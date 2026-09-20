@@ -174,7 +174,7 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
 }
 
 fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
-    match super::target::api_client()?.status() {
+    match super::target::server_status(&super::target::api_client()?) {
         Ok(status) => Ok(ServerRuntimeStatus::Running {
             version: status.version,
             protocol: status.protocol,

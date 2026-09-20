@@ -8,12 +8,10 @@ Extra user intent/context: `${@:2}`
 
 Process:
 
-1. Determine the base ref.
+1. Determine the base ref in the selected preview-based release checkout, not at current master.
    - If `$1` is non-empty and looks like a ref/tag, use it.
-   - Otherwise use the latest release tag, preferring the repo's semver tag style:
-     ```bash
-     git describe --tags --abbrev=0
-     ```
+   - Otherwise use the currently published stable version from `origin/master:distribution/latest.json` after fetching master and tags. Do not use `git describe`: preview tags and off-master release preparation make nearest-tag ancestry an unreliable release boundary.
+   - This base is also the `Previous-Stable` tag recorded by release publication. Audit only changes that will ship from the selected preview, not newer master work.
 
 2. Inspect the range from base ref to `HEAD`.
    - Use first-parent history for release context:

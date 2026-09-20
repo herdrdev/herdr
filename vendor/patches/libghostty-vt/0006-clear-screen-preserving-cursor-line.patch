@@ -1,0 +1,88 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index ad5eec54..81f9ebd0 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -2007,6 +2007,14 @@ GHOSTTY_API void ghostty_terminal_free(GhosttyTerminal terminal);
+  */
+ GHOSTTY_API void ghostty_terminal_reset(GhosttyTerminal terminal);
+ 
++/**
++ * Clear screen and history, retaining the cursor's soft-wrapped active line.
++ * Does not alter the VT parser or write to the child process. Returns false
++ * without changing the terminal on the alternate screen or for a NULL handle.
++ * Otherwise returns true and moves the retained line to the top of the screen.
++ */
++GHOSTTY_API bool ghostty_terminal_clear_screen(GhosttyTerminal terminal);
++
+ /**
+  * Resize the terminal to the given dimensions.
+  *
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index 48536568..05bc0baa 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -317,6 +317,7 @@ comptime {
+         @export(&c.terminal_new, .{ .name = "ghostty_terminal_new" });
+         @export(&c.terminal_free, .{ .name = "ghostty_terminal_free" });
+         @export(&c.terminal_reset, .{ .name = "ghostty_terminal_reset" });
++        @export(&c.terminal_clear_screen, .{ .name = "ghostty_terminal_clear_screen" });
+         @export(&c.terminal_resize, .{ .name = "ghostty_terminal_resize" });
+         @export(&c.terminal_set, .{ .name = "ghostty_terminal_set" });
+         @export(&c.terminal_vt_write, .{ .name = "ghostty_terminal_vt_write" });
+diff --git a/vendor/libghostty-vt/src/terminal/c/main.zig b/vendor/libghostty-vt/src/terminal/c/main.zig
+index 0ba1224a..5ac299ab 100644
+--- a/vendor/libghostty-vt/src/terminal/c/main.zig
++++ b/vendor/libghostty-vt/src/terminal/c/main.zig
+@@ -183,6 +183,7 @@ pub const sys_set = sys.set;
+ pub const terminal_new = terminal.new;
+ pub const terminal_free = terminal.free;
+ pub const terminal_reset = terminal.reset;
++pub const terminal_clear_screen = terminal.clearScreen;
+ pub const terminal_resize = terminal.resize;
+ pub const terminal_set = terminal.set;
+ pub const terminal_vt_write = terminal.vt_write;
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index 73097573..91bbe310 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -1504,6 +1504,40 @@ pub fn reset(terminal_: Terminal) callconv(lib.calling_conv) void {
+     t.fullReset();
+ }
+ 
++/// Clear output without feeding synthetic bytes into the child's VT stream.
++pub fn clearScreen(terminal_: Terminal) callconv(lib.calling_conv) bool {
++    const t: *ZigTerminal = (terminal_ orelse return false).terminal;
++    if (t.screens.active_key == .alternate) return false;
++    const screen = t.screens.active;
++
++    var first = screen.cursor.y;
++    while (first > 0) {
++        const pin = screen.pages.pin(.{ .active = .{ .y = first } }).?;
++        if (!pin.rowAndCell().row.wrap_continuation) break;
++        first -= 1;
++    }
++    var last = screen.cursor.y;
++    while (last + 1 < t.rows) {
++        const pin = screen.pages.pin(.{ .active = .{ .y = last } }).?;
++        if (!pin.rowAndCell().row.wrap) break;
++        last += 1;
++    }
++
++    screen.clearSelection();
++    if (last + 1 < t.rows) {
++        screen.clearRows(.{ .active = .{ .y = last + 1 } }, null, false);
++    }
++    screen.eraseHistory(null);
++    if (first > 0) screen.eraseActive(first - 1);
++    screen.pages.pin(.{ .active = .{} }).?.rowAndCell().row.wrap_continuation = false;
++    screen.scroll(.active);
++    if (comptime build_options.kitty_graphics) {
++        screen.kitty_images.delete(t.io(), screen.alloc, t, .{ .all = true });
++    }
++    t.flags.dirty.clear = true;
++    return true;
++}
++
+ /// C: GhosttyKittyGraphics
+ pub const KittyGraphics = kitty_gfx_c.KittyGraphics;
+ 

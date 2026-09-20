@@ -1,12 +1,9 @@
 name: Preview
 
 on:
-  workflow_dispatch:
-    inputs:
-      commit:
-        description: Optional master commit SHA to publish
-        required: false
-        type: string
+  push:
+    tags:
+      - "preview-*"
 
 permissions:
   contents: read
@@ -21,7 +18,7 @@ concurrency:
 
 jobs:
   preflight:
-    if: github.repository == 'herdrdev/herdr'
+    if: github.repository == 'herdrdev/herdr' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/preview-')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -34,7 +31,22 @@ jobs:
       built_at: ${{ steps.plan.outputs.built_at }}
       base_version: ${{ steps.plan.outputs.base_version }}
       protocol: ${{ steps.plan.outputs.protocol }}
+      endpoint_generation: ${{ steps.plan.outputs.endpoint_generation }}
     steps:
+      - &require-release-admins
+        name: Require repository admins for publishing and reruns
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for actor in "$GITHUB_ACTOR" "$GITHUB_TRIGGERING_ACTOR"; do
+            permission="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$actor/permission" --jq .permission)"
+            if [ "$permission" != "admin" ]; then
+              echo "error: $actor must have repository admin permission to publish" >&2
+              exit 1
+            fi
+          done
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: master
@@ -46,16 +58,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin master --tags
-          requested="${{ github.event.inputs.commit || '' }}"
-          if [ -n "$requested" ]; then
-            commit="$(git rev-parse "$requested^{commit}")"
-            if ! git merge-base --is-ancestor "$commit" origin/master; then
-              echo "error: requested commit $commit is not reachable from origin/master" >&2
-              exit 1
-            fi
-          else
-            commit="$(python3 scripts/preview.py select-commit --ref origin/master)"
+          git fetch --prune origin '+refs/heads/master:refs/remotes/origin/master' '+refs/heads/release/*:refs/remotes/origin/release/*' --tags
+          commit="$(python3 scripts/release.py preview-source --commit "$GITHUB_SHA")"
+          if [ "$(git rev-parse "refs/tags/$GITHUB_REF_NAME^{commit}")" != "$commit" ]; then
+            echo "error: preview tag no longer points at the triggering commit" >&2
+            exit 1
           fi
           current_preview="$(python3 scripts/preview.py current-commit --manifest distribution/preview.json || true)"
           if [ "$current_preview" = "$commit" ] && node scripts/docs/preview.mjs check; then
@@ -69,8 +76,13 @@ jobs:
           built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           build_id="$day-$short_sha"
           tag="preview-$build_id"
+          if [ "$GITHUB_REF_NAME" != "$tag" ]; then
+            echo "error: expected preview tag $tag; use just preview" >&2
+            exit 1
+          fi
           base_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
           protocol="$(python3 -c 'import re; print(re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", open("src/protocol/wire.rs").read()).group(1))')"
+          endpoint_generation="$(python3 -c 'import re; print(re.search(r"pub const ENDPOINT_PROTOCOL_GENERATION: u32 = (\d+);", open("src/protocol/endpoint.rs").read()).group(1))')"
           {
             echo "should_publish=true"
             echo "commit=$commit"
@@ -80,6 +92,7 @@ jobs:
             echo "built_at=$built_at"
             echo "base_version=$base_version"
             echo "protocol=$protocol"
+            echo "endpoint_generation=$endpoint_generation"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
@@ -115,11 +128,13 @@ jobs:
 
       - name: Run checks
         if: steps.plan.outputs.should_publish == 'true'
-        run: just check
+        run: |
+          just ci
+          just docs-contract-test
 
   build:
     needs: preflight
-    if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
+    if: github.repository == 'herdrdev/herdr' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/preview-') && needs.preflight.outputs.should_publish == 'true'
     permissions:
       contents: read
     strategy:
@@ -268,7 +283,7 @@ jobs:
 
   publish:
     needs: [preflight, build]
-    if: github.repository == 'herdrdev/herdr' && needs.preflight.outputs.should_publish == 'true'
+    if: github.repository == 'herdrdev/herdr' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/preview-') && needs.preflight.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     concurrency:
       group: docs-publish-master
@@ -277,6 +292,7 @@ jobs:
       contents: write
       issues: write
     steps:
+      - *require-release-admins
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: master
@@ -311,7 +327,6 @@ jobs:
             --previous '${{ steps.previous-preview.outputs.range_base }}' \
             --commit '${{ needs.preflight.outputs.commit }}' \
             --build-id '${{ needs.preflight.outputs.build_id }}' \
-            --base-version '${{ needs.preflight.outputs.base_version }}' \
             --output PREVIEW_NOTES.md
           python3 - <<'PY'
           import json, pathlib
@@ -344,7 +359,7 @@ jobs:
             echo "error: $PREVIEW_TAG exists as an immutable release with the wrong release type" >&2
             exit 1
           fi
-          tag_commit="$(git ls-remote origin "refs/tags/${PREVIEW_TAG}" | awk 'NR == 1 {print $1}')"
+          tag_commit="$(git rev-parse "refs/tags/${PREVIEW_TAG}^{commit}")"
           if [ "$tag_commit" != "$PREVIEW_COMMIT" ]; then
             echo "error: immutable release $PREVIEW_TAG points at $tag_commit, expected $PREVIEW_COMMIT" >&2
             exit 1
@@ -405,6 +420,7 @@ jobs:
             --built-at '${{ needs.preflight.outputs.built_at }}' \
             --base-version '${{ needs.preflight.outputs.base_version }}' \
             --protocol '${{ needs.preflight.outputs.protocol }}' \
+            --endpoint-generation '${{ needs.preflight.outputs.endpoint_generation }}' \
             --notes PREVIEW_NOTES.md \
             --sha-file preview-sha256.json \
             --retain 30
@@ -522,26 +538,3 @@ jobs:
               continue
             fi
           done
-
-      - name: Prune old preview prereleases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isPrerelease,createdAt > preview-releases.json
-          python3 - <<'PY' > old-preview-tags.txt
-          import json
-          with open("preview-releases.json", encoding="utf-8") as handle:
-              data = json.load(handle)
-          releases = [
-              release for release in data
-              if release.get("isPrerelease") and str(release.get("tagName", "")).startswith("preview-")
-          ]
-          releases.sort(key=lambda release: str(release.get("createdAt", "")), reverse=True)
-          for release in releases[30:]:
-              print(release["tagName"])
-          PY
-          while IFS= read -r tag; do
-            [ -n "$tag" ] || continue
-            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-          done < old-preview-tags.txt

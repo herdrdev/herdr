@@ -21,15 +21,18 @@ pub(crate) fn set_windows_mouse_reporting<W: Write>(
     enabled: bool,
     sgr_pixels: bool,
 ) -> io::Result<()> {
-    writer.write_all(if enabled {
-        WINDOWS_MOUSE_REPORTING_ENABLE_SEQUENCE
+    if enabled {
+        // Keep a true-to-false pixel transition in the same buffered reassertion,
+        // before the final SGR enable, so refresh never exposes a disabled gap.
+        if !sgr_pixels {
+            writer.write_all(b"\x1b[?1016l")?;
+        }
+        writer.write_all(WINDOWS_MOUSE_REPORTING_ENABLE_SEQUENCE)?;
+        if sgr_pixels {
+            writer.write_all(b"\x1b[?1016h")?;
+        }
     } else {
-        WINDOWS_MOUSE_REPORTING_DISABLE_SEQUENCE
-    })?;
-    // The caller clears modes before native capture. Resetting 1016 here can
-    // undo the SGR encoding that ConPTY has already enabled on the host.
-    if enabled && sgr_pixels {
-        writer.write_all(b"\x1b[?1016h")?;
+        writer.write_all(WINDOWS_MOUSE_REPORTING_DISABLE_SEQUENCE)?;
     }
     writer.flush()
 }
@@ -195,7 +198,7 @@ mod tests {
 
         assert_eq!(
             output,
-            b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
+            b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016h\x1b[?1016l\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1016l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l"
         );
     }
 }

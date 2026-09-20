@@ -670,6 +670,11 @@ A successful response includes the same `id`:
 {"id":"req_1","result":{"type":"pong"}}
 ```
 
+For request lines that reach JSON decoding, error responses also echo the request's
+`id`, including when the method or parameters are invalid. If the JSON is invalid
+or has no unambiguous top-level string `id`, the error response uses an empty `id`.
+Transport errors, such as invalid UTF-8, can close the connection without a response.
+
 Event subscriptions keep the connection open after the initial response.
 
 ## Socket paths
@@ -814,6 +819,9 @@ Subscribe to events when you need a long-lived stream:
 ```
 
 The first response acknowledges the subscription. Later lines are pushed events.
+All entries must be valid: if any referenced pane does not exist, Herdr rejects
+the entire request with an error and closes the connection. Refresh the pane list
+and retry rather than assuming the other entries were subscribed.
 Lifecycle subscriptions start when the request is accepted and do not replay
 events retained before that point.
 

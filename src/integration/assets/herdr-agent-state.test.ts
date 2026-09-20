@@ -86,6 +86,8 @@ function createExtensionHarness() {
 }
 
 function configureIntegrationEnvironment(recordingSocketPath: string) {
+  // Tests may run inside an OMP shell; nested-session cases opt in explicitly.
+  delete process.env.OMPCODE;
   process.env.HERDR_ENV = "1";
   process.env.HERDR_SOCKET_PATH = recordingSocketPath;
   process.env.HERDR_PANE_ID = "test:p1";

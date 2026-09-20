@@ -167,6 +167,22 @@ impl App {
         encode_success(id, ResponseResult::PaneInfo { pane })
     }
 
+    pub(super) fn handle_pane_clear(&mut self, id: String, target: PaneTarget) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&target.pane_id) else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        let Some(runtime) =
+            self.state
+                .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
+        else {
+            return pane_not_found(id, &target.pane_id);
+        };
+        match runtime.clear_screen() {
+            Ok(()) => encode_success(id, ResponseResult::Ok {}),
+            Err(err) => encode_error(id, "pane_clear_failed", err.to_string()),
+        }
+    }
+
     pub(super) fn handle_pane_scroll(&mut self, id: String, params: PaneScrollParams) -> String {
         let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
             return pane_not_found(id, &params.pane_id);
@@ -2347,6 +2363,26 @@ mod tests {
         assert_eq!(success.result, ResponseResult::Ok {});
         assert_eq!(rx.try_recv().unwrap(), bytes::Bytes::from_static(b"\x1b[Z"));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn api_clear_pane_mutates_endpoint_owned_history() {
+        let (mut app, public_pane_id, pane_id) = app_with_scrollback_runtime();
+        let request = crate::api::schema::Request {
+            id: "clear".into(),
+            method: crate::api::schema::Method::PaneClear(PaneTarget {
+                pane_id: public_pane_id,
+            }),
+        };
+        assert!(crate::api::request_changes_ui(&request));
+        let response = app.handle_api_request(request);
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
+        let runtime = app
+            .state
+            .runtime_for_pane_in_workspace(&app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        assert_eq!(runtime.scroll_metrics().unwrap().max_offset_from_bottom, 0);
     }
 
     #[tokio::test]

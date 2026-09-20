@@ -19,6 +19,7 @@ pub(crate) fn connect_saved_ssh(
 ) -> io::Result<SavedSshStream> {
     let ssh = validated_saved_ssh(profile_id, target, session)?;
     let remote_herdr = find_installed_remote_herdr(&ssh)?;
+    let metadata = remote_herdr.machine_metadata();
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
@@ -29,6 +30,10 @@ pub(crate) fn connect_saved_ssh(
         true,
     )?;
     let stream = crate::ipc::connect_local_stream(&path)?;
+    if let Some(metadata) = metadata {
+        crate::client::endpoint::SshMetadataCache::new(profile_id, target, session)?
+            .store(&metadata);
+    }
     Ok(SavedSshStream {
         stream,
         bridge: SavedSshBridge { _bridge: bridge },
@@ -38,13 +43,31 @@ pub(crate) fn connect_saved_ssh(
 pub(crate) struct SavedSshApiBridge {
     path: PathBuf,
     bridge: SshStdioBridge,
+    metadata_cache: crate::client::endpoint::SshMetadataCache,
+    pub(crate) used_cached_metadata: bool,
 }
 
 impl SavedSshApiBridge {
-    pub(crate) fn start(profile_id: &str, target: &str, session: &str) -> io::Result<Self> {
+    pub(crate) fn start(
+        profile_id: &str,
+        target: &str,
+        session: &str,
+        use_cached_metadata: bool,
+    ) -> io::Result<Self> {
         let ssh = validated_saved_ssh(profile_id, target, session)?;
-        let remote_herdr = super::attach::find_installed_remote_api_herdr(&ssh, session)?;
-        let command = super::attach::remote_api_bridge_command(&remote_herdr, session, false);
+        let metadata_cache =
+            crate::client::endpoint::SshMetadataCache::new(profile_id, target, session)?;
+        let cached = use_cached_metadata.then(|| metadata_cache.load()).flatten();
+        let used_cached_metadata = cached.is_some();
+        let metadata = match cached {
+            Some(metadata) => metadata,
+            None => {
+                let metadata = super::attach::discover_remote_api_metadata(&ssh, session)?;
+                metadata_cache.store(&metadata);
+                metadata
+            }
+        };
+        let command = super::attach::cached_remote_api_command(&metadata, session);
         let path = crate::platform::remote_bridge_endpoint_path(
             &format!("herdr-api-ssh-{}-{profile_id}.sock", std::process::id()),
             &format!(
@@ -60,7 +83,12 @@ impl SavedSshApiBridge {
             ssh.options(),
             true,
         )?;
-        Ok(Self { path, bridge })
+        Ok(Self {
+            path,
+            bridge,
+            metadata_cache,
+            used_cached_metadata,
+        })
     }
 
     pub(crate) fn socket_path(&self) -> &std::path::Path {
@@ -69,6 +97,16 @@ impl SavedSshApiBridge {
 
     pub(crate) fn reported_failure(&self) -> Option<io::Error> {
         self.bridge.reported_failure()
+    }
+
+    pub(crate) fn invalidate_metadata(&self) {
+        self.metadata_cache.invalidate();
+    }
+
+    pub(crate) fn stale_metadata_failure(error: &io::Error) -> bool {
+        error
+            .to_string()
+            .contains(super::attach::STALE_API_METADATA)
     }
 }
 

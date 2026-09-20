@@ -4,6 +4,8 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(windows)]
 use std::sync::Arc;
+#[cfg(windows)]
+use std::{fs::OpenOptions, io::Write as _};
 
 #[cfg(windows)]
 use tokio::sync::mpsc;
@@ -57,6 +59,19 @@ pub(super) fn raw_console_reader_loop(
 }
 
 #[cfg(windows)]
+pub(super) fn trace_input_transport(value: &str) {
+    let Some(path) = std::env::var_os("HERDR_WINDOWS_INPUT_TRACE_FILE") else {
+        return;
+    };
+    if let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(output, "{value}");
+    }
+}
+
+#[cfg(not(windows))]
+fn trace_input_transport(_value: &str) {}
+
+#[cfg(windows)]
 fn process_platform_input_items(
     items: Vec<PlatformInputItem>,
     pump: &mut WindowsInputPump,
@@ -86,24 +101,17 @@ fn push_platform_input_events(
 #[cfg(windows)]
 pub(super) fn console_input_handle() -> std::io::Result<windows_sys::Win32::Foundation::HANDLE> {
     use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::System::Console::{GetStdHandle, STD_INPUT_HANDLE};
+    use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
 
     let handle: HANDLE = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
     if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(handle)
+        return Err(std::io::Error::last_os_error());
     }
-}
-
-#[cfg(windows)]
-pub(super) fn virtual_terminal_input_enabled(
-    handle: windows_sys::Win32::Foundation::HANDLE,
-) -> bool {
-    use windows_sys::Win32::System::Console::{GetConsoleMode, ENABLE_VIRTUAL_TERMINAL_INPUT};
-
     let mut mode = 0;
-    (unsafe { GetConsoleMode(handle, &mut mode) } != 0) && mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0
+    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(handle)
 }
 
 #[cfg(windows)]
@@ -781,6 +789,7 @@ impl WindowsInputMapper {
                     items.push(PlatformInputItem::Bytes(bytes))
                 }
                 WindowsWin32InputModeItem::Key { bytes, record } => {
+                    trace_input_transport("transport=win32-serialized");
                     let win32_paste_bytes =
                         self.paste_payload_bytes_for_key(record).unwrap_or_default();
                     if let Some(raw_bytes) = self.win32_input_mode_key_record_raw_bytes(record) {

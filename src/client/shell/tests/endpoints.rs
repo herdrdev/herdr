@@ -110,6 +110,154 @@ fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
 }
 
 #[test]
+fn agent_navigation_reveals_offscreen_targets() {
+    use crate::input::KeybindAction;
+
+    for action in [
+        KeybindAction::NextAgent,
+        KeybindAction::PreviousAgent,
+        KeybindAction::FocusAgent(0),
+    ] {
+        let (mut state, remote) = state_with_scrollable_agents();
+        let (endpoint_id, pane_id) = match action {
+            KeybindAction::NextAgent => (ClientEndpointId::Local, "pane_2"),
+            KeybindAction::PreviousAgent => (remote, "pane_8"),
+            _ => (ClientEndpointId::Local, "pane_1"),
+        };
+        state.agent_scroll = if action == KeybindAction::PreviousAgent {
+            0
+        } else {
+            state.hits.agent_max_scroll
+        };
+        state.compose(100, 28).unwrap();
+        assert!(!state
+            .hits
+            .endpoint_agents
+            .iter()
+            .any(|(_, endpoint, pane)| { endpoint == &endpoint_id && pane == pane_id }));
+
+        let mut outcome = ClientShellInput::default();
+        assert!(state.handle_endpoint_navigation(action, &mut outcome));
+        assert!(outcome.repaint, "agent navigation must request a frame");
+        if endpoint_id != state.active_endpoint_id {
+            assert!(state.activate_endpoint_projection(&endpoint_id));
+        }
+        state.compose(100, 28).unwrap();
+        assert!(
+            state
+                .hits
+                .endpoint_agents
+                .iter()
+                .any(|(_, endpoint, pane)| { endpoint == &endpoint_id && pane == pane_id }),
+            "{action:?} must reveal the selected agent"
+        );
+    }
+}
+
+#[test]
+fn agent_navigation_reveals_target_using_destination_sort() {
+    use crate::api::schema::{
+        AgentViewBuiltinSortField, AgentViewSort, AgentViewSortField, AgentViewSortOrder,
+    };
+
+    let (mut state, remote) = state_with_scrollable_agents();
+    for (endpoint_id, base) in [(ClientEndpointId::Local, 0), (remote.clone(), 8)] {
+        let mut projection = state
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap()
+            .snapshot
+            .clone()
+            .unwrap();
+        for (index, agent) in projection.agents.iter_mut().enumerate() {
+            agent.state_change_seq = base + index as u64;
+        }
+        if endpoint_id == remote {
+            projection.agent_view_label = Some("recent".into());
+        }
+        state.set_endpoint_snapshot(&endpoint_id, projection);
+    }
+    state.set_test_endpoint_agent_view(&ClientEndpointId::Local, None);
+    let mut view = current_workspace_view();
+    view.label = Some("recent".into());
+    view.filter = None;
+    view.sort = vec![AgentViewSort {
+        field: AgentViewSortField::Builtin(AgentViewBuiltinSortField::StateChangeSeq),
+        order: AgentViewSortOrder::Desc,
+    }];
+    state.set_test_endpoint_agent_view(&remote, Some(view));
+    state.compose(100, 28).unwrap();
+
+    let mut outcome = ClientShellInput::default();
+    assert!(state
+        .handle_endpoint_navigation(crate::input::KeybindAction::FocusAgent(15), &mut outcome,));
+    assert!(matches!(
+        outcome.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "pane_8"
+    ));
+    // A superseded handoff restores its source before activating the new target.
+    assert!(state.activate_endpoint_projection(&ClientEndpointId::Local));
+    state.compose(100, 28).unwrap();
+    assert!(state.activate_endpoint_projection(&remote));
+    state.compose(100, 28).unwrap();
+    assert!(state
+        .hits
+        .endpoint_agents
+        .iter()
+        .any(|(_, endpoint, pane)| { endpoint == &remote && pane == "pane_8" }));
+}
+
+#[test]
+fn agent_navigation_reveal_is_cancelled_by_another_selection() {
+    for select_pane in [false, true] {
+        let (mut state, remote) = state_with_scrollable_agents();
+        let scroll = state.agent_scroll;
+        let mut outcome = ClientShellInput::default();
+        assert!(state
+            .handle_endpoint_navigation(crate::input::KeybindAction::PreviousAgent, &mut outcome,));
+        assert_eq!(state.agent_scroll, scroll);
+        if select_pane {
+            assert!(state.focus_or_activate(
+                remote.clone(),
+                ClientEndpointFocusTarget::Pane("pane_1".into()),
+                &mut outcome,
+            ));
+        } else {
+            assert!(state.activate_endpoint(remote.clone(), &mut outcome));
+        }
+        assert!(state.activate_endpoint_projection(&remote));
+        state.compose(100, 28).unwrap();
+        assert_eq!(state.agent_scroll, scroll);
+    }
+}
+
+#[test]
+fn agent_navigation_keeps_scroll_when_target_is_visible() {
+    let (mut state, _) = state_with_scrollable_agents();
+    let (_, endpoint_id, pane_id) = state.hits.endpoint_agents[1].clone();
+    let targets = super::super::aggregate_navigation::online_agent_targets(
+        &state.endpoints,
+        &state.active_endpoint_id,
+        state.config.agent_panel_sort,
+    );
+    let index = targets
+        .iter()
+        .position(|target| target.endpoint_id == endpoint_id && target.pane_id == pane_id)
+        .unwrap();
+    let scroll = state.agent_scroll;
+    assert!(state.handle_endpoint_navigation(
+        crate::input::KeybindAction::FocusAgent(index),
+        &mut ClientShellInput::default(),
+    ));
+    state.compose(100, 28).unwrap();
+    assert_eq!(state.agent_scroll, scroll);
+}
+
+#[test]
 fn switching_machines_preserves_aggregate_agent_scroll_and_visible_rows() {
     let (mut state, remote) = state_with_scrollable_agents();
     for endpoint_id in [remote.clone(), ClientEndpointId::Local, remote] {
@@ -1908,18 +2056,16 @@ fn navigator_uses_machine_parents_only_for_federated_clients() {
     assert!(rows.iter().all(|row| match row.target {
         ClientNavigatorTarget::Machine { .. } => row.depth == 0 && row.status.is_none(),
         ClientNavigatorTarget::Workspace { .. } => row.depth == 1 && row.status.is_none(),
-        ClientNavigatorTarget::Tab { .. } => row.depth == 2 && row.status.is_none(),
-        ClientNavigatorTarget::Pane { .. } => row.depth == 3 && row.status.is_some(),
+        ClientNavigatorTarget::Pane { .. } => row.depth == 2 && row.status.is_some(),
     }));
     assert_eq!(rows.iter().filter(|row| row.current).count(), 1);
 
     let frame = state.compose(106, 30).expect("federated navigator");
     for (rect, target) in &state.hits.navigator_rows {
         let expected = match target {
-            ClientNavigatorTarget::Machine { .. } => " ▾ ",
-            ClientNavigatorTarget::Workspace { .. } => "   ▾ ",
-            ClientNavigatorTarget::Tab { .. } => "     └── ",
-            ClientNavigatorTarget::Pane { .. } => "        └── ",
+            ClientNavigatorTarget::Machine { .. } => " ",
+            ClientNavigatorTarget::Workspace { .. } => "   ",
+            ClientNavigatorTarget::Pane { .. } => "   └─ ",
         };
         let prefix = frame.cells[rect.y as usize * frame.width as usize + rect.x as usize..]
             .iter()
@@ -1957,8 +2103,7 @@ fn navigator_uses_machine_parents_only_for_federated_clients() {
         .all(|row| !matches!(row.target, ClientNavigatorTarget::Machine { .. })));
     assert!(rows.iter().all(|row| match row.target {
         ClientNavigatorTarget::Workspace { .. } => row.depth == 0,
-        ClientNavigatorTarget::Tab { .. } => row.depth == 1,
-        ClientNavigatorTarget::Pane { .. } => row.depth == 2,
+        ClientNavigatorTarget::Pane { .. } => row.depth == 1,
         ClientNavigatorTarget::Machine { .. } => false,
     }));
 }
@@ -1992,10 +2137,6 @@ fn navigator_keeps_saved_machine_visible_before_metadata_arrives() {
     assert!(!rows.iter().any(|row| match &row.target {
         ClientNavigatorTarget::Machine { .. } => false,
         ClientNavigatorTarget::Workspace {
-            endpoint_id: target,
-            ..
-        }
-        | ClientNavigatorTarget::Tab {
             endpoint_id: target,
             ..
         }
@@ -2349,7 +2490,32 @@ fn collapsed_aggregate_workspace_status_uses_its_status_color() {
 }
 
 #[test]
-fn navigator_foreign_tab_selection_keeps_the_tab_target() {
+fn navigator_workspace_arrows_cross_machine_headings_without_activating_them() {
+    let (mut state, endpoint_id) = state_with_remote();
+    state.open_navigator_overlay();
+    for (key, expected_endpoint) in [
+        (KeyCode::Right, endpoint_id),
+        (KeyCode::Left, ClientEndpointId::Local),
+    ] {
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(key, KeyModifiers::empty()),
+        )]);
+        assert!(outcome.actions.is_empty());
+        let Some(ClientShellOverlay::Navigator(navigator)) = &state.overlay else {
+            panic!("navigator");
+        };
+        assert_eq!(
+            navigator.selected,
+            Some(ClientNavigatorTarget::Pane {
+                endpoint_id: expected_endpoint,
+                pane_id: "pane_1".into(),
+            })
+        );
+    }
+}
+
+#[test]
+fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
     let (mut state, endpoint_id) = state_with_remote();
     state.open_navigator_overlay();
     let selected = {
@@ -2362,15 +2528,14 @@ fn navigator_foreign_tab_selection_keeps_the_tab_target() {
             .find(|row| {
                 matches!(
                     &row.target,
-                    ClientNavigatorTarget::Tab {
+                    ClientNavigatorTarget::Workspace {
                         endpoint_id: target_endpoint,
-                        tab_id,
-                        ..
-                    } if target_endpoint == &endpoint_id && tab_id == "tab_1"
+                        workspace_id,
+                    } if target_endpoint == &endpoint_id && workspace_id == "ws_1"
                 )
             })
             .map(|row| row.target.clone())
-            .expect("remote tab row")
+            .expect("remote workspace heading")
     };
     if let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() {
         navigator.selected = Some(selected);
@@ -2383,7 +2548,7 @@ fn navigator_foreign_tab_selection_keeps_the_tab_target() {
         outcome.actions.as_slice(),
         [ClientShellAction::ActivateEndpoint {
             endpoint_id: activated,
-            target: Some(ClientEndpointFocusTarget::Tab(tab_id)),
-        }] if activated == &endpoint_id && tab_id == "tab_1"
+            target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
+        }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }

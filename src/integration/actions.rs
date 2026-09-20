@@ -556,10 +556,10 @@ pub(crate) fn uninstall_target(
                     result.tui_plugin_path.display()
                 )
             });
-            if result.updated_tui_config {
+            for path in result.updated_tui_configs {
                 messages.push(format!(
                     "removed herdr opencode plugin entry from {}",
-                    result.tui_config_path.display()
+                    path.display()
                 ));
             }
             messages

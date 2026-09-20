@@ -79,6 +79,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
                     target.profile.id.as_str(),
                     &target.profile.target,
                     &target.profile.session,
+                    true,
                 )
                 .map_err(|error| {
                     io::Error::new(
@@ -96,6 +97,51 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
             bridge.socket_path().to_owned(),
         )))
     })
+}
+
+pub(super) fn server_status(
+    client: &ApiClient,
+) -> Result<crate::api::RuntimeStatus, crate::api::client::ApiClientError> {
+    let probe = || {
+        if is_remote() {
+            client.status_with_timeout(std::time::Duration::from_secs(15))
+        } else {
+            client.status()
+        }
+    };
+    let error = match probe() {
+        Ok(status) => return Ok(status),
+        Err(error) => error,
+    };
+    // Only this read-only probe may rediscover and retry. Requests that follow
+    // the probe must never be replayed after an ambiguous SSH failure.
+    TARGET.with(|target| {
+        let mut target = target.borrow_mut();
+        let Some(target) = target.as_mut() else {
+            return Err(error);
+        };
+        let Some(bridge) = target.bridge.as_ref() else {
+            return Err(error);
+        };
+        let Some(failure) = bridge.reported_failure() else {
+            return Err(error);
+        };
+        if !bridge.used_cached_metadata
+            || !crate::remote::SavedSshApiBridge::stale_metadata_failure(&failure)
+        {
+            return Err(failure.into());
+        }
+        bridge.invalidate_metadata();
+        target.bridge.take();
+        target.bridge = Some(crate::remote::SavedSshApiBridge::start(
+            target.profile.id.as_str(),
+            &target.profile.target,
+            &target.profile.session,
+            false,
+        )?);
+        Ok(())
+    })?;
+    probe()
 }
 
 pub(super) fn remote_error(error: io::Error) -> io::Error {

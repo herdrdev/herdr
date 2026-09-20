@@ -71,7 +71,7 @@ use terminal_geometry::{
 use terminal_geometry::{reported_cell_size_from_events, store_reported_cell_size};
 use terminal_setup::{
     effective_mouse_capture, effective_sgr_pixel_mouse, set_mouse_capture,
-    setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor,
+    setup_direct_attach_terminal, setup_terminal, should_draw_host_cursor, TerminalGuard,
 };
 
 fn refresh_host_mouse_capture(enabled: bool, sgr_pixels: bool) {
@@ -80,9 +80,7 @@ fn refresh_host_mouse_capture(enabled: bool, sgr_pixels: bool) {
     }
 }
 #[cfg(windows)]
-use terminal_setup::{
-    enable_windows_virtual_terminal_input, is_ssh_session, windows_vti_input_backend_enabled,
-};
+use terminal_setup::{is_ssh_session, windows_vti_input_backend_enabled};
 #[cfg(test)]
 use terminal_setup::{
     should_enable_host_color_scheme_reports, windows_virtual_terminal_input_mode,
@@ -327,6 +325,7 @@ fn run_client_with_mode(
             should_quit,
             loop_config,
             attach_escape,
+            &terminal_guard,
         )
         .await
     });
@@ -377,6 +376,7 @@ async fn run_client_loop(
     should_quit: Arc<AtomicBool>,
     config: ClientLoopConfig,
     attach_escape: Option<AttachEscapeState>,
+    _terminal_guard: &TerminalGuard,
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
@@ -1827,17 +1827,21 @@ async fn run_client_loop(
                         );
                         let mouse_mode_changed = enabled != state.mouse_capture_active
                             || next_sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire);
+                        #[cfg(windows)]
+                        if enabled && windows_vti_input_backend_enabled() && is_ssh_session() {
+                            _terminal_guard
+                                .recover_windows_virtual_terminal_input()
+                                .map_err(ClientError::ConnectionFailed)?;
+                        }
                         if mouse_mode_changed {
-                            #[cfg(windows)]
-                            if enabled && windows_vti_input_backend_enabled() && is_ssh_session() {
-                                let _ = enable_windows_virtual_terminal_input();
-                            }
                             set_mouse_capture(enabled, next_sgr_pixels)
                                 .map_err(ClientError::ConnectionFailed)?;
-                            #[cfg(windows)]
-                            if enabled && windows_vti_input_backend_enabled() && !is_ssh_session() {
-                                let _ = enable_windows_virtual_terminal_input();
-                            }
+                        }
+                        #[cfg(windows)]
+                        if enabled && windows_vti_input_backend_enabled() && !is_ssh_session() {
+                            _terminal_guard
+                                .recover_windows_virtual_terminal_input()
+                                .map_err(ClientError::ConnectionFailed)?;
                         }
                         state.mouse_capture_active = enabled;
                         host_mouse_capture_active.store(enabled, Ordering::Release);

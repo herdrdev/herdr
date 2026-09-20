@@ -19,25 +19,6 @@ EXPECTED_ASSET_NAMES = {
     **{target: f"herdr-{target}" for target in ASSET_TARGETS},
     "windows-x86_64": "herdr-windows-x86_64.zip",
 }
-HIDDEN_SUBJECTS = (
-    "docs: publish release distribution",
-    "docs: update website manifest",
-    "docs: update preview manifest",
-    "chore: approve contributor",
-    "chore: approve merged contributor",
-)
-TYPE_HEADINGS = {
-    "feat": "Added",
-    "fix": "Fixed",
-    "perf": "Performance",
-    "docs": "Maintenance",
-    "ci": "Maintenance",
-    "test": "Maintenance",
-    "refactor": "Maintenance",
-    "chore": "Maintenance",
-}
-TYPE_ORDER = ("Added", "Fixed", "Performance", "Maintenance", "Other")
-COMMIT_RE = re.compile(r"^(?P<kind>[a-z]+)(?:\([^)]+\))?!?:\s+(?P<body>.+)$")
 ENDPOINT_PROTOCOL_SOURCE_PATH = Path("src/protocol/endpoint.rs")
 
 
@@ -92,90 +73,21 @@ def previous_preview_commit(path: Path) -> str | None:
     return commit if isinstance(commit, str) and commit.strip() else None
 
 
-def hidden_subject(subject: str) -> bool:
-    lowered = subject.strip().lower()
-    return any(lowered.startswith(prefix) for prefix in HIDDEN_SUBJECTS)
-
-
-def latest_publishable_commit(ref: str) -> str:
-    output = run_git(["log", "--pretty=format:%H%x00%s", ref])
-    for line in output.splitlines():
-        commit, _, subject = line.partition("\x00")
-        if commit and not hidden_subject(subject):
-            return commit
-    raise SystemExit(f"no publishable commit found in {ref}")
-
-
-def commit_subjects(previous: str, commit: str) -> list[str]:
-    output = run_git(["log", "--pretty=format:%s", f"{previous}..{commit}"])
-    if not output:
-        return []
-    subjects = []
-    for line in output.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if hidden_subject(stripped):
-            continue
-        subjects.append(stripped)
-    return subjects
-
-
 def preview_range_base(previous: str, commit: str) -> str:
     try:
         stable = latest_stable_tag(commit)
     except subprocess.CalledProcessError:
         return previous
+    if not git_is_ancestor(previous, commit):
+        return stable
     if git_is_ancestor(previous, stable) and git_is_ancestor(stable, commit):
         return stable
     return previous
 
 
-def humanize_subject(subject: str) -> tuple[str, str]:
-    match = COMMIT_RE.match(subject)
-    if not match:
-        return "Other", subject[0].upper() + subject[1:]
-    kind = match.group("kind")
-    body = match.group("body").strip()
-    heading = TYPE_HEADINGS.get(kind, "Other")
-    if body:
-        body = body[0].upper() + body[1:]
-    else:
-        body = subject
-    return heading, body
-
-
-def build_notes(previous: str, commit: str, build_id: str, base_version: str, repo: str) -> str:
-    short = commit[:12]
+def build_notes(previous: str, commit: str, build_id: str, repo: str) -> str:
     compare = f"https://github.com/{repo}/compare/{previous}...{commit}"
-    lines = [
-        f"Preview build {build_id}",
-        "",
-        f"Built from `{short}` on `master`.",
-        f"Base stable: v{normalize_version(base_version)}",
-        f"Compare: {compare}",
-        "",
-    ]
-    grouped: dict[str, list[str]] = {heading: [] for heading in TYPE_ORDER}
-    for subject in commit_subjects(previous, commit):
-        heading, body = humanize_subject(subject)
-        grouped.setdefault(heading, []).append(body)
-
-    wrote = False
-    for heading in TYPE_ORDER:
-        items = grouped.get(heading, [])
-        if not items:
-            continue
-        wrote = True
-        lines.append(f"### {heading}")
-        for item in items:
-            lines.append(f"- {item}")
-        lines.append("")
-
-    if not wrote:
-        lines.extend(["### Changed", "- Rebuilt preview from the current master branch.", ""])
-
-    return "\n".join(lines).rstrip() + "\n"
+    return f"Preview build {build_id}\n\n[View changes]({compare})\n"
 
 
 def default_asset_urls(repo: str, tag: str) -> dict[str, str]:
@@ -222,13 +134,15 @@ def build_manifest(
     notes: str,
     shas: dict[str, str],
     retain: int,
+    endpoint_generation: int | None = None,
 ) -> str:
     urls = default_asset_urls(repo, tag)
     assets = asset_objects(urls, shas)
     current = read_json(output) or {}
     builds = current.get("builds") if isinstance(current.get("builds"), dict) else {}
     builds = dict(builds)
-    endpoint_generation = read_endpoint_protocol_generation()
+    if endpoint_generation is None:
+        endpoint_generation = read_endpoint_protocol_generation()
     builds[build_id] = {
         "base_version": normalize_version(base_version),
         "commit": commit,
@@ -264,7 +178,7 @@ def build_manifest(
 
 def cmd_notes(args: argparse.Namespace) -> int:
     previous = args.previous or previous_preview_commit(Path(args.manifest)) or latest_stable_tag()
-    notes = build_notes(previous, args.commit, args.build_id, args.base_version, args.repo)
+    notes = build_notes(previous, args.commit, args.build_id, args.repo)
     Path(args.output).write_text(notes, encoding="utf-8")
     return 0
 
@@ -284,6 +198,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
         notes=notes,
         shas=shas,
         retain=args.retain,
+        endpoint_generation=args.endpoint_generation,
     )
     Path(args.output).write_text(content, encoding="utf-8")
     return 0
@@ -293,11 +208,6 @@ def cmd_current_commit(args: argparse.Namespace) -> int:
     commit = previous_preview_commit(Path(args.manifest))
     if commit:
         print(commit)
-    return 0
-
-
-def cmd_select_commit(args: argparse.Namespace) -> int:
-    print(latest_publishable_commit(args.ref))
     return 0
 
 
@@ -315,7 +225,6 @@ def main() -> int:
     notes.add_argument("--previous")
     notes.add_argument("--commit", required=True)
     notes.add_argument("--build-id", required=True)
-    notes.add_argument("--base-version", required=True)
     notes.add_argument("--repo", default="herdrdev/herdr")
     notes.add_argument("--output", required=True)
     notes.set_defaults(func=cmd_notes)
@@ -329,6 +238,7 @@ def main() -> int:
     manifest.add_argument("--built-at", required=True)
     manifest.add_argument("--base-version", required=True)
     manifest.add_argument("--protocol", required=True, type=int)
+    manifest.add_argument("--endpoint-generation", required=True, type=int)
     manifest.add_argument("--notes", required=True)
     manifest.add_argument("--sha-file")
     manifest.add_argument("--retain", type=int, default=30)
@@ -337,10 +247,6 @@ def main() -> int:
     current = sub.add_parser("current-commit")
     current.add_argument("--manifest", default="distribution/preview.json")
     current.set_defaults(func=cmd_current_commit)
-
-    select = sub.add_parser("select-commit")
-    select.add_argument("--ref", default="origin/master")
-    select.set_defaults(func=cmd_select_commit)
 
     range_base = sub.add_parser("range-base")
     range_base.add_argument("--previous", required=True)

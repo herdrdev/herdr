@@ -164,18 +164,21 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     }
-    if let Err(error) = crate::remote::prepare_saved_ssh(&target, &session) {
-        eprintln!("error: {error}; machine was not saved");
-        crate::remote::print_saved_ssh_error_hint(&error, &target);
-        return Ok(1);
-    }
+    let metadata = match crate::remote::prepare_saved_ssh(&target, &session) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            eprintln!("error: {error}; machine was not saved");
+            crate::remote::print_saved_ssh_error_hint(&error, &target);
+            return Ok(1);
+        }
+    };
     // Setup can wait for human approval. Do not overwrite catalog edits made meanwhile.
     let mut catalog = load_catalog().map_err(|error| {
         std::io::Error::other(format!(
             "remote prepared, but machine was not saved: {error}"
         ))
     })?;
-    let id = match catalog.add_ssh(label, target, session) {
+    let id = match catalog.add_ssh(label, &target, &session) {
         Ok(id) => id,
         Err(error) => {
             eprintln!("error: {error}");
@@ -187,6 +190,10 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             "remote prepared, but machine was not saved: {error}"
         ))
     })?;
+    if let Some(metadata) = metadata {
+        crate::client::endpoint::SshMetadataCache::new(id.as_str(), &target, &session)?
+            .store(&metadata);
+    }
     println!("Saved SSH machine {id}. Remote server is ready.");
     println!("Open Herdr clients connect automatically.");
     Ok(0)
@@ -232,11 +239,26 @@ fn remove(args: &[String]) -> std::io::Result<i32> {
     };
     let mut catalog = load_catalog()?;
     let previous_selection = catalog.selected_profile.clone();
+    let metadata_cache = catalog
+        .ssh
+        .iter()
+        .find(|profile| profile.id == id)
+        .map(|profile| {
+            crate::client::endpoint::SshMetadataCache::new(
+                id.as_str(),
+                &profile.target,
+                &profile.session,
+            )
+        })
+        .transpose()?;
     if !catalog.remove_ssh(&id) {
         eprintln!("machine profile {id} was not found");
         return Ok(1);
     }
     store_catalog(&catalog)?;
+    if let Some(cache) = metadata_cache {
+        cache.invalidate();
+    }
     if catalog.selected_profile != previous_selection {
         catalog.store_selection().map_err(std::io::Error::other)?;
     }

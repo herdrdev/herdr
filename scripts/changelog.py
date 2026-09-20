@@ -317,6 +317,7 @@ def build_latest_json(
     protocol: int | None = None,
     announcement: dict[str, str] | None = None,
     releases: dict[str, Any] | None = None,
+    endpoint_generation: int | None = None,
 ) -> str:
     normalized_version = normalize_version(version)
     normalized_notes = notes.strip()
@@ -330,7 +331,8 @@ def build_latest_json(
     ordered_sha256 = normalize_sha256(sha256, "sha256")
     normalized_announcement = normalize_announcement(announcement, "root")
     archived_releases = normalize_releases(releases)
-    endpoint_generation = read_endpoint_protocol_generation()
+    if endpoint_generation is None:
+        endpoint_generation = read_endpoint_protocol_generation()
     current_metadata: dict[str, Any] = {
         "notes": normalized_notes,
         "protocol": protocol,
@@ -372,7 +374,8 @@ def default_release_assets(version: str, repo: str = DEFAULT_RELEASE_REPO) -> di
 
 
 def manifest_from_release_payload(
-    payload: dict[str, Any], version: str, protocol: int | None = None
+    payload: dict[str, Any], version: str, protocol: int | None = None,
+    endpoint_generation: int | None = None,
 ) -> dict[str, Any]:
     normalized_version = normalize_version(version)
     tag_name = str(payload.get("tagName") or "")
@@ -425,7 +428,7 @@ def manifest_from_release_payload(
     return {
         "version": normalized_version,
         "protocol": protocol if protocol is not None else read_protocol_version(),
-        "endpoint_generation": read_endpoint_protocol_generation(),
+        "endpoint_generation": endpoint_generation if endpoint_generation is not None else read_endpoint_protocol_generation(),
         "notes": notes,
         "assets": manifest_assets,
         "sha256": manifest_sha256,
@@ -703,7 +706,7 @@ def cmd_sync_latest_json(args: argparse.Namespace) -> int:
     ensure_manifest_is_outdated(current_manifest, version)
 
     release_payload = fetch_release_payload(version, args.repo)
-    new_manifest = manifest_from_release_payload(release_payload, version, args.protocol)
+    new_manifest = manifest_from_release_payload(release_payload, version, args.protocol, args.endpoint_generation)
     announcement_path = Path(args.announcement)
     announcement = load_product_announcement(announcement_path)
     output = build_latest_json(
@@ -714,6 +717,7 @@ def cmd_sync_latest_json(args: argparse.Namespace) -> int:
         protocol=int(new_manifest["protocol"]),
         announcement=announcement,
         releases=archived_releases_from_current_manifest(current_manifest),
+        endpoint_generation=args.endpoint_generation,
     )
     write_text(manifest_path, output)
     if announcement is not None:
@@ -753,7 +757,7 @@ def cmd_validate_product_announcement(args: argparse.Namespace) -> int:
 def cmd_verify_release_state(args: argparse.Namespace) -> int:
     version = normalize_version(args.version)
     release_payload = fetch_release_payload(version, args.repo)
-    expected_manifest = manifest_from_release_payload(release_payload, version, args.protocol)
+    expected_manifest = manifest_from_release_payload(release_payload, version, args.protocol, args.endpoint_generation)
 
     local_raw_manifest = load_json(Path(args.output))
     local_manifest = ensure_manifest_matches_expected(
@@ -808,6 +812,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync_latest_json.add_argument("--output", default=str(DEFAULT_LATEST_JSON_PATH))
     sync_latest_json.add_argument("--announcement", default=str(DEFAULT_PRODUCT_ANNOUNCEMENT_PATH))
     sync_latest_json.add_argument("--protocol", type=int)
+    sync_latest_json.add_argument("--endpoint-generation", type=int)
     sync_latest_json.set_defaults(func=cmd_sync_latest_json)
 
     validate_product_announcement = subparsers.add_parser(
@@ -828,6 +833,7 @@ def build_parser() -> argparse.ArgumentParser:
     verify_release_state.add_argument("--output", default=str(DEFAULT_LATEST_JSON_PATH))
     verify_release_state.add_argument("--live-url", default=DEFAULT_LIVE_MANIFEST_URL)
     verify_release_state.add_argument("--protocol", type=int)
+    verify_release_state.add_argument("--endpoint-generation", type=int)
     verify_release_state.set_defaults(func=cmd_verify_release_state)
 
     return parser

@@ -13,24 +13,21 @@ use serde_json::{json, Value};
 
 const PROFILE_ID: &str = "0123456789abcdef0123456789abcdef";
 const SSH: &str = r#"#!/bin/sh
+printf 'ssh\n' >> "$TEST_ROOT/ssh-calls"
 for arg do
     last=$arg
     printf '%s\n' "$arg" >> "$TEST_ROOT/ssh-args"
 done
 case "$last" in
-    *'command -v herdr') printf 'login banner\nherdr-remote-output-ready:1\n%s\n' "$TEST_REMOTE_HERDR" ;;
-    *'remote-api-bridge --check')
-        if [ "$TEST_MODE" = old ]; then exit 2; fi
-        exec /bin/sh -c "$last" ;;
-    *'remote-api-bridge')
+    '/bin/sh -c '*)
         if [ "$TEST_MODE" = offline ]; then echo 'test remote connection failed' >&2; exit 255; fi
-        exec /bin/sh -c "$last" ;;
+        printf 'login banner\n'
+        PATH="$TEST_ROOT/remote bin:/usr/bin:/bin" exec /bin/sh -c "$last" ;;
     '/bin/sh -s')
         script=$(cat)
         printf 'login banner\nherdr-remote-output-ready:1\n'
         case "$script" in
             *'uname -s'*) uname -s; uname -m ;;
-            *'version='*) printf '%s\n' "$TEST_REMOTE_HERDR" ;;
             *) echo "unexpected discovery: $script" >&2; exit 2 ;;
         esac ;;
     *) echo "unexpected command: $last" >&2; exit 2 ;;
@@ -39,6 +36,7 @@ esac
 
 struct Harness {
     root: PathBuf,
+    state: PathBuf,
     remote: UnixListener,
     local: UnixListener,
     protocol: u64,
@@ -65,6 +63,24 @@ impl Harness {
         fs::write(root.join("bin/ssh"), SSH).unwrap();
         fs::set_permissions(root.join("bin/ssh"), fs::Permissions::from_mode(0o700)).unwrap();
         std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_herdr"), root.join("remote herdr")).unwrap();
+        fs::create_dir_all(root.join("remote bin")).unwrap();
+        let remote_wrapper = root.join("remote bin/herdr");
+        fs::write(
+            &remote_wrapper,
+            r#"#!/bin/sh
+if [ "$TEST_MODE" = old ]; then printf 'herdr-api-bridge-v1\n'; exit 2; fi
+case "$*" in
+    *'--check')
+        if IFS= read -r request; then
+            echo 'capability check consumed API stdin' >&2
+            exit 2
+        fi ;;
+esac
+exec "$TEST_REMOTE_HERDR" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&remote_wrapper, fs::Permissions::from_mode(0o700)).unwrap();
         fs::write(state.join("endpoints.json"), serde_json::to_vec(&json!({
             "version": 1,
             "ssh": [{"id": PROFILE_ID, "label": "mac", "target": "fake-mac", "session": "fleet", "enabled": true}]
@@ -80,6 +96,7 @@ impl Harness {
         let status: Value = serde_json::from_slice(&status.stdout).unwrap();
         Self {
             root,
+            state,
             remote,
             local,
             protocol: status["protocol"].as_u64().unwrap(),
@@ -138,6 +155,9 @@ impl Harness {
                     .unwrap();
                 let request: Value = serde_json::from_str(&line).unwrap();
                 let ping = request["method"] == "ping";
+                if !ping && result.is_null() {
+                    return request;
+                }
                 let response = if ping {
                     json!({"id": request["id"], "result": {"type": "pong", "version": "test", "protocol": protocol}})
                 } else {
@@ -152,6 +172,23 @@ impl Harness {
                 }
             }
         })
+    }
+
+    fn warm_metadata(&self) {
+        let server = self.serve(json!({}), 0);
+        success(
+            self.command(&["--machine", "mac", "status", "server", "--json"])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(server.join().unwrap()["method"], "ping");
+    }
+
+    fn ssh_calls(&self) -> usize {
+        fs::read_to_string(self.root.join("ssh-calls"))
+            .unwrap_or_default()
+            .lines()
+            .count()
     }
 
     fn assert_local_untouched(&self) {
@@ -205,7 +242,8 @@ fn machine_api_routes_structured_payload_and_remote_errors_without_local_fallbac
     let ssh_args = fs::read_to_string(harness.root.join("ssh-args")).unwrap();
     assert!(ssh_args.contains("StrictHostKeyChecking=yes"));
     assert!(ssh_args.contains("BatchMode=yes"));
-    assert!(ssh_args.contains("--session fleet remote-api-bridge"));
+    assert!(ssh_args.contains("remote-api-bridge"));
+    assert!(ssh_args.contains("fleet"));
     assert!(!ssh_args.contains("should-not-exist"));
     harness.assert_local_untouched();
 }
@@ -226,6 +264,209 @@ fn machine_api_profile_id_routes_large_list_responses() {
     );
     assert_eq!(response["result"]["test_data"], data);
     assert_eq!(server.join().unwrap()["method"], "agent.list");
+    assert_eq!(
+        fs::read_to_string(harness.root.join("ssh-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        4,
+        "cold command: platform, discovery, protocol ping, request"
+    );
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_bootstrap_falls_back_from_an_old_path_binary() {
+    let harness = Harness::new();
+    fs::create_dir_all(harness.root.join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(
+        env!("CARGO_BIN_EXE_herdr"),
+        harness.root.join(".local/bin/herdr"),
+    )
+    .unwrap();
+    let server = harness.serve(
+        json!({"result":{"type":"agent_list","agents":[]}}),
+        harness.protocol,
+    );
+    success(
+        harness
+            .command(&["--machine", "mac", "agent", "list"])
+            .env("TEST_MODE", "old")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(server.join().unwrap()["method"], "agent.list");
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_reuses_discovery_across_commands_without_rewriting_profiles() {
+    let harness = Harness::new();
+    let catalog_before = fs::read(harness.state.join("endpoints.json")).unwrap();
+    for expected_calls in [None, Some(2)] {
+        let before = harness.ssh_calls();
+        let server = harness.serve(
+            json!({"result":{"type":"agent_list","agents":[]}}),
+            harness.protocol,
+        );
+        success(
+            harness
+                .command(&["--machine", "mac", "agent", "list"])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(server.join().unwrap()["method"], "agent.list");
+        if let Some(expected) = expected_calls {
+            assert_eq!(
+                harness.ssh_calls() - before,
+                expected,
+                "warm commands must skip discovery"
+            );
+        }
+    }
+    let before = harness.ssh_calls();
+    let server = harness.serve(json!({}), 0);
+    success(
+        harness
+            .command(&["--machine", "mac", "status", "server", "--json"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(server.join().unwrap()["method"], "ping");
+    assert_eq!(
+        harness.ssh_calls() - before,
+        1,
+        "warm status needs only one SSH"
+    );
+    assert_eq!(
+        fs::read(harness.state.join("endpoints.json")).unwrap(),
+        catalog_before
+    );
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_recovers_a_stale_path_before_sending_a_mutation() {
+    let harness = Harness::new();
+    harness.warm_metadata();
+    fs::remove_file(harness.root.join("remote bin/herdr")).unwrap();
+    fs::create_dir_all(harness.root.join(".local/bin")).unwrap();
+    std::os::unix::fs::symlink(
+        env!("CARGO_BIN_EXE_herdr"),
+        harness.root.join(".local/bin/herdr"),
+    )
+    .unwrap();
+    let before = harness.ssh_calls();
+    let server = harness.serve(json!({"result":{"type":"ok"}}), harness.protocol);
+    success(
+        harness
+            .command(&["--machine", "mac", "pane", "close", "w4:p1"])
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(server.join().unwrap()["method"], "pane.close");
+    assert_eq!(
+        harness.ssh_calls() - before,
+        5,
+        "one failed ping followed by fresh discovery and one command"
+    );
+    let before = harness.ssh_calls();
+    harness.warm_metadata();
+    assert_eq!(
+        harness.ssh_calls() - before,
+        1,
+        "recovered path must be saved"
+    );
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_never_replays_a_mutation_when_its_response_is_lost() {
+    let harness = Harness::new();
+    harness.warm_metadata();
+    let before = harness.ssh_calls();
+    let server = harness.serve(Value::Null, harness.protocol);
+    let output = harness
+        .command(&["--machine", "mac", "pane", "close", "w4:p1"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(server.join().unwrap()["method"], "pane.close");
+    assert_eq!(
+        harness.ssh_calls() - before,
+        2,
+        "mutation must not trigger rediscovery or replay"
+    );
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_transient_connection_failure_keeps_working_metadata() {
+    let harness = Harness::new();
+    harness.warm_metadata();
+    let before = harness.ssh_calls();
+    let output = harness
+        .command(&["--machine", "mac", "agent", "list"])
+        .env("TEST_MODE", "offline")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(
+        harness.ssh_calls() - before,
+        1,
+        "network failures must not retry"
+    );
+    let before = harness.ssh_calls();
+    harness.warm_metadata();
+    assert_eq!(
+        harness.ssh_calls() - before,
+        1,
+        "transient failure must not discard metadata"
+    );
+}
+
+#[test]
+fn machine_remove_deletes_only_that_profiles_metadata() {
+    let harness = Harness::new();
+    harness.warm_metadata();
+    let directory = harness.state.join("ssh-metadata");
+    let other = directory.join("fedcba9876543210fedcba9876543210.json");
+    fs::write(&other, "other machine metadata").unwrap();
+    let before = harness.ssh_calls();
+    let output = harness
+        .command(&["machine", "remove", PROFILE_ID])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!directory.join(format!("{PROFILE_ID}.json")).exists());
+    assert_eq!(fs::read_to_string(other).unwrap(), "other machine metadata");
+    assert_eq!(harness.ssh_calls(), before);
+    harness.assert_local_untouched();
+}
+
+#[test]
+fn machine_api_bad_or_unwritable_metadata_does_not_block_commands() {
+    let harness = Harness::new();
+    harness.warm_metadata();
+    let path = harness
+        .state
+        .join("ssh-metadata")
+        .join(format!("{PROFILE_ID}.json"));
+    fs::write(&path, "broken metadata").unwrap();
+    let before = harness.ssh_calls();
+    harness.warm_metadata();
+    assert_eq!(harness.ssh_calls() - before, 3);
+    fs::remove_file(&path).unwrap();
+    fs::create_dir(&path).unwrap();
+    for _ in 0..2 {
+        let before = harness.ssh_calls();
+        harness.warm_metadata();
+        assert_eq!(harness.ssh_calls() - before, 3);
+    }
     harness.assert_local_untouched();
 }
 
@@ -303,6 +544,14 @@ fn machine_api_status_reports_remote_identity_not_local_installation_state() {
     assert_eq!(status["socket"], format!("machine:{PROFILE_ID}/fleet"));
     assert!(status["server_binary_stale"].is_null());
     assert_eq!(server.join().unwrap()["method"], "ping");
+    assert_eq!(
+        fs::read_to_string(harness.root.join("ssh-calls"))
+            .unwrap()
+            .lines()
+            .count(),
+        3,
+        "cold status: platform, discovery, status"
+    );
     harness.assert_local_untouched();
 }
 
@@ -389,6 +638,7 @@ fn machine_api_server_stop_is_sent_only_to_the_selected_machine() {
 #[test]
 fn machine_api_protocol_mismatch_never_sends_the_mutation() {
     let harness = Harness::new();
+    harness.warm_metadata();
     let server = harness.serve(json!({}), 0);
     let output = harness
         .command(&["--machine", "mac", "pane", "close", "w4:p1"])

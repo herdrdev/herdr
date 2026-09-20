@@ -299,49 +299,92 @@ pub(super) fn navigator_rows(
         let endpoint_query_matches = !query.is_empty() && text(&endpoint.label);
         let mut endpoint_rows = Vec::new();
         if let Some(snapshot) = endpoint.snapshot.as_deref() {
+            let agents = snapshot
+                .agents
+                .iter()
+                .map(|agent| (agent.pane_id.as_str(), agent))
+                .collect::<HashMap<_, _>>();
             for workspace in &snapshot.workspaces {
-                let workspace_meta = workspace.branch.clone().unwrap_or_default();
+                let workspace_matches = endpoint_query_matches
+                    || text(&workspace.label)
+                    || workspace.branch.as_deref().is_some_and(text);
                 let mut children = Vec::new();
-                for tab in snapshot
+                let workspace_tabs = snapshot
                     .tabs
                     .iter()
-                    .filter(|tab| tab.workspace_id == workspace.workspace_id)
-                {
-                    let mut panes = Vec::new();
-                    for (index, pane) in snapshot
+                    .filter(|tab| tab.workspace_id == workspace.workspace_id);
+                let multiple_tabs = workspace_tabs.clone().nth(1).is_some();
+                for tab in workspace_tabs {
+                    let tab_matches = workspace_matches || text(&tab.label);
+                    let tab_panes = snapshot
                         .panes
                         .iter()
                         .filter(|pane| pane.tab_id == tab.tab_id)
-                        .enumerate()
-                    {
-                        let agent = snapshot
-                            .agents
-                            .iter()
-                            .find(|agent| agent.pane_id == pane.pane_id);
+                        .collect::<Vec<_>>();
+                    for (index, pane) in tab_panes.iter().enumerate() {
+                        let agent = agents.get(pane.pane_id.as_str()).copied();
                         let status = agent
                             .map_or(crate::api::schema::AgentStatus::Unknown, |agent| {
                                 agent.agent_status
                             });
-                        let label = pane
+                        let agent_kind = agent.and_then(|agent| {
+                            agent.agent.as_deref().or(agent.display_agent.as_deref())
+                        });
+                        let name = pane
                             .label
-                            .clone()
-                            .or_else(|| agent.and_then(|agent| agent.name.clone()))
-                            .or_else(|| agent.and_then(|agent| agent.display_agent.clone()))
-                            .or_else(|| agent.and_then(|agent| agent.title.clone()))
-                            .unwrap_or_else(|| format!("pane {}", index + 1));
+                            .as_deref()
+                            .or_else(|| agent.and_then(|agent| agent.name.as_deref()));
+                        let title = agent.and_then(|agent| {
+                            agent
+                                .title
+                                .as_deref()
+                                .or(agent.terminal_title_stripped.as_deref())
+                        });
+                        let tab_name = (tab.custom_label || tab.label.parse::<usize>().is_err())
+                            .then_some(tab.label.as_str());
+                        let label = if tab_panes.len() == 1 {
+                            match name.or(tab_name).or(title) {
+                                Some(label) => label.to_owned(),
+                                None if multiple_tabs => {
+                                    format!("{} · {}", agent_kind.unwrap_or("terminal"), tab.label)
+                                }
+                                None => workspace.label.clone(),
+                            }
+                        } else {
+                            let pane_name = name.or(title).or(agent_kind).unwrap_or("terminal");
+                            match tab_name {
+                                Some(tab_name) if tab_name != pane_name => {
+                                    format!("{tab_name} · {pane_name} · {}", index + 1)
+                                }
+                                _ => format!("{pane_name} · {}", index + 1),
+                            }
+                        };
                         let meta = pane
                             .foreground_cwd
-                            .clone()
-                            .or_else(|| pane.cwd.clone())
+                            .as_deref()
+                            .or(pane.cwd.as_deref())
                             .unwrap_or_default();
-                        if !filtering
-                            || filter(status)
-                                && (endpoint_query_matches || text(&label) || text(&meta))
+                        if filter(status)
+                            && (tab_matches
+                                || text(&label)
+                                || text(meta)
+                                || pane.cwd.as_deref().is_some_and(text)
+                                || agent_kind.is_some_and(text)
+                                || title.is_some_and(text)
+                                || agent
+                                    .and_then(|agent| agent.display_agent.as_deref())
+                                    .is_some_and(text)
+                                || text(&pane.pane_id))
                         {
-                            panes.push(ClientNavigatorRow {
-                                depth: 2 + depth_offset,
+                            children.push(ClientNavigatorRow {
+                                depth: 1 + depth_offset,
                                 label,
-                                meta,
+                                meta: meta.to_owned(),
+                                detail: format!(
+                                    "{} / {} / {}",
+                                    workspace.label, tab.label, pane.pane_id
+                                ),
+                                agent: agent_kind.map(str::to_owned),
                                 status: Some(status),
                                 stale,
                                 current: endpoint.endpoint_id == *active_endpoint_id
@@ -353,40 +396,17 @@ pub(super) fn navigator_rows(
                             });
                         }
                     }
-                    if !filtering
-                        || filter(tab.agent_status) && (endpoint_query_matches || text(&tab.label))
-                        || !panes.is_empty()
-                    {
-                        children.push(ClientNavigatorRow {
-                            depth: 1 + depth_offset,
-                            label: tab.label.clone(),
-                            meta: format!(
-                                "{} panes",
-                                snapshot
-                                    .panes
-                                    .iter()
-                                    .filter(|pane| pane.tab_id == tab.tab_id)
-                                    .count()
-                            ),
-                            status: None,
-                            stale,
-                            current: false,
-                            target: ClientNavigatorTarget::Tab {
-                                endpoint_id: endpoint.endpoint_id.clone(),
-                                tab_id: tab.tab_id.clone(),
-                            },
-                        });
-                        children.extend(panes);
-                    }
                 }
-                let workspace_matches = filter(workspace.agent_status)
-                    && (endpoint_query_matches || text(&workspace.label) || text(&workspace_meta));
-                if !filtering || workspace_matches || !children.is_empty() {
-                    let key = (endpoint.endpoint_id.clone(), workspace.workspace_id.clone());
+                if !filtering
+                    || !children.is_empty()
+                    || (navigator.filter.is_none() && !query.is_empty() && workspace_matches)
+                {
                     endpoint_rows.push(ClientNavigatorRow {
                         depth: depth_offset,
                         label: workspace.label.clone(),
-                        meta: workspace_meta,
+                        meta: workspace.branch.clone().unwrap_or_default(),
+                        detail: workspace.new_workspace_cwd.clone(),
+                        agent: None,
                         status: None,
                         stale,
                         current: false,
@@ -395,9 +415,7 @@ pub(super) fn navigator_rows(
                             workspace_id: workspace.workspace_id.clone(),
                         },
                     });
-                    if navigator.expanded_workspaces.contains(&key) || filtering {
-                        endpoint_rows.extend(children);
-                    }
+                    endpoint_rows.extend(children);
                 }
             }
         }
@@ -407,6 +425,8 @@ pub(super) fn navigator_rows(
                     depth: 0,
                     label: endpoint.label.to_owned(),
                     meta: String::new(),
+                    detail: String::new(),
+                    agent: None,
                     status: None,
                     stale,
                     current: false,
@@ -427,7 +447,10 @@ pub(super) fn navigator_selected_index(
 ) -> Option<usize> {
     match navigator.selected.as_ref() {
         Some(target) => rows.iter().position(|row| row.target == *target),
-        None => (!rows.is_empty()).then_some(0),
+        None => rows
+            .iter()
+            .position(|row| matches!(row.target, ClientNavigatorTarget::Pane { .. }))
+            .or_else(|| (!rows.is_empty()).then_some(0)),
     }
 }
 

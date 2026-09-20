@@ -16,6 +16,20 @@ use std::{
 mod clipboard_image;
 mod config_backup;
 
+pub(crate) fn windows_virtual_terminal_input_active() -> bool {
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::System::Console::{
+        GetConsoleMode, GetStdHandle, ENABLE_VIRTUAL_TERMINAL_INPUT, STD_INPUT_HANDLE,
+    };
+
+    let handle = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    let mut mode = 0;
+    (unsafe { GetConsoleMode(handle, &mut mode) } != 0) && mode & ENABLE_VIRTUAL_TERMINAL_INPUT != 0
+}
+
 pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::ChildExitReason {
     // STATUS_CONTROL_C_EXIT is reported without a Unix signal by portable-pty.
     if status.exit_code() == 0xC000013A {
@@ -336,11 +350,11 @@ use windows_sys::{
             },
             Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
             Threading::{
-                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-                QueryFullProcessImageNameW, ResumeThread, TerminateProcess, CREATE_NO_WINDOW,
-                CREATE_SUSPENDED, DETACHED_PROCESS, PROCESS_BASIC_INFORMATION,
-                PROCESS_QUERY_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ,
-                THREAD_SUSPEND_RESUME,
+                GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, IsWow64Process2,
+                OpenProcess, OpenThread, QueryFullProcessImageNameW, ResumeThread,
+                TerminateProcess, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
+                PROCESS_BASIC_INFORMATION, PROCESS_QUERY_INFORMATION,
+                PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, THREAD_SUSPEND_RESUME,
             },
         },
         UI::{
@@ -371,6 +385,29 @@ const FOREGROUND_SELECTION_RECHECK: Duration = Duration::from_secs(5);
 const FOREGROUND_SELECTION_CACHE_CAPACITY: usize = 1_024;
 const FOREGROUND_SELECTION_CACHE_RETENTION: Duration = Duration::from_secs(60);
 const PANE_RUNTIME_MARKER_ENV_VAR: &str = "HERDR_PANE_RUNTIME_ID";
+
+/// Native processor architecture of the Windows host as an
+/// `IMAGE_FILE_MACHINE_*` value. `IsWow64Process2` reports the native machine
+/// even when an x64 Herdr runs under emulation on Windows ARM64, which the
+/// build target alone cannot reveal.
+pub(crate) fn native_machine_type() -> u16 {
+    let mut process_machine = 0u16;
+    let mut native_machine = 0u16;
+    // SAFETY: `GetCurrentProcess` returns a pseudo-handle and both out-pointers
+    // are valid for the duration of the call.
+    let ok = unsafe {
+        IsWow64Process2(
+            GetCurrentProcess(),
+            &mut process_machine,
+            &mut native_machine,
+        )
+    };
+    if ok != 0 && native_machine != 0 {
+        native_machine
+    } else {
+        process_machine
+    }
+}
 
 pub(crate) fn terminal_title_for_presentation(title: &str) -> &str {
     title.strip_prefix("Administrator: ").unwrap_or(title)

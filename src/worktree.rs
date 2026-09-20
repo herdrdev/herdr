@@ -193,8 +193,9 @@ pub(crate) fn build_worktree_remove_command(
 
 pub(crate) fn is_dirty_worktree_remove_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    lower.contains("contains modified or untracked files")
-        && lower.contains("use --force to delete it")
+    (lower.contains("contains modified or untracked files")
+        && lower.contains("use --force to delete it"))
+        || lower.contains("working trees containing submodules cannot be moved or removed")
 }
 
 pub(crate) fn is_not_working_tree_remove_error(message: &str) -> bool {
@@ -322,6 +323,8 @@ pub(crate) fn run_worktree_add_command(
 
 pub(crate) fn run_worktree_command(command: &WorktreeCommand) -> Result<(), String> {
     let output = crate::noninteractive_process::command(&command.program)
+        // Removal errors are classified by Git's English diagnostics.
+        .env("LC_ALL", "C")
         .args(&command.args)
         .output()
         .map_err(|err| err.to_string())?;
@@ -825,6 +828,72 @@ prunable stale
         assert!(!is_dirty_worktree_remove_error(
             "fatal: '/w/herdr' contains a locked worktree, use --force only if you know why"
         ));
+    }
+
+    #[test]
+    fn submodule_remove_error_requires_force_confirmation() {
+        assert!(is_dirty_worktree_remove_error(
+            "fatal: working trees containing submodules cannot be moved or removed"
+        ));
+    }
+
+    #[test]
+    fn submodule_worktree_removal_requires_explicit_force() {
+        let repo = create_committed_repo("submodule-remove-repo");
+        let submodule = create_committed_repo("submodule-remove-source");
+        let checkout = unique_temp_path("submodule-remove-checkout");
+        run_git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--quiet",
+                submodule.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        run_git(&repo, &["commit", "--quiet", "-am", "add submodule"]);
+        let add = build_worktree_add_new_branch_command(
+            &repo,
+            &checkout,
+            "worktree/submodule-remove",
+            "HEAD",
+            false,
+        );
+        run_worktree_command(&add).unwrap();
+        run_git(
+            &checkout,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--quiet",
+            ],
+        );
+        assert!(!checkout_has_dirty_files(&checkout, false).unwrap());
+
+        let remove = build_worktree_remove_command(&repo, &checkout, false, false);
+        let error = run_worktree_command(&remove).unwrap_err();
+        assert!(is_dirty_worktree_remove_error(&error), "{error}");
+        assert!(checkout.join("sub/README.md").exists());
+
+        std::fs::write(checkout.join("sub/README.md"), "uncommitted change\n").unwrap();
+        let error = run_worktree_command(&remove).unwrap_err();
+        assert!(is_dirty_worktree_remove_error(&error), "{error}");
+        assert!(checkout.join("sub/README.md").exists());
+
+        let forced = build_worktree_remove_command(&repo, &checkout, true, false);
+        run_worktree_remove_command_with_recovery(&forced, &repo, &checkout, true, false).unwrap();
+        assert!(!checkout.exists());
+        assert!(!worktree_list_contains_path(&repo, &checkout, false).unwrap());
+        assert!(repo.join("sub/README.md").exists());
+
+        std::fs::remove_dir_all(repo).unwrap();
+        std::fs::remove_dir_all(submodule).unwrap();
     }
 
     #[test]

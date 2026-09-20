@@ -3237,6 +3237,10 @@ unsafe extern "C" {
     pub fn ghostty_terminal_reset(terminal: GhosttyTerminal);
 }
 unsafe extern "C" {
+    #[doc = " Clear screen and history, retaining the cursor's soft-wrapped active line.\n Does not alter the VT parser or write to the child process. Returns false\n without changing the terminal on the alternate screen or for a NULL handle.\n Otherwise returns true and moves the retained line to the top of the screen."]
+    pub fn ghostty_terminal_clear_screen(terminal: GhosttyTerminal) -> bool;
+}
+unsafe extern "C" {
     #[doc = " Resize the terminal to the given dimensions.\n\n Changes the number of columns and rows in the terminal. The primary\n screen will reflow content if wraparound mode is enabled; the alternate\n screen does not reflow. If the dimensions are unchanged, this is a no-op.\n\n This also updates the terminal's pixel dimensions (used for image\n protocols and size reports), disables synchronized output mode (allowed\n by the spec so that resize results are shown immediately), and sends an\n in-band size report if mode 2048 is enabled.\n\n @param terminal The terminal handle (NULL returns GHOSTTY_INVALID_VALUE)\n @param cols New width in cells (must be greater than zero)\n @param rows New height in cells (must be greater than zero)\n @param cell_width_px Width of a single cell in pixels\n @param cell_height_px Height of a single cell in pixels\n @return GHOSTTY_SUCCESS on success, or an error code on failure\n\n @ingroup terminal"]
     pub fn ghostty_terminal_resize(
         terminal: GhosttyTerminal,

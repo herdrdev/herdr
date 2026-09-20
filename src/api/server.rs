@@ -177,10 +177,23 @@ fn handle_connection_with_stop(
     let request = match serde_json::from_str::<Request>(line) {
         Ok(request) => request,
         Err(request_error) => {
+            // Recover correlation without relaxing typed request validation or accepting
+            // ambiguous duplicate IDs. Invalid JSON and non-string IDs stay uncorrelated.
+            #[derive(serde::Deserialize)]
+            struct RequestId {
+                id: String,
+            }
+            let id = if line.starts_with('{') {
+                serde_json::from_str::<RequestId>(line)
+                    .map(|request| request.id)
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
             write_json_line_allow_disconnect(
                 &mut stream,
                 &ErrorResponse {
-                    id: String::new(),
+                    id,
                     error: ErrorBody {
                         code: "invalid_request".into(),
                         message: format!("invalid request: {request_error}"),
@@ -444,6 +457,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::PaneFocusDirection(_) => "pane.focus_direction",
         Method::PaneResize(_) => "pane.resize",
         Method::PaneScroll(_) => "pane.scroll",
+        Method::PaneClear(_) => "pane.clear",
         Method::PaneEditScrollback(_) => "pane.edit_scrollback",
         Method::PaneSelectionRead(_) => "pane.selection.read",
         Method::PaneCopyMotion(_) => "pane.copy_motion",
@@ -718,7 +732,8 @@ fn stream_subscriptions(
             event_start_sequence,
         ) {
             Ok(active) => active,
-            Err(response) => {
+            Err(mut response) => {
+                response.id = request_id;
                 if let Err(err) = write_json_line(&mut stream, &response) {
                     if is_connection_closed_error(&err) {
                         return Ok(());
@@ -957,7 +972,7 @@ mod tests {
     use super::*;
     use interprocess::local_socket::traits::Listener as _;
     use std::collections::HashMap;
-    use std::io::{BufRead, BufReader};
+    use std::io::{BufRead, BufReader, Read};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
     use std::sync::{Mutex, OnceLock};
@@ -1438,6 +1453,95 @@ mod tests {
     }
 
     #[test]
+    fn invalid_requests_preserve_only_unambiguous_string_ids() {
+        let cases = [
+            (
+                r#"{"id":"mine","method":"pane.report_agent","params":{"pane_id":"w1:p1","status":"working","source":"x"}}"#,
+                "mine",
+            ),
+            (r#"{"id":"escaped\"id","method":"unknown"}"#, "escaped\"id"),
+            (r#"{"method":"unknown","params":{"id":"nested"}}"#, ""),
+            (r#"{"id":123,"method":"unknown"}"#, ""),
+            (
+                r#"{"id":"first","id":"second","method":"ping","params":{}}"#,
+                "",
+            ),
+            (r#"{"id":"truncated","method":"ping""#, ""),
+            (r#"["not-an-object"]"#, ""),
+        ];
+        for (request, expected_id) in cases {
+            let (api_tx, mut api_rx) = mpsc::unbounded_channel();
+            let (mut client, server, path) = local_stream_pair("invalid-request-id");
+            writeln!(client, "{request}").unwrap();
+            let running = Arc::new(AtomicBool::new(true));
+            handle_connection(server, &api_tx, &EventHub::default(), &running, None).unwrap();
+
+            let mut response = String::new();
+            BufReader::new(client)
+                .read_to_string(&mut response)
+                .unwrap();
+            let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(response.id, expected_id, "{request}");
+            assert_eq!(response.error.code, "invalid_request");
+            assert!(response.error.message.starts_with("invalid request: "));
+            assert!(
+                api_rx.try_recv().is_err(),
+                "invalid requests must not dispatch"
+            );
+            fs::remove_file(path).unwrap();
+        }
+    }
+
+    #[test]
+    fn subscription_setup_errors_preserve_request_id_and_reject_entire_stream() {
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let event_hub = EventHub::default();
+        let responder_event_hub = event_hub.clone();
+        let responder = std::thread::spawn(move || {
+            let msg = api_rx.blocking_recv().unwrap();
+            let Method::PaneGet(params) = msg.request.method else {
+                panic!("unexpected request: {:?}", msg.request.method);
+            };
+            assert_eq!(params.pane_id, "w999:p9");
+            responder_event_hub.push(crate::api::schema::EventEnvelope {
+                event: crate::api::schema::EventKind::PaneClosed,
+                data: crate::api::schema::EventData::PaneClosed {
+                    pane_id: "w999:p9".into(),
+                    workspace_id: "w999".into(),
+                },
+            });
+            msg.respond_to
+                .send(error_response_json(
+                    msg.request.id,
+                    "pane_not_found",
+                    "pane w999:p9 not found".into(),
+                ))
+                .unwrap();
+            assert!(
+                api_rx.blocking_recv().is_none(),
+                "rejection must not start polling"
+            );
+        });
+        let (mut client, server, path) = local_stream_pair("subscription-error-id");
+        let request = r#"{"id":"panefold:events","method":"events.subscribe","params":{"subscriptions":[{"type":"workspace.created"},{"type":"pane.closed"},{"type":"pane.agent_status_changed","pane_id":"w999:p9"}]}}"#;
+        writeln!(client, "{request}").unwrap();
+        let running = Arc::new(AtomicBool::new(true));
+        handle_connection(server, &api_tx, &event_hub, &running, None).unwrap();
+        drop(api_tx);
+        responder.join().unwrap();
+
+        let mut response = String::new();
+        BufReader::new(client)
+            .read_to_string(&mut response)
+            .unwrap();
+        let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(response.id, "panefold:events");
+        assert_eq!(response.error.code, "pane_not_found");
+        assert_eq!(response.error.message, "pane w999:p9 not found");
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn subscriptions_stop_when_client_disconnects() {
         let (api_tx, _api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
         let (mut client, server, _path) = local_stream_pair("api-sub-disconnect");
@@ -1461,6 +1565,7 @@ mod tests {
         let ack = read_line(&mut client);
         let ack: serde_json::Value = serde_json::from_str(&ack).unwrap();
         assert_eq!(ack["result"]["type"], "subscription_started");
+        assert_eq!(ack["id"], "sub_1");
 
         drop(client);
 

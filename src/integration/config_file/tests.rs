@@ -1,4 +1,5 @@
 use super::*;
+use crate::integration::test_support::symlink_file;
 
 struct Directory(PathBuf);
 
@@ -103,15 +104,6 @@ fn hard_links_are_rejected_before_staging_and_rechecked_before_commit() {
     assert_eq!(fs::read_dir(&dir.0).unwrap().count(), 2);
 }
 
-#[cfg(unix)]
-fn symlink(target: &Path, link: &Path) {
-    std::os::unix::fs::symlink(target, link).unwrap();
-}
-#[cfg(windows)]
-fn symlink(target: &Path, link: &Path) {
-    std::os::windows::fs::symlink_file(target, link).unwrap();
-}
-
 #[test]
 fn symlink_chains_and_dangling_targets_preserve_links() {
     let dir = Directory::new();
@@ -120,10 +112,12 @@ fn symlink_chains_and_dangling_targets_preserve_links() {
     let target = other.join("preferences");
     let intermediate = other.join("link");
     let entry = dir.0.join("config");
-    symlink(&target, &intermediate);
+    if !symlink_file(&target, &intermediate) {
+        return;
+    }
     // A Windows reparse target needs native separators, unlike ordinary Win32 paths.
     let relative_target = Path::new("other").join("link");
-    symlink(&relative_target, &entry);
+    assert!(symlink_file(&relative_target, &entry));
     let original_intermediate = fs::read_link(&intermediate).unwrap();
     assert_eq!(
         fs::metadata(&entry).unwrap_err().kind(),
@@ -142,7 +136,7 @@ fn symlink_chains_and_dangling_targets_preserve_links() {
     assert_eq!(fs::read_link(&entry).unwrap(), relative_target);
 
     let cycle = dir.0.join("cycle");
-    symlink(Path::new("cycle"), &cycle);
+    assert!(symlink_file(Path::new("cycle"), &cycle));
     assert!(write_config(&cycle, b"must not replace the link").is_err());
     assert_eq!(fs::read_link(&cycle).unwrap(), Path::new("cycle"));
 }

@@ -132,3 +132,41 @@ just test-one link_activation
 just test-one ctrl_click
 just check
 ```
+
+## 0006 clear screen while preserving the cursor line
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0006-clear-screen-preserving-cursor-line.patch`
+
+herdr issue: none; requested in https://github.com/herdrdev/herdr/discussions/545
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/c/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+
+reason: Herdr needs an explicit screen/history clear that preserves the cursor's
+visible soft-wrapped line without writing to the child or interrupting a partial
+VT sequence. The new C function operates directly on the screen, leaves alternate
+screens untouched, clears image placements, and marks the result dirty.
+
+remove when: the vendored C API provides an equivalent parser-independent clear
+operation preserving the visible cursor line, and Herdr passes the checks below
+using it without this patch.
+
+verification:
+
+```sh
+just test-one clear_pane
+just maintenance-test
+just check
+```

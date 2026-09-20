@@ -32,6 +32,10 @@ If the Herdr server stops and starts again, the original pane processes are gone
 
 Snapshot restore does not preserve running shells, servers, tests, or arbitrary processes. Panes that cannot use a stronger restore path come back as new shells in their saved directories.
 
+If `session.json` cannot be read or parsed, or requires a newer Herdr version, Herdr logs why loading failed. Before saving or clearing the replacement session, it preserves the original bytes in `session-backups/` beside `session.json` and logs the recovery path as `persist.backup`. A file missing at startup is checked again before the first save or clear. Healthy restores do not create recovery copies.
+
+Herdr retains the three most recent recovery copies, pruning older copies only after a new copy is safely written. If preservation fails, autosave and shutdown leave the original untouched and log the failure; preservation is retried on the next save request. Copies are never restored automatically. To recover one, stop the affected server, copy the recovery file over its `session.json`, then restart. Recovery copies do not include pane screen history.
+
 ## Pane screen history replay
 
 Pane screen history restores recent terminal contents after a full server restart without restoring the old process.
@@ -70,13 +74,14 @@ Native session restore requires these Herdr integration versions or newer:
 | Claude Code | `6` | `claude --resume <id>` |
 | Codex | `5` | `codex resume <id>` |
 | Cursor Agent CLI | `1` | `cursor-agent --resume <id>` |
-| Grok CLI | `1` | `grok --resume <id>` |
+| Grok CLI | `2` | `grok --resume <id>` |
 | GitHub Copilot CLI | `2` | `copilot --resume=<id>` |
 | Devin CLI | `2` | `devin --resume <id>` |
 | Droid | `2` | `droid --resume <id>` |
 | Kimi Code CLI | `3` | `kimi --session <id>` |
 | Qoder CLI | `2` | `qodercli --resume <id>` |
 | Qwen Code | `1` | `qwen --resume <id>` |
+| Letta Code | `1` | `letta --conversation <id>` or `letta --conversation default --agent <agent-id>` for `default:<agent-id>` |
 | OpenCode | `5` | `opencode --session <id>` |
 | Kilo Code CLI | `1` | `kilo --session <id>` |
 | Hermes Agent | `2` | `hermes --resume <id>` |

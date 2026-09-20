@@ -1032,6 +1032,22 @@ impl ClientShellState {
                     }
                     return;
                 }
+                Some(ClientChromeDrag::NavigatorScrollbar { grab_row_offset }) => {
+                    if let Some(metrics) = self.hits.navigator_scroll_metrics {
+                        let offset = crate::ui::scrollbar_offset_from_drag_row(
+                            metrics,
+                            self.hits.navigator_scrollbar,
+                            mouse.row,
+                            *grab_row_offset,
+                        );
+                        self.scroll_navigator_to(
+                            metrics.max_offset_from_bottom.saturating_sub(offset),
+                            metrics.viewport_rows,
+                        );
+                        outcome.repaint = true;
+                    }
+                    return;
+                }
                 Some(ClientChromeDrag::HelpScrollbar { grab_row_offset }) => {
                     if let (Some(metrics), Some(ClientShellOverlay::Help(help))) =
                         (self.hits.help_scroll_metrics, self.overlay.as_mut())
@@ -1317,6 +1333,7 @@ impl ClientShellState {
                     ClientChromeDrag::WorkspaceScrollbar { .. }
                     | ClientChromeDrag::AgentScrollbar { .. }
                     | ClientChromeDrag::HelpScrollbar { .. }
+                    | ClientChromeDrag::NavigatorScrollbar { .. }
                     | ClientChromeDrag::ProductAnnouncementScrollbar { .. }
                     | ClientChromeDrag::ReleaseNotesScrollbar { .. } => {}
                 }
@@ -1613,7 +1630,29 @@ impl ClientShellState {
                     }
                 }
                 MouseEventKind::Down(MouseButton::Left) => {
-                    if super::contains(self.hits.navigator_search, point) {
+                    if super::contains(self.hits.navigator_scrollbar, point) {
+                        if let Some(metrics) = self.hits.navigator_scroll_metrics {
+                            if let Some(grab_row_offset) = crate::ui::scrollbar_thumb_grab_offset(
+                                metrics,
+                                self.hits.navigator_scrollbar,
+                                mouse.row,
+                            ) {
+                                self.chrome_drag =
+                                    Some(ClientChromeDrag::NavigatorScrollbar { grab_row_offset });
+                            } else {
+                                let offset = crate::ui::scrollbar_offset_from_row(
+                                    metrics,
+                                    self.hits.navigator_scrollbar,
+                                    mouse.row,
+                                );
+                                self.scroll_navigator_to(
+                                    metrics.max_offset_from_bottom.saturating_sub(offset),
+                                    metrics.viewport_rows,
+                                );
+                                outcome.repaint = true;
+                            }
+                        }
+                    } else if super::contains(self.hits.navigator_search, point) {
                         if let Some(ClientShellOverlay::Navigator(navigator)) =
                             self.overlay.as_mut()
                         {
@@ -1621,19 +1660,13 @@ impl ClientShellState {
                             navigator.filter = None;
                         }
                         outcome.repaint = true;
-                    } else if let Some((rect, target)) = row_hit {
+                    } else if let Some((_, target)) = row_hit {
                         if let Some(ClientShellOverlay::Navigator(navigator)) =
                             self.overlay.as_mut()
                         {
-                            navigator.selected = Some(target.clone());
+                            navigator.selected = Some(target);
                         }
-                        let workspace = matches!(target, ClientNavigatorTarget::Workspace { .. });
-                        if workspace && mouse.column <= rect.x.saturating_add(3) {
-                            self.toggle_selected_navigator_workspace();
-                            outcome.repaint = true;
-                        } else {
-                            self.accept_navigator_selection(outcome);
-                        }
+                        self.accept_navigator_selection(outcome);
                     } else if !super::contains(self.hits.navigator_popup, point) {
                         self.overlay = None;
                         outcome.repaint = true;

@@ -83,7 +83,6 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
         selected: None,
         scroll: 0,
         filter: None,
-        expanded_workspaces: HashSet::new(),
     }));
     assert!(!state.modal_paste_target_active());
     if let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() {
@@ -882,6 +881,25 @@ fn pane_scrollbar_track_and_thumb_use_stable_endpoint_scroll_requests() {
         })]);
     assert!(release.actions.is_empty());
     assert!(state.chrome_drag.is_none());
+}
+
+#[test]
+fn clear_pane_binding_targets_the_focused_endpoint_pane() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut input = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ClearPane),
+        &mut input,
+    );
+    assert!(input.requests.is_empty());
+    assert!(matches!(
+        &input.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::PaneClear(target)
+                if target.pane_id == "pane_1")
+    ));
 }
 
 #[test]

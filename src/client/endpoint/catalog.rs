@@ -331,7 +331,11 @@ fn load_selection_from_path(path: &Path) -> Result<Option<EndpointSelection>, St
     Ok(Some(selection))
 }
 
-fn store_private_json(path: &Path, content: &[u8], description: &str) -> Result<(), String> {
+pub(super) fn store_private_json(
+    path: &Path,
+    content: &[u8],
+    description: &str,
+) -> Result<(), String> {
     if content.len() as u64 > MAX_CATALOG_BYTES {
         return Err(format!("{description} exceeds the storage limit"));
     }

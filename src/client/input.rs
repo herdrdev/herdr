@@ -327,13 +327,18 @@ fn windows_stdin_reader_loop(
     should_quit: &Arc<AtomicBool>,
 ) {
     if !super::windows_vti_input_backend_enabled() {
+        windows_vti::trace_input_transport("reader=crossterm");
         windows_crossterm_reader_loop(event_tx, should_quit);
     } else {
         match windows_vti::console_input_handle() {
-            Ok(handle) if windows_vti::virtual_terminal_input_enabled(handle) => {
+            Ok(handle) => {
+                windows_vti::trace_input_transport("reader=windows-console");
                 windows_vti::raw_console_reader_loop(handle, event_tx, should_quit);
             }
-            _ => windows_crossterm_reader_loop(event_tx, should_quit),
+            _ => {
+                windows_vti::trace_input_transport("reader=crossterm-fallback");
+                windows_crossterm_reader_loop(event_tx, should_quit);
+            }
         }
     }
 }

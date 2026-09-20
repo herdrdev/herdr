@@ -782,8 +782,7 @@ pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde
 }
 
 fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
-    let status = client
-        .status()
+    let status = target::server_status(client)
         .map_err(|err| map_server_not_running_or_io(err, request_id, client))?;
     let server_protocol = status
         .protocol

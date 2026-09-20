@@ -1,7 +1,7 @@
 use std::fmt;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::Stream as _;
 use serde::de::DeserializeOwned;
@@ -75,10 +75,37 @@ impl ApiClient {
     }
 
     pub fn status(&self) -> Result<crate::api::RuntimeStatus, ApiClientError> {
-        let response = self.request(Request {
+        self.read_status(None)
+    }
+
+    pub(crate) fn status_with_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<crate::api::RuntimeStatus, ApiClientError> {
+        self.read_status(Some(timeout))
+    }
+
+    fn read_status(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<crate::api::RuntimeStatus, ApiClientError> {
+        let request = Request {
             id: "api-client:status".into(),
             method: Method::Ping(PingParams::default()),
-        })?;
+        };
+        let response = match timeout {
+            Some(timeout) => {
+                let mut stream = self.connect()?;
+                write_request(&mut stream, &request)?;
+                crate::ipc::set_local_stream_polling(&mut stream, true)?;
+                let mut reader = BufReader::new(DeadlineReader {
+                    stream: &mut stream,
+                    deadline: Instant::now() + timeout,
+                });
+                parse_response_value(read_json_line(&mut reader)?)?
+            }
+            None => self.request(request)?,
+        };
         match response.result {
             ResponseResult::Pong {
                 version,
@@ -162,9 +189,37 @@ fn write_request(stream: &mut LocalStream, request: &Request) -> Result<(), ApiC
     Ok(())
 }
 
-fn read_json_line<T: DeserializeOwned>(
-    reader: &mut BufReader<LocalStream>,
-) -> Result<T, ApiClientError> {
+struct DeadlineReader<'a> {
+    stream: &'a mut LocalStream,
+    deadline: Instant,
+}
+
+impl Read for DeadlineReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            if Instant::now() >= self.deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "server status probe timed out",
+                ));
+            }
+            // Windows named pipes have no read timeout; peek-before-read keeps
+            // both idle and partial responses subject to the same deadline.
+            match crate::ipc::poll_local_stream_read_count(self.stream, buffer)? {
+                crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
+                crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
+                crate::ipc::LocalStreamReadCount::Pending => {
+                    std::thread::sleep(Duration::from_millis(2))
+                }
+            }
+        }
+    }
+}
+
+fn read_json_line<T: DeserializeOwned>(reader: &mut impl BufRead) -> Result<T, ApiClientError> {
     let mut line = String::new();
     let read = reader.read_line(&mut line)?;
     if read == 0 || line.trim().is_empty() {
@@ -197,6 +252,34 @@ mod tests {
     fn local_session_target_resolves_named_session_socket() {
         let client = ApiClient::for_target(ConnectionTarget::LocalSession(Some("work".into())));
         assert!(client.socket_path().ends_with("sessions/work/herdr.sock"));
+    }
+
+    #[test]
+    fn status_timeout_closes_a_stalled_probe() {
+        use interprocess::local_socket::traits::Listener as _;
+        let path =
+            std::env::temp_dir().join(format!("herdr-status-timeout-{}.sock", std::process::id()));
+        let listener = crate::ipc::bind_private_local_listener(&path).unwrap();
+        let server = std::thread::spawn(move || {
+            let stream = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&line).unwrap()["method"],
+                "ping"
+            );
+            std::thread::sleep(Duration::from_millis(300));
+        });
+        let client = ApiClient::for_target(ConnectionTarget::SocketPath(path.clone()));
+        let error = client
+            .status_with_timeout(Duration::from_millis(100))
+            .unwrap_err();
+        assert!(
+            matches!(error, ApiClientError::Io(error) if matches!(error.kind(), io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock))
+        );
+        server.join().unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

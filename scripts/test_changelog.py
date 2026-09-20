@@ -9,6 +9,7 @@ from scripts.changelog import (
     ChangelogError,
     archived_releases_from_current_manifest,
     build_latest_json,
+    build_parser,
     canonicalize_manifest,
     DEFAULT_PRODUCT_ANNOUNCEMENT_PATH,
     default_release_assets,
@@ -101,6 +102,14 @@ class ChangelogScriptTests(unittest.TestCase):
 
         self.assertEqual(manifest["protocol"], read_protocol_version())
         self.assertEqual(manifest["notes"], "### Fixed\n- One")
+
+    def test_build_latest_json_uses_selected_release_endpoint_generation(self) -> None:
+        manifest = json.loads(build_latest_json(
+            "0.1.1", "Release notes", release_assets("0.1.1"), release_sha256(),
+            endpoint_generation=7,
+        ))
+        self.assertEqual(manifest["endpoint_generation"], 7)
+        self.assertEqual(manifest["releases"]["0.1.1"]["endpoint_generation"], 7)
 
     def test_build_latest_json_embeds_notes_and_release_assets(self) -> None:
         manifest = json.loads(
@@ -360,7 +369,11 @@ class ChangelogScriptTests(unittest.TestCase):
             },
         )
 
-    def test_manifest_from_release_payload_uses_explicit_protocol(self) -> None:
+    def test_manifest_from_release_payload_uses_explicit_compatibility_versions(self) -> None:
+        args = build_parser().parse_args([
+            "verify-release-state", "--version", "0.1.1",
+            "--protocol", "42", "--endpoint-generation", "7",
+        ])
         manifest = manifest_from_release_payload(
             {
                 "tagName": "v0.1.1",
@@ -370,10 +383,12 @@ class ChangelogScriptTests(unittest.TestCase):
                 "assets": release_assets_with_digests(),
             },
             "0.1.1",
-            protocol=42,
+            protocol=args.protocol,
+            endpoint_generation=args.endpoint_generation,
         )
 
         self.assertEqual(manifest["protocol"], 42)
+        self.assertEqual(manifest["endpoint_generation"], 7)
 
     def test_manifest_from_release_payload_rejects_missing_digest(self) -> None:
         assets = release_assets_with_digests()

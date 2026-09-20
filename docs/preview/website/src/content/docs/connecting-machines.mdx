@@ -43,7 +43,13 @@ Run `herdr` to open the UI. If a local client is already open, added and enabled
 
 Choose a machine or one of its workspaces in the sidebar. The selected machine receives your pane input and terminal size, and supplies the visible terminal content and graphics. Other connected machines keep updating their workspace information, agent states, and notifications without streaming their pane screens.
 
-Local opens immediately on startup without waiting for SSH connections. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
+Click the arrow beside any machine to collapse or expand its workspace list without switching away from your current workspace. This also works while that machine is reconnecting.
+
+For keyboard navigation, press `prefix+w`, then use the workspace navigation keys (Up/Down by default) to highlight workspaces across connected machines in sidebar order. Enter activates the highlighted workspace; Esc or the prefix key cancels without switching. Compact and expanded sidebars reveal the highlighted row, including under a collapsed machine. On desktop, navigation wraps at the ends; the mobile switcher stops at the first or last workspace. Disconnected machines are skipped.
+
+When highlighting a workspace on another machine, press Enter before using other keyboard actions. This prevents pane, tab, workspace, or custom-command shortcuts from acting on the current machine by mistake. Clicking cancels a remote desktop keyboard preview. Expanded sidebars respect each machine's collapsed worktree groups.
+
+Local opens immediately on startup without waiting for SSH connections. Selecting Local also cancels an unfinished remote switch without waiting for the remote machine to reply. If Local itself is reconnecting, your selection resumes when it is ready. Local accepts input once its fresh screen and terminal settings are ready. A stalled machine cannot hold up another machine's input. Multiple Herdr clients can also view different tabs on the same server independently; see [Client and server](/docs/concepts/#client-and-server) for shared-tab sizing.
 
 When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.
 
@@ -67,9 +73,11 @@ Removing or disabling the machine you are viewing returns you to Local. If Local
 
 ## Connection problems
 
-- **Reconnecting:** Herdr retries with bounded backoff after a network interruption, sleep, or SSH failure. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
+- **Reconnecting:** Herdr retries automatically after a network interruption, sleep, or SSH failure. Repeated failures increase the delay up to two minutes; brief successful connections do not reset it. A connection must remain healthy for a minute before the next interruption gets a fast retry. SSH connections are checked for application-level activity and probed when quiet, so a broken connection does not stay Online indefinitely. Local detects native connection closure or failure instead of using remote health probes.
 - **Attention:** The target needs an action that cannot be completed in the background, such as host-key approval, authentication, or a compatible server. Other machines remain usable.
 - **Saved-machine file error:** An unreadable or invalid catalog leaves current connections unchanged. Herdr shows a notice and automatically retries reading it.
+
+When both installations support bridge idle cleanup, saved-machine connections to Linux and macOS also close their remote bridge after a minute without traffic in either direction. Sleep counts toward that deadline, which is checked when the host wakes. Quiet healthy connections exchange health checks; watching continuous output does not require typing. Cleanup leaves the remote Herdr server, sessions, and pane processes running. Older installations remain compatible without this optional cleanup.
 
 Background connections never answer prompts or install, update, restart, or hand off a server. For Attention, run the standalone setup command shown by Herdr in an interactive terminal, for example:
 
@@ -87,7 +95,7 @@ The UI uses the client's local theme, sidebar settings, and keybindings by defau
 
 Default agent rows show a `machine` token when multiple machines are present. Existing custom rows are preserved; add `machine` explicitly if you want that label in your layout. [Sidebar row layouts](/docs/configuration/#sidebar-row-layouts) also support conditional colors for machine labels.
 
-Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines may both contain `w1:p1` or an agent named `reviewer`. Selecting a machine in the UI does not retarget CLI commands running in an existing pane: they still use that pane's inherited session and socket. For remote automation, run commands on the intended host against the intended session and read its IDs there.
+Workspace, tab, pane IDs, and agent names are scoped to one server. Two machines may both contain `w1:p1` or an agent named `reviewer`. Selecting a machine in the UI does not retarget CLI commands running in an existing pane: they still use that pane's inherited session and socket. For remote automation, use `herdr --machine <label-or-id> agent list`, then pass the same prefix when controlling those remote IDs. The CLI uses the saved profile's SSH target and session directly; it does not need an open TUI. Without `--machine`, existing session/socket routing is unchanged. See [CLI reference](/docs/cli-reference/#saved-ssh-machines) for supported commands, update requirements, and remote path rules.
 
 ## Updates and saved data
 

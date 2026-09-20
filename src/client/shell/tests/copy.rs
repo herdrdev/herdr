@@ -940,7 +940,34 @@ fn copy_search_owns_prompt_repeat_highlights_selection_and_restore() {
 }
 
 #[test]
-fn navigator_renders_connected_siblings_and_ancestor_lines() {
+fn navigator_workspace_headings_use_the_active_themes_primary_text() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.config.theme_runtime.auto_switch = false;
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    for palette in [
+        Palette::catppuccin(),
+        Palette::catppuccin_latte(),
+        Palette::terminal(),
+    ] {
+        state.config.palette = palette;
+        let frame = state.compose(106, 30).expect("navigator");
+        let (rect, _) = state
+            .hits
+            .navigator_rows
+            .iter()
+            .find(|(_, target)| matches!(target, ClientNavigatorTarget::Workspace { .. }))
+            .expect("workspace heading");
+        let position = cell_symbol_position(&frame, *rect, "client-shell");
+        let buffer = frame.to_ratatui_buffer().expect("buffer");
+        assert_eq!(buffer[position].fg, state.config.palette.text);
+        assert!(buffer[position].modifier.contains(Modifier::BOLD));
+    }
+}
+
+#[test]
+fn navigator_renders_every_terminal_in_workspace_sections() {
     let mut snapshot = snapshot();
     snapshot.focused_pane_id = None;
     snapshot.tabs[0].label = "editor".into();
@@ -986,39 +1013,46 @@ fn navigator_renders_connected_siblings_and_ancestor_lines() {
     state.set_snapshot(Box::new(snapshot));
     state.set_pane_surface(surface());
     state.open_navigator_overlay();
-    let prefixes = |state: &mut ClientShellState, height| {
+    let visible_rows = |state: &mut ClientShellState, height| {
         let frame = state.compose(106, height).expect("navigator frame");
         state
             .hits
             .navigator_rows
             .iter()
             .map(|(rect, _)| {
-                frame.cells[rect.y as usize * frame.width as usize + rect.x as usize + 1..]
+                frame.cells[rect.y as usize * frame.width as usize + rect.x as usize..]
                     .iter()
-                    .take(6)
+                    .take(rect.width as usize)
                     .map(|cell| cell.symbol.as_str())
                     .collect::<String>()
             })
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        prefixes(&mut state, 30),
-        [
-            "▾ clie",
-            "├── ed",
-            "│  ├──",
-            "│  └──",
-            "├── no",
-            "│  └──",
-            "└── lo",
-            "   └──",
-            "▾ seco",
-            "└── la",
-            "   └──"
-        ]
-    );
+    let visible = visible_rows(&mut state, 30);
+    assert_eq!(visible.len(), 7);
+    for (row, prefix) in visible
+        .iter()
+        .zip([" client", " ├─ ", " ├─ ", " ├─ ", " └─ ", " second", " └─ "])
+    {
+        assert!(
+            row.starts_with(prefix),
+            "{row:?} should start with {prefix:?}"
+        );
+    }
+    for (row, label) in visible.iter().zip([
+        "client-shell",
+        "editor · agent · 1",
+        "editor · shell · 2",
+        "notes",
+        "logs",
+        "second",
+        "agent",
+    ]) {
+        assert!(row.contains(label), "{row:?} should contain {label}");
+        assert!(!row.contains("/repo"));
+        assert!(!row.contains("──"));
+    }
 
-    // The editor ancestor is above this viewport; the logs sibling is below it.
     let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
         panic!("expected navigator");
     };
@@ -1027,24 +1061,477 @@ fn navigator_renders_connected_siblings_and_ancestor_lines() {
         endpoint_id: state.active_endpoint_id.clone(),
         pane_id: "pane_shell".into(),
     });
-    assert_eq!(
-        prefixes(&mut state, 12),
-        ["│  ├──", "│  └──", "├── no", "│  └──"]
-    );
+    let visible = visible_rows(&mut state, 11);
+    assert_eq!(visible.len(), 2);
+    assert!(visible.iter().any(|row| row.contains("editor · shell · 2")));
+    assert!(visible[0].starts_with(" ├─ "));
+    assert!(visible[1].starts_with(" ├─ "));
 
-    // Excluded siblings must not leave dangling continuation lines.
+    // Filtering retains the section and the exact split destination.
     let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
         panic!("expected navigator");
     };
-    navigator.query = "shell".into();
+    navigator.query = "pane_shell".into();
     navigator.scroll = 0;
-    assert_eq!(prefixes(&mut state, 30), ["▾ clie", "└── ed", "   └──"]);
+    let visible = visible_rows(&mut state, 30);
+    assert_eq!(visible.len(), 2);
+    assert!(visible[1].starts_with(" └─ "));
+    assert!(visible.iter().any(|row| row.contains("editor · shell · 2")));
+    assert!(visible.iter().all(|row| !row.contains("second")));
+}
+
+#[test]
+fn navigator_searches_ancestor_context_and_keeps_split_agents_individually_actionable() {
+    let mut projected = snapshot();
+    projected.tabs[0].label = "review".into();
+    projected.tabs[0].custom_label = true;
+    let mut second = projected.panes[0].clone();
+    second.pane_id = "pane_2".into();
+    second.focused = false;
+    second.foreground_cwd = Some("/repo/subproject".into());
+    projected.panes.push(second);
+    let first_agent = ClientShellAgent {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        name: Some("writer".into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: Some("implementing navigation".into()),
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Working,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: true,
+    };
+    let mut second_agent = first_agent.clone();
+    second_agent.pane_id = "pane_2".into();
+    second_agent.name = Some("reviewer".into());
+    second_agent.agent = Some("claude".into());
+    second_agent.title = Some("checking navigation".into());
+    second_agent.agent_status = AgentStatus::Blocked;
+    second_agent.focused = false;
+    projected.agents = vec![first_agent, second_agent];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    for (query, filter, expected) in [
+        ("", None, vec!["pane_1", "pane_2"]),
+        ("review", None, vec!["pane_1", "pane_2"]),
+        ("client-shell", None, vec!["pane_1", "pane_2"]),
+        ("main", None, vec!["pane_1", "pane_2"]),
+        ("claude", None, vec!["pane_2"]),
+        ("checking navigation", None, vec!["pane_2"]),
+        ("/repo/subproject", None, vec!["pane_2"]),
+        (
+            "review",
+            Some(ClientNavigatorFilter::Blocked),
+            vec!["pane_2"],
+        ),
+        ("", Some(ClientNavigatorFilter::Working), vec!["pane_1"]),
+        ("no such agent", None, vec![]),
+    ] {
+        let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+            panic!("navigator");
+        };
+        navigator.query = query.into();
+        navigator.filter = filter;
+        navigator.selected = None;
+        let rows =
+            render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+        let pane_ids = rows
+            .iter()
+            .filter_map(|row| match &row.target {
+                ClientNavigatorTarget::Pane { pane_id, .. } => Some(pane_id.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(pane_ids, expected, "query={query:?} filter={filter:?}");
+        assert_eq!(
+            rows.len(),
+            if expected.is_empty() {
+                0
+            } else {
+                expected.len() + 1
+            }
+        );
+        if !expected.is_empty() {
+            let selected =
+                super::super::aggregate_navigation::navigator_selected_index(&rows, navigator)
+                    .expect("search destination");
+            assert!(matches!(
+                rows[selected].target,
+                ClientNavigatorTarget::Pane { .. }
+            ));
+        }
+    }
     let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
-        panic!("expected navigator");
+        panic!("navigator");
     };
     navigator.query.clear();
-    navigator.expanded_workspaces.clear();
-    assert_eq!(prefixes(&mut state, 30), ["▸ clie", "▸ seco"]);
+    let frame = state.compose(160, 48).expect("navigator");
+    assert_eq!(state.hits.navigator_popup.width, 116);
+    let pane_rows = state
+        .hits
+        .navigator_rows
+        .iter()
+        .filter(|(_, target)| matches!(target, ClientNavigatorTarget::Pane { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(pane_rows.len(), 2);
+    for ((rect, _), (name, kind, status)) in pane_rows.iter().zip([
+        ("writer", "pi", "working"),
+        ("reviewer", "claude", "blocked"),
+    ]) {
+        cell_symbol_position(&frame, *rect, name);
+        cell_symbol_position(&frame, *rect, kind);
+        cell_symbol_position(&frame, *rect, status);
+    }
+    let rect = pane_rows[1].0;
+    let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: rect.right() - 1,
+        row: rect.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(
+        matches!(outcome.actions.as_slice(), [ClientShellAction::Endpoint { request, .. }]
+        if matches!(&request.method, crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"))
+    );
+}
+
+#[test]
+fn navigator_distinguishes_unnamed_terminals_on_numbered_tabs() {
+    let mut projected = snapshot();
+    for (number, label) in [(2, "2"), (3, "logs")] {
+        let mut tab = projected.tabs[0].clone();
+        tab.tab_id = format!("tab_{number}");
+        tab.number = number;
+        tab.label = label.into();
+        tab.custom_label = number == 3;
+        tab.focused = false;
+        let mut pane = projected.panes[0].clone();
+        pane.pane_id = format!("pane_{number}");
+        pane.tab_id = tab.tab_id.clone();
+        pane.focused = false;
+        projected.tabs.push(tab);
+        projected.panes.push(pane);
+    }
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.open_navigator_overlay();
+    let Some(ClientShellOverlay::Navigator(navigator)) = &state.overlay else {
+        panic!("navigator");
+    };
+    let rows =
+        render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+    let labels = rows
+        .iter()
+        .filter(|row| matches!(row.target, ClientNavigatorTarget::Pane { .. }))
+        .map(|row| row.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, ["terminal · 1", "terminal · 2", "logs"]);
+}
+
+#[test]
+fn navigator_keeps_empty_workspaces_searchable_without_status_filters() {
+    let mut projected = snapshot();
+    projected.tabs.clear();
+    projected.panes.clear();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.open_navigator_overlay();
+    for (query, filter, expected) in [
+        ("", None, true),
+        ("client-shell", None, true),
+        ("main", None, true),
+        ("missing", None, false),
+        ("main", Some(ClientNavigatorFilter::Idle), false),
+        ("", Some(ClientNavigatorFilter::Working), false),
+    ] {
+        let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+            panic!("navigator");
+        };
+        navigator.query = query.into();
+        navigator.filter = filter;
+        let rows =
+            render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+        assert_eq!(
+            rows.len(),
+            usize::from(expected),
+            "query={query:?}, filter={filter:?}"
+        );
+        let target =
+            super::super::aggregate_navigation::selected_navigator_target(&rows, navigator);
+        assert_eq!(
+            target,
+            expected.then(|| ClientNavigatorTarget::Workspace {
+                endpoint_id: ClientEndpointId::Local,
+                workspace_id: "ws_1".into(),
+            })
+        );
+    }
+}
+
+#[test]
+fn navigator_horizontal_arrows_jump_sections_but_edit_the_search_cursor() {
+    let mut projected = snapshot();
+    projected.panes[0].label = Some("needle-first".into());
+    let mut sibling = projected.panes[0].clone();
+    sibling.pane_id = "pane_sibling".into();
+    sibling.label = Some("other".into());
+    sibling.focused = false;
+    projected.panes.push(sibling);
+    let mut empty = projected.workspaces[0].clone();
+    empty.workspace_id = "ws_empty".into();
+    empty.label = "empty".into();
+    empty.focused = false;
+    projected.workspaces.push(empty);
+    let mut last = projected.workspaces[0].clone();
+    last.workspace_id = "ws_last".into();
+    last.label = "last".into();
+    last.active_tab_id = "tab_last".into();
+    last.focused = false;
+    let mut tab = projected.tabs[0].clone();
+    tab.workspace_id = last.workspace_id.clone();
+    tab.tab_id = last.active_tab_id.clone();
+    tab.focused = false;
+    for (id, label) in [
+        ("pane_last", "needle-last"),
+        ("pane_last_sibling", "other-last"),
+    ] {
+        let mut pane = projected.panes[0].clone();
+        pane.pane_id = id.into();
+        pane.label = Some(label.into());
+        pane.workspace_id = last.workspace_id.clone();
+        pane.tab_id = tab.tab_id.clone();
+        pane.focused = false;
+        projected.panes.push(pane);
+    }
+    projected.workspaces.push(last);
+    projected.tabs.push(tab);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    let press = |state: &mut ClientShellState, code| {
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(code, KeyModifiers::empty()),
+        )]);
+        assert!(outcome.actions.is_empty());
+    };
+    let selected = |state: &ClientShellState| {
+        let Some(ClientShellOverlay::Navigator(navigator)) = &state.overlay else {
+            panic!("navigator");
+        };
+        navigator.selected.clone()
+    };
+    let target = |id: &str| {
+        Some(ClientNavigatorTarget::Pane {
+            endpoint_id: ClientEndpointId::Local,
+            pane_id: id.into(),
+        })
+    };
+    press(&mut state, KeyCode::Left);
+    assert_eq!(selected(&state), target("pane_1"));
+    press(&mut state, KeyCode::Right);
+    assert_eq!(selected(&state), target("pane_last"));
+    press(&mut state, KeyCode::Down);
+    assert_eq!(selected(&state), target("pane_last_sibling"));
+    press(&mut state, KeyCode::Right);
+    assert_eq!(selected(&state), target("pane_last_sibling"));
+    press(&mut state, KeyCode::Left);
+    assert_eq!(selected(&state), target("pane_1"));
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+        panic!("navigator");
+    };
+    navigator.query = "needle".into();
+    press(&mut state, KeyCode::Right);
+    assert_eq!(selected(&state), target("pane_last"));
+    press(&mut state, KeyCode::Left);
+    assert_eq!(selected(&state), target("pane_1"));
+    press(&mut state, KeyCode::Char('/'));
+    press(&mut state, KeyCode::Left);
+    press(&mut state, KeyCode::Right);
+    assert_eq!(selected(&state), target("pane_1"));
+    press(&mut state, KeyCode::Left);
+    press(&mut state, KeyCode::Char('X'));
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+        panic!("navigator");
+    };
+    assert_eq!(navigator.query.as_str(), "needlXe");
+    navigator.search_focused = false;
+    navigator.selected = None;
+    press(&mut state, KeyCode::Left);
+    press(&mut state, KeyCode::Right);
+    assert_eq!(selected(&state), None);
+}
+
+#[test]
+fn navigator_scrollbar_click_and_drag_scroll_without_opening_a_destination() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    state.compose(106, 24).expect("small navigator");
+    assert!(state.hits.navigator_scrollbar.is_empty());
+
+    let mut projected = snapshot();
+    for index in 2..=60 {
+        let mut pane = projected.panes[0].clone();
+        pane.pane_id = format!("pane_{index}");
+        pane.label = Some(format!("agent {index}"));
+        pane.focused = false;
+        projected.panes.push(pane);
+    }
+    state.set_snapshot(Box::new(projected));
+    let frame = state.compose(106, 24).expect("overflowing navigator");
+    let track = state.hits.navigator_scrollbar;
+    let metrics = state.hits.navigator_scroll_metrics.expect("scroll metrics");
+    assert!(!track.is_empty());
+    assert_eq!(metrics.offset_from_bottom, metrics.max_offset_from_bottom);
+    assert!(track.y > state.hits.navigator_search.y);
+    assert!(track.bottom() < state.hits.navigator_popup.bottom() - 3);
+    assert!(state
+        .hits
+        .navigator_rows
+        .iter()
+        .all(|(rect, _)| rect.right() == track.x));
+    let buffer = frame.to_ratatui_buffer().expect("buffer");
+    assert_eq!(buffer[(track.x, track.y)].fg, state.config.palette.overlay1);
+    assert_eq!(
+        buffer[(track.x, track.bottom() - 1)].fg,
+        state.config.palette.overlay0
+    );
+    let mouse = |state: &mut ClientShellState, kind, row| {
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+            kind,
+            column: track.x,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })]);
+        assert!(outcome.actions.is_empty());
+        assert!(matches!(
+            state.overlay,
+            Some(ClientShellOverlay::Navigator(_))
+        ));
+    };
+    mouse(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        track.bottom() - 1,
+    );
+    state.compose(106, 24).expect("track jump");
+    assert_eq!(
+        state
+            .hits
+            .navigator_scroll_metrics
+            .expect("metrics")
+            .offset_from_bottom,
+        0
+    );
+    assert!(state.hits.navigator_rows.iter().any(|(_, target)| matches!(target, ClientNavigatorTarget::Pane { pane_id, .. } if pane_id == "pane_60")));
+    mouse(&mut state, MouseEventKind::Down(MouseButton::Left), track.y);
+    state.compose(106, 24).expect("jump back to top");
+    assert_eq!(
+        state
+            .hits
+            .navigator_scroll_metrics
+            .expect("metrics")
+            .offset_from_bottom,
+        metrics.max_offset_from_bottom
+    );
+    let thumb = crate::ui::scrollbar_thumb(metrics, track).expect("thumb");
+    let grab = thumb.len - 1;
+    mouse(
+        &mut state,
+        MouseEventKind::Down(MouseButton::Left),
+        thumb.top + grab,
+    );
+    assert!(
+        matches!(state.chrome_drag, Some(ClientChromeDrag::NavigatorScrollbar { grab_row_offset }) if grab_row_offset == grab)
+    );
+    mouse(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        thumb.top + grab,
+    );
+    state.compose(106, 24).expect("grab does not move viewport");
+    assert_eq!(
+        state
+            .hits
+            .navigator_scroll_metrics
+            .expect("metrics")
+            .offset_from_bottom,
+        metrics.max_offset_from_bottom
+    );
+    mouse(
+        &mut state,
+        MouseEventKind::Drag(MouseButton::Left),
+        track.bottom() + 5,
+    );
+    state.compose(106, 24).expect("drag to bottom");
+    assert_eq!(
+        state
+            .hits
+            .navigator_scroll_metrics
+            .expect("metrics")
+            .offset_from_bottom,
+        0
+    );
+    mouse(
+        &mut state,
+        MouseEventKind::Up(MouseButton::Left),
+        track.bottom() + 5,
+    );
+    assert!(state.chrome_drag.is_none());
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Up,
+        KeyModifiers::empty(),
+    ))]);
+    state.compose(106, 24).expect("keyboard resumes after drag");
+    assert_eq!(
+        state
+            .hits
+            .navigator_scroll_metrics
+            .expect("metrics")
+            .offset_from_bottom,
+        1
+    );
+
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+        panic!("navigator");
+    };
+    navigator.query = "pane_60".into();
+    navigator.selected = None;
+    state.compose(106, 24).expect("filtered navigator");
+    assert!(state.hits.navigator_scrollbar.is_empty());
+    assert_eq!(state.hits.navigator_rows.len(), 2);
+    state.compose(106, 90).expect("tall filtered navigator");
+    assert!(state.hits.navigator_scrollbar.is_empty());
+}
+
+#[test]
+fn navigator_narrow_layout_and_long_search_stay_inside_the_popup() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    for (width, height) in [(24, 12), (50, 24), (106, 30)] {
+        let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+            panic!("navigator");
+        };
+        navigator.search_focused = true;
+        navigator.query = "界".repeat(100).as_str().into();
+        let frame = state.compose(width, height).expect("navigator frame");
+        let popup = state.hits.navigator_popup;
+        let cursor = frame.cursor.expect("search cursor");
+        assert!(super::super::contains(popup, (cursor.x, cursor.y)));
+        assert!(state.hits.navigator_rows.is_empty());
+        assert!(popup.right() <= width && popup.bottom() <= height);
+    }
 }
 
 #[test]
@@ -1098,7 +1585,8 @@ fn navigator_owns_search_mouse_selection_and_stable_target_focus() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(navigator_text.contains("client-shell"));
-    assert!(navigator_text.contains("pane 1"));
+    assert!(navigator_text.contains("terminal"));
+    assert!(!navigator_text.contains("pane 1"));
 
     let search = state.hits.navigator_search;
     let focus_search =

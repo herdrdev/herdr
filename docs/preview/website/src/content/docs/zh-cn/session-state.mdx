@@ -34,6 +34,10 @@ herdr
 
 快照恢复不会保留运行中的 shell、服务器、测试或任意进程。无法使用更强恢复路径的窗格,会在各自保存的目录中作为新 shell 回来。
 
+如果无法读取或解析 `session.json`，或该文件需要更新的 Herdr 版本，Herdr 会记录加载失败的原因。在保存或清除新会话之前，Herdr 会将原始文件逐字节保存到 `session.json` 旁的 `session-backups/` 中，并通过 `persist.backup` 记录恢复副本的路径。即使启动时文件不存在，也会在首次保存或清除前再次检查。正常加载的会话不会创建恢复副本。
+
+Herdr 保留最新的三个恢复副本，只有在新副本安全写入后才删除旧副本。如果无法保存副本，自动保存和退出保存都不会修改原始文件，并会记录错误，在下一次保存请求时重试。副本不会自动恢复。如需恢复，请停止对应的服务器，将恢复文件复制到该服务器的 `session.json`，然后重启。恢复副本不包含窗格屏幕历史。
+
 ## 窗格屏幕历史回放
 
 窗格屏幕历史在服务器完全重启后恢复最近的终端内容。它恢复的是 Herdr 能展示的内容,而不是原来的进程。
@@ -77,6 +81,7 @@ Herdr 只会恢复那些通过当前官方 Herdr 集成上报了原生会话引�
 | Kimi Code CLI | `3` | `kimi --session <id>` |
 | Qoder CLI | `2` | `qodercli --resume <id>` |
 | Qwen Code | `1` | `qwen --resume <id>` |
+| Letta Code | `1` | `letta --conversation <id>`,或对 `default:<agent-id>` 使用 `letta --conversation default --agent <agent-id>` |
 | OpenCode | `5` | `opencode --session <id>` |
 | Kilo Code CLI | `1` | `kilo --session <id>` |
 | Hermes Agent | `2` | `hermes --resume <id>` |
