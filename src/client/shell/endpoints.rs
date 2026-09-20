@@ -108,6 +108,9 @@ impl ClientShellState {
     }
 
     pub(crate) fn retire_endpoint(&mut self, endpoint_id: &ClientEndpointId) {
+        if endpoint_id == &self.active_endpoint_id {
+            self.pending_workspace_highlight = None;
+        }
         self.retire_endpoint_notifications(endpoint_id);
         if let Some(endpoint) = self
             .endpoints
@@ -131,6 +134,9 @@ impl ClientShellState {
         endpoint_id: &ClientEndpointId,
         status: ClientEndpointStatus,
     ) {
+        if endpoint_id == &self.active_endpoint_id && status != ClientEndpointStatus::Online {
+            self.pending_workspace_highlight = None;
+        }
         if let Some(endpoint) = self
             .endpoints
             .iter_mut()

@@ -344,6 +344,11 @@ fn direct_attach_initial_mouse_capture_follows_config() {
         "direct attach must enable host bracketed paste; output: {:?}",
         read_output(&output)
     );
+    assert!(
+        !read_output(&output).contains("\x1b[?u"),
+        "direct attach must not query rendered-client keyboard state; output: {:?}",
+        read_output(&output)
+    );
 
     let restore_watermark = output_len(&output);
     attach

@@ -141,6 +141,7 @@ impl ClientShellState {
                     return;
                 }
                 if action == crate::input::KeybindAction::WorkspacePicker {
+                    self.pending_workspace_highlight = None;
                     self.mobile_switcher_scroll = 0;
                     self.reveal_mobile_workspace = false;
                     self.mode = ClientShellMode::Navigate;
@@ -349,6 +350,19 @@ impl ClientShellState {
         kind: PendingEndpointKind,
         outcome: &mut ClientShellInput,
     ) -> bool {
+        let changes_focus = match &method {
+            crate::api::schema::Method::WorkspaceFocus(_)
+            | crate::api::schema::Method::TabFocus(_)
+            | crate::api::schema::Method::PaneFocus(_)
+            | crate::api::schema::Method::PaneFocusDirection(_) => true,
+            crate::api::schema::Method::WorkspaceCreate(params) => params.focus,
+            crate::api::schema::Method::TabCreate(params) => params.focus,
+            crate::api::schema::Method::PaneSplit(params) => params.focus,
+            _ => false,
+        };
+        if changes_focus {
+            outcome.repaint |= self.pending_workspace_highlight.take().is_some();
+        }
         if !self.endpoint_is_online(&self.active_endpoint_id) {
             let label = self.active_endpoint_label().to_owned();
             outcome.repaint |= self.receive_endpoint_unavailable(format!("{label} is not ready"));
@@ -495,6 +509,13 @@ impl ClientShellState {
             self.endpoint_notice_seen.remove(&timeout_key);
         }
         if let Err(error) = &result {
+            if self
+                .pending_workspace_highlight
+                .as_ref()
+                .is_some_and(|pending| pending.request_id == request_id)
+            {
+                self.pending_workspace_highlight = None;
+            }
             let code = error.code.as_deref().unwrap_or("invalid_response");
             if !matches!(
                 code,

@@ -880,6 +880,7 @@ pub(crate) struct ClientShellState {
     pub(super) collapsed_endpoints: HashSet<ClientEndpointId>,
     pub(super) mode: ClientShellMode,
     pub(super) navigate_workspace_id: Option<WorkspaceNavigationTarget>,
+    pub(super) pending_workspace_highlight: Option<PendingWorkspaceHighlight>,
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) previous_pane_id: Option<String>,
@@ -1043,6 +1044,7 @@ impl ClientShellState {
             collapsed_endpoints: HashSet::new(),
             mode: ClientShellMode::Terminal,
             navigate_workspace_id: None,
+            pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
             previous_pane_id: None,
@@ -1233,6 +1235,7 @@ impl ClientShellState {
         self.endpoint_error = None;
         self.endpoint_error_deadline = None;
         self.navigate_workspace_id = None;
+        self.pending_workspace_highlight = None;
         self.overlay = self
             .config
             .startup_onboarding
@@ -1549,6 +1552,7 @@ impl ClientShellState {
             }
         }
         self.snapshot = Some(snapshot);
+        self.reconcile_pending_workspace_highlight();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {
             let matching = self.snapshot.as_ref().is_some_and(|snapshot| {
