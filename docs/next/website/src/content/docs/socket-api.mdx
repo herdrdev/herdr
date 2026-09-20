@@ -118,12 +118,11 @@ Raw socket method names use dot notation:
 `session.snapshot` returns a one-time bootstrap snapshot for clients that keep
 their own local runtime cache. The response includes version/protocol metadata,
 focused workspace/tab/pane ids, workspace records, tab records, pane records,
-tab layout snapshots, and agent records. It is not a subscription. To avoid a
-bootstrap gap, first open `events.subscribe` on another connection and wait for
-its acknowledgement. Buffer that stream while calling `session.snapshot`,
-install the snapshot, then apply the buffered events in order and continue
-streaming. Call `session.snapshot` again after reconnecting or when the local
-cache may be stale. Attached worktree provenance is included on workspace
+tab layout snapshots, and agent records. It is not a subscription. For cache
+bootstrap and recovery, subscribe first, then reconcile through authoritative
+reads as described under Event subscriptions below. Events invalidate cached state; they
+cannot be unconditionally replayed over a snapshot. Call `session.snapshot`
+again after reconnecting or when the local cache may be stale. Attached worktree provenance is included on workspace
 records. Full repo worktree discovery remains `worktree.list`.
 
 From the CLI, `herdr api snapshot` prints the live `session.snapshot` response
@@ -825,6 +824,29 @@ and retry rather than assuming the other entries were subscribed.
 Lifecycle subscriptions start when the request is accepted and do not replay
 events retained before that point.
 
+Lifecycle and agent-status events are drained in bounded batches, in order within
+each subscription. Event history is not durable. If a subscriber falls behind
+the retained history, including while its subscriptions are being initialized,
+the server sends an error response with the original request `id` and
+`error.code: "events_lost"`, then closes that subscription connection instead of
+silently continuing with missing events. Other clients remain connected.
+The history is shared across event types, so an overrun is reported even when
+the evicted events might not have matched this subscription's filters.
+
+On `events_lost`, treat the cached state as stale. Open a new subscription,
+wait for `subscription_started`, and keep reading while requesting
+`session.snapshot` on another connection. Use authoritative reads to reconcile
+current state: replace the cache with the snapshot, and treat incoming events
+as invalidation signals that trigger another read. Serialize refreshes and
+refresh again if events arrive while a read is in flight.
+
+Snapshots and events have no shared sequence boundary. Ordering is guaranteed
+within each subscription entry, not across entries or relative to a snapshot,
+so do not unconditionally replay buffered event payloads onto the snapshot.
+Recovery restores current state, not the missing event history. Another
+`events_lost` requires resubscribing and reconciling again. Slow readers may
+need to increase read throughput or reduce event load.
+
 Workspace event subscriptions include `workspace.created`, `workspace.updated`, `workspace.metadata_updated`, `workspace.renamed`, `workspace.moved`, `workspace.reordered`, `workspace.closed`, and `workspace.focused`. `workspace.metadata_updated` reports token changes and TTL expiry without invoking plugin event hooks. Other workspace events describe Herdr UI/runtime lifecycle. `workspace.created` includes optional `workspace.worktree` provenance when the workspace belongs to a worktree group. `workspace.moved` includes the moved `workspace_id`, requested `insert_index`, and updated ordered `workspaces` list. `workspace.reordered` includes the atomically moved `workspace_ids`, optional `before_workspace_id`, and authoritative ordered `workspaces` list. `workspace.closed` includes a final `workspace` snapshot when Herdr can still identify it before removal.
 Tab event subscriptions include `tab.created`, `tab.closed`, `tab.focused`,
 `tab.renamed`, and `tab.moved`. `tab.moved` includes the moved `tab_id`,
@@ -841,9 +863,9 @@ Terminal-title changes can emit `pane.updated`, but spinner-only raw-title chang
 `workspace_id`, and the current `scroll` metrics whenever Herdr observes a
 changed scroll snapshot.
 Layout event subscriptions include `layout.updated`. The event carries the
-updated `PaneLayoutSnapshot` for one tab. Clients that bootstrap with
-`session.snapshot` should replace the cached layout with the same
-`workspace_id` and `tab_id`.
+updated `PaneLayoutSnapshot` for one tab. Clients maintaining a cache with
+`session.snapshot` should use this event to refresh the affected layout through
+an authoritative read; a delayed payload may predate their latest snapshot.
 
 Worktree event subscriptions include `worktree.created`, `worktree.opened`, and `worktree.removed`. Worktree events describe Git checkout lifecycle. `worktree.created` includes the opened `workspace` and created `worktree`. `worktree.opened` includes the target `workspace`, opened `worktree`, and `already_open`. `worktree.removed` includes the `workspace_id`, removed `worktree`, and `forced`.
 

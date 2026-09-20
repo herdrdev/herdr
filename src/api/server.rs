@@ -24,6 +24,9 @@ use crate::ipc::{
 
 mod pane_graphics_stream;
 
+#[cfg(test)]
+mod subscription_socket_tests;
+
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -749,7 +752,7 @@ fn stream_subscriptions(
     if let Err(err) = write_json_line(
         &mut stream,
         &SuccessResponse {
-            id: request_id,
+            id: request_id.clone(),
             result: ResponseResult::SubscriptionStarted {},
         },
     ) {
@@ -765,7 +768,23 @@ fn stream_subscriptions(
         }
 
         for subscription in &mut subscriptions {
-            if let Some(event) = subscription.poll(api_tx, event_hub) {
+            let events = match subscription.poll_batch(api_tx, event_hub) {
+                Ok(events) => events,
+                Err(error) => {
+                    write_json_line_allow_disconnect(
+                        &mut stream,
+                        &ErrorResponse {
+                            id: request_id,
+                            error,
+                        },
+                    )?;
+                    return Ok(());
+                }
+            };
+            for event in events {
+                if should_stop_connection(&mut stream, running)? {
+                    return Ok(());
+                }
                 if let Err(err) = write_json_line(&mut stream, &event) {
                     if is_connection_closed_error(&err) {
                         return Ok(());

@@ -111,7 +111,7 @@ herdr pane read w1:p2 --source recent --lines 50
 
 `workspace.move_block` は、順序付きの `workspace_ids` を `before_workspace_id` の前へアトミックに移動します。アンカーを省略するとブロックを末尾へ移動します。id は一意である必要があり、アンカーをブロックに含めることはできません。レスポンスにはサーバーが確定した順序付きワークスペース一覧が含まれます。
 
-`session.snapshot` は、独自のローカルランタイムキャッシュを持つクライアント向けに、一度限りのブートストラップスナップショットを返します。レスポンスには、バージョン/プロトコルメタデータ、フォーカス中のワークスペース/タブ/ペイン id、ワークスペース、タブ、ペイン、タブレイアウト、エージェントの各レコードが含まれます。これは購読ではありません。ブートストラップ中のイベントを取りこぼさないよう、まず別の接続で `events.subscribe` を開いて確認応答を待ち、そのストリームをバッファしながら `session.snapshot` を呼び出します。スナップショットを適用してから、バッファしたイベントを順番に適用し、そのままストリーミングを続けます。再接続後やキャッシュが古い可能性がある場合は、`session.snapshot` を再度呼び出します。ワークスペースレコードには、関連付けられた worktree の出自情報も含まれます。リポジトリ全体の worktree 検出には引き続き `worktree.list` を使います。
+`session.snapshot` は、独自のローカルランタイムキャッシュを持つクライアント向けに、一度限りのブートストラップスナップショットを返します。レスポンスには、バージョン/プロトコルメタデータ、フォーカス中のワークスペース/タブ/ペイン id、ワークスペース、タブ、ペイン、タブレイアウト、エージェントの各レコードが含まれます。これは購読ではありません。キャッシュの初期化と復旧では、先に購読を開始し、後述のイベント購読セクションの手順でサーバーから現在の状態を読み取り、キャッシュを照合・更新します。イベントはキャッシュの無効化を知らせるものであり、スナップショットに無条件で再適用できるものではありません。再接続後やキャッシュが古い可能性がある場合は、`session.snapshot` を再度呼び出します。ワークスペースレコードには、関連付けられた worktree の出自情報も含まれます。リポジトリ全体の worktree 検出には引き続き `worktree.list` を使います。
 
 CLI の `herdr api snapshot` は、クライアントやエージェントが簡単にブートストラップできるよう、現在の `session.snapshot` レスポンスを JSON で出力します。
 
@@ -639,10 +639,16 @@ workspace の get/list 応答は結果の `tokens` マップを公開し、ス�
 
 最初のレスポンスは購読の確認応答です。以降の行はプッシュされるイベントです。ライフサイクルイベントの購読はリクエストが受理された時点から始まり、それ以前に保持されていたイベントは再生しません。
 
+ライフサイクルとエージェント状態のイベントは、各購読内の順序を保った上限付きのバッチで送信されます。イベント履歴は永続ログではありません。購読の初期化中も含め、購読者が保持範囲より遅れた場合、サーバーは元のリクエスト `id` と `error.code: "events_lost"` を含むエラーレスポンスを送り、その購読接続を閉じます。欠落したイベントを通知せずに配信を続けることはありません。他のクライアント接続には影響しません。履歴はイベント種別間で共有されるため、失われたイベントが購読条件に一致しなかった可能性があっても、保持範囲を超えたことを通知します。
+
+`events_lost` を受け取ったら、キャッシュを古い状態として扱います。新しい購読を開始して `subscription_started` を待ち、読み取りを続けながら別の接続で `session.snapshot` を取得してください。サーバーの現在の状態でキャッシュを照合し、スナップショットでキャッシュ全体を置き換えます。イベントはキャッシュの無効化通知として扱い、再取得の契機にします。取得は直列に行い、取得中にイベントが届いた場合は完了後に再取得してください。
+
+スナップショットとイベントに共通のシーケンス境界はありません。順序が保証されるのは各購読項目内のみで、項目間やスナップショットとの前後関係は保証されません。バッファしたイベントの内容をスナップショットへ無条件に再適用しないでください。復旧できるのは現在の状態であり、失われたイベント履歴ではありません。再び `events_lost` を受け取った場合は、再購読して状態を照合し直します。読み取りが遅いクライアントでは、読み取り速度を上げるかイベントの負荷を減らす必要があります。
+
 ワークスペースのイベント購読には `workspace.created`、`workspace.updated`、`workspace.metadata_updated`、`workspace.renamed`、`workspace.moved`、`workspace.reordered`、`workspace.closed`、`workspace.focused` があります。`workspace.metadata_updated` はプラグインイベントフックを実行せずにトークン変更と TTL 失効を報告します。その他のワークスペースイベントは Herdr の UI/ランタイムのライフサイクルを記述します。ワークスペースが worktree グループに属している場合、`workspace.created` は任意の `workspace.worktree` 出自情報を含みます。`workspace.moved` は、移動した `workspace_id`、要求された `insert_index`、更新済みの順序付き `workspaces` リストを含みます。`workspace.reordered` は、アトミックに移動した `workspace_ids`、省略可能な `before_workspace_id`、サーバーが確定した順序付き `workspaces` リストを含みます。削除前に Herdr がまだ識別できる場合、`workspace.closed` は最終的な `workspace` スナップショットを含みます。
 タブのイベント購読には `tab.created`、`tab.closed`、`tab.focused`、`tab.renamed`、`tab.moved` があります。`tab.moved` は、移動した `tab_id`、`workspace_id`、要求された `insert_index`、そのワークスペースの更新済みの順序付き `tabs` リストを含みます。
 ペインのイベント購読には `pane.created`、`pane.updated`、`pane.closed`、`pane.focused`、`pane.moved`、`pane.exited`、`pane.agent_detected`、`pane.output_matched`、`pane.agent_status_changed`、`pane.scroll_changed` があります。`pane.focused` は、このサーバーに接続した任意のクライアントでの手動ペイン選択も報告します。他のクライアントの表示は移動させず、ペイロードにクライアントの識別情報は含みません。選択済みのペインを再度選んでも発行しません。ターミナルタイトルの変更は `pane.updated` を発行することがありますが、生のタイトルでスピナーだけが変化し、`terminal_title_stripped` が変わらない場合は発行しません。`pane.scroll_changed` は 1 つの `pane_id` を対象とし、Herdr がスクロールスナップショットの変化を検出するたびに `pane_id`、`workspace_id`、現在の `scroll` 情報を発行します。
-レイアウトのイベント購読には `layout.updated` があります。このイベントは 1 つのタブについて更新済みの `PaneLayoutSnapshot` を運びます。`session.snapshot` でブートストラップするクライアントは、同じ `workspace_id` と `tab_id` のキャッシュ済みレイアウトを置き換えてください。
+レイアウトのイベント購読には `layout.updated` があります。このイベントは 1 つのタブについて更新済みの `PaneLayoutSnapshot` を運びます。`session.snapshot` でキャッシュを管理するクライアントは、このイベントを契機にサーバーから対象のレイアウトを再取得してください。遅れて届いたペイロードは、最新のスナップショットより古い可能性があります。
 
 worktree のイベント購読には `worktree.created`、`worktree.opened`、`worktree.removed` があります。worktree イベントは Git チェックアウトのライフサイクルを記述します。`worktree.created` は開かれた `workspace` と作成された `worktree` を含みます。`worktree.opened` は対象の `workspace`、開かれた `worktree`、`already_open` を含みます。`worktree.removed` は `workspace_id`、削除された `worktree`、`forced` を含みます。
 
