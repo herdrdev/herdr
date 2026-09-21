@@ -629,7 +629,7 @@
           "key": "keys.remote_image_paste",
           "type": "string",
           "default": "\"ctrl+v\"",
-          "description": "Local-client shortcut that sends a clipboard image to a remote Herdr session."
+          "description": "Local-client shortcut that sends a clipboard image to the focused pane."
         },
         {
           "key": "keys.new_tab",

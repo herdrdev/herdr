@@ -118,7 +118,7 @@ pub(super) fn reload_local_client_config(
                 *mouse_capture = loaded.config.ui.mouse_capture;
             }
             if !invalid_section("keys") {
-                *remote_image_paste_key = client_remote_image_paste_key(&loaded.config);
+                *remote_image_paste_key = client_image_paste_key(&loaded.config);
             }
             debug!("reloaded local client config");
         }

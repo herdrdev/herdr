@@ -381,7 +381,7 @@ pub struct KeysConfig {
     pub next_agent: BindingConfig,
     /// Focus an agent by index 1-9. Unset by default.
     pub focus_agent: BindingConfig,
-    /// Local-client shortcut that sends a clipboard image to a remote Herdr session. Default: "ctrl+v".
+    /// Local-client shortcut that sends a clipboard image to the focused pane. Default: "ctrl+v".
     pub remote_image_paste: String,
     /// Create a new tab in the active workspace. Default: "prefix+c"
     pub new_tab: BindingConfig,

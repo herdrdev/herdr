@@ -9,7 +9,7 @@ use crate::protocol::{ClientClipboardImageTarget, ClientMessage};
 
 use super::{write_to_server, ClientError};
 
-pub(super) fn write_remote_image_to_server(
+pub(super) fn write_image_to_server(
     stream: &mut impl super::ClientMessageSink,
     target: ClientClipboardImageTarget,
     image: crate::platform::ClipboardImage,
@@ -42,33 +42,29 @@ pub(super) fn write_remote_image_to_server(
     .map_err(ClientError::ConnectionLost)
 }
 
-pub(super) fn client_remote_image_paste_key(
+pub(super) fn client_image_paste_key(
     config: &crate::config::Config,
 ) -> Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)> {
     match config.remote_image_paste_key() {
         Ok(key) => key,
         Err(diagnostic) => {
-            warn!(diagnostic = %diagnostic, "local remote image paste key config diagnostic");
+            warn!(diagnostic = %diagnostic, "local image paste key config diagnostic");
             None
         }
     }
 }
 
-pub(super) fn endpoint_accepts_local_images(
-    remote_client_process: bool,
-    endpoint_id: &super::endpoint::ClientEndpointId,
-    active_surface_available: bool,
-) -> bool {
-    active_surface_available && (remote_client_process || !endpoint_id.is_local())
+pub(super) fn endpoint_accepts_local_images(active_surface_available: bool) -> bool {
+    active_surface_available
 }
 
 #[cfg(unix)]
 pub(super) fn should_bridge_clipboard_image_paste(
     data: &[u8],
-    is_remote_client: bool,
+    image_bridge_active: bool,
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
 ) -> bool {
-    if !is_remote_client {
+    if !image_bridge_active {
         return false;
     }
     if data == b"\x1b[200~\x1b[201~" {
@@ -91,10 +87,10 @@ pub(super) fn should_bridge_clipboard_image_paste(
 #[cfg(windows)]
 pub(super) fn should_bridge_clipboard_image_events(
     events: &[ClientInputEvent],
-    is_remote_client: bool,
+    image_bridge_active: bool,
     remote_image_paste_key: Option<(crossterm::event::KeyCode, crossterm::event::KeyModifiers)>,
 ) -> bool {
-    if !is_remote_client {
+    if !image_bridge_active {
         return false;
     }
     if matches!(events, [ClientInputEvent::Paste { text }] if text.is_empty()) {
@@ -122,23 +118,23 @@ pub(super) fn should_bridge_clipboard_image_events(
 #[cfg(unix)]
 pub(super) fn read_image_file_from_terminal_drop(
     data: &[u8],
-    is_remote_client: bool,
+    image_bridge_active: bool,
 ) -> Option<crate::platform::ClipboardImage> {
-    let (path, extension) = image_path_from_terminal_drop(data, is_remote_client)?;
+    let (path, extension) = image_path_from_terminal_drop(data, image_bridge_active)?;
     read_image_file(path, extension)
 }
 
 #[cfg(windows)]
 pub(super) fn read_image_file_from_client_events(
     events: &[ClientInputEvent],
-    is_remote_client: bool,
+    image_bridge_active: bool,
 ) -> Option<crate::platform::ClipboardImage> {
     let [ClientInputEvent::Paste { text }] = events else {
         return None;
     };
     let text = normalized_terminal_drop_text(text)?;
     let (path, extension) =
-        image_path_from_drop_text(strip_matching_path_quotes(text), is_remote_client)?;
+        image_path_from_drop_text(strip_matching_path_quotes(text), image_bridge_active)?;
     read_image_file(path, extension)
 }
 
@@ -171,13 +167,13 @@ fn read_image_file(
 #[cfg(unix)]
 pub(super) fn image_path_from_terminal_drop(
     data: &[u8],
-    is_remote_client: bool,
+    image_bridge_active: bool,
 ) -> Option<(PathBuf, &'static str)> {
     let bytes = bracketed_paste_payload(data).unwrap_or(data);
     let text = std::str::from_utf8(bytes).ok()?;
     let text = normalized_terminal_drop_text(text)?;
     let text = unescape_terminal_drop_path(strip_matching_path_quotes(text));
-    image_path_from_drop_text(&text, is_remote_client)
+    image_path_from_drop_text(&text, image_bridge_active)
 }
 
 fn normalized_terminal_drop_text(text: &str) -> Option<&str> {
@@ -187,9 +183,9 @@ fn normalized_terminal_drop_text(text: &str) -> Option<&str> {
 
 fn image_path_from_drop_text(
     text: &str,
-    is_remote_client: bool,
+    image_bridge_active: bool,
 ) -> Option<(PathBuf, &'static str)> {
-    if !is_remote_client {
+    if !image_bridge_active {
         return None;
     }
     let path = PathBuf::from(text);

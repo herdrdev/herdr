@@ -61,7 +61,7 @@ Plugins support `windows` as a manifest platform in preview. GitHub install, loc
 | --- | --- |
 | Live cwd after shell `cd` | partial |
 | Live cwd via shell integration/OSC7 | supported |
-| Clipboard image paste to agents in local panes | terminal/agent dependent |
+| Clipboard image paste to agents in local panes | supported |
 | CJK IME composition anchoring | partial |
 | Prefix input-source switching (Korean IME) | partial |
 | Kitty graphics rendering | terminal dependent |
@@ -69,7 +69,7 @@ Plugins support `windows` as a manifest platform in preview. GitHub install, loc
 
 Herdr can launch panes in the right directory and create the initial workspace from the directory where you started Herdr. After startup, the process field Herdr can inspect does not reliably track later logical `cd` changes in PowerShell. Use Herdr integrations or prompt shell integration for live cwd reporting.
 
-During `herdr --remote`, the configured remote image paste key reads a Windows clipboard image and transfers it to the remote host. Dropping one local image file into Windows Terminal also transfers that file and pastes its remote path.
+The configured image paste key reads a Windows clipboard image and sends it to the focused local or remote pane. Dropping one local image file into Windows Terminal also sends that file to the focused pane.
 
 Prefix input-source switching is available as an opt-in experiment for the Korean IME. It switches Hangul input to English while prefix commands are active and restores the previous mode afterward:
 
@@ -80,7 +80,7 @@ switch_ascii_input_source_in_prefix = true
 
 Other Windows IMEs are not supported by this option yet. See [Configuration](/docs/configuration/#prefix-input-source-switching).
 
-Some Windows agents can receive `ctrl+v` and read clipboard images directly. Herdr's own clipboard-image reader is not wired into local native Windows panes, so agent-native image paste remains dependent on the terminal and agent. Agent image-paste shortcuts such as `alt+v` do not add a Herdr-managed local clipboard bridge. Remote clipboard image bridging is supported separately through `herdr --remote` to Linux, macOS, and Windows hosts.
+Herdr reads clipboard images itself and pastes a staged image path into the focused agent pane. This keeps image paste consistent across local native panes and `herdr --remote` sessions. The focused agent still needs to support image paths in its input flow.
 
 Kitty graphics is enabled by default and depends on the outer terminal. Herdr emits Kitty graphics protocol output on Windows as it does on other platforms. This path has been exercised with Windows WezTerm hosting Herdr through WSL, but native Windows terminal and ConPTY combinations are not all verified. Windows Terminal does not expose the Kitty graphics path Herdr uses. Set `[terminal].kitty_graphics = false` if the outer terminal mishandles graphics output.
 
@@ -121,7 +121,6 @@ For text paste, use `ctrl+shift+v` in Windows Terminal. Multiline text paste is 
 | Live server handoff | unsupported |
 | Unix file-descriptor handoff | unsupported |
 | Unix foreground process groups | unsupported |
-| Herdr clipboard image bridge in local native panes | unsupported |
 | Signed binary / SmartScreen avoidance | unsupported |
 
 From Windows Terminal, use the same remote command as Linux and macOS:

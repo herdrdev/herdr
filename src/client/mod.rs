@@ -96,7 +96,7 @@ use attach::AttachEscapeState;
 #[cfg(unix)]
 use attach::{write_attach_semantic_action, AttachInputAction};
 use clipboard_images::{
-    client_remote_image_paste_key, endpoint_accepts_local_images, write_remote_image_to_server,
+    client_image_paste_key, endpoint_accepts_local_images, write_image_to_server,
 };
 #[cfg(windows)]
 use clipboard_images::{read_image_file_from_client_events, should_bridge_clipboard_image_events};
@@ -174,7 +174,7 @@ fn run_client_with_mode(
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
-    let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
+    let remote_image_paste_key = client_image_paste_key(&loaded_config.config);
     let kitty_graphics_enabled =
         loaded_config.config.kitty_graphics_enabled() && client_rendered_shell;
     let pixel_geometry_enabled = kitty_graphics_enabled || attach_escape.is_some();
@@ -748,11 +748,8 @@ async fn run_client_loop(
             ClientLoopEvent::EndpointCatalog(reload) => pending_catalog = Some(reload),
             #[cfg(unix)]
             ClientLoopEvent::StdinInput(data) => {
-                let image_bridge_active = endpoint_accepts_local_images(
-                    is_remote_client,
-                    write_stream.active_id(),
-                    write_stream.active_surface_available(),
-                );
+                let image_bridge_active =
+                    endpoint_accepts_local_images(write_stream.active_surface_available());
                 if state.shell.is_some() {
                     if will_query_host_cell_size {
                         let events = crate::raw_input::parse_raw_input_bytes_sync(&data);
@@ -772,7 +769,7 @@ async fn run_client_loop(
                             state.remote_image_paste_key,
                         ) {
                             if let Some(image) = crate::platform::read_clipboard_image() {
-                                write_remote_image_to_server(
+                                write_image_to_server(
                                     &mut write_stream,
                                     target,
                                     image,
@@ -787,12 +784,7 @@ async fn run_client_loop(
                         if let Some(image) =
                             read_image_file_from_terminal_drop(&data, image_bridge_active)
                         {
-                            write_remote_image_to_server(
-                                &mut write_stream,
-                                target,
-                                image,
-                                "file drop",
-                            )?;
+                            write_image_to_server(&mut write_stream, target, image, "file drop")?;
                             continue;
                         }
                     }
@@ -895,7 +887,7 @@ async fn run_client_loop(
                     state.remote_image_paste_key,
                 ) {
                     if let Some(image) = crate::platform::read_clipboard_image() {
-                        write_remote_image_to_server(
+                        write_image_to_server(
                             &mut write_stream,
                             crate::protocol::ClientClipboardImageTarget::DirectTerminal,
                             image,
@@ -909,7 +901,7 @@ async fn run_client_loop(
                 }
                 if let Some(image) = read_image_file_from_terminal_drop(&data, image_bridge_active)
                 {
-                    write_remote_image_to_server(
+                    write_image_to_server(
                         &mut write_stream,
                         crate::protocol::ClientClipboardImageTarget::DirectTerminal,
                         image,
@@ -1022,11 +1014,8 @@ async fn run_client_loop(
             }
             #[cfg(windows)]
             ClientLoopEvent::StdinEvents(events) => {
-                let image_bridge_active = endpoint_accepts_local_images(
-                    is_remote_client,
-                    write_stream.active_id(),
-                    write_stream.active_surface_available(),
-                );
+                let image_bridge_active =
+                    endpoint_accepts_local_images(write_stream.active_surface_available());
                 if state.shell.is_some() {
                     if events.iter().any(|event| {
                         matches!(event, crate::protocol::ClientInputEvent::FocusGained)
@@ -1047,7 +1036,7 @@ async fn run_client_loop(
                             state.remote_image_paste_key,
                         ) {
                             if let Some(image) = crate::platform::read_clipboard_image() {
-                                write_remote_image_to_server(
+                                write_image_to_server(
                                     &mut write_stream,
                                     target,
                                     image,
@@ -1062,12 +1051,7 @@ async fn run_client_loop(
                         if let Some(image) =
                             read_image_file_from_client_events(&events, image_bridge_active)
                         {
-                            write_remote_image_to_server(
-                                &mut write_stream,
-                                target,
-                                image,
-                                "file drop",
-                            )?;
+                            write_image_to_server(&mut write_stream, target, image, "file drop")?;
                             continue;
                         }
                     }

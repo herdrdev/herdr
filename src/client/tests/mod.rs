@@ -180,23 +180,9 @@ fn host_cursor_policy_native_and_drawn_override_auto_detection() {
 }
 
 #[test]
-fn image_bridge_follows_the_selected_remote_endpoint() {
-    let remote = crate::client::endpoint::ClientEndpointId::Ssh(
-        crate::client::endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
-    );
-
-    assert!(endpoint_accepts_local_images(false, &remote, true));
-    assert!(endpoint_accepts_local_images(
-        true,
-        &crate::client::endpoint::ClientEndpointId::Local,
-        true,
-    ));
-    assert!(!endpoint_accepts_local_images(
-        false,
-        &crate::client::endpoint::ClientEndpointId::Local,
-        true,
-    ));
-    assert!(!endpoint_accepts_local_images(false, &remote, false));
+fn image_bridge_requires_an_active_surface() {
+    assert!(endpoint_accepts_local_images(true));
+    assert!(!endpoint_accepts_local_images(false));
 }
 
 #[cfg(unix)]
@@ -274,7 +260,7 @@ impl Drop for TempImageFile {
 }
 #[cfg(unix)]
 #[test]
-fn remote_image_file_drop_bridge_reads_bracketed_absolute_image_path() {
+fn image_file_drop_bridge_reads_bracketed_absolute_image_path() {
     let file = TempImageFile::new("PNG", b"image-bytes");
     let input = format!("\x1b[200~{}\x1b[201~", file.path.display());
 
@@ -286,7 +272,7 @@ fn remote_image_file_drop_bridge_reads_bracketed_absolute_image_path() {
 
 #[cfg(unix)]
 #[test]
-fn remote_image_file_drop_bridge_reads_plain_quoted_path_with_newline() {
+fn image_file_drop_bridge_reads_plain_quoted_path_with_newline() {
     let file = TempImageFile::new("jpeg", b"jpeg-bytes");
     let input = format!("'{}'\n", file.path.display());
 
@@ -298,7 +284,7 @@ fn remote_image_file_drop_bridge_reads_plain_quoted_path_with_newline() {
 
 #[cfg(unix)]
 #[test]
-fn remote_image_file_drop_bridge_unescapes_spaces_in_paths() {
+fn image_file_drop_bridge_unescapes_spaces_in_paths() {
     let file = TempImageFile::with_name_fragment("space test", "png", b"image-bytes");
     let escaped_path = file.path.display().to_string().replace(' ', "\\ ");
 
@@ -310,7 +296,7 @@ fn remote_image_file_drop_bridge_unescapes_spaces_in_paths() {
 
 #[cfg(unix)]
 #[test]
-fn remote_image_file_drop_bridge_ignores_non_remote_and_non_image_input() {
+fn image_file_drop_bridge_ignores_inactive_and_non_image_input() {
     let file = TempImageFile::new("png", b"image-bytes");
     let path = file.path.display().to_string();
 
