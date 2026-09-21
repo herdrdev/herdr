@@ -1688,12 +1688,15 @@ mod tests {
             .set_send_timeout(Some(Duration::from_millis(100)))
             .unwrap();
         server.set_nonblocking(true).unwrap();
+        let (start_tx, start_rx) = std::sync::mpsc::sync_channel(0);
         let worker = std::thread::spawn(move || {
+            start_rx.recv().expect("client is ready to receive");
             assert!(write_framed_bytes(&mut server, &vec![b'x'; 1024 * 1024]));
         });
         client
             .set_recv_timeout(Some(Duration::from_secs(3)))
             .unwrap();
+        start_tx.send(()).expect("start writer after reader setup");
         let mut received = 0;
         let mut buffer = [0; 16 * 1024];
         while received < 1024 * 1024 {
