@@ -390,7 +390,7 @@ fn send_fd_batch(stream: &UnixStream, fds: &[RawFd]) -> io::Result<()> {
     if fds.is_empty() {
         return Ok(());
     }
-    let byte = [b'F'];
+    let byte = *b"F";
     let iov = [libc::iovec {
         iov_base: byte.as_ptr() as *mut libc::c_void,
         iov_len: byte.len(),

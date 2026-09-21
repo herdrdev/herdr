@@ -1948,7 +1948,7 @@ fn probe_remote_endpoint(
         remote_herdr.clone(),
         path.clone(),
         ssh.session_name.clone(),
-        endpoint_probe_ssh_options(ssh),
+        ssh.options(),
         true,
     )?;
     let mut stream = crate::ipc::connect_local_stream(&path)?;
@@ -1958,13 +1958,6 @@ fn probe_remote_endpoint(
         Ok(negotiation) => Ok(negotiation),
         Err(probe_error) => Err(bridge.reported_failure().unwrap_or(probe_error)),
     }
-}
-
-// Setup may have just completed password or keyboard-interactive authentication.
-// Reuse that interactive control connection for the noninteractive endpoint probe;
-// a fresh BatchMode SSH invocation cannot answer the same prompt.
-fn endpoint_probe_ssh_options(ssh: &RemoteSsh) -> Option<&ManagedSshOptions> {
-    ssh.options()
 }
 
 #[derive(Debug, Deserialize)]
@@ -2991,6 +2984,7 @@ fn bridge_connection(
 fn remove_inherited_herdr_runtime_environment(command: &mut Command) {
     command
         .env_remove(crate::HERDR_ENV_VAR)
+        .env_remove(crate::session::SESSION_ENV_VAR)
         .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
         .env_remove(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
 }
@@ -3172,20 +3166,13 @@ fn run_client_process(
     reattach_command: &str,
     keybindings: RemoteKeybindings,
 ) -> io::Result<()> {
-    let exe = std::env::current_exe()?;
-    let status = Command::new(exe)
-        .arg("client")
-        .env(
-            crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
-            local_socket,
-        )
-        .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
-        .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
-        .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()?;
+    let status = client_process_command(
+        std::env::current_exe()?,
+        local_socket,
+        reattach_command,
+        keybindings,
+    )
+    .status()?;
 
     if status.success() {
         Ok(())
@@ -3195,6 +3182,29 @@ fn run_client_process(
             format!("remote client exited with {status}"),
         ))
     }
+}
+
+fn client_process_command(
+    exe: PathBuf,
+    local_socket: &Path,
+    reattach_command: &str,
+    keybindings: RemoteKeybindings,
+) -> Command {
+    let mut command = Command::new(exe);
+    command
+        .arg("client")
+        .env(
+            crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+            local_socket,
+        )
+        .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
+        .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
+        .env_remove(crate::HERDR_ENV_VAR)
+        .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    command
 }
 
 fn local_forward_socket_path(target: &str, session_name: &str) -> PathBuf {
@@ -3693,7 +3703,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn endpoint_probe_reuses_interactive_ssh_control_socket() {
+    fn endpoint_probe_bridge_reuses_interactive_ssh_control_socket() {
         let mut managed_config = write_managed_ssh_config().expect("write managed config");
         let control_path = PathBuf::from("/tmp/herdr-password-auth/control");
         managed_config.options.control_path = Some(control_path.clone());
@@ -3704,10 +3714,17 @@ mod tests {
             noninteractive: false,
         };
 
-        assert_eq!(
-            endpoint_probe_ssh_options(&ssh).and_then(|options| options.control_path.as_ref()),
-            Some(&control_path)
-        );
+        let command = bridge_ssh_command(ssh.target(), "remote-client-bridge", ssh.options(), true);
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(args
+            .windows(2)
+            .any(|args| args[0] == "-S" && args[1] == control_path.to_string_lossy()));
+        assert!(args
+            .windows(2)
+            .any(|args| args[0] == "-o" && args[1] == "BatchMode=yes"));
     }
 
     #[cfg(windows)]
@@ -3939,6 +3956,24 @@ mod tests {
         assert_command_removes_inherited_herdr_runtime_environment(&command);
     }
 
+    #[test]
+    fn remote_client_command_removes_inherited_nested_marker() {
+        let local_socket = PathBuf::from("/tmp/herdr-remote.sock");
+        let command = client_process_command(
+            PathBuf::from("herdr"),
+            &local_socket,
+            "herdr --remote example",
+            RemoteKeybindings::Local,
+        );
+        let environments = command.get_envs().collect::<Vec<_>>();
+        assert!(environments
+            .iter()
+            .any(|(name, value)| { *name == crate::HERDR_ENV_VAR && value.is_none() }));
+        assert!(environments.iter().any(|(name, value)| {
+            *name == crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR && value.is_some()
+        }));
+    }
+
     fn assert_command_removes_inherited_herdr_runtime_environment(command: &Command) {
         let removed = command
             .get_envs()
@@ -3947,6 +3982,9 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(removed.iter().any(|name| name == crate::HERDR_ENV_VAR));
+        assert!(removed
+            .iter()
+            .any(|name| name == crate::session::SESSION_ENV_VAR));
         assert!(removed
             .iter()
             .any(|name| name == crate::api::SOCKET_PATH_ENV_VAR));
