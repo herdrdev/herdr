@@ -40,6 +40,13 @@ struct PendingFullLifecycleHookReport {
     seq: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingJcodeStartupSession {
+    previous: crate::agent_resume::PersistedAgentSession,
+    replacement: crate::agent_resume::PersistedAgentSession,
+    seq: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FullLifecycleHookSuppressionReason {
     HookClear,
@@ -135,6 +142,7 @@ pub struct TerminalState {
     managed_agent: Option<ManagedAgent>,
     managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
     hook_report_sequences: HashMap<String, u64>,
+    pending_jcode_startup_session: Option<PendingJcodeStartupSession>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
     stale_full_lifecycle_hook_sessions: HashMap<String, Vec<StaleFullLifecycleHookSession>>,
     metadata_report_sequences: HashMap<String, u64>,
@@ -172,6 +180,7 @@ impl TerminalState {
             managed_agent: None,
             managed_agent_launch_session: None,
             hook_report_sequences: HashMap::new(),
+            pending_jcode_startup_session: None,
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
             stale_full_lifecycle_hook_sessions: HashMap::new(),
             metadata_report_sequences: HashMap::new(),
@@ -195,10 +204,14 @@ impl TerminalState {
         agent: Agent,
         now: Instant,
     ) -> TerminalStateMutation {
+        let previous_session = self.current_session_identity_for_persistence();
         let starts_acquisition = !self
             .should_ignore_detected_state_under_full_lifecycle_hook(Some(agent), false)
             && !self.detected_state_observed_before_release_suppression(Some(agent), now);
-        let mutation = self.set_detected_state_with_screen_signals_at(
+        if starts_acquisition {
+            self.apply_pending_jcode_startup_session(agent);
+        }
+        let mut mutation = self.set_detected_state_with_screen_signals_at(
             Some(agent),
             AgentState::Unknown,
             false,
@@ -210,7 +223,30 @@ impl TerminalState {
         if starts_acquisition {
             self.agent_process_acquisition_pending = true;
         }
+        mutation.session_ref_changed |=
+            previous_session != self.current_session_identity_for_persistence();
         mutation
+    }
+
+    fn apply_pending_jcode_startup_session(&mut self, agent: Agent) {
+        let Some(pending) = self.pending_jcode_startup_session.take() else {
+            return;
+        };
+        // Only real process acquisition can publish an early replacement. Keep
+        // the original sequence and owner, never reissue it as a newer report.
+        if agent != Agent::Jcode
+            || self.recent_agent_process_exit.is_some()
+            || self.hook_authority.is_some()
+            || self.persisted_agent_session.as_ref() != Some(&pending.previous)
+            || self.hook_report_sequences.get("herdr:jcode") != Some(&pending.seq)
+        {
+            return;
+        }
+        self.reconcile_agent_name_owner("jcode", Some(&pending.replacement.session_ref));
+        if self.managed_agent_launch_session.as_ref() == Some(&pending.replacement) {
+            self.managed_agent_launch_session = None;
+        }
+        self.persisted_agent_session = Some(pending.replacement);
     }
 
     pub(crate) fn finish_agent_process_acquisition(&mut self) -> bool {
@@ -331,6 +367,9 @@ impl TerminalState {
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
         let previous_detected_agent = self.detected_agent;
         let previous_session = self.current_session_identity_for_persistence();
+        if process_exited || agent.is_some_and(|agent| agent != Agent::Jcode) {
+            self.pending_jcode_startup_session = None;
+        }
         let newer_custom_authority = process_exited
             && self.hook_authority.as_ref().is_some_and(|authority| {
                 crate::detect::parse_agent_label(&authority.agent_label) == agent
@@ -1349,6 +1388,7 @@ impl TerminalState {
                 | ("herdr:opencode", "opencode", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | ("herdr:grok", "grok", Some("new"))
+                | ("herdr:jcode", "jcode", Some("startup" | "resume"))
                 | (
                     "herdr:omp",
                     "omp",
@@ -1384,6 +1424,7 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.pending_jcode_startup_session = None;
         self.persisted_agent_session = Some(session);
     }
 
@@ -1391,6 +1432,7 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.pending_jcode_startup_session = None;
         self.persisted_agent_session = Some(session.clone());
         self.managed_agent_launch_session = Some(session);
     }
@@ -1559,6 +1601,26 @@ impl TerminalState {
                     },
                 );
         if replacing_identity_only_session && !process_present {
+            // Jcode emits a provisional create then resume before the first
+            // process scan. Preserve only this startup race, without granting
+            // hooks process authority or replaying reports across an exit.
+            if (source.as_str(), agent_label.as_str()) == ("herdr:jcode", "jcode")
+                && self.detected_agent.is_none()
+                && self.recent_agent_process_exit.is_none()
+                && self.hook_authority.is_none()
+            {
+                if let (Some(previous), Some(seq)) = (self.persisted_agent_session.clone(), seq) {
+                    self.pending_jcode_startup_session = Some(PendingJcodeStartupSession {
+                        previous,
+                        replacement: crate::agent_resume::PersistedAgentSession {
+                            source,
+                            agent: agent_label,
+                            session_ref,
+                        },
+                        seq,
+                    });
+                }
+            }
             return None;
         }
         let owner_conflicts = self.current_session_owner_conflicts(&source, &agent_label);
@@ -1700,6 +1762,11 @@ impl TerminalState {
         }
 
         self.hook_report_sequences.insert(source.to_string(), seq);
+        // Only newer Jcode reports supersede its unpublished startup identity.
+        // Other sources may still be rejected by ownership validation.
+        if source == "herdr:jcode" {
+            self.pending_jcode_startup_session = None;
+        }
         true
     }
 
@@ -2095,6 +2162,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_runtime_identity_after_respawn(&mut self) {
+        self.pending_jcode_startup_session = None;
         self.detected_agent = None;
         self.fallback_state = AgentState::Unknown;
         self.fallback_visible_blocker = false;
@@ -4572,6 +4640,221 @@ mod tests {
                     .map(|session| session.session_ref.value.as_str()),
                 Some(next_session.as_str()),
                 "{session_start_source} should store the replacement session"
+            );
+        }
+    }
+
+    #[test]
+    fn jcode_session_replacement_requires_a_known_lifecycle_source() {
+        for source in [None, Some("other"), Some("startup"), Some("resume")] {
+            let mut terminal = test_terminal();
+            terminal.set_detected_state(Some(Agent::Jcode), AgentState::Idle);
+            terminal
+                .set_agent_session_ref(
+                    "herdr:jcode".into(),
+                    "jcode".into(),
+                    crate::agent_resume::AgentSessionRef::id("original-session"),
+                    Some(20),
+                )
+                .expect("initial Jcode session should be accepted");
+            let mutation = terminal.set_agent_session_ref_for_session_start(
+                "herdr:jcode".into(),
+                "jcode".into(),
+                crate::agent_resume::AgentSessionRef::id("replacement-session"),
+                Some(21),
+                source.map(str::to_string),
+            );
+            let allowed = matches!(source, Some("startup" | "resume"));
+            assert_eq!(mutation.is_some(), allowed, "source: {source:?}");
+            if let Some(mutation) = mutation {
+                assert!(mutation.session_ref_changed);
+            }
+            assert_eq!(
+                terminal
+                    .persisted_agent_session
+                    .as_ref()
+                    .unwrap()
+                    .session_ref
+                    .value,
+                if allowed {
+                    "replacement-session"
+                } else {
+                    "original-session"
+                },
+                "source: {source:?}"
+            );
+        }
+    }
+
+    fn jcode_before_process_scan() -> TerminalState {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:jcode".into(),
+                "jcode".into(),
+                crate::agent_resume::AgentSessionRef::id("provisional"),
+                Some(20),
+                Some("startup".into()),
+            )
+            .expect("initial identity should be accepted before process detection");
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:jcode".into(),
+                "jcode".into(),
+                crate::agent_resume::AgentSessionRef::id("restored"),
+                Some(21),
+                Some("resume".into()),
+            )
+            .is_none());
+        assert_eq!(jcode_session_value(&terminal), Some("provisional"));
+        terminal
+    }
+
+    fn jcode_session_value(terminal: &TerminalState) -> Option<&str> {
+        terminal
+            .persisted_agent_session
+            .as_ref()
+            .map(|session| session.session_ref.value.as_str())
+    }
+
+    #[test]
+    fn jcode_early_resume_waits_for_process_acquisition() {
+        let mut terminal = jcode_before_process_scan();
+        assert!(terminal.pending_jcode_startup_session.is_some());
+        // A screen status alone must not authorize the deferred identity.
+        terminal.set_detected_state(Some(Agent::Jcode), AgentState::Idle);
+        assert_eq!(jcode_session_value(&terminal), Some("provisional"));
+        let mutation = terminal.set_detected_agent_process_at(Agent::Jcode, Instant::now());
+        assert!(mutation.session_ref_changed);
+        assert_eq!(jcode_session_value(&terminal), Some("restored"));
+        assert_eq!(terminal.hook_report_sequences.get("herdr:jcode"), Some(&21));
+        assert!(terminal.pending_jcode_startup_session.is_none());
+        assert!(terminal.hook_authority.is_none());
+    }
+
+    #[test]
+    fn jcode_early_resume_survives_unrelated_sequenced_report() {
+        for newer_jcode_report in [false, true] {
+            let mut terminal = jcode_before_process_scan();
+            assert!(terminal
+                .set_agent_session_ref_for_session_start(
+                    "herdr:claude".into(),
+                    "claude".into(),
+                    crate::agent_resume::AgentSessionRef::id("unrelated"),
+                    Some(100),
+                    Some("startup".into()),
+                )
+                .is_none());
+            // Claude's sequence was accepted, but ownership rejected its identity.
+            assert_eq!(
+                terminal.hook_report_sequences.get("herdr:claude"),
+                Some(&100)
+            );
+            assert_eq!(terminal.hook_report_sequences.get("herdr:jcode"), Some(&21));
+            assert_eq!(jcode_session_value(&terminal), Some("provisional"));
+            assert!(terminal.pending_jcode_startup_session.is_some());
+
+            if newer_jcode_report {
+                terminal
+                    .set_agent_session_ref_for_session_start(
+                        "herdr:jcode".into(),
+                        "jcode".into(),
+                        crate::agent_resume::AgentSessionRef::id("provisional"),
+                        Some(22),
+                        Some("startup".into()),
+                    )
+                    .expect("newer Jcode report should supersede the pending resume");
+                assert!(terminal.pending_jcode_startup_session.is_none());
+            }
+
+            let mutation = terminal.set_detected_agent_process_at(Agent::Jcode, Instant::now());
+            assert_eq!(mutation.session_ref_changed, !newer_jcode_report);
+            assert_eq!(
+                jcode_session_value(&terminal),
+                Some(if newer_jcode_report {
+                    "provisional"
+                } else {
+                    "restored"
+                })
+            );
+            assert!(terminal.pending_jcode_startup_session.is_none());
+            assert!(terminal.hook_authority.is_none());
+        }
+    }
+
+    #[test]
+    fn jcode_early_resume_keeps_latest_sequence_without_reordering() {
+        for (seq, source, expected) in [
+            (20, "startup", "restored"),
+            (21, "resume", "restored"),
+            (22, "startup", "cleared"),
+        ] {
+            let mut terminal = jcode_before_process_scan();
+            terminal.set_agent_session_ref_for_session_start(
+                "herdr:jcode".into(),
+                "jcode".into(),
+                crate::agent_resume::AgentSessionRef::id("cleared"),
+                Some(seq),
+                Some(source.into()),
+            );
+            terminal.set_detected_agent_process_at(Agent::Jcode, Instant::now());
+            assert_eq!(jcode_session_value(&terminal), Some(expected));
+        }
+        let mut terminal = jcode_before_process_scan();
+        // A newer authoritative report of the original identity also cancels
+        // pending replacement, rather than letting it reappear on acquisition.
+        terminal.set_agent_session_ref_for_session_start(
+            "herdr:jcode".into(),
+            "jcode".into(),
+            crate::agent_resume::AgentSessionRef::id("provisional"),
+            Some(22),
+            Some("startup".into()),
+        );
+        terminal.set_detected_agent_process_at(Agent::Jcode, Instant::now());
+        assert_eq!(jcode_session_value(&terminal), Some("provisional"));
+    }
+
+    #[test]
+    fn jcode_early_resume_does_not_cross_process_or_owner_boundaries() {
+        for boundary in ["exit", "respawn", "foreign_process", "owner"] {
+            let mut terminal = jcode_before_process_scan();
+            match boundary {
+                "exit" => {
+                    terminal.set_detected_state_with_screen_signals_at(
+                        Some(Agent::Jcode),
+                        AgentState::Idle,
+                        false,
+                        false,
+                        false,
+                        true,
+                        Instant::now(),
+                    );
+                }
+                "respawn" => terminal.clear_agent_runtime_identity_after_respawn(),
+                "foreign_process" => {
+                    terminal.set_detected_agent_process_at(Agent::Pi, Instant::now());
+                }
+                "owner" => {
+                    terminal.set_persisted_agent_session(
+                        crate::agent_resume::PersistedAgentSession {
+                            source: "herdr:pi".into(),
+                            agent: "pi".into(),
+                            session_ref: crate::agent_resume::AgentSessionRef::id("foreign")
+                                .unwrap(),
+                        },
+                    );
+                }
+                _ => unreachable!(),
+            }
+            terminal.set_detected_agent_process_at(Agent::Jcode, Instant::now());
+            assert_ne!(
+                jcode_session_value(&terminal),
+                Some("restored"),
+                "{boundary}"
+            );
+            assert!(
+                terminal.pending_jcode_startup_session.is_none(),
+                "{boundary}"
             );
         }
     }
