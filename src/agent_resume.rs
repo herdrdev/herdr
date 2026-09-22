@@ -107,6 +107,7 @@ pub fn is_reserved_native_state_source(source: &str, agent: &str) -> bool {
             | ("herdr:droid", "droid")
             | ("herdr:qodercli", "qodercli")
             | ("herdr:qwen", "qwen")
+            | ("herdr:kiro-v3", "kiro")
             | ("herdr:cursor", "cursor")
             | ("herdr:grok", "grok")
     )
@@ -160,6 +161,15 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         }
         ("herdr:kimi", "kimi", AgentSessionRefKind::Id) => {
             vec!["kimi".into(), "--session".into(), session_ref.value.clone()]
+        }
+        ("herdr:kiro-v3", "kiro", AgentSessionRefKind::Id) => {
+            vec![
+                "kiro-cli".into(),
+                "chat".into(),
+                "--agent-engine=v3".into(),
+                "--resume-id".into(),
+                session_ref.value.clone(),
+            ]
         }
         ("herdr:mastracode", "mastracode", AgentSessionRefKind::Id) => {
             vec![
@@ -271,6 +281,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:devin", "devin")
             | ("herdr:droid", "droid")
             | ("herdr:kimi", "kimi")
+            | ("herdr:kiro-v3", "kiro")
             | ("herdr:omp", "omp")
             | ("herdr:mastracode", "mastracode")
             | ("herdr:pi", "pi")
@@ -760,6 +771,45 @@ mod tests {
 
         let devin_plan = plan("herdr:devin", "devin", &AgentSessionRef::id(id).unwrap()).unwrap();
         assert_eq!(devin_plan.argv, vec!["devin", "--resume", id]);
+    }
+
+    #[test]
+    fn kiro_v3_requires_versioned_source_and_id_ref() {
+        let leaf_id = AgentSessionRef::id("kiro-leaf-id").unwrap();
+        let path = absolute_test_path("kiro-session");
+
+        assert!(is_official_agent_source("herdr:kiro-v3", "kiro"));
+        assert!(is_reserved_native_state_source("herdr:kiro-v3", "kiro"));
+        assert_eq!(
+            session_ref_from_report("herdr:kiro-v3", "kiro", Some(leaf_id.value.clone()), None,),
+            Some(leaf_id.clone())
+        );
+        assert_eq!(
+            plan("herdr:kiro-v3", "kiro", &leaf_id).unwrap().argv,
+            vec![
+                "kiro-cli",
+                "chat",
+                "--agent-engine=v3",
+                "--resume-id",
+                "kiro-leaf-id",
+            ]
+        );
+
+        assert!(plan("herdr:kiro", "kiro", &leaf_id).is_none());
+        assert!(plan("herdr:kiro-v2", "kiro", &leaf_id).is_none());
+        assert!(plan(
+            "herdr:kiro-v3",
+            "kiro",
+            &AgentSessionRef::path(&path).unwrap()
+        )
+        .is_none());
+        assert!(session_ref_from_snapshot(
+            "herdr:kiro-v3",
+            "kiro",
+            AgentSessionRefKind::Path,
+            &path,
+        )
+        .is_none());
     }
 
     #[test]

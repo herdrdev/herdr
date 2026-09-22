@@ -145,6 +145,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(KIRO_CONFIG_DIR_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -3185,6 +3186,7 @@ fn bundled_integration_asset_versions_match_expected_versions() {
             MASTRACODE_INTEGRATION_VERSION,
         ),
         ("grok", GROK_HOOK_ASSET, GROK_INTEGRATION_VERSION),
+        ("kiro", KIRO_HOOK_ASSET, KIRO_INTEGRATION_VERSION),
     ] {
         assert_eq!(
             parse_integration_version(asset),
@@ -3793,12 +3795,12 @@ fn letta_staged_install_can_restore_the_prior_file() {
     let target = base.join("settings.json");
     fs::write(&target, "old").unwrap();
 
-    let (staged, backup) = prepare_letta_install_file(&target, b"new", false, true).unwrap();
-    let had_original = publish_letta_install_file(&target, &staged, &backup).unwrap();
+    let (staged, backup) = prepare_staged_install_file(&target, b"new", false, true).unwrap();
+    let had_original = publish_staged_install_file(&target, &staged, &backup).unwrap();
     assert!(had_original);
     assert_eq!(fs::read_to_string(&target).unwrap(), "new");
 
-    rollback_letta_install_file(&target, &backup, had_original).unwrap();
+    rollback_staged_install_file(&target, &backup, had_original).unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), "old");
     assert!(!backup.exists());
 
@@ -4739,4 +4741,213 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
+}
+
+fn kiro_session_change_command(config: &Value) -> String {
+    config["hooks"]
+        .as_array()
+        .and_then(|hooks| {
+            hooks
+                .iter()
+                .find(|hook| hook["trigger"].as_str() == Some("SessionChange"))
+        })
+        .and_then(|hook| hook["action"]["command"].as_str())
+        .expect("kiro SessionChange command")
+        .to_string()
+}
+
+#[test]
+fn install_kiro_writes_one_session_change_config_and_preserves_other_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let kiro_dir = base.join(".kiro");
+    let hooks_dir = kiro_dir.join("hooks");
+    fs::create_dir_all(&hooks_dir).unwrap();
+    let user_hook_path = hooks_dir.join("user-hook.json");
+    let user_hook_bytes = b"{\"name\":\"user\",\"trigger\":\"Stop\"}\n";
+    fs::write(&user_hook_path, user_hook_bytes).unwrap();
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &kiro_dir);
+
+    let installed = install_kiro().unwrap();
+    assert_eq!(installed.hook_path, hooks_dir.join(KIRO_HOOK_INSTALL_NAME));
+    assert_eq!(
+        installed.config_path,
+        hooks_dir.join(KIRO_HOOK_CONFIG_INSTALL_NAME)
+    );
+    assert_eq!(
+        fs::read_to_string(&installed.hook_path).unwrap(),
+        KIRO_HOOK_ASSET
+    );
+
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(&installed.config_path).unwrap()).unwrap();
+    assert_eq!(config, kiro_hook_config(&installed.hook_path));
+    assert_eq!(fs::read(&user_hook_path).unwrap(), user_hook_bytes);
+    assert_eq!(config["version"].as_str(), Some("v1"));
+    let hooks = config["hooks"].as_array().unwrap();
+    assert_eq!(hooks.len(), 1);
+    assert_eq!(hooks[0]["name"].as_str(), Some(KIRO_HOOK_NAME));
+    assert_eq!(hooks[0]["trigger"].as_str(), Some("SessionChange"));
+    assert_eq!(hooks[0]["action"]["type"].as_str(), Some("command"));
+    assert_eq!(hooks[0]["timeout"].as_u64(), Some(KIRO_HOOK_TIMEOUT_SECS));
+    assert_eq!(
+        kiro_session_change_command(&config),
+        hook_command(&installed.hook_path, None)
+    );
+
+    let first_hook = fs::read_to_string(&installed.hook_path).unwrap();
+    let first_config = fs::read_to_string(&installed.config_path).unwrap();
+    install_kiro().unwrap();
+    assert_eq!(
+        fs::read_to_string(&installed.hook_path).unwrap(),
+        first_hook
+    );
+    assert_eq!(
+        fs::read_to_string(&installed.config_path).unwrap(),
+        first_config
+    );
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_kiro_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let missing = base.join(".kiro");
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &missing);
+
+    let err = install_kiro().unwrap_err().to_string();
+    assert!(err.contains("kiro config directory not found"));
+    assert!(!missing.exists());
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn install_kiro_preserves_foreign_hook_and_config_targets() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let kiro_dir = base.join(".kiro");
+    let hooks_dir = kiro_dir.join("hooks");
+    let hook_path = hooks_dir.join(KIRO_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(KIRO_HOOK_CONFIG_INSTALL_NAME);
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &kiro_dir);
+
+    let foreign_config = b"{\"version\":\"v1\",\"hooks\":[{\"name\":\"foreign\"}]}\n";
+    fs::write(&hook_path, KIRO_HOOK_ASSET).unwrap();
+    fs::write(&config_path, foreign_config).unwrap();
+    let err = install_kiro().unwrap_err().to_string();
+    assert!(err.contains("non-Herdr kiro integration target"));
+    assert_eq!(fs::read_to_string(&hook_path).unwrap(), KIRO_HOOK_ASSET);
+    assert_eq!(fs::read(&config_path).unwrap(), foreign_config);
+
+    fs::remove_file(&config_path).unwrap();
+    let foreign_hook = b"#!/bin/sh\necho foreign\n";
+    fs::write(&hook_path, foreign_hook).unwrap();
+    let err = install_kiro().unwrap_err().to_string();
+    assert!(err.contains("non-Herdr kiro integration target"));
+    assert_eq!(fs::read(&hook_path).unwrap(), foreign_hook);
+    assert!(!config_path.exists());
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn experimental_kiro_status_detects_asset_and_config_drift() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let kiro_dir = base.join(".kiro");
+    fs::create_dir_all(&kiro_dir).unwrap();
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &kiro_dir);
+    let installed = install_kiro().unwrap();
+
+    let state = || {
+        experimental_kiro_integration_status()
+            .expect("kiro integration status")
+            .state
+    };
+    assert_eq!(state(), IntegrationStatusKind::Current);
+
+    fs::write(
+        &installed.config_path,
+        r#"{"version":"v1","hooks":[{"name":"herdr-session-change","trigger":"SessionStart","action":{"type":"command","command":"echo drift"},"timeout":10}]}"#,
+    )
+    .unwrap();
+    assert_eq!(state(), IntegrationStatusKind::Outdated);
+
+    install_kiro().unwrap();
+    assert_eq!(state(), IntegrationStatusKind::Current);
+
+    fs::write(
+        &installed.hook_path,
+        KIRO_HOOK_ASSET.replace(
+            "HERDR_INTEGRATION_VERSION=1",
+            "HERDR_INTEGRATION_VERSION=1\n# drift",
+        ),
+    )
+    .unwrap();
+    assert_eq!(state(), IntegrationStatusKind::Outdated);
+
+    install_kiro().unwrap();
+    assert_eq!(state(), IntegrationStatusKind::Current);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn uninstall_kiro_removes_only_managed_files_and_is_idempotent() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let kiro_dir = base.join(".kiro");
+    let hooks_dir = kiro_dir.join("hooks");
+    let user_hook_path = hooks_dir.join("user-hook.json");
+    let user_hook_bytes = b"{\"name\":\"user\",\"trigger\":\"Stop\"}\n";
+    fs::create_dir_all(&hooks_dir).unwrap();
+    fs::write(&user_hook_path, user_hook_bytes).unwrap();
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &kiro_dir);
+
+    let installed = install_kiro().unwrap();
+    let removed = uninstall_kiro().unwrap();
+    assert!(removed.removed_hook_file);
+    assert!(removed.removed_config_file);
+    assert!(!installed.hook_path.exists());
+    assert!(!installed.config_path.exists());
+    assert_eq!(fs::read(&user_hook_path).unwrap(), user_hook_bytes);
+
+    let again = uninstall_kiro().unwrap();
+    assert!(!again.removed_hook_file);
+    assert!(!again.removed_config_file);
+
+    fs::write(&installed.hook_path, "#!/bin/sh\necho foreign\n").unwrap();
+    fs::write(
+        &installed.config_path,
+        "{\"hooks\":[{\"name\":\"foreign\"}]}\n",
+    )
+    .unwrap();
+    let foreign = uninstall_kiro().unwrap();
+    assert!(!foreign.removed_hook_file);
+    assert!(!foreign.removed_config_file);
+    assert!(installed.hook_path.exists());
+    assert!(installed.config_path.exists());
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn kiro_assets_only_accept_session_change_and_splat_windows_arguments() {
+    let windows_asset = include_str!("assets/kiro/herdr-agent-state.ps1");
+    for asset in [KIRO_HOOK_ASSET, windows_asset] {
+        assert!(asset.contains("SessionChange"));
+        assert!(!asset.contains("SessionStart"));
+        assert!(!asset.contains("SessionEnd"));
+        assert!(!asset.contains("\"--state\""));
+    }
+    assert!(windows_asset.contains("& $Executable @Arguments"));
 }

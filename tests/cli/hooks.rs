@@ -381,3 +381,234 @@ fn devin_hook_ignores_non_matching_session_list_entries() {
 
     assert!(request.is_none());
 }
+
+fn run_kiro_hook(hook_input: &str) -> Option<serde_json::Value> {
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let api_socket = base.join("herdr.sock");
+    let listener = UnixListener::bind(&api_socket).unwrap();
+
+    let server = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut line = String::new();
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    reader.read_line(&mut line).unwrap();
+                    let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                    if request["method"] == "ping" {
+                        write_fake_pong(&mut stream, &request, "kiro-hook-test", CURRENT_PROTOCOL);
+                        continue;
+                    }
+                    writeln!(
+                        stream,
+                        "{}",
+                        serde_json::json!({
+                            "id": request["id"],
+                            "result": {"type": "ok"},
+                        })
+                    )
+                    .unwrap();
+                    stream.flush().unwrap();
+                    return Some(request);
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("accept failed: {err}"),
+            }
+        }
+        None
+    });
+
+    let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/integration/assets/kiro/herdr-agent-state.sh");
+    let mut command = Command::new("bash");
+    command
+        .arg(hook_path)
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", &api_socket)
+        .env("HERDR_PANE_ID", "p_test")
+        .env("HERDR_BIN_PATH", env!("CARGO_BIN_EXE_herdr"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(hook_input.as_bytes())
+        .unwrap();
+
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "kiro hook failed: status={:?} stderr={} stdout={}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+
+    let request = server.join().unwrap();
+    cleanup_test_base(&base);
+    request
+}
+
+fn kiro_session_change_payload(location: &str, session_id: &str, transition_seq: u64) -> String {
+    serde_json::json!({
+        "hook_event_name": "SessionChange",
+        "session_id": session_id,
+        "cwd": "/tmp/kiro-hook-test",
+        "session_location": location,
+        "client_pid": std::process::id(),
+        "transition_seq": transition_seq,
+    })
+    .to_string()
+}
+
+#[test]
+fn kiro_hook_reports_local_leaf_session_through_real_cli_command() {
+    let request = run_kiro_hook(&kiro_session_change_payload("local", "leaf-local", 42))
+        .expect("local SessionChange should report through the Herdr CLI");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["pane_id"], "p_test");
+    assert_eq!(request["params"]["source"], "herdr:kiro-v3");
+    assert_eq!(request["params"]["agent"], "kiro");
+    assert_eq!(request["params"]["seq"], 42);
+    assert_eq!(request["params"]["agent_session_id"], "leaf-local");
+    assert_eq!(request["params"]["session_start_source"], "select");
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn kiro_hook_releases_remote_identity_through_real_cli_command() {
+    let request = run_kiro_hook(&kiro_session_change_payload("remote", "leaf-remote", 43))
+        .expect("remote SessionChange should release local identity through the Herdr CLI");
+
+    assert_eq!(request["method"], "pane.release_agent");
+    assert_eq!(request["params"]["pane_id"], "p_test");
+    assert_eq!(request["params"]["source"], "herdr:kiro-v3");
+    assert_eq!(request["params"]["agent"], "kiro");
+    assert_eq!(request["params"]["seq"], 43);
+    assert!(request["params"].get("agent_session_id").is_none());
+    assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn kiro_hook_ignores_malformed_legacy_and_unknown_payloads() {
+    let valid = serde_json::from_str::<serde_json::Value>(&kiro_session_change_payload(
+        "local", "leaf", 44,
+    ))
+    .unwrap();
+    let mut missing_session = valid.clone();
+    missing_session
+        .as_object_mut()
+        .unwrap()
+        .remove("session_id");
+    let mut zero_seq = valid.clone();
+    zero_seq["transition_seq"] = serde_json::json!(0);
+    let mut dead_client = valid.clone();
+    dead_client["client_pid"] = serde_json::json!(0);
+    let mut exited_child = Command::new("sh").arg("-c").arg("exit 0").spawn().unwrap();
+    let exited_pid = exited_child.id();
+    exited_child.wait().unwrap();
+    let mut exited_client = valid.clone();
+    exited_client["client_pid"] = serde_json::json!(exited_pid);
+    let mut unknown_location = valid.clone();
+    unknown_location["session_location"] = serde_json::json!("cloud");
+
+    for payload in [
+        serde_json::json!({}),
+        missing_session,
+        zero_seq,
+        dead_client,
+        exited_client,
+        unknown_location,
+        serde_json::json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "leaf",
+            "cwd": "/tmp/kiro-hook-test",
+            "session_location": "local",
+            "client_pid": std::process::id(),
+            "transition_seq": 44,
+        }),
+        serde_json::json!({
+            "hook_event_name": "SessionChangeV2",
+            "session_id": "leaf",
+            "cwd": "/tmp/kiro-hook-test",
+            "session_location": "local",
+            "client_pid": std::process::id(),
+            "transition_seq": 44,
+        }),
+    ] {
+        assert!(
+            run_kiro_hook(&payload.to_string()).is_none(),
+            "Kiro hook should ignore payload {payload}"
+        );
+    }
+}
+
+#[test]
+fn kiro_hook_passes_malicious_session_id_as_a_single_argument() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let capture = base.join("args.bin");
+    let marker = base.join("executed");
+    let fake_herdr = base.join("herdr");
+    fs::write(
+        &fake_herdr,
+        format!(
+            "#!/bin/sh\nprintf '%s\\0' \"$@\" > '{}'\n",
+            capture.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&fake_herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&fake_herdr, permissions).unwrap();
+
+    let session_id = format!("leaf; touch {} #", marker.display());
+    let hook_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/integration/assets/kiro/herdr-agent-state.sh");
+    let mut child = Command::new("bash")
+        .arg(hook_path)
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", base.join("herdr.sock"))
+        .env("HERDR_PANE_ID", "p_test")
+        .env("HERDR_BIN_PATH", &fake_herdr)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(kiro_session_change_payload("local", &session_id, 45).as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+
+    let args = fs::read(&capture)
+        .unwrap()
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| String::from_utf8(arg.to_vec()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(args[0..3], ["pane", "report-agent-session", "p_test"]);
+    assert!(args.contains(&session_id));
+    assert!(!marker.exists());
+
+    cleanup_test_base(&base);
+}

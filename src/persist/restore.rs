@@ -1059,6 +1059,40 @@ mod tests {
     }
 
     #[test]
+    fn kiro_v3_snapshot_restore_reuses_explicit_engine_and_leaf_id_on_second_restart() {
+        let first_snapshot = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:kiro-v3".into(),
+            agent: "kiro".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "kiro-leaf-id".into(),
+        };
+        let expected_argv = vec![
+            "kiro-cli",
+            "chat",
+            "--agent-engine=v3",
+            "--resume-id",
+            "kiro-leaf-id",
+        ];
+
+        let first_plan = restore_plan_for_snapshot(&first_snapshot, true)
+            .expect("first Kiro V3 snapshot restore should plan the saved leaf");
+        assert_eq!(first_plan.argv, expected_argv);
+
+        let restored = restored_terminal_agent_session(Some(&first_snapshot), false)
+            .expect("first restart should retain Kiro V3 identity metadata");
+        let second_snapshot = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: restored.source,
+            agent: restored.agent,
+            kind: restored.session_ref.kind,
+            value: restored.session_ref.value,
+        };
+        let second_plan = restore_plan_for_snapshot(&second_snapshot, true)
+            .expect("second Kiro V3 snapshot restore should reuse the saved leaf");
+
+        assert_eq!(second_plan.argv, expected_argv);
+    }
+
+    #[test]
     fn restore_plan_respects_opt_in_and_allowlist() {
         let pi_session_path = test_session_path("pi-session.jsonl");
         let session = super::super::snapshot::PaneAgentSessionSnapshot {

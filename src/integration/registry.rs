@@ -413,6 +413,21 @@ fn grok_hook_config_is_valid(hook_path: &Path) -> bool {
         .is_some_and(|config| config == super::targets::grok_hook_config(hook_path))
 }
 
+/// Whether the Herdr-owned Kiro hook asset and standalone config exactly match
+/// the installed integration. Formatting and object key order do not affect
+/// config validity.
+fn kiro_hook_is_valid(hook_path: &Path) -> bool {
+    let Some(hooks_dir) = hook_path.parent() else {
+        return false;
+    };
+    let config_path = hooks_dir.join(super::KIRO_HOOK_CONFIG_INSTALL_NAME);
+    fs::read_to_string(hook_path).is_ok_and(|content| content == super::KIRO_HOOK_ASSET)
+        && fs::read_to_string(config_path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+            .is_some_and(|config| config == super::targets::kiro_hook_config(hook_path))
+}
+
 fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) -> bool {
     let Some(config_dir) = plugin_path.parent().and_then(Path::parent) else {
         return false;
@@ -512,6 +527,30 @@ pub(crate) fn experimental_letta_integration_status() -> Option<super::Experimen
         state,
         installed_version,
         expected_version: super::LETTA_INTEGRATION_VERSION,
+    })
+}
+
+/// Kiro is intentionally kept out of the frozen client endpoint
+/// `IntegrationTarget` enum so published generation-1 clients never receive an
+/// unknown variant. Its standalone hook config must match the installed asset
+/// before status can report the integration as current.
+pub(crate) fn experimental_kiro_integration_status() -> Option<super::ExperimentalIntegrationStatus>
+{
+    let path = kiro_dir()
+        .ok()?
+        .join("hooks")
+        .join(super::KIRO_HOOK_INSTALL_NAME);
+    let (mut state, installed_version) =
+        integration_state_for_path(&path, super::KIRO_INTEGRATION_VERSION);
+    if state == super::IntegrationStatusKind::Current && !kiro_hook_is_valid(&path) {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+    Some(super::ExperimentalIntegrationStatus {
+        label: "kiro",
+        path,
+        state,
+        installed_version,
+        expected_version: super::KIRO_INTEGRATION_VERSION,
     })
 }
 

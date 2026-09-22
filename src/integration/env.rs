@@ -24,6 +24,8 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// Herdr-level override for Kiro's global config directory, used to isolate installer tests.
+pub(crate) const KIRO_CONFIG_DIR_ENV_VAR: &str = "KIRO_CONFIG_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -177,6 +179,10 @@ pub(crate) fn qwen_dir() -> io::Result<PathBuf> {
 
 pub(crate) fn letta_dir() -> io::Result<PathBuf> {
     Ok(home_dir()?.join(".letta"))
+}
+
+pub(crate) fn kiro_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(KIRO_CONFIG_DIR_ENV_VAR, &[".kiro"])
 }
 
 pub(crate) fn cursor_dir() -> io::Result<PathBuf> {
