@@ -1523,6 +1523,13 @@ pub(crate) fn install_kiro() -> io::Result<KiroInstallPaths> {
         )));
     }
 
+    #[cfg(not(windows))]
+    if !super::registry::command_available("python3") {
+        return Err(io::Error::other(
+            "python3 is required for the kiro integration. install Python 3 and retry",
+        ));
+    }
+
     let hooks_dir = dir.join("hooks");
     fs::create_dir_all(&hooks_dir)?;
     let hook_path = hooks_dir.join(KIRO_HOOK_INSTALL_NAME);

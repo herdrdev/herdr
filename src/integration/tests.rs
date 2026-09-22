@@ -3790,6 +3790,7 @@ fn install_letta_does_not_publish_hook_when_settings_are_invalid() {
 
 #[test]
 fn letta_staged_install_can_restore_the_prior_file() {
+    let _lock = integration_env_lock();
     let base = unique_base();
     fs::create_dir_all(&base).unwrap();
     let target = base.join("settings.json");
@@ -4901,6 +4902,46 @@ fn experimental_kiro_status_detects_asset_and_config_drift() {
 }
 
 #[test]
+fn outdated_update_instructions_include_only_installed_outdated_kiro() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let previous_home = std::env::var_os("HOME");
+    let home = base.join("home");
+    let kiro_dir = base.join(".kiro");
+    let hooks_dir = kiro_dir.join("hooks");
+    let hook_path = hooks_dir.join(KIRO_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(KIRO_HOOK_CONFIG_INSTALL_NAME);
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&hooks_dir).unwrap();
+    std::env::set_var("HOME", &home);
+    std::env::set_var(KIRO_CONFIG_DIR_ENV_VAR, &kiro_dir);
+
+    fs::write(&hook_path, KIRO_HOOK_ASSET).unwrap();
+    fs::write(
+        &config_path,
+        serde_json::to_string_pretty(&kiro_hook_config(&hook_path)).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(super::registry::outdated_update_instructions(), None);
+
+    fs::write(&config_path, r#"{"hooks":[]}"#).unwrap();
+    assert_eq!(
+        super::registry::outdated_update_instructions(),
+        Some("run `herdr integration install kiro`".to_string())
+    );
+
+    fs::remove_file(&hook_path).unwrap();
+    assert_eq!(super::registry::outdated_update_instructions(), None);
+
+    match previous_home {
+        Some(home) => std::env::set_var("HOME", home),
+        None => std::env::remove_var("HOME"),
+    }
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn uninstall_kiro_removes_only_managed_files_and_is_idempotent() {
     let _lock = integration_env_lock();
     let base = unique_base();
@@ -4941,7 +4982,7 @@ fn uninstall_kiro_removes_only_managed_files_and_is_idempotent() {
 }
 
 #[test]
-fn kiro_assets_only_accept_session_change_and_splat_windows_arguments() {
+fn kiro_assets_only_accept_session_change_and_directly_invoke_windows_command() {
     let windows_asset = include_str!("assets/kiro/herdr-agent-state.ps1");
     for asset in [KIRO_HOOK_ASSET, windows_asset] {
         assert!(asset.contains("SessionChange"));
@@ -4949,5 +4990,77 @@ fn kiro_assets_only_accept_session_change_and_splat_windows_arguments() {
         assert!(!asset.contains("SessionEnd"));
         assert!(!asset.contains("\"--state\""));
     }
-    assert!(windows_asset.contains("& $Executable @Arguments"));
+    assert!(windows_asset.contains("& $herdr @commandArgs *> $null"));
+    assert!(!windows_asset.contains("Start-Job"));
+    assert!(!windows_asset.contains("Wait-Job"));
+}
+
+#[cfg(windows)]
+#[test]
+fn kiro_windows_hook_passes_literal_arguments_to_script() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    fs::create_dir_all(&base).unwrap();
+    let receiver = base.join("fake herdr.ps1");
+    let captured = base.join("arguments.json");
+    fs::write(
+        &receiver,
+        "[System.IO.File]::WriteAllText($env:HERDR_TEST_ARGS, (ConvertTo-Json -InputObject @($args) -Compress))\n",
+    )
+    .unwrap();
+    let hook = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src/integration/assets/kiro/herdr-agent-state.ps1");
+    let payload = serde_json::json!({
+        "hook_event_name": "SessionChange",
+        "session_id": "leaf with spaces; still literal",
+        "cwd": base.to_string_lossy(),
+        "session_location": "local",
+        "client_pid": std::process::id(),
+        "transition_seq": 3,
+    });
+    let mut child = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-File"])
+        .arg(hook)
+        .env("HERDR_ENV", "1")
+        .env("HERDR_SOCKET_PATH", base.join("unused.sock"))
+        .env("HERDR_PANE_ID", "p_test")
+        .env("HERDR_BIN_PATH", &receiver)
+        .env("HERDR_TEST_ARGS", &captured)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let arguments: Vec<String> =
+        serde_json::from_str(&fs::read_to_string(&captured).unwrap()).unwrap();
+    assert_eq!(
+        arguments,
+        [
+            "pane",
+            "report-agent-session",
+            "p_test",
+            "--source",
+            "herdr:kiro-v3",
+            "--agent",
+            "kiro",
+            "--seq",
+            "3",
+            "--agent-session-id",
+            "leaf with spaces; still literal",
+            "--session-start-source",
+            "select",
+        ]
+    );
+    let _ = fs::remove_dir_all(base);
 }

@@ -363,10 +363,18 @@ fn integration_specs() -> [(
     ]
 }
 
+fn update_instructions_for_commands(commands: &[String]) -> String {
+    match commands {
+        [] => String::new(),
+        [command] => format!("run {command}"),
+        [rest @ .., last] => format!("run {} and {last}", rest.join(", ")),
+    }
+}
+
 pub(crate) fn integration_update_instructions(
     targets: &[crate::api::schema::IntegrationTarget],
 ) -> String {
-    let commands: Vec<String> = targets
+    let commands = targets
         .iter()
         .map(|target| {
             format!(
@@ -374,28 +382,43 @@ pub(crate) fn integration_update_instructions(
                 integration_target_label(*target)
             )
         })
-        .collect();
-
-    match commands.as_slice() {
-        [] => String::new(),
-        [command] => format!("run {command}"),
-        [rest @ .., last] => format!("run {} and {last}", rest.join(", ")),
-    }
+        .collect::<Vec<_>>();
+    update_instructions_for_commands(&commands)
 }
 
-pub(crate) fn print_outdated_update_notice() -> bool {
+pub(super) fn outdated_update_instructions() -> Option<String> {
     let outdated = outdated_installed_integrations();
-    if outdated.is_empty() {
-        return false;
-    }
-
     let targets = outdated
         .iter()
         .map(|integration| integration.target)
         .collect::<Vec<_>>();
+    let kiro_outdated = experimental_kiro_integration_status()
+        .is_some_and(|status| status.state == super::IntegrationStatusKind::Outdated);
+    if !kiro_outdated {
+        return (!targets.is_empty()).then(|| integration_update_instructions(&targets));
+    }
+
+    let mut commands = targets
+        .iter()
+        .map(|target| {
+            format!(
+                "`herdr integration install {}`",
+                integration_target_label(*target)
+            )
+        })
+        .collect::<Vec<_>>();
+    commands.push("`herdr integration install kiro`".to_string());
+    Some(update_instructions_for_commands(&commands))
+}
+
+pub(crate) fn print_outdated_update_notice() -> bool {
+    let Some(instructions) = outdated_update_instructions() else {
+        return false;
+    };
+
     eprintln!(
         "installed herdr integrations need updating; {}.",
-        integration_update_instructions(&targets).replace('`', "")
+        instructions.replace('`', "")
     );
     true
 }

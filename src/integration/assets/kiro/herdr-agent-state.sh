@@ -97,7 +97,6 @@ try:
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
-        timeout=1,
         check=False,
     )
 except Exception:

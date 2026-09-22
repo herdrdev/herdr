@@ -383,6 +383,20 @@ fn devin_hook_ignores_non_matching_session_list_entries() {
 }
 
 fn run_kiro_hook(hook_input: &str) -> Option<serde_json::Value> {
+    run_kiro_hook_with_binary(
+        hook_input,
+        Path::new(env!("CARGO_BIN_EXE_herdr")),
+        Duration::from_secs(2),
+        &[],
+    )
+}
+
+fn run_kiro_hook_with_binary(
+    hook_input: &str,
+    herdr_bin: &Path,
+    server_timeout: Duration,
+    envs: &[(&str, &str)],
+) -> Option<serde_json::Value> {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
     let api_socket = base.join("herdr.sock");
@@ -390,7 +404,7 @@ fn run_kiro_hook(hook_input: &str) -> Option<serde_json::Value> {
 
     let server = thread::spawn(move || {
         listener.set_nonblocking(true).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + server_timeout;
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
@@ -431,10 +445,13 @@ fn run_kiro_hook(hook_input: &str) -> Option<serde_json::Value> {
         .env("HERDR_ENV", "1")
         .env("HERDR_SOCKET_PATH", &api_socket)
         .env("HERDR_PANE_ID", "p_test")
-        .env("HERDR_BIN_PATH", env!("CARGO_BIN_EXE_herdr"))
+        .env("HERDR_BIN_PATH", herdr_bin)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    for (key, value) in envs {
+        command.env(key, value);
+    }
     let mut child = command.spawn().unwrap();
     child
         .stdin
@@ -484,6 +501,60 @@ fn kiro_hook_reports_local_leaf_session_through_real_cli_command() {
     assert_eq!(request["params"]["agent_session_id"], "leaf-local");
     assert_eq!(request["params"]["session_start_source"], "select");
     assert!(request["params"].get("state").is_none());
+}
+
+#[test]
+fn kiro_install_requires_python3_before_writing_files() {
+    let base = unique_test_dir();
+    let kiro_dir = base.join("kiro");
+    let empty_bin = base.join("empty-bin");
+    fs::create_dir_all(&kiro_dir).unwrap();
+    fs::create_dir_all(&empty_bin).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["integration", "install", "kiro"])
+        .env("KIRO_CONFIG_DIR", &kiro_dir)
+        .env("PATH", &empty_bin)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let message = String::from_utf8_lossy(&output.stderr);
+    assert!(message.contains("python3 is required for the kiro integration"));
+    assert!(message.contains("install Python 3 and retry"));
+    assert!(!kiro_dir.join("hooks").exists());
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn kiro_hook_allows_delayed_report_beyond_one_second() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let delayed_herdr = base.join("delayed-herdr");
+    fs::write(
+        &delayed_herdr,
+        "#!/bin/sh\nsleep 2\nexec \"$HERDR_TEST_REAL_BIN\" \"$@\"\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&delayed_herdr).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&delayed_herdr, permissions).unwrap();
+
+    let request = run_kiro_hook_with_binary(
+        &kiro_session_change_payload("local", "delayed-leaf", 46),
+        &delayed_herdr,
+        Duration::from_secs(3),
+        &[("HERDR_TEST_REAL_BIN", env!("CARGO_BIN_EXE_herdr"))],
+    )
+    .expect("a report that starts after one second should reach Herdr");
+
+    assert_eq!(request["method"], "pane.report_agent_session");
+    assert_eq!(request["params"]["source"], "herdr:kiro-v3");
+    assert_eq!(request["params"]["agent_session_id"], "delayed-leaf");
+
+    cleanup_test_base(&base);
 }
 
 #[test]

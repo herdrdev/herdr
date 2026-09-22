@@ -59,18 +59,7 @@ if ($payload.session_location -eq "local") {
     )
 }
 
-$job = $null
 try {
-    $job = Start-Job -ScriptBlock {
-        param($Executable, [object[]]$Arguments)
-        & $Executable @Arguments *> $null
-    } -ArgumentList $herdr, (,$commandArgs)
-    if ($null -eq (Wait-Job -Job $job -Timeout 1)) {
-        Stop-Job -Job $job
-    }
+    & $herdr @commandArgs *> $null
 } catch {
-} finally {
-    if ($null -ne $job) {
-        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
-    }
 }
