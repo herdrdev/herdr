@@ -651,6 +651,15 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
     }
     if ends_with(&[
         "node_modules",
+        "@oh-my-pi",
+        "pi-coding-agent",
+        "dist",
+        "cli.js",
+    ]) {
+        return Some(agent_label(Agent::Omp).to_string());
+    }
+    if ends_with(&[
+        "node_modules",
         "@moonshot-ai",
         "kimi-code",
         "dist",
@@ -1435,19 +1444,36 @@ mod tests {
 
     #[test]
     fn identify_agent_in_job_detects_bun_wrapped_omp() {
-        let job = crate::platform::ForegroundJob {
+        for (runtime, script) in [
+            ("bun", "/home/can/.bun/bin/omp"),
+            (
+                "bun.exe",
+                r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\cli.js",
+            ),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, runtime, &[runtime, script])],
+            };
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Omp, "omp".to_string())),
+                "script: {script}"
+            );
+        }
+
+        let other_script = crate::platform::ForegroundJob {
             process_group_id: 123,
             processes: vec![foreground_process(
                 123,
-                "bun",
-                &["bun", "/home/can/.bun/bin/omp"],
+                "bun.exe",
+                &[
+                    "bun.exe",
+                    r"C:\Users\herdr\AppData\Roaming\npm\node_modules\@oh-my-pi\pi-coding-agent\dist\setup.js",
+                ],
             )],
         };
-
-        assert_eq!(
-            identify_agent_in_job(&job),
-            Some((Agent::Omp, "omp".to_string()))
-        );
+        assert_eq!(identify_agent_in_job(&other_script), None);
     }
 
     #[test]
