@@ -205,7 +205,9 @@ impl CursorPositionSettleState {
         }
         self.settled
             .map(|settled| TerminalCursorState {
-                visible: settled.visible && (current.visible || !candidate.visible),
+                visible: settled.visible
+                    && (current.visible
+                        || (!candidate.visible && same_cursor_position(candidate, current))),
                 shape: current.shape,
                 ..settled
             })
@@ -540,6 +542,15 @@ mod tests {
                 now + Duration::from_millis(90)
             ),
             Some(cursor(1, 0, true, 0))
+        );
+        assert!(
+            !settle
+                .reported_cursor(
+                    Some(cursor(2, 0, false, 0)),
+                    now + Duration::from_millis(90)
+                )
+                .unwrap()
+                .visible
         );
         settle.observe(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(91));
         assert_eq!(
