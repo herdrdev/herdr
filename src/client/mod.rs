@@ -167,7 +167,12 @@ fn run_client_with_mode(
             .with_startup_config_diagnostic(startup_config_diagnostic)
             .with_startup_onboarding(loaded_config.config.should_show_onboarding())
             .with_keybinding_source(keybinding_source)
-            .with_local_endpoint(&socket_path)
+            .with_endpoint_preferences(
+                &socket_path,
+                std::env::var(crate::remote::REMOTE_PREFERENCES_ENV_VAR)
+                    .ok()
+                    .as_deref(),
+            )
     });
     let mouse_capture = loaded_config.config.ui.mouse_capture;
     let mouse_scroll_lines = loaded_config.config.ui.mouse_scroll_lines();

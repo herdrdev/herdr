@@ -75,15 +75,21 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     )?;
 
     let _bridge = SshStdioBridge::start(
-        remote.target,
+        remote.target.clone(),
         prepared_remote.remote_herdr,
         local_socket.clone(),
-        session_name,
+        session_name.clone(),
         remote_ssh.options(),
         false,
     )?;
 
-    run_client_process(&local_socket, &reattach_command, remote.keybindings)
+    run_client_process(
+        &local_socket,
+        &reattach_command,
+        remote.keybindings,
+        &remote.target,
+        &session_name,
+    )
 }
 
 pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
@@ -3235,7 +3241,11 @@ fn run_client_process(
     local_socket: &Path,
     reattach_command: &str,
     keybindings: RemoteKeybindings,
+    target: &str,
+    session: &str,
 ) -> io::Result<()> {
+    let preference_identity =
+        serde_json::to_string(&(target, session)).map_err(io::Error::other)?;
     let exe = std::env::current_exe()?;
     let status = Command::new(exe)
         .arg("client")
@@ -3243,6 +3253,7 @@ fn run_client_process(
             crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
             local_socket,
         )
+        .env(REMOTE_PREFERENCES_ENV_VAR, preference_identity)
         .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
         .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
         .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
