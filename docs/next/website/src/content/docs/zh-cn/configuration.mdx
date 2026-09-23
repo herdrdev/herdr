@@ -273,7 +273,7 @@ yellow = "#f9e2af"
 
 `sidebar_bg` 可单独设置桌面侧边栏的背景色。省略时，侧边栏继续使用宿主终端背景。`active_row_bg` 可更改当前 Space 和已聚焦 Agent 行的背景色，而不会影响分隔线或滚动条轨道。`selection_bg` 可更改侧边栏中 Navigate 模式光标行的背景色。
 
-颜色值支持十六进制、命名颜色、`rgb(r,g,b)`，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
+颜色值支持十六进制、命名颜色、`rgb(r,g,b)`、`0` 到 `255` 的 ANSI 调色板索引，以及 `reset`、`default`、`none`、`transparent` 等重置别名。
 
 启用 `auto_switch` 后，可以通过明暗模式子表在共享自定义颜色之上应用不同的覆盖值：
 

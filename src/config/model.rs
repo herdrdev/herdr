@@ -972,7 +972,7 @@ pub struct UiConfig {
     /// Expanded sidebar row composition.
     pub sidebar: SidebarConfig,
     /// Accent color for highlights, borders, and navigation UI.
-    /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).
+    /// Accepts hex (#89b4fa), named colors (cyan, blue), RGB (rgb(137,180,250)), or ANSI palette indexes (0-255).
     pub accent: String,
     /// Optional visual toast notifications for background workspace events.
     pub toast: ToastConfig,

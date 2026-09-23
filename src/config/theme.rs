@@ -194,6 +194,10 @@ pub fn parse_color(s: &str) -> ratatui::style::Color {
         }
     }
 
+    if let Ok(index) = s.parse::<u8>() {
+        return Color::Indexed(index);
+    }
+
     match s.as_str() {
         "black" => Color::Black,
         "red" => Color::Red,
@@ -267,6 +271,21 @@ light_name = "lattee"
 
         for value in ["reset", "default", "none", "transparent"] {
             assert_eq!(parse_color(value), Color::Reset, "value: {value}");
+        }
+    }
+
+    #[test]
+    fn parse_color_accepts_palette_indexes() {
+        use ratatui::style::Color;
+
+        for value in ["0", " 4 ", "255"] {
+            let expected = Color::Indexed(value.trim().parse().expect("index"));
+            assert_eq!(parse_color(value), expected, "value: {value}");
+        }
+
+        // Out of range values keep the existing unknown-color fallback.
+        for value in ["256", "-1"] {
+            assert_eq!(parse_color(value), Color::Cyan, "value: {value}");
         }
     }
 
