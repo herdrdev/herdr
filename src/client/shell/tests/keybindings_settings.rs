@@ -96,6 +96,32 @@ fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
 }
 
 #[test]
+fn remote_client_preferences_process_child() {
+    if std::env::var("HERDR_TEST_PREFERENCES_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    let expected_path = super::super::preferences::path_for_remote_endpoint("dev", "agents");
+    if !expected_path.exists() {
+        super::super::preferences::store(
+            expected_path.as_path(),
+            super::super::preferences::ClientChromePreferences {
+                sidebar_width: Some(31),
+                sidebar_collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let socket = crate::server::socket_paths::client_socket_path();
+    let config = ClientShellConfig::from_config(&Config::default())
+        .with_process_endpoint_preferences(&socket);
+    assert_eq!(config.preferences_path, Some(expected_path));
+    let restored = ClientShellState::new(config);
+    assert_eq!(restored.sidebar_width, 31);
+    assert!(restored.sidebar_collapsed);
+}
+
+#[test]
 fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
         "herdr-client-shell-prefs-{}.json",

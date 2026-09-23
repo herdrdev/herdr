@@ -194,6 +194,15 @@ impl ClientShellConfig {
         self.with_preferences_path(preferences::path_for_local_endpoint(socket_path))
     }
 
+    pub(crate) fn with_process_endpoint_preferences(self, socket_path: &std::path::Path) -> Self {
+        self.with_endpoint_preferences(
+            socket_path,
+            std::env::var(crate::remote::REMOTE_PREFERENCES_ENV_VAR)
+                .ok()
+                .as_deref(),
+        )
+    }
+
     pub(crate) fn with_endpoint_preferences(
         self,
         socket_path: &std::path::Path,
