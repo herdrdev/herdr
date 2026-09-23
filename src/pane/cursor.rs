@@ -106,19 +106,20 @@ impl CursorPositionSettleState {
         // when typing advanced its column. Otherwise the accumulated typing
         // deadline can settle a later repair cell and anchor redraws there.
         if let (Some(candidate), Some(since)) = (self.candidate, self.candidate_since) {
+            let expired = now.duration_since(since) >= self.candidate_hold();
             let restored = self.settled.zip(current).is_some_and(|(settled, current)| {
                 settled.visible
+                    && current.visible
+                    && (candidate.visible || !expired)
                     && (same_cursor_position(settled, current)
-                        || (candidate.y != settled.y
-                            && current.y == settled.y
-                            && now.duration_since(since) < self.candidate_hold()))
+                        || (candidate.y != settled.y && current.y == settled.y && !expired))
             });
             if restored {
                 self.settle(current);
                 return;
             }
             // Preserve an eligible caret before a later redraw moves it away.
-            if now.duration_since(since) >= self.candidate_hold() {
+            if expired {
                 self.settle(Some(candidate));
             }
         }
@@ -127,8 +128,28 @@ impl CursorPositionSettleState {
             return;
         };
         if !current.visible {
+            // A PTY can briefly hide a stationary caret during a redraw.
+            // Keep the last visible cell until the existing max hold expires.
+            if self.candidate.is_some_and(|candidate| {
+                !candidate.visible && same_cursor_position(candidate, current)
+            }) {
+                return;
+            }
+            if self.candidate.is_none()
+                && self.settled.is_some_and(|settled| {
+                    settled.visible && same_cursor_position(settled, current)
+                })
+            {
+                self.candidate = Some(current);
+                self.pending_since = Some(now);
+                self.candidate_since = Some(now);
+                return;
+            }
             self.settle(Some(current));
             return;
+        }
+        if self.candidate.is_some_and(|candidate| !candidate.visible) {
+            self.settle(self.settled);
         }
         let Some(settled) = self.settled else {
             self.settle(Some(current));
@@ -184,7 +205,7 @@ impl CursorPositionSettleState {
         }
         self.settled
             .map(|settled| TerminalCursorState {
-                visible: current.visible && settled.visible,
+                visible: settled.visible && (current.visible || !candidate.visible),
                 shape: current.shape,
                 ..settled
             })
@@ -204,7 +225,7 @@ impl CursorPositionSettleState {
     }
 
     fn candidate_hold(&self) -> Duration {
-        if self.candidate_jump {
+        if self.candidate_jump || self.candidate.is_some_and(|candidate| !candidate.visible) {
             CURSOR_POSITION_MAX_HOLD
         } else {
             CURSOR_POSITION_SETTLE
@@ -499,7 +520,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_settle_hides_immediately_and_waits_to_reveal() {
+    fn cursor_settle_ignores_short_same_position_hides() {
         let now = Instant::now();
         let mut settle = CursorPositionSettleState::default();
         settle.observe(Some(cursor(1, 0, true, 0)), now);
@@ -507,13 +528,99 @@ mod tests {
 
         assert_eq!(
             settle.reported_cursor(Some(cursor(1, 0, false, 0)), now + Duration::from_millis(2)),
-            Some(cursor(1, 0, false, 0))
+            Some(cursor(1, 0, true, 0))
+        );
+        settle.observe(
+            Some(cursor(1, 0, false, 0)),
+            now + Duration::from_millis(50),
+        );
+        assert_eq!(
+            settle.reported_cursor(
+                Some(cursor(1, 0, false, 0)),
+                now + Duration::from_millis(90)
+            ),
+            Some(cursor(1, 0, true, 0))
+        );
+        settle.observe(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(91));
+        assert_eq!(
+            settle.reported_cursor(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(92)),
+            Some(cursor(1, 0, true, 0))
+        );
+        assert!(!settle.pending());
+    }
+
+    #[test]
+    fn cursor_settle_hides_after_deadline_and_waits_to_reveal() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let visible = cursor(1, 0, true, 0);
+        let hidden = cursor(1, 0, false, 0);
+        settle.observe(Some(visible), now);
+        settle.observe(Some(hidden), now + Duration::from_millis(1));
+        assert_eq!(settle.render_delay(), Some(CURSOR_POSITION_MAX_HOLD));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(100)),
+            Some(visible)
+        );
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(101)),
+            Some(hidden)
         );
 
-        settle.observe(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(3));
+        // The pure read above exposes expiry without changing the state.
+        settle.observe(Some(visible), now + Duration::from_millis(102));
         assert_eq!(
-            settle.reported_cursor(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(4)),
-            Some(cursor(1, 0, false, 0))
+            settle.reported_cursor(Some(visible), now + Duration::from_millis(103)),
+            Some(hidden)
+        );
+        assert_eq!(
+            settle.reported_cursor(Some(visible), now + Duration::from_millis(122)),
+            Some(visible)
+        );
+    }
+
+    #[test]
+    fn cursor_settle_hides_immediately_outside_stationary_caret() {
+        let now = Instant::now();
+        let visible = cursor(1, 0, true, 0);
+        let hidden = cursor(2, 0, false, 0);
+        let mut settle = CursorPositionSettleState::default();
+        settle.observe(Some(visible), now);
+        settle.observe(Some(hidden), now + Duration::from_millis(1));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(2)),
+            Some(hidden)
+        );
+
+        settle.observe(None, now + Duration::from_millis(3));
+        assert_eq!(
+            settle.reported_cursor(None, now + Duration::from_millis(4)),
+            None
+        );
+
+        for hide_at in [visible, cursor(2, 0, true, 0)] {
+            let mut settle = CursorPositionSettleState::default();
+            settle.observe(Some(visible), now);
+            settle.observe(Some(cursor(2, 0, true, 0)), now + Duration::from_millis(1));
+            let hidden = TerminalCursorState {
+                visible: false,
+                ..hide_at
+            };
+            settle.observe(Some(hidden), now + Duration::from_millis(2));
+            assert_eq!(
+                settle.reported_cursor(Some(hidden), now + Duration::from_millis(3)),
+                Some(hidden)
+            );
+        }
+
+        // Once the pending move has expired, its destination is the caret to retain.
+        let mut settle = CursorPositionSettleState::default();
+        settle.observe(Some(visible), now);
+        settle.observe(Some(cursor(2, 0, true, 0)), now + Duration::from_millis(1));
+        settle.observe(Some(hidden), now + Duration::from_millis(22));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(23)),
+            Some(cursor(2, 0, true, 0))
         );
     }
 

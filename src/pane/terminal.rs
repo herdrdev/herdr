@@ -4416,6 +4416,36 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    fn cursor_state_holds_brief_pty_hide_and_schedules_sustained_hide() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[15;4H", &tx);
+        {
+            let mut core = pane.core.lock().unwrap();
+            let current = current_cursor_state(&mut core);
+            core.cursor_settle_state = CursorPositionSettleState::default();
+            core.cursor_settle_state.observe(current, Instant::now());
+        }
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b[?25l", &tx);
+        assert!(result.request_render);
+        assert_eq!(result.render_delay, Some(Duration::from_millis(100)));
+        assert!(pane.cursor_state().is_some_and(|cursor| cursor.visible));
+        let mut core = pane.core.lock().unwrap();
+        let current = current_cursor_state(&mut core);
+        assert!(
+            !core
+                .cursor_settle_state
+                .reported_cursor(current, Instant::now() + result.render_delay.unwrap())
+                .unwrap()
+                .visible
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
     fn cursor_settle_ignores_intermediate_synchronized_frame_positions() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
