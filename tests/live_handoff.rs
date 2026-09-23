@@ -431,10 +431,23 @@ fn pid_marker_waits_for_complete_line() {
     // READY 12 must time out rather than return a truncated but parseable PID.
     for partial in ["", "READY ", "READY 12"] {
         fs::write(&marker, partial).unwrap();
-        assert!(std::panic::catch_unwind(|| {
-            wait_for_pid_marker(&marker, Duration::from_millis(100))
-        })
-        .is_err());
+        let timeout = Duration::from_millis(100);
+        let started = Instant::now();
+        let panic = std::panic::catch_unwind(|| wait_for_pid_marker(&marker, timeout))
+            .expect_err("incomplete marker should time out");
+        assert!(
+            started.elapsed() >= timeout,
+            "marker {partial:?} failed early"
+        );
+        let message = panic.downcast_ref::<String>().expect("timeout diagnostic");
+        assert_eq!(
+            message,
+            &format!(
+                "{} did not contain {:?}; last text was {partial:?}",
+                marker.display(),
+                "\n"
+            )
+        );
     }
     fs::write(&marker, "READY 1234\n").unwrap();
     assert_eq!(wait_for_pid_marker(&marker, Duration::from_secs(1)), 1234);
