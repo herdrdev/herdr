@@ -95,7 +95,8 @@ impl RenderPipeline {
             },
             &self.graphics_delivery,
             1,
-        );
+        )
+        .expect("benchmark surface");
         let server_elapsed = started.elapsed();
         self.graphics_delivery = rendered.graphics_delivery;
 
@@ -469,7 +470,8 @@ fn print_surface_damage_profiles() {
             HostCellSize::default(),
             &pipeline.graphics_delivery,
             1,
-        );
+        )
+        .expect("benchmark surface");
         let mut surface = PaneSurfaceFrame {
             boot_id: "bench-boot".into(),
             projection_revision: 1,
@@ -520,7 +522,8 @@ fn print_surface_reuse_profiles() {
                 HostCellSize::default(),
                 &pipeline.graphics_delivery,
                 1,
-            );
+            )
+            .expect("benchmark surface");
             let surface = PaneSurfaceFrame {
                 boot_id: "bench-boot".into(),
                 projection_revision: 1,

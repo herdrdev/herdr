@@ -206,6 +206,20 @@ struct RetainedRecipientUpdate {
     )>,
 }
 
+fn has_synchronized_pane(app: &app::App, surface: &protocol::PaneSurfaceFrame) -> bool {
+    surface.panes.iter().any(|pane| {
+        app.parse_pane_id(&pane.pane_id)
+            .and_then(|(workspace_index, pane_id)| {
+                app.state.runtime_for_pane_in_workspace(
+                    &app.terminal_runtimes,
+                    workspace_index,
+                    pane_id,
+                )
+            })
+            .is_some_and(|runtime| runtime.synchronized_output_active())
+    })
+}
+
 impl HeadlessServer {
     /// Applies terminal dirty rows to the committed origin-relative pane surface.
     /// Any presentation or geometry uncertainty falls back to the complete renderer.
@@ -281,6 +295,9 @@ impl HeadlessServer {
             {
                 fallback!("baseline_mismatch");
             }
+            if has_synchronized_pane(&self.app, surface) {
+                fallback!("synchronized_visible");
+            }
             recipients.push(RetainedRecipient {
                 client_id: *client_id,
                 surface,
@@ -346,7 +363,7 @@ impl HeadlessServer {
         }
 
         let mut updates = Vec::with_capacity(recipients.len());
-        for recipient in recipients {
+        for recipient in &recipients {
             let client_id = recipient.client_id;
             let surface = recipient.surface;
             let mut panes = surface.panes.clone();
@@ -458,6 +475,12 @@ impl HeadlessServer {
         }
         if updates.is_empty() {
             success!("unchanged");
+        }
+        if recipients
+            .iter()
+            .any(|recipient| has_synchronized_pane(&self.app, recipient.surface))
+        {
+            fallback!("synchronized_during_patch");
         }
 
         let mut sent = 0u64;

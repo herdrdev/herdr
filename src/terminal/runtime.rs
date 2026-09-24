@@ -352,6 +352,10 @@ impl TerminalRuntime {
         self.0.synchronized_output_active()
     }
 
+    pub(crate) fn synchronized_output_state(&self) -> (bool, u64) {
+        self.0.synchronized_output_state()
+    }
+
     pub fn visible_text(&self) -> String {
         self.0.visible_text()
     }

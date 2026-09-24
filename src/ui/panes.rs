@@ -869,17 +869,21 @@ mod tests {
         let terminal_id = app.workspaces[0].terminal_id(pane_id).unwrap().clone();
         app.terminals.get_mut(&terminal_id).unwrap().restore_error =
             Some("Saved directory is unavailable. Restart to retry.".into());
-        let (buffer, cursor, _, _) = crate::server::render_stream::render_tab_surface_virtual(
+        let runtimes = TerminalRuntimeRegistry::new();
+        let area = Rect::new(0, 0, 80, 24);
+        let layout = crate::ui::compute_tab_surface_for(
             &app,
-            &TerminalRuntimeRegistry::new(),
+            &runtimes,
             Some(crate::ui::TabSurfaceTarget {
                 workspace_index: 0,
                 tab_index: 0,
             }),
-            Rect::new(0, 0, 80, 24),
+            area,
             false,
             Default::default(),
         );
+        let (buffer, cursor, _, _) =
+            crate::server::render_stream::render_tab_surface_virtual(&app, &runtimes, layout, area);
         let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
         assert!(text.contains("Saved directory is unavailable."));
         assert!(cursor.is_none_or(|cursor| !cursor.visible));

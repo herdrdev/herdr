@@ -1263,6 +1263,147 @@ fn recv_pane_surface_patch(
 }
 
 #[tokio::test]
+async fn unrelated_render_keeps_synchronized_pane_frame_committed() {
+    let mut server = test_headless_server();
+    let pane_id = install_shared_view_test_runtime(&mut server);
+    let (_control, render) = connect_matching_test_shell(&mut server, 7);
+    server.render_and_stream();
+    let before = recv_pane_surface(&render, "baseline");
+    assert!(frame_text(&before.frame).contains("BASE"));
+    let projection_before = server.clients[&7].shell_projection_revision;
+
+    write_shared_test_pane(
+        &mut server,
+        pane_id,
+        b"\x1b[?2026h\x1b[?1049h\x1b[2J\x1b[HPARTIAL",
+    );
+    server.app.state.workspaces[0].custom_name = Some("renamed during frame".into());
+    server.clients.get_mut(&7).unwrap().request_recompute();
+    server.render_and_stream();
+    assert!(render.try_recv().is_err(), "partial frame was published");
+    assert_eq!(
+        server.clients[&7].shell_projection_revision,
+        projection_before
+    );
+
+    write_shared_test_pane(&mut server, pane_id, b"\rCOMPLETE\x1b[?2026l");
+    assert!(!server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    server.render_and_stream();
+    let after = recv_pane_surface(&render, "completed frame");
+    assert!(frame_text(&after.frame).contains("COMPLETE"));
+    assert!(after.projection_revision > projection_before);
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn sibling_retained_output_waits_for_synchronized_pane_to_finish() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("synchronized-split");
+    let first = workspace.tabs[0].root_pane;
+    let second = workspace.test_split(ratatui::layout::Direction::Vertical);
+    workspace.insert_test_runtime(
+        first,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"FIRST"),
+    );
+    workspace.insert_test_runtime(
+        second,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"SECOND"),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let (_control, render) = connect_matching_test_shell(&mut server, 7);
+    server.render_and_stream();
+    let _ = recv_pane_surface(&render, "split baseline");
+
+    write_shared_test_pane(&mut server, first, b"\x1b[?2026h\rPARTIAL");
+    write_shared_test_pane(&mut server, second, b"\rUPDATED");
+    assert!(!server.render_retained_pane_surface_and_stream(&HashSet::from([second])));
+    server.render_and_stream();
+    assert!(
+        render.try_recv().is_err(),
+        "sibling published partial frame"
+    );
+
+    write_shared_test_pane(&mut server, first, b"\rCOMPLETE\x1b[?2026l");
+    assert!(!server.render_retained_pane_surface_and_stream(&HashSet::from([first])));
+    server.render_and_stream();
+    let after = recv_pane_surface(&render, "completed split");
+    let text = frame_text(&after.frame);
+    assert!(
+        text.contains("COMPLETE") && text.contains("UPDATED"),
+        "{text}"
+    );
+    assert!(!text.contains("PARTIAL"));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn popup_synchronized_output_waits_for_complete_frame() {
+    let mut server = test_headless_server();
+    install_shared_view_test_runtime(&mut server);
+    let popup_runtime =
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(40, 12, b"POPUP_BASE");
+    let (_, popup_id) = server.app.install_test_popup_runtime(popup_runtime);
+    server.popup_owner_tab_id = server.app.public_tab_id(0, 0);
+    let (_control, render) = connect_matching_test_shell(&mut server, 7);
+    server.render_and_stream();
+    assert!(recv_pane_surface(&render, "popup baseline").popup.is_some());
+
+    server
+        .app
+        .terminal_runtimes
+        .get(&popup_id)
+        .unwrap()
+        .test_process_pty_bytes(b"\x1b[?2026h\rPOPUP_PARTIAL");
+    server.render_and_stream();
+    assert!(render.try_recv().is_err(), "partial popup was published");
+
+    server
+        .app
+        .terminal_runtimes
+        .get(&popup_id)
+        .unwrap()
+        .test_process_pty_bytes(b"\rPOPUP_COMPLETE\x1b[?2026l");
+    server.render_and_stream();
+    let after = recv_pane_surface(&render, "complete popup");
+    assert!(after
+        .popup
+        .as_ref()
+        .is_some_and(|popup| frame_text(&popup.frame).contains("POPUP_COMPLETE")));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
+async fn zoom_hidden_synchronized_pane_does_not_block_surface() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("zoomed-sync");
+    let hidden = workspace.tabs[0].root_pane;
+    let visible = workspace.test_split(ratatui::layout::Direction::Vertical);
+    workspace.tabs[0].zoomed = true;
+    workspace.insert_test_runtime(
+        hidden,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"HIDDEN"),
+    );
+    workspace.insert_test_runtime(
+        visible,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 23, b"VISIBLE"),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let (_control, render) = connect_matching_test_shell(&mut server, 7);
+    write_shared_test_pane(&mut server, hidden, b"\x1b[?2026h\rPARTIAL");
+    server.render_and_stream();
+    let surface = recv_pane_surface(&render, "zoomed visible pane");
+    assert!(frame_text(&surface.frame).contains("VISIBLE"));
+    assert!(!frame_text(&surface.frame).contains("PARTIAL"));
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn retained_snapshot_survives_a_writer_waiting_for_the_terminal_core() {
     let mut server = test_headless_server();
     let pane_id = install_shared_view_test_runtime(&mut server);
@@ -3828,6 +3969,60 @@ fn with_terminal_session_test_server(
     drop(server);
     drop(_runtime_guard);
     rt.shutdown_timeout(Duration::from_millis(100));
+}
+
+#[test]
+fn terminal_observers_wait_for_synchronized_output_with_or_without_baseline() {
+    with_terminal_session_test_server(|server, terminal_id, target, _| {
+        let connect = |server: &mut HeadlessServer, client_id| {
+            let (writer, _control, render) = test_client_writer();
+            assert!(!server.handle_server_event(ServerEvent::ClientConnected {
+                client_id,
+                cols: 80,
+                rows: 24,
+                cell_width_px: 0,
+                cell_height_px: 0,
+                pixel_mouse: false,
+                writer,
+            }));
+            assert!(
+                server.handle_server_event(ServerEvent::ClientObserveTerminal {
+                    client_id,
+                    target: target.clone(),
+                })
+            );
+            render
+        };
+        let first = connect(server, 7);
+        server.render_and_stream();
+        let _ = first.recv().expect("observer baseline");
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(b"\x1b[?2026h\rPARTIAL");
+        let second = connect(server, 8);
+        server.render_and_stream();
+        assert!(first.try_recv().is_err());
+        assert!(second.try_recv().is_err());
+
+        server
+            .app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .unwrap()
+            .test_process_pty_bytes(b"\rCOMPLETE\x1b[?2026l");
+        server.render_and_stream();
+        for frames in [&first, &second] {
+            let ServerMessage::Terminal(frame) =
+                read_server_message(frames.recv().expect("complete observer frame"))
+            else {
+                panic!("expected terminal frame");
+            };
+            assert!(String::from_utf8_lossy(&frame.bytes).contains("COMPLETE"));
+        }
+    });
 }
 
 fn connect_pending_terminal_client(server: &mut HeadlessServer, client_id: u64) {

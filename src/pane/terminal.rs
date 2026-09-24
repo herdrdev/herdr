@@ -195,6 +195,7 @@ pub(crate) struct GhosttyPaneCore {
     #[cfg(test)]
     pub dirty_collection_hook: Option<Box<dyn FnOnce() + Send>>,
     pub terminal: crate::ghostty::Terminal,
+    synchronized_output_epoch: u64,
     #[cfg(windows)]
     recent_fallback: windows_recent_fallback::Cache,
     pub render_state: crate::ghostty::RenderState,
@@ -480,6 +481,10 @@ impl PaneTerminal {
 
     pub fn synchronized_output_active(&self) -> bool {
         self.ghostty.synchronized_output_active()
+    }
+
+    pub(crate) fn synchronized_output_state(&self) -> (bool, u64) {
+        self.ghostty.synchronized_output_state()
     }
 
     pub fn visible_text(&self) -> String {
@@ -1167,6 +1172,7 @@ impl GhosttyPaneTerminal {
                 #[cfg(test)]
                 dirty_collection_hook: None,
                 terminal,
+                synchronized_output_epoch: 0,
                 #[cfg(windows)]
                 recent_fallback: windows_recent_fallback::Cache::default(),
                 render_state,
@@ -1387,6 +1393,10 @@ impl GhosttyPaneTerminal {
         core.decscusr_tracker.observe(bytes);
         let in_progress_default_color_event = core.default_color_event_tracker.in_progress_event();
         let default_color_events = core.default_color_event_tracker.drain_pending();
+        let synchronized_output_before = core
+            .terminal
+            .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+            .unwrap_or(false);
         let write_started = crate::render_prof::timer();
         self.write_pty_bytes_with_ordered_responses(
             &mut core,
@@ -1420,6 +1430,9 @@ impl GhosttyPaneTerminal {
             .terminal
             .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
             .unwrap_or(false);
+        if synchronized_output != synchronized_output_before {
+            core.synchronized_output_epoch = core.synchronized_output_epoch.wrapping_add(1);
+        }
         // Intermediate synchronized-frame positions must not become settled cursors.
         if CURSOR_POSITION_SETTLE_ENABLED && !synchronized_output {
             let cursor_started = crate::render_prof::timer();
@@ -1660,6 +1673,10 @@ impl GhosttyPaneTerminal {
         cell_height_px: u32,
     ) -> Vec<Bytes> {
         if let Ok(mut core) = self.core.lock() {
+            let synchronized_output_before = core
+                .terminal
+                .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                .unwrap_or(false);
             #[cfg(windows)]
             windows_recent_fallback::refresh_if_needed(&mut core);
             let offset_from_bottom = core
@@ -1698,6 +1715,13 @@ impl GhosttyPaneTerminal {
             let _ = core
                 .terminal
                 .resize(cols, rows, cell_width_px, cell_height_px);
+            let synchronized_output_after = core
+                .terminal
+                .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                .unwrap_or(false);
+            if synchronized_output_after != synchronized_output_before {
+                core.synchronized_output_epoch = core.synchronized_output_epoch.wrapping_add(1);
+            }
             let terminal_responses = self.drain_pending_pty_responses();
 
             let bottom_is_blank = ghostty_detection_text(&mut core)
@@ -1969,6 +1993,20 @@ impl GhosttyPaneTerminal {
                     .ok()
             })
             .unwrap_or(false)
+    }
+
+    pub(crate) fn synchronized_output_state(&self) -> (bool, u64) {
+        self.core
+            .lock()
+            .map(|core| {
+                (
+                    core.terminal
+                        .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                        .unwrap_or(false),
+                    core.synchronized_output_epoch,
+                )
+            })
+            .unwrap_or((true, 0))
     }
 
     pub fn encode_terminal_key(
@@ -2308,6 +2346,13 @@ impl GhosttyPaneTerminal {
         let Ok(mut core) = self.core.lock() else {
             return;
         };
+        if core
+            .terminal
+            .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+            .unwrap_or(false)
+        {
+            return;
+        }
         let host_theme = core.host_terminal_theme;
         let initial_default_foreground = core.initial_default_foreground;
         let initial_default_background = core.initial_default_background;
@@ -2425,6 +2470,13 @@ impl GhosttyPaneTerminal {
             .lock()
             .ok()
             .map(|mut core| {
+                if core
+                    .terminal
+                    .mode_get(crate::ghostty::MODE_SYNCHRONIZED_OUTPUT)
+                    .unwrap_or(false)
+                {
+                    return TerminalDirtyPatchOutcome::Fallback;
+                }
                 #[cfg(test)]
                 if let Some(hook) = core.dirty_collection_hook.take() {
                     hook();
@@ -5947,14 +5999,21 @@ mod tests {
         let pane_terminal = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
+        assert_eq!(pane_terminal.synchronized_output_state(), (false, 0));
+        pane_terminal.process_pty_bytes(pane_id, 0, b"ordinary output", &tx);
+        assert_eq!(pane_terminal.synchronized_output_state(), (false, 0));
+
         let begin = pane_terminal.process_pty_bytes(pane_id, 0, b"\x1b[?2026h", &tx);
         assert!(!begin.request_render);
+        assert_eq!(pane_terminal.synchronized_output_state(), (true, 1));
 
         let body = pane_terminal.process_pty_bytes(pane_id, 0, b"hello", &tx);
         assert!(!body.request_render);
+        assert_eq!(pane_terminal.synchronized_output_state(), (true, 1));
 
         let end = pane_terminal.process_pty_bytes(pane_id, 0, b"\x1b[?2026l", &tx);
         assert!(end.request_render);
+        assert_eq!(pane_terminal.synchronized_output_state(), (false, 2));
     }
 
     #[test]

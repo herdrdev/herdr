@@ -441,12 +441,33 @@ impl HeadlessServer {
                 });
             if changed {
                 if let Some(target) = self.shell_target_for_client(*client_id) {
+                    let area = Rect::new(0, 0, *cols, *rows);
+                    let layout = crate::ui::compute_tab_surface_for(
+                        &self.app.state,
+                        &self.app.terminal_runtimes,
+                        Some(target),
+                        area,
+                        false,
+                        *cell_size,
+                    );
+                    if layout.pane_infos.iter().any(|pane| {
+                        self.app
+                            .state
+                            .runtime_for_pane_in_workspace(
+                                &self.app.terminal_runtimes,
+                                target.workspace_index,
+                                pane.id,
+                            )
+                            .is_some_and(|runtime| runtime.synchronized_output_active())
+                    }) {
+                        continue;
+                    }
                     crate::ui::resize_tab_surface(
                         &self.app.state,
                         &self.app.terminal_runtimes,
                         target.workspace_index,
                         target.tab_index,
-                        Rect::new(0, 0, *cols, *rows),
+                        area,
                         if cell_size.is_known() {
                             *cell_size
                         } else {
@@ -473,6 +494,55 @@ impl HeadlessServer {
             let shell_target = self.shell_target_for_client(client_id);
             let shell_tab_id = self.shell_tab_id_for_client(client_id);
             let shell_shows_popup = shell_tab_id.as_deref() == self.popup_owner_tab_id.as_deref();
+            let shell_graphics_delivery = self
+                .clients
+                .get(&client_id)
+                .map(|client| client.shell_graphics_delivery.clone())
+                .unwrap_or_default();
+            let shell_render = if matches!(mode, ClientConnectionMode::ClientShell)
+                && self
+                    .clients
+                    .get(&client_id)
+                    .is_some_and(|client| client.shell_surface_active)
+            {
+                let render_started = crate::render_prof::timer();
+                let render_cell_size = if cell_size.is_known() {
+                    cell_size
+                } else {
+                    crate::kitty_graphics::HostCellSize::default()
+                };
+                let result = render_client_shell_pane_surface(
+                    &mut self.app,
+                    shell_target,
+                    area,
+                    false,
+                    shell_shows_popup,
+                    render_cell_size,
+                    &shell_graphics_delivery,
+                    client_id,
+                );
+                crate::render_prof::duration_since(
+                    "full_render.render_tab_surface_virtual",
+                    render_started,
+                );
+                match result {
+                    Ok(surface) => Some(surface),
+                    Err(reason) => {
+                        if let Some(client) = self.clients.get_mut(&client_id) {
+                            client.render_state.request_recompute();
+                        }
+                        if matches!(
+                            reason,
+                            crate::server::client_shell::SurfaceRenderDeferred::Changed
+                        ) {
+                            self.app.render_dirty.request_generic();
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
             let mut shell_projection_revision = 0;
             if matches!(mode, ClientConnectionMode::ClientShell) {
                 let location = self
@@ -585,20 +655,9 @@ impl HeadlessServer {
                     continue;
                 }
             }
-            let shell_graphics_delivery = self
-                .clients
-                .get(&client_id)
-                .map(|client| client.shell_graphics_delivery.clone())
-                .unwrap_or_default();
             let mut surface_parts = None;
             let frame = match mode {
                 ClientConnectionMode::ClientShell => {
-                    let render_started = crate::render_prof::timer();
-                    let render_cell_size = if cell_size.is_known() {
-                        cell_size
-                    } else {
-                        crate::kitty_graphics::HostCellSize::default()
-                    };
                     let crate::server::client_shell::RenderedPaneSurface {
                         frame,
                         panes,
@@ -606,20 +665,7 @@ impl HeadlessServer {
                         popup,
                         graphics,
                         graphics_delivery: next_graphics_delivery,
-                    } = render_client_shell_pane_surface(
-                        &mut self.app,
-                        shell_target,
-                        area,
-                        false,
-                        shell_shows_popup,
-                        render_cell_size,
-                        &shell_graphics_delivery,
-                        client_id,
-                    );
-                    crate::render_prof::duration_since(
-                        "full_render.render_tab_surface_virtual",
-                        render_started,
-                    );
+                    } = shell_render.expect("active shell surface");
                     surface_parts = Some((panes, splits, popup, graphics, next_graphics_delivery));
                     frame
                 }
@@ -638,6 +684,13 @@ impl HeadlessServer {
                         broken_clients.push(client_id);
                         continue;
                     };
+                    let (synchronized, epoch) = runtime.synchronized_output_state();
+                    if synchronized {
+                        if let Some(client) = self.clients.get_mut(&client_id) {
+                            client.render_state.request_recompute();
+                        }
+                        continue;
+                    }
                     let render_started = crate::render_prof::timer();
                     let (buffer, cursor) =
                         crate::server::render_stream::render_terminal_virtual(runtime, area);
@@ -651,6 +704,16 @@ impl HeadlessServer {
                         "full_render.visible_hyperlinks",
                         hyperlinks_started,
                     );
+                    let (synchronized, after_epoch) = runtime.synchronized_output_state();
+                    if synchronized || after_epoch != epoch {
+                        if let Some(client) = self.clients.get_mut(&client_id) {
+                            client.render_state.request_recompute();
+                        }
+                        if !synchronized {
+                            self.app.render_dirty.request_generic();
+                        }
+                        continue;
+                    }
                     let frame_started = crate::render_prof::timer();
                     let frame = FrameData::from_ratatui_buffer_with_hyperlinks(
                         &buffer,
