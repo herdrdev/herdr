@@ -16,8 +16,8 @@ An elevation-query failure is also a refusal, not permission to proceed. Start
 PowerShell and Terminal **without Run as administrator**, on a dedicated desktop. There is no unattended CI job or runner permission
 change in this implementation.
 
-Required: Windows, PowerShell **7** (`pwsh`), Python 3, Rust/Cargo, and at least
-one Windows Terminal channel. Stable and Preview are discovered independently
+Required: Windows, PowerShell **7** (`pwsh`), Python 3, Rust/Cargo, and both
+Windows Terminal channels for the default run. Stable and Preview are discovered independently
 through their installed packages. Explicit paths are available when discovery
 does not work. No software is installed or updated. The actual Terminal process path/version is recorded,
 not inferred from the requested channel or bundled OpenConsole version. Stable
@@ -50,19 +50,22 @@ From the repository in PowerShell 7:
 just test-windows-input
 ```
 
-The full catalogue normally exits `2` because operator-assisted and explicitly
-unimplemented qualification cases remain. That is incomplete coverage, not an
-automated test failure; inspect the printed matrix and retained `report.json`.
+The default runs the original input matrix as three targeted observer runs:
+Stable WT through Herdr with legacy and modifyOtherKeys observers, and Preview
+WT through Herdr with Kitty. Herdr's outer reader stays on its default Win32
+policy. It tests the full selected cases at 120×30, then the existing input,
+paste, and mouse sentinels at 80×24 and 80×30. PageUp/PageDown scrolling,
+AltGr, and IME remain explicit manual checks. The printed matrix has one column
+per host path; it does not combine Stable and Preview into one verdict.
 
 ### Expected outcome
 
-A healthy run builds and identifies the current checkout, reaches the result
-matrix, and reports no `FAIL` rows or cleanup errors. The default Herdr column
-should identify itself as `Win32 (Herdr)*` from captured runtime evidence. A full
-run may still exit `2` and show `MANUAL`, `NOT TESTED`, or a documented host
-capability limitation when a terminal channel, physical gesture, or oracle is
-unavailable. A focused campaign exits `0` when every selected observation passes;
-exit `1` means an assertion, harness, or cleanup failure and needs investigation.
+A healthy default run prints PASS for every automated cell, MANUAL for the
+physical checks, and no cleanup errors. The Stable column identifies itself as
+Win32 only from captured runtime evidence. A missing host, missing Win32 reader
+evidence, unreachable required size, or unavailable assertion exits `2`; an
+assertion or cleanup failure exits `1`. Inspect the retained `report.json` for
+exact observations.
 
 The recipe itself is the explicit opt-in to foreground input injection. It builds
 the current checkout in release mode, stages that exact binary with the pinned
@@ -78,11 +81,11 @@ pwsh -NoProfile -File scripts/test_windows_input.ps1 `
   -PreviewPath 'C:\TerminalPreview\WindowsTerminal.exe'
 ```
 
-The default tests current Herdr's **default** input policy. Diagnostic runs may
-use `-Profile win32` or `-Profile vt`; they do not replace the default run.
-`-Modes native,legacy,mok2,kitty`, `-Channels`, `-Paths`, `-Cases`, `-Widths`, and
-`-Heights` select a focused campaign. In a direct PowerShell invocation, supply
-arrays normally:
+The default tests Herdr's **default** input policy. Pass `-Full` for the full
+channel × path × mode × geometry diagnostic catalogue. Any explicit `-Profile`,
+`-Modes`, `-Channels`, `-Paths`, `-Cases`, `-Widths`, `-Heights`, or `-Manual`
+selection also runs a diagnostic campaign. In a direct PowerShell invocation,
+supply arrays normally:
 
 ```powershell
 .\scripts\test_windows_input.ps1 -ExePath 'C:\test-app\herdr.exe' `
@@ -140,7 +143,7 @@ Every run needs a **new** output directory. By default it is
   passes when the origin is a positively observed `empty-paste`: a paste the
   terminal issued for clipboard text fails, and a missing or inconclusive trace is
   `inconclusive` rather than a qualification (#4314).
-- A full case pass at an observed 120×30 host size; keyboard/paste sentinels at
+- A full case pass at an observed 120×30 host size; the full diagnostic campaign also runs keyboard/paste sentinels at
   **80, 119, 120, 121, 132, 160, 240 columns**, at 24 and 50 rows; then return to
   80 columns. This exercises narrow→wide→narrow resizing of the actual outer
   window. Both outer and pane dimensions are captured. Herdr chrome means pane
@@ -182,8 +185,10 @@ The retained directory contains:
   modes, and bootstrap/probe error records.
 
 The console ends with a capability matrix derived only from that run's captured
-observations. Filtered, unavailable, or operator-assisted cases remain
-`NOT TESTED` or `MANUAL`; the full evidence and reasons remain in `report.json`.
+observations. The default pairs Stable/Win32 with Preview/Kitty; diagnostic
+campaigns retain the direct-host Plain VT column. Filtered, unavailable, or
+operator-assisted cases remain `NOT TESTED` or `MANUAL`; the full evidence and
+reasons remain in `report.json`.
 The Herdr column is labelled Win32 only after the current binary's selected
 reader decodes a real nonce-owned Win32 serialized record. Configuration defaults
 alone do not select the label; missing runtime evidence prints `UNKNOWN`.
@@ -212,8 +217,9 @@ Exit codes:
 
 - `0`: all observed assertions passed and no recorded coverage gaps/errors;
 - `1`: an assertion, harness, or cleanup failed;
-- `2`: coverage is incomplete (including deliberately unimplemented catalogue
-  rows, missing hosts, or unavailable geometry).
+- `2`: selected coverage is incomplete (for example, a missing host or
+  unavailable geometry). The full diagnostic campaign also selects unimplemented
+  catalogue rows.
 
 An empty or missing report never means success. None of these statuses certifies
 an entire Windows host.

@@ -19,6 +19,7 @@ param(
     [switch] $AllowInputInjection,
     [switch] $ClearClipboard,
     [switch] $Manual,
+    [switch] $Full,
     [switch] $MatrixOnly
 )
 . "$PSScriptRoot/windows_input/Common.ps1"
@@ -35,6 +36,19 @@ $Cases = @($Cases | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 $knownCases = @($matrix.cases | ForEach-Object id)
 if (($caseSelectionProvided -and -not @($Cases).Count) -or @($Cases | Where-Object { $_ -notin $knownCases }).Count) { throw 'Unknown case selection' }
 $selectedCases = if (@($Cases).Count) { @($matrix.cases | Where-Object id -in $Cases) } else { @($matrix.cases) }
+$customSelection = @($PSBoundParameters.Keys | Where-Object { $_ -in @('Profile', 'Modes', 'Channels', 'Paths', 'Cases', 'Widths', 'Heights', 'Manual') }).Count -gt 0
+$release = -not $Full -and -not $customSelection
+if ($release) {
+    $runSpecs = @($matrix.release_plan)
+    $releaseCaseIds = @($runSpecs | ForEach-Object { $_.cases } | Sort-Object -Unique)
+    $selectedCases = @($matrix.cases | Where-Object id -in $releaseCaseIds)
+    $Channels = @('stable', 'preview'); $Paths = @('herdr'); $Modes = @('legacy', 'mok2', 'kitty')
+    $Widths = @(80); $Heights = @(24)
+} else {
+    $runSpecs = @(foreach ($channel in $Channels) { foreach ($path in $Paths) { foreach ($mode in $Modes) {
+        @{ channel = $channel; path = $path; mode = $mode; cases = @($selectedCases | ForEach-Object id) }
+    } } })
+}
 if (-not $IsWindows) { throw 'Real-host qualification requires Windows and an interactive desktop; no tests passed' }
 if (-not $AllowInputInjection) { throw 'Read scripts/windows_input/README.md, then explicitly pass -AllowInputInjection on an isolated desktop' }
 if (-not [Environment]::UserInteractive) { throw 'Interactive desktop unavailable' }
@@ -90,13 +104,14 @@ $exeHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
 if ($sourceCommit) { Write-Host "Source: $sourceCommit$(if ($sourceDirty) { ' + working tree changes' })" }
 Write-Host "Herdr under test: $exe"
 Write-Host "SHA-256: $exeHash"
-Write-Host "Modes: $($Modes -join ', '); widths: $($Widths -join ', '); heights: $($Heights -join ', ')"
-Write-Host "Channels: $($Channels -join ', '); paths: $($Paths -join ', '); cases: $(if (@($Cases).Count) { $Cases -join ', ' } else { 'all' })"
+Write-Host "Pane observer modes: $($Modes -join ', '); widths: $($Widths -join ', '); heights: $($Heights -join ', ')"
+Write-Host "Campaign: $(if ($release) { 'release matrix' } else { 'diagnostic' }); channels: $($Channels -join ', '); paths: $($Paths -join ', ')"
 $document = @{ schema = 1; run = [IO.Path]::GetFileName($root); started = [DateTime]::UtcNow.ToString('O');
     source_commit = $sourceCommit; source_dirty = $sourceDirty; exe = $exe; exe_sha256 = $exeHash;
     powershell = $PSVersionTable.PSVersion.ToString(); os = [Environment]::OSVersion.VersionString;
     profile = $Profile; controller_elevated = $false; observations = @(); hosts = @(); errors = @(); cleanup_errors = @();
     clipboard_clear_requested = [bool]$ClearClipboard; clipboard_formats_at_start = $clipboardFormatsAtStart; clipboard_formats_cleared = $clipboardFormatsCleared;
+    campaign = if ($release) { 'release' } else { 'diagnostic' }; run_specs = $runSpecs;
     widths = $Widths; heights = $Heights; modes = $Modes; channels = $Channels; paths = $Paths;
     cases = @($selectedCases | ForEach-Object id); note = 'Desktop input evidence; native qualification still required' }
 $rawReport = Join-Path $root 'observations.json'
@@ -183,7 +198,9 @@ try {
         $hostRecord = @{ channel = $hostName; launcher = $terminal.path; launcher_version = (Get-Item $terminal.path).VersionInfo.FileVersion;
             launcher_identity = $launcherIdentities[$hostName]; installation_identity = $installationIdentities[$hostName]; runs = @() }
         $document.hosts += $hostRecord
-        foreach ($path in $Paths) { foreach ($mode in $Modes) {
+        foreach ($spec in @($runSpecs | Where-Object channel -eq $hostName)) {
+            $path = [string]$spec.path; $mode = [string]$spec.mode
+            $runCases = @($selectedCases | Where-Object id -in $spec.cases)
             $nonce = 'herdr-gauntlet-' + [guid]::NewGuid().ToString('N')
             $work = [IO.Directory]::CreateDirectory((Join-Path $root $nonce)).FullName
             $configHome = [IO.Directory]::CreateDirectory((Join-Path $work 'config')).FullName
@@ -264,7 +281,7 @@ try {
                 $phase = 0
                 foreach ($geometry in $geometries) {
                     $phase++
-                    $selected = if ($geometry.full) { $selectedCases } else { @($selectedCases | Where-Object { $_.id -in @('letter-a', 'shift-enter', 'paste-lf', 'mouse-focus-refresh') }) }
+                    $selected = if ($geometry.full) { $runCases } else { @($runCases | Where-Object { $_.id -in @('letter-a', 'shift-enter', 'paste-lf', 'mouse-focus-refresh') }) }
                     $outer = Set-ObservedGeometry $plan $window $windowPid $geometry.width $geometry.height
                     foreach ($case in $selected) {
                         $row = New-Observation $hostName $plan $geometry.width $geometry.height $case
@@ -449,7 +466,7 @@ try {
                 if ($null -ne $launcher) { $launcher.Dispose() }
                 Save-Report
             }
-        } }
+        }
     }
 } catch {
     if ($document.errors.Count -eq 0) { $document.errors += $_.Exception.Message }
