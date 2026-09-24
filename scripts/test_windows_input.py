@@ -200,6 +200,33 @@ class WindowsInputGauntletTests(unittest.TestCase):
             rows = {row[0]: row[1:] for row in qualification_matrix(result)}
             self.assertEqual(rows["Shift+Enter"][0], "PARTIAL")
 
+    def test_direct_legacy_limit_requires_unsupported_from_every_channel(self):
+        observations = [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
+                        for host, status in (("stable", "unsupported"), ("preview", "not_run"))]
+        rows = {row[0]: row[1:] for row in qualification_matrix({"channels": ["stable", "preview"], "observations": observations})}
+        self.assertEqual(rows["Shift+Enter"][1], "PARTIAL")
+
+    def test_qualification_matrix_keeps_proven_input_visible_when_geometry_is_unavailable(self):
+        observations = [{"host": host, "case": case, "path": "herdr", "mode": "legacy", "status": "pass", "width": 120}
+                        for host in ("stable", "preview") for case in ("letter-a", "shift-letter")]
+        observations += [{"host": host, "case": "letter-a", "path": "herdr", "mode": "legacy", "status": "not_run", "width": 160}
+                         for host in ("stable", "preview")]
+        observations += [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
+                         for host in ("stable", "preview") for status in ("unsupported", "not_run")]
+        observations += [{"host": "stable", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "inconclusive"},
+                         {"host": "preview", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "pass"},
+                         {"host": "preview", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "not_run"}]
+        result = {"channels": ["stable", "preview"], "observations": observations}
+        rows = {row[0]: row[1:] for row in qualification_matrix(result)}
+        self.assertEqual(rows["Printable keys"][0], "PARTIAL")
+        self.assertEqual(rows["Shift+Enter"][1:], ("X - becomes Enter", "INCONCLUSIVE"))
+        self.assertEqual(rows["Multiline paste"][0], "NOT TESTED")
+        self.assertEqual(rows["Resize 120 -> 80"][0], "NOT TESTED")
+        observations[3]["status"] = "not_run"  # Preview has no passing shift-letter observation.
+        self.assertEqual({row[0]: row[1] for row in qualification_matrix(result)}["Printable keys"], "NOT TESTED")
+        observations[3]["status"] = "fail"
+        self.assertEqual({row[0]: row[1] for row in qualification_matrix(result)}["Printable keys"], "FAIL")
+
     def test_herdr_protocol_label_requires_every_run_to_prove_transport(self):
         result = {"hosts": [{"channel": "stable", "runs": [{"nonce": "one", "path": "herdr", "mode": "native"},
                                                                   {"nonce": "two", "path": "herdr", "mode": "native"}]}],

@@ -17,6 +17,7 @@ param(
     [int[]] $Heights = @(24, 50),
     [string] $OutputDirectory,
     [switch] $AllowInputInjection,
+    [switch] $ClearClipboard,
     [switch] $Manual,
     [switch] $MatrixOnly
 )
@@ -47,6 +48,19 @@ if (@($selectedCases | Where-Object id -eq 'mouse-focus-refresh').Count) {
     if ($controllerWindow -eq [IntPtr]::Zero) { throw 'Controller has no foreground window for focus-cycle qualification' }
     [HerdrInputGauntlet.Desktop]::AssertNotElevated([HerdrInputGauntlet.Desktop]::Pid($controllerWindow))
 }
+$needsClipboard = $false
+foreach ($case in $selectedCases) {
+    if ($case.kind -in @('paste', 'mouse-interleave', 'clipboard-image', 'clipboard-mixed') -and
+        @($Modes | Where-Object { $case.expected.ContainsKey($_) }).Count) { $needsClipboard = $true; break }
+}
+$clipboardFormatsAtStart = if ($needsClipboard -and $ClearClipboard) {
+    [HerdrInputGauntlet.Desktop]::ClearClipboardForRun()
+} else { [HerdrInputGauntlet.Desktop]::CountClipboardFormats() }
+if ($needsClipboard -and -not $ClearClipboard -and $clipboardFormatsAtStart -ne 0) {
+    throw 'Clipboard is not empty; save its contents, then clear it or pass -ClearClipboard to discard it before running'
+}
+$clipboardFormatsCleared = if ($needsClipboard -and $ClearClipboard) { $clipboardFormatsAtStart } else { 0 }
+Write-Host "Clipboard formats before build: $clipboardFormatsAtStart; cleared for test: $clipboardFormatsCleared"
 $sourceCommit = $null
 $sourceDirty = $null
 if (-not $ExePath) {
@@ -78,11 +92,11 @@ Write-Host "Herdr under test: $exe"
 Write-Host "SHA-256: $exeHash"
 Write-Host "Modes: $($Modes -join ', '); widths: $($Widths -join ', '); heights: $($Heights -join ', ')"
 Write-Host "Channels: $($Channels -join ', '); paths: $($Paths -join ', '); cases: $(if (@($Cases).Count) { $Cases -join ', ' } else { 'all' })"
-Write-Host "Clipboard formats at start: $([HerdrInputGauntlet.Desktop]::CountClipboardFormats()) (paste runs only when zero)"
 $document = @{ schema = 1; run = [IO.Path]::GetFileName($root); started = [DateTime]::UtcNow.ToString('O');
     source_commit = $sourceCommit; source_dirty = $sourceDirty; exe = $exe; exe_sha256 = $exeHash;
     powershell = $PSVersionTable.PSVersion.ToString(); os = [Environment]::OSVersion.VersionString;
     profile = $Profile; controller_elevated = $false; observations = @(); hosts = @(); errors = @(); cleanup_errors = @();
+    clipboard_clear_requested = [bool]$ClearClipboard; clipboard_formats_at_start = $clipboardFormatsAtStart; clipboard_formats_cleared = $clipboardFormatsCleared;
     widths = $Widths; heights = $Heights; modes = $Modes; channels = $Channels; paths = $Paths;
     cases = @($selectedCases | ForEach-Object id); note = 'Desktop input evidence; native qualification still required' }
 $rawReport = Join-Path $root 'observations.json'

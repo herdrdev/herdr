@@ -33,11 +33,14 @@ or mouse buttons while starting a run. Normal controller cancellation runs clean
 bootstrap/probe leases also expire if the controller disappears. Lease expiry is
 not a replacement for a secure isolated desktop.
 
-Clipboard tests require an **empty clipboard**. Clear it yourself only after
-saving anything you need. The runner will not replace existing text, images,
-rich formats, or files. It writes its synthetic text while holding the clipboard
-lock and clears it afterward only if its sequence number is unchanged. A later
-user clipboard update is left alone. No original clipboard contents are logged.
+`just test-windows-input` clears the clipboard once before the build when the
+selected cases use it. **Save anything you need first:** existing text, images,
+files, and other formats are discarded and cannot be restored. Direct script
+calls need `-ClearClipboard` for the same behavior; without it, a nonempty
+clipboard stops the run before the build. The runner writes its synthetic data
+while holding the clipboard lock and clears it afterward only if its sequence
+number is unchanged. A later user clipboard update is left alone. No original
+clipboard contents are logged.
 
 ## Run
 
@@ -70,7 +73,7 @@ Or invoke the script directly:
 
 ```powershell
 pwsh -NoProfile -File scripts/test_windows_input.ps1 `
-  -ExePath 'C:\test-app\herdr.exe' -AllowInputInjection `
+  -ExePath 'C:\test-app\herdr.exe' -AllowInputInjection -ClearClipboard `
   -StablePath 'C:\TerminalStable\WindowsTerminal.exe' `
   -PreviewPath 'C:\TerminalPreview\WindowsTerminal.exe'
 ```
@@ -83,7 +86,7 @@ arrays normally:
 
 ```powershell
 .\scripts\test_windows_input.ps1 -ExePath 'C:\test-app\herdr.exe' `
-  -AllowInputInjection -Modes legacy,kitty -Cases mouse-interleave,mode-transitions `
+  -AllowInputInjection -ClearClipboard -Modes legacy,kitty -Cases mouse-interleave,mode-transitions `
   -Widths 120 -Heights 30
 ```
 
@@ -92,7 +95,7 @@ server with the remote clipboard bridge active. It needs no SSH host. A focused
 clipboard-image qualification is:
 
 ```powershell
-.\scripts\test_windows_input.ps1 -AllowInputInjection `
+.\scripts\test_windows_input.ps1 -AllowInputInjection -ClearClipboard `
   -Channels stable -Paths direct,herdr-remote -Modes legacy `
   -Cases clipboard-image,clipboard-mixed -Widths 80 -Heights 24
 ```

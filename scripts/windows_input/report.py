@@ -419,18 +419,23 @@ def qualification_matrix(result):
             return "MANUAL"
         if {row.get("case") for row in matched} != case_ids:
             return "PARTIAL" if "pass" in statuses else "INCONCLUSIVE" if "inconclusive" in statuses else "NOT TESTED"
-        if required_channels and {(row.get("host"), row.get("case")) for row in matched} != {
-                (channel, case_id) for channel in required_channels for case_id in case_ids}:
+        expected_pairs = {(channel, case_id) for channel in required_channels for case_id in case_ids}
+        if required_channels and {(row.get("host"), row.get("case")) for row in matched} != expected_pairs:
             return "PARTIAL"
         if case_ids == {"mode-transitions"} and path == "direct" and statuses <= {"unsupported", "inconclusive"}:
             return "X - mOK ignored"
-        if path == "direct" and modes == {"legacy"} and statuses == {"unsupported"}:
+        if path == "direct" and modes == {"legacy"} and statuses - {"not_run"} == {"unsupported"}:
+            if {(row.get("host"), row.get("case")) for row in matched if row.get("status") == "unsupported"} != expected_pairs:
+                return "PARTIAL"
             return "X - becomes Enter" if case_ids == {"shift-enter"} else "X - loses modifier"
-        def case_passed(case_id):
-            statuses_for_case = {row.get("status") for row in matched if row.get("case") == case_id}
+        def case_passed(case_id, channel=None):
+            statuses_for_case = {row.get("status") for row in matched if row.get("case") == case_id
+                                 and (channel is None or row.get("host") == channel)}
             return "pass" in statuses_for_case or (width == 80 and path == "direct" and modes == {"legacy"}
-                                                     and case_id == "shift-enter" and statuses_for_case == {"unsupported"})
+                                                     and case_id == "shift-enter" and statuses_for_case - {"not_run"} == {"unsupported"})
         per_case_passed = all(case_passed(case_id) for case_id in case_ids)
+        if "not_run" in statuses and all(case_passed(case_id, channel) for channel in required_channels for case_id in case_ids):
+            return "PARTIAL"
         allowed = {"pass", "inconclusive"}
         if width == 80 and path == "direct" and modes == {"legacy"}:
             allowed.add("unsupported")
