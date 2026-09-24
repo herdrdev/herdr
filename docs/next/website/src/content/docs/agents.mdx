@@ -91,6 +91,14 @@ Live explain is evaluated by the running server, so it reflects the active manif
 
 Herdr can run inside tmux as the outer terminal environment. Agent detection does not inspect tmux sessions launched inside a Herdr pane. If a shell framework auto-enters tmux inside Herdr, Herdr sees `tmux` as the pane process instead of the agent behind it.
 
+If your shell automatically attaches to tmux whenever `TMUX` is unset, update its startup rule to exclude Herdr panes. Reattaching the outer tmux session from inside a Herdr pane can recursively shrink the terminal and make it flicker. Add the `HERDR_ENV` check to your existing condition before it runs tmux:
+
+```zsh
+if [[ -z ${TMUX:-} && ${HERDR_ENV:-} != 1 ]]; then
+  tmux new-session -A -s my-session
+fi
+```
+
 ## State rollups
 
 The sidebar rolls state upward.
