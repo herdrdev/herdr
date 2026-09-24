@@ -108,7 +108,15 @@ namespace HerdrInputGauntlet {
         [DllImport("user32.dll", SetLastError=true)] static extern uint SendInput(uint count, Input[] events, int size);
         [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
         [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int width, int height, uint flags);
-        [DllImport("user32.dll")] public static extern int CountClipboardFormats();
+        [DllImport("user32.dll",EntryPoint="CountClipboardFormats",SetLastError=true)] static extern int NativeCountClipboardFormats();
+        public static int CountClipboardFormats() {
+            int count=NativeCountClipboardFormats();
+            if(count==0) {
+                int error=Marshal.GetLastWin32Error();
+                if(error!=0) throw new Win32Exception(error,"Clipboard format count failed");
+            }
+            return count;
+        }
         [DllImport("user32.dll")] public static extern uint GetClipboardSequenceNumber();
         [DllImport("user32.dll")] static extern IntPtr GetClipboardOwner();
         [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
