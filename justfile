@@ -19,7 +19,7 @@ maintenance-test:
 # Local interactive Windows Terminal input qualification (never runs in normal CI).
 [windows]
 test-windows-input *args:
-    pwsh -NoProfile -File scripts/test_windows_input.ps1 -AllowInputInjection {{args}}
+    pwsh -NoProfile -File scripts/test_windows_input.ps1 -AllowInputInjection -ClearClipboard {{args}}
 
 # Run one nextest filter, e.g. `just test-one codex_stale_working`
 test-one filter:

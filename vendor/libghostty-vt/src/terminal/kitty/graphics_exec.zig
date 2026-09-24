@@ -509,6 +509,11 @@ fn transmitAnimationFrame(
         result.message = "ENOENT: image not found";
         return result;
     };
+    storage.materializeBacking(io, alloc, img) catch |err| {
+        encodeError(&result, err);
+        return result;
+    };
+
     result.id = img.id;
 
     var loading = LoadingImage.init(
@@ -773,6 +778,10 @@ fn controlAnimation(
         result.message = "ENOENT: image not found";
         return result;
     };
+    storage.materializeBacking(io, alloc, img) catch |err| {
+        encodeError(&result, err);
+        return result;
+    };
 
     const anim = ensureAnimation(alloc, img) catch |err| {
         encodeError(&result, err);
@@ -857,6 +866,11 @@ fn composeAnimation(
         result.message = "ENOENT: image not found";
         return result;
     };
+    storage.materializeBacking(io, alloc, img) catch |err| {
+        encodeError(&result, err);
+        return result;
+    };
+
     result.id = img.id;
     if (img.data.bytes() == null) {
         result.message = "EINVAL: image data incomplete";
@@ -1058,7 +1072,10 @@ fn loadAndAddImage(
     // loading.debugDump() catch unreachable;
 
     // Validate and store our image
-    var img = try loading.complete(alloc);
+    var img = if (storage.image_limits.preserve_png)
+        try loading.completePreservingPng(alloc)
+    else
+        try loading.complete(alloc);
     errdefer img.deinit(alloc);
     try storage.addImage(io, alloc, terminal.screens.active, img);
 
@@ -3600,4 +3617,88 @@ test "kittygfx animation: control negative gap makes frame gapless" {
 
     const anim = storage.imagePtrByIdOrNumber(1, 0).?.animation.?;
     try testing.expectEqual(@as(u32, 0), anim.frames.items[0].gap_ms);
+}
+
+test "kittygfx experimental PNG retention quiet inheritance and transactional materialization" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+    const sys = @import("../sys.zig");
+    const Decoder = struct {
+        var calls: usize = 0;
+        var fail: bool = false;
+        fn decode(a: Allocator, _: []const u8) sys.DecodeError!sys.Image {
+            calls += 1;
+            if (fail) return error.InvalidData;
+            const pixels = try a.alloc(u8, 50 * 76 * 4);
+            @memset(pixels, 0);
+            return .{ .width = 50, .height = 76, .data = pixels };
+        }
+    };
+    const original = sys.decode_png;
+    defer sys.decode_png = original;
+    sys.decode_png = &Decoder.decode;
+    Decoder.calls = 0;
+    Decoder.fail = false;
+    const png = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
+    var t = try Terminal.init(io, alloc, .{ .rows = 5, .cols = 5 });
+    defer t.deinit(alloc);
+    const storage = &t.screens.active.kitty_images;
+    var cmd: Command = .{
+        .quiet = .failures,
+        .control = .{ .transmit = .{ .format = .png, .image_id = 1 } },
+        .data = @constCast(png),
+    };
+    // Default off is the normal decoder path even for q=2.
+    try testing.expect(!storage.image_limits.preserve_png);
+    _ = execute(io, alloc, &t, &cmd);
+    try testing.expectEqual(@as(usize, 1), Decoder.calls);
+    try testing.expect(storage.imageById(1).?.data == .complete);
+    storage.image_limits.preserve_png = true;
+    for ([_]Command.Quiet{ .no, .ok }) |quiet| {
+        cmd.quiet = quiet;
+        _ = execute(io, alloc, &t, &cmd);
+        try testing.expect(storage.imageById(1).?.data == .complete);
+    }
+    try testing.expectEqual(@as(usize, 3), Decoder.calls);
+    cmd.quiet = .failures;
+    cmd.control = .{ .query = .{ .format = .png, .image_id = 2 } };
+    _ = execute(io, alloc, &t, &cmd);
+    try testing.expectEqual(@as(usize, 4), Decoder.calls);
+    try testing.expect(storage.imageById(2) == null);
+    cmd.control = .{ .transmit = .{ .format = .png, .image_id = 1, .more_chunks = true } };
+    cmd.data = @constCast(png[0..33]);
+    _ = execute(io, alloc, &t, &cmd);
+    cmd.quiet = .no;
+    cmd.control = .{ .transmit = .{} };
+    cmd.data = @constCast(png[33..]);
+    _ = execute(io, alloc, &t, &cmd);
+    try testing.expectEqual(@as(usize, 4), Decoder.calls);
+    const img = storage.imagePtrByIdOrNumber(1, 0).?;
+    try testing.expectEqualSlices(u8, png, img.data.encoded_png.bytes);
+    try testing.expect(img.data.bytes() == null);
+    try testing.expectEqual(png.len + 50 * 76 * 4, storage.total_bytes);
+    const generation = img.generation;
+    Decoder.fail = true;
+    const animate: Command = .{ .control = .{ .control_animation = .{ .image_id = 1 } } };
+    _ = execute(io, alloc, &t, &animate);
+    try testing.expectEqual(generation, img.generation);
+    try testing.expect(img.data == .encoded_png);
+    try testing.expectEqual(png.len + 50 * 76 * 4, storage.total_bytes);
+    Decoder.fail = false;
+    _ = execute(io, alloc, &t, &animate);
+    try testing.expect(img.generation > generation);
+    try testing.expect(img.data == .complete);
+    try testing.expectEqual(@as(usize, 50 * 76 * 4), storage.total_bytes);
+
+    // The reservation includes both the encoded and decoded representation.
+    storage.setLimit(io, alloc, t.screens.active, 50 * 76 * 4);
+    cmd.quiet = .failures;
+    cmd.control = .{ .transmit = .{ .format = .png, .image_id = 3 } };
+    cmd.data = @constCast(png);
+    const calls = Decoder.calls;
+    _ = execute(io, alloc, &t, &cmd);
+    try testing.expectEqual(calls, Decoder.calls);
+    try testing.expect(storage.imageById(3) == null);
+    try testing.expect(storage.loading == null);
 }

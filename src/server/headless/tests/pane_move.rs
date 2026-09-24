@@ -29,7 +29,6 @@ fn public_move(
         },
         respond_to,
         response_write_complete: None,
-        stream_active: None,
     });
     let response = response_rx.recv().expect("pane move response");
     match serde_json::from_str::<SuccessResponse>(&response) {

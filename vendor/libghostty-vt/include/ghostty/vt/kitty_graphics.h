@@ -391,12 +391,13 @@ typedef enum GHOSTTY_ENUM_TYPED {
   /**
    * Borrowed pointer to the raw pixel data. Valid as long as the
    * underlying terminal is not mutated. Returns GHOSTTY_NO_VALUE when
-   * the image metadata is resident but its pixel payload is pending.
+   * the image metadata is resident but its pixel payload is pending, or
+   * when the experimental PRESERVE_PNG option retained encoded PNG data.
    *
    * The data is always fully decoded, uncompressed pixels in the
    * format reported by GHOSTTY_KITTY_IMAGE_DATA_FORMAT: zlib payloads
-   * are inflated and PNG payloads are decoded to RGBA at transmission
-   * time, before the image is stored. Consumers can upload this
+   * are inflated and PNG payloads are normally decoded to RGBA at transmission
+   * time, before the image is stored. Consumers can upload returned pixels
    * directly to the GPU without any decode step.
    *
    * For an animated image (Kitty graphics animation, actions a=f/a=a)
@@ -412,7 +413,7 @@ typedef enum GHOSTTY_ENUM_TYPED {
   /**
    * Length of the raw pixel data in bytes. Always equal to
    * width * height * bytes-per-pixel for the reported format. For a
-   * pending image, this is the expected length reserved against the
+   * pending or encoded PNG image, this is the expected decoded length reserved against the
    * storage limit even though DATA_PTR is not available yet.
    *
    * Output type: size_t *
@@ -438,6 +439,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
    * Output type: uint64_t *
    */
   GHOSTTY_KITTY_IMAGE_DATA_GENERATION = 9,
+
+  /** Owned encoded PNG bytes, borrowed until the next mutation. NO_VALUE
+   * unless experimentally retained. Output type: const uint8_t **.
+   */
+  GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_PTR = 10,
+  /** Encoded PNG length; NO_VALUE unless retained. Output type: size_t *. */
+  GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_LEN = 11,
+  /** Borrowed void* backing context; valid only while image is unchanged. */
+  GHOSTTY_KITTY_IMAGE_DATA_FILE_CONTEXT = 12,
+  /** uint64_t immutable revision fingerprint; never reads image pixels. */
+  GHOSTTY_KITTY_IMAGE_DATA_FILE_IDENTITY = 13,
 
   GHOSTTY_KITTY_IMAGE_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyKittyGraphicsImageData;

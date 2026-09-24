@@ -24,9 +24,16 @@ enum DecscusrParseState {
 }
 
 impl DecscusrTracker {
-    pub(crate) fn observe(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.observe_byte(byte);
+    pub(crate) fn observe(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            if matches!(self.state, DecscusrParseState::Ground) {
+                let Some(escape) = bytes.iter().position(|&byte| byte == 0x1b) else {
+                    return;
+                };
+                bytes = &bytes[escape..];
+            }
+            self.observe_byte(bytes[0]);
+            bytes = &bytes[1..];
         }
     }
 
@@ -255,6 +262,72 @@ fn is_jump(settled: TerminalCursorState, current: TerminalCursorState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_decscusr_matches_bytewise(chunks: &[&[u8]]) {
+        let mut optimized = DecscusrTracker::default();
+        let mut bytewise = DecscusrTracker::default();
+        for chunk in chunks {
+            optimized.observe(chunk);
+            for &byte in *chunk {
+                bytewise.observe_byte(byte);
+            }
+            assert_eq!(
+                optimized.cursor_shape_overridden(),
+                bytewise.cursor_shape_overridden(),
+                "chunks: {chunks:?}"
+            );
+            // Compare the complete parser state, including incomplete CSI parameters.
+            assert_eq!(
+                format!("{:?}", optimized.state),
+                format!("{:?}", bytewise.state),
+                "chunks: {chunks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decscusr_bulk_search_matches_bytewise_control_sequences_and_splits() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b"plain text\n\twithout escapes",
+            b"text\x1b[1 qmore\x1b[0 qend",
+            b"\x1b[ q\x1b[2 q\x1b[3 q\x1b[4 q\x1b[5 q\x1b[6 q\x1b[7 q",
+            b"\x1b\x1b[1 q\x1b[2;9 q\x1b[0:4 q",
+            b"\x1b[1q\x1b[? q\x1b[12$ q\x1b[1\x00 q\x1b[2\xff q",
+            b"\x1b[12\x1b[5 q\x1b]0;title\x07\x1bPdata\x1b\\",
+            b"\x1b[1 q\x1b",
+            b"\x1b[1 q\x1b[",
+            b"\x1b[1 q\x1b[0 ",
+        ];
+        for &bytes in cases {
+            for split in 0..=bytes.len() {
+                assert_decscusr_matches_bytewise(&[&bytes[..split], &[], &bytes[split..]]);
+            }
+            let chunks: Vec<_> = bytes.chunks(1).collect();
+            assert_decscusr_matches_bytewise(&chunks);
+        }
+    }
+
+    #[test]
+    fn decscusr_bulk_search_matches_bytewise_all_byte_values() {
+        let all_bytes: Vec<u8> = (0..=255).collect();
+        for split in 0..=all_bytes.len() {
+            assert_decscusr_matches_bytewise(&[&all_bytes[..split], &all_bytes[split..]]);
+        }
+        // Exercise every possible byte in ground, escape, and partial CSI states.
+        let prefixes: &[&[u8]] = &[b"", b"\x1b", b"\x1b[", b"\x1b[2", b"\x1b[0 ", b"\x1b[2;"];
+        for &prefix in prefixes {
+            for byte in 0..=255u8 {
+                let mut bytes = b"\x1b[1 q".to_vec();
+                bytes.extend_from_slice(prefix);
+                bytes.push(byte);
+                bytes.extend_from_slice(b" qtext\x1b[0 q\x1b[6 q");
+                for split in 0..=bytes.len() {
+                    assert_decscusr_matches_bytewise(&[&bytes[..split], &bytes[split..]]);
+                }
+            }
+        }
+    }
 
     fn cursor(x: u16, y: u16, visible: bool, shape: u8) -> TerminalCursorState {
         TerminalCursorState {

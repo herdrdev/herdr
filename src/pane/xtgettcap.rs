@@ -38,7 +38,21 @@ enum C1XtgettcapTrackerState {
 
 impl C1XtgettcapQueryTracker {
     pub(super) fn observe(&mut self, bytes: &[u8]) {
-        for (index, &byte) in bytes.iter().enumerate() {
+        let mut index = 0;
+        while index < bytes.len() {
+            if self.state == C1XtgettcapTrackerState::IgnoreString {
+                // Payload cannot affect this state. CAN/SUB still need the
+                // global native-DCS bookkeeping when a dispatch is pending.
+                let next = bytes[index..].iter().position(|&byte| {
+                    matches!(byte, 0x1b | 0x9c)
+                        || (self.native_dcs_pending && matches!(byte, 0x18 | 0x1a))
+                });
+                match next {
+                    Some(offset) => index += offset,
+                    None => break,
+                }
+            }
+            let byte = bytes[index];
             // With a 7-bit intro and raw ST, the native parser still holds the
             // DCS open. At its eventual unhook it can answer earlier keys in a
             // multi-key request again. Discard only that dispatch's XTGETTCAP
@@ -164,6 +178,7 @@ impl C1XtgettcapQueryTracker {
                 self.body.clear();
                 self.state = C1XtgettcapTrackerState::OversizedDcs;
             }
+            index += 1;
         }
     }
 
@@ -237,5 +252,84 @@ fn append_upper_hex(bytes: &[u8], output: &mut Vec<u8>) {
     for &byte in bytes {
         output.push(HEX[usize::from(byte >> 4)]);
         output.push(HEX[usize::from(byte & 0x0f)]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observe_chunks(chunks: &[&[u8]]) -> (C1XtgettcapQueryTracker, Vec<C1XtgettcapResponse>) {
+        let mut tracker = C1XtgettcapQueryTracker::default();
+        let mut pending = Vec::new();
+        let mut offset = 0;
+        for chunk in chunks {
+            tracker.observe(chunk);
+            pending.extend(tracker.drain_pending().into_iter().map(|mut response| {
+                response.end_offset += offset;
+                response
+            }));
+            offset += chunk.len();
+        }
+        (tracker, pending)
+    }
+
+    fn assert_chunk_equivalence(bytes: &[u8]) {
+        let one_byte_chunks: Vec<_> = bytes.chunks(1).collect();
+        let (expected, expected_pending) = observe_chunks(&one_byte_chunks);
+        // Includes a single bulk call and every split, especially ESC / ST.
+        for split in 0..=bytes.len() {
+            let (actual, actual_pending) = observe_chunks(&[&bytes[..split], &bytes[split..]]);
+            assert_eq!(actual_pending, expected_pending, "split {split}: {bytes:?}");
+            assert_eq!(actual.state, expected.state);
+            assert_eq!(actual.raw_c1_intro, expected.raw_c1_intro);
+            assert_eq!(actual.native_dcs_pending, expected.native_dcs_pending);
+            assert_eq!(actual.body, expected.body);
+            assert_eq!(actual.pending, expected.pending);
+        }
+    }
+
+    #[test]
+    fn ignored_string_bulk_matches_single_bytes() {
+        let mut all_bytes = b"\x1b_Gordinary kitty payload".to_vec();
+        all_bytes.extend(0..=255u8);
+        all_bytes.extend_from_slice(b"\x1b\\\x90+q5463\x9c\x90+q5247");
+        assert_chunk_equivalence(&all_bytes);
+
+        // Exercise every byte while actually inside IgnoreString, both with
+        // and without a native dispatch waiting for ESC, CAN, or SUB.
+        for native_pending in [false, true] {
+            for intro in [b"\x1b_".as_slice(), b"\x98", b"\x9e", b"\x9f"] {
+                for byte in 0..=255u8 {
+                    let mut bytes = Vec::new();
+                    if native_pending {
+                        bytes.extend_from_slice(b"\x1bP+q5463;524742\x9c");
+                    }
+                    bytes.extend_from_slice(intro);
+                    bytes.extend_from_slice(b"Gordinary payload");
+                    bytes.push(byte);
+                    assert_chunk_equivalence(&bytes);
+                    bytes.extend_from_slice(b"more payload\x1b\\\x90+q5463\x9c\x90+q5247");
+                    assert_chunk_equivalence(&bytes);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ignored_string_preserves_native_dispatch_offsets() {
+        for cancel in [0x18, 0x1a, 0x1b] {
+            let mut bytes = b"\x1bP+q5463\x9c\x9fignored payload".to_vec();
+            bytes.push(cancel);
+            let end_offset = bytes.len();
+            bytes.extend_from_slice(b"\x1b\\\x90+q524742\x9c");
+            let (_, pending) = observe_chunks(&[&bytes]);
+            assert_eq!(pending.len(), 3);
+            assert!(pending[1].suppress_native);
+            assert!(pending[1].bytes.is_empty());
+            assert_eq!(pending[1].end_offset, end_offset);
+            assert_eq!(pending[2].end_offset, bytes.len());
+            assert_chunk_equivalence(&bytes);
+        }
     }
 }

@@ -385,14 +385,6 @@ pub(super) fn complete_endpoint_activation(
         completion,
         endpoint::ActivationCompletion::AwaitingPresentationSync { .. }
     ) {
-        #[cfg(unix)]
-        if let endpoint::ActivationCompletion::AwaitingPresentationSync { previous, endpoint } =
-            &completion
-        {
-            if previous != endpoint {
-                state.retire_endpoint_graphics(previous);
-            }
-        }
         // The coherent target frame can replace the frozen source now, but the registry keeps
         // pane input disabled until a second projection epoch has replayed host modes/effects.
         state.unfreeze_presentation();
@@ -511,7 +503,7 @@ pub(super) fn handle_endpoint_disconnect(
 ) -> bool {
     supervisors.disconnected(endpoint_id, generation, now);
     #[cfg(unix)]
-    state.retire_endpoint_graphics(endpoint_id);
+    state.retire_endpoint_graphics(endpoint_id, generation);
     if pending_activation
         .as_ref()
         .is_some_and(|pending| pending.involves_endpoint(endpoint_id))
@@ -572,7 +564,7 @@ pub(super) fn handle_endpoint_attention(
         now,
     );
     #[cfg(unix)]
-    state.retire_endpoint_graphics(endpoint_id);
+    state.retire_endpoint_graphics(endpoint_id, generation);
     if pending_activation
         .as_ref()
         .is_some_and(|pending| pending.involves_endpoint(endpoint_id))
@@ -681,7 +673,7 @@ pub(super) fn install_client_shell_snapshot(
 pub(super) fn finish_client_shell_input(
     state: &mut ClientState,
     outcome: shell::ClientShellInput,
-    frame: Option<FrameData>,
+    frame: Option<super::frame_output::ComposedFrame>,
     endpoints: &mut endpoint::EndpointRegistry,
     pending_activation: &mut Option<endpoint::PendingEndpointActivation>,
     endpoint_commands: &mut endpoint_commands::EndpointCommands,

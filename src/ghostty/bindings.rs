@@ -2069,16 +2069,28 @@ pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_FORMAT:
 #[doc = " Compression of the image. Always\n GHOSTTY_KITTY_IMAGE_COMPRESSION_NONE; compressed payloads are\n inflated before storage.\n\n Output type: GhosttyKittyImageCompression *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_COMPRESSION:
     GhosttyKittyGraphicsImageData = 6;
-#[doc = " Borrowed pointer to the raw pixel data. Valid as long as the\n underlying terminal is not mutated. Returns GHOSTTY_NO_VALUE when\n the image metadata is resident but its pixel payload is pending.\n\n The data is always fully decoded, uncompressed pixels in the\n format reported by GHOSTTY_KITTY_IMAGE_DATA_FORMAT: zlib payloads\n are inflated and PNG payloads are decoded to RGBA at transmission\n time, before the image is stored. Consumers can upload this\n directly to the GPU without any decode step.\n\n For an animated image (Kitty graphics animation, actions a=f/a=a)\n this is the pixel data of the current animation frame. The\n image's GHOSTTY_KITTY_IMAGE_DATA_GENERATION changes whenever the\n current frame changes, so generation-keyed caches remain\n coherent.\n\n Output type: const uint8_t **"]
+#[doc = " Borrowed pointer to the raw pixel data. Valid as long as the\n underlying terminal is not mutated. Returns GHOSTTY_NO_VALUE when\n the image metadata is resident but its pixel payload is pending, or\n when the experimental PRESERVE_PNG option retained encoded PNG data.\n\n The data is always fully decoded, uncompressed pixels in the\n format reported by GHOSTTY_KITTY_IMAGE_DATA_FORMAT: zlib payloads\n are inflated and PNG payloads are normally decoded to RGBA at transmission\n time, before the image is stored. Consumers can upload returned pixels\n directly to the GPU without any decode step.\n\n For an animated image (Kitty graphics animation, actions a=f/a=a)\n this is the pixel data of the current animation frame. The\n image's GHOSTTY_KITTY_IMAGE_DATA_GENERATION changes whenever the\n current frame changes, so generation-keyed caches remain\n coherent.\n\n Output type: const uint8_t **"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR:
     GhosttyKittyGraphicsImageData = 7;
-#[doc = " Length of the raw pixel data in bytes. Always equal to\n width * height * bytes-per-pixel for the reported format. For a\n pending image, this is the expected length reserved against the\n storage limit even though DATA_PTR is not available yet.\n\n Output type: size_t *"]
+#[doc = " Length of the raw pixel data in bytes. Always equal to\n width * height * bytes-per-pixel for the reported format. For a\n pending or encoded PNG image, this is the expected decoded length reserved against the\n storage limit even though DATA_PTR is not available yet.\n\n Output type: size_t *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN:
     GhosttyKittyGraphicsImageData = 8;
 #[doc = " Generation stamp assigned when this image was added to (or\n replaced in) the storage. A changed generation for a given image\n ID means the pixel contents may have changed even when the\n dimensions, format, and data length are identical (e.g. a\n retransmission of the same image ID), so texture caches must key\n staleness on this value rather than on size heuristics.\n\n Stamps are unique and monotonically increasing process-wide and\n are drawn from the same sequence as\n GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION. Never zero for a stored\n image, so zero can be used as an \"empty\" sentinel by callers. Pending\n payload completion preserves this value to retain image age; consumers\n detect that completion through GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION\n and retry DATA_PTR.\n\n Output type: uint64_t *"]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION:
     GhosttyKittyGraphicsImageData = 9;
-#[doc = " Generation stamp assigned when this image was added to (or\n replaced in) the storage. A changed generation for a given image\n ID means the pixel contents may have changed even when the\n dimensions, format, and data length are identical (e.g. a\n retransmission of the same image ID), so texture caches must key\n staleness on this value rather than on size heuristics.\n\n Stamps are unique and monotonically increasing process-wide and\n are drawn from the same sequence as\n GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION. Never zero for a stored\n image, so zero can be used as an \"empty\" sentinel by callers. Pending\n payload completion preserves this value to retain image age; consumers\n detect that completion through GHOSTTY_KITTY_GRAPHICS_DATA_GENERATION\n and retry DATA_PTR.\n\n Output type: uint64_t *"]
+#[doc = " Owned encoded PNG bytes, borrowed until the next mutation. NO_VALUE\n unless experimentally retained. Output type: const uint8_t **."]
+pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_PTR:
+    GhosttyKittyGraphicsImageData = 10;
+#[doc = " Encoded PNG length; NO_VALUE unless retained. Output type: size_t *."]
+pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_LEN:
+    GhosttyKittyGraphicsImageData = 11;
+#[doc = " Borrowed void* backing context; valid only while image is unchanged."]
+pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_FILE_CONTEXT:
+    GhosttyKittyGraphicsImageData = 12;
+#[doc = " uint64_t immutable revision fingerprint; never reads image pixels."]
+pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_FILE_IDENTITY:
+    GhosttyKittyGraphicsImageData = 13;
+#[doc = " uint64_t immutable revision fingerprint; never reads image pixels."]
 pub const GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_MAX_VALUE:
     GhosttyKittyGraphicsImageData = 2147483647;
 #[doc = " Queryable data kinds for ghostty_kitty_graphics_image_get().\n\n @ingroup kitty_graphics"]
@@ -2282,6 +2294,76 @@ unsafe extern "C" {
         out_info: *mut GhosttyKittyGraphicsPlacementRenderInfo,
     ) -> GhosttyResult;
 }
+#[doc = " Borrowed opened descriptor; size is sizeof this request. No path is supplied."]
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
+pub struct GhosttyKittyImageSnapshotFileRequest {
+    pub size: usize,
+    pub fd: i64,
+    pub expected_len: u64,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyKittyImageSnapshotFileRequest"]
+        [::std::mem::size_of::<GhosttyKittyImageSnapshotFileRequest>() - 24usize];
+    ["Alignment of GhosttyKittyImageSnapshotFileRequest"]
+        [::std::mem::align_of::<GhosttyKittyImageSnapshotFileRequest>() - 8usize];
+    ["Offset of field: GhosttyKittyImageSnapshotFileRequest::size"]
+        [::std::mem::offset_of!(GhosttyKittyImageSnapshotFileRequest, size) - 0usize];
+    ["Offset of field: GhosttyKittyImageSnapshotFileRequest::fd"]
+        [::std::mem::offset_of!(GhosttyKittyImageSnapshotFileRequest, fd) - 8usize];
+    ["Offset of field: GhosttyKittyImageSnapshotFileRequest::expected_len"]
+        [::std::mem::offset_of!(GhosttyKittyImageSnapshotFileRequest, expected_len) - 16usize];
+};
+pub type GhosttyKittyImageFileReadFn = ::std::option::Option<
+    unsafe extern "C" fn(context: *mut ::std::os::raw::c_void, dest: *mut u8, len: usize) -> bool,
+>;
+pub type GhosttyKittyImageFileReleaseFn =
+    ::std::option::Option<unsafe extern "C" fn(context: *mut ::std::os::raw::c_void)>;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct GhosttyKittyImageFileBacking {
+    pub context: *mut ::std::os::raw::c_void,
+    pub identity: u64,
+    pub len: usize,
+    pub read: GhosttyKittyImageFileReadFn,
+    pub release: GhosttyKittyImageFileReleaseFn,
+}
+#[allow(clippy::unnecessary_operation, clippy::identity_op)]
+const _: () = {
+    ["Size of GhosttyKittyImageFileBacking"]
+        [::std::mem::size_of::<GhosttyKittyImageFileBacking>() - 40usize];
+    ["Alignment of GhosttyKittyImageFileBacking"]
+        [::std::mem::align_of::<GhosttyKittyImageFileBacking>() - 8usize];
+    ["Offset of field: GhosttyKittyImageFileBacking::context"]
+        [::std::mem::offset_of!(GhosttyKittyImageFileBacking, context) - 0usize];
+    ["Offset of field: GhosttyKittyImageFileBacking::identity"]
+        [::std::mem::offset_of!(GhosttyKittyImageFileBacking, identity) - 8usize];
+    ["Offset of field: GhosttyKittyImageFileBacking::len"]
+        [::std::mem::offset_of!(GhosttyKittyImageFileBacking, len) - 16usize];
+    ["Offset of field: GhosttyKittyImageFileBacking::read"]
+        [::std::mem::offset_of!(GhosttyKittyImageFileBacking, read) - 24usize];
+    ["Offset of field: GhosttyKittyImageFileBacking::release"]
+        [::std::mem::offset_of!(GhosttyKittyImageFileBacking, release) - 32usize];
+};
+impl Default for GhosttyKittyImageFileBacking {
+    fn default() -> Self {
+        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
+        unsafe {
+            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
+            s.assume_init()
+        }
+    }
+}
+#[doc = " Optional synchronous callback, default NULL. Verify exact descriptor size\n and snapshot immutable bytes before returning true. True transfers one context\n reference; false transfers nothing. Do not close the borrowed descriptor or\n reenter the terminal. Read must fill exactly len bytes; release is called once.\n identity identifies the immutable revision, not a pathname or source inode."]
+pub type GhosttyKittyImageSnapshotFileFn = ::std::option::Option<
+    unsafe extern "C" fn(
+        terminal: GhosttyTerminal,
+        userdata: *mut ::std::os::raw::c_void,
+        request: *const GhosttyKittyImageSnapshotFileRequest,
+        out_backing: *mut GhosttyKittyImageFileBacking,
+    ) -> bool,
+>;
 #[doc = " Perform one bounded compression step suitable for idle scheduling."]
 pub const GhosttyTerminalCompressionMode_GHOSTTY_TERMINAL_COMPRESSION_MODE_INCREMENTAL:
     GhosttyTerminalCompressionMode = 0;
@@ -3119,7 +3201,13 @@ pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ: GhosttyTerm
 #[doc = " Set the maximum total decoded bytes a single Kitty clipboard protocol\n (OSC 5522) write transaction may accumulate. The limit is captured\n when a transaction begins; an in-flight transaction keeps the limit\n it started with.\n\n Data beyond the limit fails the whole transaction with EFBIG. The\n transaction is discarded, later write-related packets are ignored\n until a new write begins, and nothing reaches the clipboard write\n callback.\n\n Transactions are buffered in memory, so this limit bounds how much\n memory a single write can make the terminal allocate. Pass SIZE_MAX\n to remove the limit. A NULL value pointer reverts to the built-in\n default of 64MiB, the minimum required by the protocol.\n\n This limit doesn't apply to OSC 52 writes, which are bounded by the\n maximum length of an escape sequence instead.\n\n Input type: size_t*"]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES:
     GhosttyTerminalOption = 39;
-#[doc = " Set the maximum total decoded bytes a single Kitty clipboard protocol\n (OSC 5522) write transaction may accumulate. The limit is captured\n when a transaction begins; an in-flight transaction keeps the limit\n it started with.\n\n Data beyond the limit fails the whole transaction with EFBIG. The\n transaction is discarded, later write-related packets are ignored\n until a new write begins, and nothing reaches the clipboard write\n callback.\n\n Transactions are buffered in memory, so this limit bounds how much\n memory a single write can make the terminal allocate. Pass SIZE_MAX\n to remove the limit. A NULL value pointer reverts to the built-in\n default of 64MiB, the minimum required by the protocol.\n\n This limit doesn't apply to OSC 52 writes, which are bounded by the\n maximum length of an escape sequence instead.\n\n Input type: size_t*"]
+#[doc = " Experimental, default-off PNG retention for quiet base transmissions.\n Input type: bool*. NULL is a no-op. Corrupt compressed pixels may only\n be detected when an animation operation materializes the image."]
+pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG:
+    GhosttyTerminalOption = 40;
+#[doc = " Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables."]
+pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE:
+    GhosttyTerminalOption = 41;
+#[doc = " Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables."]
 pub const GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_MAX_VALUE: GhosttyTerminalOption = 2147483647;
 #[doc = " Terminal option identifiers.\n\n These values are used with ghostty_terminal_set() to configure\n terminal callbacks and associated state.\n\n @ingroup terminal"]
 pub type GhosttyTerminalOption = ::std::os::raw::c_int;

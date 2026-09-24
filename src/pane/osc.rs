@@ -63,8 +63,19 @@ fn is_ignored_string_intro(byte: u8) -> bool {
 impl DefaultColorOscTracker {
     pub(super) fn observe(&mut self, bytes: &[u8]) -> bool {
         let mut saw_default_color_set = false;
-
-        for &byte in bytes {
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            if matches!(
+                self.state,
+                DefaultColorOscTrackerState::Ground | DefaultColorOscTrackerState::IgnoreString
+            ) {
+                let Some(offset) = bytes[cursor..].iter().position(|&byte| byte == 0x1b) else {
+                    break;
+                };
+                cursor += offset;
+            }
+            let byte = bytes[cursor];
+            cursor += 1;
             match self.state {
                 DefaultColorOscTrackerState::Ground => {
                     if byte == 0x1b {
@@ -157,7 +168,20 @@ pub(super) struct DefaultColorEventTracker {
 
 impl DefaultColorEventTracker {
     pub(super) fn observe(&mut self, bytes: &[u8]) {
-        for (index, &byte) in bytes.iter().enumerate() {
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            if matches!(
+                self.state,
+                DefaultColorOscTrackerState::Ground | DefaultColorOscTrackerState::IgnoreString
+            ) {
+                let Some(offset) = bytes[cursor..].iter().position(|&byte| byte == 0x1b) else {
+                    break;
+                };
+                cursor += offset;
+            }
+            let index = cursor;
+            let byte = bytes[cursor];
+            cursor += 1;
             match self.state {
                 DefaultColorOscTrackerState::Ground => {
                     if byte == 0x1b {
@@ -347,7 +371,19 @@ impl OscStreamCollector {
     const MAX_BODY_BYTES: usize = 4096;
 
     fn observe(&mut self, bytes: &[u8], mut receive: impl FnMut(&[u8])) {
-        for &byte in bytes {
+        let mut cursor = 0;
+        while cursor < bytes.len() {
+            if matches!(
+                self.state,
+                OscStreamState::Ground | OscStreamState::IgnoringString
+            ) {
+                let Some(offset) = bytes[cursor..].iter().position(|&byte| byte == 0x1b) else {
+                    break;
+                };
+                cursor += offset;
+            }
+            let byte = bytes[cursor];
+            cursor += 1;
             match self.state {
                 OscStreamState::Ground => {
                     if byte == 0x1b {
@@ -805,6 +841,59 @@ pub(super) fn restore_host_terminal_theme_if_needed(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bulk_osc_scans_match_bytewise_state_and_response_offsets() {
+        use super::*;
+        let mut input = b"text\x1b_Gm=1;".to_vec();
+        input.extend(std::iter::repeat_n(b'A', 8192));
+        input.extend_from_slice(b"\x1b\\\x1b]10;?\x07\x1b]11;red\x1b\\\x1bPignored");
+        input.extend(0u8..=255);
+        input.extend_from_slice(b"\x1b\\\x1b]12;");
+        input.extend(std::iter::repeat_n(b'B', 4200));
+        input.extend_from_slice(b"\x07\x1b]10;?\x1b\\\x1b]11;?\x07\x1b");
+        for chunk_size in [1, 2, 3, 17, 4096, input.len()] {
+            let mut bulk = DefaultColorOscTracker::default();
+            let mut scalar = DefaultColorOscTracker::default();
+            let mut bulk_events = DefaultColorEventTracker::default();
+            let mut scalar_events = DefaultColorEventTracker::default();
+            let mut bulk_stream = OscStreamCollector::default();
+            let mut scalar_stream = OscStreamCollector::default();
+            for chunk in input.chunks(chunk_size) {
+                let changed = bulk.observe(chunk);
+                let mut scalar_changed = false;
+                let mut expected_events = Vec::new();
+                let mut expected_bodies = Vec::new();
+                for (offset, byte) in chunk.iter().enumerate() {
+                    let byte = std::slice::from_ref(byte);
+                    scalar_changed |= scalar.observe(byte);
+                    scalar_events.observe(byte);
+                    expected_events.extend(scalar_events.drain_pending().into_iter().map(
+                        |mut event| {
+                            event.end_offset += offset;
+                            event
+                        },
+                    ));
+                    scalar_stream.observe(byte, |body| expected_bodies.push(body.to_vec()));
+                }
+                bulk_events.observe(chunk);
+                let mut bodies = Vec::new();
+                bulk_stream.observe(chunk, |body| bodies.push(body.to_vec()));
+                assert_eq!(changed, scalar_changed);
+                assert_eq!((bulk.state, &bulk.body), (scalar.state, &scalar.body));
+                assert_eq!(bulk_events.drain_pending(), expected_events);
+                assert_eq!(
+                    (bulk_events.state, &bulk_events.body),
+                    (scalar_events.state, &scalar_events.body)
+                );
+                assert_eq!(bodies, expected_bodies);
+                assert_eq!(
+                    (bulk_stream.state, &bulk_stream.body),
+                    (scalar_stream.state, &scalar_stream.body)
+                );
+            }
+        }
+    }
+
     use tokio::sync::mpsc;
 
     use super::*;
