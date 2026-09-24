@@ -2219,44 +2219,92 @@ fn word_selection_result_survives_focus_snapshot_lag() {
 
 #[test]
 fn copy_mode_repeat_during_projection_gap_stays_active() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    let mut pane_surface = surface();
-    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
-        offset_from_bottom: 0,
-        max_offset_from_bottom: 20,
-        viewport_rows: 2,
-    });
-    state.set_pane_surface(pane_surface);
-    state.compose(106, 20).expect("composed frame");
-    let mut enter = ClientShellInput::default();
-    state.record_binding(
-        crate::input::KeybindMatch::Action(crate::input::KeybindAction::CopyMode),
-        &mut enter,
-    );
-    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
-        KeyCode::Char('k'),
-        KeyModifiers::empty(),
-    ))]);
+    for selection_before_gap in [None, Some(true), Some(false)] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 20,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface);
+        state.compose(106, 20).expect("composed frame");
+        let mut enter = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::CopyMode),
+            &mut enter,
+        );
+        if selection_before_gap == Some(true) {
+            state.handle_input_bytes(b"V");
+        }
+        state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            KeyCode::Char('k'),
+            KeyModifiers::empty(),
+        ))]);
 
-    let mut next = snapshot();
-    next.revision += 1;
-    state.set_snapshot(Box::new(next));
-    assert!(state.hits.panes.is_empty());
-    assert_eq!(state.mode, ClientShellMode::Copy);
+        let end_col = state.copy_mode.as_ref().expect("copy mode").geometry.0 - 1;
+        let mut next = snapshot();
+        next.revision += 1;
+        state.set_snapshot(Box::new(next));
+        assert!(state.hits.panes.is_empty());
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        if selection_before_gap == Some(false) {
+            state.handle_input_bytes(b"V");
+            assert_eq!(
+                state
+                    .selection
+                    .as_ref()
+                    .expect("linewise selection")
+                    .ordered_cells(),
+                ((20, 0), (20, end_col))
+            );
+        }
 
-    state.handle_raw_events(vec![RawInputEvent::Key(
-        crate::input::TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty())
-            .with_kind(crossterm::event::KeyEventKind::Repeat),
-    )]);
+        let kind = if selection_before_gap == Some(false) {
+            crossterm::event::KeyEventKind::Press
+        } else {
+            crossterm::event::KeyEventKind::Repeat
+        };
+        let moved = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty())
+                .with_kind(kind),
+        )]);
+        assert!(moved.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PaneScroll(params)
+                    if params.pane_id == "pane_1" && params.offset_from_bottom == 1)
+        )));
+        if selection_before_gap.is_some() {
+            assert_eq!(
+                state
+                    .selection
+                    .as_ref()
+                    .expect("linewise selection")
+                    .ordered_cells(),
+                (
+                    (19, 0),
+                    (
+                        if selection_before_gap == Some(true) {
+                            21
+                        } else {
+                            20
+                        },
+                        end_col
+                    )
+                )
+            );
+        }
 
-    assert_eq!(state.mode, ClientShellMode::Copy);
-    assert!(state.copy_mode.is_some());
-    assert_eq!(
-        state
-            .copy_mode
-            .as_ref()
-            .map(|copy_mode| copy_mode.cursor.row),
-        Some(19)
-    );
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        assert!(state.copy_mode.is_some());
+        assert_eq!(
+            state
+                .copy_mode
+                .as_ref()
+                .map(|copy_mode| copy_mode.cursor.row),
+            Some(19)
+        );
+    }
 }

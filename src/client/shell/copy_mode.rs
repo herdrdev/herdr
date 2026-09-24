@@ -641,12 +641,11 @@ impl ClientShellState {
     }
 
     fn begin_copy_selection(&mut self, linewise: bool) {
-        let end_col = self
-            .copy_hit()
-            .map_or(0, |hit| hit.inner_rect.width.saturating_sub(1));
+        let width = self.copy_hit().map(|hit| hit.inner_rect.width);
         let Some(copy_mode) = self.copy_mode.as_mut() else {
             return;
         };
+        let end_col = width.unwrap_or(copy_mode.geometry.0).saturating_sub(1);
         if linewise {
             copy_mode.selection = Some(ClientCopySelection::Linewise {
                 anchor_row: copy_mode.cursor.row,
@@ -689,7 +688,8 @@ impl ClientShellState {
                     anchor_row,
                     copy_mode.cursor.row,
                     self.copy_hit()
-                        .map_or(0, |hit| hit.inner_rect.width.saturating_sub(1)),
+                        .map_or(copy_mode.geometry.0, |hit| hit.inner_rect.width)
+                        .saturating_sub(1),
                 )
             }
         });
