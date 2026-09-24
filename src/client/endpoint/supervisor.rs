@@ -303,6 +303,7 @@ fn connect_once(
         options.endpoint_keybindings,
         options.mouse_capture,
         false,
+        matches!(target, ConnectTarget::Local(_)),
     )
     .map_err(handshake_error)?;
     if handshake.encoding != RenderEncoding::SemanticFrame {

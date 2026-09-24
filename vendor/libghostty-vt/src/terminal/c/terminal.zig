@@ -13,6 +13,7 @@ const ScreenSet = @import("../ScreenSet.zig");
 const PageList = @import("../PageList.zig");
 const apc = @import("../apc.zig");
 const kitty = @import("../kitty/key.zig");
+const kitty_image = @import("../kitty/graphics_image.zig");
 const kitty_gfx_c = @import("kitty_graphics.zig");
 const modes = @import("../modes.zig");
 const point = @import("../point.zig");
@@ -257,6 +258,7 @@ const Effects = struct {
     clipboard_write: ?ClipboardWriteFn = null,
     clipboard_read: ?ClipboardReadFn = null,
     unknown_sequence: ?UnknownSequenceFn = null,
+    snapshot_file: ?SnapshotFileFn = null,
 
     /// Scratch buffer for DA1 feature codes. The device attributes
     /// trampoline converts C feature codes into this buffer and returns
@@ -264,6 +266,14 @@ const Effects = struct {
     /// remains valid after the trampoline returns, since the caller
     /// (`reportDeviceAttributes`) reads it before any re-entrant call.
     da_features_buf: [64]device_attributes.Primary.Feature = undefined,
+
+    pub const SnapshotFileFn = *const fn (Terminal, ?*anyopaque, *const kitty_image.SnapshotFileRequest, *kitty_image.FileBacking) callconv(lib.calling_conv) bool;
+
+    fn snapshotFile(context: ?*anyopaque, request: *const kitty_image.SnapshotFileRequest, out: *kitty_image.FileBacking) bool {
+        const wrapper: *TerminalWrapper = @ptrCast(@alignCast(context.?));
+        const callback = wrapper.effects.snapshot_file orelse return false;
+        return callback(@ptrCast(wrapper), wrapper.effects.userdata, request, out);
+    }
 
     /// C function pointer type for the write_pty callback.
     pub const WritePtyFn = *const fn (Terminal, ?*anyopaque, [*]const u8, usize) callconv(lib.calling_conv) void;
@@ -1174,12 +1184,15 @@ pub const Option = enum(c_int) {
     terminfo_name = 37,
     clipboard_read = 38,
     clipboard_write_max_bytes = 39,
+    kitty_image_preserve_png = 40,
+    kitty_image_snapshot_file = 41,
 
     /// Input type expected for setting the option.
     pub fn InType(comptime self: Option) type {
         return switch (self) {
             .userdata => ?*const anyopaque,
             .write_pty => ?Effects.WritePtyFn,
+            .kitty_image_snapshot_file => ?Effects.SnapshotFileFn,
             .bell => ?Effects.BellFn,
             .color_scheme => ?Effects.ColorSchemeFn,
             .desktop_notification => ?Effects.DesktopNotificationFn,
@@ -1197,6 +1210,7 @@ pub const Option = enum(c_int) {
             .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
             .color_palette => ?*const color.PaletteC,
             .kitty_image_storage_limit => ?*const u64,
+            .kitty_image_preserve_png,
             .kitty_image_medium_file,
             .kitty_image_medium_shared_mem,
             .glyph_protocol,
@@ -1250,6 +1264,17 @@ fn setTyped(
     switch (option) {
         .userdata => wrapper.effects.userdata = @constCast(value),
         .write_pty => wrapper.effects.write_pty = value,
+        .kitty_image_snapshot_file => {
+            if (comptime !build_options.kitty_graphics) return .success;
+            wrapper.effects.snapshot_file = value;
+            var it = wrapper.terminal.screens.all.iterator();
+            while (it.next()) |entry| {
+                entry.value.*.kitty_images.image_limits.snapshot_file = if (value != null)
+                    .{ .context = @ptrCast(wrapper), .callback = &Effects.snapshotFile }
+                else
+                    null;
+            }
+        },
         .bell => wrapper.effects.bell = value,
         .color_scheme => wrapper.effects.color_scheme = value,
         .desktop_notification => wrapper.effects.desktop_notification = value,
@@ -1330,6 +1355,7 @@ fn setTyped(
                 screen.kitty_images.setLimit(screen.io, screen.alloc, screen, limit);
             }
         },
+        .kitty_image_preserve_png,
         .kitty_image_medium_file,
         .kitty_image_medium_shared_mem,
         => {
@@ -1339,6 +1365,7 @@ fn setTyped(
             while (it.next()) |entry| {
                 const screen = entry.value.*;
                 switch (option) {
+                    .kitty_image_preserve_png => screen.kitty_images.image_limits.preserve_png = val,
                     .kitty_image_medium_file => screen.kitty_images.image_limits.file = val,
                     .kitty_image_medium_shared_mem => screen.kitty_images.image_limits.shared_memory = val,
                     else => unreachable,

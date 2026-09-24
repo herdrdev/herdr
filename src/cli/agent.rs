@@ -610,6 +610,12 @@ fn wait_for_named_agent(
                     "agent_not_ready",
                     format!("agent {name} is blocked during startup and is not ready for prompts"),
                 ))),
+                Some("unknown")
+                    if expected_kind == "codex"
+                        && agent["interactive_ready"].as_bool() == Some(true) =>
+                {
+                    Some(Ok(agent.clone()))
+                }
                 Some("working" | "unknown") => None,
                 Some("idle" | "done") if agent["interactive_ready"].as_bool() == Some(true) => {
                     Some(Ok(agent.clone()))

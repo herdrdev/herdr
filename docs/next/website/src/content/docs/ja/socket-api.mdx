@@ -99,7 +99,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | ワークスペース | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | タブ | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
-| ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
+| ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | ポップアップ | `popup.close` |
 | レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
 | エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
@@ -147,20 +147,9 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 
 ### ペイングラフィックス
 
-ペイングラフィックスを使うと、プラグインがペイン上に画像データを配置できます。デフォルトで利用でき、サーバーで `[terminal].kitty_graphics = false` が設定されている場合は、すべてのペイングラフィックスメソッドが `feature_disabled` を返します。この設定の変更にはサーバーの再起動が必要です。`pane.graphics.info` はグラフィックスレイヤーを作成せず、接続中クライアントのセルの幅と高さをピクセル単位で返します。`pane.graphics.set` は `data_base64` の `png`、`rgb`、`rgba` データを受け取り、`pane.graphics.clear` はレイヤーを削除します。
+アプリケーションとプラグインは、ペインのターミナル出力を通じて標準の Kitty グラフィックスプロトコルを送信してください。Herdr が対応する外側ターミナルで画像の配置、クリッピング、表示状態を管理します。
 
-```json
-{"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
-{"id":"graphics_set","method":"pane.graphics.set","params":{"pane_id":"w1:p1","format":"png","image_width":800,"image_height":600,"data_base64":"...","placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}}
-{"id":"graphics_clear","method":"pane.graphics.clear","params":{"pane_id":"w1:p1"}}
-```
-
-フレームを繰り返し送る場合は、`pane.graphics.stream` で専用ソケットを開きます。Herdr が `ok` を返した後、フレームごとに 1 つの JSON ヘッダーと正確に `data_length` バイトの生データを送ります。ソケットが閉じるまでストリームがそのペインのグラフィックスレイヤーを所有し、同時に set、clear、stream を要求すると `stream_conflict` を返します。
-
-```json
-{"id":"graphics_stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1"}}
-{"format":"png","image_width":800,"image_height":600,"data_length":12345,"placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}
-```
+外部ソケットのペイン画像オーバーレイ API は削除されました。`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream` は利用できず、代替のソケット画像 API もありません。旧サーバーとの内部通信プロトコルの互換性は、これらの公開メソッドを復活させるものではありません。
 
 `pane.layout` は、`workspace_id`、`tab_id`、`zoomed`、外側の `area`、`focused_pane_id`、ペインの矩形、分割の矩形/比率を含むタブレイアウトのスナップショットを返します。`pane.neighbor` と `pane.edges` は同じレイアウトスナップショットを含むので、クライアントは非公開のレイアウト状態なしに次の判断を下せます。
 

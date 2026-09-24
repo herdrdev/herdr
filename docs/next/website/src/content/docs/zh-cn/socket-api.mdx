@@ -99,7 +99,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 工作区 | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | 标签页 | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
-| 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear`、`pane.graphics.stream`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
+| 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | 弹窗 | `popup.close` |
 | 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
 | 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
@@ -147,20 +147,9 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 
 ### 窗格图形
 
-窗格图形允许插件在窗格上放置图像数据。该功能默认可用；当服务器设置 `[terminal].kitty_graphics = false` 时，所有窗格图形方法都返回 `feature_disabled`。更改此设置需要重启服务器。调用 `pane.graphics.info` 会返回所连接客户端的单元格像素宽度和高度,但不会创建图形层。`pane.graphics.set` 接受 `data_base64` 中的 `png`、`rgb` 或 `rgba` 数据,`pane.graphics.clear` 删除该图层。
+应用和插件应通过窗格的终端输出发送标准 Kitty 图形协议。Herdr 在兼容的外层终端中管理图像的位置、裁剪和可见性。
 
-```json
-{"id":"graphics_info","method":"pane.graphics.info","params":{"pane_id":"w1:p1"}}
-{"id":"graphics_set","method":"pane.graphics.set","params":{"pane_id":"w1:p1","format":"png","image_width":800,"image_height":600,"data_base64":"...","placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}}
-{"id":"graphics_clear","method":"pane.graphics.clear","params":{"pane_id":"w1:p1"}}
-```
-
-要重复发送帧,用 `pane.graphics.stream` 打开专用 socket。Herdr 回复 `ok` 后,每一帧发送一个 JSON 头,再发送恰好 `data_length` 字节的原始数据。socket 关闭前,该流拥有对应窗格的图形层;并发 set、clear 或 stream 请求返回 `stream_conflict`。
-
-```json
-{"id":"graphics_stream","method":"pane.graphics.stream","params":{"pane_id":"w1:p1"}}
-{"format":"png","image_width":800,"image_height":600,"data_length":12345,"placement":{"viewport_col":0,"viewport_row":0,"grid_cols":80,"grid_rows":30}}
-```
+外部 socket 窗格图像叠加 API 已移除:`pane.graphics.info`、`pane.graphics.set`、`pane.graphics.clear` 和 `pane.graphics.stream` 不再可用,也没有替代的 socket 图像 API。与旧服务器的内部传输协议兼容性不会恢复这些公开方法。
 
 `pane.layout` 返回标签页布局快照,包含 `workspace_id`、`tab_id`、`zoomed`、外层 `area`、`focused_pane_id`、窗格矩形和分割矩形/比例。`pane.neighbor` 和 `pane.edges` 也包含同一份布局快照,让客户端不需要私有布局状态就能做出下一步决策。
 

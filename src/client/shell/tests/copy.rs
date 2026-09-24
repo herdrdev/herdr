@@ -1081,6 +1081,42 @@ fn navigator_renders_every_terminal_in_workspace_sections() {
 }
 
 #[test]
+fn navigator_search_matches_non_adjacent_words_without_losing_the_pane_target() {
+    let mut projected = snapshot();
+    projected.panes[0].label = Some("alpha beta gamma".into());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+        panic!("navigator");
+    };
+    for (query, matches) in [
+        ("alpha gamma", true),
+        ("  ALP\tGAM  ", true),
+        ("gamma alpha", true),
+        ("beta gamma", true),
+        ("alpha missing", false),
+        ("alphagamma", false),
+    ] {
+        navigator.query = query.into();
+        navigator.selected = None;
+        let rows =
+            render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+        let target =
+            super::super::aggregate_navigation::selected_navigator_target(&rows, navigator);
+        assert_eq!(
+            target,
+            matches.then(|| ClientNavigatorTarget::Pane {
+                endpoint_id: state.active_endpoint_id.clone(),
+                pane_id: "pane_1".into(),
+            }),
+            "query={query:?}"
+        );
+    }
+}
+
+#[test]
 fn navigator_searches_ancestor_context_and_keeps_split_agents_individually_actionable() {
     let mut projected = snapshot();
     projected.tabs[0].label = "review".into();
@@ -1527,7 +1563,7 @@ fn navigator_narrow_layout_and_long_search_stay_inside_the_popup() {
         navigator.query = "界".repeat(100).as_str().into();
         let frame = state.compose(width, height).expect("navigator frame");
         let popup = state.hits.navigator_popup;
-        let cursor = frame.cursor.expect("search cursor");
+        let cursor = frame.cursor.as_ref().expect("search cursor");
         assert!(super::super::contains(popup, (cursor.x, cursor.y)));
         assert!(state.hits.navigator_rows.is_empty());
         assert!(popup.right() <= width && popup.bottom() <= height);

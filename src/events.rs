@@ -89,6 +89,8 @@ pub enum AppEvent {
         agent: Agent,
         observed_at: Instant,
     },
+    /// The current Codex input screen is visible during managed startup.
+    CodexPromptObserved { pane_id: PaneId, ready: bool },
     /// Fallback detector state changed in a pane.
     StateChanged {
         pane_id: PaneId,

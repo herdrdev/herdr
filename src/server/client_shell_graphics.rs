@@ -1,4 +1,4 @@
-use crate::kitty_graphics::surface::DeliveryCache;
+use crate::kitty_graphics::surface::{DeliveryCache, SourceFiles};
 use crate::protocol::{ClientShellPopupSurface, SurfaceGraphicsScene};
 
 pub(crate) fn collect_retained(
@@ -8,7 +8,7 @@ pub(crate) fn collect_retained(
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
     client_id: u64,
-) -> Option<(SurfaceGraphicsScene, DeliveryCache)> {
+) -> Option<(SurfaceGraphicsScene, DeliveryCache, SourceFiles)> {
     let rect = |rect: crate::protocol::SurfaceRect| {
         ratatui::layout::Rect::new(rect.x, rect.y, rect.width, rect.height)
     };
@@ -52,7 +52,7 @@ pub(crate) fn collect(
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
     client_id: u64,
-) -> (SurfaceGraphicsScene, DeliveryCache) {
+) -> (SurfaceGraphicsScene, DeliveryCache, SourceFiles) {
     let popup_content_size = popup.map(|popup| (popup.frame.width, popup.frame.height));
     crate::kitty_graphics::surface::collect_scene(
         app,

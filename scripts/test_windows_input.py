@@ -24,6 +24,11 @@ class WindowsInputGauntletTests(unittest.TestCase):
                     self.assertTrue(bytes.fromhex(value))
         self.assertEqual(self.cases["dead-acute"]["kind"], "layout-key")
         self.assertEqual(self.cases["altgr-euro"]["kind"], "manual")
+        for spec in self.matrix["release_plan"]:
+            for case_id in spec["cases"]:
+                self.assertIn(spec["mode"], self.cases[case_id]["expected"])
+                self.assertNotIn(self.cases[case_id]["kind"], {"manual", "qualification"})
+        self.assertFalse({"page-up", "page-down"} & {case_id for spec in self.matrix["release_plan"] for case_id in spec["cases"]})
 
     def test_default_catalogue_does_not_inject_terminal_host_actions(self):
         for case_id in ["ctrl-v", "alt-enter", "ctrl-shift-up", "ctrl-shift-down", "ctrl-shift-home", "ctrl-shift-end"]:
@@ -200,6 +205,80 @@ class WindowsInputGauntletTests(unittest.TestCase):
             rows = {row[0]: row[1:] for row in qualification_matrix(result)}
             self.assertEqual(rows["Shift+Enter"][0], "PARTIAL")
 
+    def test_release_matrix_uses_its_paired_hosts(self):
+        observations = [{"host": spec["channel"], "path": spec["path"], "mode": spec["mode"],
+                         "case": case, "status": "pass", "width": width}
+                        for spec in self.matrix["release_plan"] for width in (120, 80) for case in spec["cases"]]
+        nominal_only = [row for row in observations if row["width"] == 120]
+        rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": nominal_only})}
+        self.assertEqual(rows["Resize 120 -> 80"], ("PARTIAL", "PARTIAL"))
+        rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": observations})}
+        for name, cells in rows.items():
+            self.assertEqual(cells, ("MANUAL", "MANUAL") if name in {"PageUp/PageDown scroll", "AltGr", "IME composition"}
+                             else ("PASS", "PASS"), name)
+        failure = next(row for row in observations if row["host"] == "stable" and row["mode"] == "mok2"
+                       and row["case"] == "letter-a" and row["width"] == 120)
+        failure["status"] = "fail"
+        rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": observations})}
+        self.assertEqual(rows["Printable keys"][0], "FAIL")
+        self.assertEqual(rows["Resize 120 -> 80"][0], "FAIL")
+        self.assertEqual(rows["PageUp/PageDown scroll"], ("MANUAL", "MANUAL"))
+        failure["status"] = "pass"
+        missing_mode = [row for row in observations if not (row["host"] == "stable" and row["mode"] == "mok2"
+                        and row["case"] == "paste-lf")]
+        rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": missing_mode})}
+        self.assertEqual(rows["Multiline paste"][0], "PARTIAL")
+        stable_partial = next(row for row in observations if row["host"] == "stable" and row["mode"] == "mok2"
+                              and row["case"] == "paste-lf" and row["width"] == 120)
+        for status, expected in (("inconclusive", "INCONCLUSIVE"), ("unsupported", "UNSUPPORTED"),
+                                 ("not_run", "PARTIAL")):
+            stable_partial["status"] = status
+            rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": observations})}
+            self.assertEqual(rows["Multiline paste"][0], expected)
+        stable_partial["status"] = "pass"
+        partial = next(row for row in observations if row["host"] == "preview" and row["mode"] == "kitty"
+                       and row["case"] == "shift-enter" and row["width"] == 80)
+        partial["status"] = "inconclusive"
+        rows = {row[0]: row[1:] for row in qualification_matrix({"campaign": "release", "observations": observations})}
+        self.assertEqual(rows["Shift+Enter"][1], "INCONCLUSIVE")
+
+    def test_run_spec_planning_does_not_require_other_combinations(self):
+        document = {"channels": ["stable"], "widths": [80], "heights": [24],
+                    "run_specs": [{"channel": "stable", "path": "herdr", "mode": "legacy", "cases": ["letter-a"]}],
+                    "observations": [{"host": "stable", "path": "herdr", "mode": "legacy", "phase": 1,
+                                      "width": 120, "height": 30, "case": "letter-a", "status": "not_run"}]}
+        self.assertEqual(summarize(document)["coverage_missing"], 2)
+        document["observations"][0]["mode"] = "kitty"
+        with self.assertRaisesRegex(ValueError, "outside the declared run matrix"):
+            summarize(document)
+
+    def test_direct_legacy_limit_requires_unsupported_from_every_channel(self):
+        observations = [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
+                        for host, status in (("stable", "unsupported"), ("preview", "not_run"))]
+        rows = {row[0]: row[1:] for row in qualification_matrix({"channels": ["stable", "preview"], "observations": observations})}
+        self.assertEqual(rows["Shift+Enter"][1], "PARTIAL")
+
+    def test_qualification_matrix_keeps_proven_input_visible_when_geometry_is_unavailable(self):
+        observations = [{"host": host, "case": case, "path": "herdr", "mode": "legacy", "status": "pass", "width": 120}
+                        for host in ("stable", "preview") for case in ("letter-a", "shift-letter")]
+        observations += [{"host": host, "case": "letter-a", "path": "herdr", "mode": "legacy", "status": "not_run", "width": 160}
+                         for host in ("stable", "preview")]
+        observations += [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
+                         for host in ("stable", "preview") for status in ("unsupported", "not_run")]
+        observations += [{"host": "stable", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "inconclusive"},
+                         {"host": "preview", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "pass"},
+                         {"host": "preview", "case": "shift-enter", "path": "direct", "mode": "kitty", "status": "not_run"}]
+        result = {"channels": ["stable", "preview"], "observations": observations}
+        rows = {row[0]: row[1:] for row in qualification_matrix(result)}
+        self.assertEqual(rows["Printable keys"][0], "PARTIAL")
+        self.assertEqual(rows["Shift+Enter"][1:], ("X - becomes Enter", "INCONCLUSIVE"))
+        self.assertEqual(rows["Multiline paste"][0], "NOT TESTED")
+        self.assertEqual(rows["Resize 120 -> 80"][0], "NOT TESTED")
+        observations[3]["status"] = "not_run"  # Preview has no passing shift-letter observation.
+        self.assertEqual({row[0]: row[1] for row in qualification_matrix(result)}["Printable keys"], "NOT TESTED")
+        observations[3]["status"] = "fail"
+        self.assertEqual({row[0]: row[1] for row in qualification_matrix(result)}["Printable keys"], "FAIL")
+
     def test_herdr_protocol_label_requires_every_run_to_prove_transport(self):
         result = {"hosts": [{"channel": "stable", "runs": [{"nonce": "one", "path": "herdr", "mode": "native"},
                                                                   {"nonce": "two", "path": "herdr", "mode": "native"}]}],
@@ -213,6 +292,25 @@ class WindowsInputGauntletTests(unittest.TestCase):
         self.assertEqual(herdr_protocol_label(result), "Win32 (Herdr)*")
         result["hosts"].append({"channel": "preview", "runs": [{"nonce": "one", "path": "herdr", "mode": "native"}]})
         self.assertEqual(herdr_protocol_label(result), "Herdr default (UNKNOWN)*")
+
+    def test_release_success_requires_stable_win32_runtime_evidence(self):
+        observations = [{**self.evidence, "case": "letter-a", "host": "stable", "path": "herdr", "mode": "legacy",
+                         "hex": "61", "phase": phase, "width": width, "height": height,
+                         "outer_geometry": [width, height], "final_outer_geometry": [width, height],
+                         "nonce": "owned", "capture_id": str(phase)}
+                        for phase, (width, height) in enumerate(((120, 30), (80, 24), (80, 30)), 1)]
+        run = {"nonce": "owned", "path": "herdr", "mode": "legacy", "pid": 123, "hwnd": 456,
+               "elevated": False, "image_identity": "image-s", "installation_identity": "install-s"}
+        document = {"campaign": "release", "channels": ["stable"], "widths": [80], "heights": [24],
+                    "run_specs": [{"channel": "stable", "path": "herdr", "mode": "legacy", "cases": ["letter-a"]}],
+                    "observations": observations, "hosts": [{"channel": "stable", "runs": [run]}],
+                    "controller_elevated": False}
+        incomplete = summarize(document)
+        self.assertEqual(incomplete["counts"]["pass"], 3)
+        self.assertEqual(incomplete["coverage_missing"], 0)
+        self.assertFalse(incomplete["observed_checks_passed"])
+        observations[0].update(input_reader="windows-console", input_transport="win32-serialized")
+        self.assertTrue(summarize(document)["observed_checks_passed"])
 
     def test_empty_partial_and_duplicate_reports_never_become_green(self):
         self.assertFalse(summarize({})["observed_checks_passed"])

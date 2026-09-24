@@ -183,6 +183,10 @@ pub const ImageData = enum(c_int) {
     data_ptr = 7,
     data_len = 8,
     generation = 9,
+    encoded_png_ptr = 10,
+    encoded_png_len = 11,
+    file_context = 12,
+    file_identity = 13,
 
     pub fn OutType(comptime self: ImageData) type {
         return switch (self) {
@@ -190,9 +194,10 @@ pub const ImageData = enum(c_int) {
             .id, .number, .width, .height => u32,
             .format => ImageFormat,
             .compression => ImageCompression,
-            .data_ptr => [*]const u8,
-            .data_len => usize,
-            .generation => u64,
+            .data_ptr, .encoded_png_ptr => [*]const u8,
+            .data_len, .encoded_png_len => usize,
+            .generation, .file_identity => u64,
+            .file_context => ?*anyopaque,
         };
     }
 };
@@ -266,7 +271,26 @@ fn imageGetTyped(
         // data; the image generation changes whenever the current
         // frame does, so generation-keyed caches stay coherent.
         .data_ptr => out.* = (image.renderData().bytes() orelse return .no_value).ptr,
-        .data_len => out.* = image.renderData().len(),
+        .data_len => out.* = switch (image.renderData()) {
+            .encoded_png => |png| png.decoded_len,
+            else => image.renderData().len(),
+        },
+        .encoded_png_ptr => out.* = switch (image.data) {
+            .encoded_png => |png| png.bytes.ptr,
+            else => return .no_value,
+        },
+        .encoded_png_len => out.* = switch (image.data) {
+            .encoded_png => |png| png.bytes.len,
+            else => return .no_value,
+        },
+        .file_context => out.* = switch (image.data) {
+            .native_file => |file| file.context,
+            else => return .no_value,
+        },
+        .file_identity => out.* = switch (image.data) {
+            .native_file => |file| file.identity,
+            else => return .no_value,
+        },
         .generation => out.* = image.generation,
     }
 

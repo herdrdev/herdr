@@ -1,0 +1,1055 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/kitty_graphics.h b/vendor/libghostty-vt/include/ghostty/vt/kitty_graphics.h
+index 99cee60a..8dad8086 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/kitty_graphics.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/kitty_graphics.h
+@@ -391,12 +391,13 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   /**
+    * Borrowed pointer to the raw pixel data. Valid as long as the
+    * underlying terminal is not mutated. Returns GHOSTTY_NO_VALUE when
+-   * the image metadata is resident but its pixel payload is pending.
++   * the image metadata is resident but its pixel payload is pending, or
++   * when the experimental PRESERVE_PNG option retained encoded PNG data.
+    *
+    * The data is always fully decoded, uncompressed pixels in the
+    * format reported by GHOSTTY_KITTY_IMAGE_DATA_FORMAT: zlib payloads
+-   * are inflated and PNG payloads are decoded to RGBA at transmission
+-   * time, before the image is stored. Consumers can upload this
++   * are inflated and PNG payloads are normally decoded to RGBA at transmission
++   * time, before the image is stored. Consumers can upload returned pixels
+    * directly to the GPU without any decode step.
+    *
+    * For an animated image (Kitty graphics animation, actions a=f/a=a)
+@@ -412,7 +413,7 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   /**
+    * Length of the raw pixel data in bytes. Always equal to
+    * width * height * bytes-per-pixel for the reported format. For a
+-   * pending image, this is the expected length reserved against the
++   * pending or encoded PNG image, this is the expected decoded length reserved against the
+    * storage limit even though DATA_PTR is not available yet.
+    *
+    * Output type: size_t *
+@@ -439,6 +440,17 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    */
+   GHOSTTY_KITTY_IMAGE_DATA_GENERATION = 9,
+
++  /** Owned encoded PNG bytes, borrowed until the next mutation. NO_VALUE
++   * unless experimentally retained. Output type: const uint8_t **.
++   */
++  GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_PTR = 10,
++  /** Encoded PNG length; NO_VALUE unless retained. Output type: size_t *. */
++  GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_LEN = 11,
++  /** Borrowed void* backing context; valid only while image is unchanged. */
++  GHOSTTY_KITTY_IMAGE_DATA_FILE_CONTEXT = 12,
++  /** uint64_t immutable revision fingerprint; never reads image pixels. */
++  GHOSTTY_KITTY_IMAGE_DATA_FILE_IDENTITY = 13,
++
+   GHOSTTY_KITTY_IMAGE_DATA_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyKittyGraphicsImageData;
+
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index 81f9ebd0..6404af53 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -27,6 +27,39 @@
+ extern "C" {
+ #endif
+
++/** Borrowed opened descriptor; size is sizeof this request. No path is supplied. */
++typedef struct {
++  size_t size;
++  int64_t fd;
++  uint64_t expected_len;
++} GhosttyKittyImageSnapshotFileRequest;
++
++typedef bool (*GhosttyKittyImageFileReadFn)(void *context, uint8_t *dest, size_t len);
++typedef void (*GhosttyKittyImageFileReleaseFn)(void *context);
++
++typedef struct {
++  void *context;
++  uint64_t identity;
++  size_t len;
++  GhosttyKittyImageFileReadFn read;
++  GhosttyKittyImageFileReleaseFn release;
++} GhosttyKittyImageFileBacking;
++
++/** Optional synchronous callback, default NULL. Verify exact descriptor size
++ * and snapshot immutable bytes before returning true. True transfers one context
++ * reference; false transfers nothing. Do not close the borrowed descriptor or
++ * reenter the terminal. Both read and release MUST be non-NULL on success.
++ * Read must fill exactly len bytes; release is called once. An incomplete
++ * backing is rejected and ordinary file loading is used instead. If release
++ * is provided, rejection calls it once; without release, the host remains
++ * responsible for cleanup (the terminal cannot release that context).
++ * identity identifies the immutable revision, not a pathname or source inode.
++ */
++typedef bool (*GhosttyKittyImageSnapshotFileFn)(
++    GhosttyTerminal terminal, void *userdata,
++    const GhosttyKittyImageSnapshotFileRequest *request,
++    GhosttyKittyImageFileBacking *out_backing);
++
+ /** @defgroup terminal Terminal
+  *
+  * Complete terminal emulator state and rendering.
+@@ -1545,6 +1578,14 @@ typedef enum GHOSTTY_ENUM_TYPED {
+    * Input type: size_t*
+    */
+   GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES = 39,
++
++  /** Experimental, default-off PNG retention for quiet base transmissions.
++   * Input type: bool*. NULL is a no-op. Corrupt compressed pixels may only
++   * be detected when an animation operation materializes the image.
++   */
++  GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
++  /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
++  GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
+   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalOption;
+
+diff --git a/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig b/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig
+index 2bd5e862..c66b13be 100644
+--- a/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig
++++ b/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig
+@@ -183,6 +183,10 @@ pub const ImageData = enum(c_int) {
+     data_ptr = 7,
+     data_len = 8,
+     generation = 9,
++    encoded_png_ptr = 10,
++    encoded_png_len = 11,
++    file_context = 12,
++    file_identity = 13,
+
+     pub fn OutType(comptime self: ImageData) type {
+         return switch (self) {
+@@ -190,9 +194,10 @@ pub const ImageData = enum(c_int) {
+             .id, .number, .width, .height => u32,
+             .format => ImageFormat,
+             .compression => ImageCompression,
+-            .data_ptr => [*]const u8,
+-            .data_len => usize,
+-            .generation => u64,
++            .data_ptr, .encoded_png_ptr => [*]const u8,
++            .data_len, .encoded_png_len => usize,
++            .generation, .file_identity => u64,
++            .file_context => ?*anyopaque,
+         };
+     }
+ };
+@@ -266,7 +271,26 @@ fn imageGetTyped(
+         // data; the image generation changes whenever the current
+         // frame does, so generation-keyed caches stay coherent.
+         .data_ptr => out.* = (image.renderData().bytes() orelse return .no_value).ptr,
+-        .data_len => out.* = image.renderData().len(),
++        .data_len => out.* = switch (image.renderData()) {
++            .encoded_png => |png| png.decoded_len,
++            else => image.renderData().len(),
++        },
++        .encoded_png_ptr => out.* = switch (image.data) {
++            .encoded_png => |png| png.bytes.ptr,
++            else => return .no_value,
++        },
++        .encoded_png_len => out.* = switch (image.data) {
++            .encoded_png => |png| png.bytes.len,
++            else => return .no_value,
++        },
++        .file_context => out.* = switch (image.data) {
++            .native_file => |file| file.context,
++            else => return .no_value,
++        },
++        .file_identity => out.* = switch (image.data) {
++            .native_file => |file| file.identity,
++            else => return .no_value,
++        },
+         .generation => out.* = image.generation,
+     }
+
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index 91bbe310..e825183e 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -13,6 +13,7 @@ const ScreenSet = @import("../ScreenSet.zig");
+ const PageList = @import("../PageList.zig");
+ const apc = @import("../apc.zig");
+ const kitty = @import("../kitty/key.zig");
++const kitty_image = @import("../kitty/graphics_image.zig");
+ const kitty_gfx_c = @import("kitty_graphics.zig");
+ const modes = @import("../modes.zig");
+ const point = @import("../point.zig");
+@@ -257,6 +258,7 @@ const Effects = struct {
+     clipboard_write: ?ClipboardWriteFn = null,
+     clipboard_read: ?ClipboardReadFn = null,
+     unknown_sequence: ?UnknownSequenceFn = null,
++    snapshot_file: ?SnapshotFileFn = null,
+
+     /// Scratch buffer for DA1 feature codes. The device attributes
+     /// trampoline converts C feature codes into this buffer and returns
+@@ -265,6 +267,14 @@ const Effects = struct {
+     /// (`reportDeviceAttributes`) reads it before any re-entrant call.
+     da_features_buf: [64]device_attributes.Primary.Feature = undefined,
+
++    pub const SnapshotFileFn = *const fn (Terminal, ?*anyopaque, *const kitty_image.SnapshotFileRequest, *kitty_image.FileBacking) callconv(lib.calling_conv) bool;
++
++    fn snapshotFile(context: ?*anyopaque, request: *const kitty_image.SnapshotFileRequest, out: *kitty_image.FileBacking) bool {
++        const wrapper: *TerminalWrapper = @ptrCast(@alignCast(context.?));
++        const callback = wrapper.effects.snapshot_file orelse return false;
++        return callback(@ptrCast(wrapper), wrapper.effects.userdata, request, out);
++    }
++
+     /// C function pointer type for the write_pty callback.
+     pub const WritePtyFn = *const fn (Terminal, ?*anyopaque, [*]const u8, usize) callconv(lib.calling_conv) void;
+
+@@ -1174,12 +1184,15 @@ pub const Option = enum(c_int) {
+     terminfo_name = 37,
+     clipboard_read = 38,
+     clipboard_write_max_bytes = 39,
++    kitty_image_preserve_png = 40,
++    kitty_image_snapshot_file = 41,
+
+     /// Input type expected for setting the option.
+     pub fn InType(comptime self: Option) type {
+         return switch (self) {
+             .userdata => ?*const anyopaque,
+             .write_pty => ?Effects.WritePtyFn,
++            .kitty_image_snapshot_file => ?Effects.SnapshotFileFn,
+             .bell => ?Effects.BellFn,
+             .color_scheme => ?Effects.ColorSchemeFn,
+             .desktop_notification => ?Effects.DesktopNotificationFn,
+@@ -1197,6 +1210,7 @@ pub const Option = enum(c_int) {
+             .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
+             .color_palette => ?*const color.PaletteC,
+             .kitty_image_storage_limit => ?*const u64,
++            .kitty_image_preserve_png,
+             .kitty_image_medium_file,
+             .kitty_image_medium_shared_mem,
+             .glyph_protocol,
+@@ -1250,6 +1264,17 @@ fn setTyped(
+     switch (option) {
+         .userdata => wrapper.effects.userdata = @constCast(value),
+         .write_pty => wrapper.effects.write_pty = value,
++        .kitty_image_snapshot_file => {
++            if (comptime !build_options.kitty_graphics) return .success;
++            wrapper.effects.snapshot_file = value;
++            var it = wrapper.terminal.screens.all.iterator();
++            while (it.next()) |entry| {
++                entry.value.*.kitty_images.image_limits.snapshot_file = if (value != null)
++                    .{ .context = @ptrCast(wrapper), .callback = &Effects.snapshotFile }
++                else
++                    null;
++            }
++        },
+         .bell => wrapper.effects.bell = value,
+         .color_scheme => wrapper.effects.color_scheme = value,
+         .desktop_notification => wrapper.effects.desktop_notification = value,
+@@ -1330,6 +1355,7 @@ fn setTyped(
+                 screen.kitty_images.setLimit(screen.io, screen.alloc, screen, limit);
+             }
+         },
++        .kitty_image_preserve_png,
+         .kitty_image_medium_file,
+         .kitty_image_medium_shared_mem,
+         => {
+@@ -1339,6 +1365,7 @@ fn setTyped(
+             while (it.next()) |entry| {
+                 const screen = entry.value.*;
+                 switch (option) {
++                    .kitty_image_preserve_png => screen.kitty_images.image_limits.preserve_png = val,
+                     .kitty_image_medium_file => screen.kitty_images.image_limits.file = val,
+                     .kitty_image_medium_shared_mem => screen.kitty_images.image_limits.shared_memory = val,
+                     else => unreachable,
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig b/vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig
+index b1b968b2..203190f1 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig
+@@ -509,6 +509,11 @@ fn transmitAnimationFrame(
+         result.message = "ENOENT: image not found";
+         return result;
+     };
++    storage.materializeBacking(io, alloc, img) catch |err| {
++        encodeError(&result, err);
++        return result;
++    };
++
+     result.id = img.id;
+
+     var loading = LoadingImage.init(
+@@ -773,6 +778,10 @@ fn controlAnimation(
+         result.message = "ENOENT: image not found";
+         return result;
+     };
++    storage.materializeBacking(io, alloc, img) catch |err| {
++        encodeError(&result, err);
++        return result;
++    };
+
+     const anim = ensureAnimation(alloc, img) catch |err| {
+         encodeError(&result, err);
+@@ -857,6 +866,11 @@ fn composeAnimation(
+         result.message = "ENOENT: image not found";
+         return result;
+     };
++    storage.materializeBacking(io, alloc, img) catch |err| {
++        encodeError(&result, err);
++        return result;
++    };
++
+     result.id = img.id;
+     if (img.data.bytes() == null) {
+         result.message = "EINVAL: image data incomplete";
+@@ -1058,7 +1072,10 @@ fn loadAndAddImage(
+     // loading.debugDump() catch unreachable;
+
+     // Validate and store our image
+-    var img = try loading.complete(alloc);
++    var img = if (storage.image_limits.preserve_png)
++        try loading.completePreservingPng(alloc)
++    else
++        try loading.complete(alloc);
+     errdefer img.deinit(alloc);
+     try storage.addImage(io, alloc, terminal.screens.active, img);
+
+@@ -3601,3 +3618,87 @@ test "kittygfx animation: control negative gap makes frame gapless" {
+     const anim = storage.imagePtrByIdOrNumber(1, 0).?.animation.?;
+     try testing.expectEqual(@as(u32, 0), anim.frames.items[0].gap_ms);
+ }
++
++test "kittygfx experimental PNG retention quiet inheritance and transactional materialization" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++    const sys = @import("../sys.zig");
++    const Decoder = struct {
++        var calls: usize = 0;
++        var fail: bool = false;
++        fn decode(a: Allocator, _: []const u8) sys.DecodeError!sys.Image {
++            calls += 1;
++            if (fail) return error.InvalidData;
++            const pixels = try a.alloc(u8, 50 * 76 * 4);
++            @memset(pixels, 0);
++            return .{ .width = 50, .height = 76, .data = pixels };
++        }
++    };
++    const original = sys.decode_png;
++    defer sys.decode_png = original;
++    sys.decode_png = &Decoder.decode;
++    Decoder.calls = 0;
++    Decoder.fail = false;
++    const png = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
++    var t = try Terminal.init(io, alloc, .{ .rows = 5, .cols = 5 });
++    defer t.deinit(alloc);
++    const storage = &t.screens.active.kitty_images;
++    var cmd: Command = .{
++        .quiet = .failures,
++        .control = .{ .transmit = .{ .format = .png, .image_id = 1 } },
++        .data = @constCast(png),
++    };
++    // Default off is the normal decoder path even for q=2.
++    try testing.expect(!storage.image_limits.preserve_png);
++    _ = execute(io, alloc, &t, &cmd);
++    try testing.expectEqual(@as(usize, 1), Decoder.calls);
++    try testing.expect(storage.imageById(1).?.data == .complete);
++    storage.image_limits.preserve_png = true;
++    for ([_]Command.Quiet{ .no, .ok }) |quiet| {
++        cmd.quiet = quiet;
++        _ = execute(io, alloc, &t, &cmd);
++        try testing.expect(storage.imageById(1).?.data == .complete);
++    }
++    try testing.expectEqual(@as(usize, 3), Decoder.calls);
++    cmd.quiet = .failures;
++    cmd.control = .{ .query = .{ .format = .png, .image_id = 2 } };
++    _ = execute(io, alloc, &t, &cmd);
++    try testing.expectEqual(@as(usize, 4), Decoder.calls);
++    try testing.expect(storage.imageById(2) == null);
++    cmd.control = .{ .transmit = .{ .format = .png, .image_id = 1, .more_chunks = true } };
++    cmd.data = @constCast(png[0..33]);
++    _ = execute(io, alloc, &t, &cmd);
++    cmd.quiet = .no;
++    cmd.control = .{ .transmit = .{} };
++    cmd.data = @constCast(png[33..]);
++    _ = execute(io, alloc, &t, &cmd);
++    try testing.expectEqual(@as(usize, 4), Decoder.calls);
++    const img = storage.imagePtrByIdOrNumber(1, 0).?;
++    try testing.expectEqualSlices(u8, png, img.data.encoded_png.bytes);
++    try testing.expect(img.data.bytes() == null);
++    try testing.expectEqual(png.len + 50 * 76 * 4, storage.total_bytes);
++    const generation = img.generation;
++    Decoder.fail = true;
++    const animate: Command = .{ .control = .{ .control_animation = .{ .image_id = 1 } } };
++    _ = execute(io, alloc, &t, &animate);
++    try testing.expectEqual(generation, img.generation);
++    try testing.expect(img.data == .encoded_png);
++    try testing.expectEqual(png.len + 50 * 76 * 4, storage.total_bytes);
++    Decoder.fail = false;
++    _ = execute(io, alloc, &t, &animate);
++    try testing.expect(img.generation > generation);
++    try testing.expect(img.data == .complete);
++    try testing.expectEqual(@as(usize, 50 * 76 * 4), storage.total_bytes);
++
++    // The reservation includes both the encoded and decoded representation.
++    storage.setLimit(io, alloc, t.screens.active, 50 * 76 * 4);
++    cmd.quiet = .failures;
++    cmd.control = .{ .transmit = .{ .format = .png, .image_id = 3 } };
++    cmd.data = @constCast(png);
++    const calls = Decoder.calls;
++    _ = execute(io, alloc, &t, &cmd);
++    try testing.expectEqual(calls, Decoder.calls);
++    try testing.expect(storage.imageById(3) == null);
++    try testing.expect(storage.loading == null);
++}
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig b/vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig
+index e411bafe..c841c48d 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig
+@@ -21,6 +21,24 @@ const max_dimension = 10000;
+ /// Maximum size in bytes, taken from Kitty.
+ const max_size = 400 * 1024 * 1024; // 400MB
+
++/// Host-owned immutable raw RGBA snapshot. A successful callback transfers one reference.
++pub const FileBacking = extern struct {
++    context: ?*anyopaque,
++    identity: u64,
++    len: usize,
++    read: ?*const fn (?*anyopaque, [*]u8, usize) callconv(.c) bool,
++    release: ?*const fn (?*anyopaque) callconv(.c) void,
++};
++pub const SnapshotFileRequest = extern struct {
++    size: usize = @sizeOf(SnapshotFileRequest),
++    fd: i64,
++    expected_len: u64,
++};
++pub const SnapshotFileHook = struct {
++    context: ?*anyopaque,
++    callback: *const fn (?*anyopaque, *const SnapshotFileRequest, *FileBacking) bool,
++};
++
+ /// An image that is still being loaded. The image should be initialized
+ /// using init on the first chunk and then addData for each subsequent
+ /// chunk. Once all chunks have been added, complete should be called
+@@ -29,6 +47,7 @@ pub const LoadingImage = struct {
+     /// The in-progress image. The first chunk must have all the metadata
+     /// so this comes from that initially.
+     image: Image,
++    snapshot_file: ?SnapshotFileHook = null,
+
+     /// The data that is being built up.
+     data: std.ArrayListUnmanaged(u8) = .empty,
+@@ -85,6 +104,8 @@ pub const LoadingImage = struct {
+             disabled: void,
+         },
+         shared_memory: bool,
++        preserve_png: bool = false,
++        snapshot_file: ?SnapshotFileHook = null,
+
+         /// Enables all filesystem-related image transmission mediums. `path`
+         /// is the temporary directory to expect files in when files are
+@@ -132,6 +153,10 @@ pub const LoadingImage = struct {
+                 .metadata = .{ .transient = t.usage.transient },
+             },
+
++            .snapshot_file = if (cmd.control == .transmit or cmd.control == .transmit_and_display)
++                limits.snapshot_file
++            else
++                null,
+             .display = cmd.display(),
+             .quiet = cmd.quiet,
+             .response = .{
+@@ -427,6 +452,16 @@ pub const LoadingImage = struct {
+             return error.InvalidData;
+         }
+
++        // Only whole, uncompressed base RGBA files qualify. The host must
++        // verify the descriptor size and create an immutable private snapshot.
++        if (comptime builtin.os.tag != .windows and builtin.os.tag != .wasi and builtin.os.tag != .freestanding) {
++            if (self.snapshot_file) |hook| {
++                if (nativeFileExpectedLen(t)) |expected| {
++                    if (try self.trySnapshotFile(hook, .{ .fd = @intCast(file.handle), .expected_len = expected })) return;
++                }
++            }
++        }
++
+         var buf: [4096]u8 = undefined;
+         var buf_reader = file.reader(io, &buf);
+         if (t.offset > 0) {
+@@ -468,6 +503,32 @@ pub const LoadingImage = struct {
+         self.data = .{ .items = managed.items, .capacity = managed.capacity };
+     }
+
++    /// Accept only complete callback records. A malformed success falls back
++    /// to the ordinary reader, releasing the transferred reference if possible.
++    fn trySnapshotFile(self: *LoadingImage, hook: SnapshotFileHook, request: SnapshotFileRequest) !bool {
++        var backing: FileBacking = .{ .context = null, .identity = 0, .len = 0, .read = null, .release = null };
++        if (!hook.callback(hook.context, &request, &backing)) return false;
++        if (backing.read == null or backing.release == null) {
++            if (backing.release) |release| release(backing.context);
++            return false;
++        }
++        if (backing.len != request.expected_len) {
++            backing.release.?(backing.context);
++            return error.InvalidData;
++        }
++        self.image.data = .{ .native_file = backing };
++        return true;
++    }
++
++    fn nativeFileExpectedLen(t: command.Transmission) ?usize {
++        if (t.medium != .file or t.format != .rgba or t.compression != .none or
++            t.more_chunks or t.offset != 0 or t.width == 0 or t.height == 0 or
++            t.width > max_dimension or t.height > max_dimension) return null;
++        const len = @as(usize, t.width) * @as(usize, t.height) * 4;
++        if (len > 16 * 1024 * 1024 or (t.size != 0 and t.size != len)) return null;
++        return len;
++    }
++
+     /// Returns the canonical path of an open file after applying the file
+     /// transmission blocklist.
+     fn validatedFilePath(io: std.Io, file: std.Io.File, buf: []u8) ![]const u8 {
+@@ -569,7 +630,7 @@ pub const LoadingImage = struct {
+         // Data length must be what we expect.
+         const bpp = command.Transmission.formatBpp(img.format);
+         const expected_len = img.width * img.height * bpp;
+-        const actual_len = self.data.items.len;
++        const actual_len = if (img.data == .native_file) img.data.native_file.len else self.data.items.len;
+         if (self.frame != null) {
+             // Kitty allows animation frames to exceed their expected length
+             // and just truncates it. Not sure if thats expected but lets
+@@ -592,12 +653,37 @@ pub const LoadingImage = struct {
+
+         // Everything looks good, copy the image data over.
+         var result = self.image;
+-        result.data = .{ .complete = try self.data.toOwnedSlice(alloc) };
++        if (result.data != .native_file) result.data = .{ .complete = try self.data.toOwnedSlice(alloc) };
+         errdefer result.deinit(alloc);
+         self.image = .{};
+         return result;
+     }
+
++    /// Experimental forwarding path: only invoked for assembled quiet base
++    /// transmissions. Never used by queries or animation frame loading.
++    pub fn completePreservingPng(self: *LoadingImage, alloc: Allocator) !Image {
++        if (self.image.format != .png or self.image.compression != .none or
++            self.quiet != .failures or self.frame != null) return self.complete(alloc);
++        const header = inspectPng(self.data.items) catch |err| switch (err) {
++            // Do not expand the deferred-corruption contract to metadata we
++            // have not validated. Such PNGs keep the normal decoder semantics.
++            error.UnsupportedPngRetention => return self.complete(alloc),
++            error.InvalidData => return error.InvalidData,
++            error.DimensionsRequired => return error.DimensionsRequired,
++            error.DimensionsTooLarge => return error.DimensionsTooLarge,
++        };
++        var result = self.image;
++        result.width = header.width;
++        result.height = header.height;
++        result.format = .rgba;
++        result.data = .{ .encoded_png = .{
++            .bytes = try self.data.toOwnedSlice(alloc),
++            .decoded_len = header.decoded_len,
++        } };
++        self.image = .{};
++        return result;
++    }
++
+     /// Debug function to write the data to a file. This is useful for
+     /// capturing some test data for unit tests.
+     pub fn debugDump(io: std.Io, self: LoadingImage) !void {
+@@ -768,11 +854,16 @@ pub const Image = struct {
+         /// Expected decoded byte length for a payload that has not arrived.
+         pending: usize,
+
++        encoded_png: struct { bytes: []const u8, decoded_len: usize },
++        native_file: FileBacking,
++
+         /// Bytes reserved against the storage limit.
+         pub fn len(self: Data) usize {
+             return switch (self) {
+                 .complete => |data| data.len,
+                 .pending => |expected_len| expected_len,
++                .native_file => |file| file.len,
++                .encoded_png => |png| png.bytes.len + png.decoded_len,
+             };
+         }
+
+@@ -780,7 +871,7 @@ pub const Image = struct {
+         pub fn bytes(self: Data) ?[]const u8 {
+             return switch (self) {
+                 .complete => |data| data,
+-                .pending => null,
++                .pending, .encoded_png, .native_file => null,
+             };
+         }
+
+@@ -792,10 +883,43 @@ pub const Image = struct {
+             switch (self.*) {
+                 .complete => |data| if (data.len > 0) alloc.free(data),
+                 .pending => {},
++                .encoded_png => |png| alloc.free(png.bytes),
++                .native_file => |file| if (file.release) |release| release(file.context),
+             }
+         }
+     };
+
++    /// Transactional: a failed host read leaves the authoritative backing owned.
++    pub fn materializeFile(self: *Image, alloc: Allocator) !void {
++        const file = switch (self.data) {
++            .native_file => |file| file,
++            else => return,
++        };
++        const read = file.read orelse return error.InvalidData;
++        const release = file.release orelse return error.InvalidData;
++        const bytes = try alloc.alloc(u8, file.len);
++        errdefer alloc.free(bytes);
++        if (!read(file.context, bytes.ptr, bytes.len)) return error.InvalidData;
++        self.data = .{ .complete = bytes };
++        release(file.context);
++    }
++
++    /// Transactional: neither ownership nor metadata changes on failure.
++    pub fn materializePng(self: *Image, alloc: Allocator) !void {
++        const png = switch (self.data) {
++            .encoded_png => |png| png,
++            else => return,
++        };
++        const decode = sys.decode_png orelse return error.UnsupportedFormat;
++        var limited: LimitedAllocator = .init(alloc, max_size);
++        const result = try decode(limited.allocator(), png.bytes);
++        errdefer alloc.free(result.data);
++        if (result.width != self.width or result.height != self.height or
++            result.data.len != png.decoded_len) return error.InvalidData;
++        alloc.free(png.bytes);
++        self.data = .{ .complete = result.data };
++    }
++
+     pub fn deinit(self: *Image, alloc: Allocator) void {
+         self.data.deinit(alloc);
+         if (self.animation) |anim| {
+@@ -2159,3 +2283,404 @@ test "limits: temporary file medium allowed by limits" {
+     );
+     defer loading.deinit(alloc);
+ }
++
++const PngHeader = struct { width: u32, height: u32, decoded_len: usize };
++
++/// Bounded structural validation, deliberately without inflating IDAT.
++/// CRC-valid but corrupt compressed pixels can fail later in this experiment.
++fn inspectPng(bytes: []const u8) !PngHeader {
++    if (bytes.len > max_size or bytes.len < 33 or
++        !std.mem.eql(u8, bytes[0..8], "\x89PNG\r\n\x1a\n")) return error.InvalidData;
++    var offset: usize = 8;
++    var header: ?PngHeader = null;
++    var idat = false;
++    var ended_idat = false;
++    var palette = false;
++    var indexed = false;
++    var color_type: u8 = 0;
++    var bit_depth: u8 = 0;
++    var palette_entries: usize = 0;
++    var transparency = false;
++    while (offset < bytes.len) {
++        if (bytes.len - offset < 12) return error.InvalidData;
++        const len: usize = std.mem.readInt(u32, bytes[offset..][0..4], .big);
++        if (len > bytes.len - offset - 12) return error.InvalidData;
++        const kind = bytes[offset + 4 ..][0..4];
++        for (kind) |ch| if (!std.ascii.isAlphabetic(ch)) return error.InvalidData;
++        if (kind[2] & 0x20 != 0) return error.InvalidData;
++        const body = bytes[offset + 8 ..][0..len];
++        const crc = std.mem.readInt(u32, bytes[offset + 8 + len ..][0..4], .big);
++        if (std.hash.crc.Crc32IsoHdlc.hash(bytes[offset + 4 ..][0 .. len + 4]) != crc)
++            return error.InvalidData;
++        offset += len + 12;
++        if (std.mem.eql(u8, kind, "IHDR")) {
++            if (header != null or len != 13) return error.InvalidData;
++            const width = std.mem.readInt(u32, body[0..4], .big);
++            const height = std.mem.readInt(u32, body[4..8], .big);
++            if (width == 0 or height == 0) return error.DimensionsRequired;
++            if (width > max_dimension or height > max_dimension) return error.DimensionsTooLarge;
++            const depth = body[8];
++            const supported = switch (body[9]) {
++                0 => depth == 1 or depth == 2 or depth == 4 or depth == 8 or depth == 16,
++                2, 4, 6 => depth == 8 or depth == 16,
++                3 => depth == 1 or depth == 2 or depth == 4 or depth == 8,
++                else => false,
++            };
++            if (!supported or body[10] != 0 or body[11] != 0 or body[12] > 1)
++                return error.InvalidData;
++            color_type = body[9];
++            bit_depth = depth;
++            indexed = color_type == 3;
++            const pixels = std.math.mul(usize, width, height) catch return error.InvalidData;
++            const decoded_len = std.math.mul(usize, pixels, 4) catch return error.InvalidData;
++            if (decoded_len > max_size) return error.InvalidData;
++            header = .{ .width = width, .height = height, .decoded_len = decoded_len };
++        } else {
++            if (header == null) return error.InvalidData;
++            if (std.mem.eql(u8, kind, "IDAT")) {
++                if (ended_idat or (indexed and !palette)) return error.InvalidData;
++                idat = true;
++            } else {
++                if (idat) ended_idat = true;
++                if (std.mem.eql(u8, kind, "IEND")) {
++                    if (!idat or len != 0 or offset != bytes.len) return error.InvalidData;
++                    return header.?;
++                } else if (std.mem.eql(u8, kind, "PLTE")) {
++                    if (palette or idat or transparency or len == 0 or len > 768 or len % 3 != 0 or
++                        color_type == 0 or color_type == 4) return error.InvalidData;
++                    palette_entries = len / 3;
++                    if (indexed and palette_entries > (@as(usize, 1) << @intCast(bit_depth)))
++                        return error.InvalidData;
++                    palette = true;
++                } else if (std.mem.eql(u8, kind, "tRNS")) {
++                    if (transparency or idat) return error.InvalidData;
++                    switch (color_type) {
++                        0, 2 => {
++                            const expected: usize = if (color_type == 0) 2 else 6;
++                            if (len != expected) return error.InvalidData;
++                            const max_sample: u32 = (@as(u32, 1) << @intCast(bit_depth)) - 1;
++                            var i: usize = 0;
++                            while (i < len) : (i += 2) {
++                                if (std.mem.readInt(u16, body[i..][0..2], .big) > max_sample)
++                                    return error.InvalidData;
++                            }
++                        },
++                        3 => if (!palette or len == 0 or len > palette_entries)
++                            return error.InvalidData,
++                        // Alpha-bearing color types must not carry tRNS.
++                        else => return error.InvalidData,
++                    }
++                    transparency = true;
++                } else if (kind[0] & 0x20 == 0) {
++                    return error.InvalidData;
++                } else {
++                    // sBIT, bKGD, color profiles, APNG, text, and any other
++                    // ancillary extensions are deliberately not eligible.
++                    // The strict decoder handles their validity/semantics.
++                    return error.UnsupportedPngRetention;
++                }
++            }
++        }
++    }
++    return error.InvalidData;
++}
++
++test "experimental PNG inspection validates CRC and complete structure" {
++    const testing = std.testing;
++    const original = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
++    const header = try inspectPng(original);
++    try testing.expectEqual(@as(u32, 50), header.width);
++    try testing.expectEqual(@as(u32, 76), header.height);
++    try testing.expectEqual(@as(usize, 50 * 76 * 4), header.decoded_len);
++    try testing.expectError(error.InvalidData, inspectPng(original[0 .. original.len - 1]));
++    var corrupt = original.*;
++    corrupt[29] ^= 1; // IHDR CRC
++    try testing.expectError(error.InvalidData, inspectPng(&corrupt));
++    corrupt = original.*;
++    corrupt[0] = 0;
++    try testing.expectError(error.InvalidData, inspectPng(&corrupt));
++}
++
++test "experimental PNG inspection transparency and palette metadata" {
++    const testing = std.testing;
++    const Chunk = struct { kind: *const [4]u8, body: []const u8 };
++    const Helper = struct {
++        fn append(out: *std.ArrayList(u8), kind: *const [4]u8, body: []const u8) !void {
++            var word: [4]u8 = undefined;
++            std.mem.writeInt(u32, &word, @intCast(body.len), .big);
++            try out.appendSlice(testing.allocator, &word);
++            const crc_start = out.items.len;
++            try out.appendSlice(testing.allocator, kind);
++            try out.appendSlice(testing.allocator, body);
++            std.mem.writeInt(u32, &word, std.hash.crc.Crc32IsoHdlc.hash(out.items[crc_start..]), .big);
++            try out.appendSlice(testing.allocator, &word);
++        }
++        fn make(color: u8, depth: u8, chunks: []const Chunk) ![]u8 {
++            var out: std.ArrayList(u8) = .empty;
++            errdefer out.deinit(testing.allocator);
++            try out.appendSlice(testing.allocator, "\x89PNG\r\n\x1a\n");
++            const ihdr = [_]u8{ 0, 0, 0, 1, 0, 0, 0, 1, depth, color, 0, 0, 0 };
++            try append(&out, "IHDR", &ihdr);
++            for (chunks) |chunk| try append(&out, chunk.kind, chunk.body);
++            try append(&out, "IEND", "");
++            return out.toOwnedSlice(testing.allocator);
++        }
++        fn check(color: u8, depth: u8, chunks: []const Chunk, expected: ?anyerror) !void {
++            const png = try make(color, depth, chunks);
++            defer testing.allocator.free(png);
++            if (expected) |err| {
++                try testing.expectError(err, inspectPng(png));
++            } else {
++                _ = try inspectPng(png);
++            }
++        }
++    };
++    // IDAT is intentionally opaque; this test only exercises structure.
++    const idat: Chunk = .{ .kind = "IDAT", .body = "" };
++    const palette: Chunk = .{ .kind = "PLTE", .body = &.{ 0, 0, 0, 255, 255, 255 } };
++    const alpha: Chunk = .{ .kind = "tRNS", .body = &.{128} };
++    const gray: Chunk = .{ .kind = "tRNS", .body = &.{ 0, 1 } };
++    const rgb: Chunk = .{ .kind = "tRNS", .body = &.{ 0, 1, 0, 2, 0, 3 } };
++    try Helper.check(3, 1, &.{ palette, alpha, idat }, null);
++    try Helper.check(0, 1, &.{ gray, idat }, null);
++    try Helper.check(2, 8, &.{ rgb, idat }, null);
++    try Helper.check(2, 8, &.{ palette, rgb, idat }, null);
++    try Helper.check(3, 1, &.{ alpha, palette, idat }, error.InvalidData);
++    try Helper.check(3, 1, &.{ palette, idat, alpha }, error.InvalidData);
++    try Helper.check(3, 1, &.{ palette, alpha, alpha, idat }, error.InvalidData);
++    try Helper.check(0, 8, &.{ alpha, idat }, error.InvalidData);
++    try Helper.check(2, 8, &.{ gray, idat }, error.InvalidData);
++    try Helper.check(4, 8, &.{ gray, idat }, error.InvalidData);
++    try Helper.check(6, 8, &.{ rgb, idat }, error.InvalidData);
++    try Helper.check(0, 8, &.{ palette, idat }, error.InvalidData);
++    try Helper.check(4, 8, &.{ palette, idat }, error.InvalidData);
++    try Helper.check(2, 8, &.{ rgb, palette, idat }, error.InvalidData);
++    try Helper.check(3, 1, &.{ palette, .{ .kind = "tRNS", .body = "" }, idat }, error.InvalidData);
++    try Helper.check(3, 1, &.{ palette, .{ .kind = "tRNS", .body = &.{ 1, 2, 3 } }, idat }, error.InvalidData);
++    try Helper.check(3, 1, &.{ .{ .kind = "PLTE", .body = &.{ 0, 0, 0, 1, 1, 1, 2, 2, 2 } }, idat }, error.InvalidData);
++    try Helper.check(0, 1, &.{ .{ .kind = "tRNS", .body = &.{ 0, 2 } }, idat }, error.InvalidData);
++    try Helper.check(2, 8, &.{ .{ .kind = "tRNS", .body = &.{ 1, 0, 0, 0, 0, 0 } }, idat }, error.InvalidData);
++    try Helper.check(0, 16, &.{ .{ .kind = "tRNS", .body = &.{ 255, 255 } }, idat }, null);
++    for ([_]*const [4]u8{ "sBIT", "bKGD", "iCCP", "gAMA" }) |kind| {
++        try Helper.check(2, 8, &.{ .{ .kind = kind, .body = "" }, idat }, error.UnsupportedPngRetention);
++    }
++}
++
++test "experimental PNG unsupported metadata falls back to strict decoding" {
++    const testing = std.testing;
++    const Decoder = struct {
++        var calls: usize = 0;
++        fn decode(_: Allocator, _: []const u8) sys.DecodeError!sys.Image {
++            calls += 1;
++            return error.InvalidData;
++        }
++    };
++    const original_decoder = sys.decode_png;
++    defer sys.decode_png = original_decoder;
++    sys.decode_png = &Decoder.decode;
++    Decoder.calls = 0;
++    const png = @embedFile("testdata/image-png-none-50x76-2147483647-raw.data");
++    var loading: LoadingImage = .{
++        .image = .{ .format = .png },
++        .quiet = .failures,
++        .temporary_directory = null,
++    };
++    defer loading.deinit(testing.allocator);
++    try loading.addData(testing.allocator, png[0..33]);
++    // CRC-valid ancillary chunk: inspection must delegate, not retain or
++    // return UnsupportedPngRetention to the caller.
++    var chunk = [_]u8{ 0, 0, 0, 1, 's', 'B', 'I', 'T', 8, 0, 0, 0, 0 };
++    std.mem.writeInt(u32, chunk[9..13], std.hash.crc.Crc32IsoHdlc.hash(chunk[4..9]), .big);
++    try loading.addData(testing.allocator, &chunk);
++    try loading.addData(testing.allocator, png[33..]);
++    try testing.expectError(error.InvalidData, loading.completePreservingPng(testing.allocator));
++    try testing.expectEqual(@as(usize, 1), Decoder.calls);
++}
++
++test "native file completion and transactional lazy materialization" {
++    const testing = std.testing;
++    const Fake = struct {
++        reads: usize = 0,
++        releases: usize = 0,
++        fail: bool = false,
++        fn read(ctx: ?*anyopaque, dest: [*]u8, len: usize) callconv(.c) bool {
++            const self: *@This() = @ptrCast(@alignCast(ctx.?));
++            self.reads += 1;
++            if (self.fail) return false;
++            @memset(dest[0..len], 123);
++            return true;
++        }
++        fn release(ctx: ?*anyopaque) callconv(.c) void {
++            const self: *@This() = @ptrCast(@alignCast(ctx.?));
++            self.releases += 1;
++        }
++        fn backing(self: *@This(), len: usize) FileBacking {
++            return .{ .context = self, .identity = 7, .len = len, .read = read, .release = release };
++        }
++    };
++    var fake: Fake = .{};
++    var loading: LoadingImage = .{
++        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(4) } },
++        .quiet = .no,
++        .temporary_directory = null,
++    };
++    defer loading.deinit(testing.allocator);
++    var img = try loading.complete(testing.allocator);
++    defer img.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 0), fake.reads);
++    try testing.expectEqual(@as(usize, 4), img.data.len());
++    try testing.expect(!img.data.isPending());
++    try testing.expect(img.data.bytes() == null);
++    fake.fail = true;
++    try testing.expectError(error.InvalidData, img.materializeFile(testing.allocator));
++    try testing.expect(img.data == .native_file);
++    try testing.expectEqual(@as(usize, 0), fake.releases);
++    fake.fail = false;
++    try img.materializeFile(testing.allocator);
++    try testing.expectEqual(@as(usize, 1), fake.releases);
++    try testing.expectEqualSlices(u8, &.{ 123, 123, 123, 123 }, img.data.bytes().?);
++
++    var invalid: LoadingImage = .{
++        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(3) } },
++        .quiet = .no,
++        .temporary_directory = null,
++    };
++    try testing.expectError(error.InvalidData, invalid.complete(testing.allocator));
++    invalid.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 2), fake.releases);
++    // q=1 also validates length without reading pixels.
++    var quiet_one: LoadingImage = .{
++        .image = .{ .width = 1, .height = 1, .format = .rgba, .data = .{ .native_file = fake.backing(4) } },
++        .quiet = .ok,
++        .temporary_directory = null,
++    };
++    const reads_before = fake.reads;
++    var quiet_img = try quiet_one.complete(testing.allocator);
++    quiet_one.deinit(testing.allocator);
++    try testing.expectEqual(reads_before, fake.reads);
++    quiet_img.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 3), fake.releases);
++    var canceled: LoadingImage = .{
++        .image = .{ .data = .{ .native_file = fake.backing(4) } },
++        .quiet = .failures,
++        .temporary_directory = null,
++    };
++    canceled.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 4), fake.releases);
++}
++
++test "native file eligibility is whole raw RGBA only" {
++    const testing = std.testing;
++    var t: command.Transmission = .{ .medium = .file, .format = .rgba, .width = 1, .height = 2 };
++    try testing.expectEqual(@as(?usize, 8), LoadingImage.nativeFileExpectedLen(t));
++    t.size = 8;
++    try testing.expectEqual(@as(?usize, 8), LoadingImage.nativeFileExpectedLen(t));
++    t.size = 7;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.size = 0;
++    t.more_chunks = true;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.more_chunks = false;
++    t.offset = 1;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.offset = 0;
++    t.format = .rgb;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.format = .png;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.format = .rgba;
++    t.medium = .temporary_file;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.medium = .shared_memory;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.medium = .file;
++    t.compression = .zlib_deflate;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.compression = .none;
++    t.width = 0;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.width = 10001;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++    t.width = 10000;
++    t.height = 10000;
++    try testing.expect(LoadingImage.nativeFileExpectedLen(t) == null);
++}
++
++test "native file snapshot rejects missing callbacks before retaining" {
++    const testing = std.testing;
++    const Fake = struct {
++        reads: usize = 0,
++        releases: usize = 0,
++        missing_read: bool = true,
++        missing_release: bool = false,
++
++        fn read(ctx: ?*anyopaque, dest: [*]u8, len: usize) callconv(.c) bool {
++            const self: *@This() = @ptrCast(@alignCast(ctx.?));
++            self.reads += 1;
++            @memset(dest[0..len], 42);
++            return true;
++        }
++
++        fn release(ctx: ?*anyopaque) callconv(.c) void {
++            const self: *@This() = @ptrCast(@alignCast(ctx.?));
++            self.releases += 1;
++        }
++
++        fn snapshot(ctx: ?*anyopaque, request: *const SnapshotFileRequest, out: *FileBacking) bool {
++            const self: *@This() = @ptrCast(@alignCast(ctx.?));
++            out.* = .{
++                .context = ctx,
++                .identity = 1,
++                .len = @intCast(request.expected_len),
++                .read = if (self.missing_read) null else &read,
++                .release = if (self.missing_release) null else &release,
++            };
++            return true;
++        }
++    };
++    var fake: Fake = .{};
++    const hook: SnapshotFileHook = .{ .context = &fake, .callback = &Fake.snapshot };
++    const request: SnapshotFileRequest = .{ .fd = -1, .expected_len = 4 };
++    var loading: LoadingImage = .{
++        .image = .{ .width = 1, .height = 1, .format = .rgba },
++        .quiet = .no,
++        .temporary_directory = null,
++    };
++    // Missing read: transferred context is immediately released, not stored.
++    try testing.expect(!try loading.trySnapshotFile(hook, request));
++    try testing.expect(loading.image.data != .native_file);
++    try testing.expectEqual(@as(usize, 1), fake.releases);
++
++    // Missing release (or both): reject without calling a null pointer.
++    fake.missing_read = false;
++    fake.missing_release = true;
++    try testing.expect(!try loading.trySnapshotFile(hook, request));
++    try testing.expect(loading.image.data != .native_file);
++    fake.missing_read = true;
++    try testing.expect(!try loading.trySnapshotFile(hook, request));
++    try testing.expect(loading.image.data != .native_file);
++    try testing.expectEqual(@as(usize, 0), fake.reads);
++    try testing.expectEqual(@as(usize, 1), fake.releases);
++
++    // The ordinary reader can still supply bytes after rejection.
++    try loading.addData(testing.allocator, &.{ 1, 2, 3, 4 });
++    var img = try loading.complete(testing.allocator);
++    loading.deinit(testing.allocator);
++    try testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4 }, img.data.bytes().?);
++    img.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 1), fake.releases);
++
++    // Valid callback ownership is unchanged: zero-read acceptance, one release.
++    fake.missing_read = false;
++    fake.missing_release = false;
++    var accepted: LoadingImage = .{
++        .image = .{ .width = 1, .height = 1, .format = .rgba },
++        .quiet = .no,
++        .temporary_directory = null,
++    };
++    try testing.expect(try accepted.trySnapshotFile(hook, request));
++    try testing.expect(accepted.image.data == .native_file);
++    try testing.expectEqual(@as(usize, 0), fake.reads);
++    accepted.deinit(testing.allocator);
++    try testing.expectEqual(@as(usize, 2), fake.releases);
++}
+diff --git a/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig b/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
+index 897c8944..bd8cd424 100644
+--- a/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
++++ b/vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig
+@@ -154,7 +154,7 @@ pub const ImageStorage = struct {
+             if (img.generation != self.generation) return false;
+
+             const expected_len = switch (img.data) {
+-                .complete => return false,
++                .complete, .encoded_png, .native_file => return false,
+                 .pending => |len| len,
+             };
+             if (data.len != expected_len) return false;
+@@ -975,6 +975,15 @@ pub const ImageStorage = struct {
+         img.generation = self.generation;
+     }
+
++    pub fn materializeBacking(self: *ImageStorage, io: std.Io, alloc: Allocator, img: *Image) !void {
++        if (img.data != .encoded_png and img.data != .native_file) return;
++        const before = img.data.len();
++        try img.materializeFile(alloc);
++        try img.materializePng(alloc);
++        self.total_bytes -= before - img.data.len();
++        self.markImageContentChanged(io, img);
++    }
++
+     /// Convert a stored image's base data to RGBA in place, adjusting
+     /// byte accounting. All animation composition happens in RGBA;
+     /// this is called before the first composition into an image.
