@@ -348,9 +348,11 @@ impl ClientState {
         };
         crate::render_prof::duration_since("client_surface_patch.encode", encode_started);
         let write_started = crate::render_prof::timer();
-        let mut stdout = io::stdout();
-        stdout.write_all(&encoded.bytes)?;
-        stdout.flush()?;
+        if !encoded.bytes.is_empty() {
+            let mut stdout = io::stdout();
+            stdout.write_all(&encoded.bytes)?;
+            stdout.flush()?;
+        }
         crate::render_prof::duration_since("client_surface_patch.write", write_started);
         let committed = self.blit_encoder.commit_patch(&rows, patch.cursor, encoded);
         crate::render_prof::event(if committed {
