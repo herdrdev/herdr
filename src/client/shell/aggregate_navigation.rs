@@ -288,7 +288,14 @@ pub(super) fn navigator_rows(
         Some(ClientNavigatorFilter::Done) => status == crate::api::schema::AgentStatus::Done,
         None => true,
     };
-    let text = |value: &str| query.is_empty() || value.to_lowercase().contains(&query);
+    let words = query.split_whitespace().collect::<Vec<_>>();
+    let text = |value: &str| {
+        if words.is_empty() {
+            return true;
+        }
+        let value = value.to_lowercase();
+        words.iter().all(|word| value.contains(word))
+    };
     let filtering = navigator.filter.is_some() || !query.is_empty();
     let federated = endpoints.len() > 1;
     let depth_offset = u8::from(federated);
