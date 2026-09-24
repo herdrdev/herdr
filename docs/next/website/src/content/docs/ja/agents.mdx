@@ -89,6 +89,14 @@ herdr agent explain --file screen.txt --agent codex --json
 
 Herdr は外側のターミナル環境として tmux の中で動かせます。エージェント検出は、Herdr のペイン内で起動された tmux セッションの中までは調べません。シェルフレームワークが Herdr 内で自動的に tmux に入る場合、Herdr はペインのプロセスとして背後のエージェントではなく `tmux` を見ることになります。
 
+`TMUX` が未設定のときにシェルが自動的に tmux に接続する場合、シェルの起動条件を更新して Herdr のペインを除外してください。Herdr のペイン内から外側の tmux セッションに再接続すると、ターミナルのサイズが再帰的に縮小し、画面がちらつくことがあります。既存の条件に、tmux を実行する前に `HERDR_ENV` の確認を追加します:
+
+```zsh
+if [[ -z ${TMUX:-} && ${HERDR_ENV:-} != 1 ]]; then
+  tmux new-session -A -s my-session
+fi
+```
+
 ## 状態のロールアップ
 
 サイドバーは状態を上位へ集約します。

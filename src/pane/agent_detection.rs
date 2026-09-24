@@ -89,7 +89,9 @@ pub(super) struct IdleScreenScanSkipInput {
 }
 
 pub(super) fn should_skip_idle_screen_scan(input: IdleScreenScanSkipInput) -> bool {
-    if input.state != AgentState::Idle
+    let stable_state = input.state == AgentState::Idle
+        || (input.state == AgentState::Unknown && input.agent == Some(Agent::Codex));
+    if !stable_state
         || input.agent.is_none()
         || input.pending_idle_active
         || input.agent_changed
@@ -316,6 +318,23 @@ pub(super) fn detection_update_for_publish_with_osc(
     (!detection.skip_state_update).then_some(detection)
 }
 
+pub(super) fn codex_prompt_ready(content: &str) -> bool {
+    // The composer can remain visible during a turn; this is startup evidence only.
+    let recent: String = content
+        .lines()
+        .rev()
+        .take(12)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .flat_map(str::chars)
+        .filter(|ch| !ch.is_whitespace())
+        .collect();
+    recent.contains("›AskCodextodoanything")
+        && !recent.contains("model:loading")
+        && !recent.contains("Resumingsession")
+}
+
 pub(super) fn observe_detection_content_change(bytes: &[u8], detection_content_seq: &AtomicU64) {
     if !bytes.is_empty() {
         detection_content_seq.fetch_add(1, Ordering::Relaxed);
@@ -380,10 +399,43 @@ mod tests {
     }
 
     #[test]
+    fn codex_startup_prompt_survives_terminal_wraps() {
+        let wrapped = "header\n› Ask Codex to do\nanything\nfooter";
+        assert!(codex_prompt_ready(wrapped));
+        assert!(!codex_prompt_ready(&format!("model: load\ning\n{wrapped}")));
+    }
+
+    #[test]
     fn screen_read_skips_unchanged_idle_bottom_buffer() {
         assert_eq!(
             decide_detection_screen_read(screen_read_input(AgentState::Idle, 10)),
             DetectionScreenReadDecision::Skip
+        );
+    }
+
+    #[test]
+    fn screen_read_skips_unchanged_ambiguous_codex_but_not_new_content_or_replacement() {
+        let mut input = screen_read_input(AgentState::Unknown, 10);
+        assert_eq!(
+            decide_detection_screen_read(input),
+            DetectionScreenReadDecision::Skip
+        );
+        input.current_detection_content_seq = Some(11);
+        assert_eq!(
+            decide_detection_screen_read(input),
+            DetectionScreenReadDecision::Read
+        );
+        input.current_detection_content_seq = Some(10);
+        input.agent_changed = true;
+        assert_eq!(
+            decide_detection_screen_read(input),
+            DetectionScreenReadDecision::Read
+        );
+        input.agent_changed = false;
+        input.agent = Some(Agent::Pi);
+        assert_eq!(
+            decide_detection_screen_read(input),
+            DetectionScreenReadDecision::Read
         );
     }
 

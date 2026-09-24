@@ -64,13 +64,6 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::PaneFocus(_)
             | Method::PaneInputSet(_)
             | Method::PaneRename(_)
-            | Method::PaneGraphicsSet(_)
-            | Method::PaneGraphicsClear(_)
-            | Method::PaneGraphicsStream(_)
-            | Method::PaneGraphicsStreamSet(_)
-            | Method::PaneGraphicsStreamDirect(_)
-            | Method::PaneGraphicsStreamOpen(_)
-            | Method::PaneGraphicsStreamClose(_)
             | Method::PaneReportAgent(_)
             | Method::PaneReportAgentSession(_)
             | Method::PaneReportMetadata(_)
@@ -91,7 +84,6 @@ pub struct ApiRequestMessage {
     pub request: Request,
     pub respond_to: std::sync::mpsc::Sender<String>,
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
-    pub stream_active: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;

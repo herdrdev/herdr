@@ -154,7 +154,7 @@ pub const ImageStorage = struct {
             if (img.generation != self.generation) return false;
 
             const expected_len = switch (img.data) {
-                .complete => return false,
+                .complete, .encoded_png, .native_file => return false,
                 .pending => |len| len,
             };
             if (data.len != expected_len) return false;
@@ -973,6 +973,15 @@ pub const ImageStorage = struct {
     ) void {
         self.markMutated(io);
         img.generation = self.generation;
+    }
+
+    pub fn materializeBacking(self: *ImageStorage, io: std.Io, alloc: Allocator, img: *Image) !void {
+        if (img.data != .encoded_png and img.data != .native_file) return;
+        const before = img.data.len();
+        try img.materializeFile(alloc);
+        try img.materializePng(alloc);
+        self.total_bytes -= before - img.data.len();
+        self.markImageContentChanged(io, img);
     }
 
     /// Convert a stored image's base data to RGBA in place, adjusting

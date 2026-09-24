@@ -142,6 +142,7 @@ pub struct TerminalState {
     pub agent_name: Option<String>,
     agent_name_owner: Option<AgentNameOwner>,
     managed_agent: Option<ManagedAgent>,
+    codex_prompt_ready: bool,
     managed_agent_launch_session: Option<crate::agent_resume::PersistedAgentSession>,
     hook_report_sequences: HashMap<String, u64>,
     suppressed_full_lifecycle_hook_reports: HashMap<String, SuppressedFullLifecycleHookReport>,
@@ -179,6 +180,7 @@ impl TerminalState {
             agent_name: None,
             agent_name_owner: None,
             managed_agent: None,
+            codex_prompt_ready: false,
             managed_agent_launch_session: None,
             hook_report_sequences: HashMap::new(),
             suppressed_full_lifecycle_hook_reports: HashMap::new(),
@@ -217,6 +219,7 @@ impl TerminalState {
             now,
         );
         if starts_acquisition {
+            self.codex_prompt_ready = false;
             self.agent_process_acquisition_pending = true;
         }
         mutation
@@ -419,6 +422,9 @@ impl TerminalState {
             };
         }
         self.detected_agent = agent;
+        if process_exited || agent != Some(Agent::Codex) || fallback_state == AgentState::Blocked {
+            self.codex_prompt_ready = false;
+        }
         if let Some(agent) = agent {
             let agent_label = crate::detect::agent_label(agent);
             self.reconcile_agent_name_owner(agent_label, None);
@@ -1972,6 +1978,7 @@ impl TerminalState {
         settle_delay: Duration,
         timeout: Duration,
     ) {
+        self.codex_prompt_ready = false;
         self.set_agent_name(name);
         self.agent_process_acquisition_pending = true;
         self.agent_name_owner = Some(AgentNameOwner {
@@ -2000,6 +2007,20 @@ impl TerminalState {
     pub fn managed_agent_interactive_ready(&self) -> bool {
         self.managed_agent
             .is_some_and(|managed| matches!(managed.phase, ManagedAgentPhase::Active))
+    }
+
+    pub fn observe_codex_prompt_ready(&mut self, ready: bool) -> Option<TerminalStateMutation> {
+        if self.detected_agent != Some(Agent::Codex)
+            || self.recent_agent_process_exit.is_some()
+            || !self.managed_agent.is_some_and(|managed| {
+                managed.kind == Agent::Codex && managed.phase != ManagedAgentPhase::Active
+            })
+            || self.codex_prompt_ready == ready
+        {
+            return None;
+        }
+        self.codex_prompt_ready = ready;
+        Some(TerminalStateMutation::default())
     }
 
     pub fn managed_agent_kind(&self) -> Option<Agent> {
@@ -2039,7 +2060,12 @@ impl TerminalState {
             return true;
         }
         if managed.phase == ManagedAgentPhase::Blocked {
-            if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
+            if known_agent == Some(managed.kind)
+                && (self.state == AgentState::Idle
+                    || managed.kind == Agent::Codex
+                        && self.state == AgentState::Unknown
+                        && self.codex_prompt_ready)
+            {
                 self.managed_agent = Some(ManagedAgent {
                     kind: managed.kind,
                     phase: ManagedAgentPhase::Active,
@@ -2067,7 +2093,12 @@ impl TerminalState {
                 return true;
             }
             if ready_after.is_none_or(|ready_after| now >= ready_after) {
-                if known_agent == Some(managed.kind) && self.state == AgentState::Idle {
+                if known_agent == Some(managed.kind)
+                    && (self.state == AgentState::Idle
+                        || managed.kind == Agent::Codex
+                            && self.state == AgentState::Unknown
+                            && self.codex_prompt_ready)
+                {
                     self.managed_agent = Some(ManagedAgent {
                         kind: managed.kind,
                         phase: ManagedAgentPhase::Active,
@@ -2115,6 +2146,7 @@ impl TerminalState {
     }
 
     pub fn clear_agent_name(&mut self) {
+        self.codex_prompt_ready = false;
         if self
             .managed_agent_launch_session
             .take()
@@ -2326,6 +2358,52 @@ mod tests {
         assert_eq!(terminal.agent_name.as_deref(), Some("reviewer"));
         assert!(terminal.reconcile_managed_agent_at(now + Duration::from_secs(2), true));
         assert_eq!(terminal.agent_name, None);
+    }
+
+    #[test]
+    fn codex_managed_readiness_requires_current_prompt_without_idle() {
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        terminal.begin_managed_agent(
+            "reviewer".into(),
+            Agent::Codex,
+            now,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        );
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Unknown);
+        terminal.observe_codex_prompt_ready(true);
+        terminal.reconcile_managed_agent_at(now, false);
+        assert!(!terminal.managed_agent_interactive_ready());
+        terminal.observe_codex_prompt_ready(false);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(100), false));
+        assert!(!terminal.managed_agent_interactive_ready());
+
+        terminal.observe_codex_prompt_ready(true);
+        assert!(terminal.reconcile_managed_agent_at(now + Duration::from_millis(101), false));
+        assert!(terminal.managed_agent_interactive_ready());
+        assert_eq!(terminal.state, AgentState::Unknown);
+        terminal.observe_codex_prompt_ready(false);
+        assert!(terminal.managed_agent_interactive_ready());
+
+        terminal.begin_managed_agent(
+            "next".into(),
+            Agent::Codex,
+            now,
+            Duration::ZERO,
+            Duration::from_secs(1),
+        );
+        terminal.reconcile_managed_agent_at(now, false);
+        assert!(!terminal.managed_agent_interactive_ready());
+
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Blocked);
+        assert!(terminal.reconcile_managed_agent_at(now, false));
+        terminal.observe_codex_prompt_ready(false);
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Unknown);
+        assert!(!terminal.reconcile_managed_agent_at(now, false));
+        terminal.observe_codex_prompt_ready(true);
+        assert!(terminal.reconcile_managed_agent_at(now, false));
+        assert!(terminal.managed_agent_interactive_ready());
     }
 
     #[test]

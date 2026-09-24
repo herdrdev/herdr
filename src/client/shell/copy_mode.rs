@@ -504,13 +504,10 @@ impl ClientShellState {
     }
 
     fn move_copy_cursor(&mut self, row_delta: i16, col_delta: i16, outcome: &mut ClientShellInput) {
-        let Some(hit) = self.copy_hit() else {
-            self.exit_copy_mode(false, outcome);
-            return;
-        };
         let Some(copy_mode) = self.copy_mode.as_mut() else {
             return;
         };
+        let (width, height) = copy_mode.geometry;
         if col_delta < 0 {
             copy_mode.cursor.col = copy_mode
                 .cursor
@@ -521,11 +518,11 @@ impl ClientShellState {
                 .cursor
                 .col
                 .saturating_add(col_delta as u16)
-                .min(hit.inner_rect.width.saturating_sub(1));
+                .min(width.saturating_sub(1));
         }
         let total_rows = copy_mode
             .max_offset_from_bottom
-            .saturating_add(hit.inner_rect.height as usize)
+            .saturating_add(height as usize)
             .max(1);
         if row_delta < 0 {
             copy_mode.cursor.row = copy_mode
@@ -610,16 +607,13 @@ impl ClientShellState {
     }
 
     fn reveal_copy_cursor(&mut self, outcome: &mut ClientShellInput, reserve_mode_bar_row: bool) {
-        let Some(hit) = self.copy_hit() else {
-            return;
-        };
         let request = self.copy_mode.as_mut().and_then(|copy_mode| {
             let current_top = copy_mode
                 .max_offset_from_bottom
                 .saturating_sub(copy_mode.offset_from_bottom) as u32;
-            let max_cursor_row = hit
-                .inner_rect
-                .height
+            let max_cursor_row = copy_mode
+                .geometry
+                .1
                 .saturating_sub(if reserve_mode_bar_row { 2 } else { 1 });
             let bottom = current_top.saturating_add(u32::from(max_cursor_row));
             let desired_top = if copy_mode.cursor.row < current_top {
@@ -647,12 +641,11 @@ impl ClientShellState {
     }
 
     fn begin_copy_selection(&mut self, linewise: bool) {
-        let end_col = self
-            .copy_hit()
-            .map_or(0, |hit| hit.inner_rect.width.saturating_sub(1));
+        let width = self.copy_hit().map(|hit| hit.inner_rect.width);
         let Some(copy_mode) = self.copy_mode.as_mut() else {
             return;
         };
+        let end_col = width.unwrap_or(copy_mode.geometry.0).saturating_sub(1);
         if linewise {
             copy_mode.selection = Some(ClientCopySelection::Linewise {
                 anchor_row: copy_mode.cursor.row,
@@ -695,7 +688,8 @@ impl ClientShellState {
                     anchor_row,
                     copy_mode.cursor.row,
                     self.copy_hit()
-                        .map_or(0, |hit| hit.inner_rect.width.saturating_sub(1)),
+                        .map_or(copy_mode.geometry.0, |hit| hit.inner_rect.width)
+                        .saturating_sub(1),
                 )
             }
         });

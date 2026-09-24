@@ -147,6 +147,19 @@ impl BlitEncoder {
         if rows.iter().any(|row| !patch_row_fits(frame, row)) || patch_rows_overlap(rows) {
             return None;
         }
+        // Metadata revisions need no terminal output. Keep visible cursors on
+        // the normal path because their suppression policy can change.
+        if rows.is_empty()
+            && cursor == frame.cursor
+            && cursor.as_ref().is_none_or(|cursor| !cursor.visible)
+        {
+            return Some(EncodedBlit {
+                bytes: Vec::new(),
+                full: false,
+                next_last_visible_cursor: self.last_visible_cursor,
+                next_last_cursor_shape: self.last_cursor_shape,
+            });
+        }
         let mut bytes = Vec::new();
         let mut next_last_visible_cursor = self.last_visible_cursor;
         let mut next_last_cursor_shape = self.last_cursor_shape;
@@ -553,16 +566,17 @@ fn patch_cell_mut(rows: &mut [PaneSurfacePatchRow], x: u16, y: u16) -> Option<&m
 }
 
 fn patch_rows_overlap(rows: &[PaneSurfacePatchRow]) -> bool {
-    rows.iter().enumerate().any(|(index, left)| {
-        let left_end = left.x.saturating_add(left.cells.len() as u16);
-        rows[index + 1..].iter().any(|right| {
-            if left.y != right.y {
-                return false;
-            }
-            let right_end = right.x.saturating_add(right.cells.len() as u16);
-            left.x < right_end && right.x < left_end
-        })
-    })
+    if rows.len() < 2 {
+        return false;
+    }
+    let mut spans = rows
+        .iter()
+        .map(|row| (row.y, row.x, row.x.saturating_add(row.cells.len() as u16)))
+        .collect::<Vec<_>>();
+    spans.sort_unstable();
+    spans
+        .windows(2)
+        .any(|pair| pair[0].0 == pair[1].0 && pair[1].1 < pair[0].2)
 }
 
 fn patch_row_fits(frame: &FrameData, row: &PaneSurfacePatchRow) -> bool {
@@ -595,6 +609,7 @@ fn blit_patch_to(
 ) {
     let _ = writer.write_all(b"\x1b[?2026h\x1b[?25l\x1b]8;;\x1b\\");
     let mut last_sgr = String::new();
+    let mut last_style = None;
     let mut active_hyperlink = None;
     for row in rows {
         let mut invalidated = 0usize;
@@ -612,6 +627,7 @@ fn blit_patch_to(
                     cursor_position,
                     cell,
                     &mut last_sgr,
+                    &mut last_style,
                     &mut active_hyperlink,
                     frame,
                 );
@@ -838,6 +854,7 @@ fn write_ime_anchor_cursor_state(writer: &mut impl Write, cursor: HostCursorStat
 
 fn write_all_cells(writer: &mut impl Write, frame: &FrameData) {
     let mut last_sgr = String::new();
+    let mut last_style = None;
     let mut active_hyperlink = None;
     for row in 0..frame.height {
         let mut to_skip = 0usize;
@@ -862,6 +879,7 @@ fn write_all_cells(writer: &mut impl Write, frame: &FrameData) {
                 cursor_position,
                 cell,
                 &mut last_sgr,
+                &mut last_style,
                 &mut active_hyperlink,
                 frame,
             );
@@ -937,6 +955,7 @@ fn write_cell(
     cursor_position: Option<(u16, u16)>,
     cell: &CellData,
     last_sgr: &mut String,
+    last_style: &mut Option<(u32, u32, u16)>,
     active_hyperlink: &mut Option<String>,
     frame: &FrameData,
 ) {
@@ -948,10 +967,14 @@ fn write_cell(
         write_cursor_position(writer, position);
     }
 
-    let sgr = build_sgr(cell.fg, cell.bg, cell.modifier);
-    if sgr != *last_sgr {
-        let _ = writer.write_all(sgr.as_bytes());
-        *last_sgr = sgr;
+    let style = (cell.fg, cell.bg, cell.modifier);
+    if *last_style != Some(style) {
+        let sgr = build_sgr(cell.fg, cell.bg, cell.modifier);
+        if sgr != *last_sgr {
+            let _ = writer.write_all(sgr.as_bytes());
+            *last_sgr = sgr;
+        }
+        *last_style = Some(style);
     }
 
     write_hyperlink_if_changed(writer, active_hyperlink, cell_hyperlink_uri(frame, cell));
@@ -976,6 +999,7 @@ fn cells_visually_equal(
 
 fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameData) {
     let mut last_sgr = String::new(); // Track last SGR to avoid redundant style changes.
+    let mut last_style = None;
     let mut active_hyperlink = None;
     let sanitized_hyperlinks = sanitized_frame_hyperlinks(frame);
     let prev_sanitized_hyperlinks = sanitized_frame_hyperlinks(prev);
@@ -1008,6 +1032,7 @@ fn write_changed_cells(writer: &mut impl Write, frame: &FrameData, prev: &FrameD
                     cursor_position,
                     cell,
                     &mut last_sgr,
+                    &mut last_style,
                     &mut active_hyperlink,
                     frame,
                 );
@@ -1137,6 +1162,26 @@ mod tests {
     #[test]
     fn build_sgr_resets_previous_modifiers_when_cell_is_plain() {
         assert_eq!(build_sgr(0x00_00_00_00, 0x00_00_00_00, 0), "\x1b[0;39;49m");
+    }
+
+    #[test]
+    fn repeated_and_equivalent_styles_keep_text_and_link_changes() {
+        let mut cells = vec![
+            make_cell("a", 0, 0, 0),
+            make_cell("b", 0, 0, 0),
+            make_cell("c", 0xff_00_00_00, 0, 0), // Unknown color also encodes as reset.
+            make_cell("d", 2, 0, 0),
+            make_cell("e", 0, 0, 0),
+        ];
+        cells[1].hyperlink = Some(0);
+        let mut frame = make_frame(5, 1, cells);
+        frame.hyperlinks.push("https://example.com".into());
+        let mut output = Vec::new();
+        write_all_cells(&mut output, &frame);
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            "\x1b[1;1H\x1b[0;39;49ma\x1b]8;;https://example.com\x1b\\b\x1b]8;;\x1b\\c\x1b[0;31;49md\x1b[0;39;49me\x1b[0m"
+        );
     }
 
     #[test]
@@ -1855,6 +1900,72 @@ mod tests {
         ];
 
         assert!(encoder.encode_patch(&rows, None, false).is_none());
+        let mut reversed = rows.clone();
+        reversed.reverse();
+        assert!(encoder.encode_patch(&reversed, None, false).is_none());
+
+        // Input order need not match screen order; touching runs are disjoint.
+        let disjoint = vec![
+            PaneSurfacePatchRow {
+                x: 2,
+                y: 0,
+                cells: vec![make_cell("Z", 0, 0, 0)],
+            },
+            rows[0].clone(),
+        ];
+        assert!(encoder.encode_patch(&disjoint, None, false).is_some());
+    }
+
+    #[test]
+    fn metadata_only_patches_do_not_write_but_cursor_changes_do() {
+        let mut frame = make_frame(3, 1, vec![make_cell("a", 0, 0, 0); 3]);
+        let mut encoder = BlitEncoder::new();
+        for cursor in [
+            None,
+            Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: false,
+                shape: 2,
+            }),
+        ] {
+            frame.cursor = cursor.clone();
+            let initial = encoder.encode(&frame, false);
+            encoder.commit(frame.clone(), initial);
+            let encoded = encoder.encode_patch(&[], cursor.clone(), false).unwrap();
+            assert!(encoded.bytes.is_empty());
+            assert!(encoder.commit_patch(&[], cursor, encoded));
+            assert!(encoder.is_current(&frame));
+        }
+        for cursor in [
+            CursorState {
+                x: 2,
+                y: 0,
+                visible: false,
+                shape: 2,
+            },
+            CursorState {
+                x: 2,
+                y: 0,
+                visible: true,
+                shape: 2,
+            },
+        ] {
+            let encoded = encoder
+                .encode_patch(&[], Some(cursor.clone()), false)
+                .unwrap();
+            assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[1;3H"));
+            assert!(encoder.commit_patch(&[], Some(cursor), encoded));
+        }
+        // Switching to a client-drawn cursor must still hide the visible host cursor.
+        let encoded = encoder
+            .encode_patch(
+                &[],
+                encoder.last_frame.as_ref().unwrap().cursor.clone(),
+                true,
+            )
+            .unwrap();
+        assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[?25l"));
     }
 
     #[test]

@@ -69,6 +69,21 @@ fn direct_graphics_profile_is_narrow_and_transport_safe() {
     ));
 }
 
+#[test]
+fn server_graphics_files_require_local_filesystem_not_just_local_terminal() {
+    let local = endpoint::ClientEndpointId::Local;
+    let ssh = endpoint::ClientEndpointId::Ssh(
+        endpoint::ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+    );
+    // Keep old local peers working without requiring a negotiated capability.
+    assert!(server_graphics_files_allowed(&local, false));
+    // Saved SSH endpoints run in the normal local client process.
+    assert!(!server_graphics_files_allowed(&ssh, false));
+    // A standalone --remote bridge can retain the Local endpoint identity.
+    assert!(!server_graphics_files_allowed(&local, true));
+    assert!(!server_graphics_files_allowed(&ssh, true));
+}
+
 fn restore_env_var(key: &str, value: Option<OsString>) {
     if let Some(value) = value {
         std::env::set_var(key, value);

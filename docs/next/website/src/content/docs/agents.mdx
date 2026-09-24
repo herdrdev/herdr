@@ -58,9 +58,11 @@ Some restricted Linux runtimes do not expose a terminal foreground process group
 
 ## Blocked state
 
-Blocked detection is deliberately strict for screen-manifest agents. Herdr only marks `blocked` when the live bottom-buffer snapshot matches known visible approval, question, or permission UI. If no manifest rule matches for a known agent, Herdr falls back to `idle` and labels that fallback as `default_known_agent_idle_fallback` in explain output.
+Blocked detection is deliberately strict for screen-manifest agents. Herdr only marks `blocked` when the live bottom-buffer snapshot matches known visible approval, question, or permission UI. If no manifest rule matches for a known agent other than Codex, Herdr falls back to `idle` and labels that fallback as `default_known_agent_idle_fallback` in explain output. Codex falls back to `unknown` because its title and composer can look the same during an active turn and after a response.
 
-This means unusual new agent prompts may initially show as `idle` instead of `blocked` until Herdr learns that screen shape. The misclassification affects only the visible status and waits. It should not make Herdr send input or take destructive action.
+For those other agents, unusual new prompts may initially show as `idle` instead of `blocked` until Herdr learns that screen shape. The misclassification affects only the visible status and waits. It should not make Herdr send input or take destructive action.
+
+For Codex, a visible spinner or live activity timer can establish `working`, and a visible approval prompt can establish `blocked`. An ordinary title, composer, or missing spinner cannot establish that a turn ended. Codex may therefore stay `unknown` after a response, and waits for `idle` or completion may time out. Managed startup uses the initial composer only to determine when it can accept a prompt; that observation does not change turn status.
 
 ## Detection manifests
 
@@ -88,6 +90,14 @@ herdr agent explain --file screen.txt --agent codex --json
 Live explain is evaluated by the running server, so it reflects the active manifest cache. The explain output shows the agent, final state, whether screen detection was skipped by a full lifecycle authority, manifest source and version, cached remote version, local override shadowing, remote update status, matched rule, visible evidence flags, matcher and region evidence for evaluated rules, skipped-update reason for transcript viewers, and the idle fallback reason when no rule matched.
 
 Herdr can run inside tmux as the outer terminal environment. Agent detection does not inspect tmux sessions launched inside a Herdr pane. If a shell framework auto-enters tmux inside Herdr, Herdr sees `tmux` as the pane process instead of the agent behind it.
+
+If your shell automatically attaches to tmux whenever `TMUX` is unset, update its startup rule to exclude Herdr panes. Reattaching the outer tmux session from inside a Herdr pane can recursively shrink the terminal and make it flicker. Add the `HERDR_ENV` check to your existing condition before it runs tmux:
+
+```zsh
+if [[ -z ${TMUX:-} && ${HERDR_ENV:-} != 1 ]]; then
+  tmux new-session -A -s my-session
+fi
+```
 
 ## State rollups
 

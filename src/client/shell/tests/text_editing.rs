@@ -384,7 +384,7 @@ fn every_field_renders_long_unicode_across_resize_without_mutation() {
             for (width, height) in [(120, 40), (60, 20), (12, 6), (1, 1), (120, 40)] {
                 let before = editor(&mut state).clone();
                 if let Some(frame) = state.compose(width, height) {
-                    if let Some(cursor) = frame.cursor.filter(|cursor| cursor.visible) {
+                    if let Some(cursor) = frame.cursor.as_ref().filter(|cursor| cursor.visible) {
                         assert!(cursor.x < width && cursor.y < height, "field {field}");
                     }
                 }

@@ -89,6 +89,14 @@ herdr agent explain --file screen.txt --agent codex --json
 
 Herdr 可以在 tmux 作为外层终端环境时运行。智能体检测不会检查在 Herdr 窗格内启动的 tmux 会话。如果某个 shell 框架在 Herdr 内自动进入 tmux,Herdr 看到的窗格进程就是 `tmux`,而不是它背后的智能体。
 
+如果你的 shell 在 `TMUX` 未设置时自动连接 tmux,请更新 shell 启动条件以排除 Herdr 窗格。从 Herdr 窗格内重新连接外层 tmux 会话可能导致终端尺寸递归缩小、画面闪烁。在现有条件中加入 `HERDR_ENV` 检查,并确保它在运行 tmux 之前生效:
+
+```zsh
+if [[ -z ${TMUX:-} && ${HERDR_ENV:-} != 1 ]]; then
+  tmux new-session -A -s my-session
+fi
+```
+
 ## 状态汇总
 
 侧边栏会把状态向上汇总。

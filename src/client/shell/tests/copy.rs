@@ -1081,6 +1081,42 @@ fn navigator_renders_every_terminal_in_workspace_sections() {
 }
 
 #[test]
+fn navigator_search_matches_non_adjacent_words_without_losing_the_pane_target() {
+    let mut projected = snapshot();
+    projected.panes[0].label = Some("alpha beta gamma".into());
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    state.open_navigator_overlay();
+    let Some(ClientShellOverlay::Navigator(navigator)) = state.overlay.as_mut() else {
+        panic!("navigator");
+    };
+    for (query, matches) in [
+        ("alpha gamma", true),
+        ("  ALP\tGAM  ", true),
+        ("gamma alpha", true),
+        ("beta gamma", true),
+        ("alpha missing", false),
+        ("alphagamma", false),
+    ] {
+        navigator.query = query.into();
+        navigator.selected = None;
+        let rows =
+            render::client_navigator_rows(&state.endpoints, &state.active_endpoint_id, navigator);
+        let target =
+            super::super::aggregate_navigation::selected_navigator_target(&rows, navigator);
+        assert_eq!(
+            target,
+            matches.then(|| ClientNavigatorTarget::Pane {
+                endpoint_id: state.active_endpoint_id.clone(),
+                pane_id: "pane_1".into(),
+            }),
+            "query={query:?}"
+        );
+    }
+}
+
+#[test]
 fn navigator_searches_ancestor_context_and_keeps_split_agents_individually_actionable() {
     let mut projected = snapshot();
     projected.tabs[0].label = "review".into();
@@ -1527,7 +1563,7 @@ fn navigator_narrow_layout_and_long_search_stay_inside_the_popup() {
         navigator.query = "界".repeat(100).as_str().into();
         let frame = state.compose(width, height).expect("navigator frame");
         let popup = state.hits.navigator_popup;
-        let cursor = frame.cursor.expect("search cursor");
+        let cursor = frame.cursor.as_ref().expect("search cursor");
         assert!(super::super::contains(popup, (cursor.x, cursor.y)));
         assert!(state.hits.navigator_rows.is_empty());
         assert!(popup.right() <= width && popup.bottom() <= height);
@@ -2179,4 +2215,96 @@ fn word_selection_result_survives_focus_snapshot_lag() {
         .selection
         .as_ref()
         .is_some_and(crate::selection::Selection::is_visible));
+}
+
+#[test]
+fn copy_mode_repeat_during_projection_gap_stays_active() {
+    for selection_before_gap in [None, Some(true), Some(false)] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let mut pane_surface = surface();
+        pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+            offset_from_bottom: 0,
+            max_offset_from_bottom: 20,
+            viewport_rows: 2,
+        });
+        state.set_pane_surface(pane_surface);
+        state.compose(106, 20).expect("composed frame");
+        let mut enter = ClientShellInput::default();
+        state.record_binding(
+            crate::input::KeybindMatch::Action(crate::input::KeybindAction::CopyMode),
+            &mut enter,
+        );
+        if selection_before_gap == Some(true) {
+            state.handle_input_bytes(b"V");
+        }
+        state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            KeyCode::Char('k'),
+            KeyModifiers::empty(),
+        ))]);
+
+        let end_col = state.copy_mode.as_ref().expect("copy mode").geometry.0 - 1;
+        let mut next = snapshot();
+        next.revision += 1;
+        state.set_snapshot(Box::new(next));
+        assert!(state.hits.panes.is_empty());
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        if selection_before_gap == Some(false) {
+            state.handle_input_bytes(b"V");
+            assert_eq!(
+                state
+                    .selection
+                    .as_ref()
+                    .expect("linewise selection")
+                    .ordered_cells(),
+                ((20, 0), (20, end_col))
+            );
+        }
+
+        let kind = if selection_before_gap == Some(false) {
+            crossterm::event::KeyEventKind::Press
+        } else {
+            crossterm::event::KeyEventKind::Repeat
+        };
+        let moved = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty())
+                .with_kind(kind),
+        )]);
+        assert!(moved.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PaneScroll(params)
+                    if params.pane_id == "pane_1" && params.offset_from_bottom == 1)
+        )));
+        if selection_before_gap.is_some() {
+            assert_eq!(
+                state
+                    .selection
+                    .as_ref()
+                    .expect("linewise selection")
+                    .ordered_cells(),
+                (
+                    (19, 0),
+                    (
+                        if selection_before_gap == Some(true) {
+                            21
+                        } else {
+                            20
+                        },
+                        end_col
+                    )
+                )
+            );
+        }
+
+        assert_eq!(state.mode, ClientShellMode::Copy);
+        assert!(state.copy_mode.is_some());
+        assert_eq!(
+            state
+                .copy_mode
+                .as_ref()
+                .map(|copy_mode| copy_mode.cursor.row),
+            Some(19)
+        );
+    }
 }

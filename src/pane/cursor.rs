@@ -24,9 +24,16 @@ enum DecscusrParseState {
 }
 
 impl DecscusrTracker {
-    pub(crate) fn observe(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.observe_byte(byte);
+    pub(crate) fn observe(&mut self, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            if matches!(self.state, DecscusrParseState::Ground) {
+                let Some(escape) = bytes.iter().position(|&byte| byte == 0x1b) else {
+                    return;
+                };
+                bytes = &bytes[escape..];
+            }
+            self.observe_byte(bytes[0]);
+            bytes = &bytes[1..];
         }
     }
 
@@ -106,19 +113,20 @@ impl CursorPositionSettleState {
         // when typing advanced its column. Otherwise the accumulated typing
         // deadline can settle a later repair cell and anchor redraws there.
         if let (Some(candidate), Some(since)) = (self.candidate, self.candidate_since) {
+            let expired = now.duration_since(since) >= self.candidate_hold();
             let restored = self.settled.zip(current).is_some_and(|(settled, current)| {
                 settled.visible
+                    && current.visible
+                    && (candidate.visible || !expired)
                     && (same_cursor_position(settled, current)
-                        || (candidate.y != settled.y
-                            && current.y == settled.y
-                            && now.duration_since(since) < self.candidate_hold()))
+                        || (candidate.y != settled.y && current.y == settled.y && !expired))
             });
             if restored {
                 self.settle(current);
                 return;
             }
             // Preserve an eligible caret before a later redraw moves it away.
-            if now.duration_since(since) >= self.candidate_hold() {
+            if expired {
                 self.settle(Some(candidate));
             }
         }
@@ -127,8 +135,28 @@ impl CursorPositionSettleState {
             return;
         };
         if !current.visible {
+            // A PTY can briefly hide a stationary caret during a redraw.
+            // Keep the last visible cell until the existing max hold expires.
+            if self.candidate.is_some_and(|candidate| {
+                !candidate.visible && same_cursor_position(candidate, current)
+            }) {
+                return;
+            }
+            if self.candidate.is_none()
+                && self.settled.is_some_and(|settled| {
+                    settled.visible && same_cursor_position(settled, current)
+                })
+            {
+                self.candidate = Some(current);
+                self.pending_since = Some(now);
+                self.candidate_since = Some(now);
+                return;
+            }
             self.settle(Some(current));
             return;
+        }
+        if self.candidate.is_some_and(|candidate| !candidate.visible) {
+            self.settle(self.settled);
         }
         let Some(settled) = self.settled else {
             self.settle(Some(current));
@@ -184,7 +212,9 @@ impl CursorPositionSettleState {
         }
         self.settled
             .map(|settled| TerminalCursorState {
-                visible: current.visible && settled.visible,
+                visible: settled.visible
+                    && (current.visible
+                        || (!candidate.visible && same_cursor_position(candidate, current))),
                 shape: current.shape,
                 ..settled
             })
@@ -204,7 +234,7 @@ impl CursorPositionSettleState {
     }
 
     fn candidate_hold(&self) -> Duration {
-        if self.candidate_jump {
+        if self.candidate_jump || self.candidate.is_some_and(|candidate| !candidate.visible) {
             CURSOR_POSITION_MAX_HOLD
         } else {
             CURSOR_POSITION_SETTLE
@@ -232,6 +262,72 @@ fn is_jump(settled: TerminalCursorState, current: TerminalCursorState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_decscusr_matches_bytewise(chunks: &[&[u8]]) {
+        let mut optimized = DecscusrTracker::default();
+        let mut bytewise = DecscusrTracker::default();
+        for chunk in chunks {
+            optimized.observe(chunk);
+            for &byte in *chunk {
+                bytewise.observe_byte(byte);
+            }
+            assert_eq!(
+                optimized.cursor_shape_overridden(),
+                bytewise.cursor_shape_overridden(),
+                "chunks: {chunks:?}"
+            );
+            // Compare the complete parser state, including incomplete CSI parameters.
+            assert_eq!(
+                format!("{:?}", optimized.state),
+                format!("{:?}", bytewise.state),
+                "chunks: {chunks:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decscusr_bulk_search_matches_bytewise_control_sequences_and_splits() {
+        let cases: &[&[u8]] = &[
+            b"",
+            b"plain text\n\twithout escapes",
+            b"text\x1b[1 qmore\x1b[0 qend",
+            b"\x1b[ q\x1b[2 q\x1b[3 q\x1b[4 q\x1b[5 q\x1b[6 q\x1b[7 q",
+            b"\x1b\x1b[1 q\x1b[2;9 q\x1b[0:4 q",
+            b"\x1b[1q\x1b[? q\x1b[12$ q\x1b[1\x00 q\x1b[2\xff q",
+            b"\x1b[12\x1b[5 q\x1b]0;title\x07\x1bPdata\x1b\\",
+            b"\x1b[1 q\x1b",
+            b"\x1b[1 q\x1b[",
+            b"\x1b[1 q\x1b[0 ",
+        ];
+        for &bytes in cases {
+            for split in 0..=bytes.len() {
+                assert_decscusr_matches_bytewise(&[&bytes[..split], &[], &bytes[split..]]);
+            }
+            let chunks: Vec<_> = bytes.chunks(1).collect();
+            assert_decscusr_matches_bytewise(&chunks);
+        }
+    }
+
+    #[test]
+    fn decscusr_bulk_search_matches_bytewise_all_byte_values() {
+        let all_bytes: Vec<u8> = (0..=255).collect();
+        for split in 0..=all_bytes.len() {
+            assert_decscusr_matches_bytewise(&[&all_bytes[..split], &all_bytes[split..]]);
+        }
+        // Exercise every possible byte in ground, escape, and partial CSI states.
+        let prefixes: &[&[u8]] = &[b"", b"\x1b", b"\x1b[", b"\x1b[2", b"\x1b[0 ", b"\x1b[2;"];
+        for &prefix in prefixes {
+            for byte in 0..=255u8 {
+                let mut bytes = b"\x1b[1 q".to_vec();
+                bytes.extend_from_slice(prefix);
+                bytes.push(byte);
+                bytes.extend_from_slice(b" qtext\x1b[0 q\x1b[6 q");
+                for split in 0..=bytes.len() {
+                    assert_decscusr_matches_bytewise(&[&bytes[..split], &bytes[split..]]);
+                }
+            }
+        }
+    }
 
     fn cursor(x: u16, y: u16, visible: bool, shape: u8) -> TerminalCursorState {
         TerminalCursorState {
@@ -499,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn cursor_settle_hides_immediately_and_waits_to_reveal() {
+    fn cursor_settle_ignores_short_same_position_hides() {
         let now = Instant::now();
         let mut settle = CursorPositionSettleState::default();
         settle.observe(Some(cursor(1, 0, true, 0)), now);
@@ -507,13 +603,108 @@ mod tests {
 
         assert_eq!(
             settle.reported_cursor(Some(cursor(1, 0, false, 0)), now + Duration::from_millis(2)),
-            Some(cursor(1, 0, false, 0))
+            Some(cursor(1, 0, true, 0))
+        );
+        settle.observe(
+            Some(cursor(1, 0, false, 0)),
+            now + Duration::from_millis(50),
+        );
+        assert_eq!(
+            settle.reported_cursor(
+                Some(cursor(1, 0, false, 0)),
+                now + Duration::from_millis(90)
+            ),
+            Some(cursor(1, 0, true, 0))
+        );
+        assert!(
+            !settle
+                .reported_cursor(
+                    Some(cursor(2, 0, false, 0)),
+                    now + Duration::from_millis(90)
+                )
+                .unwrap()
+                .visible
+        );
+        settle.observe(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(91));
+        assert_eq!(
+            settle.reported_cursor(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(92)),
+            Some(cursor(1, 0, true, 0))
+        );
+        assert!(!settle.pending());
+    }
+
+    #[test]
+    fn cursor_settle_hides_after_deadline_and_waits_to_reveal() {
+        let now = Instant::now();
+        let mut settle = CursorPositionSettleState::default();
+        let visible = cursor(1, 0, true, 0);
+        let hidden = cursor(1, 0, false, 0);
+        settle.observe(Some(visible), now);
+        settle.observe(Some(hidden), now + Duration::from_millis(1));
+        assert_eq!(settle.render_delay(), Some(CURSOR_POSITION_MAX_HOLD));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(100)),
+            Some(visible)
+        );
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(101)),
+            Some(hidden)
         );
 
-        settle.observe(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(3));
+        // The pure read above exposes expiry without changing the state.
+        settle.observe(Some(visible), now + Duration::from_millis(102));
         assert_eq!(
-            settle.reported_cursor(Some(cursor(1, 0, true, 0)), now + Duration::from_millis(4)),
-            Some(cursor(1, 0, false, 0))
+            settle.reported_cursor(Some(visible), now + Duration::from_millis(103)),
+            Some(hidden)
+        );
+        assert_eq!(
+            settle.reported_cursor(Some(visible), now + Duration::from_millis(122)),
+            Some(visible)
+        );
+    }
+
+    #[test]
+    fn cursor_settle_hides_immediately_outside_stationary_caret() {
+        let now = Instant::now();
+        let visible = cursor(1, 0, true, 0);
+        let hidden = cursor(2, 0, false, 0);
+        let mut settle = CursorPositionSettleState::default();
+        settle.observe(Some(visible), now);
+        settle.observe(Some(hidden), now + Duration::from_millis(1));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(2)),
+            Some(hidden)
+        );
+
+        settle.observe(None, now + Duration::from_millis(3));
+        assert_eq!(
+            settle.reported_cursor(None, now + Duration::from_millis(4)),
+            None
+        );
+
+        for hide_at in [visible, cursor(2, 0, true, 0)] {
+            let mut settle = CursorPositionSettleState::default();
+            settle.observe(Some(visible), now);
+            settle.observe(Some(cursor(2, 0, true, 0)), now + Duration::from_millis(1));
+            let hidden = TerminalCursorState {
+                visible: false,
+                ..hide_at
+            };
+            settle.observe(Some(hidden), now + Duration::from_millis(2));
+            assert_eq!(
+                settle.reported_cursor(Some(hidden), now + Duration::from_millis(3)),
+                Some(hidden)
+            );
+        }
+
+        // Once the pending move has expired, its destination is the caret to retain.
+        let mut settle = CursorPositionSettleState::default();
+        settle.observe(Some(visible), now);
+        settle.observe(Some(cursor(2, 0, true, 0)), now + Duration::from_millis(1));
+        settle.observe(Some(hidden), now + Duration::from_millis(22));
+        assert_eq!(
+            settle.reported_cursor(Some(hidden), now + Duration::from_millis(23)),
+            Some(cursor(2, 0, true, 0))
         );
     }
 
