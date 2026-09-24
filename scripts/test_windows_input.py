@@ -200,6 +200,12 @@ class WindowsInputGauntletTests(unittest.TestCase):
             rows = {row[0]: row[1:] for row in qualification_matrix(result)}
             self.assertEqual(rows["Shift+Enter"][0], "PARTIAL")
 
+    def test_direct_legacy_limit_requires_unsupported_from_every_channel(self):
+        observations = [{"host": host, "case": "shift-enter", "path": "direct", "mode": "legacy", "status": status}
+                        for host, status in (("stable", "unsupported"), ("preview", "not_run"))]
+        rows = {row[0]: row[1:] for row in qualification_matrix({"channels": ["stable", "preview"], "observations": observations})}
+        self.assertEqual(rows["Shift+Enter"][1], "PARTIAL")
+
     def test_qualification_matrix_keeps_proven_input_visible_when_geometry_is_unavailable(self):
         observations = [{"host": host, "case": case, "path": "herdr", "mode": "legacy", "status": "pass", "width": 120}
                         for host in ("stable", "preview") for case in ("letter-a", "shift-letter")]
