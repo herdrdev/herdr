@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Fixed
+- Navigate mode now closes on `Ctrl+[` like Esc under the kitty keyboard protocol, while a configured `ctrl+[` binding keeps priority. (#1431, thanks @haoxianhan)
+
 ## [0.9.1] - 2026-09-16
 
 ### Added
