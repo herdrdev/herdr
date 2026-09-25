@@ -55,6 +55,7 @@ pub use self::{
 const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const PANE_TERM: &str = "xterm-256color";
 const PANE_COLORTERM: &str = "truecolor";
+const PANE_TERM_PROGRAM: &str = "ghostty";
 
 #[cfg(test)]
 thread_local! {
@@ -78,6 +79,12 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
+    // The pane renderer is the embedded Ghostty terminal core, so programs inside
+    // the pane should see a Ghostty TERM_PROGRAM. This keeps terminal capability
+    // probes (e.g. OSC 8 hyperlink support in agent CLIs) truthful: herdr parses
+    // hyperlinks in the grid and re-emits them to the outer terminal.
+    cmd.env("TERM_PROGRAM", PANE_TERM_PROGRAM);
+    cmd.env_remove("TERM_PROGRAM_VERSION");
     cmd.env_remove("WT_SESSION");
 }
 
@@ -3110,6 +3117,21 @@ mod tests {
         apply_pane_terminal_env(&mut cmd);
 
         assert!(cmd.get_env("WT_SESSION").is_none());
+    }
+
+    #[test]
+    fn pane_terminal_identity_advertises_embedded_ghostty_program() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env("TERM_PROGRAM", "vscode");
+        cmd.env("TERM_PROGRAM_VERSION", "1.121.0");
+
+        apply_pane_terminal_env(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env("TERM_PROGRAM"),
+            Some(std::ffi::OsStr::new("ghostty"))
+        );
+        assert!(cmd.get_env("TERM_PROGRAM_VERSION").is_none());
     }
 
     #[tokio::test]
