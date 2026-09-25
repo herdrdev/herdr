@@ -229,6 +229,15 @@ impl RawInputByteFramer {
         self.buffer.as_slice() == [ESC]
     }
 
+    /// A mouse report can be split right after `ESC[`, before its `<` selector
+    /// arrives. That prefix is indistinguishable from a legacy Alt+[ until the
+    /// continuation shows up, so the idle reader must give it the mouse grace
+    /// window instead of releasing it as a key.
+    #[cfg(unix)]
+    pub(crate) fn has_pending_csi_introducer(&self) -> bool {
+        self.buffer.as_slice() == b"\x1b["
+    }
+
     #[cfg(unix)]
     pub(crate) fn has_pending_incomplete_mouse_sequence(&self) -> bool {
         starts_with_incomplete_sgr_mouse_sequence(&self.buffer)
