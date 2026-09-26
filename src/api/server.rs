@@ -182,8 +182,6 @@ fn run_accept_loop<S>(
                 // exiting would leave the socket file with no listener.
                 if consecutive_errors == 0 {
                     error!(err = %err, "api listener accept failed; retrying");
-                } else {
-                    debug!(err = %err, "api listener accept failed again");
                 }
                 consecutive_errors = consecutive_errors.saturating_add(1);
                 std::thread::sleep(error_backoff);
