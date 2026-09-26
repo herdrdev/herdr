@@ -112,7 +112,7 @@ describe('documentation release publishing', () => {
     } else {
       await symlink('index.mdx', linkedPage);
     }
-    expect(() => runScript(root, ['check'])).toThrow();
+    expect(() => runScript(root, ['check'])).toThrow(/is not an ordinary documentation file/);
     await rm(linkedPage, { recursive: true, force: true });
     runScript(root, ['check']);
 
