@@ -106,7 +106,6 @@ pub(crate) struct HostGraphicsCache {
     placements: HashMap<(u32, u32), PlacementSignature>,
     /// Host image currently backing each (pane, source image id) pair.
     sources: HashMap<HostSourceKey, u32>,
-    continuation: Option<(HostSourceKey, u32, usize)>,
     replay_placements: bool,
     replayed_placements: HashSet<(u32, u32)>,
 }
@@ -121,23 +120,10 @@ pub(crate) fn is_enabled() -> bool {
     KITTY_GRAPHICS_ENABLED.load(Ordering::Acquire)
 }
 
-#[cfg(test)]
-pub(crate) struct EncodedGraphics {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) incomplete: bool,
-}
-
 pub(crate) fn image_transfer_estimated_size(data_len: usize) -> usize {
     let encoded = data_len.div_ceil(3).saturating_mul(4);
     let command_overhead = data_len.div_ceil(KITTY_CHUNK_BYTES).saturating_mul(16) + 1024;
     encoded.saturating_add(command_overhead)
-}
-
-fn placement_identity(placement: &HostPlacement) -> (HostSourceKey, u32) {
-    (
-        placement.source_key.clone(),
-        host_placement_id(&placement.source_key, &placement.placement),
-    )
 }
 
 fn encode_placement_update(
@@ -166,22 +152,29 @@ fn encode_placement_update(
     let mut bytes = Vec::new();
     let mut output = GraphicsOutput::default();
     if !image_current {
+        // Bail out before touching the cache so a pending upload keeps the old image.
+        if placement
+            .raw_data
+            .as_deref()
+            .unwrap_or(&placement.placement.data)
+            .is_empty()
+        {
+            return None;
+        }
         if cache.images.contains_key(&host_id) {
             encode_delete_image(&mut bytes, host_id);
             cache.placements.retain(|(id, _), _| *id != host_id);
             cache.replayed_placements.retain(|(id, _)| *id != host_id);
         }
         if let Some(data) = &placement.raw_data {
-            if data.is_empty() {
-                return None;
-            }
             output.push_bytes(std::mem::take(&mut bytes));
             output.operations.push(GraphicsOperation::Upload {
                 control: upload_control(placement, format_code, host_id),
                 data: Arc::clone(data),
             });
-        } else if !encode_upload_image(&mut bytes, placement, format_code, host_id) {
-            return None;
+        } else {
+            let control = upload_control(placement, format_code, host_id);
+            encode_kitty_data(&mut bytes, &control, &placement.placement.data);
         }
         cache.images.insert(host_id, image_signature);
     }
@@ -222,22 +215,11 @@ fn release_superseded_source_image(
     cache.replayed_placements.retain(|(id, _)| *id != previous);
 }
 
-#[cfg(test)]
-fn encode_graphics_update_incremental(
+/// Encodes every placement change for one frame in a single linear pass.
+fn encode_graphics_output(
     cache: &mut HostGraphicsCache,
     placements: &[HostPlacement],
-) -> EncodedGraphics {
-    let (output, incomplete) = encode_graphics_output_incremental(cache, placements);
-    EncodedGraphics {
-        bytes: output.into_inline_bytes(),
-        incomplete,
-    }
-}
-
-fn encode_graphics_output_incremental(
-    cache: &mut HostGraphicsCache,
-    placements: &[HostPlacement],
-) -> (GraphicsOutput, bool) {
+) -> GraphicsOutput {
     let desired_sources = placements
         .iter()
         .map(|placement| placement.source_key.clone())
@@ -256,24 +238,11 @@ fn encode_graphics_output_incremental(
             })
         })
         .collect::<HashSet<_>>();
-    let start = cache
-        .continuation
-        .as_ref()
-        .and_then(|(source, id, _)| {
-            placements
-                .iter()
-                .position(|placement| placement_identity(placement) == (source.clone(), *id))
-        })
-        .map(|index| index + 1)
-        .or_else(|| cache.continuation.as_ref().map(|cursor| cursor.2))
-        .map_or(0, |index| index % placements.len().max(1));
-    let mut bytes = GraphicsOutput::default();
-    let mut emitted = false;
-
     cache
         .sources
         .retain(|source, _| desired_sources.contains(source));
 
+    let mut output = GraphicsOutput::default();
     let mut stale = cache
         .placements
         .keys()
@@ -282,59 +251,24 @@ fn encode_graphics_output_incremental(
         .collect::<Vec<_>>();
     stale.sort_unstable();
     for key @ (host_id, placement_id) in stale {
-        let mut transaction = Vec::new();
-        encode_delete_placement(&mut transaction, host_id, placement_id);
-        if emitted {
-            return (bytes, true);
-        }
-        bytes.push_bytes(transaction);
+        let mut bytes = Vec::new();
+        encode_delete_placement(&mut bytes, host_id, placement_id);
+        output.push_bytes(bytes);
         cache.placements.remove(&key);
         cache.replayed_placements.remove(&key);
-        emitted = true;
     }
-
-    // Preserve one cache mutation transaction per incremental call.
-    for offset in 0..placements.len() {
-        let index = (start + offset) % placements.len();
-        let placement = &placements[index];
-        let mut candidate = cache.clone();
-        let Some(transaction) = encode_placement_update(&mut candidate, placement) else {
-            continue;
-        };
-        if transaction.is_empty() {
-            *cache = candidate;
-            continue;
+    for placement in placements {
+        if let Some(transaction) = encode_placement_update(cache, placement) {
+            output.extend(transaction);
         }
-        if emitted {
-            return (bytes, true);
-        }
-        *cache = candidate;
-        let (source, id) = placement_identity(placement);
-        cache.continuation = Some((source, id, (index + 1) % placements.len()));
-        bytes.extend(transaction);
-        emitted = true;
     }
-
     cache.replay_placements = false;
     cache.replayed_placements.clear();
-    (bytes, false)
-}
-
-#[cfg(test)]
-fn drain_graphics_updates(cache: &mut HostGraphicsCache, placements: &[HostPlacement]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    loop {
-        let encoded = encode_graphics_update_incremental(cache, placements);
-        bytes.extend(encoded.bytes);
-        if !encoded.incomplete {
-            return bytes;
-        }
-    }
+    output
 }
 
 impl HostGraphicsCache {
-    fn reset_incremental_progress(&mut self) {
-        self.continuation = None;
+    fn reset_replay(&mut self) {
         self.replay_placements = false;
         self.replayed_placements.clear();
     }
@@ -354,7 +288,7 @@ impl HostGraphicsCache {
         self.images.clear();
         self.placements.clear();
         self.sources.clear();
-        self.reset_incremental_progress();
+        self.reset_replay();
         bytes
     }
 }
@@ -515,21 +449,6 @@ fn upload_control(placement: &HostPlacement, format_code: u32, host_id: u32) -> 
         "a=t,t=d,f={format_code},s={},v={},i={host_id},q=2",
         placement.placement.image_width, placement.placement.image_height,
     )
-}
-
-fn encode_upload_image(
-    out: &mut Vec<u8>,
-    placement: &HostPlacement,
-    format_code: u32,
-    host_id: u32,
-) -> bool {
-    if placement.placement.data.is_empty() {
-        return false;
-    }
-
-    let control = upload_control(placement, format_code, host_id);
-    encode_kitty_data(out, &control, &placement.placement.data);
-    true
 }
 
 fn encode_display_placement(
@@ -811,21 +730,14 @@ mod tests {
             second.placement.placement_id += 1;
             let mut placements = [first, second];
             let mut inline_cache = HostGraphicsCache::default();
-            let expected = drain_graphics_updates(&mut inline_cache, &placements);
+            let expected =
+                encode_graphics_output(&mut inline_cache, &placements).into_inline_bytes();
             for placement in &mut placements {
                 placement.placement.data.clear();
                 placement.raw_data = Some(Arc::clone(&data));
             }
             let mut cache = HostGraphicsCache::default();
-            let mut output = GraphicsOutput::default();
-            loop {
-                let (next, incomplete) =
-                    encode_graphics_output_incremental(&mut cache, &placements);
-                output.extend(next);
-                if !incomplete {
-                    break;
-                }
-            }
+            let output = encode_graphics_output(&mut cache, &placements);
             assert_eq!(output.clone().into_inline_bytes(), expected);
             let uploads = output
                 .operations
@@ -894,7 +806,7 @@ mod tests {
         if replay {
             cache.request_placement_replay();
         }
-        bytes.extend(drain_graphics_updates(cache, placements));
+        bytes.extend(encode_graphics_output(cache, placements).into_inline_bytes());
         bytes
     }
 
@@ -973,6 +885,27 @@ mod tests {
     }
 
     #[test]
+    fn changed_image_without_data_keeps_the_previous_image() {
+        // Client surfaces keep one host image id per source across revisions.
+        let placement = || {
+            let mut placement = test_placement(0, 0);
+            placement.host_image_id = Some(77);
+            placement
+        };
+        let mut cache = HostGraphicsCache::default();
+        let _ = encode_graphics_output(&mut cache, &[placement()]);
+        let mut pending = placement();
+        pending.placement.data_fingerprint = 43;
+        pending.placement.data.clear();
+        let images = cache.images.clone();
+        let placements = cache.placements.clone();
+        let output = encode_graphics_output(&mut cache, &[pending]);
+        assert!(output.into_inline_bytes().is_empty());
+        assert_eq!(cache.images, images);
+        assert_eq!(cache.placements, placements);
+    }
+
+    #[test]
     fn view_change_redisplays_unchanged_visible_placement() {
         let mut cache = HostGraphicsCache::default();
         update(&mut cache, &[test_placement(0, 0)], false);
@@ -1023,12 +956,9 @@ mod tests {
         let second = terminal(99).source_key;
         let mut cache = HostGraphicsCache::default();
         for id in 1..=3 {
-            assert!(
-                encode_graphics_update_incremental(&mut cache, &[terminal(id), terminal(99)])
-                    .incomplete
-            );
+            let _ = encode_graphics_output(&mut cache, &[terminal(id), terminal(99)]);
+            assert!(cache.sources.contains_key(&second));
         }
-        assert!(cache.sources.contains_key(&second));
     }
 
     #[test]
