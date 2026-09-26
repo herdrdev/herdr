@@ -194,9 +194,9 @@ jobs:
         shell: pwsh
         working-directory: vendor/libghostty-vt
         run: |
-          $args = @("build", "-Demit-lib-vt", "-Doptimize=ReleaseFast", "-Dsimd=true", "-Dtarget=x86_64-windows-msvc", "-Dversion-string=$((Get-Content VERSION -Raw).Trim())", "-Demit-xcframework=false")
-          $first = Measure-Command { & $env:ZIG @args | Out-Host }
-          $second = Measure-Command { & $env:ZIG @args | Out-Host }
+          $zigArgs = @("build", "-Demit-lib-vt", "-Doptimize=ReleaseFast", "-Dsimd=true", "-Dtarget=x86_64-windows-msvc", "-Dversion-string=$((Get-Content VERSION -Raw).Trim())", "-Demit-xcframework=false")
+          $first = Measure-Command { & $env:ZIG @zigArgs | Out-Host }
+          $second = Measure-Command { & $env:ZIG @zigArgs | Out-Host }
           "zig build restored-cache={0:n1}s warm={1:n1}s" -f $first.TotalSeconds, $second.TotalSeconds
           Get-ChildItem ../../.zig-cache | Select-Object Name
           (Get-ChildItem -Recurse ../../.zig-cache/o | Measure-Object).Count
