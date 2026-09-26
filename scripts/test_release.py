@@ -193,7 +193,7 @@ class ReleaseTests(unittest.TestCase):
             release.select_hotfix("release/hotfix", "v2.0.0")
         candidate = self.prepare()
         release.validate_diff(hotfix, candidate, "1.0.1")
-        patch = subprocess.check_output(["git", "diff", "--binary", hotfix, candidate])
+        patch = subprocess.check_output(["git", "diff", "--binary", "--default-prefix", hotfix, candidate])
         self.git("checkout", "-q", "master")
         subprocess.run(["git", "apply", "--3way", "--index"], input=patch, check=True)
         self.assertEqual(Path("src/feature.rs").read_text(), "b and c\n")

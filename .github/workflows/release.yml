@@ -455,7 +455,7 @@ jobs:
             exit 0
           fi
           # Apply only release preparation, never the hotfix implementation or newer master code.
-          git diff --binary "$PREVIEW_COMMIT" "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-preparation.patch"
+          git diff --binary --default-prefix "$PREVIEW_COMMIT" "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-preparation.patch"
           if [ -s "$RUNNER_TEMP/release-preparation.patch" ]; then
             git apply --3way --index "$RUNNER_TEMP/release-preparation.patch"
           fi
