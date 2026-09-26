@@ -75,15 +75,21 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
     )?;
 
     let _bridge = SshStdioBridge::start(
-        remote.target,
+        remote.target.clone(),
         prepared_remote.remote_herdr,
         local_socket.clone(),
-        session_name,
+        session_name.clone(),
         remote_ssh.options(),
         false,
     )?;
 
-    run_client_process(&local_socket, &reattach_command, remote.keybindings)
+    run_client_process(
+        &local_socket,
+        &reattach_command,
+        remote.keybindings,
+        &remote.target,
+        &session_name,
+    )
 }
 
 pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
@@ -3235,17 +3241,21 @@ fn run_client_process(
     local_socket: &Path,
     reattach_command: &str,
     keybindings: RemoteKeybindings,
+    target: &str,
+    session: &str,
 ) -> io::Result<()> {
     let exe = std::env::current_exe()?;
-    let status = Command::new(exe)
-        .arg("client")
-        .env(
-            crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
-            local_socket,
-        )
-        .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
-        .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
-        .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+    let mut command = Command::new(exe);
+    command.arg("client");
+    configure_remote_client_environment(
+        &mut command,
+        local_socket,
+        reattach_command,
+        keybindings,
+        target,
+        session,
+    )?;
+    let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -3259,6 +3269,28 @@ fn run_client_process(
             format!("remote client exited with {status}"),
         ))
     }
+}
+
+fn configure_remote_client_environment(
+    command: &mut Command,
+    local_socket: &Path,
+    reattach_command: &str,
+    keybindings: RemoteKeybindings,
+    target: &str,
+    session: &str,
+) -> io::Result<()> {
+    let preference_identity =
+        serde_json::to_string(&(target, session)).map_err(io::Error::other)?;
+    command
+        .env(
+            crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+            local_socket,
+        )
+        .env(REMOTE_PREFERENCES_ENV_VAR, preference_identity)
+        .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
+        .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
+        .env_remove(crate::api::SOCKET_PATH_ENV_VAR);
+    Ok(())
 }
 
 fn local_forward_socket_path(target: &str, session_name: &str) -> PathBuf {
@@ -3307,6 +3339,44 @@ fn sanitize_path_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_client_preferences_cross_process_handoff() {
+        let root =
+            std::env::temp_dir().join(format!("herdr-preference-handoff-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for bridge in ["bridge-100.sock", "bridge-200.sock"] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "client::shell::tests::keybindings_settings::remote_client_preferences_process_child", "--nocapture"]);
+            command
+                .env("HERDR_TEST_PREFERENCES_CHILD", "1")
+                .env("XDG_STATE_HOME", &root);
+            // A stale inherited identity must be replaced by this launch's identity.
+            command.env(REMOTE_PREFERENCES_ENV_VAR, r#"["wrong", "session"]"#);
+            configure_remote_client_environment(
+                &mut command,
+                &root.join(bridge),
+                "herdr --remote dev",
+                RemoteKeybindings::Local,
+                "dev",
+                "agents",
+            )
+            .unwrap();
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "child failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "child test did not run: {}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn decode_windows_command(command: &str) -> String {
         let encoded = command

@@ -50,6 +50,8 @@ herdr --remote workbox
 herdr --remote ssh://you@server:2222
 ```
 
+Sidebar width, section split, collapsed groups, and agent sorting are saved locally for each remote target and session. Reattaching to the same target and session restores these preferences. Different SSH aliases or sessions have separate preferences.
+
 In this mode, the remote server owns the running panes and sends their terminal content and session state over SSH. Your local Herdr draws the UI, including its sidebar, menus, and theme. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
 
 By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. After editing local keybindings, use the UI's `reload config` action to apply them without detaching. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
