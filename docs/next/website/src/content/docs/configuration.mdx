@@ -142,6 +142,15 @@ navigate_pane_down = "ctrl+j"
 split_horizontal = "prefix+minus"
 ```
 
+`keys.prefix` also accepts an array when you need to enter prefix mode from more than one key, for example to share one config between macOS and a remote Linux machine:
+
+```toml
+[keys]
+prefix = ["ctrl+space", "ctrl+s"]
+```
+
+Every configured prefix enters the same prefix mode and starts every `prefix+...` action. The first entry is the primary prefix shown in the status bar; the in-app help panel at `prefix+?` lists all of them.
+
 The default keymap is prefix-first so Herdr does not steal input from shells, editors, tmux, or terminal apps. Search `keys.` in the [Config reference](/docs/config-reference/) to see every action and default binding. The in-app help panel at `prefix+?` shows the active bindings.
 
 A binding may also be an array when one action needs multiple shortcuts:

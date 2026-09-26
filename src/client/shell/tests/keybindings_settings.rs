@@ -282,7 +282,7 @@ command = "local-only"
     .unwrap();
     let remote_local = ClientShellConfig::from_config(&local)
         .with_keybinding_source(ClientShellKeybindingSource::RemoteLocal);
-    assert_eq!(remote_local.keybinds.prefix.0, KeyCode::Char('a'));
+    assert_eq!(remote_local.keybinds.prefix[0].0, KeyCode::Char('a'));
     assert!(remote_local.keybinds.keybinds.custom_commands.is_empty());
     assert_eq!(
         remote_local.keybinds.keybinds.new_tab.label().as_deref(),
@@ -377,7 +377,7 @@ new_tab = "prefix+n"
         });
     state.set_snapshot(Box::new(projection));
 
-    assert_eq!(state.config.keybinds.prefix.0, KeyCode::Char('x'));
+    assert_eq!(state.config.keybinds.prefix[0].0, KeyCode::Char('x'));
     assert_eq!(
         state.config.keybinds.keybinds.new_tab.label().as_deref(),
         Some("prefix+n")

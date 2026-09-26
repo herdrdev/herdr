@@ -17,9 +17,9 @@ pub use self::{
         upsert_section_value,
     },
     keybinds::{
-        format_key_combo, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
+        format_prefix_combos, normalize_key_combo, terminal_key_matches_combo, ActionKeybinds,
         BindingConfig, CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind,
-        IndexedKeybind, Keybinds, LiveKeybindConfig,
+        IndexedKeybind, KeyCombo, Keybinds, LiveKeybindConfig,
     },
     model::{
         validated_sidebar_bounds, AgentPanelSortConfig, Config, ConfigReloadReport,
@@ -102,7 +102,7 @@ impl Config {
             .unwrap_or(true)
     }
 
-    pub fn prefix_key(&self) -> (KeyCode, KeyModifiers) {
+    pub fn prefix_keys(&self) -> Vec<(KeyCode, KeyModifiers)> {
         self.validated_keybinds().1
     }
 
@@ -182,7 +182,7 @@ impl Config {
         }
 
         let mut keys = self.keys.local_profile(&self.keybinds());
-        keys.set_prefix(format_key_combo(self.prefix_key()));
+        keys.set_prefixes(&self.prefix_keys());
         toml::to_string_pretty(&KeysProfile { keys })
     }
 }
@@ -239,7 +239,42 @@ prefix = "ctrl+"
         let keybinds = keybindings_from_profile_toml(&profile).unwrap();
 
         assert!(profile.contains("prefix = \"ctrl+b\""));
-        assert_eq!(keybinds.prefix, config.prefix_key());
+        assert_eq!(keybinds.prefix, config.prefix_keys());
+    }
+
+    #[test]
+    fn local_keybindings_profile_publishes_additional_prefixes_for_old_clients() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = ["ctrl+space", "ctrl+s"]
+"#,
+        )
+        .unwrap();
+
+        let profile = config.local_keybindings_profile_toml().unwrap();
+
+        // Generation-1 clients parse `prefix` as a single string; the extra
+        // prefixes ride in the optional `extra_prefixes` field they ignore.
+        assert!(profile.contains("prefix = \"ctrl+space\""));
+        assert!(!profile.contains("prefix = ["));
+        assert!(profile.contains("extra_prefixes = [\"ctrl+s\"]"));
+
+        let keybinds = keybindings_from_profile_toml(&profile).unwrap();
+        assert_eq!(keybinds.prefix, config.prefix_keys());
+    }
+
+    #[test]
+    fn local_keybindings_profile_omits_extra_prefixes_for_a_single_prefix() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = "ctrl+b"
+"#,
+        )
+        .unwrap();
+        let profile = config.local_keybindings_profile_toml().unwrap();
+        assert!(!profile.contains("extra_prefixes"));
     }
 
     #[test]
