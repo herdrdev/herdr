@@ -66,12 +66,47 @@ impl Occlusion {
         self.popup_start = self.regions.len();
     }
 
-    fn covers(
+    #[cfg(test)]
+    fn covers(&self, placement: &SurfaceGraphicsPlacement, origin: (u16, u16)) -> bool {
+        self.visible_pieces(placement, origin, 1) != Some(vec![GridPiece::whole(placement)])
+    }
+
+    /// Visible pieces for each placement in a frame. When cropping would exceed
+    /// the frame's piece budget, touched images are hidden whole instead.
+    fn frame_pieces(
+        &self,
+        placements: &[(&SurfaceGraphicsPlacement, (u16, u16))],
+    ) -> Vec<Vec<GridPiece>> {
+        let mut extra_budget = MAX_EXTRA_CROP_PIECES;
+        let mut pieces = Vec::with_capacity(placements.len());
+        for &(placement, origin) in placements {
+            let Some(found) = self.visible_pieces(placement, origin, extra_budget + 1) else {
+                return placements
+                    .iter()
+                    .map(|&(placement, origin)| {
+                        let whole = vec![GridPiece::whole(placement)];
+                        if self.visible_pieces(placement, origin, 1).as_ref() == Some(&whole) {
+                            whole
+                        } else {
+                            Vec::new()
+                        }
+                    })
+                    .collect();
+            };
+            extra_budget -= found.len().saturating_sub(1);
+            pieces.push(found);
+        }
+        pieces
+    }
+
+    /// Splits a placement's cell grid into the rectangles no overlay touches,
+    /// or returns `None` when that would take more than `limit` pieces.
+    fn visible_pieces(
         &self,
         placement: &SurfaceGraphicsPlacement,
         origin: (u16, u16),
-        cell: HostCellSize,
-    ) -> bool {
+        limit: usize,
+    ) -> Option<Vec<GridPiece>> {
         let regions = if matches!(
             placement.asset.source,
             SurfaceGraphicsSource::Terminal {
@@ -83,23 +118,84 @@ impl Occlusion {
         } else {
             &self.regions
         };
-        if regions.is_empty() {
-            return false;
+        let mut pieces = vec![GridPiece::whole(placement)];
+        // Pixel offsets shrink an image inside its cells, so cell overlap is exact.
+        let x = u32::from(origin.0.saturating_add(placement.x));
+        let y = u32::from(origin.1.saturating_add(placement.y));
+        let covered_span = |start: u16, end: u16, image_start: u32, len: u32| {
+            let first = u32::from(start).saturating_sub(image_start);
+            let last = u32::from(end).saturating_sub(image_start).min(len);
+            (first < last).then_some((first, last))
+        };
+        for rect in regions {
+            let Some((col_start, col_end)) = covered_span(rect.x, rect.right(), x, placement.cols)
+            else {
+                continue;
+            };
+            let Some((row_start, row_end)) = covered_span(rect.y, rect.bottom(), y, placement.rows)
+            else {
+                continue;
+            };
+            pieces = pieces
+                .into_iter()
+                .flat_map(|piece| piece.subtract(col_start, col_end, row_start, row_end))
+                .collect();
+            if pieces.is_empty() {
+                return Some(pieces);
+            }
+            if pieces.len() > limit {
+                return None;
+            }
         }
-        let width = u64::from(cell.width_px);
-        let height = u64::from(cell.height_px);
-        let x =
-            u64::from(origin.0.saturating_add(placement.x)) * width + u64::from(placement.x_offset);
-        let y = u64::from(origin.1.saturating_add(placement.y)) * height
-            + u64::from(placement.y_offset);
-        let right = x + u64::from(placement.cols) * width;
-        let bottom = y + u64::from(placement.rows) * height;
-        regions.iter().any(|rect| {
-            x < u64::from(rect.right()) * width
-                && right > u64::from(rect.x) * width
-                && y < u64::from(rect.bottom()) * height
-                && bottom > u64::from(rect.y) * height
+        Some(pieces)
+    }
+}
+
+/// Extra placements one frame may add by cropping around overlays. Beyond it,
+/// the frame hides touched images whole so the quadratic host encoder stays cheap.
+const MAX_EXTRA_CROP_PIECES: usize = 32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GridPiece {
+    col: u32,
+    row: u32,
+    cols: u32,
+    rows: u32,
+}
+
+impl GridPiece {
+    fn whole(placement: &SurfaceGraphicsPlacement) -> Self {
+        Self {
+            col: 0,
+            row: 0,
+            cols: placement.cols,
+            rows: placement.rows,
+        }
+    }
+
+    fn subtract(self, col_start: u32, col_end: u32, row_start: u32, row_end: u32) -> Vec<Self> {
+        let right = self.col + self.cols;
+        let bottom = self.row + self.rows;
+        if col_end <= self.col || col_start >= right || row_end <= self.row || row_start >= bottom {
+            return vec![self];
+        }
+        let middle_top = row_start.max(self.row);
+        let middle_bottom = row_end.min(bottom);
+        [
+            (self.col, self.row, right, middle_top),
+            (self.col, middle_bottom, right, bottom),
+            (self.col, middle_top, col_start.max(self.col), middle_bottom),
+            (col_end.min(right), middle_top, right, middle_bottom),
+        ]
+        .into_iter()
+        .filter(|(left, top, right, bottom)| left < right && top < bottom)
+        .map(|(left, top, right, bottom)| Self {
+            col: left,
+            row: top,
+            cols: right - left,
+            rows: bottom - top,
         })
+        .collect()
     }
 }
 
@@ -399,23 +495,32 @@ impl ClientState {
             return GraphicsOutput::from_bytes(bytes);
         }
 
-        let placements = self
+        let visible = self
             .display_scene
             .placements
             .iter()
             .filter_map(|placement| {
-                client_host_placement(
-                    &self.scope,
-                    placement,
-                    visibility,
-                    main_origin,
-                    popup_origin,
-                    cell_size,
-                    occlusion,
-                )
-                .map(|mut host| {
-                    host.host_image_id = Some(self.image_id(&placement.asset));
-                    host.raw_data = self.assets.get(&placement.asset).map(Arc::clone);
+                client_placement_origin(placement, visibility, main_origin, popup_origin)
+                    .map(|origin| (placement, origin))
+            })
+            .collect::<Vec<_>>();
+        let pieces = occlusion.frame_pieces(&visible);
+        let this = &*self;
+        let placements = visible
+            .iter()
+            .zip(pieces)
+            .flat_map(|(&(placement, origin), pieces)| {
+                pieces.into_iter().enumerate().map(move |(index, piece)| {
+                    let mut host = client_host_piece(
+                        &this.scope,
+                        placement,
+                        origin,
+                        cell_size,
+                        piece,
+                        index as u32,
+                    );
+                    host.host_image_id = Some(this.image_id(&placement.asset));
+                    host.raw_data = this.assets.get(&placement.asset).map(Arc::clone);
                     host
                 })
             })
@@ -729,15 +834,12 @@ fn asset_key(
     }
 }
 
-fn client_host_placement(
-    scope: &str,
+fn client_placement_origin(
     placement: &SurfaceGraphicsPlacement,
     visibility: Visibility,
     main_origin: (u16, u16),
     popup_origin: Option<(u16, u16)>,
-    cell_size: HostCellSize,
-    occlusion: &Occlusion,
-) -> Option<HostPlacement> {
+) -> Option<(u16, u16)> {
     let origin = match (&placement.asset.source, visibility) {
         (
             SurfaceGraphicsSource::Terminal {
@@ -758,9 +860,43 @@ fn client_host_placement(
         }
         _ => return None,
     };
-    if occlusion.covers(placement, origin, cell_size) {
-        return None;
-    }
+    Some(origin)
+}
+
+fn client_host_piece(
+    scope: &str,
+    placement: &SurfaceGraphicsPlacement,
+    origin: (u16, u16),
+    cell_size: HostCellSize,
+    piece: GridPiece,
+    piece_index: u32,
+) -> HostPlacement {
+    let source_width = if placement.source_width == 0 {
+        placement.asset.image_width
+    } else {
+        placement.source_width
+    };
+    let source_height = if placement.source_height == 0 {
+        placement.asset.image_height
+    } else {
+        placement.source_height
+    };
+    let (source_x, piece_source_width) = piece_source_span(
+        piece.col,
+        piece.cols,
+        placement.cols,
+        cell_size.width_px,
+        placement.x_offset,
+        source_width,
+    );
+    let (source_y, piece_source_height) = piece_source_span(
+        piece.row,
+        piece.rows,
+        placement.rows,
+        cell_size.height_px,
+        placement.y_offset,
+        source_height,
+    );
     let source_key = HostSourceKey::ClientSurface {
         scope: scope.to_owned(),
         source: placement.asset.source.clone(),
@@ -779,26 +915,41 @@ fn client_host_placement(
     let raw = hasher.finish();
     let pane_id = PaneId::from_raw((raw as u32).max(1));
     let host_image_id = host_image_id(scope, &placement.asset);
-    let cols = placement.cols.min(u32::from(u16::MAX)) as u16;
-    let rows = placement.rows.min(u32::from(u16::MAX)) as u16;
-    Some(HostPlacement {
+    let cols = piece.cols.min(u32::from(u16::MAX)) as u16;
+    let rows = piece.rows.min(u32::from(u16::MAX)) as u16;
+    HostPlacement {
         raw_data: None,
         pane_id,
         host_image_id: Some(host_image_id),
         area: Rect::new(
-            origin.0.saturating_add(placement.x),
-            origin.1.saturating_add(placement.y),
+            origin
+                .0
+                .saturating_add(placement.x)
+                .saturating_add(piece.col.min(u32::from(u16::MAX)) as u16),
+            origin
+                .1
+                .saturating_add(placement.y)
+                .saturating_add(piece.row.min(u32::from(u16::MAX)) as u16),
             cols,
             rows,
         ),
         cell_size,
         source_key,
         placement: KittyImagePlacement {
-            image_id: 1,
+            // Only feeds the host placement id, so each piece gets its own.
+            image_id: 1 + piece_index,
             placement_id: placement.logical_placement_id,
             z: placement.z,
-            x_offset: placement.x_offset,
-            y_offset: placement.y_offset,
+            x_offset: if piece.col == 0 {
+                placement.x_offset
+            } else {
+                0
+            },
+            y_offset: if piece.row == 0 {
+                placement.y_offset
+            } else {
+                0
+            },
             image_width: placement.asset.image_width,
             image_height: placement.asset.image_height,
             format: match placement.asset.format {
@@ -811,20 +962,47 @@ fn client_host_placement(
             source_file: None,
             data: Vec::new(),
             render: KittyPlacementRenderInfo {
-                pixel_width: placement.cols.saturating_mul(cell_size.width_px),
-                pixel_height: placement.rows.saturating_mul(cell_size.height_px),
-                grid_cols: placement.cols,
-                grid_rows: placement.rows,
+                pixel_width: piece.cols.saturating_mul(cell_size.width_px),
+                pixel_height: piece.rows.saturating_mul(cell_size.height_px),
+                grid_cols: piece.cols,
+                grid_rows: piece.rows,
                 viewport_col: 0,
                 viewport_row: 0,
-                source_x: placement.source_x,
-                source_y: placement.source_y,
-                source_width: placement.source_width,
-                source_height: placement.source_height,
+                source_x: placement.source_x.saturating_add(source_x),
+                source_y: placement.source_y.saturating_add(source_y),
+                source_width: piece_source_width,
+                source_height: piece_source_height,
             },
         },
         scrollback_offset: placement.scrollback_offset,
-    })
+    }
+}
+
+/// Maps a piece's cells onto the source pixels shown there. The leading pixel
+/// offset shrinks the image inside its cells, and cuts use absolute boundaries so
+/// adjacent pieces share exact source edges.
+fn piece_source_span(
+    start_cell: u32,
+    cells: u32,
+    total_cells: u32,
+    cell_px: u32,
+    offset: u32,
+    source_len: u32,
+) -> (u32, u32) {
+    let display = u64::from(total_cells) * u64::from(cell_px);
+    let offset = u64::from(offset).min(display.saturating_sub(1));
+    let edge = |cell: u32| {
+        let pixel = (u64::from(cell) * u64::from(cell_px)).max(offset);
+        ((pixel - offset) * u64::from(source_len) / (display - offset).max(1)) as u32
+    };
+    let start = edge(start_cell);
+    let end = edge(start_cell + cells);
+    if end > start {
+        (start, end - start)
+    } else {
+        // An upscaled sliver still needs one source pixel; zero means "whole image".
+        (start.min(source_len.saturating_sub(1)), 1)
+    }
 }
 
 fn format_code(format: SurfaceGraphicsFormat) -> u32 {
@@ -1265,11 +1443,7 @@ mod tests {
     }
 
     #[test]
-    fn occlusion_uses_final_pixel_bounds_and_strict_overlap() {
-        let cell = HostCellSize {
-            width_px: 8,
-            height_px: 16,
-        };
+    fn occlusion_uses_placement_cells_and_strict_overlap() {
         let image = asset(
             SurfaceGraphicsTarget::Pane {
                 pane_id: "pane".into(),
@@ -1281,19 +1455,18 @@ mod tests {
         let mut cover = Occlusion::default();
         cover.cover(Rect::new(12, 8, 1, 1));
         // The image at (11, 7) just touches the cover's top-left corner.
-        assert!(!cover.covers(&placement, (10, 5), cell));
+        assert!(!cover.covers(&placement, (10, 5)));
+        // Pixel offsets shrink the image inside its cells instead of bleeding.
         placement.x_offset = 1;
-        assert!(!cover.covers(&placement, (10, 5), cell));
         placement.y_offset = 1;
-        assert!(cover.covers(&placement, (10, 5), cell));
-        placement.x_offset = 0;
-        assert!(!cover.covers(&placement, (10, 5), cell));
+        assert!(!cover.covers(&placement, (10, 5)));
         placement.cols = 2;
-        assert!(cover.covers(&placement, (10, 5), cell));
-        assert!(!cover.covers(&placement, (0, 0), cell));
+        placement.rows = 2;
+        assert!(cover.covers(&placement, (10, 5)));
+        assert!(!cover.covers(&placement, (0, 0)));
         cover = Occlusion::default();
         cover.cover(Rect::new(11, 7, 0, 1));
-        assert!(!cover.covers(&placement, (10, 5), cell));
+        assert!(!cover.covers(&placement, (10, 5)));
     }
 
     #[test]
@@ -1357,12 +1530,232 @@ mod tests {
         }
     }
 
+    fn grid_image(cols: u32, rows: u32) -> SurfaceGraphicsScene {
+        let mut image = asset(
+            SurfaceGraphicsTarget::Pane {
+                pane_id: "pane".into(),
+            },
+            1,
+            vec![0; (cols * 10 * rows * 10 * 4) as usize],
+        );
+        image.key.image_width = cols * 10;
+        image.key.image_height = rows * 10;
+        let mut graphics = scene(image, 0, 0);
+        let placement = &mut graphics.placements[0];
+        placement.cols = cols;
+        placement.rows = rows;
+        placement.source_width = cols * 10;
+        placement.source_height = rows * 10;
+        graphics
+    }
+
+    fn placed_pieces(bytes: &[u8]) -> Vec<String> {
+        let text = String::from_utf8_lossy(bytes);
+        let mut pieces = text
+            .split("\u{1b}[")
+            .filter(|chunk| chunk.contains("a=p,"))
+            .map(|chunk| {
+                let (cursor, rest) = chunk.split_once('H').unwrap();
+                let control = rest
+                    .trim_start_matches("\u{1b}_G")
+                    .split(';')
+                    .next()
+                    .unwrap()
+                    .split(',')
+                    .filter(|field| {
+                        ["c=", "r=", "x=", "y=", "w=", "h=", "X=", "Y="]
+                            .iter()
+                            .any(|key| field.starts_with(key))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{cursor} {control}")
+            })
+            .collect::<Vec<_>>();
+        pieces.sort();
+        pieces
+    }
+
+    fn encode_with_cover(
+        graphics: SurfaceGraphicsScene,
+        covers: &[Rect],
+    ) -> (ClientState, Vec<String>) {
+        let mut state = ClientState::default();
+        state.set_scope("crop");
+        let _ = state.take_pending_cleanup();
+        state.set_scene(graphics);
+        let mut occlusion = Occlusion::default();
+        for rect in covers {
+            occlusion.cover(*rect);
+        }
+        let bytes = state.encode(
+            Visibility::Main,
+            (0, 0),
+            None,
+            HostCellSize {
+                width_px: 8,
+                height_px: 16,
+            },
+            &occlusion,
+        );
+        (state, placed_pieces(&bytes))
+    }
+
     #[test]
-    fn popup_occlusion_respects_draw_order_and_its_own_images() {
+    fn overlay_on_image_corner_keeps_the_rest_visible() {
+        // A 10x4-cell image with 10px source pixels per cell; a toast covers
+        // the top-right 4x2 cells.
+        let (_, pieces) = encode_with_cover(grid_image(10, 4), &[Rect::new(6, 0, 4, 2)]);
+        assert_eq!(
+            pieces,
+            vec![
+                "1;1 c=6,r=2,w=60,h=20".to_owned(),
+                "3;1 c=10,r=2,y=20,w=100,h=20".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_inside_image_keeps_four_surrounding_pieces() {
+        let (_, pieces) = encode_with_cover(grid_image(10, 6), &[Rect::new(3, 2, 4, 2)]);
+        assert_eq!(
+            pieces,
+            vec![
+                "1;1 c=10,r=2,w=100,h=20".to_owned(),
+                "3;1 c=3,r=2,y=20,w=30,h=20".to_owned(),
+                "3;8 c=3,r=2,x=70,y=20,w=30,h=20".to_owned(),
+                "5;1 c=10,r=2,y=40,w=100,h=20".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn overlay_across_image_edge_crops_only_the_covered_side() {
+        let (_, pieces) = encode_with_cover(grid_image(10, 4), &[Rect::new(7, 0, 20, 20)]);
+        assert_eq!(pieces, vec!["1;1 c=7,r=4,w=70,h=40".to_owned()]);
+    }
+
+    #[test]
+    fn multiple_overlays_crop_around_each_other() {
+        let (_, pieces) = encode_with_cover(
+            grid_image(10, 4),
+            &[Rect::new(0, 0, 2, 1), Rect::new(8, 3, 2, 1)],
+        );
+        assert_eq!(
+            pieces,
+            vec![
+                "1;3 c=8,r=1,x=20,w=80,h=10".to_owned(),
+                "2;1 c=10,r=2,y=10,w=100,h=20".to_owned(),
+                "4;1 c=8,r=1,y=30,w=80,h=10".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn pixel_offsets_stay_on_the_leading_pieces_without_seams() {
+        let mut graphics = grid_image(10, 4);
+        graphics.placements[0].x_offset = 4;
+        graphics.placements[0].y_offset = 8;
+        // Offsets shrink the image inside its cells: 100x40 source pixels span
+        // 76x56 display pixels starting at (4, 8).
+        let (_, pieces) = encode_with_cover(graphics.clone(), &[Rect::new(1, 0, 1, 4)]);
+        assert_eq!(
+            pieces,
+            vec![
+                "1;1 c=1,r=4,w=5,h=40,X=4,Y=8".to_owned(),
+                "1;3 c=8,r=4,x=15,w=85,h=40,Y=8".to_owned(),
+            ]
+        );
+        let (_, pieces) = encode_with_cover(graphics, &[Rect::new(0, 1, 10, 1)]);
+        assert_eq!(
+            pieces,
+            vec![
+                "1;1 c=10,r=1,w=100,h=5,X=4,Y=8".to_owned(),
+                "3;1 c=10,r=2,y=17,w=100,h=23,X=4".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn upscaled_slivers_never_fall_back_to_the_whole_source() {
+        let mut graphics = grid_image(10, 1);
+        let placement = &mut graphics.placements[0];
+        placement.source_x = 30;
+        placement.source_width = 2;
+        let (_, pieces) = encode_with_cover(graphics, &[Rect::new(1, 0, 9, 1)]);
+        assert_eq!(pieces, vec!["1;1 c=1,r=1,x=30,w=1,h=10".to_owned()]);
+    }
+
+    #[test]
+    fn uneven_source_scaling_leaves_no_seam_between_pieces() {
+        let mut graphics = grid_image(3, 1);
+        graphics.placements[0].source_width = 10;
+        let (_, pieces) = encode_with_cover(graphics, &[Rect::new(1, 0, 1, 1)]);
+        assert_eq!(
+            pieces,
+            vec![
+                "1;1 c=1,r=1,w=3,h=10".to_owned(),
+                "1;3 c=1,r=1,x=6,w=4,h=10".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn over_budget_frames_hide_touched_images_whole() {
+        // A 40x4 image with holes in every other cell of two rows needs 42
+        // pieces, so the frame falls back to hiding every touched image.
+        let mut graphics = grid_image(40, 4);
+        let fragmented = graphics.placements[0].clone();
+        let mut cropped = fragmented.clone();
+        cropped.logical_placement_id = 4;
+        cropped.y = 10;
+        cropped.cols = 10;
+        let mut untouched = cropped.clone();
+        untouched.logical_placement_id = 5;
+        untouched.x = 20;
+        graphics.placements.extend([cropped, untouched]);
+        let mut covers = (0..40)
+            .map(|index| Rect::new(index % 20 * 2, index / 20 * 2 + 1, 1, 1))
+            .collect::<Vec<_>>();
+        covers.push(Rect::new(6, 10, 4, 2));
+        let (state, pieces) = encode_with_cover(graphics.clone(), &covers);
+        assert_eq!(pieces, vec!["11;21 c=10,r=4,w=400,h=40".to_owned()]);
+        assert_eq!(state.host.placements.len(), 1);
+
+        // Without the fragmenting holes the same frame crops normally.
+        let (_, pieces) = encode_with_cover(graphics, &covers[40..]);
+        assert_eq!(pieces.len(), 4, "{pieces:?}");
+    }
+
+    #[test]
+    fn moving_overlay_replaces_and_retires_pieces() {
+        let mut state = ClientState::default();
+        state.set_scope("crop");
+        let _ = state.take_pending_cleanup();
+        state.set_scene(grid_image(10, 6));
         let cell = HostCellSize {
             width_px: 8,
             height_px: 16,
         };
+        let mut cover = Occlusion::default();
+        cover.cover(Rect::new(3, 2, 4, 2));
+        let _ = state.encode(Visibility::Main, (0, 0), None, cell, &cover);
+        assert_eq!(state.host.placements.len(), 4);
+        let mut cover = Occlusion::default();
+        cover.cover(Rect::new(6, 0, 4, 2));
+        let moved = state.encode(Visibility::Main, (0, 0), None, cell, &cover);
+        assert!(!String::from_utf8_lossy(&moved).contains("a=t"));
+        assert_eq!(state.host.placements.len(), 2);
+        let restored = state.encode(Visibility::Main, (0, 0), None, cell, &Occlusion::default());
+        assert_eq!(
+            placed_pieces(&restored),
+            vec!["1;1 c=10,r=6,w=100,h=60".to_owned()]
+        );
+        assert_eq!(state.host.placements.len(), 1);
+    }
+
+    #[test]
+    fn popup_occlusion_respects_draw_order_and_its_own_images() {
         let image = asset(
             SurfaceGraphicsTarget::Pane {
                 pane_id: "pane".into(),
@@ -1382,11 +1775,11 @@ mod tests {
         let mut cover = Occlusion::default();
         cover.cover(Rect::new(10, 5, 3, 3));
         cover.start_popup(Rect::new(9, 4, 5, 5));
-        assert!(cover.covers(&main, (10, 5), cell));
-        assert!(!cover.covers(&main, (0, 0), cell));
-        assert!(!cover.covers(&popup, (10, 5), cell));
+        assert!(cover.covers(&main, (10, 5)));
+        assert!(!cover.covers(&main, (0, 0)));
+        assert!(!cover.covers(&popup, (10, 5)));
         cover.cover(Rect::new(10, 5, 1, 1));
-        assert!(cover.covers(&popup, (10, 5), cell));
+        assert!(cover.covers(&popup, (10, 5)));
     }
 
     #[test]
@@ -1410,15 +1803,39 @@ mod tests {
                 graphics.assets.extend(pane.assets);
                 graphics.placements.extend(pane.placements);
             }
-            for covered in [false, true] {
+            for overlays in ["none", "disjoint", "toast_and_menu", "fragmenting"] {
                 let mut state = ClientState::default();
                 state.set_scope("profile");
-                state.set_scene(graphics.clone());
                 let mut cover = Occlusion::default();
-                if covered {
-                    cover.cover(Rect::new(0, 10, 80, 3));
-                    cover.cover(Rect::new(60, 0, 20, 5));
+                let mut graphics = graphics.clone();
+                match overlays {
+                    "disjoint" => {
+                        cover.cover(Rect::new(0, 10, 80, 3));
+                        cover.cover(Rect::new(60, 0, 20, 5));
+                    }
+                    "toast_and_menu" | "fragmenting" => {
+                        for (index, placement) in graphics.placements.iter_mut().enumerate() {
+                            let x = index as u16 * 16;
+                            placement.x = x;
+                            placement.cols = 16;
+                            placement.rows = 8;
+                            if overlays == "fragmenting" {
+                                // Six holes per 16x8 image leave 11 visible pieces each.
+                                for (col, row) in [(3, 2), (8, 2), (13, 2), (3, 5), (8, 5), (13, 5)]
+                                {
+                                    cover.cover(Rect::new(x + col, row, 2, 1));
+                                }
+                            }
+                        }
+                        if overlays == "toast_and_menu" {
+                            let width = count * 16;
+                            cover.cover(Rect::new(width.saturating_sub(12), 0, 12, 3));
+                            cover.cover(Rect::new(width / 2, 2, 10, 4));
+                        }
+                    }
+                    _ => {}
                 }
+                state.set_scene(graphics);
                 let _ = state.encode_output(Visibility::Main, (0, 0), None, cell, &cover);
                 let mut samples = Vec::new();
                 for _ in 0..101 {
@@ -1436,7 +1853,7 @@ mod tests {
                 }
                 samples.sort_unstable();
                 eprintln!(
-                    "graphics occlusion panes={count} disjoint_overlays={covered} median_ns={} p95_ns={}",
+                    "graphics occlusion panes={count} overlays={overlays} median_ns={} p95_ns={}",
                     samples[50], samples[95]
                 );
             }
@@ -1487,6 +1904,54 @@ mod tests {
                     samples[50], samples[95]
                 );
             }
+        }
+        // Unicode placeholder images (e.g. a terminal browser) arrive as one
+        // placement per row, so overlays split only the rows they cross.
+        let image = asset(
+            SurfaceGraphicsTarget::Pane {
+                pane_id: "browser".into(),
+            },
+            1,
+            vec![1, 2, 3, 4],
+        );
+        let mut browser = scene(image, 0, 0);
+        let row = browser.placements.remove(0);
+        browser.placements = (0..45)
+            .map(|index| {
+                let mut row = row.clone();
+                row.logical_placement_id = index + 1;
+                row.y = index as u16;
+                row.cols = 150;
+                row
+            })
+            .collect();
+        for overlays in [false, true] {
+            let mut state = ClientState::default();
+            state.set_scope("browser-profile");
+            state.set_scene(browser.clone());
+            let mut cover = Occlusion::default();
+            if overlays {
+                cover.cover(Rect::new(110, 0, 40, 4));
+                cover.cover(Rect::new(60, 20, 30, 8));
+            }
+            let _ = state.encode_output(Visibility::Main, (0, 0), None, cell, &cover);
+            let mut samples = Vec::new();
+            for _ in 0..101 {
+                let start = std::time::Instant::now();
+                std::hint::black_box(state.encode_output(
+                    Visibility::Main,
+                    (0, 0),
+                    None,
+                    cell,
+                    &cover,
+                ));
+                samples.push(start.elapsed().as_nanos());
+            }
+            samples.sort_unstable();
+            eprintln!(
+                "graphics placeholder rows=45 toast_and_menu={overlays} median_ns={} p95_ns={}",
+                samples[50], samples[95]
+            );
         }
     }
 
