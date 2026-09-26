@@ -31,6 +31,7 @@ pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
+const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(50);
 
 pub struct ServerHandle {
     _thread: std::thread::JoinHandle<()>,
@@ -118,37 +119,34 @@ fn start_server_inner(
     let running = Arc::new(AtomicBool::new(true));
     let listener_running = Arc::clone(&running);
     let thread = std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let api_tx = api_tx.clone();
-                    let event_hub = event_hub.clone();
-                    let capabilities = capabilities.clone();
-                    let server_stop = server_stop.clone();
-                    let connection_running = Arc::clone(&listener_running);
-                    #[cfg(unix)]
-                    let ssh_agents = ssh_agents.clone();
-                    std::thread::spawn(move || {
-                        if let Err(err) = handle_connection_with_stop(
-                            stream,
-                            &api_tx,
-                            &event_hub,
-                            &connection_running,
-                            capabilities,
-                            server_stop.as_ref(),
-                            #[cfg(unix)]
-                            ssh_agents.as_ref(),
-                        ) {
-                            warn!(err = %err, "api connection failed");
-                        }
-                    });
-                }
-                Err(err) => {
-                    error!(err = %err, "api listener accept failed");
-                    break;
-                }
-            }
-        }
+        run_accept_loop(
+            listener.incoming(),
+            &listener_running,
+            ACCEPT_ERROR_BACKOFF,
+            |stream| {
+                let api_tx = api_tx.clone();
+                let event_hub = event_hub.clone();
+                let capabilities = capabilities.clone();
+                let server_stop = server_stop.clone();
+                let connection_running = Arc::clone(&listener_running);
+                #[cfg(unix)]
+                let ssh_agents = ssh_agents.clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = handle_connection_with_stop(
+                        stream,
+                        &api_tx,
+                        &event_hub,
+                        &connection_running,
+                        capabilities,
+                        server_stop.as_ref(),
+                        #[cfg(unix)]
+                        ssh_agents.as_ref(),
+                    ) {
+                        warn!(err = %err, "api connection failed");
+                    }
+                });
+            },
+        );
         debug!("api server thread exiting");
     });
 
@@ -158,6 +156,86 @@ fn start_server_inner(
         identity,
         running,
     })
+}
+
+fn run_accept_loop<S>(
+    incoming: impl IntoIterator<Item = io::Result<S>>,
+    running: &AtomicBool,
+    error_backoff: Duration,
+    mut handle: impl FnMut(S),
+) {
+    let mut consecutive_errors = 0_u64;
+    for stream in incoming {
+        match stream {
+            Ok(stream) => {
+                if consecutive_errors > 0 {
+                    info!(consecutive_errors, "api listener accept recovered");
+                    consecutive_errors = 0;
+                }
+                handle(stream);
+            }
+            Err(err) => {
+                if !running.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Accept errors such as ECONNABORTED or EMFILE are transient;
+                // exiting would leave the socket file with no listener.
+                if consecutive_errors == 0 {
+                    error!(err = %err, "api listener accept failed; retrying");
+                } else {
+                    debug!(err = %err, "api listener accept failed again");
+                }
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                std::thread::sleep(error_backoff);
+                if !running.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod accept_loop_tests {
+    use super::*;
+
+    fn accept_error() -> io::Result<u32> {
+        Err(io::Error::other("transient accept failure"))
+    }
+
+    #[test]
+    fn keeps_serving_after_repeated_errors() {
+        let running = AtomicBool::new(true);
+        let mut handled = Vec::new();
+
+        run_accept_loop(
+            [Ok(1), accept_error(), accept_error(), Ok(2)],
+            &running,
+            Duration::ZERO,
+            |stream| handled.push(stream),
+        );
+
+        assert_eq!(handled, vec![1, 2]);
+    }
+
+    #[test]
+    fn exits_when_shutdown_happens_while_errors_continue() {
+        let running = AtomicBool::new(true);
+        let mut attempts = 0;
+        let incoming = std::iter::from_fn(|| {
+            attempts += 1;
+            if attempts == 3 {
+                running.store(false, Ordering::Relaxed);
+            }
+            Some(accept_error())
+        });
+
+        run_accept_loop(incoming, &running, Duration::ZERO, |_| {
+            panic!("no connection should be handled")
+        });
+
+        assert_eq!(attempts, 3);
+    }
 }
 
 fn retired_pane_graphics_method_error(line: &str, id: &str) -> Option<ErrorResponse> {
