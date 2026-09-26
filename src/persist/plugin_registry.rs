@@ -16,7 +16,9 @@ fn registry_lock_path() -> PathBuf {
     crate::config::config_dir().join(REGISTRY_LOCK_FILE)
 }
 
-fn with_registry_lock<T>(operation: impl FnOnce() -> std::io::Result<T>) -> std::io::Result<T> {
+pub(crate) fn with_registry_lock<T>(
+    operation: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<T> {
     let lock_path = registry_lock_path();
     if let Some(parent) = lock_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -64,14 +66,7 @@ fn save_json_to_path<T: serde::Serialize + ?Sized>(path: &Path, value: &T) -> st
     let json = serde_json::to_string_pretty(value)?;
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, json)?;
-    #[cfg(windows)]
-    if path.exists() {
-        if let Err(err) = std::fs::remove_file(path) {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(err);
-        }
-    }
-    if let Err(err) = std::fs::rename(&tmp_path, path) {
+    if let Err(err) = crate::platform::replace_file(&tmp_path, path) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
@@ -95,7 +90,13 @@ pub fn update<T>(
 }
 
 pub fn try_load() -> std::io::Result<Vec<InstalledPluginInfo>> {
-    with_registry_lock(|| load_from_path_strict(&registry_path()))
+    read(Ok)
+}
+
+pub(crate) fn read<T>(
+    operation: impl FnOnce(Vec<InstalledPluginInfo>) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    with_registry_lock(|| operation(load_from_path_strict(&registry_path())?))
 }
 
 /// Load the global registry. Returns an empty vec on failure so a corrupt or
@@ -435,5 +436,16 @@ mod tests {
         let loaded = load_from_path(&path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].plugin_id, "example.second");
+    }
+
+    #[test]
+    fn failed_save_preserves_previous_registry() {
+        let path = temp_registry_path("failed-save");
+        save_to_path(&path, &[sample_plugin("example.original")]).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        std::fs::create_dir(path.with_extension("json.tmp")).unwrap();
+        assert!(save_to_path(&path, &[sample_plugin("example.replacement")]).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 }

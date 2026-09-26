@@ -172,6 +172,7 @@ Install an example plugin:
 
 ```bash
 herdr plugin install ogulcancelik/herdr-plugin-examples/agent-telegram-notify
+herdr plugin update
 herdr plugin config-dir examples.agent-telegram-notify
 herdr plugin list
 herdr plugin action list --plugin examples.agent-telegram-notify
@@ -190,9 +191,16 @@ herdr plugin log list --plugin example.layout
 
 `plugin install` accepts GitHub shorthand only, such as
 `owner/repo/subdir`. It clones with `git`, shows a preview in interactive
-terminals, runs supported build commands, then stores the checkout under
-Herdr-managed plugin data and registers it. Use `--yes` for noninteractive
-installs. Reinstalling a GitHub-managed plugin replaces that managed checkout.
+terminals, builds in a new Herdr-managed installation directory, and registers
+it. Use `--yes` for noninteractive installs. Updates and reinstalls leave the
+previous installation in place: running commands and panes keep their original
+files, while new invocations use the new installation without a config reload.
+Existing processes are not restarted, and startup hooks run at the next server
+startup as usual.
+`plugin update` refreshes every GitHub-managed plugin when called without a
+target, or only the listed plugin ids or GitHub sources. It refetches the ref
+recorded during install, skips unchanged commits, and ignores locally linked
+plugins during bulk updates. Use `--yes` for noninteractive updates.
 Installed and linked plugins, including their enabled state, are global to the
 current user and available in every Herdr session. Both `plugin install` and
 `plugin link` can register plugins while no Herdr server is running. Plugins
@@ -203,12 +211,18 @@ local plugin first. `plugin install` and `plugin link` create the plugin's
 config and state directories, and `plugin config-dir <id>` prints the config
 directory for setup docs and shell scripts.
 
-`plugin uninstall <id-or-source>` unregisters the plugin. For GitHub-managed
-installs it also removes the managed checkout, and it accepts either the plugin
-id or the same `owner/repo[/subdir...]` shorthand used by install.
+`plugin uninstall <id-or-source>` unregisters the plugin and accepts either the
+plugin id or the same `owner/repo[/subdir...]` shorthand used by install.
+Installation files are retained after updates, reinstalls, and uninstall so
+running plugins can finish. A later successful installation/update or server
+startup automatically removes obsolete managed installations once the servers
+using them have exited. Reloading config does not release old installations.
+Stop plugin work before shutting down its server: processes surviving server
+exit are not protected from cleanup. Plugins must stop detached background
+processes before their parent command or pane exits. Legacy installations
+without cleanup tracking are retained. Config and state are preserved.
 `plugin unlink <id>` only unregisters a plugin and leaves files alone, which is
-useful for local development. There is no separate `plugin update` in v1;
-reinstall from GitHub to refresh a managed plugin.
+useful for local development.
 
 The example cookbook repo is `ogulcancelik/herdr-plugin-examples`. It contains
 separate example plugins in subdirectories, including `agent-telegram-notify`,

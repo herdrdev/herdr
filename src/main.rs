@@ -38,6 +38,7 @@ mod pane_graphics_files;
 mod persist;
 mod platform;
 mod plugin_command;
+mod plugin_installations;
 mod plugin_paths;
 mod popup_size;
 mod product_announcements;

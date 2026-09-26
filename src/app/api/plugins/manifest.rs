@@ -290,10 +290,19 @@ pub(super) fn normalize_plugin_source(
     let plugin_root = std::path::PathBuf::from(&plugin.plugin_root)
         .canonicalize()
         .map_err(|err| ("invalid_plugin_source", err.to_string()))?;
-    let expected = crate::plugin_paths::managed_checkout_path(&plugin.plugin_id)
-        .canonicalize()
-        .map_err(|err| ("invalid_plugin_source", err.to_string()))?;
-    if managed_path != expected {
+    let legacy = crate::plugin_paths::managed_checkout_path(&plugin.plugin_id).canonicalize();
+    let installations =
+        crate::plugin_paths::managed_installations_dir(&plugin.plugin_id).canonicalize();
+    let is_installation = installations.as_ref().is_ok_and(|root| {
+        managed_path
+            .file_name()
+            .is_some_and(|name| name == "checkout")
+            && managed_path
+                .parent()
+                .and_then(|generation| generation.parent())
+                == Some(root.as_path())
+    });
+    if !is_installation && !legacy.as_ref().is_ok_and(|path| path == &managed_path) {
         return Err((
             "invalid_plugin_source",
             "GitHub plugin managed_path does not match the plugin id".to_string(),
