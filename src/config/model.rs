@@ -616,6 +616,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         let input = KeysConfigOverlay::deserialize(deserializer)?;
         let mut keys = KeysConfig::default();
 
+        let prefix_was_supplied = input.prefix.is_some() || input.extra_prefixes.is_some();
         let mut prefix_values = Vec::new();
         if let Some(prefix) = input.prefix {
             prefix_values.extend(prefix.into_values());
@@ -623,8 +624,11 @@ impl<'de> Deserialize<'de> for KeysConfig {
         if let Some(extra) = input.extra_prefixes {
             prefix_values.extend(extra.into_values());
         }
-        if !prefix_values.is_empty() {
+        if prefix_was_supplied {
+            // An explicitly empty list stays empty so prefix validation rejects
+            // it and a reload keeps the current keybindings.
             keys.prefix = match prefix_values.len() {
+                0 => BindingConfig::Many(Vec::new()),
                 1 => BindingConfig::One(prefix_values.remove(0)),
                 _ => BindingConfig::Many(prefix_values),
             };

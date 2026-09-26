@@ -1955,6 +1955,24 @@ prefix = ["ctrl+a", "wat"]
     }
 
     #[test]
+    fn empty_prefix_list_is_rejected_and_keeps_the_fallback() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+prefix = []
+"#,
+        )
+        .unwrap();
+        assert_eq!(config.prefix_keys(), vec![DEFAULT_PREFIX]);
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("keys.prefix")));
+        // A reload treats the empty list as invalid and keeps the current keybinds.
+        assert!(config.live_keybinds_with_diagnostics().is_err());
+    }
+
+    #[test]
     fn navigate_bindings_allow_plain_keys_and_reject_local_conflicts() {
         let config: Config = toml::from_str(
             r#"
