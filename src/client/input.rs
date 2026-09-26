@@ -10,7 +10,7 @@
 //! - We avoid duplicating parsing logic in the client
 //! - Host terminal control replies can be buffered or discarded before they leak
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 #[cfg(unix)]
@@ -39,7 +39,7 @@ pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
-    host_theme_query_pending: Arc<AtomicBool>,
+    host_theme_query_pending: Arc<AtomicU32>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
@@ -77,7 +77,7 @@ fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
-    host_theme_query_pending: Arc<AtomicBool>,
+    host_theme_query_pending: Arc<AtomicU32>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
     host_sgr_pixels_active: Arc<AtomicBool>,
@@ -125,7 +125,7 @@ fn unix_stdin_reader_loop(
             Ok(n) => {
                 // A redraw can issue queries while this thread is blocked in read().
                 // Arm the split-reply guard before framing the returned bytes.
-                if host_theme_query_pending.swap(false, Ordering::AcqRel) {
+                for _ in 0..host_theme_query_pending.swap(0, Ordering::AcqRel) {
                     framer.host_color_query_sent();
                 }
                 let sgr_pixels = *pending_mode

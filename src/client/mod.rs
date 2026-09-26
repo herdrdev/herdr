@@ -122,7 +122,7 @@ use terminal_sessions::terminal_control_command_from_json;
 #[cfg(unix)]
 use std::collections::HashMap;
 use std::io::{self, Write as _};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(unix)]
 use std::sync::Mutex;
@@ -468,7 +468,7 @@ async fn run_client_loop(
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme =
         state.attach_escape.is_none() && should_query_host_terminal_theme();
-    let host_theme_query_pending = Arc::new(AtomicBool::new(false));
+    let host_theme_query_pending = Arc::new(AtomicU32::new(0));
     let stdin_host_theme_query_pending = host_theme_query_pending.clone();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
@@ -1115,7 +1115,7 @@ async fn run_client_loop(
                 // notification. Re-query on redraw, including SIGWINCH without a resize,
                 // so desktop theme switchers can refresh the existing panes in place.
                 if will_query_host_terminal_theme {
-                    host_theme_query_pending.store(true, Ordering::Release);
+                    host_theme_query_pending.fetch_add(1, Ordering::AcqRel);
                     query_host_terminal_theme();
                 }
                 if !pixel_geometry_exact && host_sgr_pixels_active.load(Ordering::Acquire) {
