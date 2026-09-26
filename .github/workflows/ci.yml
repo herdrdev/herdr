@@ -17,9 +17,6 @@ env:
   # Persist both Zig caches; local build outputs otherwise stay in the uncached vendor tree.
   ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
   ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
-  # PR caches are only visible to the same PR, and each run's saves evict the
-  # branch caches every PR restores from. Only branch pushes save.
-  SAVE_CACHES: ${{ github.event_name == 'push' || github.head_ref == 'ci/faster-pr-checks' }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -47,28 +44,6 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: python3 scripts/conventional_commits.py "$PR_TITLE"
 
-  lint:
-    name: lint (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-
-      - name: Set up build
-        uses: ./.github/actions/setup-build
-        with:
-          cache-key: ${{ matrix.os }}
-
-      - name: Run lint
-        run: just lint
-
   check:
     name: check (${{ matrix.os }})
     strategy:
@@ -76,10 +51,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            kind: unix
             nextest_filter: all()
           - os: macos-latest
+            kind: unix
             nextest_filter: not binary(live_handoff)
           - os: windows-latest
+            kind: windows
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -88,26 +66,91 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up build
-        uses: ./.github/actions/setup-build
+      - name: Install Rust
+        if: matrix.kind == 'unix'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          cache-key: ${{ matrix.os }}
-          tools: just,cargo-nextest
-          bun: "true"
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          components: rustfmt,clippy
 
-      # Cargo still rebuilds workspace targets; only rustc's validated query state is retained.
+      - name: Install Rust
+        if: matrix.kind == 'windows'
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          components: rustfmt,clippy
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Rust tools
+        uses: taiki-e/install-action@fd2f5e3d644b484055ebf4268f474c565f148f25 # v2.81.9
+        with:
+          tool: just,cargo-nextest
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install Zig
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+
+      # Zig's C-header cache keys include the compiler installation path.
+      - name: Stabilize Zig installation path on Unix
+        if: matrix.kind == 'unix'
+        run: |
+          stable_zig="$RUNNER_TEMP/herdr-zig-0.16.0"
+          mv "$(dirname "$(command -v zig)")" "$stable_zig"
+          echo "$stable_zig" >> "$GITHUB_PATH"
+          echo "ZIG=$stable_zig/zig" >> "$GITHUB_ENV"
+
+      - name: Stabilize Zig installation path on Windows
+        if: matrix.kind == 'windows'
+        shell: pwsh
+        run: |
+          $source = Split-Path (Get-Command zig).Source
+          $stable = Join-Path $env:RUNNER_TEMP "herdr-zig-0.16.0"
+          Move-Item -LiteralPath $source -Destination $stable
+          $stable | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "ZIG=$(Join-Path $stable 'zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Restore Zig build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .zig-cache
+          key: zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-
+
+      - name: Restore cargo cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          cache-bin: false
+          key: ${{ matrix.os }}
+
+      # Save before rust-cache's post-step removes incremental state. Cargo still
+      # rebuilds workspace targets; only rustc's validated query state is retained.
       - name: Restore Windows incremental compiler state
-        if: runner.os == 'Windows'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.kind == 'windows'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/debug/incremental
           key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-${{ github.sha }}
           restore-keys: |
             ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-
 
-      - name: Run Unix tests
-        if: runner.os != 'Windows'
+      - name: Run Linux lint
+        if: runner.os == 'Linux'
+        run: just lint
+
+      - name: Run Linux tests
+        if: runner.os == 'Linux'
         run: CARGO_INCREMENTAL=1 just ci-tests '${{ matrix.nextest_filter }}'
+
+      - name: Run macOS checks
+        if: runner.os == 'macOS'
+        run: just ci '${{ matrix.nextest_filter }}'
 
       - name: Check scalar libghostty with runtime safety
         if: runner.os == 'Linux'
@@ -116,36 +159,20 @@ jobs:
           LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
         run: CARGO_INCREMENTAL=1 just test-one ghostty
 
-      - name: Run Windows tests
-        if: runner.os == 'Windows'
+      - name: Run Windows checks
+        if: matrix.kind == 'windows'
         shell: pwsh
         run: |
           $env:CARGO_INCREMENTAL = "1"
-          .\scripts\windows_check.ps1 -Mode test
+          just check
 
       - name: Smoke ConPTY pane
-        if: runner.os == 'Windows'
+        if: matrix.kind == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $exe = Join-Path $PWD "target\debug\herdr.exe"
           .\scripts\windows_smoke_conpty_path.ps1 -ExePath $exe -Session "ci-windows-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-
-      # Save before rust-cache's post-step removes incremental state.
-      - name: Save Windows incremental compiler state
-        if: runner.os == 'Windows' && env.SAVE_CACHES == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: target/debug/incremental
-          key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-${{ github.sha }}
-
-      # The lint job builds the same libghostty, so only this job saves it.
-      - name: Save Zig build cache
-        if: env.SAVE_CACHES == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .zig-cache
-          key: zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows-conpty-package:
     name: Windows ConPTY package
@@ -178,7 +205,7 @@ jobs:
           "ZIG=$(Join-Path $stable 'zig.exe')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Restore Zig build cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .zig-cache
           key: zig-build-v1-conpty-package-windows-2022-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
@@ -190,17 +217,9 @@ jobs:
         with:
           cache-bin: false
           key: conpty-package-windows-2022
-          save-if: ${{ env.SAVE_CACHES }}
 
       - name: Build Herdr
         run: cargo build --locked --target x86_64-pc-windows-msvc
-
-      - name: Save Zig build cache
-        if: env.SAVE_CACHES == 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: .zig-cache
-          key: zig-build-v1-conpty-package-windows-2022-${{ runner.arch }}-0.16.0-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify invalid bundle is rejected and system override recovers
         shell: pwsh
