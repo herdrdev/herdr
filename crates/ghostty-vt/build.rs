@@ -64,10 +64,17 @@ fn main() {
         .trim()
         .to_string();
 
+    // Install into this build's OUT_DIR so concurrent builds for different targets
+    // from one checkout never link each other's archive.
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
+    let zig_prefix = out_dir.join("zig-out");
+
     let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
     let mut command = Command::new(&zig);
     command
         .arg("build")
+        .arg("--prefix")
+        .arg(&zig_prefix)
         .arg("-Demit-lib-vt")
         .arg(format!("-Doptimize={optimize}"))
         .arg(format!("-Dsimd={simd}"))
@@ -108,11 +115,11 @@ fn main() {
          or set ZIG to the path of a Zig 0.16.0 binary, then retry"
     );
 
-    let mut lib_dir = vendored_dir.join("zig-out/lib");
+    let mut lib_dir = zig_prefix.join("lib");
     if target.contains("-apple-") {
         // Apple's linker prefers the sibling dylib for `-l`, so search a directory
         // holding only the static archive.
-        let static_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("lib");
+        let static_dir = out_dir.join("lib");
         fs::create_dir_all(&static_dir).expect("failed to create libghostty-vt link directory");
         fs::copy(
             lib_dir.join("libghostty-vt.a"),
