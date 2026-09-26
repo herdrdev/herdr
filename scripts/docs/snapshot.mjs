@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, relative, resolve } from 'node:path';
 
 export function createGit(repoRoot) {
@@ -92,10 +92,14 @@ export async function compareGitTree(git, ref, sourceRoot, snapshotRoot) {
 export async function listDocumentationPaths(root) {
   const paths = [];
   async function walk(directory) {
-    for (const entry of await readdir(directory, { withFileTypes: true })) {
-      const path = resolve(directory, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile()) paths.push(relative(root, path));
+    for (const name of await readdir(directory)) {
+      const path = resolve(directory, name);
+      // lstat does not follow links, so symlinks and Windows junctions stay
+      // non-ordinary here even if a runtime classifies them as directories in
+      // the readdir entry.
+      const stats = await lstat(path);
+      if (stats.isDirectory()) await walk(path);
+      else if (stats.isFile()) paths.push(relative(root, path));
       else throw new Error(`${path} is not an ordinary documentation file`);
     }
   }

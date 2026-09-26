@@ -7,8 +7,8 @@ use super::output::GraphicsOutput;
 use ratatui::layout::Rect;
 
 use super::{
-    clipped_placement, collect_visible_placements, encode_graphics_output_incremental,
-    HostCellSize, HostGraphicsCache, HostPlacement, HostSourceKey, ImageSignature,
+    clipped_placement, collect_visible_placements, encode_graphics_output, HostCellSize,
+    HostGraphicsCache, HostPlacement, HostSourceKey, ImageSignature,
 };
 use crate::ghostty::{
     KittyImageDescriptor, KittyImageFormat, KittyImagePlacement, KittyPlacementRenderInfo,
@@ -527,14 +527,8 @@ impl ClientState {
             .collect::<Vec<_>>();
         let mut output = GraphicsOutput::from_bytes(bytes);
         self.host.request_placement_replay();
-        loop {
-            let (encoded, incomplete) =
-                encode_graphics_output_incremental(&mut self.host, &placements);
-            output.extend(encoded);
-            if !incomplete {
-                return output;
-            }
-        }
+        output.extend(encode_graphics_output(&mut self.host, &placements));
+        output
     }
 }
 

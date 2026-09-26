@@ -100,9 +100,20 @@ describe('documentation release publishing', () => {
       correctedArchivedDocs,
     );
     const linkedPage = resolve(archivedDocsRoot, 'linked.mdx');
-    await symlink('index.mdx', linkedPage);
-    expect(() => runScript(root, ['check'])).toThrow();
-    await rm(linkedPage);
+    if (process.platform === 'win32') {
+      // A normal Windows terminal cannot create file symlinks without Developer
+      // Mode or elevation, but a directory junction is creatable without
+      // either. Link to an empty directory outside the snapshot so the walk
+      // stays finite and only the non-ordinary-file rejection can satisfy the
+      // assertion below.
+      const linkTarget = await mkdtemp(join(tmpdir(), 'herdr-docs-link-'));
+      temporaryDirectories.push(linkTarget);
+      await symlink(linkTarget, linkedPage, 'junction');
+    } else {
+      await symlink('index.mdx', linkedPage);
+    }
+    expect(() => runScript(root, ['check'])).toThrow(/is not an ordinary documentation file/);
+    await rm(linkedPage, { recursive: true, force: true });
     runScript(root, ['check']);
 
     delete archivedManifest.versions[0].commit;

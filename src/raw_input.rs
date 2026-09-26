@@ -179,8 +179,11 @@ impl RawInputByteFramer {
 
     /// Hold a lone trailing ESC for one idle flush so an OSC 10/11 reply split
     /// at its ESC introducer stitches back together instead of leaking (#549).
+    /// Overlapping queries each add their own replies to the window.
     pub(crate) fn host_color_query_sent(&mut self) {
-        self.host_color_replies_awaited = HOST_COLOR_QUERY_REPLIES;
+        self.host_color_replies_awaited = self
+            .host_color_replies_awaited
+            .saturating_add(HOST_COLOR_QUERY_REPLIES);
         self.held_pending_host_reply_esc = false;
     }
 
@@ -2858,5 +2861,35 @@ mod tests {
         // Window closed: a later lone Escape flushes immediately.
         assert!(framer.push(b"\x1b").is_empty());
         assert_eq!(framer.flush_timeout(), vec![b"\x1b".to_vec()]);
+    }
+
+    #[test]
+    fn overlapping_host_color_queries_keep_holding_split_reply_escape() {
+        use std::fmt::Write as _;
+
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+        framer.host_color_query_sent();
+        let mut first_batch =
+            String::from("\x1b]10;rgb:6565/7b7b/8383\x1b\\\x1b]11;rgb:2424/2727/3a3a\x1b\\");
+        for index in 0..=u8::MAX {
+            let _ = write!(first_batch, "\x1b]4;{index};rgb:1111/2222/3333\x1b\\");
+        }
+        assert_eq!(framer.push(first_batch.as_bytes()).len(), 258);
+
+        // The second batch is still outstanding, so its first reply split at ESC
+        // must not leak into the pane as an Escape key.
+        assert!(framer.push(b"\x1b").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        let chunks = framer.push(b"]10;rgb:eeee/eeee/eeee\x1b\\");
+        assert_eq!(chunks.len(), 1);
+        let (event, _) = extract_one_event(&chunks[0]).unwrap();
+        assert!(matches!(
+            event,
+            RawInputEvent::HostDefaultColor {
+                kind: DefaultColorKind::Foreground,
+                ..
+            }
+        ));
     }
 }

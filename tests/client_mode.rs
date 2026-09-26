@@ -714,6 +714,73 @@ fn read_output(output: &SharedOutput) -> String {
         .clone()
 }
 
+#[test]
+fn sigwinch_refreshes_host_palette_without_resizing() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+    let server = spawn_server_with_config(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &client_socket,
+        "onboarding = false\n[theme]\nname = \"terminal\"\n",
+    );
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&client_socket, Duration::from_secs(10));
+    let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+    let master = client._master.as_ref().expect("client PTY");
+    let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+    let mut writer = master.take_writer().unwrap();
+    let queries = "\x1b]10;?\x1b\\\x1b]11;?\x1b\\";
+    assert!(
+        wait_until(Duration::from_secs(5), Duration::from_millis(25), || {
+            read_output(&output).contains(queries)
+        }),
+        "client should query the initial palette: {:?}",
+        read_output(&output)
+    );
+
+    // Complete the startup query with a light palette. No appearance notification
+    // is sent: this models a terminal whose colors are changed directly by OSC.
+    let mut light =
+        String::from("\x1b]10;rgb:0000/0000/0000\x1b\\\x1b]11;rgb:ffff/ffff/ffff\x1b\\");
+    for index in 0..=u8::MAX {
+        light.push_str(&format!("\x1b]4;{index};rgb:ffff/ffff/ffff\x1b\\"));
+    }
+    writer.write_all(light.as_bytes()).unwrap();
+    writer.flush().unwrap();
+    // Let startup settle and the resize watcher install its signal handler.
+    thread::sleep(Duration::from_millis(250));
+
+    for _ in 0..2 {
+        let watermark = output_len(&output);
+        assert_eq!(
+            unsafe { libc::kill(client.child.process_id().unwrap() as i32, libc::SIGWINCH) },
+            0
+        );
+        assert!(
+            wait_until(Duration::from_secs(5), Duration::from_millis(25), || {
+                let captured = read_output(&output);
+                let refreshed = &captured[watermark..];
+                refreshed.contains(queries) && refreshed.contains("\x1b]4;15;?\x1b\\")
+            }),
+            "SIGWINCH should query default colors and the ANSI palette without changing PTY size"
+        );
+        writer
+            .write_all(b"\x1b]10;rgb:eeee/eeee/eeee\x1b\\\x1b]11;rgb:1111/2222/3333\x1b\\")
+            .unwrap();
+        writer.flush().unwrap();
+    }
+
+    drop(writer);
+    drop(client);
+    cleanup_spawned_herdr(server, base);
+}
+
 /// Current captured byte length, used as a watermark so a test can search only
 /// the output emitted *after* a trigger. The teardown markers also appear in
 /// normal attach-phase output, so matching the whole buffer is meaningless.
