@@ -2364,7 +2364,7 @@ mod tests {
     fn link_resolution_regions_keep_grapheme_byte_offsets() {
         let mut terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
         terminal.write("e\u{301}(https://example.com/路e\u{301}),".as_bytes());
-        let expected = vec![crate::api::schema::PaneLinkRegion {
+        let expected = vec![crate::ghostty::LinkRegion {
             row: 0,
             start_col: 2,
             end_col: 24,
@@ -2392,7 +2392,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             regions,
-            vec![crate::api::schema::PaneLinkRegion {
+            vec![crate::ghostty::LinkRegion {
                 row: 0,
                 start_col: 0,
                 end_col: 3

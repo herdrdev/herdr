@@ -9,13 +9,32 @@ use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 
+#[cfg(target_os = "linux")]
+use crate::native_image_sources::clone_native_image_source;
+
+/// Kernel CoW snapshots are deliberately unsupported outside Linux.
+#[cfg(not(target_os = "linux"))]
+fn clone_native_image_source(
+    _source_fd: i64,
+    _destination: &File,
+    _expected_len: usize,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "native source cloning requires Linux",
+    ))
+}
+
+// Herdr's default log filter is `herdr=info`; keep these warnings under its target.
+const LOG_TARGET: &str = "herdr::pane_graphics_files";
+
 #[cfg(unix)]
 const DIRECTORY_MODE: u32 = 0o700;
 #[cfg(unix)]
 const FILE_MODE: u32 = 0o600;
 
 #[derive(Debug)]
-pub(crate) struct FileStore {
+pub struct FileStore {
     base: PathBuf,
     generation: OnceLock<Arc<Generation>>,
     next_fingerprint: AtomicU64,
@@ -30,7 +49,7 @@ struct Generation {
 
 /// Keep this owned snapshot alive until the terminal has consumed its path.
 #[derive(Debug)]
-pub(crate) struct OwnedExport {
+pub struct OwnedExport {
     lease: Lease,
     _file: ExportFile,
     _reservation: Option<Reservation>,
@@ -106,7 +125,7 @@ impl FileStore {
         }
     }
 
-    pub(crate) fn native_sources() -> Self {
+    pub fn native_sources() -> Self {
         let mut store = Self::new(native_base());
         store.native_budget = Some(Arc::new(Mutex::new(NativeBudget::default())));
         store
@@ -114,7 +133,7 @@ impl FileStore {
 
     /// Kernel-only bounded snapshot; any unsupported clone returns an error.
     /// The caller keeps the borrowed descriptor alive throughout this call.
-    pub(crate) fn snapshot(&self, source_fd: i64, expected_len: usize) -> io::Result<OwnedExport> {
+    pub fn snapshot(&self, source_fd: i64, expected_len: usize) -> io::Result<OwnedExport> {
         if expected_len == 0 || expected_len > MAX_EXPORT_BYTES || !expected_len.is_multiple_of(4) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -133,7 +152,7 @@ impl FileStore {
             path,
             _generation: generation,
         };
-        crate::platform::clone_native_image_source(source_fd, &destination, expected_len)?;
+        clone_native_image_source(source_fd, &destination, expected_len)?;
         drop(destination);
         let lease = self.lease(&file.path, expected_len)?;
         Ok(OwnedExport {
@@ -143,8 +162,9 @@ impl FileStore {
         })
     }
 
-    #[cfg(all(test, unix))]
-    pub(crate) fn source_directory(&self) -> io::Result<PathBuf> {
+    // Not test-gated: herdr's own tests use it, and a dependency's cfg(test) is off.
+    #[cfg(unix)]
+    pub fn source_directory(&self) -> io::Result<PathBuf> {
         Ok(self.generation()?.source.clone())
     }
 
@@ -168,7 +188,7 @@ impl FileStore {
 
     /// Snapshot decoded bytes into a private, uniquely named file. Aggregate
     /// outstanding-export limits are the caller's responsibility.
-    pub(crate) fn export(&self, data: &[u8]) -> io::Result<OwnedExport> {
+    pub fn export(&self, data: &[u8]) -> io::Result<OwnedExport> {
         if data.len() > MAX_EXPORT_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -230,7 +250,7 @@ impl PartialEq for OwnedExport {
 impl Eq for OwnedExport {}
 
 impl OwnedExport {
-    pub(crate) fn copy_rgba(&self) -> io::Result<Vec<u8>> {
+    pub fn copy_rgba(&self) -> io::Result<Vec<u8>> {
         self.lease.copy_rgba()
     }
 
@@ -238,15 +258,16 @@ impl OwnedExport {
         self.lease.read_into(data)
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub fn path(&self) -> &Path {
         self.lease.path()
     }
 
-    pub(crate) fn len(&self) -> usize {
+    #[allow(clippy::len_without_is_empty)]
+    pub fn len(&self) -> usize {
         self.lease.len()
     }
 
-    pub(crate) fn fingerprint(&self) -> u64 {
+    pub fn fingerprint(&self) -> u64 {
         self.lease.fingerprint()
     }
 }
@@ -255,7 +276,7 @@ impl Drop for ExportFile {
     fn drop(&mut self) {
         if let Err(err) = fs::remove_file(&self.path) {
             if err.kind() != io::ErrorKind::NotFound {
-                tracing::warn!(path = %self.path.display(), err = %err, "failed to remove decoded graphics export");
+                tracing::warn!(target: LOG_TARGET, path = %self.path.display(), err = %err, "failed to remove decoded graphics export");
             }
         }
     }
@@ -306,14 +327,14 @@ impl Drop for Generation {
     fn drop(&mut self) {
         if let Err(err) = fs::remove_dir_all(&self.root) {
             if err.kind() != io::ErrorKind::NotFound {
-                tracing::warn!(path = %self.root.display(), err = %err, "failed to remove pane graphics directory");
+                tracing::warn!(target: LOG_TARGET, path = %self.root.display(), err = %err, "failed to remove pane graphics directory");
             }
         }
     }
 }
 
 #[cfg(unix)]
-pub(crate) fn validate_direct_source(path: &Path, expected_len: usize) -> io::Result<()> {
+pub fn validate_direct_source(path: &Path, expected_len: usize) -> io::Result<()> {
     validate_source_under(path, expected_len, runtime_base())
 }
 
@@ -343,7 +364,7 @@ fn validate_source_under(path: &Path, expected_len: usize, base: PathBuf) -> io:
 
 /// Unlike the API validator, accepts only the dedicated native hierarchy.
 #[cfg(unix)]
-pub(crate) fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()> {
+pub fn validate_native_source(path: &Path, expected_len: usize) -> io::Result<()> {
     if expected_len == 0 || expected_len > MAX_EXPORT_BYTES || !expected_len.is_multiple_of(4) {
         return Err(invalid_path());
     }
@@ -463,7 +484,7 @@ fn remove_stale_generations(base: &Path) {
             continue;
         }
         if let Err(err) = fs::remove_dir_all(entry.path()) {
-            tracing::warn!(path = %entry.path().display(), err = %err, "failed to remove stale pane graphics directory");
+            tracing::warn!(target: LOG_TARGET, path = %entry.path().display(), err = %err, "failed to remove stale pane graphics directory");
         }
     }
 }

@@ -1,14 +1,7 @@
 use std::{mem::size_of, ptr};
 
 // Reuse the generated C API; this test observer needs only terminal parsing and formatting.
-#[allow(
-    dead_code,
-    non_camel_case_types,
-    non_snake_case,
-    non_upper_case_globals
-)]
-#[path = "../../src/ghostty/bindings.rs"]
-mod ffi;
+use ghostty_vt::ffi;
 
 struct Screen {
     terminal: ffi::GhosttyTerminal,

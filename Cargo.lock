@@ -744,6 +744,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ghostty-vt"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "libc",
+ "png",
+ "tracing",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -781,6 +791,7 @@ dependencies = [
  "crossterm",
  "ctrlc",
  "futures-util",
+ "ghostty-vt",
  "interprocess",
  "jsonc-parser",
  "libc",

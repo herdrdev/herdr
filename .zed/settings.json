@@ -46,7 +46,7 @@
           "exclude": [
             "target",
             "vendor",
-            "src/ghostty/bindings.rs"
+            "crates/ghostty-vt/src/bindings.rs"
           ]
         },
         "lru": {

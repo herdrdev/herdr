@@ -727,16 +727,3 @@ pub(crate) fn shared_ssh_control_path(
         "interactive SSH recovery requires Unix OpenSSH multiplexing",
     ))
 }
-
-/// Kernel CoW snapshots are deliberately unsupported outside Linux.
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn clone_native_image_source(
-    _source_fd: i64,
-    _destination: &std::fs::File,
-    _expected_len: usize,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "native source cloning requires Linux",
-    ))
-}
