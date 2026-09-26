@@ -20,9 +20,7 @@ env:
   # PR caches are visible only to their own PR, and every save pushes the
   # repository toward GitHub's cache limit, evicting the master caches PRs
   # restore from. Only branch pushes save.
-  SAVE_CACHES: ${{ github.event_name == 'push' || github.head_ref == 'ci/faster-pr-checks' }}
-  # Most integration tests wait on spawned servers and PTYs rather than CPU.
-  NEXTEST_TEST_THREADS: "12"
+  SAVE_CACHES: ${{ github.event_name == 'push' }}
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -188,18 +186,6 @@ jobs:
           LIBGHOSTTY_VT_SIMD: "false"
           LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
         run: CARGO_INCREMENTAL=1 just test-one ghostty
-
-      - name: TEMP diagnose Windows zig cache
-        if: matrix.kind == 'windows'
-        shell: pwsh
-        working-directory: vendor/libghostty-vt
-        run: |
-          $zigArgs = @("build", "-Demit-lib-vt", "-Doptimize=ReleaseFast", "-Dsimd=true", "-Dtarget=x86_64-windows-msvc", "-Dversion-string=$((Get-Content VERSION -Raw).Trim())", "-Demit-xcframework=false")
-          $first = Measure-Command { & $env:ZIG @zigArgs | Out-Host }
-          $second = Measure-Command { & $env:ZIG @zigArgs | Out-Host }
-          "zig build restored-cache={0:n1}s warm={1:n1}s" -f $first.TotalSeconds, $second.TotalSeconds
-          Get-ChildItem ../../.zig-cache | Select-Object Name
-          (Get-ChildItem -Recurse ../../.zig-cache/o | Measure-Object).Count
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'
