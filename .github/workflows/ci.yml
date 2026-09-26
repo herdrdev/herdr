@@ -14,7 +14,7 @@ env:
   # Keep file/line backtraces without generating type and variable debug information.
   CARGO_PROFILE_DEV_DEBUG: "1"
   CARGO_PROFILE_TEST_DEBUG: "1"
-  # Persist both Zig caches; local build outputs otherwise stay in the uncached vendor tree.
+  # Persist both Zig caches; build outputs otherwise stay uncached in Cargo's OUT_DIR.
   ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
   ZIG_LOCAL_CACHE_DIR: ${{ github.workspace }}/.zig-cache
   # PR caches are visible only to their own PR, and every save pushes the
@@ -164,9 +164,9 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/debug/incremental
-          key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-${{ github.sha }}
+          key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs', 'crates/*/Cargo.toml', 'crates/*/build.rs') }}-${{ github.sha }}
           restore-keys: |
-            ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-
+            ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs', 'crates/*/Cargo.toml', 'crates/*/build.rs') }}-
 
       - name: Run Linux lint
         if: runner.os == 'Linux'
@@ -185,7 +185,7 @@ jobs:
         env:
           LIBGHOSTTY_VT_SIMD: "false"
           LIBGHOSTTY_VT_OPTIMIZE: ReleaseSafe
-        run: CARGO_INCREMENTAL=1 just test-one ghostty
+        run: CARGO_INCREMENTAL=1 cargo nextest run --locked -E 'package(ghostty-vt) | test(ghostty)' --status-level fail --final-status-level fail --failure-output final --success-output never
 
       - name: Run Windows checks
         if: matrix.kind == 'windows'
@@ -208,7 +208,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: target/debug/incremental
-          key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs') }}-${{ github.sha }}
+          key: ci-incremental-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN_VERSION }}-${{ env.CARGO_PROFILE_DEV_DEBUG }}-${{ env.CARGO_PROFILE_TEST_DEBUG }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.cargo/config.toml', 'build.rs', 'crates/*/Cargo.toml', 'crates/*/build.rs') }}-${{ github.sha }}
 
       - name: Save Zig build cache
         if: env.SAVE_CACHES == 'true'

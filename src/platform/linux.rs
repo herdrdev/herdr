@@ -1,6 +1,3 @@
-mod native_image_sources;
-pub(crate) use native_image_sources::clone_native_image_source;
-
 use std::{
     collections::{HashSet, VecDeque},
     io::{Read, Write},

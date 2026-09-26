@@ -1,0 +1,14 @@
+[package]
+name = "ghostty-vt"
+version = "0.0.0"
+edition = "2021"
+description = "Herdr's binding to its vendored libghostty-vt"
+license = "Apache-2.0"
+repository = "https://github.com/herdrdev/herdr"
+publish = false
+
+[dependencies]
+base64 = "0.22.1"
+libc = "0.2"
+png = "0.17"
+tracing = "0.1.44"

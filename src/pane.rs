@@ -65,7 +65,7 @@ pub(crate) struct TerminalDirtyPatchSnapshot {
 const RELEASE_REACQUIRE_SUPPRESSION: std::time::Duration = std::time::Duration::from_secs(1);
 const TERMINAL_COMPRESSION_IDLE: std::time::Duration = std::time::Duration::from_millis(250);
 const TERMINAL_COMPRESSION_STEP: std::time::Duration = std::time::Duration::from_millis(1);
-pub(crate) const PANE_TERM: &str = "xterm-256color";
+pub(crate) const PANE_TERM: &str = crate::ghostty::TERM;
 const PANE_COLORTERM: &str = "truecolor";
 
 fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
