@@ -59,6 +59,19 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         );
     }
 
+    if let Some(status) = crate::integration::experimental_kiro_integration_status() {
+        let state = describe_integration_state(
+            status.state,
+            status.installed_version,
+            status.expected_version,
+        );
+        println!(
+            "{} (experimental): {state} ({})",
+            status.label,
+            status.path.display()
+        );
+    }
+
     Ok(0)
 }
 
@@ -93,6 +106,7 @@ fn integration_install(args: &[String]) -> std::io::Result<i32> {
     let installed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::install_target(target),
         IntegrationCommandTarget::Letta => crate::integration::install_experimental_letta(),
+        IntegrationCommandTarget::Kiro => crate::integration::install_experimental_kiro(),
     };
     match installed {
         Ok(messages) => {
@@ -114,6 +128,7 @@ fn integration_uninstall(args: &[String]) -> std::io::Result<i32> {
     let removed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::uninstall_target(target),
         IntegrationCommandTarget::Letta => crate::integration::uninstall_experimental_letta(),
+        IntegrationCommandTarget::Kiro => crate::integration::uninstall_experimental_kiro(),
     };
     match removed {
         Ok(messages) => {
@@ -133,12 +148,13 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
-/// Integration target accepted by the CLI. Letta is deliberately kept out of
-/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
-/// experimental CLI-only target until the agent registry replaces it.
+/// Integration target accepted by the CLI. Letta and Kiro are deliberately kept
+/// out of the frozen client endpoint `IntegrationTarget` enum and handled as
+/// experimental CLI-only targets until the agent registry replaces it.
 enum IntegrationCommandTarget {
     Builtin(IntegrationTarget),
     Letta,
+    Kiro,
 }
 
 fn parse_integration_target(
@@ -147,13 +163,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|kiro>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|kiro>"
         );
         return Ok(None);
     }
@@ -179,10 +195,11 @@ fn parse_integration_target(
             IntegrationCommandTarget::Builtin(IntegrationTarget::AntigravityCli)
         }
         "grok" => IntegrationCommandTarget::Builtin(IntegrationTarget::Grok),
+        "kiro" => IntegrationCommandTarget::Kiro,
         _ => {
             eprintln!("unknown integration target: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
+                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok, kiro"
             );
             return Ok(None);
         }
@@ -211,6 +228,7 @@ fn print_integration_help() {
     eprintln!("  herdr integration install mastracode");
     eprintln!("  herdr integration install antigravity-cli");
     eprintln!("  herdr integration install grok");
+    eprintln!("  herdr integration install kiro");
     eprintln!("  herdr integration uninstall pi");
     eprintln!("  herdr integration uninstall omp");
     eprintln!("  herdr integration uninstall claude");
@@ -229,5 +247,20 @@ fn print_integration_help() {
     eprintln!("  herdr integration uninstall mastracode");
     eprintln!("  herdr integration uninstall antigravity-cli");
     eprintln!("  herdr integration uninstall grok");
+    eprintln!("  herdr integration uninstall kiro");
     eprintln!("  herdr integration status [--outdated-only]");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parser_accepts_kiro_as_cli_only_target() {
+        let args = vec!["kiro".to_string()];
+        assert!(matches!(
+            parse_integration_target(&args, "install").unwrap(),
+            Some(IntegrationCommandTarget::Kiro)
+        ));
+    }
 }

@@ -22,8 +22,9 @@ use super::config_edit::{
 use super::config_file::{check_config_targets, write_config};
 use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
-    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir, mastracode_dir,
-    omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, kiro_dir, letta_dir,
+    mastracode_dir, omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir,
+    qodercli_dir, qwen_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -38,10 +39,11 @@ use super::types::{
     CopilotUninstallResult, CursorInstallPaths, CursorUninstallResult, DevinInstallPaths,
     DevinUninstallResult, DroidInstallPaths, DroidUninstallResult, GrokInstallPaths,
     GrokUninstallResult, HermesInstallPaths, HermesUninstallResult, KiloInstallPaths,
-    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, LettaInstallPaths,
-    LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
-    OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
-    QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
+    KiloUninstallResult, KimiInstallPaths, KimiUninstallResult, KiroInstallPaths,
+    KiroUninstallResult, LettaInstallPaths, LettaUninstallResult, MastracodeInstallPaths,
+    MastracodeUninstallResult, OmpInstallPaths, OmpUninstallResult, OpenCodeInstallPaths,
+    OpenCodeUninstallResult, PiUninstallResult, QodercliInstallPaths, QodercliUninstallResult,
+    QwenInstallPaths, QwenUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
@@ -54,8 +56,9 @@ use super::{
     GROK_HOOK_ASSET, GROK_HOOK_CONFIG_INSTALL_NAME, GROK_HOOK_INSTALL_NAME,
     HERMES_PLUGIN_INIT_ASSET, HERMES_PLUGIN_INIT_INSTALL_NAME, HERMES_PLUGIN_MANIFEST_ASSET,
     HERMES_PLUGIN_MANIFEST_INSTALL_NAME, KILO_PLUGIN_ASSET, KILO_PLUGIN_INSTALL_NAME,
-    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, LETTA_HOOK_ASSET, LETTA_HOOK_INSTALL_NAME,
-    LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
+    KIMI_HOOK_ASSET, KIMI_HOOK_INSTALL_NAME, KIRO_HOOK_ASSET, KIRO_HOOK_CONFIG_INSTALL_NAME,
+    KIRO_HOOK_INSTALL_NAME, KIRO_HOOK_NAME, KIRO_HOOK_TIMEOUT_SECS, LETTA_HOOK_ASSET,
+    LETTA_HOOK_INSTALL_NAME, LETTA_HOOK_TIMEOUT_MS, MASTRACODE_HOOK_ASSET, MASTRACODE_HOOK_EVENTS,
     MASTRACODE_HOOK_INSTALL_NAME, MASTRACODE_HOOK_TIMEOUT_MS, MASTRACODE_REMOVED_HOOK_EVENTS,
     OMP_EXTENSION_ASSET, OMP_EXTENSION_INSTALL_NAME, OPENCODE_PLUGIN_ASSET,
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
@@ -1040,7 +1043,7 @@ pub(crate) fn install_qwen() -> io::Result<QwenInstallPaths> {
     })
 }
 
-fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
+fn staged_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
     let file_name = path
         .file_name()
         .ok_or_else(|| io::Error::other(format!("invalid install path: {}", path.display())))?;
@@ -1049,7 +1052,7 @@ fn letta_install_artifact_path(path: &Path, role: &str) -> io::Result<PathBuf> {
     Ok(path.with_file_name(artifact_name))
 }
 
-pub(super) fn prepare_letta_install_file(
+pub(super) fn prepare_staged_install_file(
     target: &Path,
     contents: &[u8],
     executable: bool,
@@ -1062,8 +1065,8 @@ pub(super) fn prepare_letta_install_file(
         )));
     }
 
-    let staged = letta_install_artifact_path(target, "staged")?;
-    let backup = letta_install_artifact_path(target, "backup")?;
+    let staged = staged_install_artifact_path(target, "staged")?;
+    let backup = staged_install_artifact_path(target, "backup")?;
     if staged.try_exists()? || backup.try_exists()? {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -1089,7 +1092,7 @@ pub(super) fn prepare_letta_install_file(
     Ok((staged, backup))
 }
 
-fn combine_letta_install_errors(primary: io::Error, rollback: io::Result<()>) -> io::Error {
+fn combine_staged_install_errors(primary: io::Error, rollback: io::Result<()>) -> io::Error {
     match rollback {
         Ok(()) => primary,
         Err(rollback_err) => io::Error::new(
@@ -1099,7 +1102,7 @@ fn combine_letta_install_errors(primary: io::Error, rollback: io::Result<()>) ->
     }
 }
 
-pub(super) fn publish_letta_install_file(
+pub(super) fn publish_staged_install_file(
     target: &Path,
     staged: &Path,
     backup: &Path,
@@ -1115,13 +1118,13 @@ pub(super) fn publish_letta_install_file(
         } else {
             Ok(())
         };
-        return Err(combine_letta_install_errors(err, rollback));
+        return Err(combine_staged_install_errors(err, rollback));
     }
 
     Ok(had_original)
 }
 
-pub(super) fn rollback_letta_install_file(
+pub(super) fn rollback_staged_install_file(
     target: &Path,
     backup: &Path,
     had_original: bool,
@@ -1133,9 +1136,9 @@ pub(super) fn rollback_letta_install_file(
     Ok(())
 }
 
-fn cleanup_letta_install_artifact(path: &Path) {
+fn cleanup_staged_install_artifact(path: &Path) {
     if let Err(err) = remove_file_if_exists(path) {
-        tracing::warn!(path = %path.display(), %err, "failed to remove Letta install artifact");
+        tracing::warn!(path = %path.display(), %err, "failed to remove staged integration install artifact");
     }
 }
 
@@ -1194,45 +1197,48 @@ pub(crate) fn install_letta() -> io::Result<LettaInstallPaths> {
 
     let settings_contents = serde_json::to_string_pretty(&settings)?;
     let (hook_staged, hook_backup) =
-        prepare_letta_install_file(&hook_path, LETTA_HOOK_ASSET.as_bytes(), true, false)?;
-    let (settings_staged, settings_backup) =
-        match prepare_letta_install_file(&settings_path, settings_contents.as_bytes(), false, true)
-        {
-            Ok(paths) => paths,
-            Err(err) => {
-                cleanup_letta_install_artifact(&hook_staged);
-                return Err(err);
-            }
-        };
-
-    let hook_had_original = match publish_letta_install_file(&hook_path, &hook_staged, &hook_backup)
-    {
-        Ok(had_original) => had_original,
+        prepare_staged_install_file(&hook_path, LETTA_HOOK_ASSET.as_bytes(), true, false)?;
+    let (settings_staged, settings_backup) = match prepare_staged_install_file(
+        &settings_path,
+        settings_contents.as_bytes(),
+        false,
+        true,
+    ) {
+        Ok(paths) => paths,
         Err(err) => {
-            cleanup_letta_install_artifact(&hook_staged);
-            cleanup_letta_install_artifact(&settings_staged);
+            cleanup_staged_install_artifact(&hook_staged);
             return Err(err);
         }
     };
 
-    let settings_had_original =
-        match publish_letta_install_file(&settings_path, &settings_staged, &settings_backup) {
+    let hook_had_original =
+        match publish_staged_install_file(&hook_path, &hook_staged, &hook_backup) {
             Ok(had_original) => had_original,
             Err(err) => {
-                let err = combine_letta_install_errors(
+                cleanup_staged_install_artifact(&hook_staged);
+                cleanup_staged_install_artifact(&settings_staged);
+                return Err(err);
+            }
+        };
+
+    let settings_had_original =
+        match publish_staged_install_file(&settings_path, &settings_staged, &settings_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_staged_install_errors(
                     err,
-                    rollback_letta_install_file(&hook_path, &hook_backup, hook_had_original),
+                    rollback_staged_install_file(&hook_path, &hook_backup, hook_had_original),
                 );
-                cleanup_letta_install_artifact(&settings_staged);
+                cleanup_staged_install_artifact(&settings_staged);
                 return Err(err);
             }
         };
 
     if hook_had_original {
-        cleanup_letta_install_artifact(&hook_backup);
+        cleanup_staged_install_artifact(&hook_backup);
     }
     if settings_had_original {
-        cleanup_letta_install_artifact(&settings_backup);
+        cleanup_staged_install_artifact(&settings_backup);
     }
 
     Ok(LettaInstallPaths {
@@ -1423,6 +1429,173 @@ pub(crate) fn uninstall_letta() -> io::Result<LettaUninstallResult> {
         settings_path,
         removed_hook_file,
         updated_settings,
+    })
+}
+
+fn kiro_hook_command(hook_path: &Path) -> String {
+    hook_command(hook_path, None)
+}
+
+pub(crate) fn kiro_hook_config(hook_path: &Path) -> Value {
+    json!({
+        "version": "v1",
+        "hooks": [{
+            "name": KIRO_HOOK_NAME,
+            "trigger": "SessionChange",
+            "action": {
+                "type": "command",
+                "command": kiro_hook_command(hook_path),
+            },
+            "timeout": KIRO_HOOK_TIMEOUT_SECS,
+        }],
+    })
+}
+
+fn kiro_hook_asset_is_managed(content: &str) -> bool {
+    content
+        .lines()
+        .any(|line| line.trim() == "# HERDR_INTEGRATION_ID=kiro")
+}
+
+fn kiro_hook_config_is_managed(content: &str) -> bool {
+    let Some(hooks) = serde_json::from_str::<Value>(content)
+        .ok()
+        .and_then(|config| config.get("hooks").and_then(Value::as_array).cloned())
+    else {
+        return false;
+    };
+
+    !hooks.is_empty()
+        && hooks.iter().all(|hook| {
+            let name = hook.get("name").and_then(Value::as_str);
+            name == Some(KIRO_HOOK_NAME)
+                || name == Some("herdr-session-start")
+                || name == Some("herdr-stop")
+        })
+}
+
+fn ensure_kiro_install_target(path: &Path, is_managed: fn(&str) -> bool) -> io::Result<()> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_file() {
+        return Err(io::Error::other(format!(
+            "kiro integration target is not a file: {}",
+            path.display()
+        )));
+    }
+
+    if is_managed(&fs::read_to_string(path)?) {
+        return Ok(());
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "refusing to replace non-Herdr kiro integration target at {}",
+            path.display()
+        ),
+    ))
+}
+
+fn remove_managed_kiro_file(path: &Path, is_managed: fn(&str) -> bool) -> io::Result<bool> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err),
+    };
+    if !metadata.is_file() || !is_managed(&fs::read_to_string(path)?) {
+        return Ok(false);
+    }
+
+    fs::remove_file(path)?;
+    Ok(true)
+}
+
+pub(crate) fn install_kiro() -> io::Result<KiroInstallPaths> {
+    let dir = kiro_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "kiro config directory not found at {}. install kiro cli first",
+            dir.display()
+        )));
+    }
+
+    #[cfg(not(windows))]
+    if !super::registry::command_available("python3") {
+        return Err(io::Error::other(
+            "python3 is required for the kiro integration. install Python 3 and retry",
+        ));
+    }
+
+    let hooks_dir = dir.join("hooks");
+    fs::create_dir_all(&hooks_dir)?;
+    let hook_path = hooks_dir.join(KIRO_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(KIRO_HOOK_CONFIG_INSTALL_NAME);
+    ensure_kiro_install_target(&hook_path, kiro_hook_asset_is_managed)?;
+    ensure_kiro_install_target(&config_path, kiro_hook_config_is_managed)?;
+
+    let config_contents = serde_json::to_vec_pretty(&kiro_hook_config(&hook_path))?;
+    let (hook_staged, hook_backup) =
+        prepare_staged_install_file(&hook_path, KIRO_HOOK_ASSET.as_bytes(), true, false)?;
+    let (config_staged, config_backup) =
+        match prepare_staged_install_file(&config_path, &config_contents, false, true) {
+            Ok(paths) => paths,
+            Err(err) => {
+                cleanup_staged_install_artifact(&hook_staged);
+                return Err(err);
+            }
+        };
+
+    let hook_had_original =
+        match publish_staged_install_file(&hook_path, &hook_staged, &hook_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                cleanup_staged_install_artifact(&hook_staged);
+                cleanup_staged_install_artifact(&config_staged);
+                return Err(err);
+            }
+        };
+    let config_had_original =
+        match publish_staged_install_file(&config_path, &config_staged, &config_backup) {
+            Ok(had_original) => had_original,
+            Err(err) => {
+                let err = combine_staged_install_errors(
+                    err,
+                    rollback_staged_install_file(&hook_path, &hook_backup, hook_had_original),
+                );
+                cleanup_staged_install_artifact(&config_staged);
+                return Err(err);
+            }
+        };
+
+    if hook_had_original {
+        cleanup_staged_install_artifact(&hook_backup);
+    }
+    if config_had_original {
+        cleanup_staged_install_artifact(&config_backup);
+    }
+
+    Ok(KiroInstallPaths {
+        hook_path,
+        config_path,
+    })
+}
+
+pub(crate) fn uninstall_kiro() -> io::Result<KiroUninstallResult> {
+    let hooks_dir = kiro_dir()?.join("hooks");
+    let hook_path = hooks_dir.join(KIRO_HOOK_INSTALL_NAME);
+    let config_path = hooks_dir.join(KIRO_HOOK_CONFIG_INSTALL_NAME);
+    let removed_config_file = remove_managed_kiro_file(&config_path, kiro_hook_config_is_managed)?;
+    let removed_hook_file = remove_managed_kiro_file(&hook_path, kiro_hook_asset_is_managed)?;
+
+    Ok(KiroUninstallResult {
+        hook_path,
+        config_path,
+        removed_hook_file,
+        removed_config_file,
     })
 }
 

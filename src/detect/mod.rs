@@ -338,6 +338,7 @@ pub(crate) fn session_identity_only_integration(source: &str, agent_label: &str)
         ("herdr:hermes", "hermes")
             | ("herdr:qwen", "qwen")
             | ("herdr:letta", "letta")
+            | ("herdr:kiro-v3", "kiro")
             | ("herdr:antigravity_cli", "agy")
     )
 }
@@ -1054,6 +1055,7 @@ mod tests {
             ("herdr:hermes", "hermes", Agent::Hermes),
             ("herdr:qwen", "qwen", Agent::Qwen),
             ("herdr:letta", "letta", Agent::Letta),
+            ("herdr:kiro-v3", "kiro", Agent::Kiro),
             ("herdr:antigravity_cli", "agy", Agent::Antigravity),
         ] {
             assert!(!full_lifecycle_hook_authority(source, label));

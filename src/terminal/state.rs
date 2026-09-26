@@ -493,6 +493,12 @@ impl TerminalState {
             for source in reset_sources {
                 self.hook_report_sequences.remove(&source);
             }
+            if let Some(exited_agent) = agent {
+                let exited_agent_label = crate::detect::agent_label(exited_agent);
+                self.hook_report_sequences.retain(|source, _| {
+                    !crate::agent_resume::is_official_agent_source(source, exited_agent_label)
+                });
+            }
 
             let official_session = self
                 .hook_authority
@@ -1387,6 +1393,7 @@ impl TerminalState {
             ) | ("herdr:mastracode", "mastracode", Some("startup"))
                 | ("herdr:hermes", "hermes", Some("startup" | "new" | "resume"))
                 | ("herdr:opencode", "opencode", Some("select"))
+                | ("herdr:kiro-v3", "kiro", Some("select"))
                 | ("herdr:pi", "pi", Some("new" | "resume" | "fork"))
                 | ("herdr:grok", "grok", Some("new"))
                 | (
@@ -4786,6 +4793,138 @@ mod tests {
                 .as_ref()
                 .map(|session| session.session_ref.value.as_str()),
             Some("qwen-parent")
+        );
+    }
+
+    #[test]
+    fn kiro_v3_selection_replaces_identity_without_overwriting_blocked_state() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Kiro), AgentState::Blocked);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:kiro-v3".into(),
+                "kiro".into(),
+                crate::agent_resume::AgentSessionRef::id("kiro-leaf-old"),
+                Some(20),
+                Some("select".into()),
+            )
+            .expect("initial Kiro V3 identity should be accepted");
+
+        let selected = terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:kiro-v3".into(),
+                "kiro".into(),
+                crate::agent_resume::AgentSessionRef::id("kiro-leaf-new"),
+                Some(21),
+                Some("select".into()),
+            )
+            .expect("newer Kiro V3 selection should replace the saved leaf ID");
+
+        assert!(selected.session_ref_changed);
+        assert_eq!(terminal.state, AgentState::Blocked);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("kiro-leaf-new")
+        );
+
+        let stale = terminal.set_agent_session_ref_for_session_start(
+            "herdr:kiro-v3".into(),
+            "kiro".into(),
+            crate::agent_resume::AgentSessionRef::id("kiro-leaf-stale"),
+            Some(21),
+            Some("select".into()),
+        );
+
+        assert!(stale.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("kiro-leaf-new")
+        );
+    }
+
+    #[test]
+    fn kiro_release_then_process_exit_accepts_new_process_sequence() {
+        let mut terminal = test_terminal();
+        let exit_observed_at = Instant::now() + Duration::from_secs(1);
+        terminal.set_detected_state(Some(Agent::Kiro), AgentState::Working);
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:kiro-v3".into(),
+                "kiro".into(),
+                crate::agent_resume::AgentSessionRef::id("kiro-local-before-release"),
+                Some(20),
+                Some("select".into()),
+            )
+            .expect("initial local Kiro selection should be accepted");
+        terminal
+            .release_agent_with_mutation("herdr:kiro-v3", "kiro", Some(21))
+            .expect("remote Kiro selection should release the local identity");
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Kiro),
+            AgentState::Idle,
+            false,
+            false,
+            false,
+            true,
+            exit_observed_at,
+        );
+        terminal
+            .set_detected_agent_process_at(Agent::Kiro, exit_observed_at + Duration::from_secs(1));
+
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:kiro-v3".into(),
+                "kiro".into(),
+                crate::agent_resume::AgentSessionRef::id("kiro-local-after-restart"),
+                Some(1),
+                Some("select".into()),
+            )
+            .expect("the first report from the new Kiro process should be accepted");
+
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("kiro-local-after-restart")
+        );
+    }
+
+    #[test]
+    fn kiro_v3_selection_does_not_replace_without_foreground_kiro() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref_for_session_start(
+                "herdr:kiro-v3".into(),
+                "kiro".into(),
+                crate::agent_resume::AgentSessionRef::id("kiro-leaf-old"),
+                Some(20),
+                Some("select".into()),
+            )
+            .expect("initial Kiro V3 identity should be accepted");
+
+        let replacement = terminal.set_agent_session_ref_for_session_start(
+            "herdr:kiro-v3".into(),
+            "kiro".into(),
+            crate::agent_resume::AgentSessionRef::id("kiro-leaf-new"),
+            Some(21),
+            Some("select".into()),
+        );
+
+        assert!(replacement.is_none());
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("kiro-leaf-old")
         );
     }
 

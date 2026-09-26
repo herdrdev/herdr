@@ -420,6 +420,7 @@ fn foreground_shell_agent_action(
     previous_agent: Option<Agent>,
     new_agent: Option<Agent>,
     foreground_is_pane_shell: bool,
+    foreground_process_replaced: bool,
     process_exit_reported: bool,
 ) -> ForegroundShellAgentAction {
     let Some(previous_agent) = previous_agent else {
@@ -433,6 +434,12 @@ fn foreground_shell_agent_action(
         } else {
             ForegroundShellAgentAction::ObserveProbe
         };
+    }
+    if foreground_process_replaced
+        && previous_agent == Agent::Kiro
+        && new_agent == Some(previous_agent)
+    {
+        return ForegroundShellAgentAction::ReportProcessExit;
     }
     if new_agent.is_some() {
         return ForegroundShellAgentAction::ObserveProbe;
@@ -891,6 +898,9 @@ fn spawn_basic_detection_task(
                     previous_agent,
                     new_agent,
                     foreground_is_pane_shell,
+                    process_group_changed
+                        && foreground_pgid.is_some()
+                        && last_foreground_pgid.is_some(),
                     foreground_shell_exit_reported,
                 );
                 let changed = apply_foreground_shell_agent_action(
@@ -2837,6 +2847,9 @@ impl PaneRuntime {
                                 previous_agent,
                                 new_agent,
                                 foreground_is_pane_shell,
+                                process_group_changed
+                                    && foreground_pgid.is_some()
+                                    && last_foreground_pgid.is_some(),
                                 foreground_shell_exit_reported,
                             );
                             let changed = apply_foreground_shell_agent_action(
@@ -5025,11 +5038,11 @@ mod tests {
     #[test]
     fn foreground_shell_reports_process_exit_before_clearing_agent() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Codex), None, true, false),
+            foreground_shell_agent_action(Some(Agent::Codex), None, true, false, false),
             ForegroundShellAgentAction::ReportProcessExit
         );
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Codex), None, true, true),
+            foreground_shell_agent_action(Some(Agent::Codex), None, true, false, true),
             ForegroundShellAgentAction::ClearAgent
         );
     }
@@ -5037,7 +5050,19 @@ mod tests {
     #[test]
     fn same_agent_after_reported_exit_is_a_replacement_process() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Pi), Some(Agent::Pi), false, true),
+            foreground_shell_agent_action(Some(Agent::Pi), Some(Agent::Pi), false, false, true),
+            ForegroundShellAgentAction::ReportReplacementProcess
+        );
+    }
+
+    #[test]
+    fn same_kiro_foreground_group_replacement_reports_exit_before_reacquire() {
+        assert_eq!(
+            foreground_shell_agent_action(Some(Agent::Kiro), Some(Agent::Kiro), false, true, false),
+            ForegroundShellAgentAction::ReportProcessExit
+        );
+        assert_eq!(
+            foreground_shell_agent_action(Some(Agent::Kiro), Some(Agent::Kiro), false, true, true),
             ForegroundShellAgentAction::ReportReplacementProcess
         );
     }
@@ -5045,7 +5070,7 @@ mod tests {
     #[test]
     fn unknown_non_shell_foreground_job_is_not_immediate_clear_signal() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), None, false, false),
+            foreground_shell_agent_action(Some(Agent::Claude), None, false, false, false),
             ForegroundShellAgentAction::ObserveProbe
         );
     }
@@ -5067,7 +5092,7 @@ mod tests {
     #[test]
     fn reported_process_exit_clears_before_unknown_foreground_probe() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), None, false, true),
+            foreground_shell_agent_action(Some(Agent::Claude), None, false, false, true),
             ForegroundShellAgentAction::ClearAgent
         );
     }
@@ -5075,7 +5100,13 @@ mod tests {
     #[test]
     fn foreground_agent_job_is_not_clear_signal() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), Some(Agent::OpenCode), true, false,),
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                Some(Agent::OpenCode),
+                true,
+                false,
+                false,
+            ),
             ForegroundShellAgentAction::ObserveProbe
         );
     }
