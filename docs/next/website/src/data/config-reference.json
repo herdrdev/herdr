@@ -477,9 +477,9 @@
       "keys": [
         {
           "key": "keys.prefix",
-          "type": "string",
+          "type": "keybinding",
           "default": "\"ctrl+b\"",
-          "description": "Prefix key to enter prefix mode (e.g. \"ctrl+b\", \"f12\", \"esc\")."
+          "description": "Prefix key(s) to enter prefix mode (e.g. \"ctrl+b\", \"f12\", \"esc\", or an array to accept several)."
         },
         {
           "key": "keys.help",

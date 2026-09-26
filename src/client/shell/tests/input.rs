@@ -650,3 +650,28 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
     let link = frame.cells[index].hyperlink.expect("linked cell") as usize;
     assert_eq!(frame.hyperlinks[link], "https://example.test");
 }
+
+#[test]
+fn every_configured_prefix_enters_prefix_mode() {
+    let mut config = Config::default();
+    config.keys.prefix =
+        crate::config::BindingConfig::Many(vec!["ctrl+space".to_owned(), "ctrl+s".to_owned()]);
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(snapshot()));
+
+    for combo in [
+        (KeyCode::Char(' '), KeyModifiers::CONTROL),
+        (KeyCode::Char('s'), KeyModifiers::CONTROL),
+    ] {
+        let _ = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            combo.0, combo.1,
+        ))]);
+        assert_eq!(state.mode, ClientShellMode::Prefix);
+
+        let _ = state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+            KeyCode::Esc,
+            KeyModifiers::empty(),
+        ))]);
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+    }
+}

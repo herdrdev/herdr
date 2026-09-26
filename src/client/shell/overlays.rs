@@ -1044,7 +1044,7 @@ fn help_lines(
     use ratatui::text::{Line, Span};
 
     let groups = crate::input::filter_keybind_help_groups(
-        crate::input::keybind_help_groups(&keybinds.keybinds, keybinds.prefix),
+        crate::input::keybind_help_groups(&keybinds.keybinds, &keybinds.prefix),
         query,
     );
     let key_width = groups

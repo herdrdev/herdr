@@ -139,7 +139,7 @@ impl ClientShellConfig {
                 .live_keybinds_with_diagnostics()
                 .map(|(keybinds, _diagnostics)| keybinds)
                 .unwrap_or_else(|_diagnostics| LiveKeybindConfig {
-                    prefix: config.prefix_key(),
+                    prefix: config.prefix_keys(),
                     keybinds: config.keybinds(),
                 }),
             local_keys: config.keys.clone(),
@@ -459,7 +459,7 @@ mod tests {
         next.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
-        next.keys.prefix = "ctrl+a".to_owned();
+        next.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
 
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(shell.agents, previous);
         assert_eq!(
             shell.keybinds.prefix,
-            (KeyCode::Char('a'), KeyModifiers::CONTROL)
+            vec![(KeyCode::Char('a'), KeyModifiers::CONTROL)]
         );
     }
 
@@ -523,19 +523,19 @@ mod tests {
     fn live_reload_preserves_invalid_client_owned_sections() {
         let mut initial = Config::default();
         initial.ui.sidebar_width = 29;
-        initial.keys.prefix = "ctrl+x".to_owned();
+        initial.keys.prefix = crate::config::BindingConfig::one("ctrl+x");
         let mut shell = ClientShellConfig::from_config(&initial);
 
         let mut invalid = Config::default();
         invalid.ui.sidebar_width = 35;
-        invalid.keys.prefix = "ctrl+a".to_owned();
+        invalid.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
         let invalid_sections = vec!["ui".to_owned(), "keys".to_owned()];
         shell.apply_live_config(&invalid, &[], &invalid_sections);
 
         assert_eq!(shell.sidebar_width, 29);
         assert_eq!(
             shell.keybinds.prefix,
-            (KeyCode::Char('x'), KeyModifiers::CONTROL)
+            vec![(KeyCode::Char('x'), KeyModifiers::CONTROL)]
         );
     }
 }

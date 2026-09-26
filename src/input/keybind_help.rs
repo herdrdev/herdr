@@ -63,13 +63,13 @@ fn indexed_range_prefix(bindings: &[IndexedKeybind]) -> Option<&str> {
 
 pub(crate) fn keybind_help_groups(
     keybinds: &Keybinds,
-    prefix: (crossterm::event::KeyCode, crossterm::event::KeyModifiers),
+    prefixes: &[crate::config::KeyCombo],
 ) -> Vec<KeybindHelpGroup> {
     let mut groups = vec![
         (
             "global",
             vec![
-                entry(crate::config::format_key_combo(prefix), "prefix mode"),
+                entry(crate::config::format_prefix_combos(prefixes), "prefix mode"),
                 entry(binding_label(&keybinds.help), "keybinds"),
                 entry(binding_label(&keybinds.settings), "settings"),
                 entry(binding_label(&keybinds.detach), "detach"),
@@ -266,5 +266,19 @@ mod tests {
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].1[0].1, "close pane");
         assert!(filter_keybind_help_groups(groups(), "panes").is_empty());
+    }
+
+    #[test]
+    fn help_lists_every_configured_prefix() {
+        let groups = keybind_help_groups(
+            &Keybinds::default(),
+            &[
+                (KeyCode::Char(' '), KeyModifiers::CONTROL),
+                (KeyCode::Char('s'), KeyModifiers::CONTROL),
+            ],
+        );
+        let global = &groups[0].1;
+        assert_eq!(global[0].0, "ctrl+space / ctrl+s");
+        assert_eq!(global[0].1, "prefix mode");
     }
 }
