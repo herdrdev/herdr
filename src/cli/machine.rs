@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::client::endpoint::{EndpointCatalog, ProfileId};
+use crate::client::endpoint::{EndpointCatalog, ProfileId, MAX_LABEL_BYTES};
 
 const HELP: &str = "Usage:
   herdr machine list [--json]
@@ -205,7 +205,7 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
 #[derive(Debug, PartialEq, Eq)]
 struct AddArgs {
     target: String,
-    label: String,
+    label: Option<String>,
     session: String,
 }
 
@@ -249,7 +249,6 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         "usage: herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]"
             .to_owned()
     })?;
-    let label = label.unwrap_or_else(|| default_label(&target));
     let session = session.unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_owned());
     Ok(AddArgs {
         target,
@@ -258,12 +257,39 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
     })
 }
 
-/// Names the machine after the SSH host, without any `user@` prefix.
-fn default_label(target: &str) -> String {
-    target
+/// Names the machine after the SSH host, plus the session when it is not the default.
+fn default_label(target: &str, session: &str) -> String {
+    let url = target
+        .strip_prefix("ssh://")
+        .map(|authority| authority.trim_end_matches('/'));
+    let authority = url.unwrap_or(target);
+    let host = authority
         .rsplit_once('@')
-        .map_or(target, |(_, host)| host)
-        .to_owned()
+        .map_or(authority, |(_, host)| host);
+    let host = match (url, host.strip_prefix('[')) {
+        (Some(_), Some(bracketed)) => bracketed.split_once(']').map_or(host, |(ip, _)| ip),
+        (Some(_), None) => host.split_once(':').map_or(host, |(host, _)| host),
+        (None, _) => host,
+    };
+    if session == crate::session::DEFAULT_SESSION_NAME {
+        host.to_owned()
+    } else {
+        format!("{host}/{session}")
+    }
+}
+
+fn check_default_label(catalog: &EndpointCatalog, label: &str) -> Result<(), String> {
+    if label.len() > MAX_LABEL_BYTES {
+        return Err(format!(
+            "default machine name '{label}' is longer than {MAX_LABEL_BYTES} bytes; pass --label to choose a name"
+        ));
+    }
+    if catalog.ssh.iter().any(|profile| profile.label == label) {
+        return Err(format!(
+            "a machine named '{label}' already exists; pass --label to choose another name"
+        ));
+    }
+    Ok(())
 }
 
 fn add(args: &[String]) -> std::io::Result<i32> {
@@ -278,7 +304,15 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
     };
+    let label_is_default = label.is_none();
+    let label = label.unwrap_or_else(|| default_label(&target, &session));
     let mut catalog = load_catalog()?;
+    if label_is_default {
+        if let Err(error) = check_default_label(&catalog, &label) {
+            eprintln!("error: {error}");
+            return Ok(2);
+        }
+    }
     match catalog.add_ssh(label.clone(), &target, session.clone()) {
         Ok(_) => {}
         Err(error) => {
@@ -300,6 +334,12 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             "remote prepared, but machine was not saved: {error}"
         ))
     })?;
+    if label_is_default {
+        if let Err(error) = check_default_label(&catalog, &label) {
+            eprintln!("error: {error}; machine was not saved");
+            return Ok(2);
+        }
+    }
     let id = match catalog.add_ssh(label, &target, &session) {
         Ok(id) => id,
         Err(error) => {
@@ -466,7 +506,7 @@ mod tests {
                 parse_add_args(&args).unwrap(),
                 AddArgs {
                     target: "workstation.coder".into(),
-                    label: "coder".into(),
+                    label: Some("coder".into()),
                     session: session.into(),
                 },
                 "{args:?}"
@@ -475,25 +515,38 @@ mod tests {
     }
 
     #[test]
-    fn add_parser_defaults_label_to_ssh_host() {
-        for (args, label, session) in [
-            (vec!["workstation.coder"], "workstation.coder", "default"),
-            (
-                vec!["dev@workstation.coder"],
-                "workstation.coder",
-                "default",
-            ),
-            (
-                vec!["workstation.coder", "--remote-session", "agents"],
-                "workstation.coder",
-                "agents",
-            ),
+    fn add_parser_leaves_label_unset_without_flag() {
+        let parsed = parse_add_args(&["workstation.coder".to_owned()]).unwrap();
+        assert_eq!(parsed.label, None);
+        assert_eq!(parsed.session, "default");
+    }
+
+    #[test]
+    fn default_label_uses_ssh_host_and_non_default_session() {
+        for (target, session, label) in [
+            ("workbox", "default", "workbox"),
+            ("dev@workbox", "default", "workbox"),
+            ("workbox", "agents", "workbox/agents"),
+            ("ssh://workbox", "default", "workbox"),
+            ("ssh://dev@workbox:2222", "default", "workbox"),
+            ("ssh://dev@[::1]:2222", "agents", "::1/agents"),
+            ("ssh://dev@workbox/", "default", "workbox"),
+            ("ssh://dev@workbox:2222/", "agents", "workbox/agents"),
         ] {
-            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
-            let parsed = parse_add_args(&args).unwrap();
-            assert_eq!(parsed.label, label, "{args:?}");
-            assert_eq!(parsed.session, session, "{args:?}");
+            assert_eq!(default_label(target, session), label, "{target} {session}");
         }
+    }
+
+    #[test]
+    fn default_label_must_be_unique_and_fit() {
+        let mut catalog = EndpointCatalog::default();
+        catalog.add_ssh("workbox", "workbox", "default").unwrap();
+
+        assert!(check_default_label(&catalog, "workbox/agents").is_ok());
+        let duplicate = check_default_label(&catalog, "workbox").unwrap_err();
+        assert!(duplicate.contains("--label"), "{duplicate}");
+        let long = check_default_label(&catalog, &"h".repeat(MAX_LABEL_BYTES + 1)).unwrap_err();
+        assert!(long.contains("--label"), "{long}");
     }
 
     #[test]

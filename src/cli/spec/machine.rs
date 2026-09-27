@@ -31,7 +31,7 @@ pub(super) fn command() -> Command {
                 )
                 .arg(
                     option("label", "LABEL").help(
-                        "Set the machine label shown in the sidebar (defaults to the SSH host)",
+                        "Set the machine label shown in the sidebar (defaults to the SSH host, or host/session)",
                     ),
                 )
                 .arg(

@@ -11,7 +11,7 @@ const CATALOG_VERSION: u32 = 1;
 const SELECTION_VERSION: u32 = 1;
 const MAX_CATALOG_BYTES: u64 = 64 * 1024;
 const MAX_PROFILES: usize = 64;
-const MAX_LABEL_BYTES: usize = 128;
+pub(crate) const MAX_LABEL_BYTES: usize = 128;
 const MAX_TARGET_BYTES: usize = 1024;
 static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(1);
 
