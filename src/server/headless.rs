@@ -20056,6 +20056,81 @@ next_tab = ""
     }
 
     #[test]
+    fn sections_sidebar_area_checklist_uses_headless_client_hit_areas() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let directory = std::env::temp_dir().join(format!(
+            "herdr-headless-sidebar-areas-{}",
+            crate::config::test_unique_suffix()
+        ));
+        std::fs::create_dir_all(&directory).expect("temp config directory");
+        let config_path = directory.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "[ui.sidebar]\nlayout = \"sections\"\n[ui.sidebar.areas]\nnotes = true\n",
+        )
+        .expect("seed sections config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &config_path);
+
+        let mut server = test_headless_server();
+        server.app.state.set_server_mode(crate::app::Mode::Terminal);
+        server.app.state.sidebar_collapsed = false;
+        server.app.state.sidebar_sections_layout = true;
+        crate::ui::compute_view(
+            &mut server.app.state,
+            ratatui::layout::Rect::new(0, 0, 80, 24),
+        );
+        let checklist = server.app.state.view.sidebar_areas_hit_area;
+        let bell = server.app.state.view.notification_hit_area;
+        assert_eq!(checklist.width, 1);
+        assert_eq!(checklist.y, bell.y);
+        assert_eq!(checklist.right(), bell.x);
+
+        let (writer, _control_rx, _render_rx) = test_client_writer();
+        server.clients.insert(
+            1,
+            ClientConnection::new(
+                (80, 24),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(writer),
+            ),
+        );
+        server.foreground_client_id = Some(1);
+        server.sync_foreground_client_state();
+
+        let click = |server: &mut HeadlessServer, x, y| {
+            assert!(server.handle_server_event(ServerEvent::ClientInputEvents {
+                client_id: 1,
+                events: vec![crate::protocol::ClientInputEvent::Mouse {
+                    kind: crate::protocol::ClientMouseKind::Down(
+                        crate::protocol::ClientMouseButton::Left,
+                    ),
+                    column: x,
+                    row: y,
+                    modifiers: 0,
+                }],
+            }));
+        };
+
+        click(&mut server, checklist.x, checklist.y);
+        assert_eq!(server.app.state.sidebar_areas_menu_selected, Some(0));
+        let menu = crate::ui::sidebar::sidebar_areas_menu_layout(
+            &server.app.state,
+            server.app.state.screen_rect(),
+        )
+        .expect("checklist menu layout");
+        click(&mut server, menu.list_rect.x, menu.list_rect.y + 6);
+        assert!(!server.app.state.sidebar_areas.notes);
+        assert!(!crate::config::Config::load().config.ui.sidebar.areas.notes);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
     fn notification_permission_survives_reconnect_after_bell_toggle() {
         let mut env = crate::config::TestConfigEnvGuard::acquire();
         let directory = std::env::temp_dir().join(format!(

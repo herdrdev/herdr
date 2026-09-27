@@ -350,6 +350,30 @@ The symbols are static, so this option does not enable spinner animation.
 
 ### Sidebar row layouts
 
+Choose the sections layout with a separate layout key. The default `current` value keeps the existing grouping. Sections show Pinned, Active, Snoozed, and Settled in that order; `header = "plain"` removes the sky band and wordmark while keeping search and sidebar action controls available in the compact header.
+
+```toml
+[ui.sidebar]
+layout = "sections"
+header = "sky"
+
+[ui.sidebar.areas]
+sky_header = true
+view_bar = true
+unassigned = true
+runs = true
+aloops = true
+symphony = true
+notes = true
+pomodoro = true
+hosts = true
+```
+
+Each `areas` key hides or shows that row group in the sections layout. Every
+area is shown by default. The current layout ignores this table.
+
+Pin or unpin a tab from the CLI with `herdr tab pin <tab_id>` and `herdr tab unpin <tab_id>`. The sections layout keeps settled tabs on a collapsed shelf until you expand it.
+
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:
 
 ```toml

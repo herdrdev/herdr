@@ -1,9 +1,10 @@
 use crate::api::schema::{
     EmptyParams, Method, PaneFocusDirectionParams, PaneInputSetParams, PaneMoveParams,
     PaneRenameParams, PaneResizeParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneZoomParams, Request, TabCreateParams, TabListParams, TabPrioParams, TabRenameParams,
-    TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams, WorkspaceTarget,
-    WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams, WorktreeRemoveParams,
+    PaneZoomParams, Request, TabCreateParams, TabListParams, TabPinParams, TabPrioParams,
+    TabRenameParams, TabTarget, WorkspaceCloseParams, WorkspaceCreateParams, WorkspaceRenameParams,
+    WorkspaceTarget, WorktreeCreateParams, WorktreeListParams, WorktreeOpenParams,
+    WorktreeRemoveParams,
 };
 
 fn print_method_response(id: &'static str, method: Method) -> std::io::Result<i32> {
@@ -70,6 +71,10 @@ pub(super) fn tab_focus(tab_id: String) -> std::io::Result<i32> {
 
 pub(super) fn tab_rename(params: TabRenameParams) -> std::io::Result<i32> {
     print_method_response("cli:tab:rename", Method::TabRename(params))
+}
+
+pub(super) fn tab_pin(params: TabPinParams) -> std::io::Result<i32> {
+    print_method_response("cli:tab:pin", Method::TabPin(params))
 }
 
 pub(super) fn tab_prio(params: TabPrioParams) -> std::io::Result<i32> {

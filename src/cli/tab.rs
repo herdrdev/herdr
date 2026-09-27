@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 
 use crate::api::schema::{
-    TabCreateParams, TabListParams, TabPrioMode, TabPrioParams, TabRenameParams,
+    TabCreateParams, TabListParams, TabPinMode, TabPinParams, TabPrioMode, TabPrioParams,
+    TabRenameParams,
 };
 
 pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
@@ -15,6 +16,8 @@ pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
         "create" => tab_create(&args[1..]),
         "get" => tab_get(&args[1..]),
         "focus" => tab_focus(&args[1..]),
+        "pin" => tab_pin(&args[1..], TabPinMode::Pin),
+        "unpin" => tab_pin(&args[1..], TabPinMode::Unpin),
         "rename" => tab_rename(&args[1..]),
         "prio" => tab_prio(&args[1..]),
         "close" => tab_close(&args[1..]),
@@ -161,6 +164,30 @@ fn tab_focus(args: &[String]) -> std::io::Result<i32> {
     super::runtime::tab_focus(super::normalize_tab_id(raw_tab_id))
 }
 
+fn tab_pin(args: &[String], mode: TabPinMode) -> std::io::Result<i32> {
+    let Some(params) = parse_tab_pin_args(args, mode) else {
+        eprintln!(
+            "usage: herdr tab {} <tab_id>",
+            match mode {
+                TabPinMode::Pin => "pin",
+                _ => "unpin",
+            }
+        );
+        return Ok(2);
+    };
+    super::runtime::tab_pin(params)
+}
+
+fn parse_tab_pin_args(args: &[String], mode: TabPinMode) -> Option<TabPinParams> {
+    let [raw_tab_id] = args else {
+        return None;
+    };
+    Some(TabPinParams {
+        tab_id: super::normalize_tab_id(raw_tab_id),
+        mode,
+    })
+}
+
 fn tab_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_tab_rename_args(args) else {
         eprintln!("usage: herdr tab rename <tab_id> <label>|--clear");
@@ -281,6 +308,8 @@ fn print_tab_help() {
     );
     eprintln!("  herdr tab get <tab_id>");
     eprintln!("  herdr tab focus <tab_id>");
+    eprintln!("  herdr tab pin <tab_id>");
+    eprintln!("  herdr tab unpin <tab_id>");
     eprintln!("  herdr tab rename <tab_id> <label>");
     eprintln!("  herdr tab prio [<tab_id>|--tab ID|--current] [--toggle|--on|--off]");
     eprintln!("  herdr tab close <tab_id>");
@@ -321,5 +350,18 @@ mod tests {
     fn tab_rename_needs_a_tab_and_a_label() {
         assert!(parse_tab_rename_args(&args(&[])).is_none());
         assert!(parse_tab_rename_args(&args(&["w1:t2"])).is_none());
+    }
+
+    #[test]
+    fn sidebar_pin_cli_parses_a_tab_id_for_pin_and_unpin() {
+        let pin =
+            parse_tab_pin_args(&args(&["w1:t2"]), TabPinMode::Pin).expect("pin takes one tab id");
+        assert_eq!(pin.tab_id, "w1:t2");
+        assert_eq!(pin.mode, TabPinMode::Pin);
+        let unpin = parse_tab_pin_args(&args(&["w1:t2"]), TabPinMode::Unpin)
+            .expect("unpin takes one tab id");
+        assert_eq!(unpin.mode, TabPinMode::Unpin);
+        assert!(parse_tab_pin_args(&args(&[]), TabPinMode::Pin).is_none());
+        assert!(parse_tab_pin_args(&args(&["w1:t2", "extra"]), TabPinMode::Pin).is_none());
     }
 }

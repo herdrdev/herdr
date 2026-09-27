@@ -2670,6 +2670,8 @@ pub struct ViewState {
     pub(crate) pomodoro_hit_area: Rect,
     /// Per-machine notification toggle beside the break timer.
     pub(crate) notification_hit_area: Rect,
+    /// Checklist control for sections-layout area visibility.
+    pub(crate) sidebar_areas_hit_area: Rect,
     /// The idle animation's panel under the notepad. Empty when it is off.
     pub(crate) hyperspace_rect: Rect,
     /// Its pause button, in the panel's bottom-left corner.
@@ -4445,6 +4447,8 @@ pub struct AppState {
     pub(crate) sidebar_starred_only: bool,
     /// Downward creation menu anchored to the sidebar header.
     pub(crate) sidebar_new_menu: Option<SidebarNewMenuState>,
+    /// Checklist menu for sections-layout area visibility.
+    pub(crate) sidebar_areas_menu_selected: Option<usize>,
     /// Downward recent-project picker. Project paths are derived at render time.
     pub(crate) sidebar_new_thread: Option<SidebarNewThreadState>,
     pub(crate) sidebar_project_menu: Option<SidebarProjectMenuState>,
@@ -4722,6 +4726,10 @@ pub struct AppState {
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
+    pub sidebar_areas: crate::config::SidebarAreasConfig,
+    /// Config-selected sidebar presentation. It is view state, never session data.
+    pub sidebar_sections_layout: bool,
+    pub sidebar_header_plain: bool,
     pub next_agent_state_change_seq: u64,
     /// Capture mouse input for Herdr's own mouse UI. When false, Herdr only
     /// captures mouse while the focused pane app requests mouse reporting.
@@ -6223,7 +6231,12 @@ impl AppState {
         }
         // The notepad is a visible client editor. Once focused it owns input
         // and the host cursor ahead of shared modes and underlying surfaces.
-        if self.notepad.focused {
+        // Config reloads can hide Notes without clearing its focus flag, so
+        // resolve ownership from the same visibility settings as the panel.
+        if self.notepad.focused
+            && self.notepad.enabled
+            && (!self.sidebar_sections_layout || self.sidebar_areas.notes)
+        {
             return InputOwner::Notepad;
         }
         if self.add_project_active() {
@@ -7554,6 +7567,7 @@ impl AppState {
             sidebar_search_active: false,
             sidebar_starred_only: false,
             sidebar_new_menu: None,
+            sidebar_areas_menu_selected: None,
             sidebar_new_thread: None,
             sidebar_project_menu: None,
             sidebar_refresh_requested: false,
@@ -7610,6 +7624,7 @@ impl AppState {
                 notepad_usage_max_scroll: 0,
                 pomodoro_hit_area: Rect::default(),
                 notification_hit_area: Rect::default(),
+                sidebar_areas_hit_area: Rect::default(),
                 hyperspace_rect: Rect::default(),
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
@@ -7807,6 +7822,9 @@ impl AppState {
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
+            sidebar_areas: crate::config::SidebarAreasConfig::default(),
+            sidebar_sections_layout: false,
+            sidebar_header_plain: false,
             next_agent_state_change_seq: 0,
             mouse_capture: true,
             copy_on_select: true,

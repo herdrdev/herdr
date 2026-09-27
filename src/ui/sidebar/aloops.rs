@@ -152,7 +152,7 @@ pub(super) struct Area {
 pub(super) fn areas(app: &AppState, area: Rect) -> Vec<Area> {
     let ws_area = workspace_list_rect_for_app(app, area);
     let metrics = super::workspace_list_scroll_metrics(app, ws_area);
-    let body = workspace_list_body_rect(ws_area, should_show_scrollbar(metrics));
+    let body = workspace_list_body_rect(app, ws_area, should_show_scrollbar(metrics));
     let rows = sidebar_rows(app);
     let mut y = body.y;
     let mut out = Vec::new();

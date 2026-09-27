@@ -725,6 +725,9 @@ pub struct TerminalState {
     pub(crate) foreground_process_name: Option<String>,
     foreground_process_active: bool,
     pub last_agent_state_change_seq: Option<u64>,
+    /// Runtime-only start of the current Working lifecycle, independent of
+    /// later status report refreshes.
+    working_since: Option<Instant>,
     /// When this pane most recently entered `Blocked`. Cleared on any transition
     /// out of it, so it always measures the current wait rather than a past one.
     pub blocked_since: Option<Instant>,
@@ -807,6 +810,7 @@ impl TerminalState {
             foreground_process_name: None,
             foreground_process_active: false,
             last_agent_state_change_seq: None,
+            working_since: None,
             blocked_since: None,
             unreported_turn_started_at: None,
             agent_turn_generation: 0,
@@ -827,6 +831,10 @@ impl TerminalState {
     /// Most callers need `PaneState::agent_projection` instead.
     pub(crate) fn raw_agent_state(&self) -> AgentState {
         self.state
+    }
+
+    pub(crate) fn working_since(&self) -> Option<Instant> {
+        self.working_since
     }
 
     #[cfg(test)]
@@ -1516,6 +1524,7 @@ impl TerminalState {
                 authority.retired_at = Some(observed_at);
             }
             self.state = state;
+            self.working_since = (state == AgentState::Working).then_some(observed_at);
             self.fallback_state = state;
             self.fallback_visible_blocker = false;
             self.fallback_visible_working = false;
@@ -4325,6 +4334,7 @@ impl TerminalState {
                 }
             });
         self.state = handoff.state.into();
+        self.working_since = None;
         self.fallback_state = self.state;
         self.detected_agent = handoff
             .detected_agent
@@ -4356,6 +4366,7 @@ impl TerminalState {
         now: Instant,
     ) {
         self.state = handoff.state.into();
+        self.working_since = None;
         self.fallback_state = self.state;
         self.agent_active_since = handoff
             .active_elapsed
@@ -4813,6 +4824,7 @@ impl TerminalState {
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
         self.last_agent_state_change_seq = None;
+        self.working_since = None;
         self.agent_active_since = None;
         self.agent_last_active_at = None;
         self.agent_activity_owner = None;
@@ -4904,6 +4916,14 @@ impl TerminalState {
 
         let presentation = self.effective_presentation_for_state_at(state, now);
         self.clear_expiry_pending_for_hidden_metadata();
+
+        if state == AgentState::Working {
+            if previous_state != AgentState::Working {
+                self.working_since = Some(now);
+            }
+        } else {
+            self.working_since = None;
+        }
 
         if activity_owner_changed {
             if state == AgentState::Working && activity_owner.is_some() {
@@ -8136,6 +8156,42 @@ mod tests {
         assert_eq!(
             terminal.agent_status_watchdog_deadline(TEST_AGENT_STALE_AFTER),
             turn_started_at.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+    }
+
+    #[test]
+    fn repeated_working_report_does_not_reset_working_since() {
+        let started = Instant::now();
+        let refreshed = started + Duration::from_secs(90);
+        let mut terminal = test_terminal();
+
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Claude),
+            AgentState::Working,
+            false,
+            false,
+            false,
+            false,
+            false,
+            started,
+        );
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Claude),
+            AgentState::Working,
+            false,
+            false,
+            false,
+            false,
+            false,
+            refreshed,
+        );
+
+        assert_eq!(terminal.working_since(), Some(started));
+        assert_eq!(
+            refreshed.saturating_duration_since(
+                terminal.working_since().expect("working start timestamp")
+            ),
+            Duration::from_secs(90)
         );
     }
 

@@ -54,7 +54,14 @@ impl AppState {
         self.notepad_request = Some(request);
     }
 
+    fn notes_area_visible(&self) -> bool {
+        !self.sidebar_sections_layout || self.sidebar_areas.notes
+    }
+
     pub(crate) fn set_notepad_focus(&mut self, focused: bool) {
+        if focused && !self.notes_area_visible() {
+            return;
+        }
         if focused {
             // The agent tab is read-only: taking the editor focus means going
             // back to the active note.
@@ -70,12 +77,13 @@ impl AppState {
         }
     }
 
-    /// Toggles notepad focus. Off when the panel is disabled or has no note.
+    /// Toggles notepad focus. Off when the panel is disabled or hidden.
     pub(crate) fn toggle_notepad_focus(&mut self) -> bool {
-        if !self.notepad.enabled {
+        let focused = !self.notepad.focused;
+        if !self.notepad.enabled || (focused && !self.notes_area_visible()) {
             return false;
         }
-        self.set_notepad_focus(!self.notepad.focused);
+        self.set_notepad_focus(focused);
         true
     }
 

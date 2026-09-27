@@ -430,8 +430,126 @@ impl Default for SpacesSidebarConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
+    /// Sidebar row layout. `current` preserves the existing layout; `sections`
+    /// shows pinned, active, snoozed, and settled thread shelves.
+    pub layout: SidebarLayoutConfig,
+    /// Header decoration used by the sections layout. `plain` removes the sky
+    /// band and places search and goto in the control row.
+    pub header: SidebarHeaderConfig,
+    /// Visibility of individual sections-layout areas. The current layout
+    /// ignores these values so it keeps its existing row contract.
+    pub areas: SidebarAreasConfig,
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SidebarArea {
+    SkyHeader,
+    ViewBar,
+    Unassigned,
+    Runs,
+    Aloops,
+    Symphony,
+    Notes,
+    Pomodoro,
+    Hosts,
+}
+
+impl SidebarArea {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::SkyHeader => "Sky header",
+            Self::ViewBar => "View bar",
+            Self::Unassigned => "No repo yet",
+            Self::Runs => "Runs",
+            Self::Aloops => "Aloops",
+            Self::Symphony => "Symphony",
+            Self::Notes => "Notes",
+            Self::Pomodoro => "Pomodoro",
+            Self::Hosts => "Host strip",
+        }
+    }
+
+    pub(crate) fn config_key(self) -> &'static str {
+        match self {
+            Self::SkyHeader => "sky_header",
+            Self::ViewBar => "view_bar",
+            Self::Unassigned => "unassigned",
+            Self::Runs => "runs",
+            Self::Aloops => "aloops",
+            Self::Symphony => "symphony",
+            Self::Notes => "notes",
+            Self::Pomodoro => "pomodoro",
+            Self::Hosts => "hosts",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct SidebarAreasConfig {
+    pub sky_header: bool,
+    pub view_bar: bool,
+    pub unassigned: bool,
+    pub runs: bool,
+    pub aloops: bool,
+    pub symphony: bool,
+    pub notes: bool,
+    pub pomodoro: bool,
+    pub hosts: bool,
+}
+
+impl SidebarAreasConfig {
+    pub(crate) fn is_visible(&self, area: SidebarArea) -> bool {
+        match area {
+            SidebarArea::SkyHeader => self.sky_header,
+            SidebarArea::ViewBar => self.view_bar,
+            SidebarArea::Unassigned => self.unassigned,
+            SidebarArea::Runs => self.runs,
+            SidebarArea::Aloops => self.aloops,
+            SidebarArea::Symphony => self.symphony,
+            SidebarArea::Notes => self.notes,
+            SidebarArea::Pomodoro => self.pomodoro,
+            SidebarArea::Hosts => self.hosts,
+        }
+    }
+}
+
+impl Default for SidebarAreasConfig {
+    fn default() -> Self {
+        Self {
+            sky_header: true,
+            view_bar: true,
+            unassigned: true,
+            runs: true,
+            aloops: true,
+            symphony: true,
+            notes: true,
+            pomodoro: true,
+            hosts: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarLayoutConfig {
+    #[default]
+    /// Keep the configured legacy sidebar grouping.
+    Current,
+    /// Show the T3-style thread shelves.
+    Sections,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarHeaderConfig {
+    #[default]
+    /// Draw the theme-colored half-block night sky.
+    Sky,
+    /// Draw no header decoration.
+    Plain,
 }
 
 #[cfg(test)]
@@ -441,6 +559,9 @@ mod tests {
     #[test]
     fn defaults_show_only_thread_titles_and_space_names() {
         let config = SidebarConfig::default();
+        assert_eq!(config.layout, SidebarLayoutConfig::Current);
+        assert_eq!(config.header, SidebarHeaderConfig::Sky);
+        assert_eq!(config.areas, SidebarAreasConfig::default());
         assert_eq!(
             config.agents.rows,
             vec![vec![
@@ -460,6 +581,15 @@ mod tests {
         );
         // ac3: distinct Space groups get one compact blank row by default.
         assert_eq!(config.spaces.row_gap, 1);
+    }
+
+    #[test]
+    fn sections_layout_and_plain_header_parse_from_sidebar_config() {
+        let config: SidebarConfig =
+            toml::from_str("layout = \"sections\"\nheader = \"plain\"\n").unwrap();
+
+        assert_eq!(config.layout, SidebarLayoutConfig::Sections);
+        assert_eq!(config.header, SidebarHeaderConfig::Plain);
     }
 
     #[test]

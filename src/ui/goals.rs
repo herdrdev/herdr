@@ -14,7 +14,6 @@ use crate::{
     goals::{GoalsFile, GoalsLoad, Stream, StreamState},
 };
 
-const MIN_WORKSPACE_ROWS: u16 = 3;
 const MIN_PANEL_ROWS: u16 = 2;
 const MAX_PANEL_ROWS: u16 = 12;
 
@@ -43,7 +42,11 @@ pub(crate) fn split_sidebar_panels(app: &AppState, content: Rect) -> SidebarPane
         content.width,
         content.height.saturating_sub(goals_height),
     );
-    let notepad = super::notepad::notepad_panel_rect(app, upper);
+    let notepad = if app.sidebar_sections_layout && !app.sidebar_areas.notes {
+        Rect::default()
+    } else {
+        super::notepad::notepad_panel_rect(app, upper)
+    };
     let workspaces = Rect::new(
         upper.x,
         upper.y,
@@ -69,7 +72,9 @@ fn goals_height(app: &AppState, content: Rect) -> u16 {
             .min(usize::from(u16::MAX)) as u16,
     }
     .clamp(MIN_PANEL_ROWS, MAX_PANEL_ROWS);
-    let spare = content.height.saturating_sub(MIN_WORKSPACE_ROWS);
+    let spare = content
+        .height
+        .saturating_sub(super::sidebar::sidebar_workspace_floor(app));
     if spare >= MIN_PANEL_ROWS {
         wanted.min(spare)
     } else {
@@ -336,7 +341,7 @@ mod tests {
         app.notepad.height = 5;
         let rects = split_sidebar_panels(&app, Rect::new(0, 1, 36, 12));
 
-        assert!(rects.workspaces.height >= MIN_WORKSPACE_ROWS);
+        assert!(rects.workspaces.height >= crate::ui::sidebar::sidebar_workspace_floor(&app));
         assert!(rects.workspaces.bottom() <= rects.notepad.y);
         assert!(rects.notepad.bottom() <= rects.goals.y);
         assert_eq!(rects.goals.bottom(), 13);

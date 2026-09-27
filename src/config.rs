@@ -35,8 +35,8 @@ pub use self::{
         MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SpaceSidebarToken,
-        SpacesSidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, SidebarAreasConfig, SidebarConfig,
+        SidebarHeaderConfig, SidebarLayoutConfig, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
@@ -46,6 +46,8 @@ pub use self::{
     },
     window_title::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken},
 };
+
+pub(crate) use self::sidebar::SidebarArea;
 
 pub(crate) use self::keybinds::parse_key_combo;
 #[cfg(test)]

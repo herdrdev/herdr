@@ -238,12 +238,17 @@ impl App {
         else {
             return tab_not_found(id, &params.tab_id);
         };
-        tab.pinned = match params.mode {
+        let pinned = match params.mode {
             TabPinMode::Pin => true,
             TabPinMode::Unpin => false,
             TabPinMode::Toggle => !tab.pinned,
         };
+        let changed = tab.pinned != pinned;
+        tab.pinned = pinned;
         self.schedule_session_save();
+        if changed {
+            self.state.mark_sidebar_projection_changed();
+        }
         tab_info_response(id, &params.tab_id, self.tab_info(ws_idx, tab_idx))
     }
 
@@ -774,6 +779,26 @@ mod tests {
             },
         );
         assert!(app.state.workspaces[0].tabs[0].pinned);
+    }
+
+    #[test]
+    fn sidebar_pin_api_invalidates_the_sidebar_projection() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub);
+        app.state.workspaces = vec![Workspace::test_new("tabs")];
+        let tab_id = app.public_tab_id(0, 0).expect("tab id");
+        let revision = app.state.sidebar_projection_revision;
+
+        app.handle_tab_pin(
+            "req".into(),
+            TabPinParams {
+                tab_id,
+                mode: TabPinMode::Pin,
+            },
+        );
+
+        assert!(app.state.sidebar_projection_revision > revision);
     }
 
     #[test]

@@ -2836,3 +2836,6 @@ mod tests {
         assert!(argv[2].contains("/tmp/herdr scrollback.txt"));
     }
 }
+pub(super) const fn local_host_os() -> crate::platform::HostOs {
+    crate::platform::HostOs::Linux
+}

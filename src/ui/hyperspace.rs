@@ -29,7 +29,7 @@ use starfield::Level;
 const BOX_COLS: u16 = 12;
 const BOX_ROWS: u16 = 6;
 
-/// Rows the workspace list keeps for itself before the animation may claim any.
+/// Rows the current-layout workspace list keeps before the animation may claim any.
 const MIN_LIST_ROWS_BESIDE_ANIMATION: u16 = 6;
 
 /// Shown while the field is moving: clicking it stops the animation.
@@ -48,14 +48,17 @@ fn button_glyph(app: &AppState) -> &'static str {
 /// How many rows of `content` the animation occupies. All or nothing: a box
 /// that cannot be its full size is not a square, so it is not drawn at all.
 /// Zero whenever it is off, the sidebar is collapsed or too narrow, or the list
-/// would be squeezed below [`MIN_LIST_ROWS_BESIDE_ANIMATION`].
+/// would fall below its layout's minimum row count.
 pub(crate) fn animation_height(app: &AppState, content: Rect) -> u16 {
     if !app.hyperspace.enabled || app.sidebar_collapsed || content.width < BOX_COLS {
         return 0;
     }
-    let spare = content
-        .height
-        .saturating_sub(MIN_LIST_ROWS_BESIDE_ANIMATION);
+    let workspace_floor = if app.sidebar_sections_layout {
+        crate::ui::sidebar::sidebar_workspace_floor(app)
+    } else {
+        MIN_LIST_ROWS_BESIDE_ANIMATION
+    };
+    let spare = content.height.saturating_sub(workspace_floor);
     if spare < BOX_ROWS {
         return 0;
     }

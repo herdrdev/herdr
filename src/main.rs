@@ -488,6 +488,27 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # distinct static glyphs for blocked, working, done, idle, and unknown states.
 # status_indicators = "dots"
 
+# Sidebar presentation. "current" keeps the configured legacy grouping;
+# "sections" shows Pinned, Active, Snoozed, and Settled thread shelves.
+# [ui.sidebar]
+# layout = "current"
+# Header decoration for the sections layout. "plain" keeps the controls and
+# their positions but removes the theme-aware half-block night sky.
+# header = "sky"
+
+# Optional sections-layout areas. All are shown by default; the current layout
+# ignores these settings.
+# [ui.sidebar.areas]
+# sky_header = true
+# view_bar = true
+# unassigned = true
+# runs = true
+# aloops = true
+# symphony = true
+# notes = true
+# pomodoro = true
+# hosts = true
+
 # Expanded agent rows. Built-ins are state_icon, state_text, workspace, tab, pane, agent,
 # terminal_title, and terminal_title_stripped.
 # Custom values reported through pane metadata use a $name token.
@@ -1229,6 +1250,13 @@ mod tests {
         assert!(DEFAULT_CONFIG.contains("# reap_done_panes = true"));
         assert!(DEFAULT_CONFIG.contains("[source_control]\n# Merge strategy"));
         assert!(DEFAULT_CONFIG.contains("# merge_method = \"merge\""));
+    }
+
+    #[test]
+    fn default_config_exposes_sidebar_section_options() {
+        assert!(DEFAULT_CONFIG.contains("# layout = \"current\""));
+        assert!(DEFAULT_CONFIG.contains("# header = \"sky\""));
+        assert!(DEFAULT_CONFIG.contains("Pinned, Active, Snoozed, and Settled"));
     }
 
     #[test]

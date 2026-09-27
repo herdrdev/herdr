@@ -1,8 +1,8 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 use crate::app::{
-    state::{AppState, ViewLayout},
+    state::{AppState, InputOwner, ServerInputOwner, ViewLayout},
     App,
 };
 
@@ -590,7 +590,7 @@ impl AppState {
     }
 
     pub(crate) fn sidebar_group_mode_anchor_rect(&self) -> Rect {
-        crate::ui::sidebar_group_mode_anchor_rect(self.view.sidebar_rect)
+        crate::ui::sidebar_group_mode_anchor_rect_for_app(self, self.view.sidebar_rect)
     }
 
     pub(crate) fn sidebar_group_menu_item_at(&self, col: u16, row: u16) -> Option<usize> {
@@ -1077,6 +1077,22 @@ impl AppState {
     /// round trip -- but it does change the row count, so the sidebar's own
     /// scroll clamp has to run afterwards.
     pub(crate) fn toggle_sidebar_group(&mut self, title: &str) {
+        if self.sidebar_sections_layout {
+            let key = format!("sections:{title}");
+            if title == crate::ui::sidebar::SETTLED_SECTION_TITLE {
+                if !self.collapsed_sidebar_groups.remove(&key) {
+                    self.collapsed_sidebar_groups.insert(key);
+                }
+            } else if !self.collapsed_sidebar_groups.remove(&key) {
+                self.collapsed_sidebar_groups.insert(key);
+            }
+            self.workspace_scroll = crate::ui::normalized_workspace_scroll(
+                self,
+                self.view.sidebar_rect,
+                self.workspace_scroll,
+            );
+            return;
+        }
         let key = format!("{}:{title}", self.sidebar_group_mode.collapse_namespace());
         if title.starts_with(crate::ui::sidebar::aloops::ALOOP_CLEAN_KEY_PREFIX) {
             // Clean runs are folded by default, so membership represents the
@@ -1403,6 +1419,97 @@ impl AppState {
 }
 
 impl App {
+    pub(crate) fn handle_sidebar_areas_menu_key(
+        &mut self,
+        key: KeyEvent,
+        owner: InputOwner,
+    ) -> bool {
+        if self.state.sidebar_areas_menu_selected.is_none()
+            || !sidebar_areas_menu_accepts_input_owner(owner)
+        {
+            return false;
+        }
+        if crate::ui::sidebar::sidebar_areas_menu_layout(&self.state, self.state.screen_rect())
+            .is_none()
+        {
+            self.state.sidebar_areas_menu_selected = None;
+            return false;
+        }
+        const LAST_AREA_INDEX: usize = 8;
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(selected) = &mut self.state.sidebar_areas_menu_selected {
+                    *selected = selected.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(selected) = &mut self.state.sidebar_areas_menu_selected {
+                    *selected = selected.saturating_add(1).min(LAST_AREA_INDEX);
+                }
+            }
+            KeyCode::Home => self.state.sidebar_areas_menu_selected = Some(0),
+            KeyCode::End => self.state.sidebar_areas_menu_selected = Some(LAST_AREA_INDEX),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(area) = self
+                    .state
+                    .sidebar_areas_menu_selected
+                    .and_then(crate::ui::sidebar::sidebar_area_at_menu_index)
+                {
+                    self.toggle_sidebar_area(area);
+                }
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.sidebar_areas_menu_selected = None;
+            }
+            _ => {}
+        }
+        true
+    }
+
+    pub(super) fn handle_sidebar_areas_menu_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        owner: InputOwner,
+    ) -> bool {
+        if !sidebar_areas_menu_accepts_input_owner(owner) {
+            return false;
+        }
+        if self.state.sidebar_areas_menu_selected.is_some() {
+            if let Some(index) = crate::ui::sidebar::sidebar_areas_menu_index_at(
+                &self.state,
+                self.state.screen_rect(),
+                mouse.column,
+                mouse.row,
+            ) {
+                if matches!(mouse.kind, MouseEventKind::Moved) {
+                    self.state.sidebar_areas_menu_selected = Some(index);
+                    return true;
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    self.state.sidebar_areas_menu_selected = Some(index);
+                    if let Some(area) = crate::ui::sidebar::sidebar_area_at_menu_index(index) {
+                        self.toggle_sidebar_area(area);
+                    }
+                    return true;
+                }
+            }
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.state.sidebar_areas_menu_selected = None;
+            }
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.state.point_in_rect(
+                self.state.view.sidebar_areas_hit_area,
+                mouse.column,
+                mouse.row,
+            )
+        {
+            self.state.sidebar_areas_menu_selected = Some(0);
+            return true;
+        }
+        false
+    }
+
     /// Open the pod picker for the focused local pane. The action is safe to
     /// expose in the palette even when no pod exists because a typed name can
     /// create the first local pod.
@@ -1557,6 +1664,23 @@ impl App {
     }
 }
 
+fn sidebar_areas_menu_accepts_input_owner(owner: InputOwner) -> bool {
+    match owner {
+        InputOwner::Pomodoro
+        | InputOwner::Client(_)
+        | InputOwner::AddProject
+        | InputOwner::Popup => false,
+        InputOwner::Server(
+            ServerInputOwner::Navigate
+            | ServerInputOwner::Prefix
+            | ServerInputOwner::Copy
+            | ServerInputOwner::Resize,
+        ) => true,
+        InputOwner::Server(_) => false,
+        _ => true,
+    }
+}
+
 impl super::super::App {
     fn sidebar_pane_lifecycle_state(
         &self,
@@ -1629,13 +1753,25 @@ impl super::super::App {
         agent_ref: &crate::api::schema::AgentRef,
         message: String,
     ) {
+        self.show_pane_lifecycle_error(format!("{} pane action failed", agent_ref.host), message);
+    }
+
+    fn show_pane_lifecycle_error(&mut self, title: String, message: String) {
         self.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
-            title: format!("{} pane action failed", agent_ref.host),
+            title,
             context: message,
             position: None,
             target: None,
         });
+    }
+
+    fn show_local_pane_lifecycle_error(&mut self, action: &str, response: &str) -> bool {
+        let Ok(error) = serde_json::from_str::<crate::api::schema::ErrorResponse>(response) else {
+            return false;
+        };
+        self.show_pane_lifecycle_error(format!("Pane {action} failed"), error.error.message);
+        true
     }
 
     pub(crate) fn remote_pane_lifecycle_refused(
@@ -2349,8 +2485,31 @@ impl super::super::App {
     }
 
     pub(crate) fn resume_settled_pane(&mut self, target: crate::app::state::PaneFocusTarget) {
-        self.state
-            .note_pane_activity_at(target.pane_id, std::time::Instant::now());
+        let now = std::time::Instant::now();
+        let tab_panes = self
+            .state
+            .sidebar_sections_layout
+            .then(|| {
+                self.state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == target.workspace_id)
+                    .and_then(|workspace| {
+                        workspace
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.panes.contains_key(&target.pane_id))
+                            .map(|tab| tab.panes.keys().copied().collect::<Vec<_>>())
+                    })
+            })
+            .flatten();
+        if let Some(pane_ids) = tab_panes {
+            for pane_id in pane_ids {
+                self.state.note_pane_activity_at(pane_id, now);
+            }
+        } else {
+            self.state.note_pane_activity_at(target.pane_id, now);
+        }
         self.focus_settled_pane(target);
         self.flush_pane_settlement_events();
     }
@@ -2360,12 +2519,10 @@ impl super::super::App {
         target: crate::app::state::SidebarPaneLifecycleTarget,
     ) {
         match &target {
-            crate::app::state::SidebarPaneLifecycleTarget::Local(_) => {
+            crate::app::state::SidebarPaneLifecycleTarget::Local(pane_target) => {
                 // Keep the pre-remote-control keyboard behavior: local `s`
                 // always reaches pane.settle, whose API owns snoozed refusal.
-                if let Some(public_pane_id) = self.sidebar_pane_lifecycle_public_id(&target) {
-                    self.runtime_pane_settle("tui.sidebar.settle", public_pane_id);
-                }
+                self.settle_local_pane_or_tab(pane_target.clone(), "tui.sidebar.settle");
             }
             crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref) => {
                 let Some((snoozed, _)) = self.sidebar_pane_lifecycle_state(&target) else {
@@ -2379,6 +2536,63 @@ impl super::super::App {
                     self.show_remote_pane_lifecycle_error(agent_ref, error);
                 }
             }
+        }
+    }
+
+    pub(crate) fn settle_local_pane_or_tab(
+        &mut self,
+        target: crate::app::state::PaneFocusTarget,
+        source: &'static str,
+    ) {
+        let pane_ids = self
+            .state
+            .sidebar_sections_layout
+            .then(|| {
+                self.state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == target.workspace_id)
+                    .and_then(|workspace| {
+                        workspace
+                            .tabs
+                            .iter()
+                            .find(|tab| tab.panes.contains_key(&target.pane_id))
+                            .map(|tab| tab.panes.keys().copied().collect::<Vec<_>>())
+                    })
+            })
+            .flatten();
+        if let Some(pane_ids) = pane_ids {
+            let Some(ws_idx) = self
+                .state
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.id == target.workspace_id)
+            else {
+                return;
+            };
+            for pane_id in pane_ids {
+                let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) else {
+                    continue;
+                };
+                if self.state.pane_is_snoozed(ws_idx, pane_id) {
+                    let response = self.runtime_pane_unsnooze(
+                        "tui.pane.unsnooze-before-settle",
+                        public_pane_id.clone(),
+                    );
+                    if self.show_local_pane_lifecycle_error("unsnooze", &response) {
+                        continue;
+                    }
+                }
+                let response = self.runtime_pane_settle(source, public_pane_id);
+                self.show_local_pane_lifecycle_error("settle", &response);
+            }
+            return;
+        }
+
+        let target = crate::app::state::SidebarPaneLifecycleTarget::Local(target);
+        if let Some(public_pane_id) = self.sidebar_pane_lifecycle_public_id(&target) {
+            let response = self.runtime_pane_settle(source, public_pane_id);
+            self.show_local_pane_lifecycle_error("settle", &response);
         }
     }
 
@@ -2414,6 +2628,46 @@ mod tests {
         detect::{Agent, AgentState},
         workspace::Workspace,
     };
+
+    #[test]
+    fn sidebar_areas_menu_accepts_nonmodal_surfaces_and_excludes_modal_owners() {
+        use crate::app::state::{InputOwner, SurfaceInputOwner};
+
+        for surface in [
+            SurfaceInputOwner::Symphony,
+            SurfaceInputOwner::LoopRunHistory,
+            SurfaceInputOwner::AloopRunLog,
+            SurfaceInputOwner::EditorPreview,
+            SurfaceInputOwner::DockObjectPreview,
+        ] {
+            assert!(
+                super::sidebar_areas_menu_accepts_input_owner(InputOwner::Surface(surface)),
+                "nonmodal surface {surface:?} must allow the area checklist click"
+            );
+        }
+
+        for owner in [
+            InputOwner::Server(crate::app::state::ServerInputOwner::Navigate),
+            InputOwner::Server(crate::app::state::ServerInputOwner::Prefix),
+            InputOwner::Server(crate::app::state::ServerInputOwner::Copy),
+            InputOwner::Server(crate::app::state::ServerInputOwner::Resize),
+        ] {
+            assert!(super::sidebar_areas_menu_accepts_input_owner(owner));
+        }
+
+        for owner in [
+            InputOwner::Pomodoro,
+            InputOwner::Client(crate::app::state::ClientInputOwner::DockSurfaceMenu),
+            InputOwner::AddProject,
+            InputOwner::Server(crate::app::state::ServerInputOwner::Settings),
+            InputOwner::Popup,
+        ] {
+            assert!(
+                !super::sidebar_areas_menu_accepts_input_owner(owner),
+                "modal owner {owner:?} must keep the checklist click blocked"
+            );
+        }
+    }
 
     fn sidebar_order_app(settled: bool) -> crate::app::App {
         let mut app = app_for_mouse_test();
@@ -2936,6 +3190,266 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_settle_tab_uses_pane_settle_for_every_tab_pane() {
+        let mut app = sidebar_order_app(false);
+        let workspace = &mut app.state.workspaces[0];
+        let root_pane = workspace.tabs[0].root_pane;
+        let sibling_pane = workspace.test_split(Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        app.state.sidebar_sections_layout = true;
+        let workspace_id = app.state.workspaces[0].id.clone();
+
+        app.settle_sidebar_pane(crate::app::state::SidebarPaneLifecycleTarget::Local(
+            crate::app::state::PaneFocusTarget {
+                workspace_id,
+                pane_id: root_pane,
+            },
+        ));
+
+        assert!(app.state.pane_is_settled(0, root_pane));
+        assert!(app.state.pane_is_settled(0, sibling_pane));
+    }
+
+    #[test]
+    fn sections_settle_tab_unsnoozes_and_settles_snoozed_sibling() {
+        let mut sidebar = sidebar_order_app(false);
+        sidebar.state.active = Some(0);
+        let (root_pane, sibling_pane) = {
+            let workspace = &mut sidebar.state.workspaces[0];
+            let root_pane = workspace.tabs[0].root_pane;
+            let sibling_pane = workspace.test_split(Direction::Horizontal);
+            workspace.tabs[0].layout.focus_pane(root_pane);
+            (root_pane, sibling_pane)
+        };
+        sidebar.state.ensure_test_terminals();
+        sidebar.state.sidebar_sections_layout = true;
+        assert!(sidebar.state.snooze_pane_at(0, sibling_pane, u64::MAX));
+        sidebar.state.sidebar_focused = true;
+
+        assert!(sidebar.handle_sidebar_session_action_key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::empty(),
+        )));
+
+        for pane_id in [root_pane, sibling_pane] {
+            assert!(sidebar.state.pane_is_settled(0, pane_id));
+            assert!(!sidebar.state.pane_is_snoozed(0, pane_id));
+        }
+
+        let mut context_menu = sidebar_order_app(false);
+        let (workspace_id, tab_id, root_pane, sibling_pane) = {
+            let workspace = &mut context_menu.state.workspaces[0];
+            let root_pane = workspace.tabs[0].root_pane;
+            let sibling_pane = workspace.test_split(Direction::Horizontal);
+            workspace.tabs[0].layout.focus_pane(root_pane);
+            (
+                workspace.id.clone(),
+                crate::workspace::public_tab_id_for_number(&workspace.id, workspace.tabs[0].number),
+                root_pane,
+                sibling_pane,
+            )
+        };
+        context_menu.state.ensure_test_terminals();
+        context_menu.state.sidebar_sections_layout = true;
+        assert!(context_menu.state.snooze_pane_at(0, sibling_pane, u64::MAX));
+        let menu = crate::app::state::ContextMenuState {
+            kind: crate::app::state::ContextMenuKind::Tab {
+                workspace_id,
+                tab_id,
+                ws_idx: 0,
+                tab_idx: 0,
+                starred: false,
+                has_subgroup: false,
+                settle_pane_id: Some(root_pane),
+                snooze_target: Some(root_pane),
+            },
+            x: 0,
+            y: 0,
+            selected: crate::app::state::ContextMenuAction::Settle,
+        };
+
+        context_menu
+            .apply_context_menu_action_via_api(menu, crate::app::state::ContextMenuAction::Settle);
+
+        for pane_id in [root_pane, sibling_pane] {
+            assert!(context_menu.state.pane_is_settled(0, pane_id));
+            assert!(!context_menu.state.pane_is_snoozed(0, pane_id));
+        }
+    }
+
+    #[test]
+    fn sidebar_card_row_second_line_selects_the_tab() {
+        let mut app = sidebar_order_app(false);
+        app.state.sidebar_sections_layout = true;
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let card = crate::ui::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)
+            .into_iter()
+            .find(|card| card.ws_idx == 0 && card.tab_idx == 1)
+            .expect("second tab card");
+        assert_eq!(card.rect.height, 2);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            card.rect.x + 2,
+            card.rect.y + 1,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 1);
+    }
+
+    #[test]
+    fn sidebar_areas_menu_opens_and_toggles_from_surface_and_dock_owners() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let config_path = unique_temp_path("sidebar-areas-owners");
+        let config = "[ui.sidebar]\nlayout = \"sections\"\nheader = \"sky\"\n[ui.sidebar.areas]\nsky_header = true\nview_bar = true\n";
+        fs::write(&config_path, config).expect("seed sidebar config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &config_path);
+
+        let owners = [
+            crate::app::state::InputOwner::Surface(crate::app::state::SurfaceInputOwner::Home),
+            crate::app::state::InputOwner::Surface(crate::app::state::SurfaceInputOwner::Inbox),
+            crate::app::state::InputOwner::Surface(crate::app::state::SurfaceInputOwner::Work),
+            crate::app::state::InputOwner::Surface(crate::app::state::SurfaceInputOwner::Usage),
+            crate::app::state::InputOwner::Dock(crate::app::state::DockInputOwner::Home),
+        ];
+
+        for owner in owners {
+            fs::write(&config_path, config).expect("reset sidebar config");
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_sections_layout = true;
+            app.state.sidebar_width = 40;
+            app.state.sidebar_areas.sky_header = true;
+            app.state.sidebar_areas.view_bar = true;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+            let anchor = app.state.view.sidebar_areas_hit_area;
+            assert!(anchor.width > 0, "checklist control must be visible");
+
+            app.handle_mouse_for_input_owner(
+                1,
+                mouse(MouseEventKind::Down(MouseButton::Left), anchor.x, anchor.y),
+                crate::ui::pomodoro::InputPresentation::default(),
+                owner,
+            );
+            assert_eq!(app.state.sidebar_areas_menu_selected, Some(0));
+            assert!(app.handle_sidebar_areas_menu_key(
+                KeyEvent::new(KeyCode::Down, KeyModifiers::empty()),
+                owner,
+            ));
+            assert_eq!(app.state.sidebar_areas_menu_selected, Some(1));
+            assert!(app.handle_sidebar_areas_menu_key(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+                owner,
+            ));
+            assert!(!app.state.sidebar_areas.view_bar);
+
+            fs::write(&config_path, config).expect("reset sidebar config for mouse toggle");
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_sections_layout = true;
+            app.state.sidebar_width = 40;
+            app.state.sidebar_areas.sky_header = true;
+            app.state.sidebar_areas.view_bar = true;
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+            let anchor = app.state.view.sidebar_areas_hit_area;
+            app.handle_mouse_for_input_owner(
+                1,
+                mouse(MouseEventKind::Down(MouseButton::Left), anchor.x, anchor.y),
+                crate::ui::pomodoro::InputPresentation::default(),
+                owner,
+            );
+            let menu =
+                crate::ui::sidebar::sidebar_areas_menu_layout(&app.state, Rect::new(0, 0, 120, 40))
+                    .expect("checklist menu layout");
+            app.handle_mouse_for_input_owner(
+                1,
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    menu.rect.x.saturating_add(1),
+                    menu.rect.y,
+                ),
+                crate::ui::pomodoro::InputPresentation::default(),
+                owner,
+            );
+            assert!(!app.state.sidebar_areas.sky_header);
+        }
+
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_sections_layout = true;
+        app.state.view.sidebar_areas_hit_area = Rect::new(10, 19, 1, 1);
+        let modal = crate::app::state::InputOwner::Pomodoro;
+        assert!(!app.handle_sidebar_areas_menu_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), 10, 19),
+            modal,
+        ));
+        assert!(!app.handle_sidebar_areas_menu_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+            modal,
+        ));
+        assert_eq!(app.state.sidebar_areas_menu_selected, None);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = fs::remove_file(config_path);
+    }
+
+    fn assert_hidden_areas_menu_releases_pane(layout_off: bool) {
+        let mut app = app_for_mouse_test();
+        let mut workspace = Workspace::test_new("areas-menu-pane");
+        let pane_id = workspace.tabs[0].root_pane;
+        let (runtime, mut pane_input) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 4,
+            );
+        workspace.insert_test_runtime(pane_id, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_width = 40;
+        app.state.sidebar_areas.sky_header = true;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let anchor = app.state.view.sidebar_areas_hit_area;
+        assert!(anchor.width > 0);
+        assert!(app.handle_sidebar_areas_menu_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), anchor.x, anchor.y),
+            crate::app::state::InputOwner::Pane,
+        ));
+        assert_eq!(app.state.sidebar_areas_menu_selected, Some(0));
+
+        let area = if layout_off {
+            app.state.sidebar_sections_layout = false;
+            Rect::new(0, 0, 120, 40)
+        } else {
+            Rect::new(0, 0, 40, 40)
+        };
+        crate::ui::compute_view(&mut app.state, area);
+        assert_eq!(app.state.view.sidebar_areas_hit_area.width, 0);
+        assert_eq!(app.state.sidebar_areas_menu_selected, None);
+
+        // A stale selection can arrive before the next view pass. Input must
+        // still go to the pane and must not toggle the hidden area.
+        app.state.sidebar_areas_menu_selected = Some(0);
+        assert_eq!(app.state.input_owner(), crate::app::state::InputOwner::Pane);
+        let target = app.handle_terminal_key_headless(crate::input::TerminalKey::new(
+            KeyCode::Char(' '),
+            KeyModifiers::empty(),
+        ));
+        assert!(target.is_some(), "space must reach the focused pane");
+        assert_eq!(pane_input.try_recv().expect("pane input").as_ref(), b" ");
+        assert!(app.state.sidebar_areas.sky_header);
+        assert_eq!(app.state.sidebar_areas_menu_selected, None);
+    }
+
+    #[tokio::test]
+    async fn area_menu_closes_when_sidebar_becomes_too_narrow() {
+        assert_hidden_areas_menu_releases_pane(false);
+    }
+
+    #[tokio::test]
+    async fn area_menu_closes_when_sections_layout_is_disabled() {
+        assert_hidden_areas_menu_releases_pane(true);
+    }
+
+    #[test]
     fn clicking_sidebar_snooze_opens_durations_and_dispatches_the_api() {
         let mut app = sidebar_order_app(false);
         app.state.sidebar_width = 40;
@@ -3105,6 +3619,7 @@ mod tests {
     #[test]
     fn keyboard_s_keeps_the_local_pane_api_refusal_when_already_snoozed() {
         let mut app = sidebar_order_app(false);
+        assert!(!app.state.sidebar_sections_layout);
         let pane_id = app.state.workspaces[0]
             .focused_pane_id()
             .expect("focused pane");
@@ -4162,6 +4677,38 @@ mod tests {
             Some(target.pane_id)
         );
         assert_eq!(app.state.server_mode(), Mode::Settings);
+    }
+
+    #[test]
+    fn sections_resume_unsettles_every_pane_in_split_tab() {
+        let mut app = app_for_mouse_test();
+        if app.state.workspaces.is_empty() {
+            app.state.workspaces.push(Workspace::test_new("sections"));
+            app.state.active = Some(0);
+            app.state.selected = 0;
+            app.state.ensure_test_terminals();
+        }
+        let root_pane = app.state.workspaces[0].tabs[0].root_pane;
+        let sibling_pane = app.state.workspaces[0].test_split(Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        app.state.sidebar_sections_layout = true;
+        app.state.set_server_mode(Mode::Settings);
+        for pane_id in [root_pane, sibling_pane] {
+            assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_000));
+        }
+        let target = crate::app::state::PaneFocusTarget {
+            workspace_id: app.state.workspaces[0].id.clone(),
+            pane_id: sibling_pane,
+        };
+
+        app.resume_settled_pane(target);
+
+        assert!(!app.state.pane_is_settled(0, root_pane));
+        assert!(!app.state.pane_is_settled(0, sibling_pane));
+        assert_eq!(
+            app.state.workspaces[0].focused_pane_id(),
+            Some(sibling_pane)
+        );
     }
 
     #[test]

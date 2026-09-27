@@ -26,6 +26,7 @@ const INDICATOR_WIDTH: u16 = 9;
 /// Columns the footer icon strip already owns.
 const FOOTER_ICON_COLUMNS: u16 = 13;
 const NOTIFICATION_WIDTH: u16 = 2;
+const SIDEBAR_AREAS_WIDTH: u16 = 1;
 const PROMPT_WIDTH: u16 = 62;
 const PROMPT_HEIGHT: u16 = 12;
 const ORB_PROMPT_WIDTH: u16 = 82;
@@ -353,11 +354,22 @@ pub(crate) fn prompt_button_rects(area: Rect) -> Option<(Rect, Rect)> {
 /// The countdown's slot at the right end of the sidebar footer row. Empty when
 /// the timer is off or the sidebar is too narrow to hold it beside the icons.
 pub(crate) fn pomodoro_hit_area(app: &AppState, sidebar: Rect) -> Rect {
-    if !app.pomodoro.enabled || app.sidebar_collapsed || sidebar.height == 0 {
+    if !app.pomodoro.enabled
+        || (app.sidebar_sections_layout && !app.sidebar_areas.pomodoro)
+        || app.sidebar_collapsed
+        || sidebar.height == 0
+        || (app.sidebar_sections_layout
+            && sidebar.height < super::sidebar::sidebar_workspace_floor(app).saturating_add(3))
+    {
         return Rect::default();
     }
     let content_width = sidebar.width.saturating_sub(1);
-    if content_width < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH + INDICATOR_WIDTH {
+    let area_width = if app.sidebar_sections_layout {
+        SIDEBAR_AREAS_WIDTH
+    } else {
+        0
+    };
+    if content_width < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH + area_width + INDICATOR_WIDTH {
         return Rect::default();
     }
     Rect::new(
@@ -386,6 +398,31 @@ pub(crate) fn notification_hit_area(app: &AppState, sidebar: Rect) -> Rect {
         sidebar.x + content_width - NOTIFICATION_WIDTH
     };
     Rect::new(x, sidebar.bottom().saturating_sub(1), NOTIFICATION_WIDTH, 1)
+}
+
+pub(crate) fn sidebar_areas_hit_area(app: &AppState, sidebar: Rect) -> Rect {
+    if !app.sidebar_sections_layout || app.sidebar_collapsed || sidebar.height == 0 {
+        return Rect::default();
+    }
+    let content_width = sidebar.width.saturating_sub(1);
+    let timer = pomodoro_hit_area(app, sidebar);
+    let reserved_timer = timer.width;
+    if content_width
+        < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH + SIDEBAR_AREAS_WIDTH + reserved_timer
+    {
+        return Rect::default();
+    }
+    let bell = if timer.width > 0 {
+        timer.x.saturating_sub(NOTIFICATION_WIDTH)
+    } else {
+        sidebar.x + content_width - NOTIFICATION_WIDTH
+    };
+    Rect::new(
+        bell.saturating_sub(SIDEBAR_AREAS_WIDTH),
+        sidebar.bottom().saturating_sub(1),
+        SIDEBAR_AREAS_WIDTH,
+        1,
+    )
 }
 
 fn phase_color(app: &AppState, phase: PomodoroPhase) -> ratatui::style::Color {
@@ -437,6 +474,21 @@ pub(crate) fn render_notification_toggle(app: &AppState, frame: &mut Frame, area
     };
     frame.render_widget(
         Paragraph::new(Span::styled(glyph, Style::default().fg(color))).right_aligned(),
+        area,
+    );
+}
+
+pub(crate) fn render_sidebar_areas_toggle(app: &AppState, frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let color = if app.sidebar_areas_menu_selected.is_some() {
+        app.palette.accent
+    } else {
+        app.palette.overlay0
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled("≡", Style::default().fg(color))),
         area,
     );
 }

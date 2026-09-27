@@ -213,6 +213,9 @@ impl App {
         owner: InputOwner,
     ) -> Option<super::TerminalInputTarget> {
         let key_event = key.as_key_event();
+        if self.handle_sidebar_areas_menu_key(key_event, owner) {
+            return None;
+        }
         if self.paste_clipboard_shortcut_for_input_owner(
             owner,
             &key_event,
@@ -4939,6 +4942,9 @@ impl App {
                     }
                 }
             }
+            return;
+        }
+        if self.handle_sidebar_areas_menu_mouse(mouse, owner) {
             return;
         }
         if let InputOwner::Client(owner) = owner {

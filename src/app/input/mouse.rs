@@ -456,7 +456,8 @@ impl AppState {
             );
         let new_thread_anchor = crate::ui::sidebar_header_new_thread_rect(self.view.sidebar_rect);
         let new_menu_anchor = crate::ui::sidebar_header_new_menu_rect(self.view.sidebar_rect);
-        let search_anchor = crate::ui::sidebar_header_search_rect(self.view.sidebar_rect);
+        let search_anchor =
+            crate::ui::sidebar_header_search_rect_for_app(self, self.view.sidebar_rect);
         let new_thread_hit =
             group_menu_enabled && self.point_in_rect(new_thread_anchor, mouse.column, mouse.row);
         let new_menu_hit =

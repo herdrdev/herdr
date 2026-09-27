@@ -918,6 +918,7 @@ impl App {
             sidebar_search_active: false,
             sidebar_starred_only: false,
             sidebar_new_menu: None,
+            sidebar_areas_menu_selected: None,
             sidebar_new_thread: None,
             sidebar_project_menu: None,
             sidebar_refresh_requested: false,
@@ -1118,6 +1119,7 @@ impl App {
                 notepad_usage_max_scroll: 0,
                 pomodoro_hit_area: Rect::default(),
                 notification_hit_area: Rect::default(),
+                sidebar_areas_hit_area: Rect::default(),
                 hyperspace_rect: Rect::default(),
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
@@ -1316,6 +1318,11 @@ impl App {
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
+            sidebar_areas: config.ui.sidebar.areas.clone(),
+            sidebar_sections_layout: config.ui.sidebar.layout
+                == crate::config::SidebarLayoutConfig::Sections,
+            sidebar_header_plain: config.ui.sidebar.header
+                == crate::config::SidebarHeaderConfig::Plain,
             next_agent_state_change_seq: 0,
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
@@ -2831,6 +2838,10 @@ impl App {
                 }
                 if self.state.sidebar_agents != config.ui.sidebar.agents
                     || self.state.sidebar_spaces != config.ui.sidebar.spaces
+                    || self.state.sidebar_areas != config.ui.sidebar.areas
+                    || self.state.sidebar_sections_layout
+                        != (config.ui.sidebar.layout
+                            == crate::config::SidebarLayoutConfig::Sections)
                 {
                     sidebar_projection_changed = true;
                 }
@@ -2841,6 +2852,14 @@ impl App {
                 self.state.working_row_opacity_percent = config.ui.working_row_opacity_percent;
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
+                self.state.sidebar_areas = config.ui.sidebar.areas.clone();
+                self.state.sidebar_sections_layout =
+                    config.ui.sidebar.layout == crate::config::SidebarLayoutConfig::Sections;
+                if self.state.sidebar_sections_layout && !self.state.sidebar_areas.notes {
+                    self.state.set_notepad_focus(false);
+                }
+                self.state.sidebar_header_plain =
+                    config.ui.sidebar.header == crate::config::SidebarHeaderConfig::Plain;
                 if sidebar_projection_changed {
                     self.state.mark_sidebar_projection_changed();
                 }
@@ -3603,6 +3622,9 @@ impl App {
         key: crate::input::TerminalKey,
     ) {
         let key_event = key.as_key_event();
+        if self.handle_sidebar_areas_menu_key(key_event, owner) {
+            return;
+        }
         match owner {
             state::InputOwner::Pomodoro | state::InputOwner::Popup | state::InputOwner::Pane => {}
             state::InputOwner::Client(owner) => match owner {
@@ -9445,6 +9467,124 @@ last_pane = "prefix+tab"
             rx.try_recv().is_err(),
             "the pane must not see keys typed into the notepad"
         );
+    }
+
+    #[tokio::test]
+    async fn toggling_hidden_notes_does_not_steal_input_when_notes_are_shown() {
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("hidden-notes-toggle");
+        let focused = workspace.focused_pane_id().expect("focused pane");
+        let (runtime, mut pane_input) = TerminalRuntime::test_with_channel(80, 24);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Terminal);
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_areas.notes = false;
+        app.state.notepad.enabled = true;
+
+        assert!(!app.state.notepad.focused);
+        assert!(!app.state.toggle_notepad_focus());
+        assert!(!app.state.notepad.focused);
+        app.state.set_notepad_focus(true);
+        assert!(!app.state.notepad.focused);
+
+        app.state.sidebar_areas.notes = true;
+        assert_eq!(app.state.input_owner(), state::InputOwner::Pane);
+        app.route_client_events_from(
+            42,
+            vec![raw_key(
+                KeyCode::Char('j'),
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+
+        assert!(pane_input.try_recv().is_ok(), "the pane receives the key");
+        assert!(app.state.notepad.body().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn config_reload_hiding_focused_notes_routes_keys_back_to_the_pane() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = temp_config_path("notes-focus-reload");
+        std::fs::create_dir_all(path.parent().expect("config parent"))
+            .expect("create config directory");
+        std::fs::write(
+            &path,
+            "[ui.sidebar]\nlayout = \"sections\"\n[ui.sidebar.areas]\nnotes = true\n[notepad]\nenabled = true\n",
+        )
+        .expect("write visible-notes config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = test_app();
+        let mut workspace = Workspace::test_new("test");
+        let focused = workspace.focused_pane_id().expect("focused pane");
+        let (runtime, mut pane_input) = TerminalRuntime::test_with_channel(80, 24);
+        workspace.tabs[0].runtimes.insert(focused, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Terminal);
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_areas.notes = true;
+        app.state.notepad.enabled = true;
+        app.state.notepad.focused = true;
+        assert_eq!(app.state.input_owner(), state::InputOwner::Notepad);
+
+        std::fs::write(
+            &path,
+            "[ui.sidebar]\nlayout = \"sections\"\n[ui.sidebar.areas]\nnotes = false\n[notepad]\nenabled = true\n",
+        )
+        .expect("write hidden-notes config");
+        app.reload_config();
+
+        assert!(
+            !app.state.notepad.focused,
+            "reload releases hidden-notes focus"
+        );
+        assert_eq!(app.state.input_owner(), state::InputOwner::Pane);
+        app.route_client_events_from(
+            42,
+            vec![raw_key(
+                KeyCode::Char('j'),
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert!(pane_input.try_recv().is_ok(), "the pane receives the key");
+        assert!(app.state.notepad.body().is_empty());
+
+        std::fs::write(
+            &path,
+            "[ui.sidebar]\nlayout = \"sections\"\n[ui.sidebar.areas]\nnotes = true\n[notepad]\nenabled = true\n",
+        )
+        .expect("write visible-notes config again");
+        app.reload_config();
+
+        assert!(!app.state.notepad.focused);
+        assert_eq!(app.state.input_owner(), state::InputOwner::Pane);
+        app.route_client_events_from(
+            42,
+            vec![raw_key(
+                KeyCode::Char('k'),
+                KeyModifiers::empty(),
+                KeyEventKind::Press,
+            )],
+            false,
+        );
+        assert!(
+            pane_input.try_recv().is_ok(),
+            "the pane keeps input ownership"
+        );
+        assert!(app.state.notepad.body().is_empty());
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(path.parent().expect("config parent")).ok();
     }
 
     #[tokio::test]

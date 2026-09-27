@@ -92,6 +92,21 @@ impl App {
         }
     }
 
+    pub(super) fn toggle_sidebar_area(&mut self, area: crate::config::SidebarArea) {
+        let value = !self.state.sidebar_areas.is_visible(area);
+        self.save_config_edit(crate::app::settings_general::ConfigEdit::Bool {
+            section: "ui.sidebar.areas",
+            key: area.config_key(),
+            value,
+        });
+        if area == crate::config::SidebarArea::Notes
+            && self.state.sidebar_sections_layout
+            && !self.state.sidebar_areas.is_visible(area)
+        {
+            self.state.set_notepad_focus(false);
+        }
+    }
+
     /// Persist one captured keybinding and reload.
     ///
     /// Built-ins go through the same single config-edit path every other
@@ -306,6 +321,104 @@ mod tests {
             crate::config::ToastDelivery::System
         );
         assert!(saved.ui.sound.enabled);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sections_sidebar_area_toggle_hides_notes_and_round_trips_config() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let dir = scratch_dir();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui.sidebar]\nlayout = \"sections\"\n[ui.sidebar.areas]\nnotes = true\n[notepad]\nenabled = true\nheight = 4\n",
+        )
+        .expect("seed config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let config = crate::config::Config::load().config;
+        let mut app = App::new(
+            &config,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        app.state.hyperspace.enabled = false;
+        app.state.notepad.focused = true;
+        let sidebar = ratatui::layout::Rect::new(0, 0, 36, 24);
+        assert!(crate::ui::sidebar::sidebar_notepad_rect(&app.state, sidebar).height > 0);
+
+        app.toggle_sidebar_area(crate::config::SidebarArea::Notes);
+
+        assert_eq!(
+            crate::ui::sidebar::sidebar_notepad_rect(&app.state, sidebar),
+            ratatui::layout::Rect::default(),
+            "a hidden notes area must reserve no panel rows"
+        );
+        assert!(
+            !app.state.notepad.focused,
+            "hiding Notes releases editor focus"
+        );
+        assert!(
+            app.state.notepad_request.is_some(),
+            "releasing focus queues the note save"
+        );
+        let saved = crate::config::Config::load().config;
+        assert!(!saved.ui.sidebar.areas.notes);
+        let reloaded = App::new(
+            &saved,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        assert!(!reloaded.state.sidebar_areas.notes);
+        assert_eq!(
+            crate::ui::sidebar::sidebar_notepad_rect(&reloaded.state, sidebar),
+            ratatui::layout::Rect::default()
+        );
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_sidebar_layout_ignores_sections_area_config() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let dir = scratch_dir();
+        let path = dir.join("config.toml");
+        std::fs::write(
+            &path,
+            "[ui.sidebar]\nlayout = \"current\"\n[ui.sidebar.areas]\nnotes = false\n[notepad]\nenabled = true\nheight = 4\n",
+        )
+        .expect("seed config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let config = crate::config::Config::load().config;
+        let mut app = App::new(
+            &config,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        app.state.hyperspace.enabled = false;
+        assert!(!app.state.sidebar_areas.notes);
+        assert!(crate::ui::sidebar::sidebar_area_is_visible(
+            &app.state,
+            crate::config::SidebarArea::Notes
+        ));
+        assert!(
+            crate::ui::sidebar::sidebar_notepad_rect(
+                &app.state,
+                ratatui::layout::Rect::new(0, 0, 36, 24)
+            )
+            .height
+                > 0
+        );
 
         env.remove(crate::config::CONFIG_PATH_ENV_VAR);
         std::fs::remove_dir_all(&dir).ok();

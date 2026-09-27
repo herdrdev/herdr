@@ -1899,15 +1899,19 @@ impl App {
             }
             (
                 ContextMenuKind::Tab {
-                    ws_idx,
+                    workspace_id,
                     settle_pane_id: Some(pane_id),
                     ..
                 },
                 Some(crate::app::state::SETTLE_ITEM),
             ) => {
-                if let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) {
-                    self.runtime_pane_settle("tui.context-menu.settle", public_pane_id);
-                }
+                self.settle_local_pane_or_tab(
+                    crate::app::state::PaneFocusTarget {
+                        workspace_id,
+                        pane_id,
+                    },
+                    "tui.context-menu.settle",
+                );
                 self.state.close_client_overlay();
             }
             (
@@ -3452,6 +3456,8 @@ mod tests {
     fn api_sidebar_context_menu_settles_the_exact_pane() {
         let mut app = app_with_test_workspaces(&["main"]);
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let sibling_pane = app.state.workspaces[0].test_split(Direction::Horizontal);
+        app.state.ensure_test_terminals();
         let (workspace_id, tab_id) = context_tab_ids(&app.state, 0, 0);
         let menu = ContextMenuState {
             kind: ContextMenuKind::Tab {
@@ -3471,7 +3477,38 @@ mod tests {
         app.apply_context_menu_action_via_api(menu, ContextMenuAction::Settle);
 
         assert!(app.state.pane_is_settled(0, pane_id));
+        assert!(!app.state.pane_is_settled(0, sibling_pane));
         assert_eq!(app.state.server_mode(), Mode::Terminal);
+    }
+
+    #[test]
+    fn sections_context_menu_settle_settles_every_pane_in_split_tab() {
+        let mut app = app_with_test_workspaces(&["main"]);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let sibling_pane = app.state.workspaces[0].test_split(Direction::Horizontal);
+        app.state.ensure_test_terminals();
+        app.state.sidebar_sections_layout = true;
+        let (workspace_id, tab_id) = context_tab_ids(&app.state, 0, 0);
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                workspace_id,
+                tab_id,
+                ws_idx: 0,
+                tab_idx: 0,
+                starred: false,
+                has_subgroup: false,
+                settle_pane_id: Some(pane_id),
+                snooze_target: None,
+            },
+            x: 0,
+            y: 0,
+            selected: ContextMenuAction::Settle,
+        };
+
+        app.apply_context_menu_action_via_api(menu, ContextMenuAction::Settle);
+
+        assert!(app.state.pane_is_settled(0, pane_id));
+        assert!(app.state.pane_is_settled(0, sibling_pane));
     }
 
     #[test]

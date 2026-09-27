@@ -144,26 +144,39 @@ fn mobile_switcher_target_for_row(
             false,
             col,
         ),
-        SidebarRow::Tab { entry, depth } => super::sidebar::selected_row_control_at(
-            app,
-            entry,
-            Rect::new(content.x, content.y, content.width, 1),
-            *depth,
-            true,
-            col,
-        ),
+        SidebarRow::Tab { entry, depth } => {
+            if entry.has_sections_card() {
+                None
+            } else {
+                super::sidebar::selected_row_control_at(
+                    app,
+                    entry,
+                    Rect::new(content.x, content.y, content.width, 1),
+                    *depth,
+                    true,
+                    col,
+                )
+            }
+        }
         SidebarRow::RemoteAgent {
             entry,
             depth,
             show_host_identity,
-        } => super::sidebar::selected_remote_row_control_at(
-            app,
-            entry,
-            Rect::new(content.x, content.y, content.width, 1),
-            *depth,
-            *show_host_identity,
-            col,
-        ),
+            sections_card,
+        } => {
+            if sections_card.is_some() {
+                None
+            } else {
+                super::sidebar::selected_remote_row_control_at(
+                    app,
+                    entry,
+                    Rect::new(content.x, content.y, content.width, 1),
+                    *depth,
+                    *show_host_identity,
+                    col,
+                )
+            }
+        }
         _ => None,
     };
     if let Some(control) = control {
@@ -887,6 +900,7 @@ fn render_mobile_switcher_content(
                 entry,
                 depth,
                 show_host_identity,
+                ..
             } => {
                 let selected = app
                     .sidebar_selected_remote_agent
@@ -3188,6 +3202,7 @@ mod tests {
         let content = Rect::new(0, 0, 60, 1);
         let row = SidebarRow::RemoteAgent {
             entry: entry.clone(),
+            sections_card: None,
             depth: 0,
             show_host_identity: true,
         };

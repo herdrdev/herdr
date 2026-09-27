@@ -63,6 +63,9 @@ impl App {
         }
 
         let key_event = key.as_key_event();
+        if self.handle_sidebar_areas_menu_key(key_event, self.state.input_owner()) {
+            return None;
+        }
         if self.state.handle_sidebar_subgroup_picker_key(key_event) {
             return None;
         }

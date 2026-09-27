@@ -1522,6 +1522,80 @@
           ]
         },
         {
+          "key": "ui.sidebar.layout",
+          "type": "enum",
+          "default": "current",
+          "description": "Sidebar row layout. `current` preserves the existing layout; `sections` shows pinned, active, snoozed, and settled thread shelves.",
+          "values": [
+            "current",
+            "sections"
+          ]
+        },
+        {
+          "key": "ui.sidebar.header",
+          "type": "enum",
+          "default": "sky",
+          "description": "Header style for the sections layout. `plain` removes the sky band and wordmark while keeping search and sidebar action controls available in the compact header.",
+          "values": [
+            "sky",
+            "plain"
+          ]
+        },
+        {
+          "key": "ui.sidebar.areas.sky_header",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the sky header in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.view_bar",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the View bar in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.unassigned",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the unassigned work block in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.runs",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show fleet Runs in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.aloops",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show Aloops in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.symphony",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show Symphony in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.notes",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the notes panel in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.pomodoro",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the Pomodoro timer in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
+          "key": "ui.sidebar.areas.hosts",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the fleet host strip in the sections layout. Area visibility settings are ignored by the current layout."
+        },
+        {
           "key": "ui.sidebar.agents.row_gap",
           "type": "integer",
           "default": "0",

@@ -4813,3 +4813,6 @@ mod tests {
         }
     }
 }
+pub(super) const fn local_host_os() -> crate::platform::HostOs {
+    crate::platform::HostOs::Windows
+}
