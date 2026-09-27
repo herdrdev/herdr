@@ -1962,9 +1962,15 @@ mod tests {
         let mut writer = pair.master.take_writer().expect("no writer");
 
         assert!(wait_for(true, pid), "interactive shell should start idle");
-        writer.write_all(b"sleep 999\n").unwrap();
+        // End the foreground command with EOF rather than SIGINT. An interrupt
+        // sent while the shell is still moving the command into its own
+        // foreground process group can be delivered before the command resets
+        // its signal dispositions, leaving it running in a stale foreground
+        // group while the shell shows a prompt. `cat` blocks until stdin hits
+        // EOF, so it stays reliably busy until we end it.
+        writer.write_all(b"cat\n").unwrap();
         assert!(wait_for(false, pid), "shell running a command is not idle");
-        writer.write_all(&[3]).unwrap();
+        writer.write_all(&[4]).unwrap();
         assert!(
             wait_for(true, pid),
             "shell should be idle after the command ends"
