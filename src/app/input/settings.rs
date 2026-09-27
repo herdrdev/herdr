@@ -1057,9 +1057,15 @@ mod tests {
             .position(|row| *row == crate::app::settings_general::GeneralRow::HideWhitespace)
             .expect("row");
         let (offset, _) = crate::ui::general_row_offsets()[hide_whitespace];
-        let action = app
-            .state
-            .handle_settings_mouse(mouse_down(area.x + 1, area.y + 2 + offset));
+        app.state.settings.list.selected = hide_whitespace + 1;
+        let scroll = crate::ui::general_row_scroll(
+            app.state.settings.list.selected,
+            area.height.saturating_sub(2),
+        );
+        let action = app.state.handle_settings_mouse(mouse_down(
+            area.x + 1,
+            area.y + 2 + offset.saturating_sub(scroll),
+        ));
 
         assert_eq!(app.state.settings.list.selected, hide_whitespace);
         assert_eq!(
@@ -1080,9 +1086,15 @@ mod tests {
             })
             .expect("row");
         let (offset, _) = crate::ui::general_row_offsets()[auto_nudge];
-        let action = app
-            .state
-            .handle_settings_mouse(mouse_down(area.x + 1, area.y + 2 + offset));
+        app.state.settings.list.selected = auto_nudge - 1;
+        let scroll = crate::ui::general_row_scroll(
+            app.state.settings.list.selected,
+            area.height.saturating_sub(2),
+        );
+        let action = app.state.handle_settings_mouse(mouse_down(
+            area.x + 1,
+            area.y + 2 + offset.saturating_sub(scroll),
+        ));
 
         assert_eq!(app.state.settings.list.selected, auto_nudge);
         assert_eq!(

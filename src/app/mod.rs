@@ -1345,6 +1345,7 @@ impl App {
             ),
             nudge_after: auto_nudge::nudge_after_duration(config.session.nudge_after_minutes),
             max_nudges: config.session.max_nudges,
+            max_nudges_without_human: config.session.max_nudges_without_human,
             stall_nudge_message: config.session.stall_nudge_message.clone(),
             prompt_new_tab_name: config.ui.prompt_new_tab_name,
             prompt_new_workspace_name: config.ui.prompt_new_workspace_name,
@@ -2648,6 +2649,7 @@ impl App {
             self.state.nudge_after =
                 auto_nudge::nudge_after_duration(config.session.nudge_after_minutes);
             self.state.max_nudges = config.session.max_nudges;
+            self.state.max_nudges_without_human = config.session.max_nudges_without_human;
             self.state
                 .stall_nudge_message
                 .clone_from(&config.session.stall_nudge_message);

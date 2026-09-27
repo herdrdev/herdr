@@ -2059,6 +2059,12 @@
           "description": "Maximum prompts Herdr sends during one stale-status episode. Answering a nudge parks the episode rather than refilling it; the budget resets once the pane stays healthy for a full escalation cycle, or as soon as you type into it."
         },
         {
+          "key": "session.max_nudges_without_human",
+          "type": "integer",
+          "default": "5",
+          "description": "Maximum stalled-agent nudges sent to one pane without human input, across status reports and recovered episodes. Once reached, nudging stops until you type into that pane. Set to 0 for no cap."
+        },
+        {
           "key": "session.stall_nudge_message",
           "type": "string",
           "default": "\"Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue.\"",

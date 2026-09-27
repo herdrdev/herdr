@@ -1893,9 +1893,11 @@ impl HeadlessServer {
                 .and_then(|terminal| terminal.agent_activity_handoff_state(handoff_captured_at));
             handoff_runtime.agent_state = terminal
                 .and_then(|terminal| terminal.terminal_agent_handoff_state(handoff_captured_at));
-            handoff_runtime.stall_nudge = self
-                .app
-                .stall_nudge_handoff_state(terminal_id, handoff_captured_at);
+            handoff_runtime.stall_nudge = self.app.stall_nudge_handoff_state(
+                crate::layout::PaneId::from_raw(pane_id),
+                terminal_id,
+                handoff_captured_at,
+            );
             handoff_runtime.human_draft = self
                 .app
                 .human_draft_handoff_state(crate::layout::PaneId::from_raw(pane_id));

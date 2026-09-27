@@ -12,6 +12,21 @@ impl App {
             .find_map(|(ws_idx, ws)| ws.pane_state(pane_id).map(|pane| (ws_idx, pane)))
     }
 
+    pub(crate) fn find_pane_mut(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<(usize, &mut crate::pane::PaneState)> {
+        self.state
+            .workspaces
+            .iter_mut()
+            .enumerate()
+            .find_map(|(ws_idx, ws)| {
+                ws.tabs
+                    .iter_mut()
+                    .find_map(|tab| tab.panes.get_mut(&pane_id).map(|pane| (ws_idx, pane)))
+            })
+    }
+
     pub(crate) fn public_workspace_id(&self, ws_idx: usize) -> String {
         self.state.workspaces[ws_idx].id.clone()
     }

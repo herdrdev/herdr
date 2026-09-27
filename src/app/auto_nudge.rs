@@ -7,6 +7,8 @@ use super::App;
 const STALL_NUDGE_SUBMIT_DELAY: Duration = Duration::from_millis(300);
 const STALL_NUDGE_SCHEDULE_FAILED: &str =
     "stalled-agent nudge scheduling overflowed; waiting for a fresh status report";
+const STALL_NUDGE_HUMAN_INPUT_CAP_REACHED: &str =
+    "the no-human-input stalled-agent nudge limit was reached";
 
 #[derive(Debug, Clone)]
 pub(crate) struct StallNudgeEpisode {
@@ -50,6 +52,8 @@ struct AutoNudgeFacts {
     runtime_hosts_agent: bool,
     nudges_sent: u32,
     max_nudges: u32,
+    nudges_without_human: u32,
+    max_nudges_without_human: u32,
     next_nudge_at: Option<Instant>,
     schedule_failed: bool,
     now: Instant,
@@ -96,6 +100,11 @@ fn auto_nudge_decision(facts: &AutoNudgeFacts) -> AutoNudgeDecision {
     }
     if !facts.detected_agent {
         return AutoNudgeDecision::Drop("the pane has no detected agent");
+    }
+    if facts.max_nudges_without_human > 0
+        && facts.nudges_without_human >= facts.max_nudges_without_human
+    {
+        return AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED);
     }
     if facts.nudges_sent >= facts.max_nudges {
         return AutoNudgeDecision::Drop("the stall episode exhausted its nudge budget");
@@ -203,6 +212,9 @@ impl App {
     fn retire_stall_nudge_episode_for_pane(&mut self, pane_id: crate::layout::PaneId) {
         self.stall_nudge_episodes
             .retain(|_, episode| episode.pane_id != pane_id);
+        if let Some((_, pane)) = self.find_pane_mut(pane_id) {
+            pane.stall_nudges_without_human = 0;
+        }
     }
 
     pub(crate) fn next_auto_nudge_deadline(&self, now: Instant) -> Option<Instant> {
@@ -233,17 +245,27 @@ impl App {
     #[cfg(unix)]
     pub(crate) fn stall_nudge_handoff_state(
         &self,
+        pane_id: crate::layout::PaneId,
         terminal_id: &crate::terminal::TerminalId,
         now: Instant,
     ) -> Option<crate::handoff_runtime::StallNudgeHandoffState> {
-        self.stall_nudge_episodes.get(terminal_id).map(|episode| {
-            crate::handoff_runtime::StallNudgeHandoffState {
-                nudges_sent: episode.nudges_sent,
-                next_nudge_in: episode
+        let episode = self.stall_nudge_episodes.get(terminal_id);
+        let nudges_without_human = self
+            .find_pane(pane_id)
+            .map_or(0, |(_, pane)| pane.stall_nudges_without_human);
+        if episode.is_none() && nudges_without_human == 0 {
+            return None;
+        }
+        Some(crate::handoff_runtime::StallNudgeHandoffState {
+            nudges_sent: episode.map_or(0, |episode| episode.nudges_sent),
+            nudges_without_human,
+            episode_active: episode.is_some(),
+            next_nudge_in: episode.and_then(|episode| {
+                episode
                     .next_nudge_at
-                    .map(|deadline| deadline.saturating_duration_since(now)),
-                schedule_failed: episode.schedule_failed,
-            }
+                    .map(|deadline| deadline.saturating_duration_since(now))
+            }),
+            schedule_failed: episode.is_some_and(|episode| episode.schedule_failed),
         })
     }
 
@@ -271,14 +293,17 @@ impl App {
                 .get(&old_pane_id)
                 .copied()
                 .unwrap_or_else(|| crate::layout::PaneId::from_raw(old_pane_id));
-            let Some((_, pane)) = self.find_pane(pane_id) else {
-                continue;
+            let terminal_id = {
+                let Some((_, pane)) = self.find_pane_mut(pane_id) else {
+                    continue;
+                };
+                pane.stall_nudges_without_human = state.nudges_without_human;
+                pane.attached_terminal_id.clone()
             };
-            let terminal_id = pane.attached_terminal_id.clone();
             let Some(terminal) = self.state.terminals.get(&terminal_id) else {
                 continue;
             };
-            if !terminal.supervisor_stale {
+            if !state.episode_active || !terminal.supervisor_stale {
                 continue;
             }
             let mut schedule_failed = state.schedule_failed;
@@ -363,6 +388,14 @@ impl App {
                     );
                 }
                 AutoNudgeDecision::Drop(reason) => {
+                    let display_reason = if reason == STALL_NUDGE_HUMAN_INPUT_CAP_REACHED {
+                        let nudges_without_human = self
+                            .find_pane(target.pane_id)
+                            .map_or(0, |(_, pane)| pane.stall_nudges_without_human);
+                        format!("{nudges_without_human} nudges sent with no human input")
+                    } else {
+                        reason.to_string()
+                    };
                     let episode = self
                         .stall_nudge_episodes
                         .entry(target.terminal_id.clone())
@@ -383,7 +416,7 @@ impl App {
                             terminal = %target.terminal_id,
                             declaration = target.declaration_kind,
                             quiet_seconds = target.quiet_for.as_secs(),
-                            reason,
+                            reason = %display_reason,
                             "dropping stalled-agent nudge candidate"
                         );
                         episode.last_drop_reason = Some(reason);
@@ -431,6 +464,14 @@ impl App {
                 continue;
             }
 
+            let nudges_without_human = self
+                .find_pane_mut(target.pane_id)
+                .map(|(_, pane)| {
+                    pane.stall_nudges_without_human =
+                        pane.stall_nudges_without_human.saturating_add(1);
+                    pane.stall_nudges_without_human
+                })
+                .unwrap_or(0);
             let nudge_after = self.state.nudge_after;
             let max_nudges = self.state.max_nudges;
             let Some(episode) = self.stall_nudge_episodes.get_mut(&target.terminal_id) else {
@@ -462,6 +503,7 @@ impl App {
                 quiet_seconds = target.quiet_for.as_secs(),
                 nudge = episode.nudges_sent,
                 max_nudges,
+                nudges_without_human,
                 "nudged a stalled agent pane"
             );
             changed = true;
@@ -565,6 +607,8 @@ impl App {
                         runtime_hosts_agent: agent.is_some() && runtime.is_some(),
                         nudges_sent,
                         max_nudges: self.state.max_nudges,
+                        nudges_without_human: pane.stall_nudges_without_human,
+                        max_nudges_without_human: self.state.max_nudges_without_human,
                         next_nudge_at,
                         schedule_failed: episode.is_some_and(|episode| episode.schedule_failed),
                         now,
@@ -745,6 +789,8 @@ mod tests {
             runtime_hosts_agent: true,
             nudges_sent: 0,
             max_nudges: 3,
+            nudges_without_human: 0,
+            max_nudges_without_human: 5,
             next_nudge_at: None,
             schedule_failed: false,
             now,
@@ -816,6 +862,26 @@ mod tests {
                 AutoNudgeDecision::Drop(_)
             ));
         }
+    }
+
+    #[test]
+    fn the_no_human_input_cap_drops_at_its_limit_and_zero_is_unlimited() {
+        let now = Instant::now();
+        let capped = AutoNudgeFacts {
+            nudges_without_human: 5,
+            ..ready_facts(now)
+        };
+        assert_eq!(
+            auto_nudge_decision(&capped),
+            AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED)
+        );
+
+        let unlimited = AutoNudgeFacts {
+            nudges_without_human: u32::MAX,
+            max_nudges_without_human: 0,
+            ..ready_facts(now)
+        };
+        assert_eq!(auto_nudge_decision(&unlimited), AutoNudgeDecision::Nudge);
     }
 
     #[test]
@@ -1063,19 +1129,33 @@ mod tests {
             app.stall_nudge_episodes[&terminal_id].nudges_sent,
             app.state.max_nudges
         );
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            app.state.max_nudges
+        );
     }
 
-    /// A pane that actually recovers has to get its budget back, or one bad
-    /// stretch would mute its nudges for the life of the session.
+    /// Recovery starts a new episode, but it does not refill the pane's
+    /// no-human-input budget.
     #[tokio::test]
-    async fn a_full_recovery_window_restores_the_budget() {
+    async fn a_full_recovery_window_resets_only_the_episode_budget() {
         let now = Instant::now();
-        let (mut app, _pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
         let recovery = stall_nudge_recovery_window(app.state.nudge_after, app.state.max_nudges);
 
         assert!(app.tick_auto_nudges(now));
         assert!(drain(&mut rx).contains("Re-verify"));
         assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 1);
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
 
         app.state
             .terminals
@@ -1084,9 +1164,23 @@ mod tests {
             .supervisor_stale = false;
         app.tick_auto_nudges(now + Duration::from_secs(1));
         assert!(app.stall_nudge_episodes.contains_key(&terminal_id));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
 
         app.tick_auto_nudges(now + recovery + Duration::from_secs(1));
         assert!(!app.stall_nudge_episodes.contains_key(&terminal_id));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
     }
 
     /// Typing into the pane is the human taking over, which is the one signal
@@ -1099,9 +1193,79 @@ mod tests {
         assert!(app.tick_auto_nudges(now));
         assert!(drain(&mut rx).contains("Re-verify"));
         assert!(app.stall_nudge_episodes.contains_key(&terminal_id));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
 
         app.note_human_text(pane_id, "picking this up myself");
         assert!(!app.stall_nudge_episodes.contains_key(&terminal_id));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn the_no_human_input_cap_spans_recovered_episodes() {
+        let now = Instant::now();
+        let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        app.state.max_nudges_without_human = 2;
+        let recovery = stall_nudge_recovery_window(app.state.nudge_after, app.state.max_nudges);
+
+        assert!(app.tick_auto_nudges(now));
+        assert!(drain(&mut rx).contains("Re-verify"));
+        assert!(app.tick_auto_nudges(now + STALL_NUDGE_SUBMIT_DELAY));
+        assert_eq!(drain(&mut rx), "\r");
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .supervisor_stale = false;
+        app.tick_auto_nudges(now + STALL_NUDGE_SUBMIT_DELAY);
+
+        app.tick_auto_nudges(now + recovery + Duration::from_secs(1));
+        assert!(!app.stall_nudge_episodes.contains_key(&terminal_id));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
+
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .supervisor_stale = true;
+        assert!(app.tick_auto_nudges(now + recovery + Duration::from_secs(2)));
+        assert!(drain(&mut rx).contains("Re-verify"));
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            2
+        );
+
+        assert!(app
+            .tick_auto_nudges(now + recovery + Duration::from_secs(2) + STALL_NUDGE_SUBMIT_DELAY));
+        assert_eq!(drain(&mut rx), "\r");
+        assert_eq!(
+            auto_nudge_decision(&AutoNudgeFacts {
+                nudges_without_human: 2,
+                max_nudges_without_human: 2,
+                ..ready_facts(now)
+            }),
+            AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED)
+        );
     }
 
     #[tokio::test]
@@ -1193,6 +1357,13 @@ mod tests {
         assert!(app.stall_nudge_episodes[&terminal_id]
             .dormant_since
             .is_some());
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            1
+        );
 
         app.handle_scheduled_tasks(report_at + app.state.agent_stale_after, false);
         assert!(!app.state.terminals[&terminal_id].supervisor_stale);
@@ -1214,6 +1385,13 @@ mod tests {
         app.handle_scheduled_tasks(stale_at, false);
         assert!(app.state.terminals[&terminal_id].supervisor_stale);
         assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 2);
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            2
+        );
         assert!(drain(&mut rx)
             .contains("Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."));
     }
@@ -1480,6 +1658,10 @@ mod tests {
     async fn handoff_restores_stall_nudge_budget_without_refilling_it() {
         let now = Instant::now();
         let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        app.find_pane_mut(pane_id)
+            .expect("pane")
+            .1
+            .stall_nudges_without_human = 4;
         app.stall_nudge_episodes.insert(
             terminal_id.clone(),
             StallNudgeEpisode {
@@ -1493,7 +1675,7 @@ mod tests {
             },
         );
         let persisted = app
-            .stall_nudge_handoff_state(&terminal_id, now)
+            .stall_nudge_handoff_state(pane_id, &terminal_id, now)
             .expect("stalled episode");
         app.stall_nudge_episodes.clear();
         app.restore_stall_nudge_episodes(
@@ -1503,8 +1685,55 @@ mod tests {
         );
 
         assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 2);
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            4
+        );
         assert!(!app.tick_auto_nudges(now));
         assert_eq!(drain(&mut rx), "");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn handoff_restores_the_no_human_count_after_episode_recovery() {
+        let now = Instant::now();
+        let (mut app, pane_id, terminal_id, _rx) = app_with_stalled_pane(now);
+        app.find_pane_mut(pane_id)
+            .expect("pane")
+            .1
+            .stall_nudges_without_human = 4;
+
+        let persisted = app
+            .stall_nudge_handoff_state(pane_id, &terminal_id, now)
+            .expect("pane nudge count");
+        assert!(!persisted.episode_active);
+        assert_eq!(persisted.nudges_without_human, 4);
+        let persisted = serde_json::from_slice::<crate::handoff_runtime::StallNudgeHandoffState>(
+            &serde_json::to_vec(&persisted).expect("serialize nudge state"),
+        )
+        .expect("restore serialized nudge state");
+
+        app.find_pane_mut(pane_id)
+            .expect("pane")
+            .1
+            .stall_nudges_without_human = 0;
+        app.restore_stall_nudge_episodes(
+            std::collections::HashMap::from([(pane_id.raw(), persisted)]),
+            &std::collections::HashMap::new(),
+            now,
+        );
+
+        assert_eq!(
+            app.find_pane(pane_id)
+                .expect("pane")
+                .1
+                .stall_nudges_without_human,
+            4
+        );
+        assert!(!app.stall_nudge_episodes.contains_key(&terminal_id));
     }
 
     /// AC6: handoff restores an exported human draft under the aliased pane and blocks nudging it.
@@ -1546,6 +1775,7 @@ mod tests {
         config.session.agent_subagent_stale_after_minutes = 75;
         config.session.nudge_after_minutes = 12;
         config.session.max_nudges = 5;
+        config.session.max_nudges_without_human = 8;
         config.session.stall_nudge_message = "report".into();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
         assert!(app.state.auto_nudge_stalled_agents);
@@ -1556,6 +1786,7 @@ mod tests {
         );
         assert_eq!(app.state.nudge_after, Duration::from_secs(12 * 60));
         assert_eq!(app.state.max_nudges, 5);
+        assert_eq!(app.state.max_nudges_without_human, 8);
         assert_eq!(app.state.stall_nudge_message, "report");
 
         config.session.auto_nudge_stalled_agents = false;
@@ -1563,6 +1794,7 @@ mod tests {
         config.session.agent_subagent_stale_after_minutes = 65;
         config.session.nudge_after_minutes = 7;
         config.session.max_nudges = 2;
+        config.session.max_nudges_without_human = 0;
         config.session.stall_nudge_message = "still working?".into();
         app.apply_live_config(&config, &[], &[], false);
         assert!(!app.state.auto_nudge_stalled_agents);
@@ -1573,6 +1805,7 @@ mod tests {
         );
         assert_eq!(app.state.nudge_after, Duration::from_secs(7 * 60));
         assert_eq!(app.state.max_nudges, 2);
+        assert_eq!(app.state.max_nudges_without_human, 0);
         assert_eq!(app.state.stall_nudge_message, "still working?");
 
         config.session.agent_stale_after_minutes = u64::MAX;

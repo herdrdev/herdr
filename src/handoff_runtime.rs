@@ -5,10 +5,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct StallNudgeHandoffState {
     pub nudges_sent: u32,
+    #[serde(default)]
+    pub nudges_without_human: u32,
+    #[serde(default = "default_stall_nudge_episode_active")]
+    pub episode_active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_nudge_in: Option<std::time::Duration>,
     #[serde(default)]
     pub schedule_failed: bool,
+}
+
+#[cfg(unix)]
+fn default_stall_nudge_episode_active() -> bool {
+    true
 }
 
 /// Long-lived pane runtime transferred during server replacement.
@@ -71,7 +80,7 @@ pub(crate) struct ImportedHandoffRuntime {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::HandoffRuntimeState;
+    use super::{HandoffRuntimeState, StallNudgeHandoffState};
 
     /// AC6: handoff payloads written before human-draft transfer still deserialize.
     #[test]
@@ -89,5 +98,15 @@ mod tests {
             serde_json::from_value(payload).expect("older handoff runtime should deserialize");
 
         assert!(state.human_draft.is_none());
+    }
+
+    #[test]
+    fn an_older_stall_nudge_handoff_keeps_its_episode_active() {
+        let state: StallNudgeHandoffState =
+            serde_json::from_value(serde_json::json!({ "nudges_sent": 2 }))
+                .expect("older stall nudge state should deserialize");
+
+        assert_eq!(state.nudges_without_human, 0);
+        assert!(state.episode_active);
     }
 }

@@ -69,6 +69,8 @@ pub struct PaneState {
     /// settled yet. Runtime-only: a restart re-arms the grace window, which can
     /// only delay settling, never settle a pane early.
     pub(crate) finished_since: Option<std::time::Instant>,
+    /// Runtime-only nudge count, carried across server handoff and reset by human input.
+    pub(crate) stall_nudges_without_human: u32,
     pub(crate) activity: Box<crate::activity_age::PaneActivity>,
 }
 
@@ -83,6 +85,7 @@ impl PaneState {
             settled_at: None,
             settled_work_key: None,
             finished_since: None,
+            stall_nudges_without_human: 0,
             activity: Box::new(crate::activity_age::PaneActivity::new(
                 std::time::Instant::now(),
             )),

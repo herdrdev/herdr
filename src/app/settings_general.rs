@@ -17,6 +17,7 @@ pub(crate) enum GeneralRow {
     SettleDoneAfterMinutes,
     NudgeResumedAgents,
     AutoNudgeStalledAgents,
+    MaxNudgesWithoutHuman,
     HideWhitespace,
     NewThreadWorkspace,
     AddProjectStartDir,
@@ -47,6 +48,15 @@ const WORK_MINUTE_LADDER: [u64; 5] = [20, 25, 30, 45, 50];
 const SHORT_BREAK_MINUTE_LADDER: [u64; 3] = [3, 5, 10];
 const LONG_BREAK_MINUTE_LADDER: [u64; 3] = [15, 20, 30];
 const WORKING_OPACITY_LADDER: [u8; 4] = [100, 75, 50, 25];
+const NUDGES_WITHOUT_HUMAN_LADDER: [u32; 4] = [3, 5, 10, 0];
+
+fn next_nudges_without_human(current: u32) -> u32 {
+    let next = NUDGES_WITHOUT_HUMAN_LADDER
+        .iter()
+        .position(|value| *value == current)
+        .map_or(0, |index| (index + 1) % NUDGES_WITHOUT_HUMAN_LADDER.len());
+    NUDGES_WITHOUT_HUMAN_LADDER[next]
+}
 
 /// The next entry above `current`, wrapping to the first one at the top.
 fn next_in_ladder(ladder: &[u64], current: u64) -> u64 {
@@ -68,6 +78,7 @@ impl GeneralRow {
         Self::SettleDoneAfterMinutes,
         Self::NudgeResumedAgents,
         Self::AutoNudgeStalledAgents,
+        Self::MaxNudgesWithoutHuman,
         Self::HideWhitespace,
         Self::NewThreadWorkspace,
         Self::AddProjectStartDir,
@@ -92,6 +103,7 @@ impl GeneralRow {
             Self::SettleDoneAfterMinutes => "Quiet minutes before auto-settle",
             Self::NudgeResumedAgents => "Continue resumed agents",
             Self::AutoNudgeStalledAgents => "Nudge agents after the stale timer",
+            Self::MaxNudgesWithoutHuman => "Nudge limit without human input",
             Self::HideWhitespace => "Hide whitespace changes in diff",
             Self::NewThreadWorkspace => "New threads default workspace",
             Self::AddProjectStartDir => "Add project starts in",
@@ -118,6 +130,9 @@ impl GeneralRow {
             Self::AutoNudgeStalledAgents => {
                 Some("after both its status report and pane activity go quiet")
             }
+            Self::MaxNudgesWithoutHuman => {
+                Some("after this many, wait until you type in the pane; off means no limit")
+            }
             Self::Notepad => Some("markdown notes under the workspace list"),
             Self::BreakTimer => Some("countdown in the sidebar footer, break prompt on expiry"),
             _ => None,
@@ -136,6 +151,7 @@ impl GeneralRow {
             Self::SettleDoneAfterMinutes => ("session", "settle_done_after_minutes"),
             Self::NudgeResumedAgents => ("session", "nudge_resumed_agents"),
             Self::AutoNudgeStalledAgents => ("session", "auto_nudge_stalled_agents"),
+            Self::MaxNudgesWithoutHuman => ("session", "max_nudges_without_human"),
             Self::HideWhitespace => ("ui", "hide_whitespace_in_diff"),
             Self::NewThreadWorkspace => ("ui", "new_thread_workspace"),
             Self::AddProjectStartDir => ("ui", "add_project_start_dir"),
@@ -168,6 +184,13 @@ impl GeneralRow {
             Self::SettleDoneAfterMinutes => minutes(state.settle_done_after),
             Self::NudgeResumedAgents => on_off(state.nudge_resumed_agents),
             Self::AutoNudgeStalledAgents => on_off(state.auto_nudge_stalled_agents),
+            Self::MaxNudgesWithoutHuman => {
+                if state.max_nudges_without_human == 0 {
+                    "off".to_string()
+                } else {
+                    state.max_nudges_without_human.to_string()
+                }
+            }
             Self::HideWhitespace => on_off(state.dock_diff_ignore_whitespace),
             Self::NewThreadWorkspace => state.new_thread_workspace.label().to_string(),
             Self::AddProjectStartDir => {
@@ -269,6 +292,11 @@ pub(crate) fn cycle_general_row(state: &AppState, row: GeneralRow) -> Option<Con
         }),
         GeneralRow::NudgeResumedAgents => toggle(state.nudge_resumed_agents),
         GeneralRow::AutoNudgeStalledAgents => toggle(state.auto_nudge_stalled_agents),
+        GeneralRow::MaxNudgesWithoutHuman => Some(ConfigEdit::Integer {
+            section,
+            key,
+            value: u64::from(next_nudges_without_human(state.max_nudges_without_human)),
+        }),
         GeneralRow::HideWhitespace => toggle(state.dock_diff_ignore_whitespace),
         GeneralRow::DeleteConfirmation => toggle(state.confirm_close),
         GeneralRow::Notepad => toggle(state.notepad.enabled),
@@ -342,7 +370,7 @@ mod tests {
         let total = keys.len();
         keys.sort_unstable();
         keys.dedup();
-        assert_eq!(total, 20);
+        assert_eq!(total, 21);
         assert_eq!(keys.len(), total);
     }
 
@@ -519,6 +547,31 @@ mod tests {
 
         state.auto_nudge_stalled_agents = true;
         assert_eq!(GeneralRow::AutoNudgeStalledAgents.value(&state), "on");
+    }
+
+    #[test]
+    fn the_nudges_without_human_row_cycles_the_session_key() {
+        let mut state = AppState::test_new();
+        assert_eq!(GeneralRow::MaxNudgesWithoutHuman.value(&state), "5");
+        for value in [10, 0, 3, 5] {
+            assert_eq!(
+                cycle_general_row(&state, GeneralRow::MaxNudgesWithoutHuman),
+                Some(ConfigEdit::Integer {
+                    section: "session",
+                    key: "max_nudges_without_human",
+                    value,
+                })
+            );
+            state.max_nudges_without_human = value as u32;
+            assert_eq!(
+                GeneralRow::MaxNudgesWithoutHuman.value(&state),
+                if value == 0 {
+                    "off".to_string()
+                } else {
+                    value.to_string()
+                }
+            );
+        }
     }
 
     #[test]

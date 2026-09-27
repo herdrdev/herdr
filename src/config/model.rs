@@ -360,6 +360,9 @@ pub struct SessionConfig {
     pub nudge_after_minutes: u64,
     /// Maximum nudges sent during one stale-status episode. Default: 3.
     pub max_nudges: u32,
+    /// Maximum stalled-agent nudges sent to one pane without human input.
+    /// Zero disables this cap. Default: 5.
+    pub max_nudges_without_human: u32,
     /// Prompt submitted to a stalled pane. Default: "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."
     pub stall_nudge_message: String,
 }
@@ -385,6 +388,7 @@ impl Default for SessionConfig {
             agent_subagent_stale_after_minutes: 30,
             nudge_after_minutes: 5,
             max_nudges: 3,
+            max_nudges_without_human: 5,
             stall_nudge_message:
                 "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue.".to_string(),
         }
@@ -2403,6 +2407,7 @@ mod tests {
         assert_eq!(session.agent_subagent_stale_after_minutes, 30);
         assert_eq!(session.nudge_after_minutes, 5);
         assert_eq!(session.max_nudges, 3);
+        assert_eq!(session.max_nudges_without_human, 5);
         assert_eq!(
             session.stall_nudge_message,
             "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."

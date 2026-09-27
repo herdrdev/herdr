@@ -4762,6 +4762,9 @@ pub struct AppState {
     pub nudge_after: std::time::Duration,
     /// Maximum nudges sent during one stale-status episode.
     pub max_nudges: u32,
+    /// Maximum stalled-agent nudges sent to one pane without human input.
+    /// Zero disables this cap.
+    pub max_nudges_without_human: u32,
     /// Prompt submitted to a stalled pane (`session.stall_nudge_message`).
     pub stall_nudge_message: String,
     pub prompt_new_tab_name: bool,
@@ -7826,6 +7829,7 @@ impl AppState {
             agent_subagent_stale_after: std::time::Duration::from_secs(30 * 60),
             nudge_after: std::time::Duration::from_secs(5 * 60),
             max_nudges: 3,
+            max_nudges_without_human: 5,
             stall_nudge_message:
                 "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue.".to_string(),
             prompt_new_tab_name: true,
@@ -8623,6 +8627,7 @@ mod tests {
         );
         assert_eq!(state.nudge_after, std::time::Duration::from_secs(5 * 60));
         assert_eq!(state.max_nudges, 3);
+        assert_eq!(state.max_nudges_without_human, 5);
         assert_eq!(
             state.stall_nudge_message,
             "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."
