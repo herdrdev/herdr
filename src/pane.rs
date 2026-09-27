@@ -3434,6 +3434,10 @@ impl PaneRuntime {
             .kitty_image_placements_with_data_filter(needs_data)
     }
 
+    pub(crate) fn kitty_image_fingerprints(&self, image_ids: &[u32]) -> Vec<Option<u64>> {
+        self.terminal.kitty_image_fingerprints(image_ids)
+    }
+
     pub fn keyboard_protocol(&self) -> crate::input::KeyboardProtocol {
         let fallback = crate::input::KeyboardProtocol::from_kitty_flags(
             self.kitty_keyboard_flags.load(Ordering::Relaxed),
