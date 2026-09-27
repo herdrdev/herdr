@@ -25,7 +25,7 @@ use crate::{
 
 /// Full-width, right-aligned top status row.
 ///
-/// Contents, left to right: provider quota (Claude, Codex, Kimi) · link dot ·
+/// Contents, left to right: provider quota (Claude, Codex, Kimi, Antigravity) · link dot ·
 /// agent dot · remote device (only when the focused pane is attached to a
 /// fleet host) · device · CPU · memory · disk. The row before the first
 /// surviving segment is intentionally blank.
@@ -35,9 +35,9 @@ use crate::{
 /// mode adds the numbers and the reset times back.
 ///
 /// Layout: spans the full client width above the sidebar and pads before the
-/// first surviving segment. On narrow widths Kimi, then Codex, then Claude,
-/// then the remote device, then the device elide in that order; CPU and memory
-/// remain required.
+/// first surviving segment. On narrow widths Antigravity, Kimi, Codex, Claude,
+/// then the remote device and device elide in that order; CPU and memory remain
+/// required.
 pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -657,8 +657,8 @@ fn status_segments(
     let expanded = app.status_bar_expanded;
     let now_unix = app.status_now_unix;
 
-    // Providers elide from the right of the group inwards: Kimi is the most
-    // recent addition and the least load-bearing, Claude the most.
+    // Providers elide from the right of the group inwards: Antigravity is the
+    // most recent addition and the least load-bearing, Claude the most.
     for (label, provider, color, rank) in [
         (
             "CC",
@@ -668,6 +668,7 @@ fn status_segments(
         ),
         ("CX", crate::provider_usage::QuotaProvider::Codex, p.blue, 2),
         ("KI", crate::provider_usage::QuotaProvider::Kimi, p.mauve, 1),
+        ("AG", crate::provider_usage::QuotaProvider::Agy, p.teal, 0),
     ] {
         let usage = app.provider_usage.primary_usage(provider);
         if let Some(text) = provider_segment_text(label, usage, expanded, now_unix) {
@@ -1648,14 +1649,15 @@ mod tests {
         let metrics = crate::platform::status_metrics::status_metrics_fixture();
         let full = status_segments(&app, &metrics, &app.palette);
 
-        // Kimi first, then Codex, then Claude, then the device: the row sheds
-        // the least load-bearing account before it sheds a required metric.
+        // The provider rows elide newest first, before device details.
         assert_eq!(
             full.iter()
                 .filter_map(|segment| segment.elide_rank)
                 .collect::<Vec<_>>(),
             vec![3, 2, 1, 4]
         );
+
+        assert!(!full.iter().any(|segment| segment.text.contains("AG")));
 
         let without_kimi = fitted_segments(
             status_segments(&app, &metrics, &app.palette),
@@ -1686,6 +1688,43 @@ mod tests {
         assert!(!rendered.contains("testhost"), "{rendered}");
         assert!(rendered.contains("CPU \u{2581}"), "{rendered}");
         assert!(rendered.contains("MEM \u{2584}"), "{rendered}");
+    }
+
+    #[test]
+    fn antigravity_quota_uses_its_teal_status_segment() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
+        app.active = Some(0);
+        app.provider_usage = usage_fixture();
+        app.provider_usage
+            .primary_usage_mut(crate::provider_usage::QuotaProvider::Agy)
+            .five_hour = Some(crate::provider_usage::QuotaWindow {
+            used_percent: 12,
+            resets_at: Some(2_000_000_000),
+        });
+
+        let segment = status_segments(
+            &app,
+            &crate::platform::status_metrics::status_metrics_fixture(),
+            &app.palette,
+        )
+        .into_iter()
+        .find(|segment| segment.text.contains("AG"))
+        .expect("Antigravity status segment");
+
+        assert_eq!(segment.style.fg, Some(app.palette.teal));
+        assert_eq!(segment.elide_rank, Some(0));
+        assert_eq!(
+            status_segments(
+                &app,
+                &crate::platform::status_metrics::status_metrics_fixture(),
+                &app.palette,
+            )
+            .iter()
+            .filter_map(|segment| segment.elide_rank)
+            .collect::<Vec<_>>(),
+            vec![3, 2, 1, 0, 4]
+        );
     }
 
     fn fleet_host_fixture() -> crate::fleet::HostSnapshot {

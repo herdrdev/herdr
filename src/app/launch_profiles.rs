@@ -15,13 +15,14 @@ use crate::detect::{parse_agent_label, Agent};
 /// Which quota window a lane reports.
 ///
 /// Separate from `UsageProvider`, which names the providers whose historical
-/// token logs Herdr scans. Kimi publishes a quota but keeps no local log, so
-/// the two sets are not the same and one enum cannot serve both.
+/// token logs Herdr scans. Kimi and Antigravity publish quotas but keep no local
+/// log, so the two sets are not the same and one enum cannot serve both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum QuotaSource {
     Claude,
     Codex,
     Kimi,
+    Agy,
 }
 
 impl QuotaSource {
@@ -34,6 +35,7 @@ impl QuotaSource {
             Self::Claude => crate::provider_usage::QuotaProvider::Claude,
             Self::Codex => crate::provider_usage::QuotaProvider::Codex,
             Self::Kimi => crate::provider_usage::QuotaProvider::Kimi,
+            Self::Agy => crate::provider_usage::QuotaProvider::Agy,
         };
         snapshot.primary_usage(provider)
     }
@@ -43,6 +45,7 @@ impl QuotaSource {
             "claude" | "claude_code" | "claude-code" => Some(Self::Claude),
             "codex" => Some(Self::Codex),
             "kimi" => Some(Self::Kimi),
+            "agy" | "antigravity" => Some(Self::Agy),
             _ => None,
         }
     }
@@ -218,6 +221,17 @@ mod tests {
         assert_eq!(lane.agent, Agent::Claude, "the lane still runs Claude Code");
         assert!(lane.owns_its_flags());
         assert_eq!(lane.quota, Some(QuotaSource::Kimi));
+    }
+
+    #[test]
+    fn antigravity_quota_names_resolve_to_its_usage_snapshot() {
+        let mut profile = config("agy", "claude");
+        profile.usage = Some("antigravity".into());
+        let lane = resolve(&[profile]).pop().expect("configured lane");
+
+        assert_eq!(lane.quota, Some(QuotaSource::Agy));
+        assert!(lane.quota.unwrap().usage(&Default::default()).is_empty());
+        assert_eq!(QuotaSource::parse("agy"), Some(QuotaSource::Agy));
     }
 
     #[test]

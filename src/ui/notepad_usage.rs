@@ -33,6 +33,7 @@ fn provider_presentation(provider: QuotaProvider, app: &AppState) -> (&'static s
         QuotaProvider::Claude => ("claude", app.palette.peach),
         QuotaProvider::Codex => ("codex", app.palette.blue),
         QuotaProvider::Kimi => ("opencode", app.palette.mauve),
+        QuotaProvider::Agy => ("antigravity", app.palette.teal),
     }
 }
 
@@ -86,6 +87,7 @@ fn provider_initial(provider: QuotaProvider) -> char {
         QuotaProvider::Claude => 'C',
         QuotaProvider::Codex => 'X',
         QuotaProvider::Kimi => 'K',
+        QuotaProvider::Agy => 'A',
     }
 }
 
@@ -352,6 +354,7 @@ pub(crate) fn usage_rows_window(
         QuotaProvider::Claude,
         QuotaProvider::Codex,
         QuotaProvider::Kimi,
+        QuotaProvider::Agy,
     ] {
         if app
             .provider_usage
@@ -455,6 +458,30 @@ mod tests {
         assert_eq!(rows[2].action, NotepadUsageAction::OpenDashboard);
         assert_eq!(rows[3].action, NotepadUsageAction::None);
         assert_eq!(rows[6].action, NotepadUsageAction::None);
+    }
+
+    #[test]
+    fn antigravity_accounts_have_a_provider_header_and_usage_row() {
+        let mut app = AppState::test_new();
+        app.provider_usage.accounts.push(ProviderAccountUsage {
+            provider: QuotaProvider::Agy,
+            profile_id: "default".into(),
+            label: "Antigravity".into(),
+            usage: crate::provider_usage::AccountUsage {
+                five_hour: Some(QuotaWindow {
+                    used_percent: 1,
+                    resets_at: None,
+                }),
+                ..crate::provider_usage::AccountUsage::default()
+            },
+        });
+
+        let (rows, _) = usage_rows_window(&app, 100, 0, 20);
+        let text = rows.iter().map(row_text).collect::<Vec<_>>();
+
+        assert_eq!(text[0], "antigravity");
+        assert!(text[1].contains("Antigravity"));
+        assert!(text[1].contains("5h"));
     }
 
     #[test]

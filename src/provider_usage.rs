@@ -1,13 +1,14 @@
 //! Account-level subscription usage for the top status bar.
 //!
-//! Three providers, one shape: a 5-hour window and a 7-day window per account,
+//! Four providers, one shape: a 5-hour window and a 7-day window per account,
 //! each a used percentage plus the instant it resets. The numbers describe the
 //! *account*, not the focused pane, because the quota is what every agent on
 //! that profile shares.
 //!
 //! Every source is already on disk or already installed. Claude Code writes its
 //! own rate-limit payload to the statusline cache, Codex records its limits in
-//! each rollout, and `kimi-usage` reshapes the Kimi plan into the same fields.
+//! each rollout, and `kimi-usage` and `agy-usage` reshape their plans into the
+//! same fields.
 //! Nothing here talks to a provider API, so a dead network costs the bar a dim
 //! segment rather than a stalled frame.
 
@@ -28,6 +29,8 @@ use std::{
 pub(crate) const CLAUDE_CACHE_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 const KIMI_TIMEOUT: Duration = Duration::from_secs(5);
 const KIMI_OUTPUT_LIMIT: usize = 64 * 1024;
+const AGY_TIMEOUT: Duration = Duration::from_secs(5);
+const AGY_OUTPUT_LIMIT: usize = 64 * 1024;
 const FIVE_HOUR_MINUTES: u64 = 300;
 const SEVEN_DAY_MINUTES: u64 = 10_080;
 const MAX_USAGE_FILES: usize = 64;
@@ -532,6 +535,7 @@ pub(crate) enum QuotaProvider {
     Claude,
     Codex,
     Kimi,
+    Agy,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -548,6 +552,7 @@ pub(crate) struct ProviderUsageSnapshot {
     primary_claude: String,
     primary_codex: String,
     primary_kimi: String,
+    primary_agy: String,
 }
 
 impl ProviderUsageSnapshot {
@@ -581,6 +586,7 @@ impl ProviderUsageSnapshot {
             primary_claude: "default".into(),
             primary_codex: "default".into(),
             primary_kimi: "default".into(),
+            primary_agy: "default".into(),
         }
     }
 
@@ -589,6 +595,7 @@ impl ProviderUsageSnapshot {
             QuotaProvider::Claude => &self.primary_claude,
             QuotaProvider::Codex => &self.primary_codex,
             QuotaProvider::Kimi => &self.primary_kimi,
+            QuotaProvider::Agy => &self.primary_agy,
         };
         self.accounts
             .iter()
@@ -608,6 +615,7 @@ impl ProviderUsageSnapshot {
             QuotaProvider::Claude => &mut self.primary_claude,
             QuotaProvider::Codex => &mut self.primary_codex,
             QuotaProvider::Kimi => &mut self.primary_kimi,
+            QuotaProvider::Agy => &mut self.primary_agy,
         };
         if profile_id.is_empty() {
             *profile_id = "default".into();
@@ -639,14 +647,24 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
         label: "Kimi".into(),
         usage: load_kimi_usage(now_unix),
     };
+    let agy_usage = load_agy_usage(now_unix);
     let mut accounts = claude;
     accounts.extend(codex);
     accounts.push(kimi);
+    if !agy_usage.is_empty() {
+        accounts.push(ProviderAccountUsage {
+            provider: QuotaProvider::Agy,
+            profile_id: "default".into(),
+            label: "Antigravity".into(),
+            usage: agy_usage,
+        });
+    }
     ProviderUsageSnapshot {
         accounts,
         primary_claude,
         primary_codex,
         primary_kimi: "default".into(),
+        primary_agy: "default".into(),
     }
 }
 
@@ -1518,6 +1536,119 @@ fn resolve_kimi_usage() -> Option<PathBuf> {
     None
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct RawAgyWindow {
+    used_ratio: Option<f64>,
+    reset_time: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawAgyUsages {
+    #[serde(rename = "limit_5h")]
+    five_hour: Option<RawAgyWindow>,
+    #[serde(rename = "limit_7d")]
+    seven_day: Option<RawAgyWindow>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RawAgyUsage {
+    usages: Option<RawAgyUsages>,
+}
+
+pub(crate) fn parse_agy_usage(output: &str, now_unix: Option<i64>) -> AccountUsage {
+    let Ok(raw) = serde_json::from_str::<RawAgyUsage>(output) else {
+        return AccountUsage::default();
+    };
+    let Some(usages) = raw.usages else {
+        return AccountUsage::default();
+    };
+    let window = |raw: Option<RawAgyWindow>| {
+        let raw = raw?;
+        let ratio = raw
+            .used_ratio
+            .filter(|ratio| ratio.is_finite() && (0.0..=1.0).contains(ratio))?;
+        let resets_at = raw
+            .reset_time
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .and_then(parse_utc_timestamp);
+        if let (Some(resets_at), Some(now)) = (resets_at, now_unix) {
+            if resets_at <= now {
+                return None;
+            }
+        }
+        Some(QuotaWindow {
+            used_percent: (ratio * 100.0).round() as u8,
+            resets_at,
+        })
+    };
+    AccountUsage {
+        five_hour: window(usages.five_hour),
+        seven_day: window(usages.seven_day),
+        stale: false,
+        ..AccountUsage::default()
+    }
+}
+
+/// Antigravity usage is supplied by a local helper. Missing binaries, failures,
+/// oversized output, and invalid JSON all leave the provider empty.
+fn load_agy_usage(now_unix: Option<i64>) -> AccountUsage {
+    load_agy_usage_from(resolve_agy_usage(), now_unix)
+}
+
+fn load_agy_usage_from(binary: Option<PathBuf>, now_unix: Option<i64>) -> AccountUsage {
+    let Some(binary) = binary else {
+        return AccountUsage::default();
+    };
+    let Ok(mut child) = Command::new(binary)
+        .arg("--json")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return AccountUsage::default();
+    };
+
+    let deadline = Instant::now() + AGY_TIMEOUT;
+    let output = loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break child.wait_with_output().ok(),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+
+    let Some(output) = output.filter(|output| output.status.success()) else {
+        return AccountUsage::default();
+    };
+    if output.stdout.len() > AGY_OUTPUT_LIMIT {
+        return AccountUsage::default();
+    }
+    parse_agy_usage(&String::from_utf8_lossy(&output.stdout), now_unix)
+}
+
+fn resolve_agy_usage() -> Option<PathBuf> {
+    let home = home_path("")?;
+    resolve_agy_usage_from(&home)
+}
+
+fn resolve_agy_usage_from(home: &Path) -> Option<PathBuf> {
+    [".local/bin/agy-usage", "bin/agy-usage"]
+        .into_iter()
+        .map(|candidate| home.join(candidate))
+        .find(|path| path.is_file())
+}
+
 /// Human reset distance: `2h45`, `3d15h`, `12m`.
 pub(crate) fn reset_label(resets_at: i64, now_unix: i64) -> Option<String> {
     let remaining = resets_at.checked_sub(now_unix)?;
@@ -1872,6 +2003,42 @@ mod tests {
     fn garbage_from_kimi_is_no_kimi_segment_rather_than_a_zero_one() {
         assert!(parse_kimi_usage("not json", Some(NOW)).is_empty());
         assert!(parse_kimi_usage(r#"{"five_hour":{"used_percentage":250}}"#, Some(NOW)).is_empty());
+    }
+
+    #[test]
+    fn agy_fixture_parses_the_pro_account_five_hour_and_free_account_weekly_limits() {
+        let usage = parse_agy_usage(
+            include_str!("../tests/fixtures/agy-usage.sample.json"),
+            None,
+        );
+
+        assert_eq!(usage.five_hour.map(|window| window.used_percent), Some(1));
+        assert_eq!(
+            usage.five_hour.and_then(|window| window.resets_at),
+            parse_utc_timestamp("2026-09-27T17:17:35Z")
+        );
+        assert_eq!(usage.seven_day.map(|window| window.used_percent), Some(1));
+        assert_eq!(
+            usage.seven_day.and_then(|window| window.resets_at),
+            parse_utc_timestamp("2026-10-04T12:17:22Z")
+        );
+    }
+
+    #[test]
+    fn missing_agy_helper_produces_no_usage() {
+        assert!(load_agy_usage_from(None, Some(NOW)).is_empty());
+
+        let home = std::env::temp_dir().join(format!(
+            "herdr-missing-agy-helper-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("test clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&home).expect("create empty test home");
+        assert_eq!(resolve_agy_usage_from(&home), None);
+        let _ = fs::remove_dir_all(home);
     }
 
     #[test]

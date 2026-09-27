@@ -97,19 +97,28 @@ pub(crate) struct UsageLayout {
     pub(crate) footer: Rect,
 }
 
-pub(crate) fn layout(area: Rect) -> UsageLayout {
+/// Whether Antigravity reported a quota window, so the usage view gives it a row.
+pub(crate) fn agy_has_data(snapshot: &ProviderUsageSnapshot) -> bool {
+    let agy = snapshot.primary_usage(crate::provider_usage::QuotaProvider::Agy);
+    agy.five_hour.is_some() || agy.seven_day.is_some()
+}
+
+pub(crate) fn layout(area: Rect, agy_row: bool) -> UsageLayout {
     let outer = Block::default().borders(Borders::ALL).inner(area);
     let narrow = outer.width < 80;
+    // Narrow screens stack the subscription panel, so a fourth provider needs two more rows.
+    let extra = if narrow && agy_row { 2 } else { 0 };
     let rows = Layout::vertical([
         Constraint::Length(header_rows(outer.width)),
-        Constraint::Length(if narrow { 11 } else { 9 }),
+        Constraint::Length(if narrow { 11 + extra } else { 9 }),
         Constraint::Length(if narrow { 3 } else { 2 }),
         Constraint::Min(3),
         Constraint::Length(if narrow { 2 } else { 1 }),
     ])
     .split(outer);
     let (summary, subscription, chart) = if narrow {
-        let stacked = Layout::vertical([Constraint::Length(6), Constraint::Min(4)]).split(rows[1]);
+        let stacked =
+            Layout::vertical([Constraint::Length(6 + extra), Constraint::Min(4)]).split(rows[1]);
         let columns =
             Layout::horizontal([Constraint::Length(34), Constraint::Min(20)]).split(stacked[0]);
         (columns[0], columns[1], stacked[1])
@@ -151,8 +160,8 @@ fn header_rows(width: u16) -> u16 {
     control_rows.saturating_add(1)
 }
 
-pub(crate) fn hit_areas(area: Rect) -> Vec<UsageHitArea> {
-    let layout = layout(area);
+pub(crate) fn hit_areas(area: Rect, agy_row: bool) -> Vec<UsageHitArea> {
+    let layout = layout(area, agy_row);
     let mut areas = header_hit_areas(layout.header);
     areas.extend(breakdown_hit_areas(layout.breakdown));
     areas
@@ -233,7 +242,7 @@ pub(crate) fn render(app: &AppState, area: Rect, frame: &mut Frame) {
         .title(" Usage ")
         .border_style(Style::default().fg(palette.accent));
     frame.render_widget(block, area);
-    let layout = layout(area);
+    let layout = layout(area, agy_has_data(&app.provider_usage));
     let now =
         app.status_now_unix
             .or_else(|| {
@@ -278,6 +287,7 @@ fn render_subscription_usage(
     palette: &Palette,
     frame: &mut Frame,
 ) {
+    let agy = snapshot.primary_usage(crate::provider_usage::QuotaProvider::Agy);
     let providers = [
         (
             "Claude Code",
@@ -294,9 +304,15 @@ fn render_subscription_usage(
             snapshot.primary_usage(crate::provider_usage::QuotaProvider::Kimi),
             palette.mauve,
         ),
+        ("Antigravity", agy, palette.teal),
     ];
-    let rows = Layout::vertical([Constraint::Length(2); 3]).split(area);
-    for ((label, usage, color), provider_area) in providers.into_iter().zip(rows.iter().copied()) {
+    // Antigravity only takes a row when it reports data, so the panel keeps its size otherwise.
+    let wanted: usize = if agy_has_data(snapshot) { 4 } else { 3 };
+    let shown = wanted.min(usize::from(area.height / 2)).max(1);
+    let rows = Layout::vertical(&[Constraint::Length(2); 4][..shown]).split(area);
+    for ((label, usage, color), provider_area) in
+        providers.into_iter().take(shown).zip(rows.iter().copied())
+    {
         let style = if usage.stale {
             Style::default()
                 .fg(palette.overlay0)
@@ -1079,7 +1095,7 @@ mod tests {
     #[test]
     fn populated_provider_snapshot_renders_subscription_windows_resets_and_credits() {
         let now = 1_787_992_841;
-        let provider_usage = ProviderUsageSnapshot::with_primary_accounts(
+        let mut provider_usage = ProviderUsageSnapshot::with_primary_accounts(
             AccountUsage {
                 five_hour: Some(QuotaWindow {
                     used_percent: 31,
@@ -1115,8 +1131,31 @@ mod tests {
                 ..AccountUsage::default()
             },
         );
+        provider_usage
+            .primary_usage_mut(crate::provider_usage::QuotaProvider::Agy)
+            .five_hour = Some(QuotaWindow {
+            used_percent: 1,
+            resets_at: Some(now + 720),
+        });
 
-        let text = render_snapshot_with_provider_usage_at(120, 40, fixture(), provider_usage);
+        let text =
+            render_snapshot_with_provider_usage_at(120, 40, fixture(), provider_usage.clone());
+        let narrow =
+            render_snapshot_with_provider_usage_at(80, 24, fixture(), provider_usage.clone());
+        for expected in ["Kimi", "Antigravity", "5h 1% · 12m"] {
+            assert!(
+                narrow.contains(expected),
+                "missing {expected:?} at 80x24\n{narrow}"
+            );
+        }
+        // Antigravity takes two chart rows on narrow screens; a slightly taller one keeps the legend.
+        let taller = render_snapshot_with_provider_usage_at(80, 26, fixture(), provider_usage);
+        for expected in ["Antigravity", "◆ Claude Code  ● Codex"] {
+            assert!(
+                taller.contains(expected),
+                "missing {expected:?} at 80x26\n{taller}"
+            );
+        }
         for expected in [
             "Claude Code",
             "5h 31% · 12m",
@@ -1128,6 +1167,8 @@ mod tests {
             "Kimi",
             "5h 0% · —",
             "week 24% · 2h45",
+            "Antigravity",
+            "5h 1% · 12m",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
         }
@@ -1207,9 +1248,9 @@ mod tests {
 
     #[test]
     fn usage_layout_places_chart_beside_wide_and_below_narrow_summary() {
-        let wide = layout(Rect::new(0, 0, 120, 40));
+        let wide = layout(Rect::new(0, 0, 120, 40), false);
         assert_eq!(wide.chart.y, wide.summary.y);
-        let narrow = layout(Rect::new(0, 0, 80, 24));
+        let narrow = layout(Rect::new(0, 0, 80, 24), false);
         assert!(narrow.chart.y > narrow.summary.y);
     }
 
@@ -1384,7 +1425,7 @@ mod tests {
 
     #[test]
     fn every_usage_toggle_has_a_nonempty_mouse_target() {
-        let targets: BTreeSet<_> = hit_areas(Rect::new(0, 0, 120, 40))
+        let targets: BTreeSet<_> = hit_areas(Rect::new(0, 0, 120, 40), false)
             .into_iter()
             .filter(|hit| hit.rect.width > 0 && hit.rect.height > 0)
             .map(|hit| hit.target)
