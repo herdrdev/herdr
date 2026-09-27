@@ -32,15 +32,15 @@ Multi-machine connections support Linux, macOS, and Windows clients connecting t
 Run setup in an interactive terminal so Herdr can ask before installing or replacing anything:
 
 ```bash
-herdr machine add workbox --label "Build machine"
+herdr machine add workbox
 ```
 
-This uses the remote default session. A machine profile targets one remote session; it does not combine every session on the host.
+The sidebar shows the machine as `workbox`, the SSH host without any `user@` prefix. Add `--label "Build machine"` to choose a different name. This uses the remote default session. A machine profile targets one remote session; it does not combine every session on the host.
 
 To use a named session instead, add the optional `--remote-session` flag:
 
 ```bash
-herdr machine add workbox --label "Build machine" --remote-session agents
+herdr machine add workbox --remote-session agents
 ```
 
 Herdr checks both the installed binary and the running server. It starts the requested background server before saving the profile. Compatible client and server versions do not have to match. Missing or incompatible installations go through an approval-based setup. When the running server needs replacement, setup asks before stopping it and its pane processes, then starts the compatible server. The default answer is No. If installation and replacement are both needed, one confirmation covers them. `machine add` does not use experimental live handoff. Cancelling or failing setup leaves the profile unsaved.

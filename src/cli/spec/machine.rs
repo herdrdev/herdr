@@ -30,9 +30,9 @@ pub(super) fn command() -> Command {
                         .required(true),
                 )
                 .arg(
-                    option("label", "LABEL")
-                        .required(true)
-                        .help("Set the machine label shown in the sidebar"),
+                    option("label", "LABEL").help(
+                        "Set the machine label shown in the sidebar (defaults to the SSH host)",
+                    ),
                 )
                 .arg(
                     option("remote-session", "NAME")

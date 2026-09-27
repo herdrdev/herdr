@@ -6,7 +6,7 @@ const HELP: &str = "Usage:
   herdr machine list [--json]
   herdr machine status [<label-or-id>] [--json]
   herdr machine reconnect <label-or-id>
-  herdr machine add <ssh-target> --label <label> [--remote-session <name>]
+  herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]
   herdr machine rename <profile-id> --label <label>
   herdr machine remove <profile-id>
   herdr machine enable <profile-id>
@@ -246,15 +246,24 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         }
     }
     let target = target.ok_or_else(|| {
-        "usage: herdr machine add <ssh-target> --label <label> [--remote-session <name>]".to_owned()
+        "usage: herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]"
+            .to_owned()
     })?;
-    let label = label.ok_or_else(|| "--label is required".to_owned())?;
+    let label = label.unwrap_or_else(|| default_label(&target));
     let session = session.unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_owned());
     Ok(AddArgs {
         target,
         label,
         session,
     })
+}
+
+/// Names the machine after the SSH host, without any `user@` prefix.
+fn default_label(target: &str) -> String {
+    target
+        .rsplit_once('@')
+        .map_or(target, |(_, host)| host)
+        .to_owned()
 }
 
 fn add(args: &[String]) -> std::io::Result<i32> {
@@ -466,11 +475,32 @@ mod tests {
     }
 
     #[test]
+    fn add_parser_defaults_label_to_ssh_host() {
+        for (args, label, session) in [
+            (vec!["workstation.coder"], "workstation.coder", "default"),
+            (
+                vec!["dev@workstation.coder"],
+                "workstation.coder",
+                "default",
+            ),
+            (
+                vec!["workstation.coder", "--remote-session", "agents"],
+                "workstation.coder",
+                "agents",
+            ),
+        ] {
+            let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            let parsed = parse_add_args(&args).unwrap();
+            assert_eq!(parsed.label, label, "{args:?}");
+            assert_eq!(parsed.session, session, "{args:?}");
+        }
+    }
+
+    #[test]
     fn add_parser_rejects_incomplete_duplicate_and_extra_arguments() {
         for args in [
             vec![],
             vec!["--label", "coder"],
-            vec!["workstation.coder"],
             vec!["workstation.coder", "--label"],
             vec!["workstation.coder", "--label", "coder", "--remote-session"],
             vec!["--label", "coder", "--label", "other", "workstation.coder"],
