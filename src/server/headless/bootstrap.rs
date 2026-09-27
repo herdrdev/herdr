@@ -53,13 +53,13 @@ pub fn run_server() -> io::Result<()> {
 
     let result = rt.block_on(async {
         // Create the App (with AppState, event channels, etc.).
-        let mut app = app::App::new(
+        let mut app = app::App::try_new(
             &loaded_config.config,
             app::AppPolicy::PRODUCTION,
             config::config_diagnostic_summary(&loaded_config.diagnostics),
             api_rx,
             event_hub,
-        );
+        )?;
         seed_startup_workspace_if_empty(&mut app);
 
         // Create the headless server.

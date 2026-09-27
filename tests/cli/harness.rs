@@ -12,9 +12,6 @@ pub(super) use crate::support::{
 };
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
 
-pub(super) const WORKTREE_BOOTSTRAP_MANAGED_COMPONENT: &str =
-    "example.worktree-bootstrap-ef876653ffc3";
-
 pub(super) fn unique_test_dir() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -24,7 +21,10 @@ pub(super) fn unique_test_dir() -> PathBuf {
 }
 
 pub(super) fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
-    config_home.join("herdr-dev").join("plugins").join("github")
+    config_home
+        .join("herdr-dev")
+        .join("plugins")
+        .join("github-installations")
 }
 
 pub(super) fn path_missing_or_empty(path: &Path) -> bool {

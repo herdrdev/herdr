@@ -40,7 +40,7 @@ impl App {
         if !self.policy.persist_plugin_registry {
             return Ok(());
         }
-        let entries = crate::persist::plugin_registry::try_load()?;
+        let entries = crate::plugin_installations::load(&mut self.plugin_installation_leases)?;
         self.replace_installed_plugins(entries);
         Ok(())
     }
@@ -52,7 +52,7 @@ impl App {
         if !self.policy.persist_plugin_registry {
             return Ok(mutation(&mut self.state.installed_plugins));
         }
-        let (result, entries) = crate::persist::plugin_registry::update(|entries| {
+        let (result, _) = crate::persist::plugin_registry::update(|entries| {
             let mut registry = entries
                 .drain(..)
                 .map(|plugin| (plugin.plugin_id.clone(), plugin))
@@ -61,7 +61,7 @@ impl App {
             *entries = registry.into_values().collect();
             result
         })?;
-        self.replace_installed_plugins(entries);
+        self.refresh_installed_plugins()?;
         Ok(result)
     }
 
@@ -2653,6 +2653,86 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
             Some(previous) => std::env::set_var("XDG_CONFIG_HOME", previous),
             None => std::env::remove_var("XDG_CONFIG_HOME"),
         }
+    }
+
+    #[test]
+    fn running_plugin_command_keeps_its_files_after_app_teardown() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let base = unique_temp_path("plugin-worker-lease");
+        let previous_config = std::env::var_os("XDG_CONFIG_HOME");
+        let previous_state = std::env::var_os("XDG_STATE_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", &base);
+        std::env::set_var("XDG_STATE_HOME", base.join("state"));
+        let installation =
+            crate::plugin_paths::create_managed_installation("example.worktree-bootstrap").unwrap();
+        let root = installation.join("checkout");
+        write_manifest(&root);
+        std::fs::create_dir_all(crate::plugin_paths::managed_plugins_dir().join(".locks")).unwrap();
+        std::fs::write(root.join("payload"), "original").unwrap();
+        drop(crate::plugin_installations::create_lease(&installation).unwrap());
+        let mut plugin = load_plugin_manifest(&root.to_string_lossy(), true).unwrap();
+        plugin.source.managed_path = Some(root.display().to_string());
+        crate::persist::plugin_registry::update(|entries| *entries = vec![plugin.clone()]).unwrap();
+        let mut app = test_app();
+        crate::plugin_installations::load(&mut app.plugin_installation_leases).unwrap();
+        let command = if cfg!(windows) {
+            vec![
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "Set-Content ready ready; $deadline = [DateTime]::UtcNow.AddSeconds(10); while (!(Test-Path release) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }; Get-Content payload | Set-Content result",
+            ]
+        } else {
+            vec![
+                "sh",
+                "-c",
+                "printf ready > ready; i=0; while [ ! -f release ] && [ $i -lt 500 ]; do sleep 0.02; i=$((i+1)); done; cat payload > result",
+            ]
+        }
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        app.start_plugin_command(
+            &plugin,
+            None,
+            None,
+            command,
+            &app.current_plugin_context("lease-test"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            read_capture_when_ready(&root.join("ready"), || {}).trim(),
+            "ready"
+        );
+        crate::persist::plugin_registry::update(Vec::clear).unwrap();
+        drop(app);
+        crate::plugin_installations::cleanup().unwrap();
+        assert!(root.exists(), "the worker still owns the old installation");
+        std::fs::write(root.join("release"), "").unwrap();
+        assert_eq!(
+            read_capture_when_ready(&root.join("result"), || {}).trim(),
+            "original"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while installation.exists() {
+            crate::plugin_installations::cleanup().unwrap();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "finished worker must release its installation"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        for (key, previous) in [
+            ("XDG_CONFIG_HOME", previous_config),
+            ("XDG_STATE_HOME", previous_state),
+        ] {
+            match previous {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+        std::fs::remove_dir_all(base).unwrap();
     }
 
     #[cfg(unix)]

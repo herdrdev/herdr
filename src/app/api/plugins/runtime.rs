@@ -118,7 +118,11 @@ impl App {
         self.push_plugin_command_log(log.clone());
         self.state.plugin_commands_in_flight += 1;
         let event_tx = self.event_tx.clone();
+        let installation_lease =
+            crate::plugin_installations::command_lease(&self.plugin_installation_leases, plugin);
         std::thread::spawn(move || {
+            // The worker may outlive App during normal server teardown.
+            let _installation_lease = installation_lease;
             let child =
                 crate::plugin_command::command_for_argv_in_dir(&program, &args, &plugin_root)
                     .envs(env)
@@ -181,6 +185,11 @@ impl App {
     }
 
     pub(crate) fn run_plugin_startup_hooks(&mut self) {
+        if self.policy.persist_plugin_registry {
+            if let Err(err) = crate::plugin_installations::cleanup() {
+                tracing::warn!(%err, "plugin cleanup deferred");
+            }
+        }
         let mut context = self.current_plugin_context("plugin.startup");
         context.invocation_source = Some("startup".to_string());
         let mut plugins = self
