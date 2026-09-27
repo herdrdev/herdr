@@ -5,6 +5,62 @@ fn receive_render(receiver: &std::sync::mpsc::Receiver<Vec<u8>>, timeout: Durati
 }
 
 #[tokio::test]
+async fn unchanged_retained_graphics_leave_the_committed_surface_and_delivery_untouched() {
+    let (mut server, _control_rx, client_rx, pane_id) = retained_test_server_with_control(
+        b"populated terminal\r\n\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1,q=2;/wAA/w==\x1b\\",
+    );
+    let client = server.clients.get_mut(&1).unwrap();
+    client.mode = ClientConnectionMode::ClientShell;
+    client.cell_size = crate::kitty_graphics::HostCellSize {
+        width_px: 10,
+        height_px: 20,
+    };
+    server.render_and_stream();
+    let _ = receive_render(&client_rx, Duration::from_millis(100));
+
+    let before = server.clients[&1]
+        .render_state
+        .last_pane_surface()
+        .unwrap()
+        .clone();
+    assert_eq!(before.graphics.placements.len(), 1);
+    assert!(before.graphics.assets.is_empty());
+    let cells = server.clients[&1]
+        .render_state
+        .last_pane_surface()
+        .unwrap()
+        .frame
+        .cells
+        .as_ptr();
+    let mut hidden = crate::workspace::Workspace::test_new("hidden");
+    let hidden_pane = hidden.tabs[0].root_pane;
+    hidden.insert_test_runtime(
+        hidden_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b"hidden output"),
+    );
+    server.app.state.workspaces.push(hidden);
+    for source in [pane_id, hidden_pane] {
+        assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([source])));
+        assert!(client_rx.try_recv().is_err());
+        let after = server.clients[&1].render_state.last_pane_surface().unwrap();
+        assert_eq!(after, &before);
+        assert_eq!(after.frame.cells.as_ptr(), cells);
+    }
+
+    // Skipping the no-op must not discard the upload cache for the next real update.
+    write_shared_test_pane(&mut server, pane_id, b"\x1b[Hchanged");
+    assert!(server.render_retained_pane_surface_and_stream(&HashSet::from([pane_id])));
+    let ServerMessage::PaneSurface(updated) =
+        read_server_message(receive_render(&client_rx, Duration::from_millis(100)))
+    else {
+        panic!("expected retained image with changed text");
+    };
+    assert!(updated.graphics.assets.is_empty());
+    assert_eq!(updated.graphics.placements, before.graphics.placements);
+    assert!(frame_text(&updated.frame).contains("changed"));
+}
+
+#[tokio::test]
 async fn first_kitty_image_updates_retained_surface_without_full_redraw() {
     let (mut server, _control_rx, client_rx, pane_id) =
         retained_test_server_with_control(b"text before image");
@@ -241,7 +297,7 @@ async fn retained_unicode_image_arrives_after_fragmented_upload_without_reupload
 async fn render_scale_profile_retained_graphics() {
     use ratatui::layout::Direction;
     for retained in [false, true] {
-        for image in ["none", "visible", "offscreen"] {
+        for image in ["none", "visible", "offscreen", "unchanged-image"] {
             for count in [1, 15] {
                 let (mut server, _control_rx, client_rx, root) =
                     retained_test_server_with_control(b"populated terminal\r\n");
@@ -289,12 +345,14 @@ async fn render_scale_profile_retained_graphics() {
                 let sources = pane_ids.iter().copied().collect();
                 let mut samples = Vec::new();
                 for sample in 0..110 {
-                    for id in &pane_ids {
-                        write_shared_test_pane(
-                            &mut server,
-                            *id,
-                            format!("\x1b[H{sample:03}").as_bytes(),
-                        );
+                    if image != "unchanged-image" {
+                        for id in &pane_ids {
+                            write_shared_test_pane(
+                                &mut server,
+                                *id,
+                                format!("\x1b[H{sample:03}").as_bytes(),
+                            );
+                        }
                     }
                     let started = Instant::now();
                     if retained {
@@ -314,9 +372,9 @@ async fn render_scale_profile_retained_graphics() {
                 }
                 samples.sort_unstable();
                 println!(
-                    "retained={retained} 80x24 panes={count} image={image} median_us={} p95_us={}",
-                    samples[50].as_micros(),
-                    samples[94].as_micros()
+                    "retained={retained} 80x24 panes={count} image={image} median_us={:.3} p95_us={:.3}",
+                    samples[50].as_secs_f64() * 1e6,
+                    samples[94].as_secs_f64() * 1e6
                 );
             }
         }

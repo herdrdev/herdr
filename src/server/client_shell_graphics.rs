@@ -3,7 +3,7 @@ use crate::protocol::{ClientShellPopupSurface, SurfaceGraphicsScene};
 
 pub(crate) fn collect_retained(
     app: &crate::app::App,
-    surface: &crate::protocol::PaneSurfaceFrame,
+    panes: &[crate::protocol::PaneSurfacePane],
     target: crate::ui::TabSurfaceTarget,
     cell_size: crate::kitty_graphics::HostCellSize,
     delivered: &DeliveryCache,
@@ -12,8 +12,7 @@ pub(crate) fn collect_retained(
     let rect = |rect: crate::protocol::SurfaceRect| {
         ratatui::layout::Rect::new(rect.x, rect.y, rect.width, rect.height)
     };
-    let pane_infos = surface
-        .panes
+    let pane_infos = panes
         .iter()
         .map(|pane| {
             let (workspace_index, id) = app.parse_pane_id(&pane.pane_id)?;
