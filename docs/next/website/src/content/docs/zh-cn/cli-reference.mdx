@@ -258,7 +258,8 @@ herdr pane report-agent <pane_id> \
   [--message TEXT] \
   [--seq N] \
   [--agent-session-id ID] \
-  [--agent-session-path PATH]
+  [--agent-session-path PATH] \
+  [-- RESUME_COMMAND...]
 
 herdr pane report-agent-session <pane_id> \
   --source ID \
@@ -266,7 +267,8 @@ herdr pane report-agent-session <pane_id> \
   [--seq N] \
   [--agent-session-id ID] \
   [--agent-session-path PATH] \
-  [--session-start-source SOURCE]
+  [--session-start-source SOURCE] \
+  [-- RESUME_COMMAND...]
 
 herdr pane release-agent <pane_id> \
   --source ID \
@@ -275,6 +277,8 @@ herdr pane release-agent <pane_id> \
 ```
 
 `report-agent-session` 只更新原生会话身份,不上报生命周期状态。`release-agent` 在智能体进程退出时结束该来源的生命周期权威。
+
+`--` 之后的参数是服务器重启后 Herdr 为恢复此会话而运行的命令。第一个参数必须是 `PATH` 上的普通命令名,并且任何参数都不能包含撇号。
 
 当官方集成上报了原生会话引用时,`pane get`、`pane list`、`agent get` 和 `agent list` 会包含一个只读的 `agent_session` 对象。没有存储原生会话引用时,该字段被省略。
 

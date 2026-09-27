@@ -545,6 +545,22 @@ Herdr はローカルソケット上の改行区切り JSON を使います。Un
 }
 ```
 
+どちらのメソッドも、Herdr サーバーの再起動後に報告元の現在のセッションを再開するコマンドを、省略可能な `resume_argv` 配列で受け付けます。最初の要素はパスではなく単純なコマンド名でなければならず、どの要素にもアポストロフィを含めることはできません。無効な値は `invalid_resume_argv` で失敗し、その報告は適用されません。カスタムエージェントは、コマンドを付ける前に `pane.report_agent` でペインを保持している必要があり、そうでない場合は `resume_not_accepted` で失敗します。Herdr は同じ `source` と `agent` がペインを保持している間だけコマンドを保持し、そのエージェントに対する Herdr 組み込みの resume コマンドより優先します。古い Herdr はこのフィールドを無視します。
+
+```json
+{
+  "id": "req_3",
+  "method": "pane.report_agent_session",
+  "params": {
+    "pane_id": "w1:p1",
+    "source": "custom:my-agent",
+    "agent": "my-agent",
+    "agent_session_id": "...",
+    "resume_argv": ["my-agent", "--resume", "..."]
+  }
+}
+```
+
 Herdr に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
 
 ```json

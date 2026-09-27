@@ -541,6 +541,22 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
 }
 ```
 
+两个方法都接受可选的 `resume_argv` 数组,内容是 Herdr 服务器重启后恢复上报者当前会话的命令。第一个元素必须是普通命令名而不是路径,并且任何元素都不能包含撇号;无效值会以 `invalid_resume_argv` 失败,该次上报不会生效。自定义智能体必须先通过 `pane.report_agent` 持有窗格才能附加命令,否则请求会以 `resume_not_accepted` 失败。Herdr 只在同一 `source` 和 `agent` 持有窗格时保留该命令,并且它优先于 Herdr 为该智能体内置的恢复命令。旧版 Herdr 会忽略这个字段。
+
+```json
+{
+  "id": "req_3",
+  "method": "pane.report_agent_session",
+  "params": {
+    "pane_id": "w1:p1",
+    "source": "custom:my-agent",
+    "agent": "my-agent",
+    "agent_session_id": "...",
+    "resume_argv": ["my-agent", "--resume", "..."]
+  }
+}
+```
+
 Herdr 存有原生会话引用时,`pane.get`、`pane.list`、`agent.get` 和 `agent.list` 暴露一个只读的 `agent_session` 对象:
 
 ```json
