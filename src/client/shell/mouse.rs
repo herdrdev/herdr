@@ -1960,7 +1960,9 @@ impl ClientShellState {
                     }
                     return;
                 }
-                if super::contains(self.hits.agent_scrollbar, point) {
+                if super::contains(self.hits.agent_scrollbar, point)
+                    && !super::contains(self.hits.sidebar_toggle, point)
+                {
                     if let Some(metrics) = self.hits.agent_scroll_metrics {
                         if let Some(grab_row_offset) = crate::ui::scrollbar_thumb_grab_offset(
                             metrics,

@@ -1003,6 +1003,16 @@ fn sidebar_scrollbars_use_proportional_shared_geometry_and_drag() {
             modifiers: KeyModifiers::empty(),
         })]);
     }
+
+    assert!(!state.sidebar_collapsed);
+    let toggle_click = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: state.hits.sidebar_toggle.x,
+        row: state.hits.sidebar_toggle.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert!(toggle_click.repaint);
+    assert!(state.sidebar_collapsed);
 }
 
 #[test]
