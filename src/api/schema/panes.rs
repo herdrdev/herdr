@@ -372,6 +372,10 @@ pub struct PaneReportAgentParams {
     pub agent_session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_session_path: Option<String>,
+    /// Command that resumes this agent's session after a Herdr restart. The
+    /// first element must be a plain command name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -387,6 +391,10 @@ pub struct PaneReportAgentSessionParams {
     pub agent_session_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_source: Option<String>,
+    /// Command that resumes this agent's session after a Herdr restart. The
+    /// first element must be a plain command name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_argv: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

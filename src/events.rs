@@ -120,6 +120,19 @@ pub enum AppEvent {
         session_ref: Option<crate::agent_resume::AgentSessionRef>,
         session_start_source: Option<String>,
     },
+    /// A reporter supplied the command that resumes its own session.
+    AgentResumeReported {
+        pane_id: PaneId,
+        source: String,
+        agent_label: String,
+        seq: Option<u64>,
+        argv: Vec<String>,
+    },
+    /// A pane held by a self-reported agent is back at its idle shell.
+    ReportedAgentShellReturned {
+        pane_id: PaneId,
+        observed_at: std::time::Instant,
+    },
     /// Display-only agent metadata was reported for a pane.
     HookMetadataReported {
         pane_id: PaneId,

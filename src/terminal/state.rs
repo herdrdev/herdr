@@ -137,6 +137,8 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    reported_resume: Option<crate::agent_resume::ReportedAgentResume>,
+    reported_resume_revision: u64,
     pub terminal_title: Option<String>,
     pub manual_label: Option<String>,
     pub agent_name: Option<String>,
@@ -175,6 +177,8 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            reported_resume: None,
+            reported_resume_revision: 0,
             terminal_title: None,
             manual_label: None,
             agent_name: None,
@@ -553,6 +557,15 @@ impl TerminalState {
                     })
             {
                 self.persisted_agent_session = None;
+            }
+            if !newer_custom_authority
+                && agent.is_some()
+                && self
+                    .reported_resume
+                    .as_ref()
+                    .is_some_and(|resume| crate::detect::parse_agent_label(&resume.agent) == agent)
+            {
+                self.set_reported_resume(None);
             }
             if let Some(agent) = agent {
                 let agent_label = crate::detect::agent_label(agent);
@@ -1727,19 +1740,12 @@ impl TerminalState {
     }
 
     fn accept_hook_report(&mut self, source: &str, seq: Option<u64>) -> bool {
-        let Some(seq) = seq else {
-            return !self.hook_report_sequences.contains_key(source);
-        };
-
-        if self
-            .hook_report_sequences
-            .get(source)
-            .is_some_and(|last_seq| seq <= *last_seq)
-        {
+        if !self.hook_report_is_newer(source, seq) {
             return false;
         }
-
-        self.hook_report_sequences.insert(source.to_string(), seq);
+        if let Some(seq) = seq {
+            self.hook_report_sequences.insert(source.to_string(), seq);
+        }
         true
     }
 
@@ -1785,7 +1791,9 @@ impl TerminalState {
         self.suppress_current_full_lifecycle_hook_authority(
             FullLifecycleHookSuppressionReason::HookClear,
         );
-        self.hook_authority = None;
+        if let Some(authority) = self.hook_authority.take() {
+            self.forget_reported_resume_of(&authority.source, &authority.agent_label);
+        }
         self.persisted_agent_session = None;
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -1848,6 +1856,7 @@ impl TerminalState {
             self.clear_agent_name();
         }
         self.hook_authority = None;
+        self.forget_reported_resume_of(source, agent_label);
         if !preserve_foreign_persisted_session {
             self.persisted_agent_session = None;
         }
@@ -1863,6 +1872,161 @@ impl TerminalState {
             session_ref_changed: previous_session != current_session,
             agent_released: !process_owns_agent,
         })
+    }
+
+    /// A reporter that Herdr cannot also identify by process holds this pane,
+    /// so only the pane returning to its shell can tell Herdr it exited.
+    pub fn self_reported_agent_active(&self) -> bool {
+        self.hook_authority.as_ref().is_some_and(|authority| {
+            crate::detect::parse_agent_label(&authority.agent_label).is_none()
+        })
+    }
+
+    /// `observed_at` is when the idle shell was seen; a claim made after that
+    /// belongs to a newer agent and must survive the delayed signal.
+    pub fn clear_self_reported_agent(
+        &mut self,
+        observed_at: Instant,
+    ) -> Option<TerminalStateMutation> {
+        if !self.self_reported_agent_active() || !self.hook_authority_not_newer_than(observed_at) {
+            return None;
+        }
+        let now = Instant::now();
+        let previous_agent_label = self.effective_agent_label().map(str::to_string);
+        let previous_known_agent = self.effective_known_agent();
+        let previous_state = self.state;
+        let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
+        let previous_session = self.current_session_identity_for_persistence();
+        self.hook_authority = None;
+        self.set_reported_resume(None);
+        self.detected_agent = None;
+        self.fallback_state = AgentState::Unknown;
+        self.fallback_visible_blocker = false;
+        self.fallback_observed_at = None;
+        self.clear_agent_name();
+        let current_session = self.current_session_identity_for_persistence();
+        Some(TerminalStateMutation {
+            effective_state_change: self.recompute_effective_state(
+                previous_agent_label,
+                previous_known_agent,
+                previous_state,
+                previous_presentation,
+                now,
+            ),
+            session_ref_changed: previous_session != current_session,
+            agent_released: true,
+        })
+    }
+
+    pub fn session_ref_is_current(
+        &self,
+        session_ref: &crate::agent_resume::AgentSessionRef,
+    ) -> bool {
+        self.current_session_identity_for_persistence()
+            .is_some_and(|(_, _, kind, value)| {
+                kind == session_ref.kind && value == session_ref.value
+            })
+    }
+
+    /// A reporter may own the resume command when it holds the pane, or when it
+    /// is an agent Herdr currently sees running there and can therefore see exit.
+    pub fn can_record_reported_resume(&self, source: &str, agent_label: &str) -> bool {
+        match self.hook_authority.as_ref() {
+            Some(authority) => authority.source == source && authority.agent_label == agent_label,
+            None => {
+                self.recent_agent_process_exit.is_none()
+                    && self.detected_agent.is_some()
+                    && crate::detect::parse_agent_label(agent_label) == self.detected_agent
+            }
+        }
+    }
+
+    /// Same ordering rule as lifecycle reports, evaluated before the report is
+    /// applied so a duplicate cannot pass as the report that was just accepted.
+    pub fn hook_report_is_newer(&self, source: &str, seq: Option<u64>) -> bool {
+        let last_seq = self.hook_report_sequences.get(source).copied();
+        match seq {
+            Some(seq) => last_seq.is_none_or(|last| seq > last),
+            None => last_seq.is_none(),
+        }
+    }
+
+    /// Callers must first check `hook_report_is_newer` against the state
+    /// before the carrying report was applied.
+    pub fn record_reported_resume(
+        &mut self,
+        source: &str,
+        agent_label: &str,
+        seq: Option<u64>,
+        argv: Vec<String>,
+    ) -> bool {
+        if !self.can_record_reported_resume(source, agent_label) {
+            return false;
+        }
+        if let Some(seq) = seq {
+            let last = self
+                .hook_report_sequences
+                .entry(source.to_string())
+                .or_insert(seq);
+            *last = (*last).max(seq);
+        }
+        let resume = crate::agent_resume::ReportedAgentResume {
+            source: source.to_string(),
+            agent: agent_label.to_string(),
+            argv,
+        };
+        if self.reported_resume.as_ref() == Some(&resume) {
+            return false;
+        }
+        self.set_reported_resume(Some(resume));
+        true
+    }
+
+    pub fn reported_resume(&self) -> Option<&crate::agent_resume::ReportedAgentResume> {
+        self.reported_resume.as_ref()
+    }
+
+    /// Changes whenever the stored resume command changes, so callers can
+    /// persist removals as well as new commands.
+    pub fn reported_resume_revision(&self) -> u64 {
+        self.reported_resume_revision
+    }
+
+    /// Drops the command once a different agent holds the pane.
+    pub fn reconcile_reported_resume(&mut self) {
+        let Some(resume) = self.reported_resume.as_ref() else {
+            return;
+        };
+        let other_authority = self.hook_authority.as_ref().is_some_and(|authority| {
+            authority.source != resume.source || authority.agent_label != resume.agent
+        });
+        let other_process = self
+            .detected_agent
+            .is_some_and(|agent| crate::detect::agent_label(agent) != resume.agent);
+        if other_authority || other_process {
+            self.set_reported_resume(None);
+        }
+    }
+
+    pub fn restore_reported_resume(&mut self, resume: crate::agent_resume::ReportedAgentResume) {
+        self.set_reported_resume(Some(resume));
+    }
+
+    fn set_reported_resume(&mut self, resume: Option<crate::agent_resume::ReportedAgentResume>) {
+        if self.reported_resume != resume {
+            self.reported_resume = resume;
+            self.reported_resume_revision += 1;
+        }
+    }
+
+    fn forget_reported_resume_of(&mut self, source: &str, agent_label: &str) {
+        if self
+            .reported_resume
+            .as_ref()
+            .is_some_and(|resume| resume.source == source && resume.agent == agent_label)
+        {
+            self.set_reported_resume(None);
+        }
     }
 
     fn hook_authority_is_effective(&self, authority: &HookAuthority) -> bool {

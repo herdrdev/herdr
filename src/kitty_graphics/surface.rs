@@ -20,10 +20,17 @@ use crate::protocol::{
 };
 
 const MAX_SURFACE_GRAPHICS_PLACEMENTS: usize = 4_096;
+// Apps such as pi scroll images out of view and back. Keeping a bounded set
+// loaded on the host avoids resending their pixels on every pass. The limits
+// match pi's own off-screen cache in decoded bytes, which is what hosts store.
+const MAX_OFFSCREEN_IMAGES: usize = 16;
+const MAX_OFFSCREEN_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DeliveryCache {
     assets: HashSet<SurfaceGraphicsAssetKey>,
+    /// Delivered terminal images without a placement, most recently visible first.
+    offscreen: Vec<SurfaceGraphicsAssetKey>,
     pending: bool,
 }
 
@@ -33,6 +40,7 @@ pub(crate) type SourceFiles =
 impl DeliveryCache {
     pub(crate) fn forget_asset(&mut self, key: &SurfaceGraphicsAssetKey) {
         self.assets.remove(key);
+        self.offscreen.retain(|offscreen| offscreen != key);
         self.pending = true;
     }
 
@@ -730,8 +738,15 @@ pub(crate) fn collect_scene(
         .iter()
         .map(|placement| placement.asset.clone())
         .collect::<HashSet<_>>();
+    let offscreen = offscreen_assets(app, workspace_index, &public_panes, delivered, &desired);
     let mut next = DeliveryCache {
-        assets: delivered.assets.intersection(&desired).cloned().collect(),
+        assets: delivered
+            .assets
+            .intersection(&desired)
+            .chain(&offscreen)
+            .cloned()
+            .collect(),
+        offscreen: offscreen.clone(),
         pending: false,
     };
     let mut assets = Vec::new();
@@ -769,17 +784,103 @@ pub(crate) fn collect_scene(
             placement.x,
         )
     });
-    let retained_assets = Vec::new();
     sources.retain(|key, _| next.assets.contains(key));
     (
         SurfaceGraphicsScene {
             assets,
             placements,
-            retained_assets,
+            retained_assets: offscreen,
         },
         next,
         sources,
     )
+}
+
+/// Delivered pane images that left the view but still exist in their terminal,
+/// bounded and ordered from most to least recently visible.
+fn offscreen_assets(
+    app: &crate::app::App,
+    workspace_index: Option<usize>,
+    public_panes: &HashMap<String, PaneId>,
+    delivered: &DeliveryCache,
+    visible: &HashSet<SurfaceGraphicsAssetKey>,
+) -> Vec<SurfaceGraphicsAssetKey> {
+    let Some(workspace_index) = workspace_index else {
+        return Vec::new();
+    };
+    fn pane_image(key: &SurfaceGraphicsAssetKey) -> Option<(&str, u32)> {
+        match &key.source {
+            SurfaceGraphicsSource::Terminal {
+                target: SurfaceGraphicsTarget::Pane { pane_id },
+                image_id,
+            } => Some((pane_id.as_str(), *image_id)),
+            _ => None,
+        }
+    }
+    let mut newly_hidden = delivered
+        .assets
+        .iter()
+        .filter(|key| !visible.contains(*key) && !delivered.offscreen.contains(key))
+        .collect::<Vec<_>>();
+    if newly_hidden.is_empty() && delivered.offscreen.is_empty() {
+        return Vec::new();
+    }
+    newly_hidden.sort_by_key(|key| pane_image(key));
+    let visible_sources = visible
+        .iter()
+        .map(|key| &key.source)
+        .collect::<HashSet<_>>();
+    let mut candidates_by_pane = HashMap::<PaneId, Vec<&SurfaceGraphicsAssetKey>>::new();
+    let candidates = newly_hidden
+        .into_iter()
+        .chain(&delivered.offscreen)
+        .filter(|key| {
+            !visible_sources.contains(&key.source) && key.data_len <= MAX_OFFSCREEN_IMAGE_BYTES
+        })
+        .filter_map(|key| {
+            let (public_id, _) = pane_image(key)?;
+            let pane_id = *public_panes.get(public_id)?;
+            candidates_by_pane.entry(pane_id).or_default().push(key);
+            Some(key)
+        })
+        .collect::<Vec<_>>();
+
+    let mut live = HashSet::new();
+    for (pane_id, keys) in candidates_by_pane {
+        let Some(runtime) = app.state.runtime_for_pane_in_workspace(
+            &app.terminal_runtimes,
+            workspace_index,
+            pane_id,
+        ) else {
+            continue;
+        };
+        let image_ids = keys
+            .iter()
+            .filter_map(|key| pane_image(key).map(|(_, image_id)| image_id))
+            .collect::<Vec<_>>();
+        for (key, fingerprint) in keys
+            .into_iter()
+            .zip(runtime.kitty_image_fingerprints(&image_ids))
+        {
+            if fingerprint == Some(key.data_fingerprint) {
+                live.insert(key);
+            }
+        }
+    }
+
+    let mut bytes = 0u64;
+    let mut offscreen = Vec::new();
+    for key in candidates {
+        if offscreen.len() == MAX_OFFSCREEN_IMAGES {
+            break;
+        }
+        if !live.contains(key) || bytes.saturating_add(key.data_len) > MAX_OFFSCREEN_IMAGE_BYTES {
+            continue;
+        }
+        bytes += key.data_len;
+        offscreen.push(key.clone());
+    }
+    offscreen
 }
 
 fn image_signature_from_asset(key: &SurfaceGraphicsAssetKey) -> ImageSignature {

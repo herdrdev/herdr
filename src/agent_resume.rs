@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_SESSION_ID_LEN: usize = 512;
 const MAX_SESSION_PATH_LEN: usize = 4096;
+const MAX_RESUME_ARGS: usize = 64;
+const MAX_RESUME_ARGV_BYTES: usize = 8192;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionRef {
@@ -23,6 +25,67 @@ pub struct AgentResumePlan {
     pub agent: String,
     pub argv: Vec<String>,
     pub dedupe_key: String,
+}
+
+/// A resume command reported by the agent itself, run in the restored pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReportedAgentResume {
+    pub source: String,
+    pub agent: String,
+    pub argv: Vec<String>,
+}
+
+impl ReportedAgentResume {
+    /// The same command can name different sessions in different directories,
+    /// for example `agent --continue`, so the directory is part of its identity.
+    pub fn plan(&self, cwd: &Path) -> AgentResumePlan {
+        AgentResumePlan {
+            agent: self.agent.clone(),
+            argv: self.argv.clone(),
+            dedupe_key: format!(
+                "{}\u{0}{}\u{0}{}\u{0}argv\u{0}{}",
+                self.source,
+                self.agent,
+                cwd.display(),
+                self.argv.join("\u{0}")
+            ),
+        }
+    }
+}
+
+/// Restore types the command into the pane's shell, so the executable must be a
+/// bare command name: shells disagree on how to invoke a quoted path.
+pub fn validate_resume_argv(argv: &[String]) -> Result<(), String> {
+    let Some(command) = argv.first() else {
+        return Err("resume_argv must not be empty".into());
+    };
+    if argv.len() > MAX_RESUME_ARGS {
+        return Err(format!(
+            "resume_argv allows at most {MAX_RESUME_ARGS} arguments"
+        ));
+    }
+    if argv.iter().map(String::len).sum::<usize>() > MAX_RESUME_ARGV_BYTES {
+        return Err(format!(
+            "resume_argv allows at most {MAX_RESUME_ARGV_BYTES} bytes"
+        ));
+    }
+    if argv.iter().any(|arg| arg.chars().any(char::is_control)) {
+        return Err("resume_argv must not contain control characters".into());
+    }
+    // Restore quotes arguments POSIX-style, which PowerShell reads differently
+    // only when an argument itself contains an apostrophe.
+    if argv.iter().any(|arg| arg.contains('\'')) {
+        return Err("resume_argv must not contain apostrophes".into());
+    }
+    let plain_command = !command.is_empty()
+        && !command.starts_with('-')
+        && command
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'));
+    if !plain_command {
+        return Err("resume_argv must start with a plain command name, not a path".into());
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,6 +370,38 @@ mod tests {
             .join(name)
             .display()
             .to_string()
+    }
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|part| part.to_string()).collect()
+    }
+
+    #[test]
+    fn reported_resume_argv_requires_a_plain_command_name() {
+        assert!(validate_resume_argv(&argv(&[
+            "prime-agent",
+            "--resume",
+            "01a0de21",
+            "--model",
+            "gpt 6"
+        ]))
+        .is_ok());
+        assert!(validate_resume_argv(&argv(&["cursor-agent.cmd", "--resume", "id"])).is_ok());
+
+        for invalid in [
+            argv(&[]),
+            argv(&[""]),
+            argv(&["/usr/bin/prime-agent", "--resume", "id"]),
+            argv(&["C:\\Program Files\\Prime\\prime.exe"]),
+            argv(&["prime agent"]),
+            argv(&["-prime"]),
+            argv(&["prime-agent", "bad\nline"]),
+            argv(&["prime-agent", "--name", "can's session"]),
+            vec!["prime-agent".to_string(); MAX_RESUME_ARGS + 1],
+            argv(&["prime-agent", &"x".repeat(MAX_RESUME_ARGV_BYTES)]),
+        ] {
+            assert!(validate_resume_argv(&invalid).is_err(), "{invalid:?}");
+        }
     }
 
     #[test]

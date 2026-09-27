@@ -12,7 +12,7 @@ pub mod bindings;
 
 use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -1824,6 +1824,37 @@ impl Terminal {
         Ok(generation != 0 && self.kitty_empty_generation.get() != Some(generation))
     }
 
+    /// Current fingerprint of each stored image, placed or not, when it is known
+    /// without hashing pixels. `None` means deleted or replaced since last seen.
+    pub fn kitty_image_fingerprints(&self, image_ids: &[u32]) -> Result<Vec<Option<u64>>, Error> {
+        let graphics = self.kitty_graphics()?;
+        if graphics.is_null() {
+            return Ok(vec![None; image_ids.len()]);
+        }
+        image_ids
+            .iter()
+            .map(|&image_id| {
+                let image = unsafe { ffi::ghostty_kitty_graphics_image(graphics, image_id) };
+                if image.is_null() {
+                    return Ok(None);
+                }
+                if let Some(source) = native_source::image_source(image)? {
+                    return Ok(Some(source.fingerprint()));
+                }
+                let generation = kitty_image_u64(
+                    image,
+                    ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
+                )?;
+                Ok(self.kitty_fingerprints.lock().ok().and_then(|cache| {
+                    cache
+                        .get(&image_id)
+                        .filter(|entry| entry.generation == generation)
+                        .map(|entry| entry.fingerprint)
+                }))
+            })
+            .collect()
+    }
+
     pub fn kitty_image_placements(&self) -> Result<Vec<KittyImagePlacement>, Error> {
         self.kitty_image_placements_with_data_filter(|_| true)
     }
@@ -1872,13 +1903,13 @@ impl Terminal {
         }
         if !storage_has_placements {
             self.kitty_empty_generation.set(Some(generation));
-            self.prune_kitty_fingerprints(&[]);
+            self.prune_kitty_fingerprints(graphics);
             return Ok(Vec::new());
         }
 
         placements.extend(self.kitty_virtual_image_placements(graphics, &mut needs_data)?);
         placements.sort_by_key(|placement| placement.z);
-        self.prune_kitty_fingerprints(&placements);
+        self.prune_kitty_fingerprints(graphics);
         Ok(placements)
     }
 
@@ -1923,16 +1954,13 @@ impl Terminal {
         fingerprint
     }
 
-    fn prune_kitty_fingerprints(&self, placements: &[KittyImagePlacement]) {
+    /// Keeps fingerprints for hidden images so scrolling them back into view
+    /// does not re-hash their pixels; generation checks catch replacements.
+    fn prune_kitty_fingerprints(&self, graphics: ffi::GhosttyKittyGraphics) {
         if let Ok(mut cache) = self.kitty_fingerprints.lock() {
-            if cache.is_empty() {
-                return;
-            }
-            let live: HashSet<u32> = placements
-                .iter()
-                .map(|placement| placement.image_id)
-                .collect();
-            cache.retain(|image_id, _| live.contains(image_id));
+            cache.retain(|image_id, _| {
+                !unsafe { ffi::ghostty_kitty_graphics_image(graphics, *image_id) }.is_null()
+            });
         }
     }
 
@@ -3848,6 +3876,33 @@ mod tests {
                 .generation,
             second_generation
         );
+    }
+
+    #[test]
+    fn kitty_image_fingerprint_survives_hidden_placements_until_the_image_is_deleted() {
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        let cached =
+            |terminal: &Terminal| terminal.kitty_fingerprints.lock().unwrap().contains_key(&7);
+        terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
+        assert_eq!(
+            terminal
+                .kitty_image_placements_with_data_filter(|_| false)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(cached(&terminal));
+
+        terminal.write(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+        assert!(terminal
+            .kitty_image_placements_with_data_filter(|_| false)
+            .unwrap()
+            .is_empty());
+        assert!(cached(&terminal), "a hidden image must not be re-hashed");
+
+        terminal.write(b"\x1b_Ga=d,d=I,i=7,q=2\x1b\\");
+        let _ = terminal.kitty_image_placements_with_data_filter(|_| false);
+        assert!(!cached(&terminal));
     }
 
     #[test]

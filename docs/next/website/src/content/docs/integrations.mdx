@@ -87,7 +87,21 @@ Report `idle` when the agent is ready for input and `blocked` when it needs a us
 
 Report only when `HERDR_ENV=1` and the required variables are present. This keeps the integration a no-op outside Herdr. Keep `--source` stable and unique to the integration. If reports can arrive out of order, include a strictly increasing `--seq`; Herdr ignores stale sequence numbers from the same source.
 
-You can include `--agent-session-id` or `--agent-session-path` with `report-agent`, or use `pane report-agent-session` when session identity changes independently of state. Herdr exposes that reference through its pane and agent APIs. Automatic session restore also requires Herdr to know how to launch that agent and resume the referenced session.
+You can include `--agent-session-id` or `--agent-session-path` with `report-agent`, or use `pane report-agent-session` when session identity changes independently of state. Herdr exposes that reference through its pane and agent APIs.
+
+To have Herdr resume your agent after a Herdr server restart, report the command that resumes the current session after `--`. Include any options the session needs, such as the model or permission mode:
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent-session "$HERDR_PANE_ID" \
+  --source custom:my-agent \
+  --agent my-agent \
+  --agent-session-id "$SESSION_ID" \
+  -- my-agent --resume "$SESSION_ID" --model my-model
+```
+
+Herdr runs that command in the restored pane's directory. The first word must be a plain command name on `PATH`, not a path, and no argument may contain an apostrophe. Report the agent's state with `report-agent` first so your source holds the pane, and report the command again whenever the session changes. Herdr keeps it only while your source holds the pane and drops it on release. `[session] resume_agents_on_restore = false` disables it.
+
+Herdr cannot identify a custom agent's process, so it treats the pane returning to its idle shell prompt as the agent exiting and clears the agent and its resume command. Still release authority on exit so the pane updates immediately.
 
 Use `HERDR_BIN_PATH` and the CLI wrappers for portable integrations. Code that needs direct IPC can send the equivalent `pane.report_agent`, `pane.report_agent_session`, and `pane.release_agent` requests described in the [Socket API](/docs/socket-api/#agent-state-reporting).
 

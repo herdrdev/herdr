@@ -335,16 +335,20 @@ fn collect_visible_placements(
             }
         };
         let mut requested_images = HashSet::new();
-        for placement in runtime.kitty_image_placements_with_data_filter(|descriptor| {
+        let pane_placements = runtime.kitty_image_placements_with_data_filter(|descriptor| {
             if descriptor.source_file {
                 return false;
             }
             terminal_image_needs_data(info.id, descriptor, delivered_images, &mut requested_images)
-        }) {
-            let scrollback_offset = runtime
-                .scroll_metrics()
-                .map(|m| m.offset_from_bottom as u32)
-                .unwrap_or(0);
+        });
+        if pane_placements.is_empty() {
+            continue;
+        }
+        let scrollback_offset = runtime
+            .scroll_metrics()
+            .map(|m| m.offset_from_bottom as u32)
+            .unwrap_or(0);
+        for placement in pane_placements {
             placements.push(HostPlacement {
                 raw_data: None,
                 pane_id: info.id,
