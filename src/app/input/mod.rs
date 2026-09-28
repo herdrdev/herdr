@@ -5275,7 +5275,12 @@ impl App {
             self.start_home_ref_refresh_if_requested();
             self.start_home_github_refresh_if_requested();
             if let Some(pane_id) = self.state.take_forwarded_pane_input() {
-                if !self.state.pane_is_settled_anywhere(pane_id) {
+                // Wheel and motion reports are not deliberate answers to a blocker.
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::Down(_) | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
+                ) && !self.state.pane_is_settled_anywhere(pane_id)
+                {
                     self.retire_blocked_hook_authority_for_pane(pane_id, std::time::Instant::now());
                 }
             }
@@ -6697,6 +6702,68 @@ enabled = true
             Some(1),
         );
         (app, terminal_id, rx)
+    }
+
+    fn terminal_app_with_mouse_reporting_blocked_hook(
+        mouse_modes: &[u8],
+    ) -> (
+        App,
+        crate::terminal::TerminalId,
+        tokio::sync::mpsc::Receiver<Bytes>,
+    ) {
+        let mut app = test_app();
+        let mut workspace = crate::workspace::Workspace::test_new("test");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let (runtime, rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                mouse_modes,
+                16,
+            );
+        assert!(runtime.mouse_reporting_enabled());
+        workspace.insert_test_runtime(pane_id, runtime);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Terminal);
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(
+            Some(crate::detect::Agent::Pi),
+            crate::detect::AgentState::Idle,
+        );
+        let session_ref =
+            crate::agent_resume::AgentSessionRef::id("pi-mouse-input").expect("Pi session ref");
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:pi".into(),
+            agent: "pi".into(),
+            session_ref: session_ref.clone(),
+        });
+        terminal.set_hook_authority_at(
+            "herdr:pi".into(),
+            "pi".into(),
+            crate::detect::AgentState::Blocked,
+            None,
+            Some(session_ref),
+            Some(1),
+            std::time::Instant::now(),
+        );
+        assert!(terminal.blocked_state_hold_active_for_test());
+        assert!(terminal.full_lifecycle_hook_authority_active());
+        (app, terminal_id, rx)
+    }
+
+    fn assert_blocked_hook_held(app: &App, terminal_id: &crate::terminal::TerminalId) {
+        assert_eq!(
+            app.state.terminals[terminal_id].raw_agent_state(),
+            crate::detect::AgentState::Blocked
+        );
+        assert!(app.state.terminals[terminal_id].full_lifecycle_hook_authority_active());
     }
 
     fn assert_blocked_hook_retired(app: &App, terminal_id: &crate::terminal::TerminalId) {
@@ -9897,6 +9964,46 @@ navigate_workspace_down = "ctrl+j"
         let (mut app, terminal_id, mut rx) = terminal_app_with_blocked_hook();
         app.handle_text_commit_headless("continue");
         assert!(rx.try_recv().is_ok());
+        assert_blocked_hook_retired(&app, &terminal_id);
+    }
+
+    #[tokio::test]
+    async fn local_forwarded_mouse_wheel_keeps_full_lifecycle_blocked_hold() {
+        let (mut app, terminal_id, mut rx) =
+            terminal_app_with_mouse_reporting_blocked_hook(b"\x1b[?1000h\x1b[?1006h");
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 106, 26));
+        let info = app.state.view.pane_infos[0].clone();
+
+        app.handle_mouse(mouse(
+            MouseEventKind::ScrollDown,
+            info.inner_rect.x + 2,
+            info.inner_rect.y + 2,
+        ));
+
+        assert!(
+            rx.try_recv().is_ok(),
+            "mouse-reporting wheel reaches the pane"
+        );
+        assert_blocked_hook_held(&app, &terminal_id);
+    }
+
+    #[tokio::test]
+    async fn local_forwarded_mouse_motion_keeps_hold_and_button_press_releases_it() {
+        let (mut app, terminal_id, mut rx) =
+            terminal_app_with_mouse_reporting_blocked_hook(b"\x1b[?1003h\x1b[?1006h");
+        crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 106, 26));
+        let info = app.state.view.pane_infos[0].clone();
+        let column = info.inner_rect.x + 2;
+        let row = info.inner_rect.y + 2;
+
+        app.handle_mouse(mouse(MouseEventKind::Moved, column, row));
+
+        assert!(rx.try_recv().is_ok(), "mouse motion reaches the pane");
+        assert_blocked_hook_held(&app, &terminal_id);
+
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
+
+        assert!(rx.try_recv().is_ok(), "button press reaches the pane");
         assert_blocked_hook_retired(&app, &terminal_id);
     }
 

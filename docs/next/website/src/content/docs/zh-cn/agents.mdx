@@ -44,7 +44,7 @@ Herdr 首先检测每个窗格的前台进程。之后,每个窗格有且只有�
 
 对于具备完整生命周期钩子的智能体，最近接受的集成上报在常规 `idle`、`working` 和 `blocked` 仲裁中具有权威。Herdr 仍会同时评估屏幕清单。原生权限、信任、登录、工具审批或提问控件不一定发出生命周期事件，因此，如果这些结构明确的控件比非 blocked 的钩子上报更新，它们可以覆盖该上报。对于普通提示框或 working 屏幕证据，新鲜钩子状态仍然优先。
 
-如果在 `agent_detection.full_lifecycle_hook_authority_timeout_seconds` 内没有新的已接受上报，完整生命周期权威就会过期。默认值为 600 秒，有效范围为 30–3600 秒。与上报矛盾的窗格输出也可能提前撤销 blocked 的完整生命周期权威。权威撤销后，当前屏幕结果决定窗格状态；之后到达的有效生命周期上报可以重新取得权威。回合结束时的 `herdr:<agent>-closing-block` 上报可以携带有效门控而不取得完整生命周期权威。`blocked` closing gate 在终端持续输出时仍保持权威；明确输入、清除门控的新上报、智能体替换或进程退出会撤销它。
+如果在 `agent_detection.full_lifecycle_hook_authority_timeout_seconds` 内没有新的已接受上报，完整生命周期权威就会过期。默认值为 600 秒，有效范围为 30–3600 秒。`blocked` 的完整生命周期上报会在超时后继续让窗格保持 blocked，直到明确输入、同一智能体的 `working` 上报或稳定可见的 `working`、智能体替换或进程退出才解除。之后到达的有效生命周期上报可以重新取得权威。回合结束时的 `herdr:<agent>-closing-block` 上报可以携带有效门控而不取得完整生命周期权威。`blocked` closing gate 在终端持续输出时仍保持权威；明确输入、清除门控的新上报、智能体替换或进程退出会撤销它。
 
 父智能体结束回合时若声明仍有子智能体在运行，会显示为带黄色空心点的 `waiting on agents`，而不是 done 或普通 working。检测缓冲区的输出发生变化时会重置静默计时，仅有输入不会重置。默认的 30 分钟预算可通过 `session.agent_subagent_stale_after_minutes` 配置；后续声明运行中智能体为零的 closing report 会结束等待。即使仍有子进程，已完成的 closing report 仍显示 done。
 

@@ -3266,11 +3266,6 @@ impl HeadlessServer {
             apply_terminal_attach_scroll(runtime, source, direction, lines, column, row, modifiers)
         {
             warn!(client_id, terminal_id = %terminal_id, err = %err, "terminal attach scroll failed");
-        } else {
-            self.app.retire_blocked_hook_authority_for_terminal(
-                &resolved_terminal_id,
-                std::time::Instant::now(),
-            );
         }
         true
     }
