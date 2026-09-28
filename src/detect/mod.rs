@@ -420,7 +420,8 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
         "node" => cursor_agent_name_from_bundled_node_argv(argv)
             .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
         "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
-        name if is_python_runtime(name) => script_arg_agent_name(argv, &["-c"], &["-m"]),
+        name if is_python_runtime(name) => hermes_agent_name_from_bootstrap_argv(argv)
+            .or_else(|| script_arg_agent_name(argv, &["-c"], &["-m"])),
         "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
         "cmd" => windows_cmd_arg_agent_name(argv),
         "powershell" | "pwsh" => powershell_arg_agent_name(argv),
@@ -451,6 +452,27 @@ fn cursor_agent_name_from_bundled_node_argv(argv: &[String]) -> Option<String> {
         && !version.trim().is_empty())
     .then(|| agent_label(Agent::Cursor).to_string())
 }
+fn hermes_agent_name_from_bootstrap_argv(argv: &[String]) -> Option<String> {
+    let mut args = argv.iter().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "-c" {
+            let code = args.next()?;
+            if code.contains("hermes_cli.main") || code.contains("from hermes_cli") {
+                return Some(agent_label(Agent::Hermes).to_string());
+            }
+            return None;
+        }
+        if arg.starts_with('-') {
+            if option_takes_value(arg) {
+                let _ = args.next();
+            }
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
 
 fn path_parent_and_basename(path: &str) -> Option<(&str, &str)> {
     let split = path.rfind(['/', '\\'])?;
@@ -1380,6 +1402,29 @@ mod tests {
                     "/nix/store/example/bin/hermes",
                     "--resume",
                     "session-id",
+                ],
+            )],
+        };
+
+        assert_eq!(
+            identify_agent_in_job(&job),
+            Some((Agent::Hermes, "hermes".to_string()))
+        );
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_bootstrap_wrapped_hermes() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 123,
+            processes: vec![foreground_process(
+                123,
+                "python3.14",
+                &[
+                    "/Users/user/.hermes/tools/python-3.14/bin/python3",
+                    "-I",
+                    "-c",
+                    "import hermes_bootstrap; from hermes_cli.main import main; sys.exit(main())",
+                    "chat",
                 ],
             )],
         };
