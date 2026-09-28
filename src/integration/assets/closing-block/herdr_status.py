@@ -30,7 +30,7 @@ from typing import Any
 
 from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
 
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 VERSION = 2
 
 

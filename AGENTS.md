@@ -421,3 +421,20 @@ checkout, so the error is not evidence of a bad change.
 Do not run the upgrade from a pane owned by the server being restarted: `herdr server
 stop` kills that pane, so the run dies partway with the old server already down.
 Drive it over SSH, from a different multiplexer, or accept losing the session.
+
+### Closing-block blocker detection
+
+A Claude pane shows as blocked only when the Stop hook in
+`src/integration/assets/closing-block/` finds a pending question in the reply.
+If the parser misses it, the pane reads idle and the question sits unseen, so
+keep blocker detection tied to structure (numbered items with a known label, or
+the `Reply 1a / 1b. Silence holds.` line), not to exact heading words. The
+policy wording changes; the fallback in `closing_block.py` exists so a renamed
+heading can never hide a blocker.
+
+The hook is installed per host in `~/.local/share/herdr-closing-block`, apart
+from the Herdr binary, and goes stale silently. After a change to the bundle
+lands, rerun `python3 src/integration/assets/closing-block/install.py` on every
+host and compare `closing_block.py` checksums. On 2026-09-28, ub2, air and mbpro
+still ran a copy from before `Needs you (N)` support, and every blocker on them
+read as idle.

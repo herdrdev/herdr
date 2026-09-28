@@ -12,9 +12,11 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 HUMAN_INPUT_LABELS = ("Gate", "Answer", "Verify", "Approve", "Decide")
 GATE_LABELS = ("Gate", "Approve")
+# Label for a human-input item whose own label word is unknown or missing.
+FALLBACK_LABEL = "Decide"
 
 _HUMAN_INPUT_LABEL_PATTERN = "|".join(
     re.escape(label) for label in HUMAN_INPUT_LABELS
@@ -106,6 +108,9 @@ _ITEM_LABEL_RE = re.compile(
     r"(?:[ \t]*·[ \t]*non-blocking)?[ \t]*(?:[—–:]|-[ \t])?[ \t]*"
     rf"|(?P<plain_label>{_HUMAN_INPUT_LABEL_PATTERN})"
     r"(?:[ \t]*·[ \t]*non-blocking)?[ \t]*(?:[—–:]|-[ \t])[ \t]*"
+    # Any other bold word used as a label. The label vocabulary changes with
+    # the policy, so an unknown word must still read as a human decision.
+    r"|\*\*(?P<other_label>[A-Za-z][A-Za-z-]{1,23})\*\*[ \t]*(?:[—–:]|-[ \t])[ \t]*"
     r")",
     re.MULTILINE | re.IGNORECASE,
 )
@@ -247,6 +252,8 @@ class ClosingBlock:
     # miscounted header apart from an incomplete parse.
     authored_labels: bool = False
     discarded_items: int = 0
+    # Set when items were recovered without a recognised heading.
+    fallback: bool = False
 
     @property
     def gates(self) -> list[Item]:
@@ -278,6 +285,8 @@ class ClosingBlock:
     def parse_status(self) -> str:
         if not self.present:
             return "missing"
+        if self.fallback:
+            return "malformed"
         if self.discarded_items:
             return "malformed"
         if (
@@ -530,7 +539,12 @@ def _parse_what_to_test(
 
 
 def _parse_items(
-    text: str, start: int, end: int, fences: list[tuple[int, int]]
+    text: str,
+    start: int,
+    end: int,
+    fences: list[tuple[int, int]],
+    *,
+    any_bold_label: bool = True,
 ) -> list[Item]:
     section_end = _section_end(text, start, end, fences)
     matches = list(_visible_matches(_ITEM_RE, text, start, section_end, fences))
@@ -561,6 +575,8 @@ def _parse_items(
         label = ""
         if label_match:
             label = label_match.group("bold_label") or label_match.group("plain_label") or ""
+            if not label and any_bold_label and label_match.group("other_label"):
+                label = FALLBACK_LABEL
             before = body[: label_match.start()].rstrip()
             after = body[label_match.end() :].lstrip()
             body = "\n".join(part for part in (after, before) if part)
@@ -655,6 +671,50 @@ def _now_entries(rest: str) -> tuple[list[str], list[str]]:
         else:
             streams.append(entry)
     return streams, waits
+
+
+def _headerless_fallback(
+    text: str, fences: list[tuple[int, int]], block: ClosingBlock
+) -> None:
+    """Recover pending human input when no closing-block heading matched.
+
+    The heading words change with the policy. When they no longer match, the
+    reply still carries structural evidence of a question: numbered items with
+    a bold label, or the `Reply 1a / 1b. Silence holds.` answer line. Either
+    one marks the pane blocked, so a renamed heading cannot hide a blocker.
+    The parse is reported as malformed so the drift stays visible.
+    """
+    answer_lines = list(
+        _visible_matches(_ANSWER_INSTRUCTION_RE, text, 0, len(text), fences)
+    )
+    anchor = answer_lines[-1].start() if answer_lines else len(text)
+    firsts = [
+        match
+        for match in _visible_matches(_ITEM_RE, text, 0, anchor, fences)
+        if int(match.group("idx")) == 1
+    ]
+    items: list[Item] = []
+    if firsts:
+        # Without a heading, any bold word is too weak: progress replies bold
+        # their list entries. Only the known label words count here.
+        items = _parse_items(
+            text, firsts[-1].start(), anchor, fences, any_bold_label=False
+        )
+    labeled = [item for item in items if item.label]
+    if labeled:
+        items = labeled
+    elif answer_lines:
+        for item in items:
+            item.label = FALLBACK_LABEL
+            item.blocking = True
+        if not items:
+            prose = text[:anchor].strip().splitlines()
+            items = [Item(1, FALLBACK_LABEL, prose[-1].strip() if prose else "", blocking=True)]
+    else:
+        return
+    block.present = True
+    block.fallback = True
+    block.items = items
 
 
 def parse(text: str) -> ClosingBlock:
@@ -762,6 +822,9 @@ def parse(text: str) -> ClosingBlock:
                 text, decision_headings, selected.decisions_end, fences
             )
         )
+
+    if not blocks:
+        _headerless_fallback(text, fences, block)
 
     lifecycle_agents = list(
         _visible_matches(_AGENTS_RE, text, authoritative_start, len(text), fences)

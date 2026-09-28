@@ -2857,7 +2857,7 @@ class BundleInstallerTests(unittest.TestCase):
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 2)
+            self.assertEqual(result["files"][name]["version"], 3)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),
@@ -3222,6 +3222,66 @@ class ExplicitStateTests(unittest.TestCase):
         # Junk must degrade to the counts, never reach the server verbatim.
         self.assertEqual(herdr_status.resolve_state(1, 0, "nonsense"), "blocked")
         self.assertEqual(herdr_status.resolve_state(0, 1, 7), "working")
+
+
+class SectionWordFallbackTests(unittest.TestCase):
+    """Blockers must register when the heading or label words drift."""
+
+    def test_renamed_heading_with_labeled_items_blocks(self):
+        block = closing_block.parse(
+            "Body.\n\n**Your turn (1)**\n"
+            "1. **Decide** — ship it?\n   a) yes\n   b) hold\n"
+            "Reply 1a / 1b. Silence holds.\n**Now:** waiting on you.\n"
+        )
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 1)
+        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.items[0].label, "Decide")
+
+    def test_answer_line_alone_blocks_unlabeled_items(self):
+        block = closing_block.parse(
+            "Questions\n1. Which seller?\n2. New or used?\n"
+            "Reply 1a / 2b. Silence holds.\n"
+        )
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 2)
+
+    def test_answer_line_without_items_still_blocks(self):
+        block = closing_block.parse("Pick one: a) yes b) no\nReply 1a / 1b. Silence holds.\n")
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 1)
+
+    def test_unknown_bold_label_under_heading_counts_as_decision(self):
+        block = closing_block.parse(
+            "**Needs you (1)**\n1. **Confirm** — keep the branch?\n"
+            "Reply 1a / 1b. Silence holds.\n"
+        )
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.blocking, 1)
+        self.assertEqual(block.items[0].label, "Decide")
+
+    def test_plain_numbered_prose_without_answer_line_stays_idle(self):
+        block = closing_block.parse("Steps taken:\n1. built\n2. tested\n")
+        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.parse_status, "missing")
+
+    def test_headerless_bold_list_without_label_words_stays_idle(self):
+        block = closing_block.parse(
+            "Progress:\n1. **Shelf** — seeded.\n2. **Player** — wired.\n"
+        )
+        self.assertEqual(block.herdr_state, "idle")
+
+    def test_explicit_nothing_disables_fallback(self):
+        block = closing_block.parse(
+            "1. **Decide** — quoted earlier?\n\n**Needs you: nothing.**\nDone here.\n"
+        )
+        self.assertEqual(block.blocking, 0)
+
+    def test_fenced_example_does_not_block(self):
+        block = closing_block.parse(
+            "```\n1. **Decide** — x?\nReply 1a / 1b. Silence holds.\n```\n"
+        )
+        self.assertEqual(block.herdr_state, "idle")
 
 
 if __name__ == "__main__":

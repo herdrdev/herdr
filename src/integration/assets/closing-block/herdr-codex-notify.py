@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 """Codex `notify` handler -> herdr turn-end status.
 
 Codex invokes the notify program with a single JSON argument. For a finished
