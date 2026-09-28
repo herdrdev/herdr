@@ -411,18 +411,63 @@ pub(crate) fn apply(
         let start = usize::from(row.y) * usize::from(width) + usize::from(row.x);
         cells[start..start + row.cells.len()].clone_from_slice(&row.cells);
     }
+    // Each scrolled row is emitted once with its final cells, so the expanded patch keeps
+    // only the parts of other rows outside every region. Receivers require disjoint rows.
+    let mut rows = Vec::with_capacity(patch.rows.len());
+    for row in std::mem::take(&mut patch.rows) {
+        rows.extend(outside_scrolls(row, &scrolls));
+    }
     for scroll in &scrolls {
         let rect = scroll.rect;
         for y in rect.y..rect.y + rect.height {
             let start = usize::from(y) * usize::from(width) + usize::from(rect.x);
-            patch.rows.push(PaneSurfacePatchRow {
+            rows.push(PaneSurfacePatchRow {
                 x: rect.x,
                 y,
                 cells: cells[start..start + usize::from(rect.width)].to_vec(),
             });
         }
     }
+    patch.rows = rows;
     Ok(patch)
+}
+
+/// The spans of `row` not covered by any scrolled region.
+fn outside_scrolls(
+    row: PaneSurfacePatchRow,
+    scrolls: &[SurfaceScroll],
+) -> Vec<PaneSurfacePatchRow> {
+    let start = usize::from(row.x);
+    let mut covered = scrolls
+        .iter()
+        .map(|scroll| scroll.rect)
+        .filter(|rect| row.y >= rect.y && row.y - rect.y < rect.height)
+        .map(|rect| {
+            (
+                usize::from(rect.x),
+                usize::from(rect.x) + usize::from(rect.width),
+            )
+        })
+        .collect::<Vec<_>>();
+    if covered.is_empty() {
+        return vec![row];
+    }
+    covered.sort_unstable();
+    let end = start + row.cells.len();
+    let mut spans = Vec::new();
+    let mut cursor = start;
+    for (left, right) in covered.into_iter().chain([(end, end)]) {
+        let span_end = left.clamp(cursor, end);
+        if span_end > cursor {
+            spans.push(PaneSurfacePatchRow {
+                x: cursor as u16,
+                y: row.y,
+                cells: row.cells[cursor - start..span_end - start].to_vec(),
+            });
+        }
+        cursor = cursor.max(right.min(end));
+    }
+    spans
 }
 
 #[cfg(test)]
@@ -549,7 +594,40 @@ mod tests {
             plain.cells[start..start + row.cells.len()].clone_from_slice(&row.cells);
         }
         assert_eq!(plain.cells, cells);
+        assert_disjoint(&expanded.rows);
         (size, plain)
+    }
+
+    /// Receivers only take the fast presentation path for non-overlapping rows.
+    fn assert_disjoint(rows: &[PaneSurfacePatchRow]) {
+        for (index, a) in rows.iter().enumerate() {
+            for b in &rows[index + 1..] {
+                let overlap = a.y == b.y
+                    && usize::from(a.x) < usize::from(b.x) + b.cells.len()
+                    && usize::from(b.x) < usize::from(a.x) + a.cells.len();
+                assert!(!overlap, "expanded rows overlap: {a:?} / {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rows_crossing_a_scrolled_region_keep_only_their_outside_cells() {
+        let last = surface();
+        let mut next = last.frame.clone();
+        for y in 0..PANE.height {
+            write(&mut next, y, &line(i32::from(y) + 1));
+        }
+        let mut patch = row_patch(&last, &next);
+        // One full-width row that runs across the pane, as a border repaint would.
+        let y = PANE.y + 4;
+        let start = usize::from(y) * usize::from(WIDTH);
+        patch.rows.push(PaneSurfacePatchRow {
+            x: 0,
+            y,
+            cells: next.cells[start..start + usize::from(WIDTH)].to_vec(),
+        });
+        let (_, result) = round_trip(&last, &patch);
+        assert_eq!(result.cells, next.cells);
     }
 
     #[test]
