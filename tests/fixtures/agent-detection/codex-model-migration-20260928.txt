@@ -1,0 +1,13 @@
+
+  Codex just got an upgrade. Introducing
+  gpt-5.1-codex-max.
+
+  Upgrade to gpt-5.2-codex for the latest and greatest
+  agentic coding model.
+
+  You can continue using gpt-5.1-codex-mini if you prefer.
+
+› 1. Try new model                                          
+  2. Use existing model
+
+  enter/esc confirm · ctrl+c quit

@@ -1,0 +1,2 @@
+  Finish signing in via your browser
+  Press esc to cancel

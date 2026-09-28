@@ -1,0 +1,8 @@
+  Use this reset?
+  Full reset (Weekly + 5 hr) · Expires 09:39 on 18 Jun 2026
+
+
+  1. Yes, use reset  Reset your weekly and 5-hour usage limits.
+› 2. No, go back     Choose a different reset
+
+  enter confirm · esc back

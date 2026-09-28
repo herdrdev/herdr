@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.09.24.1"
+version = "2026.09.28.1"
 min_engine_version = 3
-updated_at = "2026-09-24T00:00:00Z"
+updated_at = "2026-09-28T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -40,6 +40,123 @@ visible_blocker = true
 all = [
   { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },
   { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
+]
+
+[[rules]]
+id = "folder_access_prompt"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+all = [
+  { contains = ["Folder access"] },
+  { any = [
+    { contains = ["Trust this folder?"] },
+    { contains = ["Open existing task"] },
+    { contains = ["Open restricted"] },
+  ] },
+  { line_regex = ['^[ \t]*(?:›[ \t]+)?1\.[ \t]+(?:Trust and continue|Open existing task|Open restricted)[ \t]*$'] },
+  { regex = ['(?s)(?:^|\n)[ \t]*enter[ \t]+continue(?:[ \t]+and[ \t]+create[ \t]+sandbox)?[ \t]*·[ \t]*esc[ \t]+(?:quit|back)[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "startup_hooks_review"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(16)"
+visible_blocker = true
+all = [
+  { contains = ["Hooks need review", "Trust all and continue"] },
+  { line_regex = ['^[ \t]*(?:›[ \t]+)?1\. Review hooks[ \t]*$'] },
+  { regex = ['(?s)(?:^|\n)[ \t]*enter confirm · esc skip[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "browser_sign_in"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(32)"
+visible_blocker = true
+all = [
+  { contains = ["Finish signing in via your browser"] },
+  { regex = ['(?s)(?:^|\n)[ \t]*Press esc to cancel[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "request_user_input"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+all = [
+  { contains = ["Question ", "unanswered"] },
+  { regex = ['(?s)(?:^|\n)[ \t]*(?:[\w+]+[ \t]+)*to[ \t]+submit[ \t]+(?:answer|all)[ \t]*\|[ \t]*esc[ \t]+to[ \t]+interrupt[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "mcp_server_elicitation"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(18)"
+visible_blocker = true
+all = [
+  { regex = ['(?m)^[ \t]*Field [0-9]+/[0-9]+(?: \([0-9]+ required unanswered\))?[ \t]*$'] },
+  { regex = ['(?s)(?:^|\n)[ \t]*(?:enter|ctrl\+x enter)[ \t]+to submit[ \t]*\|[ \t]*esc to cancel[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "model_migration"
+state = "blocked"
+priority = 975
+region = "bottom_non_empty_lines(18)"
+visible_blocker = true
+all = [
+  { any = [
+    { contains = ["Codex just got an upgrade"] },
+    { regex = ['(?m)^[ \t]*# Introducing [^\r\n]+$'] },
+  ] },
+  { regex = ['(?s)(?:^|\n)[ \t]*enter/esc[ \t]+(?:confirm|continue)[ \t]*·\s*ctrl\+c[ \t]+quit[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "update_prompt_modal"
+state = "blocked"
+priority = 975
+region = "bottom_non_empty_lines(20)"
+visible_blocker = true
+all = [
+  { contains = ["Update available"] },
+  { any = [
+    { contains = ["Update now"] },
+    { contains = ["Skip until next version"] },
+  ] },
+  { regex = ['(?s)(?:^|\n)[ \t]*enter[ \t]+continue[ \t]*·[ \t]*esc\s+skip[ \t]*(?:\r?\n[ \t]*)*\z'] },
+]
+
+[[rules]]
+id = "interactive_choice"
+state = "blocked"
+priority = 940
+region = "bottom_non_empty_lines(24)"
+visible_blocker = true
+all = [
+  { regex = ['(?s)(?:^|\n)[ \t]*(?:enter[ \t]+select[ \t]*·[ \t]*esc[ \t]+(?:back|close)|enter[ \t]+confirm[ \t]*·[ \t]*esc[ \t]+back|tab[ \t]*/[ \t]*↑[ \t]↓[ \t]*move[ \t]*·[ \t]*enter[ \t]+select[ \t]*·[ \t]*esc[ \t]+close|Use ↑/↓ to move, enter to select, c to customize)[ \t]*(?:\r?\n[ \t]*)*\z'] },
+  { any = [
+    { line_regex = ['^[ \t]*›[ \t]*[0-9]+\.[ \t]+\S.*$'] },
+    { line_regex = ['^[ \t]*[0-9]+\.[ \t]+\S.*$'] },
+    { regex = ['(?m)^[ \t]*›[ \t]*\S.{1,}[ \t]{2,}\S.*$'] },
+  ] },
+]
+
+[[rules]]
+id = "safety_retry_confirmation"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_blocker = true
+all = [
+  { contains = ["Stop this attempt and retry?"] },
+  { regex = ['(?s)(?:^|\n)[ \t]*(?:›[ \t]+)?1\.[ \t]+Keep waiting[ \t]*\r?\n[ \t]*(?:›[ \t]+)?2\.[ \t]+Stop and retry[ \t]*(?:\r?\n[ \t]*)*\z'] },
 ]
 
 [[rules]]
@@ -109,6 +226,8 @@ region = "after_last_prompt_marker"
 visible_blocker = true
 any = [
   { contains = ["press enter to confirm or esc to cancel"] },
+  { regex = ['(?i)press enter to confirm or esc to\s+cancel'] },
+  { contains = ["press enter to confirm or esc to go back"] },
   { contains = ["enter to submit answer"] },
   { contains = ["enter to submit all"] },
   { contains = ["allow command?"] },

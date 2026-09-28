@@ -1,0 +1,15 @@
+
+  Action required
+  Server: payments
+
+  Review the payment details to continue.
+
+  URL
+  https://payments.example/checkout/123
+
+  Complete the requested action in your browser, then return here.
+
+
+› 1. Open link
+  2. Back
+  tab / ↑ ↓ move · enter select · esc close

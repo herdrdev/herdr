@@ -1,0 +1,8 @@
+  Delete this session?
+  Cannot be undone. Subagent threads will also be deleted.
+
+
+› 1. No, keep this session  Return to the current session
+  2. Yes, delete and exit   Permanently delete this session now
+
+  enter select · esc back

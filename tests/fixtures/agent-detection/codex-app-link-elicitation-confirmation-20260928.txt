@@ -1,0 +1,13 @@
+
+  Finish in Browser
+
+  Complete the requested action in the browser window that just
+  opened.
+  Then return here and select "I finished".
+
+  Link:
+  https://payments.example/checkout/123
+
+› 1. I finished
+  2. Back
+  tab / ↑ ↓ move · enter select · esc close

@@ -2039,6 +2039,227 @@ fn codex_working_spinner_clears_a_visible_api_error() {
 }
 
 #[test]
+fn codex_v0158_question_and_confirmation_snapshots_are_blocked() {
+    let fixtures = [
+        (
+            "startup hooks review",
+            include_str!("../../../tests/fixtures/agent-detection/codex-startup-hooks-review-20260928.txt"),
+            "startup_hooks_review",
+        ),
+        (
+            "live startup hooks review",
+            include_str!("../../../tests/fixtures/agent-detection/codex-startup-hooks-review-live-20260928.txt"),
+            "startup_hooks_review",
+        ),
+        (
+            "startup hooks review with option 2 selected",
+            include_str!("../../../tests/fixtures/agent-detection/codex-startup-hooks-review-selection-moved-20260928.txt"),
+            "startup_hooks_review",
+        ),
+        (
+            "startup hooks review with trust error",
+            include_str!("../../../tests/fixtures/agent-detection/codex-startup-hooks-review-trust-error-20260928.txt"),
+            "startup_hooks_review",
+        ),
+        (
+            "folder access",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "live folder access",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-live-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "folder access with option 2 selected",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-selection-moved-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "folder access with trust error",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-trust-error-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "folder access existing task choice",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-existing-task-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "folder access restricted folder choice",
+            include_str!("../../../tests/fixtures/agent-detection/codex-folder-access-restricted-20260928.txt"),
+            "folder_access_prompt",
+        ),
+        (
+            "browser sign in",
+            include_str!("../../../tests/fixtures/agent-detection/codex-browser-sign-in-20260928.txt"),
+            "browser_sign_in",
+        ),
+        (
+            "narrow browser sign in",
+            include_str!("../../../tests/fixtures/agent-detection/codex-browser-sign-in-narrow-20260928.txt"),
+            "browser_sign_in",
+        ),
+        (
+            "remapped request_user_input submit",
+            include_str!("../../../tests/fixtures/agent-detection/codex-request-user-input-remapped-submit-20260928.txt"),
+            "request_user_input",
+        ),
+        (
+            "unanswered request_user_input confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-request-user-input-unanswered-confirmation-20260928.txt"),
+            "live_strong_blocker",
+        ),
+        (
+            "wrapped approval footer",
+            include_str!("../../../tests/fixtures/agent-detection/codex-approval-wrapped-footer-20260928.txt"),
+            "live_strong_blocker",
+        ),
+        (
+            "MCP elicitation approval",
+            include_str!("../../../tests/fixtures/agent-detection/codex-mcp-elicitation-approval-20260928.txt"),
+            "mcp_server_elicitation",
+        ),
+        (
+            "MCP elicitation text input",
+            include_str!("../../../tests/fixtures/agent-detection/codex-mcp-elicitation-text-20260928.txt"),
+            "mcp_server_elicitation",
+        ),
+        (
+            "model migration",
+            include_str!("../../../tests/fixtures/agent-detection/codex-model-migration-20260928.txt"),
+            "model_migration",
+        ),
+        (
+            "narrow model migration choice",
+            include_str!("../../../tests/fixtures/agent-detection/codex-model-migration-narrow-20260928.txt"),
+            "model_migration",
+        ),
+        (
+            "update prompt",
+            include_str!("../../../tests/fixtures/agent-detection/codex-update-prompt-20260928.txt"),
+            "update_prompt_modal",
+        ),
+        (
+            "narrow update prompt",
+            include_str!("../../../tests/fixtures/agent-detection/codex-update-prompt-narrow-20260928.txt"),
+            "update_prompt_modal",
+        ),
+        (
+            "app link elicitation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-app-link-elicitation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "app link elicitation confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-app-link-elicitation-confirmation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "external agent setup import",
+            include_str!("../../../tests/fixtures/agent-detection/codex-external-agent-import-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "full access confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-full-access-confirmation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "memory reset confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-memory-reset-confirmation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "rate limit reset confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-rate-limit-reset-confirmation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "delete session confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-delete-session-confirmation-20260928.txt"),
+            "interactive_choice",
+        ),
+        (
+            "safety retry confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-safety-retry-confirmation-20260928.txt"),
+            "safety_retry_confirmation",
+        ),
+        (
+            "safety retry confirmation with option 2 selected",
+            include_str!("../../../tests/fixtures/agent-detection/codex-safety-retry-confirmation-selection-moved-20260928.txt"),
+            "safety_retry_confirmation",
+        ),
+    ];
+
+    for (name, screen, expected_rule) in fixtures {
+        let result = bundled_explain(Agent::Codex, screen);
+
+        assert_eq!(result.state, AgentState::Blocked, "{name}");
+        assert!(result.visible_blocker, "{name}");
+        assert_eq!(
+            result
+                .matched_rule
+                .as_ref()
+                .map(|matched| matched.id.as_str()),
+            Some(expected_rule),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn codex_question_prompts_above_idle_composer_are_not_blocked() {
+    let fixtures = [
+        (
+            "startup hooks review",
+            include_str!("../../../tests/fixtures/agent-detection/codex-startup-hooks-review-20260928.txt"),
+        ),
+        (
+            "browser sign in",
+            include_str!("../../../tests/fixtures/agent-detection/codex-browser-sign-in-20260928.txt"),
+        ),
+        (
+            "request user input",
+            include_str!("../../../tests/fixtures/agent-detection/codex-request-user-input-remapped-submit-20260928.txt"),
+        ),
+        (
+            "MCP server elicitation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-mcp-elicitation-approval-20260928.txt"),
+        ),
+        (
+            "safety retry confirmation",
+            include_str!("../../../tests/fixtures/agent-detection/codex-safety-retry-confirmation-20260928.txt"),
+        ),
+    ];
+
+    for (name, prompt) in fixtures {
+        let screen = format!("{prompt}\n› follow-up text\n\n  GPT-6-Luna default · /repo");
+        let result = bundled_explain(Agent::Codex, &screen);
+
+        assert_ne!(result.state, AgentState::Blocked, "{name}");
+    }
+
+    let narrow_browser_prompt = include_str!(
+        "../../../tests/fixtures/agent-detection/codex-browser-sign-in-narrow-20260928.txt"
+    );
+    let screen = format!("{narrow_browser_prompt}\n› \n\n  GPT-6-Luna default · /repo");
+    let result = bundled_explain(Agent::Codex, &screen);
+
+    assert_ne!(result.state, AgentState::Blocked, "narrow browser sign in");
+}
+
+#[test]
+fn codex_quoted_hook_prompt_above_idle_composer_is_not_blocked() {
+    let screen = "Earlier output quoted ‘Hooks need review’ and ‘Trust all and continue’.\n› What does that prompt mean?\n";
+    let result = bundled_explain(Agent::Codex, screen);
+
+    assert_ne!(result.state, AgentState::Blocked);
+    assert!(!result.visible_blocker);
+}
+
+#[test]
 fn ordinary_claude_permission_prompt_keeps_its_existing_rule() {
     let screen = include_str!(
         "../../../tests/fixtures/agent-detection/claude-native-bash-permission-20260825.txt"
