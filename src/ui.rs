@@ -908,6 +908,7 @@ fn compute_view_internal_at(
         status_buttons: Vec::new(),
         status_work_links: Vec::new(),
         status_segments: Vec::new(),
+        status_segment_hit_areas: Vec::new(),
         focused_remote_host: None,
         scratchpad_link_rows: if !app.dock_collapsed
             && app.dock_tab == Some(crate::app::DockSurface::Scratchpad)
@@ -965,10 +966,12 @@ fn compute_view_internal_at(
     if status_bar_is_renderable(app, area) {
         app.view.status_buttons = status::status_buttons(app, status_bar_rect);
         app.view.status_segments = status::fitted_status_segments(app, status_bar_rect);
+        app.view.status_segment_hit_areas = status::status_segment_hit_areas(app, status_bar_rect);
         app.view.status_work_links = status::status_work_links(app, status_bar_rect);
     } else {
         app.view.status_buttons = Vec::new();
         app.view.status_segments = Vec::new();
+        app.view.status_segment_hit_areas = Vec::new();
         app.view.status_work_links = Vec::new();
     }
     app.sync_copy_mode_search_geometry();
@@ -1216,6 +1219,7 @@ fn compute_mobile_view(
         status_buttons: Vec::new(),
         status_work_links: Vec::new(),
         status_segments: Vec::new(),
+        status_segment_hit_areas: Vec::new(),
         focused_remote_host: None,
         scratchpad_link_rows: Vec::new(),
         mobile_header_rect: header_rect,

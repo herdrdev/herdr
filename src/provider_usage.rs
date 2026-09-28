@@ -521,6 +521,8 @@ pub(crate) struct QuotaWindow {
 pub(crate) struct AccountUsage {
     /// Short account code, e.g. `SHQ`. `None` when the account cannot be named.
     pub account: Option<String>,
+    /// Full account email, when the provider's local credentials name it.
+    pub email: Option<String>,
     pub five_hour: Option<QuotaWindow>,
     pub seven_day: Option<QuotaWindow>,
     /// Remaining provider credits, when the provider reports a balance.
@@ -1151,6 +1153,15 @@ fn claude_account_code(profile: Option<&str>, config_dir: Option<&Path>) -> Opti
 }
 
 fn claude_profile_account_code(config_dir: &Path) -> Option<String> {
+    email_account_code(&claude_profile_email(config_dir)?)
+}
+
+fn email_account_code(email: &str) -> Option<String> {
+    account_code(email.split_once('@')?.1)
+}
+
+/// The account email in a profile's `meta.env`, when it names one.
+fn claude_profile_email(config_dir: &Path) -> Option<String> {
     let path = config_dir.join("meta.env");
     if fs::metadata(&path).ok()?.len() > MAX_PROFILE_METADATA_BYTES {
         return None;
@@ -1161,11 +1172,15 @@ fn claude_profile_account_code(config_dir: &Path) -> Option<String> {
             .strip_prefix("EMAIL=")?
             .trim()
             .trim_matches(['\'', '"']);
-        account_code(email.split_once('@')?.1)
+        email.contains('@').then(|| email.to_owned())
     })
 }
 
 fn signed_in_claude_account_code(config_dir: Option<&Path>) -> Option<String> {
+    email_account_code(&signed_in_claude_email(config_dir)?)
+}
+
+fn signed_in_claude_email(config_dir: Option<&Path>) -> Option<String> {
     let path = config_dir
         .map(|dir| dir.join(".claude.json"))
         .or_else(|| home_path(".claude.json"))?;
@@ -1179,7 +1194,15 @@ fn signed_in_claude_account_code(config_dir: Option<&Path>) -> Option<String> {
         .get("emailAddress")?
         .as_str()?
         .to_owned();
-    account_code(email.split_once('@')?.1)
+    email.contains('@').then_some(email)
+}
+
+/// Full Claude account email: the profile's own record first, then the
+/// signed-in account. The domain-only status cache cannot name an email.
+fn claude_account_email(config_dir: Option<&Path>) -> Option<String> {
+    config_dir
+        .and_then(claude_profile_email)
+        .or_else(|| signed_in_claude_email(config_dir))
 }
 
 /// Parses the `KEY=value` snapshot the statusline writes after every render.
@@ -1247,6 +1270,7 @@ fn load_claude_usage_from(
         |contents| parse_claude_rate_limits(&contents, now_unix, file_age(path, now)),
     );
     usage.account = claude_account_code(profile, config_dir);
+    usage.email = claude_account_email(config_dir);
     usage
 }
 
@@ -1315,12 +1339,16 @@ fn file_age(path: &Path, _now: Instant) -> Option<Duration> {
 /// The Codex account behind one `CODEX_HOME`, read from the `id_token`
 /// the CLI already stores. No network call and no token is ever logged.
 fn codex_account_code(root: &Path) -> Option<String> {
+    email_account_code(&codex_account_email(root)?)
+}
+
+fn codex_account_email(root: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(root.join("auth.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
     let id_token = value.get("tokens")?.get("id_token")?.as_str()?;
     let claims = decode_jwt_claims(id_token)?;
     let email = claims.get("email")?.as_str()?;
-    account_code(email.split_once('@')?.1)
+    email.contains('@').then(|| email.to_owned())
 }
 
 fn cached_codex_record(path: &Path) -> Option<CodexRateLimits> {
@@ -1357,12 +1385,14 @@ fn load_codex_usage_from(root: &Path, now_unix: Option<i64>) -> AccountUsage {
     let Ok(files) = recent_jsonl_files(&root.join("sessions"), MAX_USAGE_FILES) else {
         return AccountUsage {
             account: codex_account_code(root),
+            email: codex_account_email(root),
             ..AccountUsage::default()
         };
     };
 
     let mut usage = AccountUsage {
         account: codex_account_code(root),
+        email: codex_account_email(root),
         ..AccountUsage::default()
     };
     for path in files {
@@ -1979,6 +2009,31 @@ mod tests {
         let profiles = named_profile_dirs(&root, &["config.toml", "auth.json"]);
 
         assert_eq!(profiles, vec![("scalable".into(), root.join("scalable"))]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn codex_usage_carries_the_account_email_when_sessions_exist() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-codex-usage-email-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("sessions")).expect("sessions dir");
+        // {"email":"matthias@scalablehq.com"}
+        fs::write(
+            root.join("auth.json"),
+            r#"{"tokens":{"id_token":"header.eyJlbWFpbCI6Im1hdHRoaWFzQHNjYWxhYmxlaHEuY29tIn0.signature"}}"#,
+        )
+        .expect("auth file");
+
+        let usage = load_codex_usage_from(&root, Some(NOW));
+
+        assert_eq!(usage.email.as_deref(), Some("matthias@scalablehq.com"));
+        assert_eq!(usage.account.as_deref(), Some("SHQ"));
         let _ = fs::remove_dir_all(root);
     }
 

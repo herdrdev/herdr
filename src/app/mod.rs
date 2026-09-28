@@ -1205,6 +1205,7 @@ impl App {
                 status_buttons: Vec::new(),
                 status_work_links: Vec::new(),
                 status_segments: Vec::new(),
+                status_segment_hit_areas: Vec::new(),
                 focused_remote_host: None,
             },
             drag: None,
@@ -4193,7 +4194,11 @@ mod tests {
             row: marker.y,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(app.state.hovered_control, None);
+        // The cell beside the marker is a status segment with its own tooltip.
+        assert_ne!(
+            app.state.hovered_control,
+            Some(state::ControlId::ConfigDiagnostic)
+        );
 
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),

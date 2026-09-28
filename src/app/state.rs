@@ -2761,6 +2761,8 @@ pub struct ViewState {
     /// The status row's right-aligned segments, fitted once per frame so the
     /// title and the links can be laid out beside what will actually be drawn.
     pub(crate) status_segments: Vec<crate::ui::status::Segment>,
+    /// Where each fitted status segment is drawn, for hover tooltips.
+    pub(crate) status_segment_hit_areas: Vec<(StatusSegmentKind, Rect)>,
     /// Remote host of the focused pane, resolved once during view computation.
     /// Status layout and render only read this projection.
     pub(crate) focused_remote_host: Option<String>,
@@ -5368,6 +5370,20 @@ pub(crate) enum ControlId {
     TopBarGitMenu,
     TopBarPaneBelow,
     TopBarPaneRight,
+    StatusSegment(StatusSegmentKind),
+}
+
+/// One right-aligned status-row segment, named for its hover explanation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatusSegmentKind {
+    Provider(crate::provider_usage::QuotaProvider),
+    Link,
+    Agents,
+    RemoteHost,
+    Hostname,
+    Cpu,
+    Memory,
+    Disk,
 }
 
 impl AppState {
@@ -7802,6 +7818,7 @@ impl AppState {
                 status_buttons: Vec::new(),
                 status_work_links: Vec::new(),
                 status_segments: Vec::new(),
+                status_segment_hit_areas: Vec::new(),
                 focused_remote_host: None,
             },
             drag: None,

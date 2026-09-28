@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::app::{
-    state::{ControlId, SidebarFooterItem},
+    state::{ControlId, SidebarFooterItem, StatusSegmentKind},
     AppState,
 };
 
@@ -129,6 +129,13 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
     fixed
         .into_iter()
         .find_map(|(control, rect)| rect_contains(rect, col, row).then_some(control))
+        .or_else(|| {
+            view.status_segment_hit_areas
+                .iter()
+                .find_map(|(kind, rect)| {
+                    rect_contains(*rect, col, row).then_some(ControlId::StatusSegment(*kind))
+                })
+        })
         .or_else(|| {
             view.user_action_hit_areas.iter().find_map(|(index, rect)| {
                 rect_contains(*rect, col, row).then_some(ControlId::TopBarUserAction(*index))
@@ -269,8 +276,79 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
             }
             .into(),
         ),
+        ControlId::StatusSegment(kind) => (
+            view.status_segment_hit_areas
+                .iter()
+                .find_map(|(candidate, rect)| (*candidate == kind).then_some(*rect))?,
+            status_segment_tooltip(app, kind),
+        ),
     };
     Some(target)
+}
+
+/// Names a status-row segment and where its value comes from.
+pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) -> String {
+    use crate::provider_usage::QuotaProvider;
+    let metrics = app
+        .status_metrics
+        .as_ref()
+        .map(|snapshot| &snapshot.metrics);
+    match kind {
+        StatusSegmentKind::Provider(provider) => {
+            let name = match provider {
+                QuotaProvider::Claude => "Claude",
+                QuotaProvider::Codex => "Codex",
+                QuotaProvider::Kimi => "Kimi",
+                QuotaProvider::Agy => "Antigravity",
+            };
+            let usage = app.provider_usage.primary_usage(provider);
+            let peak = [usage.five_hour, usage.seven_day]
+                .into_iter()
+                .flatten()
+                .max_by_key(|window| window.used_percent);
+            let mut text = match peak {
+                Some(window) => format!("{name} quota: {}% of window used", window.used_percent),
+                None => format!("{name} quota: no usage reported"),
+            };
+            if let Some(email) = usage.email.as_deref() {
+                text.push_str(" \u{b7} ");
+                text.push_str(email);
+            }
+            if let Some(local) = peak
+                .and_then(|window| window.resets_at)
+                .and_then(|resets_at| u64::try_from(resets_at).ok())
+                .and_then(crate::platform::local_datetime_at)
+            {
+                text.push_str(&format!(
+                    " \u{b7} resets {:02}:{:02}",
+                    local.hour(),
+                    local.minute()
+                ));
+            }
+            text
+        }
+        StatusSegmentKind::Link => if app.connectivity.is_online() {
+            "Link: internet reachable"
+        } else {
+            "Link: offline, internet unreachable"
+        }
+        .into(),
+        StatusSegmentKind::Agents => {
+            let (agents, blocked) = app.agent_dot_counts();
+            format!("Agents on this machine: {agents} active, {blocked} waiting on you")
+        }
+        StatusSegmentKind::RemoteHost => match app.view.focused_remote_host.as_deref() {
+            Some(host) => format!("Remote device this pane runs on: {host}"),
+            None => "Remote device this pane runs on".into(),
+        },
+        StatusSegmentKind::Hostname => match metrics {
+            Some(metrics) => format!("Host herdr runs on: {}", metrics.hostname),
+            None => "Host herdr runs on".into(),
+        },
+        StatusSegmentKind::Cpu => "CPU busy, sampled from kernel ticks".into(),
+        StatusSegmentKind::Memory => "Memory used of installed total".into(),
+        StatusSegmentKind::Disk => "Disk usage on / (shown above 80%)".into(),
+    }
 }
 
 pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
@@ -422,5 +500,103 @@ mod tests {
         // rather than explaining the wrong row.
         app.view.sidebar_hover_targets.clear();
         assert!(tooltip_target(&app, ControlId::SidebarHover(1)).is_none());
+    }
+}
+
+#[cfg(test)]
+mod status_segments {
+    use super::*;
+    use crate::app::state::StatusSegmentKind;
+    use crate::provider_usage::QuotaProvider;
+    use ratatui::layout::Rect;
+
+    const ALL: [StatusSegmentKind; 11] = [
+        StatusSegmentKind::Provider(QuotaProvider::Claude),
+        StatusSegmentKind::Provider(QuotaProvider::Codex),
+        StatusSegmentKind::Provider(QuotaProvider::Kimi),
+        StatusSegmentKind::Provider(QuotaProvider::Agy),
+        StatusSegmentKind::Link,
+        StatusSegmentKind::Agents,
+        StatusSegmentKind::RemoteHost,
+        StatusSegmentKind::Hostname,
+        StatusSegmentKind::Cpu,
+        StatusSegmentKind::Memory,
+        StatusSegmentKind::Disk,
+    ];
+
+    #[test]
+    fn every_status_segment_names_itself_and_its_source() {
+        let mut app = AppState::test_new();
+        app.view.status_segment_hit_areas = ALL
+            .iter()
+            .enumerate()
+            .map(|(index, kind)| (*kind, Rect::new(index as u16 * 4, 0, 3, 1)))
+            .collect();
+        for (index, kind) in ALL.iter().enumerate() {
+            let control = ControlId::StatusSegment(*kind);
+            assert_eq!(
+                hovered_control_at(&app, index as u16 * 4 + 1, 0),
+                Some(control),
+                "{kind:?} hit area"
+            );
+            let (anchor, label) = tooltip_target(&app, control).expect("tooltip");
+            assert_eq!(anchor, Rect::new(index as u16 * 4, 0, 3, 1));
+            assert!(!label.trim().is_empty(), "{kind:?} tooltip empty");
+        }
+    }
+
+    #[test]
+    fn provider_quota_names_the_account_email_and_local_reset_time() {
+        let mut app = AppState::test_new();
+        let resets_at = 1_790_000_000;
+        {
+            let usage = app.provider_usage.primary_usage_mut(QuotaProvider::Claude);
+            usage.email = Some("team@x.so".into());
+            usage.five_hour = Some(crate::provider_usage::QuotaWindow {
+                used_percent: 42,
+                resets_at: Some(resets_at),
+            });
+        }
+        let local = crate::platform::local_datetime_at(resets_at as u64).expect("local time");
+        let expected_reset = format!("resets {:02}:{:02}", local.hour(), local.minute());
+        let label =
+            status_segment_tooltip(&app, StatusSegmentKind::Provider(QuotaProvider::Claude));
+        assert!(label.contains("42%"), "{label}");
+        assert!(label.contains("team@x.so"), "{label}");
+        assert!(label.contains(&expected_reset), "{label}");
+
+        // Unknown email is omitted, not rendered as a placeholder.
+        app.provider_usage
+            .primary_usage_mut(QuotaProvider::Claude)
+            .email = None;
+        let label =
+            status_segment_tooltip(&app, StatusSegmentKind::Provider(QuotaProvider::Claude));
+        assert!(!label.contains('@'), "{label}");
+        assert!(label.contains(&expected_reset), "{label}");
+    }
+
+    #[test]
+    fn a_segment_that_elided_explains_nothing() {
+        let app = AppState::test_new();
+        assert!(tooltip_target(&app, ControlId::StatusSegment(StatusSegmentKind::Cpu)).is_none());
+    }
+
+    #[test]
+    fn hit_areas_cover_the_drawn_row_right_aligned() {
+        let mut app = AppState::test_new();
+        let area = Rect::new(0, 0, 200, 1);
+        app.view.status_segments = crate::ui::status::fitted_status_segments(&app, area);
+        let areas = crate::ui::status::status_segment_hit_areas(&app, area);
+        assert!(areas
+            .iter()
+            .any(|(kind, _)| *kind == StatusSegmentKind::Cpu));
+        assert!(areas
+            .windows(2)
+            .all(|pair| pair[0].1.right() == pair[1].1.x));
+        let reserved = crate::ui::tabs::tab_action_status_bar_reserved_width(&app, area);
+        assert_eq!(
+            areas.last().expect("segments").1.right(),
+            area.width - reserved
+        );
     }
 }

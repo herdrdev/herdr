@@ -13,8 +13,8 @@ use super::text::{display_width, display_width_u16, truncate_end};
 use super::widgets::panel_contrast_fg;
 use crate::{
     app::state::{
-        CopyFeedback, Palette, StatusButton, StatusButtonAction, StatusWorkLink, ToastKind,
-        ToastNotification,
+        CopyFeedback, Palette, StatusButton, StatusButtonAction, StatusSegmentKind, StatusWorkLink,
+        ToastKind, ToastNotification,
     },
     app::AppState,
     config::{StatusIndicatorStyle, ToastClipboardPosition, ToastHerdrPosition},
@@ -513,6 +513,36 @@ pub(crate) struct Segment {
     preserve_bg: bool,
     /// Lower values elide first; `None` is required at desktop widths.
     elide_rank: Option<u8>,
+    kind: StatusSegmentKind,
+}
+
+/// Where each fitted segment lands, mirroring the right-aligned layout
+/// `render_status_bar` draws from the same stored segments.
+pub(crate) fn status_segment_hit_areas(
+    app: &AppState,
+    area: Rect,
+) -> Vec<(StatusSegmentKind, Rect)> {
+    let segments = &app.view.status_segments;
+    if segments.is_empty() {
+        return Vec::new();
+    }
+    let reserved = super::tabs::tab_action_status_bar_reserved_width(app, area);
+    let content_width = usize::from(area.width.saturating_sub(reserved));
+    let mut x = usize::from(area.x) + content_width.saturating_sub(segment_width(segments));
+    segments
+        .iter()
+        .map(|segment| {
+            let width = display_width(&segment.text);
+            let rect = Rect::new(
+                u16::try_from(x).unwrap_or(u16::MAX),
+                area.y,
+                u16::try_from(width).unwrap_or(u16::MAX),
+                1,
+            );
+            x += width;
+            (segment.kind, rect)
+        })
+        .collect()
 }
 
 fn segment_width(segments: &[Segment]) -> usize {
@@ -683,6 +713,7 @@ fn status_segments(
                 style: provider_style(usage, color, p),
                 preserve_bg: false,
                 elide_rank: Some(rank),
+                kind: StatusSegmentKind::Provider(provider),
             });
         }
     }
@@ -696,6 +727,7 @@ fn status_segments(
         style: Style::default().fg(if online { p.green } else { p.red }),
         preserve_bg: false,
         elide_rank: None,
+        kind: StatusSegmentKind::Link,
     });
 
     let (agents, blocked) = app.agent_dot_counts();
@@ -710,6 +742,7 @@ fn status_segments(
             style: Style::default().fg(if blocked > 0 { p.red } else { p.accent }),
             preserve_bg: false,
             elide_rank: Some(5),
+            kind: StatusSegmentKind::Agents,
         });
     }
 
@@ -726,6 +759,7 @@ fn status_segments(
             style: Style::default().fg(p.teal),
             preserve_bg: false,
             elide_rank: Some(4),
+            kind: StatusSegmentKind::RemoteHost,
         });
     }
 
@@ -734,16 +768,19 @@ fn status_segments(
         style: Style::default().fg(p.green),
         preserve_bg: false,
         elide_rank: Some(4),
+        kind: StatusSegmentKind::Hostname,
     });
 
     let label = |metric| crate::ui::icons::metric_label(metric, app.nerd_font);
     out.push(metric_segment(
+        StatusSegmentKind::Cpu,
         label(Metric::Cpu),
         metrics.cpu_percent,
         expanded,
         p,
     ));
     out.push(metric_segment(
+        StatusSegmentKind::Memory,
         label(Metric::Mem),
         memory_percent(metrics),
         expanded,
@@ -754,6 +791,7 @@ fn status_segments(
         app.status_disk_visible,
     ) {
         out.push(metric_segment(
+            StatusSegmentKind::Disk,
             label(Metric::Dsk),
             metrics.disk_percent,
             expanded,
@@ -799,7 +837,13 @@ pub(crate) fn resolve_focused_remote_host(
         .map(str::to_owned)
 }
 
-fn metric_segment(label: &str, percent: Option<u8>, expanded: bool, p: &Palette) -> Segment {
+fn metric_segment(
+    kind: StatusSegmentKind,
+    label: &str,
+    percent: Option<u8>,
+    expanded: bool,
+    p: &Palette,
+) -> Segment {
     let (text, color) = match percent.filter(|percent| *percent <= 100) {
         Some(percent) if expanded => (
             format!(" {label} {} {percent} ", fill_glyph(percent)),
@@ -816,6 +860,7 @@ fn metric_segment(label: &str, percent: Option<u8>, expanded: bool, p: &Palette)
         style: Style::default().fg(color),
         preserve_bg: false,
         elide_rank: None,
+        kind,
     }
 }
 
@@ -2784,7 +2829,14 @@ mod metric_icons {
         [Metric::Cpu, Metric::Mem, Metric::Dsk]
             .into_iter()
             .map(|metric| {
-                metric_segment(metric_label(metric, nerd_font), Some(50), expanded, &p).text
+                metric_segment(
+                    StatusSegmentKind::Cpu,
+                    metric_label(metric, nerd_font),
+                    Some(50),
+                    expanded,
+                    &p,
+                )
+                .text
             })
             .collect()
     }
