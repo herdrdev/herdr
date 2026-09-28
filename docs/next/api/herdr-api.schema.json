@@ -9059,6 +9059,13 @@
             "local_override_shadowing_remote": {
               "type": "boolean"
             },
+            "overlaid_rule_ids": {
+              "description": "Bundled rule ids appended to the active remote manifest because the\nupstream catalog does not define them.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "remote_last_checked_unix": {
               "format": "uint64",
               "minimum": 0,

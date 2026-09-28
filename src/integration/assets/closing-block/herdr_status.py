@@ -28,11 +28,15 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
+from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
+
 # HERDR_INTEGRATION_VERSION=2
 VERSION = 2
 
 
 STATES = ("idle", "working", "blocked", "unknown")
+_HUMAN_INPUT_LABELS = {label.casefold() for label in HUMAN_INPUT_LABELS}
+_GATE_LABELS = {label.casefold() for label in GATE_LABELS}
 
 
 def state_for(
@@ -126,13 +130,18 @@ def blocked_state_label(
 
     Row width is scarce and the pane's own title already sits beside it, so a
     truncated body crowds out the identity that says which agent is asking.
-    Full Gate text stays in `closing_gates` and `gates[]`; Answer and Verify
-    text stays in `items[]`.
+    Gate text stays in `closing_gates` and `gates[]`; other action text stays
+    in `items[]`.
     """
     action_points = action_points or []
     if len(action_points) == blocking == 1:
         return str(action_points[0].get("label") or "action point").lower()
     if action_points and len(action_points) == blocking:
+        if all(
+            str(item.get("label") or "").casefold() in _GATE_LABELS
+            for item in action_points
+        ):
+            return f"{blocking} gates"
         return f"{blocking} action points"
     if blocking <= 0:
         return "blocked"
@@ -350,13 +359,17 @@ def report(
         _normalize_item(value, index=index, label="Answer")
         for index, value in enumerate(items or [], start=1)
     ]
-    for item in [*gate_objects, *item_objects]:
-        if str(item.get("label") or "").lower() in {"gate", "answer", "verify"}:
+    all_items = [*gate_objects, *item_objects]
+    for item in all_items:
+        if str(item.get("label") or "").casefold() in _HUMAN_INPUT_LABELS:
             item["blocking"] = True
     action_points = [
         item
         for item in item_objects
-        if str(item.get("label") or "").lower() in {"answer", "verify"}
+        if (
+            str(item.get("label") or "").casefold() in _HUMAN_INPUT_LABELS
+            and str(item.get("label") or "").casefold() not in _GATE_LABELS
+        )
     ]
     blocking = max(blocking, len(gate_objects) + len(action_points))
     decision_objects = [
@@ -491,7 +504,15 @@ def report(
         "applies_to_source": source,
         "tokens": tokens,
         "state_labels": {
-            "blocked": blocked_state_label(blocking, action_points),
+            "blocked": blocked_state_label(
+                blocking,
+                [
+                    item
+                    for item in all_items
+                    if str(item.get("label") or "").casefold()
+                    in _HUMAN_INPUT_LABELS
+                ],
+            ),
             "working": "working",
         },
         "seq": seq,

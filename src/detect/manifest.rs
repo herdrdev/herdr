@@ -43,6 +43,9 @@ pub struct DetectionExplain {
     pub manifest_version: Option<String>,
     pub cached_remote_version: Option<String>,
     pub local_override_shadowing_remote: bool,
+    /// Bundled rule ids appended to an accepted remote manifest. See
+    /// `overlay_fork_only_rules`.
+    pub overlaid_rule_ids: Vec<String>,
     pub remote_update_status: Option<String>,
     pub remote_update_error: Option<String>,
 }
@@ -79,6 +82,7 @@ pub(crate) struct AgentManifestSummary {
     pub(crate) active_version: Option<String>,
     pub(crate) cached_remote_version: Option<String>,
     pub(crate) local_override_shadowing_remote: bool,
+    pub(crate) overlaid_rule_ids: Vec<String>,
     pub(crate) warning: Option<String>,
 }
 
@@ -130,6 +134,7 @@ struct LoadedManifest {
     warning: Option<String>,
     cached_remote_version: Option<String>,
     local_override_shadowing_remote: bool,
+    overlaid_rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -429,6 +434,7 @@ fn manifest_summary_from_loaded(agent: Agent, loaded: LoadedManifest) -> AgentMa
         active_source: loaded.source,
         cached_remote_version: loaded.cached_remote_version,
         local_override_shadowing_remote: loaded.local_override_shadowing_remote,
+        overlaid_rule_ids: loaded.overlaid_rule_ids,
         warning: loaded.warning,
     }
 }
@@ -490,6 +496,7 @@ pub fn explain_for_label(agent_label: &str, screen_content: &str) -> DetectionEx
             manifest_version: None,
             cached_remote_version: None,
             local_override_shadowing_remote: false,
+            overlaid_rule_ids: Vec::new(),
             remote_update_status: None,
             remote_update_error: None,
         };
@@ -609,6 +616,7 @@ fn evaluate_loaded_manifest(
         manifest_version: loaded.manifest.version.as_ref().map(ToString::to_string),
         cached_remote_version: loaded.cached_remote_version,
         local_override_shadowing_remote: loaded.local_override_shadowing_remote,
+        overlaid_rule_ids: loaded.overlaid_rule_ids,
         remote_update_status: remote_update_status
             .as_ref()
             .map(|status| status.last_result.clone()),
@@ -628,6 +636,7 @@ fn fallback_explain(
         manifest_version,
         cached_remote_version,
         local_override_shadowing_remote,
+        overlaid_rule_ids,
     ) = context
         .map(|(loaded, evaluated)| {
             (
@@ -637,9 +646,10 @@ fn fallback_explain(
                 loaded.manifest.version.as_ref().map(ToString::to_string),
                 loaded.cached_remote_version,
                 loaded.local_override_shadowing_remote,
+                loaded.overlaid_rule_ids,
             )
         })
-        .unwrap_or((None, Vec::new(), None, None, None, false));
+        .unwrap_or((None, Vec::new(), None, None, None, false, Vec::new()));
     let known_agent = agent.is_some();
     let remote_update_status = include_update_status
         .then(|| agent.and_then(remote_update_status))
@@ -667,6 +677,7 @@ fn fallback_explain(
         manifest_version,
         cached_remote_version,
         local_override_shadowing_remote,
+        overlaid_rule_ids,
         remote_update_status: remote_update_status
             .as_ref()
             .map(|status| status.last_result.clone()),
@@ -801,6 +812,7 @@ fn loaded_manifest(
         warning,
         cached_remote_version,
         local_override_shadowing_remote,
+        overlaid_rule_ids: Vec::new(),
     })
 }
 
@@ -852,7 +864,7 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
         .and_then(|content| {
             parse_remote_manifest_for_agent(agent, &content).map(|parsed| parsed.manifest)
         }) {
-        Ok(manifest) => {
+        Ok(mut manifest) => {
             let version = manifest
                 .version
                 .as_ref()
@@ -874,6 +886,7 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
                     ));
                 }
             }
+            let overlaid_rule_ids = overlay_fork_only_rules(&mut manifest, bundled);
             match loaded_manifest(
                 manifest,
                 ManifestSource::Remote {
@@ -884,7 +897,10 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
                 None,
                 false,
             ) {
-                Ok(loaded) => Some(loaded),
+                Ok(mut loaded) => {
+                    loaded.overlaid_rule_ids = overlaid_rule_ids;
+                    Some(loaded)
+                }
                 Err(err) => Some(bundled_loaded_manifest(
                     agent,
                     bundled.clone(),
@@ -908,6 +924,29 @@ fn read_remote_manifest(agent: Agent, bundled: &AgentManifest) -> Option<LoadedM
             false,
         )),
     }
+}
+
+/// The remote catalog is published upstream and does not know the rules this
+/// fork bundles (auth failures, API errors, usage limits, ...). A newer
+/// upstream manifest would otherwise shadow them and silently drop those
+/// detections, so every bundled rule whose id the remote does not define is
+/// appended unchanged. Rules the remote defines stay exactly as published.
+/// Returns the appended ids in bundled order.
+fn overlay_fork_only_rules(remote: &mut AgentManifest, bundled: &AgentManifest) -> Vec<String> {
+    let fork_only: Vec<ManifestRule> = bundled
+        .rules
+        .iter()
+        .filter(|rule| {
+            !remote
+                .rules
+                .iter()
+                .any(|remote_rule| remote_rule.id == rule.id)
+        })
+        .cloned()
+        .collect();
+    let ids = fork_only.iter().map(|rule| rule.id.clone()).collect();
+    remote.rules.extend(fork_only);
+    ids
 }
 
 pub fn agent_state_label(state: AgentState) -> &'static str {
@@ -952,7 +991,7 @@ pub fn explain_to_json_value(explain: &DetectionExplain) -> serde_json::Value {
         })
         .collect();
 
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "agent": explain.agent,
         "state": agent_state_label(explain.state),
         "manifest_source": explain.source.as_ref().map(|source| source.label()),
@@ -971,7 +1010,11 @@ pub fn explain_to_json_value(explain: &DetectionExplain) -> serde_json::Value {
         "fallback_reason": explain.fallback_reason,
         "warning": explain.warning,
         "evaluated_rules": evaluated_rules,
-    })
+    });
+    if !explain.overlaid_rule_ids.is_empty() {
+        value["overlaid_rule_ids"] = serde_json::json!(&explain.overlaid_rule_ids);
+    }
+    value
 }
 
 pub(crate) struct ParsedRemoteManifest {

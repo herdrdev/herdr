@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.09.23.1"
+version = "2026.09.27.1"
 min_engine_version = 2
-updated_at = "2026-09-23T00:00:00Z"
+updated_at = "2026-09-27T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -120,6 +120,27 @@ any = [
     { regex = ['(?i)↑/↓(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
     { regex = ['(?i)↑↓(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)navigate'] },
   ] },
+]
+
+[[rules]]
+id = "plan_approval_prompt"
+state = "blocked"
+priority = 1200
+region = "after_last_horizontal_rule"
+visible_blocker = true
+# The ExitPlanMode approval dialog has no "Esc to cancel" footer, and at normal
+# widths "Would you like to proceed?" wraps, so live_blocked_form and the
+# contains gate in legacy_no_prompt_blocker both miss it and the idle OSC title
+# wins. Gate on the invariant header sentence (wrap-tolerant) and at least one
+# numbered option. The plan path and ctrl+g editor hint vary, so they stay out.
+regex = [
+  '(?i)ready(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)execute',
+  '(?i)would(?:[ \t]+|[ \t]*\n[ \t]*)you(?:[ \t]+|[ \t]*\n[ \t]*)like(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)proceed',
+]
+any = [
+  { line_regex = ['^\s*❯?\s*1\.\s*Yes\b'] },
+  { line_regex = ['^\s*❯?\s*2\.\s*Yes\b'] },
+  { line_regex = ['^\s*❯?\s*3\.\s*Tell Claude\b'] },
 ]
 
 [[rules]]
@@ -267,6 +288,24 @@ all = [
     { line_regex = ['(?i)^\s*❯?\s*2\.\s*no\b'] },
     { line_regex = ['(?i)^\s*❯?\s*3\.\s*no\b'] },
   ] },
+]
+
+[[rules]]
+id = "file_permission_prompt"
+state = "blocked"
+priority = 850
+region = "after_last_horizontal_rule"
+visible_blocker = true
+# Write and Edit approvals ask "Do you want to create <file>?" or "Do you want
+# to make this edit to <file>?" instead of "Do you want to proceed?", so only
+# the non-visible legacy fallback caught them. Gate on that question
+# (wrap-tolerant), the cancel footer, and at least one numbered option.
+regex = ['(?i)do(?:[ \t]+|[ \t]*\n[ \t]*)you(?:[ \t]+|[ \t]*\n[ \t]*)want(?:[ \t]+|[ \t]*\n[ \t]*)to(?:[ \t]+|[ \t]*\n[ \t]*)(?:create|make(?:[ \t]+|[ \t]*\n[ \t]*)this(?:[ \t]+|[ \t]*\n[ \t]*)edit(?:[ \t]+|[ \t]*\n[ \t]*)to)']
+contains = ["esc to cancel"]
+any = [
+  { line_regex = ['^\s*❯?\s*1\.\s*Yes\b'] },
+  { line_regex = ['^\s*❯?\s*2\.\s*Yes\b'] },
+  { line_regex = ['^\s*❯?\s*3\.\s*No\b'] },
 ]
 
 [[rules]]

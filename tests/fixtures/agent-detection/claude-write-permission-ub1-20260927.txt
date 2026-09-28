@@ -1,0 +1,39 @@
+
+
+❯ Use the Bash tool to run exactly: touch /tmp/herdr-probe-cwd/probe-file .
+  Do nothing else and do not explain.
+
+  Ran 1 shell command
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ Call the EnterPlanMode tool, then call ExitPlanMode with the one-line
+  plan 'Create probe-file with touch'. Do nothing else.
+
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+● Updated plan
+  ⎿  /plan to preview
+  ⎿  User rejected Claude's plan:
+     ╭──────────────────────────────╮
+     │ Create probe-file with touch │
+     ╰──────────────────────────────╯
+
+❯ Use the Write tool to create /tmp/herdr-probe-cwd/probe.txt with the
+  content hello. Do nothing else.
+
+● Write(probe.txt)
+
+────────────────────────────────────────────────────────────────────────────
+ Create file
+ probe.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hello
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create probe.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common
+      file commands) for this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

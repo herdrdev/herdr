@@ -1,7 +1,7 @@
 id = "codex"
-version = "2026.09.15.1"
+version = "2026.09.24.1"
 min_engine_version = 3
-updated_at = "2026-09-15T00:00:00Z"
+updated_at = "2026-09-24T00:00:00Z"
 
 [[rules]]
 id = "osc_title_blocked"
@@ -112,6 +112,7 @@ any = [
   { contains = ["enter to submit answer"] },
   { contains = ["enter to submit all"] },
   { contains = ["allow command?"] },
+  { contains = ["All Results", "Filesystem Only", "Plugins"] },
 ]
 
 [[rules]]

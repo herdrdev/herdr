@@ -420,6 +420,10 @@ pub struct AgentManifestInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cached_remote_version: Option<String>,
     pub local_override_shadowing_remote: bool,
+    /// Bundled rule ids appended to the active remote manifest because the
+    /// upstream catalog does not define them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overlaid_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_update_result: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

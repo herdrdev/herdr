@@ -1869,40 +1869,36 @@ fn closing_block_item_defaults_are_null_on_read_and_write() {
 }
 
 #[test]
-fn closing_item_blocking_defaults_true() {
-    let legacy: ClosingBlockItem = serde_json::from_value(serde_json::json!({
-        "n": 1,
-        "label": "Answer",
-        "text": "choose"
-    }))
-    .unwrap();
-    let legacy_false: ClosingBlockItem = serde_json::from_value(serde_json::json!({
-        "n": 2,
-        "label": "Verify",
-        "text": "optional check",
-        "blocking": false
-    }))
-    .unwrap();
+fn closing_item_human_input_excludes_only_informational_labels() {
+    let item = |label: &str, blocking: Option<bool>| -> ClosingBlockItem {
+        let mut value = serde_json::json!({ "n": 1, "label": label, "text": "t" });
+        if let Some(blocking) = blocking {
+            value["blocking"] = serde_json::Value::Bool(blocking);
+        }
+        serde_json::from_value(value).unwrap()
+    };
 
+    let legacy = item("Answer", None);
     assert!(legacy.blocking);
-    assert!(legacy_false.blocking);
-    assert!(legacy.requires_human_input());
-    assert!(legacy_false.requires_human_input());
-    assert_eq!(serde_json::to_value(legacy).unwrap()["blocking"], true);
+    assert_eq!(serde_json::to_value(&legacy).unwrap()["blocking"], true);
 
-    let informational: ClosingBlockItem = serde_json::from_value(serde_json::json!({
-        "n": 3,
-        "label": " What to test ",
-        "text": "run the smoke test",
-        "blocking": true
-    }))
-    .unwrap();
-    assert!(!informational.requires_human_input());
-    assert!(!informational.blocking);
+    // The wire `blocking` flag is ignored: the label alone decides.
+    let legacy_false = item("Verify", Some(false));
+    assert!(legacy_false.blocking);
     assert_eq!(
-        serde_json::to_value(legacy_false).unwrap()["blocking"],
+        serde_json::to_value(&legacy_false).unwrap()["blocking"],
         true
     );
+
+    for label in ["Gate", "Answer", "Verify", "Approve", "Decide", "Confirm"] {
+        let parsed = item(label, None);
+        assert!(parsed.requires_human_input(), "{label} must need the human");
+        assert!(parsed.blocking, "{label} must serialise as blocking");
+    }
+
+    let informational = item(" What to test ", Some(true));
+    assert!(!informational.requires_human_input());
+    assert!(!informational.blocking);
     assert_eq!(
         serde_json::to_value(informational).unwrap()["blocking"],
         false

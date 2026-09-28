@@ -613,12 +613,21 @@ pub struct ClosingBlockItem {
     pub default_at: Option<String>,
 }
 
+/// Closing-block labels that only inform the human and never ask for input.
+const INFORMATIONAL_CLOSING_LABELS: [&str; 1] = ["what to test"];
+
 impl ClosingBlockItem {
+    /// Whether this item waits on the human.
+    ///
+    /// The Stop-hook adapter is the single parser of the closing-block label
+    /// vocabulary (`Gate`, `Answer`, `Approve`, `Decide`, ...). The server
+    /// only keeps known informational sections out, so a label it has never
+    /// seen still counts as human input instead of silently not blocking.
     pub(crate) fn requires_human_input(&self) -> bool {
         let label = self.label.trim();
-        ["gate", "answer", "verify"]
+        !INFORMATIONAL_CLOSING_LABELS
             .iter()
-            .any(|action| label.eq_ignore_ascii_case(action))
+            .any(|informational| label.eq_ignore_ascii_case(informational))
     }
 }
 

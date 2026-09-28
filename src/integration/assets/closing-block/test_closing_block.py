@@ -1997,6 +1997,171 @@ class PlainFormTests(unittest.TestCase):
         self.assertEqual(block.wire_items(), [])
 
 
+class NeedsYouBlockTests(unittest.TestCase):
+    def test_approve_and_decide_items_are_blocked_and_exclude_reply_instruction(self):
+        block = closing_block.parse(
+            "**Needs you (2)**\n\n"
+            "1. **Approve** — Merge the PR?\n"
+            "2. **Decide** — Which lane?\n"
+            "Reply 1a / 1b. Silence holds.\n"
+        )
+
+        self.assertEqual(block.blocking, 2)
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.completion, "incomplete")
+        self.assertEqual([item["label"] for item in block.wire_gates()], ["Approve"])
+        self.assertEqual(
+            [(item["label"], item["blocking"]) for item in block.wire_gates()],
+            [("Approve", True)],
+        )
+        self.assertEqual(
+            [(item["label"], item["blocking"]) for item in block.wire_items()],
+            [("Decide", True)],
+        )
+        self.assertTrue(block.message().startswith("Merge the PR?"))
+        self.assertNotIn("Reply 1a / 1b", block.wire_items()[0]["text"])
+
+    def test_needs_you_nothing_is_present_but_incomplete(self):
+        block = closing_block.parse("**Needs you: nothing.**\n")
+
+        self.assertTrue(block.present)
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.completion, "incomplete")
+
+    def test_needs_you_nothing_followed_by_done_is_complete(self):
+        block = closing_block.parse("**Needs you: nothing.**\n\nDone here.\n")
+
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.completion, "complete")
+
+    def test_now_tracks_streams_and_multiple_external_waits(self):
+        block = closing_block.parse(
+            "Needs you: nothing.\n"
+            "**Now:** reviewer — inspect diff · wait — CI finishes · wait: release bot\n"
+        )
+
+        self.assertEqual(block.agents, ["reviewer — inspect diff"])
+        self.assertEqual(block.declared_agents, 1)
+        self.assertTrue(block.workers_unknown)
+        self.assertEqual(block.external_wait, "CI finishes; release bot")
+        self.assertEqual(block.herdr_state, "working")
+
+    def test_now_only_progress_reply_is_not_a_closing_block(self):
+        block = closing_block.parse("Progress.\n\n**Now:** reviewer — inspecting diff\n")
+
+        self.assertFalse(block.present)
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.herdr_state, "idle")
+
+    def test_now_after_needs_you_nothing_stays_present(self):
+        block = closing_block.parse("**Needs you: nothing.**\n**Now:** wait — CI on PR 12\n")
+
+        self.assertTrue(block.present)
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.external_wait, "CI on PR 12")
+        self.assertEqual(block.herdr_state, "working")
+
+    def test_now_with_only_stopped_entries_is_idle(self):
+        block = closing_block.parse(
+            "Needs you: nothing.\nNow: stopped — reviewer finished\n"
+        )
+
+        self.assertEqual(block.agents, [])
+        self.assertEqual(block.declared_agents, 0)
+        self.assertFalse(block.workers_unknown)
+        self.assertEqual(block.herdr_state, "idle")
+
+    def test_now_after_done_makes_completion_incomplete(self):
+        block = closing_block.parse(
+            "Needs you: nothing.\nDone here.\n**Now:** stopped — no active work\n"
+        )
+
+        self.assertFalse(block.done_here)
+        self.assertEqual(block.completion, "incomplete")
+
+    def test_declared_count_mismatch_stays_blocked_and_malformed(self):
+        block = closing_block.parse(
+            "Needs you (3)\n1. Approve — Merge the PR?\n2. Decide — Which lane?\n"
+        )
+
+        self.assertEqual(block.blocking, 2)
+        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.herdr_state, "blocked")
+
+    def test_plain_heading_and_labels_parse(self):
+        block = closing_block.parse(
+            "## Needs you (2 blocking):\n"
+            "1. Approve — Merge the PR?\n"
+            "2. Decide: Which lane?\n"
+        )
+
+        self.assertEqual(block.declared_blocking, 2)
+        self.assertEqual([item["label"] for item in block.wire_gates()], ["Approve"])
+        self.assertEqual([item["label"] for item in block.wire_items()], ["Decide"])
+        self.assertEqual(block.parse_status, "ok")
+
+    def test_header_inside_fenced_code_is_ignored(self):
+        block = closing_block.parse(
+            "```markdown\nNeeds you (1)\n1. Approve — Example\n```\n"
+        )
+
+        self.assertFalse(block.present)
+        self.assertEqual(block.parse_status, "missing")
+
+    def test_realistic_goal_and_verification_lines_do_not_hide_the_block(self):
+        block = closing_block.parse(
+            "**Goal:** Complete the migration safely.\n"
+            "**Verified when:** The preview is green.\n\n"
+            "**Needs you (1)**\n1. **Approve** — Merge the PR?\n"
+        )
+
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.parse_status, "ok")
+
+    def test_both_heading_generations_parse_the_same_six_items(self):
+        labels = (
+            "Gate",
+            "Answer",
+            "Verify",
+            "Approve",
+            "Decide",
+            "Approve",
+        )
+        items = "\n".join(
+            f"{index}. **{label}** — Item {index}?"
+            for index, label in enumerate(labels, start=1)
+        )
+        parsed = []
+        for heading in (
+            "**Critical action points (6 blocking)**",
+            "**Needs you (6)**",
+        ):
+            with self.subTest(heading=heading):
+                block = closing_block.parse(
+                    f"{heading}\n{items}\nAnswer 1a / 1b. Silence holds.\n"
+                )
+                parsed.append(
+                    (
+                        block.blocking,
+                        block.herdr_state,
+                        block.parse_status,
+                        block.completion,
+                    )
+                )
+        self.assertEqual(parsed[0], parsed[1])
+        self.assertEqual(parsed[0], (6, "blocked", "ok", "incomplete"))
+
+    def test_approve_and_decide_have_specific_blocked_state_labels(self):
+        self.assertEqual(
+            herdr_status.blocked_state_label(1, [{"label": "Approve"}]), "approve"
+        )
+        self.assertEqual(
+            herdr_status.blocked_state_label(1, [{"label": "Decide"}]), "decide"
+        )
+
+
 class StopHookTranscriptTests(unittest.TestCase):
     @staticmethod
     def _hook_module():
@@ -2023,6 +2188,61 @@ class StopHookTranscriptTests(unittest.TestCase):
         '{"type": "assistant", "message": {"content": '
         '[{"type": "text", "text": "Done here."}]}}'
     )
+
+    def test_needs_you_reply_reaches_report_rpc_as_one_approve_gate(self):
+        import json
+        import tempfile
+
+        hook = self._hook_module()
+        reply = (
+            "**Needs you (1)**\n"
+            "1. **Approve** — Merge the pull request?\n"
+            "Reply 1a / 1b. Silence holds.\n"
+        )
+        path = self._write_transcript(
+            [
+                '{"type": "user"}',
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {"content": [{"type": "text", "text": reply}]},
+                    }
+                ),
+            ]
+        )
+        state_dir = tempfile.mkdtemp(prefix="herdr-needs-you-hook-test-")
+        with mock.patch.dict(
+            hook.os.environ,
+            {
+                "HERDR_ENV": "1",
+                "HERDR_PANE_ID": "w1:p-needs-you",
+                "HERDR_SOCKET_PATH": "/tmp/herdr-test.sock",
+                "XDG_STATE_HOME": state_dir,
+            },
+            clear=False,
+        ), mock.patch.object(herdr_status, "_rpc") as rpc, mock.patch.object(
+            hook.sys, "stdin", __import__("io").StringIO(
+                json.dumps({"transcript_path": path})
+            )
+        ):
+            self.assertEqual(hook.main(), 0)
+
+        report_params = next(
+            call.args[3]
+            for call in rpc.call_args_list
+            if call.args[2] == "pane.report_agent"
+        )
+        self.assertEqual(report_params["state"], "blocked")
+        self.assertEqual(
+            [(item["label"], item["blocking"]) for item in report_params["gates"]],
+            [("Approve", True)],
+        )
+        metadata_params = next(
+            call.args[3]
+            for call in rpc.call_args_list
+            if call.args[2] == "pane.report_metadata"
+        )
+        self.assertEqual(metadata_params["state_labels"]["blocked"], "approve")
 
     def test_torn_trailing_line_does_not_discard_transcript(self):
         hook = self._hook_module()

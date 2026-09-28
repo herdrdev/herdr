@@ -6758,6 +6758,43 @@ mod tests {
     }
 
     #[test]
+    fn approve_gate_and_decide_item_count_as_closing_human_input() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        let terminal_id = app.state.workspaces[0]
+            .pane_state(internal_pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Codex), AgentState::Idle);
+
+        let mut report = closing_block_report(&pane_id, 1, vec![test_attention_item("Approve")]);
+        report.state = crate::api::schema::PaneAgentState::Blocked;
+        report.items = Some(vec![test_attention_item("Decide")]);
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_agent("approve-decide".into(), report))
+                .unwrap();
+
+        let terminal = &app.state.terminals[&terminal_id];
+        assert!(terminal.has_pending_human_input());
+        assert_eq!(
+            terminal
+                .metadata_tokens_for_api()
+                .get("closing_blocking")
+                .map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            app.pane_info(0, internal_pane_id).unwrap().agent_status,
+            crate::api::schema::AgentStatus::Blocked
+        );
+    }
+
+    #[test]
     fn missing_short_reply_preserves_the_previous_human_blocker() {
         let (mut app, pane_id) = app_with_test_workspace();
         let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();

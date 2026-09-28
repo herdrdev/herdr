@@ -13,22 +13,28 @@ from datetime import datetime, timezone
 from typing import Any
 
 # HERDR_INTEGRATION_VERSION=2
-# The header line alone is the trigger: agents drop the bold markers, add a
-# heading marker or a colon, or vary the case often enough that any strictness
-# here silently un-latches gates. The `(N blocking)` count covers every retained
-# Gate, Answer, and Verify item; labels describe input kind, not blocking policy.
-# Only the full-line anchor is kept so prose mentions never match.
+HUMAN_INPUT_LABELS = ("Gate", "Answer", "Verify", "Approve", "Decide")
+GATE_LABELS = ("Gate", "Approve")
+
+_HUMAN_INPUT_LABEL_PATTERN = "|".join(
+    re.escape(label) for label in HUMAN_INPUT_LABELS
+)
+
+# The header line alone is the trigger: agents drop bold markers, add a
+# heading marker or a colon, or vary the case often enough that strictness
+# here silently unlatches pending input. Only a full-line heading matches.
 _HEADER_RE = re.compile(
-    r"^(?:#{1,6}[ \t]*)?(?:\*\*)?Critical action points"
-    r"(?:[ \t]*\((?P<n>\d+)[ \t]+blocking\))?(?:\*\*)?"
-    # A separator-led suffix after an explicit count is authored trailing prose
-    # ("— unchanged, still waiting on your answer:"); the count keeps prose
-    # mentions from matching, so only the countless form stays full-line.
-    r"(?(n)(?:[ \t]*[—–:-].*)?)[ \t]*:?[ \t]*\r?$",
+    r"^(?:#{1,6}[ \t]*)?(?:\*\*)?(?:"
+    r"Critical action points(?:[ \t]*\((?P<critical_n>\d+)[ \t]+blocking\))?"
+    r"(?:\*\*)?(?(critical_n)(?:[ \t]*[—–:-].*)?)"
+    r"|Needs you[ \t]*\((?P<needs_n>\d+)(?:[ \t]+blocking)?\)"
+    r"(?:\*\*)?(?:[ \t]*[—–:-].*)?"
+    r")[ \t]*:?[ \t]*\r?$",
     re.MULTILINE | re.IGNORECASE,
 )
 _NOTHING_RE = re.compile(
-    r"^(?:\*\*)?Nothing to act on\.?(?:\*\*)?[ \t]*\r?$", re.MULTILINE
+    r"^(?:\*\*)?(?:Nothing to act on|Needs you:[ \t]*nothing)\.?(?:\*\*)?[ \t]*\r?$",
+    re.MULTILINE | re.IGNORECASE,
 )
 _AGENTS_RE = re.compile(
     r"^(?:\*\*)?(?P<n>\d+)[ \t]+agents?[ \t]+running:[ \t]*(?P<rest>.+?)"
@@ -38,6 +44,15 @@ _AGENTS_RE = re.compile(
 )
 _DONE_RE = re.compile(
     r"^(?:\*\*)?Done here\.(?:\*\*)?[ \t]*\r?$", re.MULTILINE | re.IGNORECASE
+)
+_NOW_RE = re.compile(
+    r"^(?:\*\*)?Now:(?:\*\*)?[ \t]*(?P<rest>.*?)(?:\*\*)?[ \t]*\r?$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_ANSWER_INSTRUCTION_RE = re.compile(
+    r"^(?:Reply|Answer)[ \t]+\d+[a-z]?[ \t]*/[ \t]*\d+[a-z]?\."
+    r"[ \t]*Silence holds\.[ \t]*\r?$",
+    re.MULTILINE | re.IGNORECASE,
 )
 _WAITING_ON_YOU_RE = re.compile(
     r"^(?:(?:\*\*)?\d+[ \t]+agents?[ \t]+running:.*?[ \t]+·[ \t]+)?"
@@ -79,15 +94,17 @@ _ITEM_RE = re.compile(
     rf"^[ \t]*(?P<idx>\d+)[.)]\s*(?P<body>.*?)(?={_ITEM_START}|^\*\*What to test\b|"
     r"^\*\*Auto-proceeded decisions\*\*|^\d+\s+agents?\s+running:|"
     r"^(?:\*\*)?Waiting on you\b|^(?:\*\*)?Waiting(?:[ \t]+for|[ \t]*:)|"
-    r"^(?:\*\*)?Done here\.|\Z)",
+    r"^(?:\*\*)?Done here\.|^(?:\*\*)?Now:|"
+    r"^(?:Reply|Answer)[ \t]+\d+[a-z]?[ \t]*/[ \t]*\d+[a-z]?\."
+    r"[ \t]*Silence holds\.|\Z)",
     re.MULTILINE | re.IGNORECASE | re.DOTALL,
 )
 _ITEM_LABEL_RE = re.compile(
     r"^[ \t]*(?:"
-    r"\*\*(?P<bold_label>Gate|Answer|Verify)"
+    rf"\*\*(?P<bold_label>{_HUMAN_INPUT_LABEL_PATTERN})"
     r"(?:[ \t]*·[ \t]*non-blocking)?\*\*"
     r"(?:[ \t]*·[ \t]*non-blocking)?[ \t]*(?:[—–:]|-[ \t])?[ \t]*"
-    r"|(?P<plain_label>Gate|Answer|Verify)"
+    rf"|(?P<plain_label>{_HUMAN_INPUT_LABEL_PATTERN})"
     r"(?:[ \t]*·[ \t]*non-blocking)?[ \t]*(?:[—–:]|-[ \t])[ \t]*"
     r")",
     re.MULTILINE | re.IGNORECASE,
@@ -102,7 +119,7 @@ _DECISIONS_RE = re.compile(
 _DECISION_ITEM_RE = re.compile(
     r"^(?P<idx>\d+)[.)]\s*(?P<body>.*?)(?=^\d+[.)]\s+|"
     r"^\*\*What to test\b|^\d+\s+agents?\s+running:|"
-    r"^Done here\.|\Z)",
+    r"^Done here\.|^(?:\*\*)?Now:|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 _WHAT_RE = re.compile(
@@ -127,6 +144,22 @@ def _clean_body(body: str) -> str:
     # Remove only the Markdown list separator. Keep the item wording and
     # internal whitespace verbatim.
     return body.strip().lstrip("-—–:").strip()
+
+
+def _declared_count(header: re.Match[str]) -> int | None:
+    value = header.group("critical_n") or header.group("needs_n")
+    return int(value) if value is not None else None
+
+
+def _is_human_input_label(label: str) -> bool:
+    return label in HUMAN_INPUT_LABELS
+
+
+def _canonical_human_input_label(label: str) -> str:
+    return next(
+        (candidate for candidate in HUMAN_INPUT_LABELS if candidate.casefold() == label.casefold()),
+        "",
+    )
 
 
 def _metadata(text: str) -> dict[str, Any]:
@@ -217,18 +250,18 @@ class ClosingBlock:
 
     @property
     def gates(self) -> list[Item]:
-        return [item for item in self.items if item.label == "Gate"]
+        return [item for item in self.items if item.label in GATE_LABELS]
 
     @property
     def nongate_items(self) -> list[Item]:
-        return [item for item in self.items if item.label != "Gate"]
+        return [item for item in self.items if item.label not in GATE_LABELS]
 
     @property
     def action_points(self) -> list[Item]:
         return [
             item
             for item in self.items
-            if item.label in {"Answer", "Verify"}
+            if item.label in HUMAN_INPUT_LABELS and item.label not in GATE_LABELS
         ]
 
     @property
@@ -237,7 +270,7 @@ class ClosingBlock:
             [
                 item
                 for item in self.items
-                if item.label in {"Gate", "Answer", "Verify"}
+                if item.label in HUMAN_INPUT_LABELS
             ]
         )
 
@@ -303,7 +336,7 @@ class ClosingBlock:
             pending = [
                 item
                 for item in self.items
-                if item.label in {"Gate", "Answer", "Verify"}
+                if item.label in HUMAN_INPUT_LABELS
             ]
             head = pending[0].text if pending else ""
             if not head:
@@ -382,7 +415,14 @@ def _section_end(
 ) -> int:
     candidates = [
         match.start()
-        for pattern in (_DECISIONS_RE, _NOTHING_RE, _WHAT_RE)
+        for pattern in (
+            _DECISIONS_RE,
+            _NOTHING_RE,
+            _WHAT_RE,
+            _AGENTS_RE,
+            _DONE_RE,
+            _NOW_RE,
+        )
         for match in _visible_matches(pattern, text, start, end, fences)
     ]
     return min(candidates, default=end)
@@ -403,6 +443,7 @@ def _decisions_end(
             _WHAT_RE,
             _AGENTS_RE,
             _DONE_RE,
+            _NOW_RE,
         )
         for match in _visible_matches(pattern, text, start, end, fences)
     ]
@@ -461,7 +502,13 @@ def _parse_what_to_test(
     for position, heading in enumerate(headings):
         end_candidates = [
             match.start()
-            for pattern in (_DECISIONS_RE, _NOTHING_RE, _AGENTS_RE, _DONE_RE)
+            for pattern in (
+                _DECISIONS_RE,
+                _NOTHING_RE,
+                _AGENTS_RE,
+                _DONE_RE,
+                _NOW_RE,
+            )
             for match in _visible_matches(
                 pattern, text, heading.end(), end, fences
             )
@@ -492,7 +539,7 @@ def _parse_items(
         end_candidates = [section_end]
         if position + 1 < len(matches):
             end_candidates.append(matches[position + 1].start())
-        for pattern in (_AGENTS_RE, _DONE_RE):
+        for pattern in (_AGENTS_RE, _DONE_RE, _NOW_RE, _ANSWER_INSTRUCTION_RE):
             end_candidates.extend(
                 candidate.start()
                 for candidate in _visible_matches(
@@ -521,14 +568,14 @@ def _parse_items(
         legacy_suffix = _LEGACY_NONBLOCKING_SUFFIX_RE.match(cleaned_body)
         if legacy_suffix:
             cleaned_body = legacy_suffix.group("text").rstrip()
-        normalized_label = label.capitalize()
+        normalized_label = _canonical_human_input_label(label)
         parsed.append(
             Item(
                 int(match.group("idx")),
                 normalized_label,
                 cleaned_body,
                 metadata=item_metadata,
-                blocking=normalized_label in {"Gate", "Answer", "Verify"},
+                blocking=_is_human_input_label(normalized_label),
             )
         )
     return parsed
@@ -547,7 +594,7 @@ def _parse_decisions(
         )
         matches = list(
             _visible_matches(
-                _DECISION_ITEM_RE,
+            _DECISION_ITEM_RE,
                 text,
                 decisions_heading.end(),
                 decisions_end,
@@ -558,7 +605,7 @@ def _parse_decisions(
             end_candidates = [decisions_end]
             if position + 1 < len(matches):
                 end_candidates.append(matches[position + 1].start())
-            for pattern in (_AGENTS_RE, _DONE_RE):
+            for pattern in (_AGENTS_RE, _DONE_RE, _NOW_RE):
                 end_candidates.extend(
                     candidate.start()
                     for candidate in _visible_matches(
@@ -593,6 +640,23 @@ def _decision_fields(body: str) -> tuple[str, str | None]:
     return recommendation, decided_at
 
 
+def _now_entries(rest: str) -> tuple[list[str], list[str]]:
+    streams: list[str] = []
+    waits: list[str] = []
+    for entry in re.split(r"[ \t]*·[ \t]*", rest):
+        entry = entry.strip()
+        if not entry:
+            continue
+        wait = re.match(r"^wait(?:[ \t]*[—–:][ \t]*|[ \t]+-[ \t]+)(?P<event>.+?)\.?$", entry, re.I)
+        if wait:
+            waits.append(wait.group("event").strip())
+        elif re.match(r"^stopped(?:$|[ \t]*[—–:]|[ \t]+-[ \t]+)", entry, re.I):
+            continue
+        else:
+            streams.append(entry)
+    return streams, waits
+
+
 def parse(text: str) -> ClosingBlock:
     """Parse the last closing block out of a full assistant message."""
     block = ClosingBlock()
@@ -607,8 +671,7 @@ def parse(text: str) -> ClosingBlock:
     if selected:
         block.present = True
         if selected.header:
-            declared = selected.header.group("n")
-            block.declared_blocking = int(declared) if declared is not None else None
+            block.declared_blocking = _declared_count(selected.header)
             start = selected.header.end()
         else:
             block.declared_blocking = 0
@@ -653,14 +716,14 @@ def parse(text: str) -> ClosingBlock:
             block.authored_labels = any(item.label for item in block.items)
             for item in block.items:
                 if not item.label and item.index in waiting_indices:
-                    item.label = "Answer"
-                    item.blocking = True
+                    item.label = HUMAN_INPUT_LABELS[1]
+                    item.blocking = _is_human_input_label(item.label)
                     labeled_items += 1
             if not block.authored_labels:
                 for item in block.items:
                     if item.label == "" and labeled_items < declared:
-                        item.label = "Gate"
-                        item.blocking = True
+                        item.label = GATE_LABELS[0]
+                        item.blocking = _is_human_input_label(item.label)
                         labeled_items += 1
             kept = [item for item in block.items if item.label]
             block.discarded_items = len(block.items) - len(kept)
@@ -709,39 +772,53 @@ def parse(text: str) -> ClosingBlock:
     lifecycle_waits = list(
         _visible_matches(_EXTERNAL_WAIT_RE, text, authoritative_start, len(text), fences)
     )
+    lifecycle_now = list(
+        _visible_matches(_NOW_RE, text, authoritative_start, len(text), fences)
+    )
     last_done = lifecycle_done[-1] if lifecycle_done else None
     agents = lifecycle_agents[-1] if lifecycle_agents else None
     external_wait = lifecycle_waits[-1] if lifecycle_waits else None
-    if last_done and (agents is None or last_done.start() > agents.start()):
-        agents = None
-    if last_done and (
-        external_wait is None or last_done.start() > external_wait.start()
-    ):
-        external_wait = None
-
-    if agents:
-        block.declared_agents = int(agents.group("n"))
-        block.agents = [
-            part.strip()
-            for part in re.split(
-                r"(?:[ \t]*;[ \t]+|[ \t]+·[ \t]+)", agents.group("rest")
-            )
-            if part.strip()
-        ]
-        # Closing prose is an unverified claim. Keep names as reconciliation
-        # hints, but reserve the active count for runtime worker lifecycle.
-        block.workers_unknown = block.declared_agents > 0
-        block.present = True
-    else:
-        block.declared_agents = 0
-    if external_wait:
-        block.external_wait = external_wait.group("rest").strip().rstrip(".")
-        block.present = True
-    done_is_final = bool(
-        last_done
-        and (not lifecycle_agents or last_done.start() > lifecycle_agents[-1].start())
-        and (not lifecycle_waits or last_done.start() > lifecycle_waits[-1].start())
+    last_now = lifecycle_now[-1] if lifecycle_now else None
+    latest_legacy_position = max(
+        (marker.start() for marker in (agents, external_wait) if marker), default=-1
     )
+    now_is_latest = bool(last_now and last_now.start() > latest_legacy_position)
+    latest_activity_position = max(
+        latest_legacy_position, last_now.start() if last_now else -1
+    )
+    done_is_final = bool(last_done and last_done.start() > latest_activity_position)
+
+    if done_is_final:
+        block.declared_agents = 0
+    elif now_is_latest and last_now:
+        block.agents, waits = _now_entries(last_now.group("rest"))
+        block.declared_agents = len(block.agents)
+        block.workers_unknown = block.declared_agents > 0
+        if waits:
+            block.external_wait = "; ".join(waits)
+        # A liveness line alone is a progress reply, not a closing block: it
+        # must not report an ok parse with empty blocker arrays, which the
+        # server would take as authority to clear a pending human decision.
+    else:
+        if agents:
+            block.declared_agents = int(agents.group("n"))
+            block.agents = [
+                part.strip()
+                for part in re.split(
+                    r"(?:[ \t]*;[ \t]+|[ \t]+·[ \t]+)", agents.group("rest")
+                )
+                if part.strip()
+            ]
+            # Closing prose is an unverified claim. Keep names as reconciliation
+            # hints, but reserve the active count for runtime worker lifecycle.
+            block.workers_unknown = block.declared_agents > 0
+            block.present = True
+        else:
+            block.declared_agents = 0
+        if external_wait:
+            block.external_wait = external_wait.group("rest").strip().rstrip(".")
+            block.present = True
+
     if done_is_final:
         block.done_here = True
         block.present = True

@@ -204,6 +204,181 @@ fn older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest() {
     });
 }
 
+// A synthetic bundled manifest passed straight to `read_remote_manifest`, so
+// the overlay tests do not depend on any real agent's rule ids.
+fn overlay_bundled_manifest(version: &str) -> AgentManifest {
+    parse_manifest(&format!(
+        r#"
+id = "codex"
+version = "{version}"
+min_engine_version = 1
+
+[[rules]]
+id = "shared"
+state = "working"
+contains = ["bundled-shared"]
+
+[[rules]]
+id = "fork_only_blocked"
+state = "blocked"
+priority = 50
+visible_blocker = true
+contains = ["fork-only-blocker"]
+"#
+    ))
+    .unwrap()
+}
+
+fn overlay_remote_manifest(version: &str, extra_rules: &str) -> String {
+    format!(
+        r#"
+id = "codex"
+version = "{version}"
+min_engine_version = 1
+updated_at = "2026-06-10T12:00:00Z"
+
+[[rules]]
+id = "shared"
+state = "idle"
+contains = ["remote-shared"]
+{extra_rules}
+"#
+    )
+}
+
+fn overlay_explain(loaded: LoadedManifest, screen: &str) -> DetectionExplain {
+    evaluate_loaded_manifest(
+        Agent::Codex,
+        DetectionInput {
+            screen,
+            osc_title: "",
+            osc_progress: "",
+        },
+        loaded,
+        false,
+    )
+}
+
+#[test]
+fn newer_remote_manifest_keeps_bundled_rules_it_does_not_define() {
+    with_manifest_dirs("overlay-fork-only", || {
+        write_remote_codex(&overlay_remote_manifest("9999.01.01.1", ""));
+        let bundled = overlay_bundled_manifest("2026.01.01.1");
+
+        let loaded = read_remote_manifest(Agent::Codex, &bundled).unwrap();
+        assert!(matches!(loaded.source, ManifestSource::Remote { .. }));
+        assert_eq!(loaded.overlaid_rule_ids, vec!["fork_only_blocked"]);
+
+        let blocked = overlay_explain(loaded.clone(), "fork-only-blocker");
+        assert_eq!(blocked.state, AgentState::Blocked);
+        assert!(blocked.visible_blocker);
+        assert_eq!(
+            blocked.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("fork_only_blocked")
+        );
+        assert_eq!(blocked.overlaid_rule_ids, vec!["fork_only_blocked"]);
+
+        // The shared id comes from the remote, not the bundled copy.
+        let shared = overlay_explain(loaded.clone(), "remote-shared");
+        assert_eq!(shared.state, AgentState::Idle);
+        let bundled_shared = overlay_explain(loaded, "bundled-shared");
+        assert!(bundled_shared.matched_rule.is_none());
+    });
+}
+
+#[test]
+fn newer_remote_manifest_rule_with_same_id_replaces_bundled_rule() {
+    with_manifest_dirs("overlay-same-id", || {
+        write_remote_codex(&overlay_remote_manifest(
+            "9999.01.01.1",
+            r#"
+[[rules]]
+id = "fork_only_blocked"
+state = "blocked"
+regex = ['^remote-[a-z]+-blocker$']
+"#,
+        ));
+        let bundled = overlay_bundled_manifest("2026.01.01.1");
+
+        let loaded = read_remote_manifest(Agent::Codex, &bundled).unwrap();
+        assert!(loaded.overlaid_rule_ids.is_empty());
+
+        let bundled_screen = overlay_explain(loaded.clone(), "fork-only-blocker");
+        assert!(bundled_screen.matched_rule.is_none());
+        let remote_screen = overlay_explain(loaded, "remote-only-blocker");
+        assert_eq!(remote_screen.state, AgentState::Blocked);
+        assert_eq!(
+            remote_screen
+                .matched_rule
+                .as_ref()
+                .map(|rule| rule.id.as_str()),
+            Some("fork_only_blocked")
+        );
+        assert!(remote_screen.overlaid_rule_ids.is_empty());
+    });
+}
+
+#[test]
+fn older_remote_manifest_uses_bundled_without_overlay() {
+    with_manifest_dirs("overlay-older-remote", || {
+        write_remote_codex(&overlay_remote_manifest("2026.01.01.1", ""));
+        let bundled = overlay_bundled_manifest("9999.01.01.1");
+
+        let loaded = read_remote_manifest(Agent::Codex, &bundled).unwrap();
+        assert!(matches!(loaded.source, ManifestSource::Bundled));
+        assert!(loaded.overlaid_rule_ids.is_empty());
+        assert!(loaded
+            .warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("older than bundled")));
+
+        let shared = overlay_explain(loaded, "bundled-shared");
+        assert_eq!(shared.state, AgentState::Working);
+    });
+}
+
+#[test]
+fn explain_json_lists_overlaid_rule_ids_only_when_present() {
+    with_manifest_dirs("overlay-explain-json", || {
+        write_remote_codex(&overlay_remote_manifest("9999.01.01.1", ""));
+        let overlaid =
+            read_remote_manifest(Agent::Codex, &overlay_bundled_manifest("2026.01.01.1")).unwrap();
+        let json = explain_to_json_value(&overlay_explain(overlaid, "fork-only-blocker"));
+        assert_eq!(
+            json["overlaid_rule_ids"],
+            serde_json::json!(["fork_only_blocked"])
+        );
+
+        let bundled =
+            read_remote_manifest(Agent::Codex, &overlay_bundled_manifest("9999.01.01.2")).unwrap();
+        let json = explain_to_json_value(&overlay_explain(bundled, "bundled-shared"));
+        assert!(json.get("overlaid_rule_ids").is_none());
+    });
+}
+
+#[test]
+fn cache_reload_applies_overlay_to_downloaded_remote_manifest() {
+    // Goes through the real reload path and bundled codex manifest, but only
+    // checks that the overlay happened, not which bundled rule ids exist.
+    with_manifest_dirs("overlay-cache-reload", || {
+        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
+
+        let explain = explain(Agent::Codex, "remote-ready");
+        assert!(matches!(
+            explain.source,
+            Some(ManifestSource::Remote { .. })
+        ));
+        assert!(!explain.overlaid_rule_ids.is_empty());
+        assert!(!explain.overlaid_rule_ids.iter().any(|id| id == "test"));
+
+        let summary = manifest_summaries()
+            .into_iter()
+            .find(|summary| summary.agent == Agent::Codex)
+            .unwrap();
+        assert_eq!(summary.overlaid_rule_ids, explain.overlaid_rule_ids);
+    });
+}
+
 #[test]
 fn local_override_shadows_cached_remote_manifest() {
     with_manifest_dirs("local-shadows-remote", || {
@@ -1355,7 +1530,7 @@ fn fresh_hook_working_overrides_stale_native_claude_permission() {
 fn bundled_manifest_versions_cover_deployed_and_upstream_floors() {
     let claude: toml::Value = toml::from_str(include_str!("../manifests/claude.toml")).unwrap();
     let kimi: toml::Value = toml::from_str(include_str!("../manifests/kimi.toml")).unwrap();
-    assert_eq!(claude["version"].as_str(), Some("2026.09.23.1"));
+    assert_eq!(claude["version"].as_str(), Some("2026.09.27.1"));
     assert!(kimi["version"]
         .as_str()
         .is_some_and(|version| version > "2026.06.10.1"));
@@ -1877,4 +2052,80 @@ fn ordinary_claude_permission_prompt_keeps_its_existing_rule() {
     );
     assert!(result.visible_blocker);
     assert!(!result.usage_limited);
+}
+
+fn assert_claude_visible_blocker(result: &DetectionExplain, rule: &str, label: &str) {
+    assert_eq!(result.state, AgentState::Blocked, "{label}");
+    assert_eq!(
+        result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+        Some(rule),
+        "{label}"
+    );
+    assert!(result.visible_blocker, "{label}");
+    assert!(!result.usage_limited, "{label}");
+}
+
+#[test]
+fn claude_plan_approval_dialog_is_a_visible_blocker() {
+    let screen = include_str!(
+        "../../../tests/fixtures/agent-detection/claude-plan-approval-ub1-20260927.txt"
+    );
+
+    let result = bundled_explain(Agent::Claude, screen);
+    assert_claude_visible_blocker(&result, "plan_approval_prompt", "no OSC");
+
+    // Claude keeps the idle title glyph while the dialog waits for an answer.
+    let result = osc_explain(Agent::Claude, screen, "✳ Create probe file", "");
+    assert_claude_visible_blocker(&result, "plan_approval_prompt", "idle OSC title");
+}
+
+#[test]
+fn claude_file_write_permission_prompt_is_a_visible_blocker() {
+    let screen = include_str!(
+        "../../../tests/fixtures/agent-detection/claude-write-permission-ub1-20260927.txt"
+    );
+
+    let result = bundled_explain(Agent::Claude, screen);
+    assert_claude_visible_blocker(&result, "file_permission_prompt", "no OSC");
+
+    let result = osc_explain(Agent::Claude, screen, "✳ Create probe file", "");
+    assert_claude_visible_blocker(&result, "file_permission_prompt", "idle OSC title");
+}
+
+#[test]
+fn claude_wrapped_file_edit_permission_prompt_is_a_visible_blocker() {
+    let rule = "─".repeat(80);
+    let screen = format!(
+        "{rule}\n Edit file\n probe.txt\n{rule}\n Do you want to make this\n edit to probe.txt?\n ❯ 1. Yes\n   2. Yes, and switch to accept edits (auto-approve file edits and common\n      file commands) for this session (shift+tab)\n   3. No\n\n Esc to cancel · Tab to amend\n"
+    );
+
+    let result = bundled_explain(Agent::Claude, &screen);
+    assert_claude_visible_blocker(&result, "file_permission_prompt", "wrapped edit");
+}
+
+#[test]
+fn current_claude_bash_permission_panel_keeps_its_existing_rule() {
+    let screen = include_str!(
+        "../../../tests/fixtures/agent-detection/claude-native-bash-permission-ub1-20260927.txt"
+    );
+
+    let result = bundled_explain(Agent::Claude, screen);
+    assert_claude_visible_blocker(&result, "bash_permission_prompt", "no OSC");
+
+    let result = osc_explain(Agent::Claude, screen, "✳ Create probe file", "");
+    assert_claude_visible_blocker(&result, "bash_permission_prompt", "idle OSC title");
+}
+
+#[test]
+fn quoted_plan_and_file_prompts_above_a_live_prompt_stay_idle() {
+    let rule = "─".repeat(80);
+    let screen = format!(
+        "❯ Quote the two Claude dialogs back to me.\n\n⏺ The plan dialog says \"Claude has written up a plan and is ready to execute. Would you like\n  to proceed?\" with 1. Yes, and use auto mode, 2. Yes, manually approve edits and\n  3. Tell Claude what to change. The write dialog asks \"Do you want to create probe.txt?\"\n  with 1. Yes, 2. Yes, and switch to accept edits, 3. No and Esc to cancel.\n\n{rule}\n❯\n{rule}\n  -- INSERT -- ⏸ manual mode on · ← 13 agents /rc\n"
+    );
+
+    for (label, osc_title) in [("no OSC", ""), ("idle OSC title", "✳ Create probe file")] {
+        let result = osc_explain(Agent::Claude, &screen, osc_title, "");
+        assert_eq!(result.state, AgentState::Idle, "{label}");
+        assert!(!result.visible_blocker, "{label}");
+    }
 }

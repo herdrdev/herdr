@@ -5034,6 +5034,36 @@ mod tests {
         assert!(!terminal.has_pending_human_input());
     }
 
+    #[test]
+    fn decide_closing_item_projects_blocked_on_an_idle_pane() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        terminal.closing_items = vec![crate::api::schema::ClosingBlockItem {
+            n: 1,
+            label: "Decide".into(),
+            text: "Pick the rollout lane".into(),
+            blocking: false,
+            pr: None,
+            ticket: None,
+            url: None,
+            default: None,
+            default_at: None,
+        }];
+
+        assert!(terminal.has_pending_human_input());
+        assert_eq!(
+            terminal.effective_state_and_arbitration(),
+            (AgentState::Blocked, "closing_human_input")
+        );
+        assert_eq!(
+            terminal
+                .metadata_tokens_for_api()
+                .get("closing_blocking")
+                .map(String::as_str),
+            Some("1")
+        );
+    }
+
     const TEST_AGENT_STALE_AFTER: Duration = Duration::from_secs(5 * 60);
     const TEST_SUBAGENT_STALE_AFTER: Duration = Duration::from_secs(30 * 60);
 
