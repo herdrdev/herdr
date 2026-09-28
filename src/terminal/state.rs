@@ -757,6 +757,9 @@ pub struct TerminalState {
     claude_subagent_activity_observed_at: Option<Instant>,
     /// Last background observation of the pane's distinct foreground process.
     pub(crate) foreground_process_name: Option<String>,
+    /// Runtime-only model the pane's agent process was launched with
+    /// (`--model`/`-m` argv). `None` when unknown.
+    pub(crate) agent_model: Option<String>,
     foreground_process_active: bool,
     pub last_agent_state_change_seq: Option<u64>,
     /// Runtime-only start of the current Working lifecycle, independent of
@@ -843,6 +846,7 @@ impl TerminalState {
             claude_subagent_transcript_activity: SubagentTranscriptActivity::Unknown,
             claude_subagent_activity_observed_at: None,
             foreground_process_name: None,
+            agent_model: None,
             foreground_process_active: false,
             last_agent_state_change_seq: None,
             working_since: None,
@@ -1966,6 +1970,25 @@ impl TerminalState {
             ),
             ..TerminalStateMutation::default()
         })
+    }
+
+    /// Where this pane's session log names the model in use, when known.
+    pub(crate) fn agent_model_log_source(
+        &self,
+    ) -> Option<crate::app::agent_model_log::ModelLogSource> {
+        use crate::app::agent_model_log::ModelLogSource;
+        match self.effective_known_agent()? {
+            Agent::Claude => self
+                .claude_transcript_path
+                .clone()
+                .map(ModelLogSource::ClaudeTranscript),
+            Agent::Codex => {
+                let (_, agent, kind, value) = self.current_session_identity_for_persistence()?;
+                (agent == "codex" && kind == crate::agent_resume::AgentSessionRefKind::Id)
+                    .then_some(ModelLogSource::CodexSession(value))
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn foreground_process_active(&self) -> bool {

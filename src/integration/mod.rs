@@ -15,8 +15,8 @@ pub(crate) use actions::{
     install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
 };
 pub(crate) use env::{
-    apply_pane_base_env, codex_dir, expand_tilde_path, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR,
-    HERDR_WORKSPACE_ID_ENV_VAR,
+    apply_pane_base_env, codex_dir, expand_tilde_path, home_dir, HERDR_PANE_ID_ENV_VAR,
+    HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 #[cfg(test)]
 pub(crate) use env::{integration_env_lock, HERDR_BIN_PATH_ENV_VAR};

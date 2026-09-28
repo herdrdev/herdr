@@ -273,6 +273,34 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
     parse_agent_label(process_name)
 }
 
+/// The model an agent process was launched with, read from its argv:
+/// `--model X`, `--model=X`, `-m X`, and Codex's `-c model=X` override.
+/// Returns `None` when the argv names no model.
+pub fn agent_model_from_argv(argv: &[String]) -> Option<String> {
+    let mut args = argv.iter().skip(1);
+    let mut model = None;
+    while let Some(arg) = args.next() {
+        let value = match arg.as_str() {
+            "--model" | "-m" => args.next().map(String::as_str),
+            "-c" | "--config" => args
+                .next()
+                .and_then(|config| config.trim().strip_prefix("model=")),
+            "--" => break,
+            other => other
+                .strip_prefix("--model=")
+                .or_else(|| other.strip_prefix("--config=model="))
+                .or_else(|| other.strip_prefix("-cmodel=")),
+        };
+        if let Some(value) = value
+            .map(|value| value.trim().trim_matches(|c| c == '"' || c == '\''))
+            .filter(|value| !value.is_empty())
+        {
+            model = Some(value.to_string());
+        }
+    }
+    model
+}
+
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
     if let Some(process) = job
         .processes
@@ -1037,6 +1065,37 @@ fn is_python_runtime(name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    fn argv(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn agent_model_from_argv_reads_model_flags() {
+        use super::agent_model_from_argv as model;
+        assert_eq!(
+            model(&argv(&["claude", "--model", "claude-fable-5-1"])).as_deref(),
+            Some("claude-fable-5-1")
+        );
+        assert_eq!(
+            model(&argv(&["claude", "--model=fable"])).as_deref(),
+            Some("fable")
+        );
+        assert_eq!(
+            model(&argv(&["codex", "-m", "gpt-6-astra"])).as_deref(),
+            Some("gpt-6-astra")
+        );
+        assert_eq!(
+            model(&argv(&["codex", "-c", "model=\"gpt-6-astra\""])).as_deref(),
+            Some("gpt-6-astra")
+        );
+        assert_eq!(
+            model(&argv(&["codex", "-c", "model_reasoning_effort=high"])),
+            None
+        );
+        assert_eq!(model(&argv(&["claude"])), None);
+        assert_eq!(model(&argv(&["claude", "--model"])), None);
+        assert_eq!(model(&argv(&["claude", "--", "--model", "x"])), None);
+    }
 
     #[test]
     fn closing_block_source_matches_only_its_own_agent() {

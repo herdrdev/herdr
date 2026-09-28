@@ -2039,6 +2039,7 @@ mod tests {
                 open_blockers: false,
                 completion_tier: None,
                 active_subagents: None,
+                model_letter: None,
                 waiting_on_agents: false,
                 holds_shell: false,
                 gate_count: 0,

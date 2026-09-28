@@ -297,11 +297,45 @@ pub(crate) fn compact_dot_for_state(
     }
 }
 
-fn compact_provider(entry: &AgentPanelEntry, nerd_font: bool) -> String {
-    compact_provider_token(entry, nerd_font)
+/// AS1: the model letter. Shown only for (Claude, Fable) and (Codex, Astra);
+/// every other pair, and an unknown model, shows nothing.
+fn model_letter_for(
+    agent: Option<crate::detect::Agent>,
+    model: Option<&str>,
+) -> Option<&'static str> {
+    let model = model?.to_ascii_lowercase();
+    match agent? {
+        crate::detect::Agent::Claude if model.contains("fable") => Some(MODEL_LETTER_FABLE),
+        crate::detect::Agent::Codex if model.contains("astra") => Some(MODEL_LETTER_ASTRA),
+        _ => None,
+    }
 }
 
-fn compact_provider_token(entry: &AgentPanelEntry, nerd_font: bool) -> String {
+const MODEL_LETTER_FABLE: &str = "\u{A730}";
+const MODEL_LETTER_ASTRA: &str = "\u{1D00}";
+
+/// The model letter this row draws, which needs the Nerd Font agent icon.
+fn row_model_letter(entry: &AgentPanelEntry, nerd_font: bool) -> Option<&'static str> {
+    entry.model_letter.filter(|_| nerd_font)
+}
+
+fn compact_provider(entry: &AgentPanelEntry, nerd_font: bool) -> String {
+    compact_provider_with(entry, nerd_font, row_model_letter(entry, nerd_font))
+}
+
+fn compact_provider_with(
+    entry: &AgentPanelEntry,
+    nerd_font: bool,
+    model_letter: Option<&str>,
+) -> String {
+    compact_provider_token(entry, nerd_font, model_letter)
+}
+
+fn compact_provider_token(
+    entry: &AgentPanelEntry,
+    nerd_font: bool,
+    model_letter: Option<&str>,
+) -> String {
     if !entry.has_agent {
         return String::new();
     }
@@ -312,6 +346,9 @@ fn compact_provider_token(entry: &AgentPanelEntry, nerd_font: bool) -> String {
         return String::new();
     };
     let mut provider = suffix.to_string();
+    if let Some(letter) = model_letter {
+        provider.push_str(letter);
+    }
     if !entry.stale {
         if let Some(count) = entry.active_subagents.filter(|count| *count > 0) {
             provider.push_str(&format!("+{count}"));
@@ -491,7 +528,7 @@ pub(crate) fn agent_row_cells(
         dot: compact_row_dot_text(entry),
         dot_color: compact_row_color(entry, p),
         title: compact_row_title(entry, true).to_string(),
-        provider: compact_provider(entry, nerd_font),
+        provider: compact_provider_with(entry, nerd_font, None),
         provider_color: provider_color(entry, p),
     }
 }
@@ -1080,7 +1117,27 @@ fn render_compact_agent_row_with_prefix(
             },
             working_row_style(app, fade, Style::default().fg(p.overlay0), bg),
         ),
-        Span::styled(provider, working_row_style(app, fade, provider_style, bg)),
+    ]);
+    // The model letter is part of the provider field's width but drawn plain:
+    // no provider colour, no dim, no bold.
+    let provider_style = working_row_style(app, fade, provider_style, bg);
+    match row_model_letter(entry, app.nerd_font).and_then(|letter| {
+        provider.find(letter).map(|at| {
+            (
+                letter,
+                provider[..at].to_string(),
+                provider[at + letter.len()..].to_string(),
+            )
+        })
+    }) {
+        Some((letter, before, after)) => spans.extend([
+            Span::styled(before, provider_style),
+            Span::styled(letter, compact_row_style(Style::default(), bg)),
+            Span::styled(after, provider_style),
+        ]),
+        None => spans.push(Span::styled(provider, provider_style)),
+    }
+    spans.extend([
         Span::styled(
             format!(" {machine_icon}"),
             working_row_style(app, fade, Style::default().fg(p.overlay0), bg),
@@ -1423,6 +1480,9 @@ pub(crate) struct AgentPanelEntryData {
     /// Positive count from the current sub-agent source. Rendering depends on
     /// this field only so the source can change without changing row layout.
     pub active_subagents: Option<u32>,
+    /// Small-capital model letter from `model_letter_for`, drawn plain right
+    /// after the agent icon. Local panes only; remote rows carry `None`.
+    pub model_letter: Option<&'static str>,
     pub waiting_on_agents: bool,
     pub holds_shell: bool,
     pub gate_count: usize,
@@ -1976,11 +2036,16 @@ fn collect_agent_panel_entries_with_runtimes(
                 .into_iter()
                 .map(move |detail| {
                     let space_label = workspace_label.clone();
-                    let remote_host = ws
+                    let terminal = ws
                         .tabs
                         .get(detail.tab_idx)
                         .and_then(|tab| tab.panes.get(&detail.pane_id))
-                        .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
+                        .and_then(|pane| app.terminals.get(&pane.attached_terminal_id));
+                    let model_letter = model_letter_for(
+                        detail.agent,
+                        terminal.and_then(|terminal| terminal.agent_model.as_deref()),
+                    );
+                    let remote_host = terminal
                         .and_then(|terminal| terminal.launch_argv.as_deref())
                         .and_then(|argv| {
                             crate::fleet::attached_host_name(&app.fleet_snapshot, argv)
@@ -2044,6 +2109,7 @@ fn collect_agent_panel_entries_with_runtimes(
                             completion_tier,
                             usage_limited: detail.usage_limited,
                             active_subagents,
+                            model_letter,
                             waiting_on_agents: detail.waiting_on_agents,
                             seen: detail.seen,
                             done_since: detail.done_since,
@@ -2198,6 +2264,7 @@ pub(crate) fn remote_agent_panel_entries_at(
                             completion_tier: None,
                             usage_limited: lifecycle.usage_limited,
                             active_subagents: None,
+                            model_letter: None,
                             waiting_on_agents: lifecycle.waiting_on_agents,
                             holds_shell: false,
                             gate_count,
@@ -2398,6 +2465,11 @@ fn aggregate_tab_entries(
                     // whose panes all sit on that machine.
                     if tab_entry.remote_host != entry.remote_host {
                         tab_entry.remote_host = None;
+                    }
+                    // AS1: a rolled-up tab shows a letter only when every pane
+                    // agrees on it, so it never names the wrong model.
+                    if tab_entry.model_letter != entry.model_letter {
+                        tab_entry.model_letter = None;
                     }
                     tab_entry.gate_count = tab_entry.gate_count.saturating_add(entry.gate_count);
                     tab_entry.active_subagents =
@@ -16078,7 +16150,7 @@ pub(crate) mod tests {
         assert_eq!(take_remote_sidebar_row_visits(), 0);
     }
 
-    fn app_with_agents(names: &[&str]) -> AppState {
+    pub(super) fn app_with_agents(names: &[&str]) -> AppState {
         let mut app = AppState::test_new();
         app.workspaces = names.iter().map(|name| Workspace::test_new(name)).collect();
         app.ensure_test_terminals();
@@ -16962,6 +17034,7 @@ pub(crate) mod tests {
                 open_blockers: false,
                 completion_tier: None,
                 active_subagents: None,
+                model_letter: None,
                 waiting_on_agents: false,
                 holds_shell: false,
                 gate_count: 0,
@@ -18693,7 +18766,7 @@ row_gap = 1
         );
     }
 
-    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+    pub(super) fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
         (0..width)
             .map(|x| buffer[(x, row)].symbol())
             .collect::<String>()
@@ -29794,5 +29867,171 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 assert_eq!(animation.height, 6, "animation fits above the list floor");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod model_letter {
+    use super::tests::{app_with_agents, row_text};
+    use super::*;
+    use crate::detect::Agent;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    const FABLE: &str = MODEL_LETTER_FABLE;
+    const ASTRA: &str = MODEL_LETTER_ASTRA;
+    const WIDTH: u16 = 40;
+
+    fn app_with_model(agent: Agent, model: Option<&str>, nerd_font: bool) -> AppState {
+        let mut app = app_with_agents(&["herdr"]);
+        app.sidebar_sections_layout = true;
+        app.nerd_font = nerd_font;
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).expect("agent terminal");
+        terminal.detected_agent = Some(agent);
+        terminal.agent_model = model.map(str::to_string);
+        app.refresh_local_agent_panel_identities();
+        app
+    }
+
+    /// Render the Spaces view and return the first tab row's cells.
+    fn render_row(app: &AppState) -> Vec<ratatui::buffer::Cell> {
+        let area = Rect::new(0, 0, WIDTH, 20);
+        let mut terminal = Terminal::new(TestBackend::new(WIDTH, 20)).expect("sidebar terminal");
+        terminal
+            .draw(|frame| render_sidebar(app, &TerminalRuntimeRegistry::new(), frame, area))
+            .expect("render sidebar");
+        let card = compute_tab_card_areas(app, area)
+            .into_iter()
+            .next()
+            .expect("tab row");
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            display_width(&row_text(buffer, card.rect.y, card.rect.width)),
+            usize::from(card.rect.width),
+            "row stays inside its width"
+        );
+        (card.rect.x..card.rect.right())
+            .map(|x| buffer[(x, card.rect.y)].clone())
+            .collect()
+    }
+
+    fn letter_at(cells: &[ratatui::buffer::Cell], letter: &str) -> Option<usize> {
+        cells.iter().position(|cell| cell.symbol() == letter)
+    }
+
+    fn assert_plain_letter_after_icon(agent: Agent, model: &str, letter: &str) {
+        let app = app_with_model(agent, Some(model), true);
+        let cells = render_row(&app);
+        let at = letter_at(&cells, letter).expect("letter rendered");
+        let icon = crate::ui::icons::agent_label(agent, true).expect("agent icon");
+        assert_eq!(cells[at - 1].symbol(), icon, "letter follows the icon");
+        assert_eq!(cells[at].fg, Color::Reset, "letter has no colour");
+        assert!(cells[at].modifier.is_empty(), "letter has no bold or dim");
+        assert_ne!(cells[at - 1].fg, Color::Reset, "icon keeps its colour");
+    }
+
+    #[test]
+    fn fable() {
+        assert_plain_letter_after_icon(Agent::Claude, "claude-fable-5-1", FABLE);
+    }
+
+    #[test]
+    fn astra() {
+        assert_plain_letter_after_icon(Agent::Codex, "gpt-6-astra", ASTRA);
+    }
+
+    #[test]
+    fn other() {
+        for (agent, model) in [
+            (Agent::Claude, "claude-opus-5-5"),
+            (Agent::Codex, "gpt-6-luna"),
+            // AS1: the letter belongs to the (agent, model) pair, not the model.
+            (Agent::Claude, "gpt-6-astra"),
+            (Agent::Codex, "claude-fable-5-1"),
+            (Agent::Cursor, "fable"),
+        ] {
+            let cells = render_row(&app_with_model(agent, Some(model), true));
+            assert!(letter_at(&cells, FABLE).is_none(), "{agent:?} {model}");
+            assert!(letter_at(&cells, ASTRA).is_none(), "{agent:?} {model}");
+        }
+    }
+
+    #[test]
+    fn unknown() {
+        for agent in [Agent::Claude, Agent::Codex] {
+            let cells = render_row(&app_with_model(agent, None, true));
+            assert!(letter_at(&cells, FABLE).is_none());
+            assert!(letter_at(&cells, ASTRA).is_none());
+        }
+    }
+
+    #[test]
+    fn nerd_font_off_shows_no_letter() {
+        for (agent, model) in [
+            (Agent::Claude, "claude-fable-5-1"),
+            (Agent::Codex, "gpt-6-astra"),
+        ] {
+            let app = app_with_model(agent, Some(model), false);
+            let cells = render_row(&app);
+            assert!(letter_at(&cells, FABLE).is_none());
+            assert!(letter_at(&cells, ASTRA).is_none());
+            let entry = &sidebar_thread_entries(&app)[0];
+            assert!(!compact_provider(entry, false).contains(FABLE));
+            assert!(!compact_provider(entry, false).contains(ASTRA));
+        }
+    }
+
+    #[test]
+    fn letter_counts_in_the_provider_width() {
+        let app = app_with_model(Agent::Claude, Some("claude-fable-5-1"), true);
+        let entry = &sidebar_thread_entries(&app)[0];
+        let with = compact_provider(entry, true);
+        let without = compact_provider_with(entry, true, None);
+        assert_eq!(
+            display_width(&with),
+            display_width(&without) + display_width(FABLE)
+        );
+        // The right-hand fields keep their columns: the letter took title width.
+        let cells = render_row(&app);
+        let plain = render_row(&app_with_model(
+            Agent::Claude,
+            Some("claude-opus-5-5"),
+            true,
+        ));
+        let at = letter_at(&cells, FABLE).expect("letter rendered");
+        let symbols = |cells: &[ratatui::buffer::Cell]| {
+            cells
+                .iter()
+                .map(|cell| cell.symbol().to_string())
+                .collect::<Vec<_>>()
+        };
+        // Same right edge: the plain row's icon sits where the letter does.
+        assert_eq!(plain[at].symbol(), cells[at - 1].symbol());
+        assert_eq!(symbols(&cells[at + 1..]), symbols(&plain[at + 1..]));
+    }
+
+    #[test]
+    fn home_cells_leave_out_the_letter() {
+        let app = app_with_model(Agent::Claude, Some("claude-fable-5-1"), true);
+        let entry = &sidebar_thread_entries(&app)[0];
+        assert!(!agent_row_cells(entry, &app.palette, true)
+            .provider
+            .contains(FABLE));
+    }
+
+    #[test]
+    fn matching_is_case_insensitive() {
+        assert_eq!(
+            model_letter_for(Some(Agent::Claude), Some("Claude-FABLE")),
+            Some(FABLE)
+        );
+        assert_eq!(
+            model_letter_for(Some(Agent::Codex), Some("GPT-6-Astra")),
+            Some(ASTRA)
+        );
+        assert_eq!(model_letter_for(None, Some("fable")), None);
     }
 }

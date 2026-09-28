@@ -2422,6 +2422,7 @@ mod tests {
                     shell_pid,
                     process_name: None,
                     process_active: false,
+                    agent_model: None,
                 },
             ],
         );

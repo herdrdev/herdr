@@ -17,6 +17,8 @@ pub(crate) struct ForegroundProcessTarget {
     pub(crate) pane_id: PaneId,
     pub(crate) shell_pid: Option<u32>,
     pub(crate) idle_agent_context: bool,
+    /// Session log to read the model from when the agent argv names none.
+    pub(crate) model_log: Option<crate::app::agent_model_log::ModelLogSource>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +27,7 @@ pub(crate) struct ForegroundProcessObservation {
     pub(crate) shell_pid: Option<u32>,
     pub(crate) process_name: Option<String>,
     pub(crate) process_active: bool,
+    pub(crate) agent_model: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -84,6 +87,40 @@ fn single_process_job(process: &ForegroundProcess) -> ForegroundJob {
         process_group_id: process.pid,
         processes: vec![process.clone()],
     }
+}
+
+/// The model the pane's agent process was launched with, from its argv.
+pub(crate) fn agent_model_for_job(job: &ForegroundJob) -> Option<String> {
+    let agent_pid = agent_process_pid(job)?;
+    let process = job
+        .processes
+        .iter()
+        .find(|process| process.pid == agent_pid)?;
+    match process.argv.as_deref() {
+        Some(argv) => crate::detect::agent_model_from_argv(argv),
+        None => {
+            let argv: Vec<String> = process
+                .cmdline
+                .as_deref()?
+                .split_whitespace()
+                .map(str::to_string)
+                .collect();
+            crate::detect::agent_model_from_argv(&argv)
+        }
+    }
+}
+
+/// Fallback when argv names no model: the model in the session's own log,
+/// only when the log belongs to the same agent the job is running.
+fn model_from_session_log(
+    job: &ForegroundJob,
+    source: &crate::app::agent_model_log::ModelLogSource,
+) -> Option<String> {
+    agent_process_pid(job)?;
+    let (agent, _) = crate::detect::identify_agent_in_job(job)?;
+    (agent == source.agent())
+        .then(|| crate::app::agent_model_log::model_from_log(source))
+        .flatten()
 }
 
 /// The pid of the agent process the pane's foreground job is named after.
@@ -265,8 +302,8 @@ where
 {
     let mut observations = Vec::with_capacity(targets.len());
     for target in targets {
-        let (process_name, process_active) = match target.shell_pid {
-            None => (None, false),
+        let (process_name, process_active, agent_model) = match target.shell_pid {
+            None => (None, false, None),
             Some(_) if Instant::now() >= deadline => continue,
             Some(shell_pid) => lookup(shell_pid)
                 .map(|job| {
@@ -274,15 +311,21 @@ where
                         || agent_process_pid(&job).is_some_and(|agent_pid| {
                             agent_subprocess_active(&job, &descendants(agent_pid))
                         });
-                    (process_name_for_job(shell_pid, &job), active)
+                    (
+                        process_name_for_job(shell_pid, &job),
+                        active,
+                        agent_model_for_job(&job)
+                            .or_else(|| model_from_session_log(&job, target.model_log.as_ref()?)),
+                    )
                 })
-                .unwrap_or((None, false)),
+                .unwrap_or((None, false, None)),
         };
         observations.push(ForegroundProcessObservation {
             pane_id: target.pane_id,
             shell_pid: target.shell_pid,
             process_name,
             process_active,
+            agent_model,
         });
     }
     observations
@@ -404,10 +447,16 @@ impl crate::app::App {
                         continue;
                     }
                     let shell_pid = runtime.and_then(|runtime| runtime.child_pid());
+                    let model_log = self
+                        .state
+                        .terminals
+                        .get(terminal_id)
+                        .and_then(|terminal| terminal.agent_model_log_source());
                     targets.push(ForegroundProcessTarget {
                         pane_id,
                         shell_pid,
                         idle_agent_context,
+                        model_log,
                     });
                 }
             }
@@ -472,6 +521,17 @@ impl crate::app::App {
             {
                 continue;
             }
+            let model_changed = self
+                .state
+                .terminals
+                .get(&terminal_id)
+                .is_some_and(|terminal| terminal.agent_model != observation.agent_model);
+            if model_changed {
+                if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                    terminal.agent_model = observation.agent_model.clone();
+                }
+                changed = true;
+            }
             let process_changed = self
                 .state
                 .terminals
@@ -535,6 +595,74 @@ mod tests {
             process_group_id,
             processes,
         }
+    }
+
+    #[test]
+    fn agent_model_is_read_from_the_agent_process_argv() {
+        let job = job(
+            40,
+            vec![
+                process_with_argv(40, "claude", &["claude", "--model", "claude-fable-5-1"]),
+                process_with_argv(41, "node", &["node", "--model", "decoy"]),
+            ],
+        );
+        assert_eq!(
+            agent_model_for_job(&job).as_deref(),
+            Some("claude-fable-5-1")
+        );
+        let plain = super::tests::job(50, vec![process_with_argv(50, "codex", &["codex"])]);
+        assert_eq!(agent_model_for_job(&plain), None);
+    }
+
+    #[test]
+    fn session_log_supplies_the_model_only_when_argv_has_none() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-fg-model-log-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let transcript = dir.join("session.jsonl");
+        std::fs::write(
+            &transcript,
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-fable-5-1\"}}\n",
+        )
+        .expect("write transcript");
+        let log = Some(crate::app::agent_model_log::ModelLogSource::ClaudeTranscript(transcript));
+        let target = |pane: u32, shell_pid: u32| ForegroundProcessTarget {
+            pane_id: PaneId::from_raw(pane),
+            shell_pid: Some(shell_pid),
+            idle_agent_context: false,
+            model_log: log.clone(),
+        };
+        let targets = [target(1, 10), target(2, 20), target(3, 30)];
+        let observations = refresh_foreground_processes(
+            &targets,
+            Instant::now() + Duration::from_secs(1),
+            |pid| match pid {
+                10 => Some(job(11, vec![process_with_argv(11, "claude", &["claude"])])),
+                20 => Some(job(
+                    21,
+                    vec![process_with_argv(
+                        21,
+                        "claude",
+                        &["claude", "--model", "claude-opus-5-5"],
+                    )],
+                )),
+                _ => Some(job(31, vec![process_with_argv(31, "codex", &["codex"])])),
+            },
+            |_| Vec::new(),
+        );
+        let models: Vec<_> = observations
+            .iter()
+            .map(|observation| observation.agent_model.as_deref())
+            .collect();
+        // Log fills a bare argv; argv wins; a Claude log never feeds Codex.
+        assert_eq!(
+            models,
+            [Some("claude-fable-5-1"), Some("claude-opus-5-5"), None]
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -802,6 +930,7 @@ mod tests {
             pane_id: PaneId::from_raw(1),
             shell_pid: Some(10),
             idle_agent_context: true,
+            model_log: None,
         }];
 
         let observations = refresh_foreground_processes(
@@ -826,6 +955,7 @@ mod tests {
             pane_id: PaneId::from_raw(1),
             shell_pid: Some(10),
             idle_agent_context: true,
+            model_log: None,
         }];
 
         let observations = refresh_foreground_processes(
@@ -845,11 +975,13 @@ mod tests {
                 pane_id: PaneId::from_raw(1),
                 shell_pid: None,
                 idle_agent_context: false,
+                model_log: None,
             },
             ForegroundProcessTarget {
                 pane_id: PaneId::from_raw(2),
                 shell_pid: Some(10),
                 idle_agent_context: false,
+                model_log: None,
             },
         ];
         let observations = refresh_foreground_processes(
@@ -872,11 +1004,13 @@ mod tests {
                 pane_id: PaneId::from_raw(1),
                 shell_pid: Some(10),
                 idle_agent_context: false,
+                model_log: None,
             },
             ForegroundProcessTarget {
                 pane_id: PaneId::from_raw(2),
                 shell_pid: Some(20),
                 idle_agent_context: false,
+                model_log: None,
             },
         ];
 
@@ -898,16 +1032,19 @@ mod tests {
                 pane_id: PaneId::from_raw(1),
                 shell_pid: Some(10),
                 idle_agent_context: false,
+                model_log: None,
             },
             ForegroundProcessTarget {
                 pane_id: PaneId::from_raw(2),
                 shell_pid: Some(20),
                 idle_agent_context: false,
+                model_log: None,
             },
             ForegroundProcessTarget {
                 pane_id: PaneId::from_raw(3),
                 shell_pid: Some(30),
                 idle_agent_context: false,
+                model_log: None,
             },
         ];
 
@@ -977,6 +1114,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("cargo".into()),
                 process_active: true,
+                agent_model: None,
             }],
         );
 
@@ -1003,6 +1141,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("cargo".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
 
@@ -1029,6 +1168,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("codex".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
         assert_eq!(
@@ -1044,6 +1184,7 @@ mod tests {
                 shell_pid: None,
                 process_name: None,
                 process_active: false,
+                agent_model: None,
             }],
         ));
         assert_eq!(
@@ -1071,6 +1212,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("claude".into()),
                 process_active: false,
+                agent_model: None,
             }],
         );
         let _ = app.render_dirty.take();
@@ -1084,6 +1226,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("claude".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
 
@@ -1128,6 +1271,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("cargo".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
         assert_eq!(
@@ -1144,6 +1288,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("stale-process".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
         assert_eq!(
@@ -1182,6 +1327,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("stale-process".into()),
                 process_active: true,
+                agent_model: None,
             }],
         ));
         assert_eq!(
@@ -1219,6 +1365,7 @@ mod tests {
                 shell_pid: None,
                 process_name: Some("stale-process".into()),
                 process_active: true,
+                agent_model: None,
             }],
         );
 
