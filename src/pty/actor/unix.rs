@@ -146,6 +146,12 @@ impl PtyIoActorHandle {
         enter: Bytes,
         delay: Duration,
     ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+        if enter.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "submission Enter must not be empty",
+            ));
+        }
         let user_writes = self
             .user_writes
             .lock()
@@ -887,13 +893,8 @@ impl PtyIoActorRunner {
         };
         if Instant::now() >= *deadline {
             let enter = enter.clone();
-            if enter.is_empty() {
-                let submission = self.active_submission.take().unwrap();
-                let _ = submission.reply.send(Ok(()));
-            } else {
-                self.active_submission.as_mut().unwrap().phase = SubmissionPhase::WritingEnter;
-                self.enqueue_submission_write(enter, SubmissionBoundary::Enter);
-            }
+            self.active_submission.as_mut().unwrap().phase = SubmissionPhase::WritingEnter;
+            self.enqueue_submission_write(enter, SubmissionBoundary::Enter);
         }
     }
 
@@ -1213,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn actor_completes_empty_submission_parts() {
+    fn actor_writes_empty_text_and_rejects_empty_enter() {
         let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
         peer.set_read_timeout(Some(Duration::from_secs(1)))
             .expect("peer timeout");
@@ -1230,28 +1231,14 @@ mod tests {
             .expect("actor reports empty prompt submission")
             .expect("empty prompt submission completes");
 
-        let completion = handle
+        let err = handle
             .queue_user_input_submission(
                 Bytes::from_static(b"prompt"),
                 Bytes::new(),
                 Duration::from_millis(40),
             )
-            .expect("empty enter submission queues");
-        let handoff_handle = handle.clone();
-        let handoff =
-            std::thread::spawn(move || handoff_handle.begin_handoff(Duration::from_millis(250)));
-        let mut prompt = [0; 6];
-        peer.read_exact(&mut prompt)
-            .expect("peer receives prompt before empty enter");
-        assert_eq!(&prompt, b"prompt");
-        completion
-            .recv_timeout(Duration::from_secs(1))
-            .expect("actor reports empty enter submission")
-            .expect("empty enter submission completes");
-        handoff
-            .join()
-            .expect("handoff thread joins")
-            .expect("handoff resumes without an idle poll after submission");
+            .expect_err("empty enter cannot count as submission");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
         handle.shutdown();
     }
 

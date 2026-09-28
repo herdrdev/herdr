@@ -11,6 +11,12 @@ use crate::app::App;
 use super::responses::{encode_error, encode_error_body, encode_success};
 
 const AGENT_PROMPT_SUBMIT_DELAY: Duration = Duration::from_millis(300);
+const AGENT_PROMPT_FOLLOW_UP_DELAY: Duration = Duration::from_millis(200);
+type AgentPromptQueued = (
+    String,
+    crate::api::schema::AgentInfo,
+    Vec<std::sync::mpsc::Receiver<std::io::Result<()>>>,
+);
 
 // Codex's Windows input reader does not surface bracketed paste. It detects the prompt as a
 // "paste burst" and, while that burst is buffered, rewrites a following Enter into a newline
@@ -88,15 +94,22 @@ impl App {
             return false;
         };
         match self.queue_agent_prompt(request.id, params) {
-            Ok((id, agent, completion)) => {
+            Ok((id, agent, completions)) => {
                 std::thread::spawn(move || {
-                    let response = match completion.recv() {
-                        Ok(Ok(())) => encode_success(id, ResponseResult::AgentPrompted { agent }),
-                        Ok(Err(err)) if err.kind() == std::io::ErrorKind::TimedOut => {
+                    let result = completions.into_iter().try_for_each(|completion| {
+                        completion.recv().unwrap_or_else(|_| {
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::BrokenPipe,
+                                "pty actor closed",
+                            ))
+                        })
+                    });
+                    let response = match result {
+                        Ok(()) => encode_success(id, ResponseResult::AgentPrompted { agent }),
+                        Err(err) if err.kind() == std::io::ErrorKind::TimedOut => {
                             encode_error(id, "timeout", err.to_string())
                         }
-                        Ok(Err(err)) => encode_error(id, "agent_prompt_failed", err.to_string()),
-                        Err(_) => encode_error(id, "agent_prompt_failed", "pty actor closed"),
+                        Err(err) => encode_error(id, "agent_prompt_failed", err.to_string()),
                     };
                     let _ = respond_to.send(response);
                 });
@@ -112,14 +125,7 @@ impl App {
         &mut self,
         id: String,
         params: AgentPromptParams,
-    ) -> Result<
-        (
-            String,
-            crate::api::schema::AgentInfo,
-            std::sync::mpsc::Receiver<std::io::Result<()>>,
-        ),
-        String,
-    > {
+    ) -> Result<AgentPromptQueued, String> {
         if params.text.is_empty() {
             return Err(encode_error(
                 id,
@@ -207,12 +213,33 @@ impl App {
         let completion = runtime
             .queue_user_input_submission(
                 Bytes::from(text),
-                Bytes::from(enter),
+                Bytes::from(enter.clone()),
                 AGENT_PROMPT_SUBMIT_DELAY,
                 submit_deadline,
             )
             .map_err(|err| encode_error(id.clone(), "agent_prompt_failed", err.to_string()))?;
-        Ok((id, agent, completion))
+        let mut completions = vec![completion];
+        if matches!(
+            expected_agent,
+            crate::detect::Agent::Claude | crate::detect::Agent::Codex
+        ) {
+            // Claude may need two Enters to expand a paste (#4529); Codex can treat the first
+            // Enter as a newline while its paste burst is still buffered. Queue one settled
+            // follow-up behind the primary submission and wait for its write acknowledgment.
+            completions.push(
+                runtime
+                    .queue_user_input_submission(
+                        Bytes::new(),
+                        Bytes::from(enter),
+                        AGENT_PROMPT_FOLLOW_UP_DELAY,
+                        None,
+                    )
+                    .map_err(|err| {
+                        encode_error(id.clone(), "agent_prompt_failed", err.to_string())
+                    })?,
+            );
+        }
+        Ok((id, agent, completions))
     }
 
     pub(super) fn handle_agent_read(
@@ -609,6 +636,48 @@ mod tests {
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&rejected).unwrap();
         assert_eq!(error.error.code, "agent_not_found");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_prompt_queues_settled_follow_up_enter_for_claude() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80, 24, 0, b"", 3,
+            );
+        runtime.test_process_pty_bytes(b"\x1b[?2004h");
+        app.state.insert_test_runtime(pane_id, runtime);
+
+        let started = std::time::Instant::now();
+        let response = run_deferred_agent_prompt(
+            &mut app,
+            "req",
+            AgentPromptParams {
+                target: "reviewer".into(),
+                text: "review this".into(),
+                wait: None,
+            },
+        );
+        let success: SuccessResponse =
+            serde_json::from_str(&response).unwrap_or_else(|err| panic!("{err}: {response}"));
+        assert!(matches!(
+            success.result,
+            ResponseResult::AgentPrompted { .. }
+        ));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Bytes::from_static(b"\x1b[200~review this\x1b[201~")
+        );
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
+        assert!(started.elapsed() >= AGENT_PROMPT_SUBMIT_DELAY + AGENT_PROMPT_FOLLOW_UP_DELAY);
     }
 
     #[tokio::test]

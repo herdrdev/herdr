@@ -54,7 +54,18 @@ pub(super) fn encode_api_submission_parts(
         crossterm::event::KeyCode::Enter,
         crossterm::event::KeyModifiers::NONE,
     );
-    (text, runtime.encode_terminal_key(enter.into()))
+    (
+        text,
+        submission_enter(runtime.encode_terminal_key(enter.into())),
+    )
+}
+
+fn submission_enter(encoded: Vec<u8>) -> Vec<u8> {
+    if encoded.is_empty() {
+        b"\r".to_vec()
+    } else {
+        encoded
+    }
 }
 
 pub(super) fn encode_api_submission(
@@ -159,7 +170,13 @@ pub(crate) fn limit_snapshot_lines(
 
 #[cfg(test)]
 mod read_snapshot_tests {
-    use super::limit_snapshot_lines;
+    use super::{limit_snapshot_lines, submission_enter};
+
+    #[test]
+    fn empty_encoded_enter_falls_back_to_carriage_return() {
+        assert_eq!(submission_enter(Vec::new()), b"\r");
+        assert_eq!(submission_enter(b"\x1bOM".to_vec()), b"\x1bOM");
+    }
 
     #[test]
     fn line_limit_preserves_endings_and_reports_omitted_lines() {

@@ -1383,6 +1383,7 @@ enum PaneRuntimeIo {
     TestChannel {
         sender: mpsc::Sender<Bytes>,
         resize_tx: watch::Sender<(u16, u16, u32, u32)>,
+        submission_tail: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     },
 }
 
@@ -1528,19 +1529,40 @@ impl PaneRuntimeIo {
                 }
             }
             #[cfg(test)]
-            PaneRuntimeIo::TestChannel { sender, .. } => {
+            PaneRuntimeIo::TestChannel {
+                sender,
+                submission_tail,
+                ..
+            } => {
                 let _ = deadline;
+                if enter.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "submission Enter must not be empty",
+                    ));
+                }
                 let sender = sender.clone();
                 let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+                let (done_tx, done_rx) = std::sync::mpsc::channel();
+                let previous = submission_tail
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .replace(done_rx);
                 std::thread::spawn(move || {
-                    let result = sender
-                        .try_send(text)
-                        .map_err(std::io::Error::other)
-                        .and_then(|()| {
-                            std::thread::sleep(delay);
-                            sender.try_send(enter).map_err(std::io::Error::other)
-                        });
+                    if let Some(previous) = previous {
+                        let _ = previous.recv();
+                    }
+                    let result = if text.is_empty() {
+                        Ok(())
+                    } else {
+                        sender.try_send(text).map_err(std::io::Error::other)
+                    }
+                    .and_then(|()| {
+                        std::thread::sleep(delay);
+                        sender.try_send(enter).map_err(std::io::Error::other)
+                    });
                     let _ = reply_tx.send(result);
+                    let _ = done_tx.send(());
                 });
                 Ok(reply_rx)
             }
@@ -3843,6 +3865,7 @@ impl PaneRuntime {
                 io: PaneRuntimeIo::TestChannel {
                     sender: tx,
                     resize_tx,
+                    submission_tail: Mutex::new(None),
                 },
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
@@ -5015,6 +5038,7 @@ mod tests {
             io: PaneRuntimeIo::TestChannel {
                 sender: tx,
                 resize_tx,
+                submission_tail: Mutex::new(None),
             },
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
@@ -5055,6 +5079,7 @@ mod tests {
             io: PaneRuntimeIo::TestChannel {
                 sender: tx,
                 resize_tx,
+                submission_tail: Mutex::new(None),
             },
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),

@@ -114,6 +114,12 @@ mod windows {
             delay: Duration,
             deadline: Option<Instant>,
         ) -> std::io::Result<std_mpsc::Receiver<std::io::Result<()>>> {
+            if enter.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "submission Enter must not be empty",
+                ));
+            }
             let accepting = self
                 .accepting
                 .lock()
