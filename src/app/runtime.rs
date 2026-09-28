@@ -684,6 +684,7 @@ impl App {
         );
         self.start_foreground_process_refresh_if_due(now);
         self.start_claude_subagent_refresh_if_due(now);
+        self.observe_status_changes(now);
         self.start_git_status_refresh_if_due(now);
         changed |= self.finish_sidebar_refresh_if_idle();
         self.start_dock_diff_refresh_if_needed();

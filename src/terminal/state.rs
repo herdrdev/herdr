@@ -339,6 +339,14 @@ pub struct ClosingReport {
     workers_unknown: Option<bool>,
 }
 
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ClosingLogTokens {
+    pub completion: Option<&'static str>,
+    pub parse: Option<&'static str>,
+    pub workers_unknown: Option<bool>,
+    pub idle: Option<bool>,
+}
+
 impl Default for ClosingReport {
     fn default() -> Self {
         Self {
@@ -1331,6 +1339,35 @@ impl TerminalState {
         completed
     }
 
+    /// Runtime evidence settles the closing prose: the provider transcript
+    /// scan is caught up and trustworthy and reports no live sub-agent. Only
+    /// then may an idle pane with an incomplete or worker-claiming closing
+    /// block leave `Unknown`. `None` (no transcript, not caught up, or an
+    /// untrustworthy scan) keeps the pane uncertain.
+    pub(crate) fn runtime_workers_settled(&self) -> bool {
+        self.active_subagents == Some(0)
+    }
+
+    pub(crate) fn closing_log_tokens(&self) -> ClosingLogTokens {
+        let Some(report) = self.closing_report.as_ref() else {
+            return ClosingLogTokens::default();
+        };
+        ClosingLogTokens {
+            completion: report.completion.map(|completion| match completion {
+                crate::api::schema::ClosingCompletion::Complete => "complete",
+                crate::api::schema::ClosingCompletion::Incomplete => "incomplete",
+                crate::api::schema::ClosingCompletion::Missing => "missing",
+            }),
+            parse: report.parse_status.map(|parse| match parse {
+                crate::api::schema::ClosingParseStatus::Ok => "ok",
+                crate::api::schema::ClosingParseStatus::Missing => "missing",
+                crate::api::schema::ClosingParseStatus::Malformed => "malformed",
+            }),
+            workers_unknown: report.workers_unknown,
+            idle: report.closing_idle,
+        }
+    }
+
     fn closing_task_projection(
         &self,
         state: AgentState,
@@ -1341,14 +1378,14 @@ impl TerminalState {
         } else if self.closing_external_wait().is_some() && state != AgentState::Blocked {
             (AgentState::Working, "closing_external_wait")
         } else if state == AgentState::Idle
-            && (self.closing_task_reported() && !self.closing_task_complete()
-                || self.active_subagents.is_none()
-                    && self.closing_report.as_ref().is_some_and(|report| {
+            && (!self.runtime_workers_settled()
+                && (self.closing_task_reported() && !self.closing_task_complete()
+                    || self.closing_report.as_ref().is_some_and(|report| {
                         report.workers_unknown == Some(true)
                             || report
                                 .closing_report_subagents
                                 .is_some_and(|count| count > 0)
-                    })
+                    }))
                 || self.closing_report.as_ref().is_some_and(|report| {
                     matches!(
                         report.parse_status,
@@ -1731,6 +1768,28 @@ impl TerminalState {
                 .closing_task_projection(state, has_pending_human_input)
                 .0;
             (state, seen)
+        }
+    }
+
+    pub(crate) fn sidebar_projection_reason(&self, has_pending_human_input: bool) -> &'static str {
+        if self.supervisor_stale && self.stale_resolution.is_some() {
+            return "supervisor_stale";
+        }
+        let active_subagents = self.verified_active_subagents();
+        let state = if self.supervisor_stale {
+            self.stale_resolution
+                .map(|(state, _)| state)
+                .unwrap_or(self.state)
+        } else if active_subagents == Some(0) && self.closing_task_complete() {
+            self.lifecycle_state_and_arbitration().0
+        } else {
+            self.state
+        };
+        if state != AgentState::Blocked && active_subagents.is_some_and(|count| count > 0) {
+            "active_subagents"
+        } else {
+            self.closing_task_projection(state, has_pending_human_input)
+                .1
         }
     }
 
@@ -5596,6 +5655,98 @@ mod tests {
         assert_eq!(
             terminal.sidebar_projection(false),
             (AgentState::Unknown, false)
+        );
+    }
+
+    #[test]
+    fn incomplete_claude_report_without_runtime_worker_count_is_unknown() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.apply_closing_task_report(
+            Some(crate::api::schema::ClosingCompletion::Incomplete),
+            None,
+            Some(crate::api::schema::ClosingParseStatus::Ok),
+            Some(true),
+            Instant::now(),
+        );
+
+        assert_eq!(terminal.active_subagents, None);
+        assert_eq!(terminal.sidebar_projection(false).0, AgentState::Unknown);
+        assert_eq!(
+            terminal.sidebar_projection_reason(false),
+            "closing_task_uncertain"
+        );
+    }
+
+    #[test]
+    fn incomplete_claude_report_with_settled_runtime_workers_projects_idle() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.apply_closing_task_report(
+            Some(crate::api::schema::ClosingCompletion::Incomplete),
+            None,
+            Some(crate::api::schema::ClosingParseStatus::Ok),
+            Some(true),
+            Instant::now(),
+        );
+        terminal.set_active_subagents(Some(0));
+
+        assert_eq!(terminal.sidebar_projection(false).0, AgentState::Idle);
+        assert_eq!(terminal.sidebar_projection_reason(false), "lifecycle");
+    }
+
+    #[test]
+    fn incomplete_claude_report_with_settled_workers_and_needs_you_projects_blocked() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.apply_closing_task_report(
+            Some(crate::api::schema::ClosingCompletion::Incomplete),
+            None,
+            Some(crate::api::schema::ClosingParseStatus::Ok),
+            Some(true),
+            Instant::now(),
+        );
+        terminal.set_active_subagents(Some(0));
+        terminal.apply_closing_block_payload(
+            vec![crate::api::schema::ClosingBlockItem {
+                n: 1,
+                label: "Needs you".into(),
+                text: "Choose one".into(),
+                blocking: true,
+                pr: None,
+                ticket: None,
+                url: None,
+                default: None,
+                default_at: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert_eq!(terminal.sidebar_projection(false).0, AgentState::Blocked);
+        assert_eq!(
+            terminal.sidebar_projection_reason(true),
+            "closing_human_input"
+        );
+    }
+
+    #[test]
+    fn malformed_claude_report_stays_unknown_with_settled_runtime_workers() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        terminal.apply_closing_task_report(
+            Some(crate::api::schema::ClosingCompletion::Incomplete),
+            None,
+            Some(crate::api::schema::ClosingParseStatus::Malformed),
+            Some(true),
+            Instant::now(),
+        );
+        terminal.set_active_subagents(Some(0));
+
+        assert_eq!(terminal.sidebar_projection(false).0, AgentState::Unknown);
+        assert_eq!(
+            terminal.sidebar_projection_reason(false),
+            "closing_task_uncertain"
         );
     }
 

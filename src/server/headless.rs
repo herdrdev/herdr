@@ -7233,6 +7233,7 @@ impl HeadlessServer {
                 .start_headless_foreground_process_refresh_if_due(now);
         }
         self.app.start_claude_subagent_refresh_if_due(now);
+        self.app.observe_status_changes(now);
         // The work index is a server-owned runtime fact, so it refreshes with or
         // without an attached TUI. Omitting it here left every server-backed
         // session with a permanently empty index while the interactive loop

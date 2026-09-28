@@ -2165,6 +2165,7 @@ pub(crate) fn remote_agent_panel_entries_at(
                 .unwrap_or_else(|| {
                     middle_elide(row.agent_ref.host.as_str(), SIDEBAR_HOST_TOKEN_NARROW_WIDTH)
                 });
+            let has_agent = agent_label.is_some();
             Some(std::sync::Arc::new(
                 RemoteAgentPanelEntry::new_with_narrow_host(
                     row.agent_ref.clone(),
@@ -2185,7 +2186,10 @@ pub(crate) fn remote_agent_panel_entries_at(
                             agent,
                             foreground_process_name: None,
                             agent_context: agent,
-                            has_agent: true,
+                            // A remote pane without an agent (for example a
+                            // restored side pane whose cwd is gone) renders
+                            // the empty no-agent dot, not the grey unknown one.
+                            has_agent,
                             prio: false,
                             starred: false,
                             state: lifecycle.state,
@@ -13092,6 +13096,46 @@ pub(crate) mod tests {
             row,
             SidebarRow::AgentRun { host, .. } if host == "remote-b"
         )));
+    }
+
+    #[test]
+    fn remote_no_agent_pane_with_unknown_status_renders_empty_dot() {
+        let mut info = remote_agent_info(
+            "pane/side",
+            "side pane",
+            crate::api::schema::AgentStatus::Unknown,
+            false,
+            false,
+        );
+        info.agent = None;
+        let agent_row = remote_agent_info(
+            "pane/agent",
+            "agent pane",
+            crate::api::schema::AgentStatus::Unknown,
+            false,
+            false,
+        );
+        let snapshot = crate::fleet::Snapshot {
+            hosts: vec![fleet_host_snapshot(
+                "remote",
+                false,
+                vec![
+                    crate::fleet::FleetRow::test_agent_info_row("remote", info),
+                    crate::fleet::FleetRow::test_agent_info_row("remote", agent_row),
+                ],
+            )],
+            ..crate::fleet::Snapshot::default()
+        };
+        let entries = remote_agent_panel_entries(&snapshot, false);
+        let dot = |pane: &str| {
+            let entry = entries
+                .iter()
+                .find(|entry| entry.agent_ref.agent == pane)
+                .expect("remote entry");
+            compact_row_dot(&entry.entry)
+        };
+        assert_eq!(dot("pane/side"), "·");
+        assert_eq!(dot("pane/agent"), "●");
     }
 
     #[test]

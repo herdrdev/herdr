@@ -2081,6 +2081,66 @@ class NeedsYouBlockTests(unittest.TestCase):
         self.assertFalse(block.workers_unknown)
         self.assertEqual(block.herdr_state, "idle")
 
+    def test_now_waiting_on_human_is_not_a_worker(self):
+        for line in ("waiting on you.", "Waiting on you", "idle", "nothing running"):
+            with self.subTest(line=line):
+                block = closing_block.parse(
+                    "Needs you (1)\n1. **Decide** — ship?\n   a) yes\n   b) no\n"
+                    f"Reply 1a / 1b. Silence holds.\n**Now:** {line}\n"
+                )
+                self.assertEqual(block.agents, [])
+                self.assertEqual(block.declared_agents, 0)
+                self.assertFalse(block.workers_unknown)
+                self.assertEqual(block.herdr_state, "blocked")
+
+    def test_now_other_human_wait_prose_stays_a_worker(self):
+        for line in (
+            "waiting on your choice",
+            "awaiting your approval",
+            "waiting for CI checks and for your approval",
+            "waiting on you while build worker compiles",
+        ):
+            with self.subTest(line=line):
+                block = closing_block.parse(f"Needs you: nothing.\n**Now:** {line}\n")
+                self.assertEqual(block.agents, [line])
+                self.assertTrue(block.workers_unknown)
+
+    def test_now_external_waits_need_the_wait_form(self):
+        block = closing_block.parse(
+            "**Needs you: nothing.**\n**Now:** wait — PR 423 checks\n"
+        )
+        self.assertEqual(block.declared_agents, 0)
+        self.assertFalse(block.workers_unknown)
+        self.assertEqual(block.external_wait, "PR 423 checks")
+        self.assertEqual(block.herdr_state, "working")
+
+        for line in ("PR 423 checks running", "waiting for CI checks", "CI — running"):
+            with self.subTest(line=line):
+                block = closing_block.parse(f"Needs you: nothing.\n**Now:** {line}\n")
+                self.assertEqual(block.agents, [line])
+                self.assertTrue(block.workers_unknown)
+                self.assertIsNone(block.external_wait)
+
+    def test_now_named_worker_stays_unverified_beside_human_wait(self):
+        block = closing_block.parse(
+            "Needs you: nothing.\n"
+            "**Now:** codex reviewer — inspecting diff · waiting on you\n"
+        )
+        self.assertEqual(block.agents, ["codex reviewer — inspecting diff"])
+        self.assertTrue(block.workers_unknown)
+
+    def test_now_prose_entries_stay_unverified_workers(self):
+        for line in (
+            "codex reviewer — waiting on your choice",
+            "codex reviewer — inspecting PR while CI checks running",
+            "worker executing your approval check",
+            "build worker — compiling",
+        ):
+            with self.subTest(line=line):
+                block = closing_block.parse(f"Needs you: nothing.\n**Now:** {line}\n")
+                self.assertEqual(block.agents, [line])
+                self.assertTrue(block.workers_unknown)
+
     def test_now_after_done_makes_completion_incomplete(self):
         block = closing_block.parse(
             "Needs you: nothing.\nDone here.\n**Now:** stopped — no active work\n"

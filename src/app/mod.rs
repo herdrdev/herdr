@@ -54,6 +54,7 @@ pub(crate) mod settings_keybindings;
 pub(crate) mod settings_providers;
 pub(crate) mod settled;
 pub mod state;
+pub(crate) mod status_log;
 mod tab_bar_status;
 mod terminal_targets;
 mod terminal_titles;
@@ -321,6 +322,9 @@ pub struct App {
     pub(crate) claude_subagent_refresh_rotation: usize,
     pub(crate) claude_subagent_trackers:
         HashMap<crate::terminal::TerminalId, claude_subagents::TranscriptTracker>,
+    pub(crate) last_status_observed: Option<Instant>,
+    pub(crate) last_status_states: HashMap<crate::terminal::TerminalId, crate::detect::AgentState>,
+    pub(crate) status_log_sink: status_log::StatusLogSink,
     #[cfg(test)]
     pub(crate) git_program_override: Option<std::path::PathBuf>,
     #[cfg(test)]
@@ -1663,6 +1667,9 @@ impl App {
             next_claude_subagent_target_generation: 0,
             claude_subagent_refresh_rotation: 0,
             claude_subagent_trackers: HashMap::new(),
+            last_status_observed: None,
+            last_status_states: HashMap::new(),
+            status_log_sink: status_log::StatusLogSink::default(),
             #[cfg(test)]
             git_program_override: None,
             #[cfg(test)]
