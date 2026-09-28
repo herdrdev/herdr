@@ -101,6 +101,19 @@ fn level_color(level: Level, palette: &Palette) -> ratatui::style::Color {
 }
 
 pub(crate) fn render_animation(app: &AppState, frame: &mut Frame, boxed: Rect) {
+    let hovered = matches!(
+        app.hovered_control,
+        Some(crate::app::state::ControlId::SidebarAnimationPause)
+    );
+    render_animation_with_hover(app, frame, boxed, hovered);
+}
+
+pub(crate) fn render_animation_with_hover(
+    app: &AppState,
+    frame: &mut Frame,
+    boxed: Rect,
+    hovered: bool,
+) {
     if boxed.width == 0 || boxed.height == 0 || !app.hyperspace.enabled {
         return;
     }
@@ -147,10 +160,6 @@ pub(crate) fn render_animation(app: &AppState, frame: &mut Frame, boxed: Rect) {
 
     // The control goes on last, docked one cell into the bottom edge so the
     // corner stays a corner.
-    let hovered = matches!(
-        app.hovered_control,
-        Some(crate::app::state::ControlId::SidebarAnimationPause)
-    );
     let style = if hovered {
         Style::default().fg(palette.accent).bg(bg)
     } else if app.hyperspace.paused() {

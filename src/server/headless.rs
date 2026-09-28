@@ -63,6 +63,7 @@ use crate::server::socket_paths::{
 };
 use crate::server::terminal_attach::paste_payload_for_runtime;
 
+mod idle_render;
 mod pane_graphics;
 
 use crate::protocol::MAX_GRAPHICS_FRAME_SIZE;
@@ -450,6 +451,12 @@ enum AltScreenReadConflict {
     RestoreFailed,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct ScheduledTaskRender {
+    changed: bool,
+    sidebar_animation_only: bool,
+}
+
 /// Complete attach-local app presentation installed while one client's input
 /// is resolved. Cell and pixel input share this transaction so hit geometry
 /// cannot be computed from another client's sidebar, dock, or detail state.
@@ -798,6 +805,7 @@ impl HeadlessServer {
         let mut needs_render = true;
         let mut needs_full_render = true;
         let mut needs_graphics_render = false;
+        let mut needs_sidebar_animation_render = false;
 
         loop {
             crate::render_prof::event("loop.tick");
@@ -915,11 +923,21 @@ impl HeadlessServer {
 
             // 6. Handle scheduled tasks.
             let now = Instant::now();
-            if self.handle_scheduled_tasks_headless(now, needs_render) {
+            let render_was_already_pending =
+                needs_render || needs_full_render || needs_graphics_render;
+            let scheduled_render =
+                self.handle_scheduled_tasks_headless_with_render_kind(now, needs_render);
+            if scheduled_render.changed {
                 needs_render = true;
-                needs_full_render = true;
-                needs_graphics_render = false;
-                crate::render_prof::event("full_render_cause.scheduled_tasks");
+                if scheduled_render.sidebar_animation_only && !render_was_already_pending {
+                    needs_sidebar_animation_render = true;
+                    crate::render_prof::event("animation_render.request");
+                } else {
+                    needs_full_render = true;
+                    needs_graphics_render = false;
+                    needs_sidebar_animation_render = false;
+                    crate::render_prof::event("full_render_cause.scheduled_tasks");
+                }
             }
 
             if self.handle_deferred_requests_headless() {
@@ -970,8 +988,35 @@ impl HeadlessServer {
                     needs_full_render = true;
                     needs_graphics_render = false;
                 }
+                let mut staged_render_request = None;
+                if needs_sidebar_animation_render && !needs_full_render && !needs_graphics_render {
+                    if self.app.render_dirty.is_pending() {
+                        let request = self.app.render_dirty.take();
+                        let visible_pty =
+                            self.pty_sources_visible_to_any_render_target(&request.pty_sources);
+                        // Hidden PTY output keeps runtime state current but does not invalidate
+                        // the frame any attached client can see.
+                        if request.generic
+                            || !request.terminal_title_sources.is_empty()
+                            || visible_pty
+                        {
+                            staged_render_request = Some(request);
+                            needs_full_render = true;
+                        }
+                    }
+                    if !needs_full_render {
+                        if self.render_sidebar_animation_and_stream() {
+                            self.app.record_render_attempt(now, true);
+                            needs_render = false;
+                            needs_sidebar_animation_render = false;
+                            continue;
+                        }
+                        needs_full_render = true;
+                    }
+                }
                 crate::render_prof::event("render.attempt");
-                let render_request = self.app.render_dirty.take();
+                let render_request =
+                    staged_render_request.unwrap_or_else(|| self.app.render_dirty.take());
                 let pty_dirty = !render_request.pty_sources.is_empty();
                 if pty_dirty {
                     crate::render_prof::event("render.attempt.pty_dirty");
@@ -1050,6 +1095,7 @@ impl HeadlessServer {
                 needs_render = false;
                 needs_full_render = false;
                 needs_graphics_render = false;
+                needs_sidebar_animation_render = false;
                 continue;
             }
 
@@ -2588,7 +2634,7 @@ impl HeadlessServer {
             .state
             .terminals
             .keys()
-            .find(|id| id.to_string() == terminal_id)
+            .find(|id| id.as_str() == terminal_id)
             .cloned()
     }
 
@@ -2596,8 +2642,13 @@ impl HeadlessServer {
         &self,
         terminal_id: &str,
     ) -> Option<&crate::terminal::TerminalRuntime> {
-        let terminal_id = self.terminal_id_by_string(terminal_id)?;
-        self.app.terminal_runtimes.get(&terminal_id)
+        let terminal_id = self
+            .app
+            .state
+            .terminals
+            .keys()
+            .find(|id| id.as_str() == terminal_id)?;
+        self.app.terminal_runtimes.get(terminal_id)
     }
 
     fn forward_terminal_attach_bytes(
@@ -6554,12 +6605,17 @@ impl HeadlessServer {
                         crate::kitty_graphics::HostCellSize::default()
                     };
                     let (buffer, cursor) =
-                        crate::server::render_stream::render_virtual_with_runtime_registry(
+                        crate::server::render_stream::render_virtual_with_runtime_registry_reusing(
                             &mut self.app.state,
                             &self.app.terminal_runtimes,
                             area,
                             is_foreground,
                             render_cell_size,
+                            &mut self
+                                .clients
+                                .get_mut(&client_id)
+                                .expect("render target client remains connected")
+                                .render_terminal,
                         );
                     self.app.record_pending_first_frame();
                     // The editor PTY is a shared runtime resource. Its size follows the
@@ -6611,6 +6667,7 @@ impl HeadlessServer {
                     );
                     let retained_pane_cursor =
                         !crate::server::render_stream::dock_editor_is_focused(&self.app.state);
+                    let animation_rect = self.app.state.view.hyperspace_rect;
                     crate::render_prof::duration_since("full_render.frame_build", frame_started);
                     self.app
                         .state
@@ -6635,6 +6692,7 @@ impl HeadlessServer {
                         std::sync::Arc::make_mut(&mut client.retained_pane_infos)
                             .clone_from(&self.app.state.view.pane_infos);
                         client.retained_pane_cursor = retained_pane_cursor;
+                        client.animation_rect = animation_rect;
                         client.sidebar_presentation = sidebar_presentation;
                         client.dock_presentation = dock_presentation;
                         client.notepad_presentation = notepad_presentation;
@@ -6648,7 +6706,14 @@ impl HeadlessServer {
                 }
                 ClientConnectionMode::TerminalAttach { terminal_id, .. }
                 | ClientConnectionMode::TerminalObserve { terminal_id } => {
-                    let Some(runtime) = self.runtime_for_terminal_id_string(&terminal_id) else {
+                    let runtime = self
+                        .app
+                        .state
+                        .terminals
+                        .keys()
+                        .find(|id| id.as_str() == terminal_id)
+                        .and_then(|id| self.app.terminal_runtimes.get(id));
+                    let Some(runtime) = runtime else {
                         self.send_to_client(
                             client_id,
                             ServerMessage::ServerShutdown {
@@ -6662,7 +6727,15 @@ impl HeadlessServer {
                     };
                     let render_started = crate::render_prof::timer();
                     let (buffer, cursor) =
-                        crate::server::render_stream::render_terminal_virtual(runtime, area);
+                        crate::server::render_stream::render_terminal_virtual_reusing(
+                            runtime,
+                            area,
+                            &mut self
+                                .clients
+                                .get_mut(&client_id)
+                                .expect("render target client remains connected")
+                                .render_terminal,
+                        );
                     crate::render_prof::duration_since(
                         "full_render.render_terminal_virtual",
                         render_started,
@@ -6964,7 +7037,17 @@ impl HeadlessServer {
     ///
     /// Similar to `App::handle_scheduled_tasks` but without resize polling
     /// (the server doesn't have a terminal to resize).
+    #[cfg(test)]
     fn handle_scheduled_tasks_headless(&mut self, now: Instant, geometry_dirty: bool) -> bool {
+        self.handle_scheduled_tasks_headless_with_render_kind(now, geometry_dirty)
+            .changed
+    }
+
+    fn handle_scheduled_tasks_headless_with_render_kind(
+        &mut self,
+        now: Instant,
+        geometry_dirty: bool,
+    ) -> ScheduledTaskRender {
         // Nothing renders the status row without an attached app client, so a
         // detached server never samples native metrics.
         let has_app_client = self.has_app_client();
@@ -6972,7 +7055,7 @@ impl HeadlessServer {
         // has produced a frame. Wait for the pending render to finish so a
         // narrow-to-wide resize cannot start collection for an unseen row.
         self.app.status_metrics_visible = !geometry_dirty && self.has_renderable_status_target();
-        let mut changed = if has_app_client {
+        let mut other_changed = if has_app_client {
             self.app.take_due_agent_activity_refresh(now)
         } else {
             // Activity age is client-only presentation state. Drop a deadline
@@ -6982,29 +7065,30 @@ impl HeadlessServer {
             self.app.agent_activity_refresh_deadline = None;
             false
         };
+        let mut sidebar_animation_changed = false;
         for client in self.clients.values_mut() {
             if client.dock_presentation.reveal_hover_tooltip_at(now) {
                 client.request_repaint();
-                changed = true;
+                other_changed = true;
             }
         }
-        changed |= self.app.handle_loop_receipt_fallback(now);
-        changed |= self.app.tick_notepad(now);
+        other_changed |= self.app.handle_loop_receipt_fallback(now);
+        other_changed |= self.app.tick_notepad(now);
         if has_app_client {
-            changed |= self.app.schedule_goals_refresh(now);
+            other_changed |= self.app.schedule_goals_refresh(now);
             let host_focused = self.app_clients_host_focused();
-            changed |= self.app.tick_pomodoro(now, host_focused);
-            changed |= self.pomodoro_animation_due(now);
+            other_changed |= self.app.tick_pomodoro(now, host_focused);
+            other_changed |= self.pomodoro_animation_due(now);
             // The sidebar only exists in front of an attached client, and this
             // loop - not `App::handle_scheduled_tasks` - is the one every
             // server-backed session actually runs.
-            changed |= self.app.tick_sidebar_animation(now);
+            sidebar_animation_changed = self.app.tick_sidebar_animation(now);
         }
         if self.app.status_metrics_visible {
-            changed |= self.app.schedule_status_metrics(now);
+            other_changed |= self.app.schedule_status_metrics(now);
             self.app.schedule_status_side_signals(now);
         } else {
-            changed |= self.app.discard_stale_status_metrics(now);
+            other_changed |= self.app.discard_stale_status_metrics(now);
         }
         if has_app_client
             && (self.app.state.notepad.enabled
@@ -7024,7 +7108,7 @@ impl HeadlessServer {
         {
             self.app.config_diagnostic_deadline = None;
             self.app.state.config_diagnostic = None;
-            changed = true;
+            other_changed = true;
         }
 
         if self
@@ -7034,7 +7118,7 @@ impl HeadlessServer {
         {
             self.app.toast_deadline = None;
             self.app.state.toast = None;
-            changed = true;
+            other_changed = true;
         }
 
         if self
@@ -7052,7 +7136,7 @@ impl HeadlessServer {
                 for delivery in &deliveries {
                     self.forward_agent_notification_delivery(delivery);
                 }
-                changed = true;
+                other_changed = true;
             }
         }
 
@@ -7064,14 +7148,14 @@ impl HeadlessServer {
         {
             for update in self.app.state.mark_due_agent_status_stale_at(now) {
                 self.app.emit_pane_state_update(&update);
-                changed = true;
+                other_changed = true;
             }
             // The mark is what re-enables the process probe under a hook.
             self.app.sync_detection_authority_mirrors();
         }
 
         if has_app_client && self.app.state.done_hide_transition_due(now) {
-            changed = true;
+            other_changed = true;
         }
         if self
             .app
@@ -7079,7 +7163,7 @@ impl HeadlessServer {
             .next_done_reap_deadline(now)
             .is_some_and(|deadline| now >= deadline)
         {
-            changed |= self.app.reap_due_done_panes(now);
+            other_changed |= self.app.reap_due_done_panes(now);
         }
 
         if self
@@ -7098,7 +7182,7 @@ impl HeadlessServer {
             }
             for (ws_idx, pane_id) in due {
                 self.app.emit_pane_updated(ws_idx, pane_id);
-                changed = true;
+                other_changed = true;
             }
         }
 
@@ -7109,7 +7193,7 @@ impl HeadlessServer {
         {
             self.app.copy_feedback_deadline = None;
             self.app.state.copy_feedback = None;
-            changed = true;
+            other_changed = true;
         }
 
         if self
@@ -7118,12 +7202,12 @@ impl HeadlessServer {
             .is_some_and(|deadline| now >= deadline)
         {
             self.app.tick_selection_autoscroll(now);
-            changed = true;
+            other_changed = true;
         }
 
-        changed |= self.app.clear_due_selection_highlight(now);
-        changed |= self.app.process_git_action_panes(now);
-        changed |= self.app.refresh_pane_settlement_at(now);
+        other_changed |= self.app.clear_due_selection_highlight(now);
+        other_changed |= self.app.process_git_action_panes(now);
+        other_changed |= self.app.refresh_pane_settlement_at(now);
 
         if self.has_app_client() {
             // Work-context links matter only while a TUI is attached and viewing panes.
@@ -7139,7 +7223,7 @@ impl HeadlessServer {
                 self.app.start_dock_files_refresh();
             }
             self.app.start_git_status_refresh_if_due(now);
-            changed |= self.start_foreground_dock_diff_refresh_if_needed();
+            other_changed |= self.start_foreground_dock_diff_refresh_if_needed();
         } else {
             self.app.dock_files_refresh_demand = false;
         }
@@ -7198,23 +7282,26 @@ impl HeadlessServer {
             .filter(|deadline| now >= *deadline)
         {
             self.app.expire_metadata_at(deadline, now);
-            changed = true;
+            other_changed = true;
         }
 
         if geometry_dirty {
             self.app.pending_agent_resume_deadline = None;
         } else {
             self.app.sync_pending_agent_resume_deadline(now);
-            changed |= self
+            other_changed |= self
                 .app
                 .start_pending_agent_resumes(self.app.pending_agent_resume_due(now));
         }
         // The headless server owns its own scheduler, so anything the TUI loop
         // ticks has to be ticked here too or it only runs for TUI-owned
         // runtimes. Resumes above, and the nudge that follows them.
-        changed |= self.app.tick_resume_nudges(now);
-        changed |= self.app.tick_auto_nudges(now);
-        changed
+        other_changed |= self.app.tick_resume_nudges(now);
+        other_changed |= self.app.tick_auto_nudges(now);
+        ScheduledTaskRender {
+            changed: other_changed || sidebar_animation_changed,
+            sidebar_animation_only: sidebar_animation_changed && !other_changed,
+        }
     }
 
     fn start_foreground_dock_diff_refresh_if_needed(&mut self) -> bool {
@@ -7725,6 +7812,8 @@ mod tests {
     use crate::protocol::{CellData, CursorState};
     use unicode_width::UnicodeWidthStr;
 
+    #[path = "../idle_render_tests.rs"]
+    mod idle_render_tests;
     #[path = "pane_graphics.rs"]
     mod pane_graphics_tests;
 

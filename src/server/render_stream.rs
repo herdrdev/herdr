@@ -117,6 +117,19 @@ impl ClientRenderState {
         }
     }
 
+    pub(crate) fn take_semantic_frame(&mut self) -> Option<FrameData> {
+        match self {
+            Self::Semantic { last_frame } => last_frame.take(),
+            Self::TerminalAnsi { .. } => None,
+        }
+    }
+
+    pub(crate) fn restore_semantic_frame(&mut self, frame: FrameData) {
+        if let Self::Semantic { last_frame } = self {
+            *last_frame = Some(frame);
+        }
+    }
+
     pub(crate) fn commit_sent_frame(&mut self, prepared: PreparedRender) {
         match (self, prepared) {
             (
@@ -282,6 +295,30 @@ impl CursorTrackingBackend {
             shape: 0,
         })
     }
+
+    fn clear_rendered_cursor(&mut self) {
+        self.rendered_cursor = None;
+    }
+}
+
+/// A virtual Ratatui terminal retained by one connected client.
+///
+/// Its size changes only when that client resizes. Keeping the terminal alive
+/// reuses Ratatui's front and back buffers across ordinary full renders.
+pub(crate) struct VirtualTerminal {
+    size: (u16, u16),
+    terminal: ratatui::Terminal<CursorTrackingBackend>,
+}
+
+impl VirtualTerminal {
+    fn new(width: u16, height: u16) -> Self {
+        let backend = CursorTrackingBackend::new(width, height);
+        let terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
+        Self {
+            size: (width, height),
+            terminal,
+        }
+    }
 }
 
 impl Backend for CursorTrackingBackend {
@@ -368,21 +405,51 @@ pub(crate) fn render_virtual_with_runtime_registry(
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
 ) -> (ratatui::buffer::Buffer, Option<CursorState>) {
-    render_virtual_with_runtime_registry_inner(
+    let mut terminal = VirtualTerminal::new(area.width, area.height);
+    render_virtual_with_runtime_registry_using_terminal(
         app_state,
         terminal_runtimes,
         area,
         resize_panes,
         cell_size,
+        &mut terminal,
     )
 }
 
-fn render_virtual_with_runtime_registry_inner(
+pub(crate) fn render_virtual_with_runtime_registry_reusing(
     app_state: &mut AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
     area: Rect,
     resize_panes: bool,
     cell_size: crate::kitty_graphics::HostCellSize,
+    terminal: &mut Option<VirtualTerminal>,
+) -> (ratatui::buffer::Buffer, Option<CursorState>) {
+    if terminal
+        .as_ref()
+        .is_none_or(|terminal| terminal.size != (area.width, area.height))
+    {
+        *terminal = Some(VirtualTerminal::new(area.width, area.height));
+    }
+    let terminal = terminal
+        .as_mut()
+        .expect("virtual terminal was initialized for this client size");
+    render_virtual_with_runtime_registry_using_terminal(
+        app_state,
+        terminal_runtimes,
+        area,
+        resize_panes,
+        cell_size,
+        terminal,
+    )
+}
+
+fn render_virtual_with_runtime_registry_using_terminal(
+    app_state: &mut AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+    resize_panes: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+    terminal: &mut VirtualTerminal,
 ) -> (ratatui::buffer::Buffer, Option<CursorState>) {
     let owner = app_state.input_owner();
     let popup_visible = owner == InputOwner::Popup;
@@ -399,10 +466,9 @@ fn render_virtual_with_runtime_registry_inner(
         || (pane_owns_input
             && focused_terminal_suppresses_host_cursor_when_owned(app_state, terminal_runtimes));
 
-    let backend = CursorTrackingBackend::new(area.width, area.height);
-    let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
-
+    terminal.terminal.backend_mut().clear_rendered_cursor();
     terminal
+        .terminal
         .draw(|frame| {
             crate::ui::render_with_runtime_registry_for_owner(
                 app_state,
@@ -413,25 +479,55 @@ fn render_virtual_with_runtime_registry_inner(
         })
         .expect("render to TestBackend should never fail");
 
-    let buffer = terminal.backend().buffer().clone();
+    let buffer = terminal.terminal.backend().buffer().clone();
     let cursor = if popup_visible {
         popup_terminal_cursor(app_state, terminal_runtimes)
     } else if dock_editor_focused {
         dock_editor_cursor_state_when_owned(app_state, terminal_runtimes)
     } else if !pane_owns_input {
-        terminal.backend().rendered_cursor()
+        terminal.terminal.backend().rendered_cursor()
     } else if suppress_focused_terminal_cursor {
         None
     } else {
         crate::ui::tab_surface_cursor(app_state, terminal_runtimes, app_state.view.tab_surface())
             .or_else(|| {
                 (!focused_terminal_owns_host_cursor_when_owned(app_state, terminal_runtimes))
-                    .then(|| terminal.backend().rendered_cursor())
+                    .then(|| terminal.terminal.backend().rendered_cursor())
                     .flatten()
             })
     };
 
     (buffer, cursor)
+}
+
+pub(crate) fn render_hyperspace_animation_buffer_reusing(
+    app_state: &AppState,
+    area: Rect,
+    hovered: bool,
+    terminal: &mut Option<VirtualTerminal>,
+) -> ratatui::buffer::Buffer {
+    if terminal
+        .as_ref()
+        .is_none_or(|terminal| terminal.size != (area.width, area.height))
+    {
+        *terminal = Some(VirtualTerminal::new(area.width, area.height));
+    }
+    let terminal = terminal
+        .as_mut()
+        .expect("animation terminal was initialized for this client size");
+    terminal.terminal.backend_mut().clear_rendered_cursor();
+    terminal
+        .terminal
+        .draw(|frame| {
+            crate::ui::hyperspace::render_animation_with_hover(
+                app_state,
+                frame,
+                frame.area(),
+                hovered,
+            )
+        })
+        .expect("render to TestBackend should never fail");
+    terminal.terminal.backend().buffer().clone()
 }
 
 fn popup_terminal_cursor(
@@ -453,22 +549,38 @@ fn popup_terminal_cursor(
     })
 }
 
-/// Renders one server-owned terminal directly for `terminal attach` clients.
-pub(crate) fn render_terminal_virtual(
+pub(crate) fn render_terminal_virtual_reusing(
     runtime: &crate::terminal::TerminalRuntime,
     area: Rect,
+    terminal: &mut Option<VirtualTerminal>,
+) -> (ratatui::buffer::Buffer, Option<CursorState>) {
+    if terminal
+        .as_ref()
+        .is_none_or(|terminal| terminal.size != (area.width, area.height))
+    {
+        *terminal = Some(VirtualTerminal::new(area.width, area.height));
+    }
+    let terminal = terminal
+        .as_mut()
+        .expect("virtual terminal was initialized for this client size");
+    render_terminal_virtual_using_terminal(runtime, area, terminal)
+}
+
+fn render_terminal_virtual_using_terminal(
+    runtime: &crate::terminal::TerminalRuntime,
+    area: Rect,
+    terminal: &mut VirtualTerminal,
 ) -> (ratatui::buffer::Buffer, Option<CursorState>) {
     let suppress_cursor = runtime.synchronized_output_active();
-    let backend = CursorTrackingBackend::new(area.width, area.height);
-    let mut terminal = ratatui::Terminal::new(backend).expect("TestBackend::new should never fail");
-
+    terminal.terminal.backend_mut().clear_rendered_cursor();
     terminal
+        .terminal
         .draw(|frame| {
             runtime.render(frame, area, true);
         })
         .expect("render to TestBackend should never fail");
 
-    let buffer = terminal.backend().buffer().clone();
+    let buffer = terminal.terminal.backend().buffer().clone();
     let cursor = (!suppress_cursor)
         .then(|| runtime.cursor_state(area, true))
         .flatten()
@@ -480,7 +592,7 @@ pub(crate) fn render_terminal_virtual(
         })
         .or_else(|| {
             (!suppress_cursor)
-                .then(|| terminal.backend().rendered_cursor())
+                .then(|| terminal.terminal.backend().rendered_cursor())
                 .flatten()
         });
 

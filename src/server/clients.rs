@@ -65,6 +65,12 @@ pub(crate) struct ClientConnection {
     pub(crate) last_activity: u64,
     /// Render baseline for the negotiated client encoding.
     pub(crate) render_state: ClientRenderState,
+    /// Ratatui buffers for this client's full virtual terminal.
+    pub(crate) render_terminal: Option<crate::server::render_stream::VirtualTerminal>,
+    /// Small retained terminal used to redraw only the sidebar animation.
+    pub(crate) animation_terminal: Option<crate::server::render_stream::VirtualTerminal>,
+    /// Sidebar animation area from this client's last full layout.
+    pub(crate) animation_rect: ratatui::layout::Rect,
     /// Pomodoro input ownership from the last frame plus overlays raised since it.
     pub(crate) pomodoro_presentation: crate::ui::pomodoro::InputPresentation,
     /// Pomodoro input ownership awaiting transport flush acknowledgements.
@@ -175,6 +181,9 @@ impl ClientConnection {
             raw_input: crate::raw_input::RawInputFramer::default(),
             last_activity,
             render_state: ClientRenderState::new(render_encoding),
+            render_terminal: None,
+            animation_terminal: None,
+            animation_rect: ratatui::layout::Rect::default(),
             pomodoro_presentation: crate::ui::pomodoro::InputPresentation::default(),
             pending_pomodoro_presentations: VecDeque::new(),
             sidebar_presentation: crate::app::state::SidebarPresentationState::default(),
