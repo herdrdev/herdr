@@ -3150,18 +3150,37 @@ mod tests {
     #[test]
     fn clicking_sidebar_settle_icon_settles_the_exact_pane() {
         let mut app = sidebar_order_app(false);
-        // Nested rows need room for both selected-row controls. The 26-column
-        // default intentionally preserves the title instead of drawing them.
+        // Nested rows need room for both lifecycle controls. This tab belongs
+        // to the inactive workspace, so its controls must appear on hover.
         app.state.sidebar_width = 40;
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let row = crate::ui::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)
+            .into_iter()
+            .find(|row| row.ws_idx == 1 && row.tab_idx == 1)
+            .expect("inactive workspace tab");
+        app.handle_mouse(mouse(
+            MouseEventKind::Moved,
+            row.rect.right() - 1,
+            row.rect.y,
+        ));
+        crate::ui::compute_view(&mut app.state, area);
         let target = app
             .state
             .view
             .sidebar_hover_targets
             .iter()
-            .find(|target| target.label == "Settle")
+            .find(|target| {
+                target.rect.y == row.rect.y
+                    && matches!(
+                        target.action.as_ref(),
+                        Some(crate::app::state::SidebarHoverAction::Settle {
+                            target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                        }) if pane.pane_id == row.pane_id
+                    )
+            })
             .cloned()
-            .expect("settle icon target");
+            .expect("settle icon target for the inactive tab");
         let crate::app::state::SidebarHoverAction::Settle {
             target: lifecycle_target,
         } = target.action.expect("settle action")
@@ -3186,6 +3205,11 @@ mod tests {
             target.rect.y,
         ));
 
+        assert_eq!(
+            app.state.active,
+            Some(0),
+            "the other workspace stays active"
+        );
         assert!(app.state.pane_is_settled(ws_idx, pane_id));
     }
 
@@ -3453,15 +3477,34 @@ mod tests {
     fn clicking_sidebar_snooze_opens_durations_and_dispatches_the_api() {
         let mut app = sidebar_order_app(false);
         app.state.sidebar_width = 40;
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let row = crate::ui::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)
+            .into_iter()
+            .find(|row| row.ws_idx == 1 && row.tab_idx == 2)
+            .expect("second inactive workspace tab");
+        app.handle_mouse(mouse(
+            MouseEventKind::Moved,
+            row.rect.right() - 1,
+            row.rect.y,
+        ));
+        crate::ui::compute_view(&mut app.state, area);
         let target = app
             .state
             .view
             .sidebar_hover_targets
             .iter()
-            .find(|target| target.label == "Set time")
+            .find(|target| {
+                target.rect.y == row.rect.y
+                    && matches!(
+                        target.action.as_ref(),
+                        Some(crate::app::state::SidebarHoverAction::Snooze {
+                            target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                        }) if pane.pane_id == row.pane_id
+                    )
+            })
             .cloned()
-            .expect("snooze control target");
+            .expect("snooze control target for the inactive tab");
         let crate::app::state::SidebarHoverAction::Snooze {
             target: lifecycle_target,
         } = target.action.expect("snooze action")

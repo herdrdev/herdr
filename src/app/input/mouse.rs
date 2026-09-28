@@ -4585,10 +4585,21 @@ mod tests {
             false,
         );
         app.state.remote_agent_panel_entries = remote.remote_agent_panel_entries;
-        app.state.sidebar_selected_remote_agent = remote.sidebar_selected_remote_agent;
+        app.state.sidebar_selected_remote_agent = None;
         app.state.collapsed_sidebar_groups.remove("repo:Fleet");
         app.state.sidebar_width = 60;
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let row =
+            crate::ui::compute_remote_agent_row_areas(&app.state, app.state.view.sidebar_rect)
+                .into_iter()
+                .find(|row| row.agent_ref == entry.agent_ref)
+                .expect("unselected remote row");
+        let hover = crate::ui::hovered_control_at(&app.state, row.rect.right() - 1, row.rect.y)
+            .expect("row-wide hover target");
+        app.state
+            .set_hovered_control_at(Some(hover), std::time::Instant::now());
+        crate::ui::compute_view(&mut app.state, area);
 
         let control = app
             .state

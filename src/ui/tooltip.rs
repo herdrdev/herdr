@@ -143,7 +143,11 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
                 .iter()
                 .enumerate()
                 .find_map(|(index, target)| {
-                    rect_contains(target.rect, col, row).then_some(ControlId::SidebarHover(index))
+                    rect_contains(target.rect, col, row).then_some(if target.row_hover {
+                        ControlId::SidebarRowHover(target.rect.y)
+                    } else {
+                        ControlId::SidebarHover(index)
+                    })
                 })
         })
 }
@@ -209,6 +213,7 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
             let target = view.sidebar_hover_targets.get(index)?;
             (target.rect, target.label.clone())
         }
+        ControlId::SidebarRowHover(_) => return None,
         ControlId::DockClose => (view.dock_tab_close_rect, "Close tab".into()),
         ControlId::DockAdd => (view.dock_plus_rect, "Open surface".into()),
         ControlId::DockAutoOpen => (
@@ -370,11 +375,19 @@ mod tests {
                 rect: Rect::new(1, 4, 3, 1),
                 label: "Blocked, waiting on you".into(),
                 action: None,
+                row_hover: false,
             },
             crate::app::state::SidebarHoverTarget {
                 rect: Rect::new(4, 5, 1, 1),
                 label: "In Review".into(),
                 action: None,
+                row_hover: false,
+            },
+            crate::app::state::SidebarHoverTarget {
+                rect: Rect::new(1, 8, 20, 1),
+                label: String::new(),
+                action: None,
+                row_hover: true,
             },
         ];
 
@@ -387,6 +400,11 @@ mod tests {
             Some(ControlId::SidebarHover(1))
         );
         assert_eq!(hovered_control_at(&app, 9, 5), None);
+        assert_eq!(
+            hovered_control_at(&app, 10, 8),
+            Some(ControlId::SidebarRowHover(8))
+        );
+        assert!(tooltip_target(&app, ControlId::SidebarRowHover(8)).is_none());
 
         let (anchor, label) =
             tooltip_target(&app, ControlId::SidebarHover(1)).expect("status tooltip");

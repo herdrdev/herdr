@@ -2448,6 +2448,69 @@ mod tests {
     }
 
     #[test]
+    fn mobile_nonfocused_rows_keep_lifecycle_controls_visible_and_clickable() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![
+            crate::workspace::Workspace::test_new("mobile-active"),
+            crate::workspace::Workspace::test_new("mobile-other"),
+        ];
+        app.ensure_test_terminals();
+        for terminal in app.terminals.values_mut() {
+            terminal.agent_name = Some("codex".to_string());
+            terminal.set_raw_agent_state_for_test(AgentState::Working);
+        }
+        app.active = Some(0);
+        app.selected = 0;
+        app.set_server_mode(crate::app::Mode::Navigate);
+        app.view.layout = crate::app::state::ViewLayout::Mobile;
+        app.view.mobile_header_rect = Rect::new(0, 0, 60, 2);
+        app.view.terminal_area = Rect::new(0, 2, 60, 16);
+        app.reconcile_sidebar_presentation();
+
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 18)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_mobile_panel(
+                    &app,
+                    &TerminalRuntimeRegistry::new(),
+                    frame,
+                    Rect::new(0, 0, 60, 18),
+                )
+            })
+            .unwrap();
+
+        let viewport = mobile_switcher_areas(&app).viewport;
+        let content = inset_for_left_scrollbar(viewport);
+        let range = mobile_switcher_workspace_doc_range(&app, 1).expect("inactive workspace row");
+        let row = viewport.y + range.start as u16 + 1;
+        let rendered = (content.x..content.right())
+            .map(|column| terminal.backend().buffer()[(column, row)].symbol())
+            .collect::<String>();
+        assert!(rendered.contains('◷'), "{rendered:?}");
+        assert!(rendered.contains('✓'), "{rendered:?}");
+
+        let pane_id = app.workspaces[1]
+            .focused_pane_id()
+            .expect("inactive workspace pane");
+        let targets = (content.x..content.right())
+            .filter_map(|column| mobile_switcher_target_at(&app, column, row))
+            .collect::<Vec<_>>();
+        assert!(targets.iter().any(|target| matches!(
+            target,
+            MobileSwitcherTarget::Snooze(
+                crate::app::state::SidebarPaneLifecycleTarget::Local(pane)
+            ) if pane.pane_id == pane_id
+        )));
+        assert!(targets.iter().any(|target| matches!(
+            target,
+            MobileSwitcherTarget::Settle(
+                crate::app::state::SidebarPaneLifecycleTarget::Local(pane)
+            ) if pane.pane_id == pane_id
+        )));
+    }
+
+    #[test]
     fn mobile_subagent_count_is_dimmed_and_aligned_at_supported_widths() {
         for width in [18, 40] {
             let mut app = crate::app::state::AppState::test_new();

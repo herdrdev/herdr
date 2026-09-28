@@ -1034,6 +1034,8 @@ pub struct SidebarHoverTarget {
     pub rect: Rect,
     pub label: String,
     pub action: Option<SidebarHoverAction>,
+    /// The row-wide hover area that reveals lifecycle controls. It has no tooltip.
+    pub(crate) row_hover: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2680,9 +2682,8 @@ pub struct ViewState {
     pub(crate) sidebar_footer_refresh_hit_area: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
     pub agent_card_areas: Vec<AgentCardArea>,
-    /// Hover-only explanations for sidebar row internals (status glyphs, agent
-    /// dots, truncated work titles), in the order `ControlId::SidebarHover`
-    /// indexes them.
+    /// Hover targets for sidebar row internals and lifecycle controls. Row-wide
+    /// hover targets use `ControlId::SidebarRowHover` and have no tooltip.
     pub(crate) sidebar_hover_targets: Vec<SidebarHoverTarget>,
     pub(crate) visible_agent_activity_instants: Vec<Instant>,
     /// Elapsed wall-clock ages for visible notepad rows. Keeping the elapsed
@@ -5246,6 +5247,7 @@ pub(crate) enum ControlId {
     SidebarMore,
     SidebarFooter(SidebarFooterItem),
     SidebarHover(usize),
+    SidebarRowHover(u16),
     SidebarAnimationPause,
     DockTab(usize),
     DockClose,

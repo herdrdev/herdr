@@ -817,14 +817,22 @@ fn render_remote_compact_agent_row_with_prefix(
     let age_width = widths.age;
     let fixed_width = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + provider_width + age_width;
     let title_width = row_width.saturating_sub(fixed_width);
-    let control = remote_row_control(app, remote);
-    let controls_width = selected_row_controls_width(control.as_ref(), title_width, rect.width);
-    let title_text_width = title_width.saturating_sub(controls_width);
-    let title_text = truncate_end(title, title_text_width);
     let selected = app
         .sidebar_selected_remote_agent
         .as_ref()
         .is_some_and(|selected| selected == &remote.agent_ref);
+    let control = remote_row_control(remote);
+    let show_controls = control.as_ref().is_some_and(|control| control.snoozed)
+        || selected
+        || app.view.layout == crate::app::state::ViewLayout::Mobile
+        || sidebar_row_is_hovered(app, rect.y);
+    let controls_width = selected_row_controls_width(
+        show_controls.then_some(control.as_ref()).flatten(),
+        title_width,
+        rect.width,
+    );
+    let title_text_width = title_width.saturating_sub(controls_width);
+    let title_text = truncate_end(title, title_text_width);
     let title_style = if selected {
         Style::default()
             .fg(active_sidebar_title_color(p))
@@ -964,8 +972,15 @@ fn render_compact_agent_row_with_prefix(
     let fixed_width = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
     let title_width = usize::from(rect.width).saturating_sub(fixed_width);
     let control_pane = row_control_pane(app, entry, tab);
-    let controls_width =
-        selected_row_controls_width(control_pane.as_ref(), title_width, rect.width);
+    let show_controls = control_pane.as_ref().is_some_and(|control| control.snoozed)
+        || selected_local_row_pane(app, entry, tab).is_some()
+        || app.view.layout == crate::app::state::ViewLayout::Mobile
+        || sidebar_row_is_hovered(app, rect.y);
+    let controls_width = selected_row_controls_width(
+        show_controls.then_some(control_pane.as_ref()).flatten(),
+        title_width,
+        rect.width,
+    );
     let snoozed = control_pane.as_ref().is_some_and(|control| control.snoozed);
     // The star sits inside the title field, right after the name, so it reads as
     // part of the session's label rather than as another right-hand column.
@@ -1058,6 +1073,18 @@ fn selected_local_row_pane(
         .then_some(target.pane_id)
 }
 
+fn sidebar_row_is_hovered(app: &AppState, row_y: u16) -> bool {
+    match app.hovered_control {
+        Some(crate::app::state::ControlId::SidebarRowHover(hovered_y)) => hovered_y == row_y,
+        Some(crate::app::state::ControlId::SidebarHover(index)) => app
+            .view
+            .sidebar_hover_targets
+            .get(index)
+            .is_some_and(|target| target.rect.y == row_y),
+        _ => false,
+    }
+}
+
 #[derive(Clone)]
 struct SidebarRowControl {
     target: crate::app::state::SidebarPaneLifecycleTarget,
@@ -1071,51 +1098,28 @@ fn row_control_pane(
     tab: bool,
 ) -> Option<SidebarRowControl> {
     let target = entry.local_target()?;
-    if !app.pane_can_snooze(target.ws_idx, target.pane_id) {
+    let pane_id = selected_local_row_pane(app, entry, tab).unwrap_or(target.pane_id);
+    if !app.pane_can_snooze(target.ws_idx, pane_id) {
         return None;
     }
-    if app.pane_is_snoozed(target.ws_idx, target.pane_id) {
-        return Some(SidebarRowControl {
-            target: crate::app::state::SidebarPaneLifecycleTarget::Local(
-                crate::app::state::PaneFocusTarget {
-                    workspace_id: app.workspaces.get(target.ws_idx)?.id.clone(),
-                    pane_id: target.pane_id,
-                },
-            ),
-            snoozed: true,
-            show_settle: false,
-        });
-    }
-    let pane_id = selected_local_row_pane(app, entry, tab)?;
-    if app.pane_can_snooze(target.ws_idx, pane_id) {
-        Some(SidebarRowControl {
-            target: crate::app::state::SidebarPaneLifecycleTarget::Local(
-                crate::app::state::PaneFocusTarget {
-                    workspace_id: app.workspaces.get(target.ws_idx)?.id.clone(),
-                    pane_id,
-                },
-            ),
-            snoozed: false,
-            show_settle: true,
-        })
-    } else {
-        None
-    }
+    let snoozed = app.pane_is_snoozed(target.ws_idx, pane_id);
+    Some(SidebarRowControl {
+        target: crate::app::state::SidebarPaneLifecycleTarget::Local(
+            crate::app::state::PaneFocusTarget {
+                workspace_id: app.workspaces.get(target.ws_idx)?.id.clone(),
+                pane_id,
+            },
+        ),
+        snoozed,
+        show_settle: !snoozed,
+    })
 }
 
-fn remote_row_control(app: &AppState, entry: &RemoteAgentPanelEntry) -> Option<SidebarRowControl> {
+fn remote_row_control(entry: &RemoteAgentPanelEntry) -> Option<SidebarRowControl> {
     if !entry.host_fresh || entry.settled || entry_needs_human_attention(entry) {
         return None;
     }
     let snoozed = entry.snoozed_until.is_some();
-    if !snoozed
-        && app
-            .sidebar_selected_remote_agent
-            .as_ref()
-            .is_none_or(|selected| selected != &entry.agent_ref)
-    {
-        return None;
-    }
     Some(SidebarRowControl {
         target: crate::app::state::SidebarPaneLifecycleTarget::Remote(entry.agent_ref.clone()),
         snoozed,
@@ -1160,7 +1164,10 @@ pub(crate) fn selected_row_control_at(
     let widths = compact_row_widths(title, &provider, usize::from(rect.width), requested_prefix);
     let fixed_width = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
     let title_width = usize::from(rect.width).saturating_sub(fixed_width);
-    let control_pane = row_control_pane(app, entry, tab);
+    let selected = selected_local_row_pane(app, entry, tab).is_some();
+    let mobile = app.view.layout == crate::app::state::ViewLayout::Mobile;
+    let control_pane =
+        row_control_pane(app, entry, tab).filter(|control| control.snoozed || selected || mobile);
     let controls_width =
         selected_row_controls_width(control_pane.as_ref(), title_width, rect.width);
     if controls_width == 0 {
@@ -1213,7 +1220,12 @@ pub(crate) fn selected_remote_row_control_at(
     let widths = compact_row_widths(title, &entry.render_provider, row_width, requested_prefix);
     let fixed_width = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
     let title_width = row_width.saturating_sub(fixed_width);
-    let control = remote_row_control(app, entry);
+    let selected = app
+        .sidebar_selected_remote_agent
+        .as_ref()
+        .is_some_and(|selected| selected == &entry.agent_ref);
+    let mobile = app.view.layout == crate::app::state::ViewLayout::Mobile;
+    let control = remote_row_control(entry).filter(|control| control.snoozed || selected || mobile);
     let controls_width = selected_row_controls_width(control.as_ref(), title_width, rect.width);
     if controls_width == 0 {
         return None;
@@ -8218,6 +8230,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                     rect,
                     label: agent_dot_tooltip(entry),
                     action: None,
+                    row_hover: false,
                 });
                 if entry.sections_card.is_some() {
                     continue;
@@ -8226,37 +8239,67 @@ pub(crate) fn compute_sidebar_hover_targets(
                     widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
                 let title_width = usize::from(body.width).saturating_sub(fixed_width);
                 let control_pane = row_control_pane(app, entry, tab);
-                let controls_width =
+                let available_width =
                     selected_row_controls_width(control_pane.as_ref(), title_width, body.width);
-                if controls_width > 0 {
-                    let Some(control) = control_pane else {
-                        continue;
-                    };
-                    let start = prefix + SIDEBAR_DOT_FIELD_WIDTH + title_width - controls_width;
-                    if let Some(rect) =
-                        clamp_row_cells(body, row_y, start, SIDEBAR_SNOOZE_CONTROL_WIDTH)
-                    {
-                        targets.push(crate::app::state::SidebarHoverTarget {
-                            rect,
-                            label: snooze_control_tooltip(app, target.ws_idx, target.pane_id),
-                            action: Some(crate::app::state::SidebarHoverAction::Snooze {
-                                target: control.target.clone(),
-                            }),
-                        });
-                    }
-                    if control.show_settle {
-                        if let Some(rect) = clamp_row_cells(
-                            body,
-                            row_y,
-                            start + SIDEBAR_SNOOZE_CONTROL_WIDTH,
-                            SIDEBAR_SETTLE_CONTROL_WIDTH,
-                        ) {
+                let controls_visible = control_pane.as_ref().is_some_and(|control| control.snoozed)
+                    || selected_local_row_pane(app, entry, tab).is_some()
+                    || sidebar_row_is_hovered(app, row_y);
+                let controls_width = if controls_visible { available_width } else { 0 };
+                if let Some(control) = control_pane {
+                    if available_width > 0 {
+                        if controls_width > 0 {
+                            let start =
+                                prefix + SIDEBAR_DOT_FIELD_WIDTH + title_width - controls_width;
+                            if let Some(rect) =
+                                clamp_row_cells(body, row_y, start, SIDEBAR_SNOOZE_CONTROL_WIDTH)
+                            {
+                                targets.push(crate::app::state::SidebarHoverTarget {
+                                    rect,
+                                    label: snooze_control_tooltip(
+                                        app,
+                                        target.ws_idx,
+                                        match &control.target {
+                                            crate::app::state::SidebarPaneLifecycleTarget::Local(
+                                                pane,
+                                            ) => pane.pane_id,
+                                            crate::app::state::SidebarPaneLifecycleTarget::Remote(
+                                                _,
+                                            ) => target.pane_id,
+                                        },
+                                    ),
+                                    action: Some(crate::app::state::SidebarHoverAction::Snooze {
+                                        target: control.target.clone(),
+                                    }),
+                                    row_hover: false,
+                                });
+                            }
+                            if control.show_settle {
+                                if let Some(rect) = clamp_row_cells(
+                                    body,
+                                    row_y,
+                                    start + SIDEBAR_SNOOZE_CONTROL_WIDTH,
+                                    SIDEBAR_SETTLE_CONTROL_WIDTH,
+                                ) {
+                                    targets.push(crate::app::state::SidebarHoverTarget {
+                                        rect,
+                                        label: "Settle".into(),
+                                        action: Some(
+                                            crate::app::state::SidebarHoverAction::Settle {
+                                                target: control.target.clone(),
+                                            },
+                                        ),
+                                        row_hover: false,
+                                    });
+                                }
+                            }
+                        }
+                        if let Some(rect) = clamp_row_cells(body, row_y, 0, usize::from(body.width))
+                        {
                             targets.push(crate::app::state::SidebarHoverTarget {
                                 rect,
-                                label: "Settle".into(),
-                                action: Some(crate::app::state::SidebarHoverAction::Settle {
-                                    target: control.target,
-                                }),
+                                label: String::new(),
+                                action: None,
+                                row_hover: true,
                             });
                         }
                     }
@@ -8295,6 +8338,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                         rect,
                         label: agent_dot_tooltip(entry),
                         action: None,
+                        row_hover: false,
                     });
                 }
                 if sections_card.is_some() {
@@ -8303,41 +8347,63 @@ pub(crate) fn compute_sidebar_hover_targets(
                 let fixed_width =
                     widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
                 let title_width = row_width.saturating_sub(fixed_width);
-                let control = remote_row_control(app, entry);
-                let controls_width =
+                let control = remote_row_control(entry);
+                let available_width =
                     selected_row_controls_width(control.as_ref(), title_width, body.width);
-                if controls_width == 0 {
-                    continue;
-                }
-                let Some(control) = control else {
-                    continue;
-                };
-                let start = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + title_width - controls_width;
-                if let Some(rect) =
-                    clamp_row_cells(body, row_y, start, SIDEBAR_SNOOZE_CONTROL_WIDTH)
-                {
-                    targets.push(crate::app::state::SidebarHoverTarget {
-                        rect,
-                        label: remote_snooze_control_tooltip(entry),
-                        action: Some(crate::app::state::SidebarHoverAction::Snooze {
-                            target: control.target.clone(),
-                        }),
-                    });
-                }
-                if control.show_settle {
-                    if let Some(rect) = clamp_row_cells(
-                        body,
-                        row_y,
-                        start + SIDEBAR_SNOOZE_CONTROL_WIDTH,
-                        SIDEBAR_SETTLE_CONTROL_WIDTH,
-                    ) {
-                        targets.push(crate::app::state::SidebarHoverTarget {
-                            rect,
-                            label: "Settle".into(),
-                            action: Some(crate::app::state::SidebarHoverAction::Settle {
-                                target: control.target,
-                            }),
-                        });
+                let selected = app
+                    .sidebar_selected_remote_agent
+                    .as_ref()
+                    .is_some_and(|selected| selected == &entry.agent_ref);
+                let controls_visible = control.as_ref().is_some_and(|control| control.snoozed)
+                    || selected
+                    || sidebar_row_is_hovered(app, row_y);
+                let controls_width = if controls_visible { available_width } else { 0 };
+                if let Some(control) = control {
+                    if available_width > 0 {
+                        if controls_width > 0 {
+                            let start = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + title_width
+                                - controls_width;
+                            if let Some(rect) =
+                                clamp_row_cells(body, row_y, start, SIDEBAR_SNOOZE_CONTROL_WIDTH)
+                            {
+                                targets.push(crate::app::state::SidebarHoverTarget {
+                                    rect,
+                                    label: remote_snooze_control_tooltip(entry),
+                                    action: Some(crate::app::state::SidebarHoverAction::Snooze {
+                                        target: control.target.clone(),
+                                    }),
+                                    row_hover: false,
+                                });
+                            }
+                            if control.show_settle {
+                                if let Some(rect) = clamp_row_cells(
+                                    body,
+                                    row_y,
+                                    start + SIDEBAR_SNOOZE_CONTROL_WIDTH,
+                                    SIDEBAR_SETTLE_CONTROL_WIDTH,
+                                ) {
+                                    targets.push(crate::app::state::SidebarHoverTarget {
+                                        rect,
+                                        label: "Settle".into(),
+                                        action: Some(
+                                            crate::app::state::SidebarHoverAction::Settle {
+                                                target: control.target.clone(),
+                                            },
+                                        ),
+                                        row_hover: false,
+                                    });
+                                }
+                            }
+                        }
+                        if let Some(rect) = clamp_row_cells(body, row_y, 0, usize::from(body.width))
+                        {
+                            targets.push(crate::app::state::SidebarHoverTarget {
+                                rect,
+                                label: String::new(),
+                                action: None,
+                                row_hover: true,
+                            });
+                        }
                     }
                 }
             }
@@ -8358,6 +8424,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                     rect,
                     label: status.label().to_string(),
                     action: None,
+                    row_hover: false,
                 });
             }
         }
@@ -8374,6 +8441,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                     rect,
                     label: header.title.clone(),
                     action: None,
+                    row_hover: false,
                 });
             }
         }
@@ -27426,6 +27494,92 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn hovering_a_nonfocused_local_row_reveals_its_lifecycle_controls() {
+        let mut app = app_with_agents(&["alpha", "beta"]);
+        app.nerd_font = false;
+        app.sidebar_width = 60;
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app, area);
+
+        let row = compute_tab_card_areas(&app, app.view.sidebar_rect)
+            .into_iter()
+            .find(|card| card.ws_idx == 1)
+            .expect("nonfocused workspace row");
+        assert!(
+            app.view.sidebar_hover_targets.iter().all(|target| {
+                !matches!(
+                    target.action.as_ref(),
+                    Some(crate::app::state::SidebarHoverAction::Snooze {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                    } | crate::app::state::SidebarHoverAction::Settle {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                    }) if pane.pane_id == row.pane_id
+                )
+            }),
+            "unhovered rows keep lifecycle hit areas hidden"
+        );
+        let hover = crate::ui::hovered_control_at(&app, row.rect.right() - 1, row.rect.y)
+            .expect("row-wide hover target");
+        assert_eq!(
+            hover,
+            crate::app::state::ControlId::SidebarRowHover(row.rect.y)
+        );
+        app.set_hovered_control_at(Some(hover), std::time::Instant::now());
+        crate::ui::compute_view(&mut app, area);
+
+        for action in ["Snooze", "Settle"] {
+            assert!(app.view.sidebar_hover_targets.iter().any(|target| {
+                target.rect.y == row.rect.y
+                    && matches!(
+                        (action, target.action.as_ref()),
+                        (
+                            "Snooze",
+                            Some(crate::app::state::SidebarHoverAction::Snooze {
+                                target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                            })
+                        ) if pane.pane_id == row.pane_id
+                    )
+                    || matches!(
+                        (action, target.action.as_ref()),
+                        (
+                            "Settle",
+                            Some(crate::app::state::SidebarHoverAction::Settle {
+                                target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                            })
+                        ) if pane.pane_id == row.pane_id
+                    )
+            }), "missing {action} action for pane {}", row.pane_id.raw());
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        let sidebar_area = app.view.sidebar_rect;
+        terminal
+            .draw(|frame| {
+                render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, sidebar_area)
+            })
+            .unwrap();
+        let rendered = row_text(terminal.backend().buffer(), row.rect.y, row.rect.width);
+        assert!(rendered.contains('◷'), "{rendered:?}");
+        assert!(rendered.contains('✓'), "{rendered:?}");
+
+        app.set_hovered_control_at(None, std::time::Instant::now());
+        crate::ui::compute_view(&mut app, area);
+        assert!(
+            app.view.sidebar_hover_targets.iter().all(|target| {
+                !matches!(
+                    target.action.as_ref(),
+                    Some(crate::app::state::SidebarHoverAction::Snooze {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                    } | crate::app::state::SidebarHoverAction::Settle {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                    }) if pane.pane_id == row.pane_id
+                )
+            }),
+            "moving off the row hides its lifecycle hit areas"
+        );
+    }
+
+    #[test]
     fn section_cards_have_no_local_or_remote_lifecycle_hover_targets() {
         let mut app = app_with_agents(&["local"]);
         app.sidebar_sections_layout = true;
@@ -28539,6 +28693,61 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
             }) if agent_ref == &entry.agent_ref
         )));
+
+        app.sidebar_selected_remote_agent = None;
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
+        assert!(
+            app.view
+                .sidebar_hover_targets
+                .iter()
+                .all(|target| !matches!(
+                    target.action.as_ref(),
+                    Some(crate::app::state::SidebarHoverAction::Snooze {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
+                    } | crate::app::state::SidebarHoverAction::Settle {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
+                    }) if agent_ref == &entry.agent_ref
+                )),
+            "unhovered remote rows keep lifecycle hit areas hidden"
+        );
+
+        let row = compute_remote_agent_row_areas(&app, app.view.sidebar_rect)
+            .into_iter()
+            .find(|row| row.agent_ref == entry.agent_ref)
+            .expect("remote row geometry");
+        let hover = crate::ui::hovered_control_at(&app, row.rect.right() - 1, row.rect.y)
+            .expect("row-wide hover target");
+        assert_eq!(
+            hover,
+            crate::app::state::ControlId::SidebarRowHover(row.rect.y)
+        );
+        app.set_hovered_control_at(Some(hover), std::time::Instant::now());
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
+
+        assert!(app.view.sidebar_hover_targets.iter().any(|target| matches!(
+            target.action.as_ref(),
+            Some(crate::app::state::SidebarHoverAction::Snooze {
+                target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
+            }) if agent_ref == &entry.agent_ref
+        )));
+        assert!(app.view.sidebar_hover_targets.iter().any(|target| matches!(
+            target.action.as_ref(),
+            Some(crate::app::state::SidebarHoverAction::Settle {
+                target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
+            }) if agent_ref == &entry.agent_ref
+        )));
+
+        let area = Rect::new(0, 0, 120, 40);
+        let sidebar_area = app.view.sidebar_rect;
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, sidebar_area)
+            })
+            .unwrap();
+        let rendered = row_text(terminal.backend().buffer(), row.rect.y, row.rect.width);
+        assert!(rendered.contains('◷'), "{rendered:?}");
+        assert!(rendered.contains('✓'), "{rendered:?}");
     }
 
     #[test]
