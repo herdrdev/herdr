@@ -1351,6 +1351,14 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 for call in rpc.call_args_list
             )
         )
+        report_agent_params = next(
+            call.args[3]
+            for call in rpc.call_args_list
+            if call.args[2] == "pane.report_agent"
+        )
+        self.assertEqual(
+            report_agent_params["agent_session_id"], "thread-native-1"
+        )
         metadata = rpc.call_args_list[-1].args[3]
         self.assertEqual(metadata["agent"], "codex")
         self.assertEqual(

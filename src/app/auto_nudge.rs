@@ -806,6 +806,134 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn final_report_from_a_stale_pane_id_clears_staleness_before_nudging() {
+        let now = Instant::now();
+        let (mut app, pane_id, terminal_id, _rx) = app_with_stalled_pane(now);
+        let session_id = "stale-pane-final-report-session";
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id(session_id).unwrap(),
+        });
+        terminal.supervisor_stale = true;
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "stale-final-report".into(),
+            method: crate::api::schema::Method::PaneReportAgent(
+                crate::api::schema::PaneReportAgentParams {
+                    pane_id: "old-workspace:p15".into(),
+                    source: "herdr:claude-closing-block".into(),
+                    agent: "claude".into(),
+                    state: crate::api::schema::PaneAgentState::Idle,
+                    v: Some(2),
+                    message: None,
+                    seq: Some(2),
+                    wait: None,
+                    eta_s: None,
+                    reported_at: None,
+                    agent_session_id: Some(session_id.into()),
+                    agent_session_path: None,
+                    gates: Some(Vec::new()),
+                    items: Some(Vec::new()),
+                    decisions: Some(Vec::new()),
+                    completion: Some(crate::api::schema::ClosingCompletion::Complete),
+                    external_wait: None,
+                    parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
+                    workers_unknown: Some(false),
+                    agents: Some(0),
+                },
+            ),
+        });
+        let _: crate::api::schema::SuccessResponse = serde_json::from_str(&response)
+            .unwrap_or_else(|_| panic!("stale pane report was not routed: {response}"));
+
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.raw_agent_state(), AgentState::Idle);
+        assert!(!terminal.supervisor_stale);
+        let pane = app.pane_info(0, pane_id).unwrap();
+        assert_eq!(
+            pane.tokens.get("closing_completion").map(String::as_str),
+            Some("complete")
+        );
+        let facts = AutoNudgeFacts {
+            supervisor_stale: terminal.supervisor_stale,
+            ..ready_facts(now)
+        };
+        assert!(matches!(
+            auto_nudge_decision(&facts),
+            AutoNudgeDecision::Reset(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_older_report_does_not_clear_a_stale_working_session_or_its_nudge() {
+        let now = Instant::now();
+        let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
+        let session_id = "stale-sequence-session";
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal
+            .set_hook_authority_report_at(
+                "herdr:claude".into(),
+                "claude".into(),
+                AgentState::Working,
+                None,
+                None,
+                None,
+                None,
+                Some(crate::agent_resume::AgentSessionRef::id(session_id).unwrap()),
+                Some(10),
+                now,
+            )
+            .expect("current working report accepted");
+        terminal.supervisor_stale = true;
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "older-report".into(),
+            method: crate::api::schema::Method::PaneReportAgent(
+                crate::api::schema::PaneReportAgentParams {
+                    pane_id: public_pane_id,
+                    source: "herdr:claude".into(),
+                    agent: "claude".into(),
+                    state: crate::api::schema::PaneAgentState::Idle,
+                    v: None,
+                    message: None,
+                    seq: Some(9),
+                    wait: None,
+                    eta_s: None,
+                    reported_at: None,
+                    agent_session_id: Some(session_id.into()),
+                    agent_session_path: None,
+                    gates: None,
+                    items: None,
+                    decisions: None,
+                    completion: None,
+                    external_wait: None,
+                    parse_status: None,
+                    workers_unknown: None,
+                    agents: None,
+                },
+            ),
+        });
+        let _: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+
+        let terminal = &app.state.terminals[&terminal_id];
+        assert_eq!(terminal.raw_agent_state(), AgentState::Working);
+        assert!(terminal.supervisor_stale);
+        assert_eq!(
+            auto_nudge_decision(&AutoNudgeFacts {
+                supervisor_stale: terminal.supervisor_stale,
+                ..ready_facts(now)
+            }),
+            AutoNudgeDecision::Nudge
+        );
+        assert!(app.tick_auto_nudges(now));
+        assert!(!drain(&mut rx).is_empty());
+    }
+
     #[test]
     fn every_auto_nudge_safety_gate_rejects_the_candidate() {
         let now = Instant::now();

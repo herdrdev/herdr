@@ -3624,6 +3624,20 @@ impl TerminalState {
         )
     }
 
+    pub(crate) fn effective_non_retired_hook_authority(&self) -> Option<&HookAuthority> {
+        self.hook_authority.as_ref().filter(|authority| {
+            authority.retired_at.is_none() && self.hook_authority_is_effective(authority)
+        })
+    }
+
+    pub(crate) fn effective_non_retired_hook_session_id(&self) -> Option<(&str, &str)> {
+        let authority = self.effective_non_retired_hook_authority()?;
+        let session_ref = authority.session_ref.as_ref().filter(|session_ref| {
+            session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
+        })?;
+        Some((&authority.agent_label, session_ref.value.as_str()))
+    }
+
     pub(crate) fn record_legacy_closing_report_precursor(
         &mut self,
         source: String,
