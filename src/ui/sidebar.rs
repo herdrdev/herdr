@@ -238,6 +238,8 @@ pub(super) struct TabRowLayout {
 }
 
 const SIDEBAR_DOT_FIELD_WIDTH: usize = 3;
+/// Prefix of a task row at depth 1 (`depth * 3 + 1`), shared by the Needs-you strip.
+const NEEDS_YOU_DOT_PREFIX_WIDTH: usize = 4;
 const SIDEBAR_PROVIDER_GAP_WIDTH: usize = 1;
 const SIDEBAR_AGE_FIELD_WIDTH: usize = 5;
 const SIDEBAR_AGE_MIN_ROW_WIDTH: usize = 24;
@@ -2756,8 +2758,11 @@ pub(crate) enum SidebarRow {
         space_icon: String,
         /// Short host token, e.g. `ub1`; local rows name the current host.
         host: String,
-        /// Retained for urgency ordering; all Needs-you markers render red.
+        /// Retained for urgency ordering.
         blocked: bool,
+        /// Status dot glyph and colour, from the same helpers as task rows.
+        dot: String,
+        dot_color: Color,
         target: NeedsYouTarget,
     },
     NeedsYouMore {
@@ -4797,6 +4802,8 @@ fn needs_you_strip_rows(
             space_icon,
             host: sidebar_machine_host(app, entry).to_string(),
             blocked: entry_is_blocked(entry),
+            dot: compact_row_dot_text(entry),
+            dot_color: compact_row_color(entry, &app.palette),
             target: NeedsYouTarget::Local(target),
         });
     }
@@ -4822,6 +4829,8 @@ fn needs_you_strip_rows(
             space_name,
             host: remote.agent_ref.host.clone(),
             blocked: entry_is_blocked(entry),
+            dot: compact_row_dot_text(entry),
+            dot_color: compact_row_color(entry, &app.palette),
             target: NeedsYouTarget::Remote(remote.agent_ref.clone()),
         });
     }
@@ -7790,34 +7799,40 @@ pub(super) fn render_needs_you_row(
     title: &str,
     space_icon: &str,
     host: &str,
-    _blocked: bool,
+    dot: &str,
+    dot_color: Color,
     rect: Rect,
 ) {
     if rect.width == 0 || rect.height == 0 {
         return;
     }
     let p = &app.palette;
-    let marker_color = p.red;
     let machine_icon = sidebar_machine_icon(app, host);
     let age_width = if usize::from(rect.width) >= SIDEBAR_AGE_MIN_ROW_WIDTH {
         SIDEBAR_AGE_FIELD_WIDTH
     } else {
         0
     };
+    // The dot sits in the same column as the dots of task rows nested one
+    // level under a group header, so the strip and the list line up.
+    let prefix = NEEDS_YOU_DOT_PREFIX_WIDTH.min(usize::from(rect.width) / 4);
     let title_width = usize::from(rect.width).saturating_sub(
-        2 + display_width(space_icon) + 1 + SIDEBAR_MACHINE_FIELD_WIDTH + age_width,
+        prefix
+            + SIDEBAR_DOT_FIELD_WIDTH
+            + display_width(space_icon)
+            + 1
+            + SIDEBAR_MACHINE_FIELD_WIDTH
+            + age_width,
     );
     let title = truncate_end(title, title_width);
     let pad = title_width.saturating_sub(display_width(&title));
     frame.render_widget(
         Paragraph::new(Line::from(vec![
+            Span::raw(" ".repeat(prefix)),
             Span::styled(
-                "●",
-                Style::default()
-                    .fg(marker_color)
-                    .add_modifier(Modifier::BOLD),
+                pad_right(dot, SIDEBAR_DOT_FIELD_WIDTH),
+                Style::default().fg(dot_color),
             ),
-            Span::raw(" "),
             Span::styled(space_icon.to_string(), Style::default().fg(p.subtext0)),
             Span::raw(" "),
             Span::styled(title, Style::default().fg(p.subtext0)),
@@ -10904,10 +10919,13 @@ fn render_workspace_list(
                     title,
                     space_icon,
                     host,
-                    blocked,
+                    dot,
+                    dot_color,
                     ..
                 }) => {
-                    render_needs_you_row(app, frame, title, space_icon, host, *blocked, rect);
+                    render_needs_you_row(
+                        app, frame, title, space_icon, host, dot, *dot_color, rect,
+                    );
                 }
                 Some(SidebarRow::NeedsYouMore {
                     remaining,
@@ -29345,14 +29363,19 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                     ..
                 }
             )));
-            let mut terminal = Terminal::new(TestBackend::new(36, 1)).expect("needs-you terminal");
+            let entry = sidebar_thread_entries(&app)
+                .into_iter()
+                .next()
+                .expect("tab");
+            let mut terminal = Terminal::new(TestBackend::new(36, 2)).expect("needs-you terminal");
             terminal
                 .draw(|frame| {
                     if let SidebarRow::NeedsYou {
                         title,
                         space_icon,
                         host,
-                        blocked,
+                        dot,
+                        dot_color,
                         ..
                     } = &rows[0]
                     {
@@ -29362,15 +29385,29 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                             title,
                             space_icon,
                             host,
-                            *blocked,
+                            dot,
+                            *dot_color,
                             Rect::new(0, 0, 36, 1),
                         );
                     }
+                    // A task row nested one level under a group header.
+                    render_compact_agent_row(
+                        &app,
+                        frame,
+                        &entry,
+                        Rect::new(0, 1, 36, 1),
+                        1,
+                        true,
+                        None,
+                    );
                 })
                 .expect("render needs-you row");
             let buffer = terminal.backend().buffer();
-            let x = find_symbol_x(buffer, 0, 36, "●");
-            assert_eq!(x, 0);
+            let task_x = find_symbol_x(buffer, 1, 36, "○");
+            let x = find_symbol_x(buffer, 0, 36, "○");
+            assert_eq!(x, task_x, "needs-you dot aligns with the task dot");
+            assert!(x > 0);
+            assert_eq!(buffer[(x, 0)].style().fg, buffer[(task_x, 1)].style().fg);
             assert_eq!(buffer[(x, 0)].style().fg, Some(app.palette.red));
         }
     }
@@ -29417,7 +29454,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                             "blocked",
                             "▯",
                             "ub1",
-                            true,
+                            "○",
+                            app.palette.red,
                             Rect::new(0, 1, width, 1),
                         );
                     })

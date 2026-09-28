@@ -629,7 +629,7 @@ fn compute_view_internal_at(
         sidebar::sidebar_footer_usage_hit_area(sidebar_area)
     };
     let usage_hit_areas = if app.usage_view.is_some() {
-        usage::hit_areas(terminal_area, usage::agy_has_data(&app.provider_usage))
+        usage::hit_areas(terminal_area)
     } else {
         Vec::new()
     };

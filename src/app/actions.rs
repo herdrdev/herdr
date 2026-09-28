@@ -352,6 +352,9 @@ impl AppState {
         let current = self.current_pane_focus_target();
         if previous != current {
             self.previous_pane_focus = previous;
+            // The usage screen covers the terminal area; navigating to another
+            // tab or workspace leaves it so the newly focused pane is visible.
+            self.usage_view = None;
         }
     }
 

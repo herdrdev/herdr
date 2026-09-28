@@ -1441,9 +1441,23 @@ impl App {
                 }
                 self.start_usage_scan();
             }
-            _ => {}
+            _ => self.dispatch_usage_passthrough_key(key),
         }
         true
+    }
+
+    /// Keys the usage screen does not own still reach the global direct
+    /// keybindings and the prefix key, so tab switching keeps working while
+    /// the screen is open.
+    fn dispatch_usage_passthrough_key(&mut self, key: KeyEvent) {
+        let key = TerminalKey::from(key);
+        let action = terminal_direct_non_indexed_navigation_action(&self.state, &key)
+            .or_else(|| terminal_direct_indexed_navigation_action(&self.state, &key));
+        if let Some(action) = action {
+            self.execute_tui_navigate_action(action, navigate::ActionContext::Direct);
+        } else if self.state.is_prefix_key(&key) {
+            self.state.set_server_mode(Mode::Prefix);
+        }
     }
 
     fn activate_usage_hit_target(&mut self, target: crate::app::state::UsageHitTarget) {
@@ -5026,9 +5040,17 @@ impl App {
                     .map(|hit| hit.target);
                 if let Some(target) = target {
                     self.activate_usage_hit_target(target);
+                    return;
                 }
             }
-            return;
+            // Clicks outside the usage surface (tab bar, sidebar) keep their
+            // normal handling so tabs stay clickable while the screen is open.
+            if self
+                .state
+                .point_in_rect(self.state.view.terminal_area, mouse.column, mouse.row)
+            {
+                return;
+            }
         }
         if owner == InputOwner::Surface(SurfaceInputOwner::Work) {
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
@@ -8155,6 +8177,31 @@ sidebar_visible = true
 
         app.state.swap_dock_presentation(&mut client_a);
         assert_eq!(app.state.pr_action_confirmation, Some(confirmation));
+    }
+
+    #[test]
+    fn usage_view_passes_tab_switch_keybinds_through_and_closes() {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("test")];
+        app.state.workspaces[0].test_add_tab(None);
+        app.state.workspaces[0].active_tab = 0;
+        app.state.active = Some(0);
+        app.state.keybinds.next_tab = crate::config::ActionKeybinds::direct("alt+n");
+        app.toggle_usage_view();
+
+        assert!(app.handle_usage_view_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT)));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 1);
+        assert!(app.state.usage_view.is_none());
+    }
+
+    #[test]
+    fn usage_view_prefix_key_enters_prefix_mode() {
+        let mut app = test_app();
+        app.toggle_usage_view();
+        let (code, modifiers) = (app.state.prefix_code, app.state.prefix_mods);
+        app.handle_usage_view_key(KeyEvent::new(code, modifiers));
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
     }
 
     #[test]

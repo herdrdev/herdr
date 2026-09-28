@@ -5100,6 +5100,39 @@ mod tests {
     }
 
     #[test]
+    fn tab_click_switches_tab_and_leaves_open_usage_screen() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None);
+        ws.active_tab = 1;
+        app.state.workspaces = vec![ws];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.toggle_usage_view();
+        let area = Rect::new(0, 0, 106, 20);
+        crate::ui::compute_view(&mut app.state, area);
+        assert_eq!(
+            app.state.input_owner(),
+            crate::app::state::InputOwner::Surface(crate::app::state::SurfaceInputOwner::Usage)
+        );
+
+        let first_tab = app.state.view.tab_hit_areas[0];
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            first_tab.x + 1,
+            first_tab.y,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            first_tab.x + 1,
+            first_tab.y,
+        ));
+
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert!(app.state.usage_view.is_none());
+    }
+
+    #[test]
     fn workspace_click_survives_stray_drag_report_off_the_workspace_list() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("first"), Workspace::test_new("second")];

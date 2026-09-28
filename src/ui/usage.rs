@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -14,7 +14,9 @@ use crate::{
         UsageViewState,
     },
     config::{UsageConfig, UsageModelPricing},
-    provider_usage::{ProviderUsageSnapshot, QuotaWindow, UsageProvider, UsageSample},
+    provider_usage::{
+        ProviderUsageSnapshot, QuotaProvider, QuotaWindow, UsageProvider, UsageSample,
+    },
 };
 
 const HEADER_CONTROLS: [(UsageHitTarget, u16); 7] = [
@@ -97,17 +99,21 @@ pub(crate) struct UsageLayout {
     pub(crate) footer: Rect,
 }
 
-/// Whether Antigravity reported a quota window, so the usage view gives it a row.
-pub(crate) fn agy_has_data(snapshot: &ProviderUsageSnapshot) -> bool {
-    let agy = snapshot.primary_usage(crate::provider_usage::QuotaProvider::Agy);
-    agy.five_hour.is_some() || agy.seven_day.is_some()
-}
+/// Every quota provider herdr collects, in display order. Each always gets a
+/// row; providers without data render placeholder windows.
+pub(crate) const SUBSCRIPTION_PROVIDERS: [QuotaProvider; 4] = [
+    QuotaProvider::Claude,
+    QuotaProvider::Codex,
+    QuotaProvider::Kimi,
+    QuotaProvider::Agy,
+];
 
-pub(crate) fn layout(area: Rect, agy_row: bool) -> UsageLayout {
+pub(crate) fn layout(area: Rect) -> UsageLayout {
     let outer = Block::default().borders(Borders::ALL).inner(area);
     let narrow = outer.width < 80;
-    // Narrow screens stack the subscription panel, so a fourth provider needs two more rows.
-    let extra = if narrow && agy_row { 2 } else { 0 };
+    // A stacked (narrow) panel needs two more rows to give every provider two
+    // lines; short terminals keep the space and use compact one-line rows.
+    let extra = if narrow && outer.height >= 26 { 2 } else { 0 };
     let rows = Layout::vertical([
         Constraint::Length(header_rows(outer.width)),
         Constraint::Length(if narrow { 11 + extra } else { 9 }),
@@ -160,8 +166,8 @@ fn header_rows(width: u16) -> u16 {
     control_rows.saturating_add(1)
 }
 
-pub(crate) fn hit_areas(area: Rect, agy_row: bool) -> Vec<UsageHitArea> {
-    let layout = layout(area, agy_row);
+pub(crate) fn hit_areas(area: Rect) -> Vec<UsageHitArea> {
+    let layout = layout(area);
     let mut areas = header_hit_areas(layout.header);
     areas.extend(breakdown_hit_areas(layout.breakdown));
     areas
@@ -242,7 +248,7 @@ pub(crate) fn render(app: &AppState, area: Rect, frame: &mut Frame) {
         .title(" Usage ")
         .border_style(Style::default().fg(palette.accent));
     frame.render_widget(block, area);
-    let layout = layout(area, agy_has_data(&app.provider_usage));
+    let layout = layout(area);
     let now =
         app.status_now_unix
             .or_else(|| {
@@ -287,29 +293,20 @@ fn render_subscription_usage(
     palette: &Palette,
     frame: &mut Frame,
 ) {
-    let agy = snapshot.primary_usage(crate::provider_usage::QuotaProvider::Agy);
-    let providers = [
+    // Every provider keeps a row: two lines each when the panel is tall
+    // enough, otherwise one compact line with the windows inline.
+    let count = SUBSCRIPTION_PROVIDERS.len();
+    let compact = usize::from(area.height) < count * 2;
+    let row_height = if compact { 1 } else { 2 };
+    let shown = count.min(usize::from(area.height / row_height)).max(1);
+    let rows = Layout::vertical(&[Constraint::Length(row_height); 4][..shown]).split(area);
+    let providers = SUBSCRIPTION_PROVIDERS.map(|provider| {
         (
-            "Claude Code",
-            snapshot.primary_usage(crate::provider_usage::QuotaProvider::Claude),
-            palette.peach,
-        ),
-        (
-            "Codex",
-            snapshot.primary_usage(crate::provider_usage::QuotaProvider::Codex),
-            palette.blue,
-        ),
-        (
-            "Kimi",
-            snapshot.primary_usage(crate::provider_usage::QuotaProvider::Kimi),
-            palette.mauve,
-        ),
-        ("Antigravity", agy, palette.teal),
-    ];
-    // Antigravity only takes a row when it reports data, so the panel keeps its size otherwise.
-    let wanted: usize = if agy_has_data(snapshot) { 4 } else { 3 };
-    let shown = wanted.min(usize::from(area.height / 2)).max(1);
-    let rows = Layout::vertical(&[Constraint::Length(2); 4][..shown]).split(area);
+            quota_provider_label(provider),
+            snapshot.primary_usage(provider),
+            quota_provider_color(provider, palette),
+        )
+    });
     for ((label, usage, color), provider_area) in
         providers.into_iter().take(shown).zip(rows.iter().copied())
     {
@@ -333,18 +330,22 @@ fn render_subscription_usage(
             header.push(Span::raw("  "));
             header.push(Span::styled(credits_text(balance, available), style));
         }
-        let windows = Line::from(vec![
+        let windows = vec![
             Span::styled(subscription_window_text("5h", usage.five_hour, now), style),
             Span::raw("  "),
             Span::styled(
                 subscription_window_text("week", usage.seven_day, now),
                 style,
             ),
-        ]);
-        frame.render_widget(
-            Paragraph::new(vec![Line::from(header), windows]),
-            provider_area,
-        );
+        ];
+        let lines = if compact {
+            let mut line = vec![header.swap_remove(0), Span::raw("  ")];
+            line.extend(windows);
+            vec![Line::from(line)]
+        } else {
+            vec![Line::from(header), Line::from(windows)]
+        };
+        frame.render_widget(Paragraph::new(lines), provider_area);
     }
 }
 
@@ -925,9 +926,33 @@ fn provider_label(provider: UsageProvider) -> &'static str {
     provider.label()
 }
 
-fn provider_color(provider: UsageProvider, palette: &Palette) -> ratatui::style::Color {
-    let colors = [palette.peach, palette.blue, palette.green, palette.mauve];
-    colors[provider.series_index() % colors.len()]
+fn quota_provider_label(provider: QuotaProvider) -> &'static str {
+    match provider {
+        QuotaProvider::Claude => "Claude Code",
+        QuotaProvider::Codex => "Codex",
+        QuotaProvider::Kimi => "Kimi",
+        QuotaProvider::Agy => "Antigravity",
+    }
+}
+
+/// Same per-theme brand colours the sidebar uses, so a provider keeps one
+/// colour across screens and stays legible on light and dark themes.
+fn quota_provider_color(provider: QuotaProvider, palette: &Palette) -> Color {
+    match provider {
+        QuotaProvider::Claude => super::icons::claude_color(palette),
+        QuotaProvider::Codex => super::icons::codex_color(palette),
+        QuotaProvider::Kimi => palette.yellow,
+        QuotaProvider::Agy => palette.teal,
+    }
+}
+
+fn provider_color(provider: UsageProvider, palette: &Palette) -> Color {
+    match provider {
+        UsageProvider::ClaudeCode => quota_provider_color(QuotaProvider::Claude, palette),
+        UsageProvider::Codex => quota_provider_color(QuotaProvider::Codex, palette),
+        #[cfg(test)]
+        UsageProvider::TestCollected => palette.green,
+    }
 }
 
 fn provider_series_marker(provider: UsageProvider) -> char {
@@ -1227,30 +1252,55 @@ mod tests {
                 ProviderUsageSnapshot::default(),
             );
 
-            for provider in ["Claude Code", "Codex", "Kimi"] {
+            for provider in ["Claude Code", "Codex", "Kimi", "Antigravity"] {
                 assert!(
                     text.contains(provider),
                     "missing {provider:?} at {width}x{height}\n{text}"
                 );
             }
-            assert_eq!(
-                text.matches("5h — · —").count(),
-                3,
-                "{width}x{height}\n{text}"
-            );
-            assert_eq!(
-                text.matches("week — · —").count(),
-                3,
-                "{width}x{height}\n{text}"
-            );
+            // Compact rows on short narrow screens may clip the week window.
+            assert_eq!(text.matches("5h —").count(), 4, "{width}x{height}\n{text}");
+            if width >= 80 {
+                assert_eq!(
+                    text.matches("week — · —").count(),
+                    4,
+                    "{width}x{height}\n{text}"
+                );
+            }
         }
     }
 
     #[test]
+    fn provider_colours_follow_the_active_theme_on_light_and_dark_palettes() {
+        for palette in [Palette::catppuccin(), Palette::catppuccin_latte()] {
+            assert_eq!(
+                quota_provider_color(QuotaProvider::Claude, &palette),
+                crate::ui::icons::claude_color(&palette)
+            );
+            assert_eq!(
+                quota_provider_color(QuotaProvider::Codex, &palette),
+                palette.text
+            );
+            assert_eq!(
+                provider_color(UsageProvider::ClaudeCode, &palette),
+                quota_provider_color(QuotaProvider::Claude, &palette)
+            );
+            assert_eq!(
+                provider_color(UsageProvider::Codex, &palette),
+                quota_provider_color(QuotaProvider::Codex, &palette)
+            );
+        }
+        assert_ne!(
+            quota_provider_color(QuotaProvider::Codex, &Palette::catppuccin()),
+            quota_provider_color(QuotaProvider::Codex, &Palette::catppuccin_latte())
+        );
+    }
+
+    #[test]
     fn usage_layout_places_chart_beside_wide_and_below_narrow_summary() {
-        let wide = layout(Rect::new(0, 0, 120, 40), false);
+        let wide = layout(Rect::new(0, 0, 120, 40));
         assert_eq!(wide.chart.y, wide.summary.y);
-        let narrow = layout(Rect::new(0, 0, 80, 24), false);
+        let narrow = layout(Rect::new(0, 0, 80, 24));
         assert!(narrow.chart.y > narrow.summary.y);
     }
 
@@ -1425,7 +1475,7 @@ mod tests {
 
     #[test]
     fn every_usage_toggle_has_a_nonempty_mouse_target() {
-        let targets: BTreeSet<_> = hit_areas(Rect::new(0, 0, 120, 40), false)
+        let targets: BTreeSet<_> = hit_areas(Rect::new(0, 0, 120, 40))
             .into_iter()
             .filter(|hit| hit.rect.width > 0 && hit.rect.height > 0)
             .map(|hit| hit.target)
