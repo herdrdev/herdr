@@ -291,7 +291,8 @@ pub(crate) fn compact_dot_for_state(
         AgentState::Working => "●",
         AgentState::Blocked => "○",
         AgentState::Idle if has_agent => "○",
-        _ => "·",
+        // Unknown agent state: a solid grey dot, not an empty one.
+        _ => "●",
     }
 }
 
@@ -8112,7 +8113,7 @@ fn agent_dot_tooltip(entry: &AgentPanelEntry) -> String {
         "waiting_on_agents" => "Waiting on agents",
         "done" => "Done, unread",
         "idle" => "Idle",
-        _ => "Unknown",
+        _ => "?",
     }
     .to_string()
 }
@@ -17755,7 +17756,7 @@ pub(crate) mod tests {
             compact_row_color(&settled, &app.palette),
             app.palette.overlay0
         );
-        assert_eq!(agent_dot_tooltip(&settled), "Unknown");
+        assert_eq!(agent_dot_tooltip(&settled), "?");
     }
 
     /// Owner correction to #77: the same latched gate is not blocking while
@@ -21762,10 +21763,10 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(workspace_area.x, first_row)].symbol(), "1");
         assert_eq!(buffer[(workspace_area.x + 1, first_row)].symbol(), " ");
-        assert_eq!(buffer[(workspace_area.x + 2, first_row)].symbol(), "·");
+        assert_eq!(buffer[(workspace_area.x + 2, first_row)].symbol(), "●");
         assert_eq!(buffer[(workspace_area.x, tenth_row)].symbol(), "1");
         assert_eq!(buffer[(workspace_area.x + 1, tenth_row)].symbol(), "0");
-        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "·");
+        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "●");
     }
 
     #[test]
@@ -27343,6 +27344,22 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         assert!(spans.title_truncated);
         assert!(display_width(&spans.title) < display_width(&header.title));
+    }
+
+    #[test]
+    fn agent_dot_unknown_state_is_a_solid_grey_dot_with_question_tooltip() {
+        assert_eq!(
+            compact_dot_for_state(AgentState::Unknown, false, true, false, false),
+            "●"
+        );
+        assert_eq!(
+            state_label_color(AgentState::Unknown, false, &Palette::catppuccin()),
+            Palette::catppuccin().overlay0
+        );
+        assert_eq!(
+            compact_dot_for_state(AgentState::Unknown, false, false, false, false),
+            "·"
+        );
     }
 
     #[test]
