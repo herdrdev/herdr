@@ -51,7 +51,7 @@ async fn surface_delta_reconstructs_metadata_text_and_hyperlinks() {
     enable_delta(&mut server, 1);
     server.render_and_stream();
     let (initial_bytes, initial_message) = receive_message(&render_rx);
-    let mut decoder = protocol::surface_reuse::Decoder::new(true);
+    let mut decoder = protocol::surface_reuse::Decoder::new(true, false);
     let initial = decode_surface_message(&mut decoder, initial_message);
     assert_eq!(
         without_asset_payload(initial.clone()),
@@ -119,7 +119,7 @@ async fn surface_delta_updates_global_popup_without_affecting_legacy_peer() {
     server.render_and_stream();
     let (initial_bytes, initial_message) = receive_message(&delta_render);
     let (_, _legacy_initial) = receive_message(&legacy_render);
-    let mut decoder = protocol::surface_reuse::Decoder::new(true);
+    let mut decoder = protocol::surface_reuse::Decoder::new(true, false);
     let _ = decode_surface_message(&mut decoder, initial_message);
 
     server
@@ -160,7 +160,7 @@ async fn surface_delta_preserves_graphics_baseline_through_queue_recovery() {
     enable_delta(&mut server, 1);
     server.render_and_stream();
     let (initial_bytes, initial_message) = receive_message(&render_rx);
-    let mut decoder = protocol::surface_reuse::Decoder::new(true);
+    let mut decoder = protocol::surface_reuse::Decoder::new(true, false);
     let _ = decode_surface_message(&mut decoder, initial_message);
 
     write_shared_test_pane(

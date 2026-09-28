@@ -19,6 +19,7 @@ pub(crate) enum ClientRenderState {
         surface_revision: u64,
         surface_reuse: bool,
         surface_delta: bool,
+        surface_scroll: bool,
         recompute_pending: bool,
     },
     /// Terminal-ANSI clients keep a terminal diff encoder and sequence number.
@@ -37,6 +38,7 @@ impl ClientRenderState {
                 surface_revision: 0,
                 surface_reuse: false,
                 surface_delta: false,
+                surface_scroll: false,
                 recompute_pending: false,
             },
             RenderEncoding::TerminalAnsi => Self::TerminalAnsi {
@@ -56,6 +58,12 @@ impl ClientRenderState {
     pub(crate) fn enable_surface_delta(&mut self, enabled: bool) {
         if let Self::Semantic { surface_delta, .. } = self {
             *surface_delta = enabled;
+        }
+    }
+
+    pub(crate) fn enable_surface_scroll(&mut self, enabled: bool) {
+        if let Self::Semantic { surface_scroll, .. } = self {
+            *surface_scroll = enabled;
         }
     }
 
@@ -171,6 +179,7 @@ impl ClientRenderState {
             surface_reuse,
             surface_delta,
             recompute_pending,
+            ..
         } = self
         else {
             return None;
@@ -239,6 +248,7 @@ impl ClientRenderState {
         let Self::Semantic {
             last_surface,
             surface_revision,
+            surface_scroll,
             ..
         } = self
         else {
@@ -256,8 +266,18 @@ impl ClientRenderState {
         }
         let next_revision = surface_revision.saturating_add(1);
         patch.surface_revision = next_revision;
-        Some(PreparedRender::SemanticPatch {
-            message: ServerMessage::PaneSurfacePatch(patch),
+        let scrolled = (*surface_scroll)
+            .then(|| crate::protocol::surface_scroll::message(last, &patch))
+            .flatten();
+        Some(match scrolled {
+            Some(message) => PreparedRender::SemanticPatch {
+                message,
+                encoded: Some(Box::new(patch)),
+            },
+            None => PreparedRender::SemanticPatch {
+                message: ServerMessage::PaneSurfacePatch(patch),
+                encoded: None,
+            },
         })
     }
 
@@ -284,10 +304,13 @@ impl ClientRenderState {
                     surface_revision,
                     ..
                 },
-                PreparedRender::SemanticPatch {
-                    message: ServerMessage::PaneSurfacePatch(patch),
-                },
+                PreparedRender::SemanticPatch { message, encoded },
             ) => {
+                let patch = match (encoded, message) {
+                    (Some(patch), _) => *patch,
+                    (None, ServerMessage::PaneSurfacePatch(patch)) => patch,
+                    (None, _) => unreachable!("a plain semantic patch carries its pane patch"),
+                };
                 let surface = last_surface
                     .as_deref_mut()
                     .expect("prepared patch baseline");
@@ -358,6 +381,8 @@ pub(crate) enum PreparedRender {
     },
     SemanticPatch {
         message: ServerMessage,
+        /// The pane patch a compact `message` encodes; `None` when `message` is that patch.
+        encoded: Option<Box<PaneSurfacePatch>>,
     },
     TerminalAnsi {
         message: ServerMessage,
@@ -370,7 +395,7 @@ impl PreparedRender {
     pub(crate) fn message(&self) -> &ServerMessage {
         match self {
             Self::Semantic { message, .. }
-            | Self::SemanticPatch { message }
+            | Self::SemanticPatch { message, .. }
             | Self::TerminalAnsi { message, .. } => message,
         }
     }

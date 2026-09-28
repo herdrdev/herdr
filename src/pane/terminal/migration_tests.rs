@@ -311,6 +311,13 @@ fn incremental_rows_reconstruct_full_render() {
         b"\x1b[3;4H",
         b"\x1b[?1049hALT",
         b"\x1b[?1049l",
+        // Blank cells must match the full renderer under every color source.
+        b"\x1b[3;1H\x1b[44m\x1b[2K\x1b[0m",
+        b"\x1b[4;2H\x1b[7m \x1b[0m \x1b[8m \x1b[0m",
+        b"\x1b[?5h",
+        b"\x1b[?5l",
+        b"\x1b[5;1H\x1b]133;A\x07$ \x1b]133;B\x07  \x1b]133;C\x07",
+        b"\x1b[5;1H\r\n\r\nscrolled\r\n",
     ] {
         incremental.write(bytes);
         full.write(bytes);

@@ -376,7 +376,8 @@ fn surface_encoding_client(mode: &str, surface: &PaneSurfaceFrame) -> SurfaceEnc
         state: super::render_stream::ClientRenderState::new(
             crate::protocol::RenderEncoding::SemanticFrame,
         ),
-        decoder: (reuse || delta).then(|| crate::protocol::surface_reuse::Decoder::new(delta)),
+        decoder: (reuse || delta)
+            .then(|| crate::protocol::surface_reuse::Decoder::new(delta, false)),
     };
     client.state.enable_surface_reuse(reuse);
     client.state.enable_surface_delta(delta);
@@ -587,4 +588,40 @@ async fn render_scale_profile() {
     print_token_rule_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();
+}
+
+/// Dirty-row collection while output scrolls a large pane, the host's hot path
+/// for streaming agents and build logs.
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "manual dirty collection profile"]
+async fn dirty_scroll_collection_profile() {
+    const WIDTH: u16 = 295;
+    const HEIGHT: u16 = 84;
+    let runtime = TerminalRuntime::test_with_scrollback_bytes(WIDTH, HEIGHT, 1024 * 1024, b"");
+    let mut samples = Vec::new();
+    let mut rows = 0;
+    for line in 0..2_000u32 {
+        runtime.test_process_pty_bytes(
+            format!("{:010}{:010}\r\n", line.wrapping_mul(2_654_435_761), line).as_bytes(),
+        );
+        let started = Instant::now();
+        let snapshot = black_box(runtime.collect_dirty_patch_snapshot(WIDTH, HEIGHT));
+        if line as usize >= WARMUP_COUNT {
+            samples.push(started.elapsed());
+        }
+        if let Some(crate::pane::TerminalDirtyPatchOutcome::Patch(patch)) =
+            snapshot.map(|snapshot| snapshot.patch)
+        {
+            rows += patch.rows.len();
+        }
+    }
+    samples.sort_unstable();
+    let at = |fraction: f64| samples[((samples.len() - 1) as f64 * fraction) as usize].as_micros();
+    println!(
+        "dirty scroll collection {WIDTH}x{HEIGHT}: median {}us p95 {}us max {}us, {} rows per update",
+        at(0.5),
+        at(0.95),
+        at(1.0),
+        rows / 2_000
+    );
 }

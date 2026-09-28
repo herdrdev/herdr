@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn reconstruct(last: &PaneSurfaceFrame, next: &PaneSurfaceFrame) -> ServerMessage {
-        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true);
+        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true, false);
         decoder
             .decode(ServerMessage::PaneSurface(last.clone()))
             .unwrap();
@@ -384,7 +384,7 @@ mod tests {
                 8 => corrupt.surface.projection_revision = 0,
                 _ => unreachable!(),
             }
-            let mut decoder = crate::protocol::surface_reuse::Decoder::new(true);
+            let mut decoder = crate::protocol::surface_reuse::Decoder::new(true, false);
             decoder
                 .decode(ServerMessage::PaneSurface(last.clone()))
                 .unwrap();
@@ -409,7 +409,7 @@ mod tests {
         let mut next = last.clone();
         next.surface_revision += 1;
         next.frame.cells[0].symbol = "a".into();
-        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true);
+        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true, false);
         decoder.decode(ServerMessage::PaneSurface(last)).unwrap();
         decoder
             .decode(ServerMessage::PaneSurfacePatch(
@@ -512,7 +512,7 @@ mod tests {
             .decode(ServerMessage::PaneSurface(last.clone()))
             .unwrap();
         assert!(legacy.decode(update.clone()).is_err());
-        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true);
+        let mut decoder = crate::protocol::surface_reuse::Decoder::new(true, false);
         decoder.decode(ServerMessage::PaneSurface(last)).unwrap();
         let ServerMessage::EndpointControl { data, .. } = &update else {
             panic!("delta");

@@ -3381,6 +3381,17 @@ impl<'a> RowCellIter<'a> {
         unsafe { ffi::ghostty_render_state_row_cells_select(self.cells.raw, x).into_result() }
     }
 
+    /// Whether the current cell was never written: no text, default style,
+    /// narrow, and no hyperlink. One read replaces the style and text lookups
+    /// for the blank cells that fill most wide panes.
+    pub fn is_default_blank(&self) -> Result<bool, Error> {
+        // Packed cell bits 0..44 hold content, style id, and width; bit 45 is
+        // the hyperlink flag. Protection (44) and OSC 133 semantic marks
+        // (46..48) do not change how a cell renders.
+        const PRESENTATION_BITS: u64 = ((1 << 44) - 1) | (1 << 45);
+        Ok(self.raw_cell()? & PRESENTATION_BITS == 0)
+    }
+
     fn raw_cell(&self) -> Result<ffi::GhosttyCell, Error> {
         let mut raw = ffi::GhosttyCell::default();
         unsafe {

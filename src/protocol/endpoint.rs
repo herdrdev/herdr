@@ -61,6 +61,9 @@ pub struct EndpointClientHello {
     /// Accept the optional surface-delta encoding on this connection.
     #[serde(default)]
     pub surface_delta: bool,
+    /// Accept the optional scroll-aware patch encoding on this connection.
+    #[serde(default)]
+    pub surface_scroll: bool,
     #[serde(default)]
     pub snapshot_codecs: Vec<String>,
     #[serde(default)]
@@ -165,6 +168,7 @@ impl EndpointServerWelcome {
             capabilities: vec![
                 super::surface_reuse::CAPABILITY.into(),
                 super::surface_delta::CAPABILITY.into(),
+                super::surface_scroll::CAPABILITY.into(),
                 SURFACE_INTEREST_CAPABILITY.into(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.into(),
                 HEALTH_CHECK_CAPABILITY.into(),
@@ -210,6 +214,7 @@ mod tests {
             surface_active: true,
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             snapshot_codecs: vec![SNAPSHOT_CODEC_V1.into()],
             surface_codecs: vec![SURFACE_CODEC_V1.into()],
             input_codecs: vec![INPUT_CODEC_V1.into()],
@@ -358,10 +363,12 @@ mod tests {
         value.as_object_mut().unwrap().remove("surface_active");
         value.as_object_mut().unwrap().remove("surface_reuse");
         value.as_object_mut().unwrap().remove("surface_delta");
+        value.as_object_mut().unwrap().remove("surface_scroll");
         let decoded: EndpointClientHello = serde_json::from_value(value).unwrap();
         assert!(decoded.surface_active);
         assert!(!decoded.surface_reuse);
         assert!(!decoded.surface_delta);
+        assert!(!decoded.surface_scroll);
     }
 
     #[test]
@@ -372,6 +379,7 @@ mod tests {
             vec![
                 super::super::surface_reuse::CAPABILITY.to_string(),
                 super::super::surface_delta::CAPABILITY.to_string(),
+                super::super::surface_scroll::CAPABILITY.to_string(),
                 SURFACE_INTEREST_CAPABILITY.to_string(),
                 PRESENTATION_EFFECTS_FENCE_CAPABILITY.to_string(),
                 HEALTH_CHECK_CAPABILITY.to_string(),

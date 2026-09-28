@@ -2677,6 +2677,7 @@ fn ghostty_collect_dirty_patch(
     let mut grapheme_bytes = Vec::new();
     let mut symbol_scratch = String::new();
     let mut patch_rows = Vec::new();
+    let blank = blank_cell_data(default_fg, default_bg);
     while let Some(y) = rows.next_dirty() {
         if y >= area_height {
             break;
@@ -2692,6 +2693,15 @@ fn ghostty_collect_dirty_patch(
         let mut patch_cells = Vec::with_capacity(usize::from(area_width));
         let mut x = 0u16;
         while x < area_width && cells.next() {
+            match cells.is_default_blank() {
+                Ok(true) => {
+                    patch_cells.push(blank.clone());
+                    x += 1;
+                    continue;
+                }
+                Ok(false) => {}
+                Err(_) => fallback!("raw_cell_error"),
+            }
             let Ok(basic) = cells.basic_data() else {
                 fallback!("basic_data_error");
             };
@@ -2720,10 +2730,7 @@ fn ghostty_collect_dirty_patch(
             patch_cells.push(cell_data_from_style(symbol, style));
             x += 1;
         }
-        while x < area_width {
-            patch_cells.push(blank_cell_data(default_fg, default_bg));
-            x += 1;
-        }
+        patch_cells.resize(usize::from(area_width), blank.clone());
         patch_rows.push((y, patch_cells));
     }
 

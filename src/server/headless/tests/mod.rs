@@ -10,6 +10,8 @@ mod retained_graphics_tests;
 mod surface_delta_tests;
 #[path = "surface_interest.rs"]
 mod surface_interest_tests;
+#[path = "surface_scroll.rs"]
+mod surface_scroll_tests;
 
 fn client_shell_projection(
     receiver: &std::sync::mpsc::Receiver<Vec<u8>>,
@@ -719,6 +721,7 @@ async fn client_shell_attach_seeds_workspace() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 6,
             surface_cols: 80,
             surface_rows: 23,
@@ -761,6 +764,7 @@ async fn completion_guard_endpoint_pairs_runtime_completions_with_snapshots() {
         surface_active: false,
         surface_reuse: false,
         surface_delta: false,
+        surface_scroll: false,
         writer,
     });
     let (_, initial) = client_shell_projection(&control_rx);
@@ -809,6 +813,7 @@ async fn client_shell_endpoint_request_uses_the_selected_connection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id,
             surface_cols: 80,
             surface_rows: 23,
@@ -927,6 +932,7 @@ async fn client_shell_pairs_agent_view_set_replacement_and_clear_with_snapshots(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 77,
             surface_cols: 80,
             surface_rows: 23,
@@ -1029,6 +1035,7 @@ async fn client_shell_receives_metadata_then_shell_free_pane_surface() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 7,
             surface_cols: 80,
             surface_rows: 23,
@@ -1196,6 +1203,7 @@ fn connect_test_shell(
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id,
             surface_cols,
             surface_rows,
@@ -1800,6 +1808,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 13,
             surface_cols: 80,
             surface_rows: 23,
@@ -1824,6 +1833,7 @@ async fn client_shell_config_diagnostics_follow_keybinding_ownership() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 14,
             surface_cols: 80,
             surface_rows: 23,
@@ -2743,6 +2753,7 @@ async fn public_api_focus_replaces_every_client_shell_projection() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 9,
             surface_cols: 80,
             surface_rows: 23,
@@ -2989,6 +3000,7 @@ async fn client_shell_streams_and_targets_popup_terminal_content() {
         server.handle_server_event(ServerEvent::ClientShellConnected {
             surface_reuse: false,
             surface_delta: false,
+            surface_scroll: false,
             client_id: 12,
             surface_cols: 80,
             surface_rows: 23,

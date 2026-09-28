@@ -53,6 +53,16 @@ struct CellBaseline {
     popup: Option<PopupBaseline>,
 }
 
+impl CellBaseline {
+    /// Whether a patch applies to exactly this baseline as its next revision.
+    fn matches_patch(&self, patch: &super::PaneSurfacePatch) -> bool {
+        patch.boot_id == self.boot_id
+            && patch.projection_revision == self.projection_revision
+            && patch.base_surface_revision == self.surface_revision
+            && patch.surface_revision == self.surface_revision.saturating_add(1)
+    }
+}
+
 struct PopupBaseline {
     terminal_id: String,
     width: u16,
@@ -75,13 +85,15 @@ fn popup_baseline(surface: &PaneSurfaceFrame) -> Option<PopupBaseline> {
 pub(crate) struct Decoder {
     baseline: Option<CellBaseline>,
     surface_delta: bool,
+    surface_scroll: bool,
 }
 
 impl Decoder {
-    pub(crate) fn new(surface_delta: bool) -> Self {
+    pub(crate) fn new(surface_delta: bool, surface_scroll: bool) -> Self {
         Self {
             baseline: None,
             surface_delta,
+            surface_scroll,
         }
     }
 
@@ -94,6 +106,16 @@ impl Decoder {
                     return Err("surface delta was not negotiated".into());
                 }
                 return self.decode_delta(&data).map(ServerMessage::PaneSurface);
+            }
+            ServerMessage::EndpointControl { kind, data }
+                if kind == super::surface_scroll::MESSAGE_KIND =>
+            {
+                if !self.surface_scroll {
+                    return Err("surface scroll was not negotiated".into());
+                }
+                return self
+                    .decode_scroll(&data)
+                    .map(ServerMessage::PaneSurfacePatch);
             }
             ServerMessage::EndpointControl { kind, data } if kind == MESSAGE_KIND => {
                 let reuse: SurfaceReuse<PaneSurfaceFrame> = serde_json::from_str(&data)
@@ -136,11 +158,7 @@ impl Decoder {
             }
             ServerMessage::PaneSurfacePatch(patch) => {
                 if let Some(base) = &mut self.baseline {
-                    if patch.boot_id != base.boot_id
-                        || patch.projection_revision != base.projection_revision
-                        || patch.base_surface_revision != base.surface_revision
-                        || patch.surface_revision != base.surface_revision.saturating_add(1)
-                    {
+                    if !base.matches_patch(patch) {
                         self.baseline = None;
                     } else {
                         for row in &patch.rows {
@@ -162,6 +180,19 @@ impl Decoder {
             _ => {}
         }
         Ok(message)
+    }
+
+    fn decode_scroll(&mut self, data: &str) -> Result<super::PaneSurfacePatch, String> {
+        let Some(base) = &mut self.baseline else {
+            return Err("surface scroll without a baseline".into());
+        };
+        let scroll = super::surface_scroll::decode(data)?;
+        if !base.matches_patch(&scroll.patch) {
+            return Err("surface scroll does not match its baseline".into());
+        }
+        let patch = super::surface_scroll::apply(&mut base.cells, base.width, base.height, scroll)?;
+        base.surface_revision = patch.surface_revision;
+        Ok(patch)
     }
 
     fn decode_delta(&mut self, data: &str) -> Result<PaneSurfaceFrame, String> {
