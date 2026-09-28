@@ -1204,7 +1204,8 @@ mod tests {
             }],
             ..crate::fleet::Snapshot::default()
         };
-        app.state.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries(&snapshot);
+        app.state.remote_agent_panel_entries =
+            crate::ui::remote_agent_panel_entries(&snapshot, false);
         app.state.collapsed_sidebar_groups.remove("repo:Fleet");
 
         let started = app

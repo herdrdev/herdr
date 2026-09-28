@@ -232,8 +232,11 @@ impl AppState {
         {
             return false;
         }
-        self.remote_agent_panel_entries =
-            crate::ui::remote_agent_panel_entries_at(&self.fleet_snapshot, now_unix);
+        self.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries_at(
+            &self.fleet_snapshot,
+            now_unix,
+            self.nerd_font,
+        );
         true
     }
     fn settle_owned_candidates(
@@ -796,7 +799,7 @@ mod tests {
         let mut state = crate::app::state::AppState::test_new();
         state.fleet_snapshot = snapshot;
         state.remote_agent_panel_entries =
-            crate::ui::remote_agent_panel_entries_at(&state.fleet_snapshot, 199);
+            crate::ui::remote_agent_panel_entries_at(&state.fleet_snapshot, 199, false);
         state.view_observed_unix_s = 199;
         state.collapsed_sidebar_groups.remove("repo:Fleet");
         let now = Instant::now();
@@ -973,8 +976,8 @@ mod tests {
                 "revision": 1
             }))
             .expect("remote agent fixture");
-        state.remote_agent_panel_entries =
-            crate::ui::remote_agent_panel_entries(&crate::fleet::Snapshot {
+        state.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries(
+            &crate::fleet::Snapshot {
                 hosts: vec![crate::fleet::HostSnapshot {
                     name: "remote".into(),
                     target: "remote".into(),
@@ -992,7 +995,9 @@ mod tests {
                     )],
                 }],
                 ..crate::fleet::Snapshot::default()
-            });
+            },
+            false,
+        );
         let mut merged_item = item();
         merged_item.pr_url = Some(url.into());
         merged_item.pr_state = Some("merged".into());

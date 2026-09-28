@@ -342,6 +342,7 @@ pub(crate) fn visible_tab_activity_instants_from(
                 display_width(&indent),
                 &app.palette,
                 app.status_indicators,
+                app.nerd_font,
             );
             layout.activity_age.and(layout.activity_instant)
         })
@@ -533,7 +534,12 @@ fn render_header_status(
         crate::terminal::state::AttentionTier::Attention => dot_style.fg(p.peach),
         crate::terminal::state::AttentionTier::None => dot_style,
     };
-    let tab_label = mobile_tab_status(ws, &app.terminals, area.width.saturating_sub(6) as usize);
+    let tab_label = mobile_tab_status(
+        ws,
+        &app.terminals,
+        area.width.saturating_sub(6) as usize,
+        app.nerd_font,
+    );
     let row1 = Rect::new(area.x, area.y, area.width, 1);
     let tab_w = display_width_u16(&tab_label)
         .saturating_add(1)
@@ -580,6 +586,7 @@ fn mobile_tab_status(
         crate::terminal::TerminalState,
     >,
     max_width: usize,
+    nerd_font: bool,
 ) -> String {
     let prefix = "tab ";
     let suffix = if ws.tabs.len() > 1 {
@@ -592,7 +599,9 @@ fn mobile_tab_status(
         .saturating_sub(display_width(&suffix));
     let tab_label = ws
         .tab_display_projection(terminals, ws.active_tab)
-        .map(|projection| super::tabs::fit_tab_display_projection(projection, label_width))
+        .map(|projection| {
+            super::tabs::fit_tab_display_projection_with_icons(projection, label_width, nerd_font)
+        })
         .unwrap_or_else(|| truncate_end(&(ws.active_tab + 1).to_string(), label_width));
     truncate_end(&format!("{prefix}{tab_label}{suffix}"), max_width)
 }
@@ -1252,7 +1261,13 @@ fn render_mobile_switcher_content(
                 as usize;
             let display_name = ws
                 .tab_display_projection(&app.terminals, idx)
-                .map(|projection| super::tabs::fit_tab_display_projection(projection, label_width))
+                .map(|projection| {
+                    super::tabs::fit_tab_display_projection_with_icons(
+                        projection,
+                        label_width,
+                        app.nerd_font,
+                    )
+                })
                 .unwrap_or_else(|| truncate_end(&(idx + 1).to_string(), label_width));
             let label = format!("{label_prefix}{display_name}");
             let title = Line::from(vec![
@@ -2436,6 +2451,7 @@ mod tests {
     fn mobile_subagent_count_is_dimmed_and_aligned_at_supported_widths() {
         for width in [18, 40] {
             let mut app = crate::app::state::AppState::test_new();
+            app.nerd_font = false;
             app.workspaces = vec![crate::workspace::Workspace::test_new("mobile-count")];
             app.workspaces[0].tabs[0].custom_name = Some("mobile worker".into());
             app.ensure_test_terminals();
@@ -2726,7 +2742,7 @@ mod tests {
         workspace.active_tab = 1;
 
         assert_eq!(
-            mobile_tab_status(&workspace, &Default::default(), 40),
+            mobile_tab_status(&workspace, &Default::default(), 40, false),
             "tab 2 · 2/2"
         );
     }
@@ -2749,11 +2765,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            mobile_tab_status(&app.workspaces[0], &app.terminals, 80),
+            mobile_tab_status(&app.workspaces[0], &app.terminals, 80, false),
             "tab SCA-42 · repair login regression"
         );
         assert_eq!(
-            mobile_tab_status(&app.workspaces[0], &app.terminals, 10),
+            mobile_tab_status(&app.workspaces[0], &app.terminals, 10, false),
             "tab SCA-42"
         );
     }
@@ -2803,6 +2819,7 @@ mod tests {
     #[test]
     fn ac1_ac2_ac3_mobile_tabs_are_status_first_single_line_rows() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = crate::workspace::Workspace::test_new("mobile-tabs");
         workspace.tabs[0].custom_name = Some("First task".into());
         workspace.test_add_tab(Some("Second task"));
@@ -2879,6 +2896,7 @@ mod tests {
     fn mobile_tab_rows_follow_field_priority_at_minimum_and_normal_widths() {
         let started = std::time::Instant::now();
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = crate::workspace::Workspace::test_new("mobile-tabs");
         workspace.tabs[0].custom_name = Some("Investigate release regression".into());
         let pane = workspace.tabs[0].root_pane;

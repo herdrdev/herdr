@@ -1592,7 +1592,9 @@ pub(super) fn render_home(
                             .local_target()
                             .is_some_and(|target| target.pane_id == agent.pane_id)
                     })
-                    .map(|entry| crate::ui::sidebar::agent_row_cells(entry, &app.palette));
+                    .map(|entry| {
+                        crate::ui::sidebar::agent_row_cells(entry, &app.palette, app.nerd_font)
+                    });
                 agent_line(app, agent, cells.as_ref(), idx == selected, body.width)
             })
             .collect()
@@ -1928,6 +1930,7 @@ mod tests {
     #[test]
     fn home_rows_use_the_sidebar_dot_session_title_and_provider() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = Workspace::test_new("herdr");
         workspace.tabs[0].custom_name = Some("Critical action links".into());
         app.workspaces = vec![workspace];

@@ -659,18 +659,14 @@ fn status_segments(
 
     // Providers elide from the right of the group inwards: Antigravity is the
     // most recent addition and the least load-bearing, Claude the most.
-    for (label, provider, color, rank) in [
-        (
-            "CC",
-            crate::provider_usage::QuotaProvider::Claude,
-            p.peach,
-            3u8,
-        ),
-        ("CX", crate::provider_usage::QuotaProvider::Codex, p.blue, 2),
-        ("KI", crate::provider_usage::QuotaProvider::Kimi, p.mauve, 1),
-        ("AG", crate::provider_usage::QuotaProvider::Agy, p.teal, 0),
+    for (provider, color, rank) in [
+        (crate::provider_usage::QuotaProvider::Claude, p.peach, 3u8),
+        (crate::provider_usage::QuotaProvider::Codex, p.blue, 2),
+        (crate::provider_usage::QuotaProvider::Kimi, p.mauve, 1),
+        (crate::provider_usage::QuotaProvider::Agy, p.teal, 0),
     ] {
         let usage = app.provider_usage.primary_usage(provider);
+        let label = crate::ui::icons::usage_label(provider, app.nerd_font);
         if let Some(text) = provider_segment_text(label, usage, expanded, now_unix) {
             out.push(Segment {
                 text,
@@ -1356,6 +1352,28 @@ mod tests {
     }
 
     #[test]
+    fn rendered_status_bar_uses_the_claude_glyph_in_peach() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut app = AppState::test_new();
+        app.nerd_font = true;
+        app.provider_usage = usage_fixture();
+        let area = Rect::new(0, 0, 120, 1);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_status_bar(&app, frame, area))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let claude_cell = buffer
+            .content()
+            .iter()
+            .find(|cell| cell.symbol() == "\u{EC82}")
+            .expect("Claude provider icon");
+        assert_eq!(claude_cell.style().fg, Some(app.palette.peach));
+    }
+
+    #[test]
     fn review_findings_status_width_is_independent_of_metric_snapshot() {
         let mut app = AppState::test_new();
         let unavailable_width = minimum_required_status_width(&app);
@@ -1643,6 +1661,7 @@ mod tests {
     #[test]
     fn status_elision_drops_providers_then_device() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.active = Some(0);
         app.provider_usage = usage_fixture();
@@ -1693,6 +1712,7 @@ mod tests {
     #[test]
     fn antigravity_quota_uses_its_teal_status_segment() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.active = Some(0);
         app.provider_usage = usage_fixture();
@@ -1896,6 +1916,7 @@ mod tests {
     #[test]
     fn narrow_width_elides_the_remote_segment_after_providers_and_before_metrics() {
         let mut app = app_with_focused_attached_pane();
+        app.nerd_font = false;
         app.provider_usage = usage_fixture();
         let metrics = crate::platform::status_metrics::status_metrics_fixture();
         let full = status_segments(&app, &metrics, &app.palette);
@@ -1990,6 +2011,7 @@ mod tests {
     #[test]
     fn status_content_order_theme_and_omitted_segments_match_contract() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = crate::workspace::Workspace::test_new("status");
         workspace.identity_cwd = PathBuf::from("/home/test/work/status");
         workspace.cached_git_branch = Some("feature/native-status".into());
@@ -2107,6 +2129,7 @@ mod tests {
     #[test]
     fn compact_hides_numbers_and_expanded_restores_them_with_reset_times() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.provider_usage = usage_fixture();
         app.status_now_unix = Some(1_999_990_100);
 
@@ -2130,6 +2153,7 @@ mod tests {
     fn a_nearly_spent_window_shows_its_number_without_expanding() {
         // The one moment the exact figure matters, it appears unasked.
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.provider_usage = usage_fixture();
         app.provider_usage
             .primary_usage_mut(crate::provider_usage::QuotaProvider::Claude)
@@ -2151,6 +2175,7 @@ mod tests {
     #[test]
     fn a_stale_source_renders_dim_instead_of_asserting_its_numbers() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.provider_usage = usage_fixture();
         app.provider_usage
             .primary_usage_mut(crate::provider_usage::QuotaProvider::Codex)

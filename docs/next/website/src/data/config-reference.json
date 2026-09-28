@@ -1363,7 +1363,13 @@
           "key": "ui.nerd_font",
           "type": "boolean",
           "default": "true",
-          "description": "Render Nerd Font glyphs for file kinds. Disable this to use portable two-character labels."
+          "description": "Render Nerd Font glyphs for agents, Spaces, usage providers, and file kinds. Disable this to use text labels and portable two-character file kinds."
+        },
+        {
+          "key": "ui.icons.spaces",
+          "type": "table",
+          "default": "{}",
+          "description": "Custom Space header icons keyed by repo name, owner/repo binding, or Space label."
         },
         {
           "key": "ui.new_thread_workspace",

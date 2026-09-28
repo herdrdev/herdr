@@ -68,16 +68,6 @@ pub(crate) fn sidebar_separator_col(area: Rect) -> Option<u16> {
     (area.width > 0).then(|| area.x + area.width.saturating_sub(1))
 }
 
-pub(crate) fn tab_agent_suffix(agent: Option<Agent>) -> Option<&'static str> {
-    match agent {
-        Some(Agent::Codex) => Some("cx"),
-        Some(Agent::Claude) => Some("cc"),
-        Some(Agent::Pi) => Some("pi"),
-        Some(Agent::Kimi) => Some("ki"),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 pub(super) fn title_repeats_agent_identity(entry: &AgentPanelEntry, title: &str) -> bool {
     let title = title.trim().to_ascii_lowercase();
@@ -94,13 +84,13 @@ pub(super) fn title_repeats_agent_identity(entry: &AgentPanelEntry, title: &str)
         .into_iter()
         .chain(entry.agent_kind_label.as_deref())
         .chain(provider)
-        .chain(tab_agent_suffix(entry.agent))
+        .chain(crate::ui::icons::agent_text_tag(entry.agent))
         .any(|identity| identity.trim().eq_ignore_ascii_case(&title))
 }
 
 #[cfg(test)]
 pub(super) fn canonical_sidebar_agent_identity(entry: &AgentPanelEntry) -> Option<&str> {
-    tab_agent_suffix(entry.agent)
+    crate::ui::icons::agent_text_tag(entry.agent)
         .or(entry.agent_kind_label.as_deref())
         .or_else(|| {
             entry
@@ -305,8 +295,8 @@ pub(crate) fn compact_dot_for_state(
     }
 }
 
-fn compact_provider(entry: &AgentPanelEntry) -> String {
-    let provider = compact_provider_token(entry);
+fn compact_provider(entry: &AgentPanelEntry, nerd_font: bool) -> String {
+    let provider = compact_provider_token(entry, nerd_font);
     match entry.remote_host.as_deref() {
         Some(host) if provider.is_empty() => host.to_string(),
         Some(host) => format!("{host} · {provider}"),
@@ -314,16 +304,16 @@ fn compact_provider(entry: &AgentPanelEntry) -> String {
     }
 }
 
-fn compact_provider_token(entry: &AgentPanelEntry) -> String {
+fn compact_provider_token(entry: &AgentPanelEntry, nerd_font: bool) -> String {
     if !entry.has_agent {
-        return ">_".to_string();
+        return crate::ui::icons::shell_label(nerd_font).to_string();
     }
     let Some(agent) = entry.agent.or(entry.agent_context) else {
-        return ">_".to_string();
+        return crate::ui::icons::shell_label(nerd_font).to_string();
     };
-    let Some(suffix) = tab_agent_suffix(Some(agent)) else {
+    let Some(suffix) = crate::ui::icons::agent_label(agent, nerd_font) else {
         return if entry.holds_shell {
-            ">_".to_string()
+            crate::ui::icons::shell_label(nerd_font).to_string()
         } else {
             String::new()
         };
@@ -335,7 +325,8 @@ fn compact_provider_token(entry: &AgentPanelEntry) -> String {
         }
     }
     if entry.holds_shell {
-        provider.push_str(" >_");
+        provider.push(' ');
+        provider.push_str(crate::ui::icons::shell_label(nerd_font));
     }
     provider
 }
@@ -442,9 +433,10 @@ fn compact_row_layout(
     width: usize,
     prefix_width: usize,
     tab: bool,
+    nerd_font: bool,
 ) -> TabRowLayout {
     let (age, activity_instant) = compact_age(entry, now);
-    let provider = compact_provider(entry);
+    let provider = compact_provider(entry, nerd_font);
     let title = compact_row_title_for_width(
         compact_row_title(entry, tab),
         &provider,
@@ -473,12 +465,16 @@ pub(crate) struct AgentRowCells {
     pub provider_color: Color,
 }
 
-pub(crate) fn agent_row_cells(entry: &AgentPanelEntry, p: &Palette) -> AgentRowCells {
+pub(crate) fn agent_row_cells(
+    entry: &AgentPanelEntry,
+    p: &Palette,
+    nerd_font: bool,
+) -> AgentRowCells {
     AgentRowCells {
         dot: compact_row_dot_text(entry),
         dot_color: compact_row_color(entry, p),
         title: compact_row_title(entry, true).to_string(),
-        provider: compact_provider(entry),
+        provider: compact_provider(entry, nerd_font),
         provider_color: provider_color(entry, p),
     }
 }
@@ -943,7 +939,7 @@ fn render_compact_agent_row_with_prefix(
     };
     let p = &app.palette;
     let requested_prefix_width = prefix_override.unwrap_or_else(|| usize::from(depth) * 3 + 1);
-    let provider = compact_provider(entry);
+    let provider = compact_provider(entry, app.nerd_font);
     let row_title = compact_row_title_for_width(
         compact_row_title(entry, tab),
         &provider,
@@ -963,6 +959,7 @@ fn render_compact_agent_row_with_prefix(
         usize::from(rect.width),
         widths.prefix,
         tab,
+        app.nerd_font,
     );
     let fixed_width = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
     let title_width = usize::from(rect.width).saturating_sub(fixed_width);
@@ -1153,7 +1150,7 @@ pub(crate) fn selected_row_control_at(
     column: u16,
 ) -> Option<crate::app::state::SidebarHoverAction> {
     let requested_prefix = usize::from(depth) * 3 + 1;
-    let provider = compact_provider(entry);
+    let provider = compact_provider(entry, app.nerd_font);
     let title = compact_row_title_for_width(
         compact_row_title(entry, tab),
         &provider,
@@ -1248,9 +1245,10 @@ pub(super) fn tab_row_layout(
     prefix_width: usize,
     palette: &Palette,
     indicator_style: StatusIndicatorStyle,
+    nerd_font: bool,
 ) -> TabRowLayout {
     let _ = (palette, indicator_style);
-    compact_row_layout(entry, now, width, prefix_width, true)
+    compact_row_layout(entry, now, width, prefix_width, true, nerd_font)
 }
 
 pub(super) fn mobile_tab_row_layout(
@@ -1260,9 +1258,10 @@ pub(super) fn mobile_tab_row_layout(
     prefix_width: usize,
     palette: &Palette,
     indicator_style: StatusIndicatorStyle,
+    nerd_font: bool,
 ) -> TabRowLayout {
     let _ = (palette, indicator_style);
-    compact_row_layout(entry, now, width, prefix_width, true)
+    compact_row_layout(entry, now, width, prefix_width, true, nerd_font)
 }
 
 /// Foreground for the selected Space and the current tab title in the sidebar.
@@ -1313,6 +1312,7 @@ pub(crate) enum AgentPanelIdentity {
 pub(crate) struct ProjectBadge {
     letters: String,
     color_index: usize,
+    icon: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1349,6 +1349,7 @@ pub(crate) struct SidebarThreadCard {
     host: String,
     host_kind: SidebarCardHostKind,
     agent: Option<SidebarCardAgent>,
+    agent_icon: Option<&'static str>,
 }
 
 #[derive(Clone)]
@@ -1530,6 +1531,7 @@ impl RemoteAgentPanelEntry {
             false,
             None,
             true,
+            false,
         )
     }
 
@@ -1542,10 +1544,11 @@ impl RemoteAgentPanelEntry {
         settled: bool,
         snoozed_until: Option<u64>,
         host_fresh: bool,
+        nerd_font: bool,
     ) -> Self {
         let render_dot = compact_row_dot(&entry);
         let render_title = compact_row_title(&entry, false).to_string();
-        let render_provider = compact_provider(&entry);
+        let render_provider = compact_provider(&entry, nerd_font);
         let host_suffix = format!(" · {narrow_host}");
         let narrow_host_suffix = host_suffix.clone();
         let search_key_lowercase = format!(
@@ -2090,16 +2093,18 @@ fn collect_agent_panel_entries_with_runtimes(
 /// entries through `Arc` and never re-read or re-materialize fleet evidence.
 pub(crate) fn remote_agent_panel_entries(
     snapshot: &crate::fleet::Snapshot,
+    nerd_font: bool,
 ) -> Vec<std::sync::Arc<RemoteAgentPanelEntry>> {
     let now_unix_s = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| duration.as_secs());
-    remote_agent_panel_entries_at(snapshot, now_unix_s)
+    remote_agent_panel_entries_at(snapshot, now_unix_s, nerd_font)
 }
 
 pub(crate) fn remote_agent_panel_entries_at(
     snapshot: &crate::fleet::Snapshot,
     now_unix_s: u64,
+    nerd_font: bool,
 ) -> Vec<std::sync::Arc<RemoteAgentPanelEntry>> {
     let narrow_host_tokens = narrow_remote_host_tokens(snapshot);
     let mut entries = snapshot
@@ -2233,6 +2238,7 @@ pub(crate) fn remote_agent_panel_entries_at(
                     lifecycle.settled,
                     lifecycle.snoozed_until,
                     host.state == crate::fleet::HostState::Reachable,
+                    nerd_font,
                 ),
             ))
         })
@@ -3019,6 +3025,34 @@ fn sidebar_thread_card(app: &AppState, entry: &AgentPanelEntry) -> SidebarThread
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .unwrap_or_else(|| entry.space_label.clone());
+    let workspace = entry
+        .local_target()
+        .and_then(|target| app.workspaces.get(target.ws_idx));
+    let repo_binding = workspace
+        .and_then(|workspace| workspace.repo_binding.as_deref())
+        .or_else(|| context.and_then(|context| context.repo.as_deref()));
+    let repo_root = workspace
+        .and_then(|workspace| {
+            workspace
+                .cached_git_space
+                .as_ref()
+                .map(|space| space.repo_root.as_path())
+        })
+        .or_else(|| {
+            terminal
+                .and_then(|terminal| app.git_root_for_cwd.get(&terminal.cwd))
+                .and_then(Option::as_deref)
+        });
+    let mut badge = project_badge(&repo_label);
+    if app.nerd_font {
+        badge.icon = crate::ui::icons::space_badge_icon(
+            repo_binding,
+            repo_root,
+            &entry.space_label,
+            &app.space_icons,
+        )
+        .map(|icon| pad_right(icon, display_width(&badge.letters)));
+    }
     let reported_age = compact_age(entry, app.view_observed_at).0;
     let age = if entry.state == AgentState::Working {
         entry_earliest_working_since(app, entry)
@@ -3063,14 +3097,15 @@ fn sidebar_thread_card(app: &AppState, entry: &AgentPanelEntry) -> SidebarThread
             crate::platform::HostOs::Other => SidebarCardHostKind::Other,
         }
     };
-    let agent = match entry.agent.or(entry.agent_context) {
+    let detected_agent = entry.agent.or(entry.agent_context);
+    let agent = match detected_agent {
         Some(crate::detect::Agent::Claude) => Some(SidebarCardAgent::Claude),
         Some(crate::detect::Agent::Codex) => Some(SidebarCardAgent::Codex),
         Some(_) => Some(SidebarCardAgent::Other),
         None => None,
     };
     SidebarThreadCard {
-        badge: project_badge(&repo_label),
+        badge,
         title: compact_row_title(entry, true).to_string(),
         status,
         branch,
@@ -3078,6 +3113,11 @@ fn sidebar_thread_card(app: &AppState, entry: &AgentPanelEntry) -> SidebarThread
         host,
         host_kind,
         agent,
+        agent_icon: if app.nerd_font {
+            detected_agent.map(|agent| crate::ui::icons::agent_icon(agent).unwrap_or("◆"))
+        } else {
+            None
+        },
     }
 }
 
@@ -3137,6 +3177,7 @@ fn project_badge(label: &str) -> ProjectBadge {
     ProjectBadge {
         letters,
         color_index,
+        icon: None,
     }
 }
 
@@ -3682,7 +3723,7 @@ fn compact_sidebar_rows_inner(
             false,
         );
         let row_width = sidebar_row_render_width(app, &rows, expand_worktrees);
-        mark_ambiguous_remote_titles(&mut rows, row_width);
+        mark_ambiguous_remote_titles(&mut rows, row_width, app.nerd_font);
         return rows;
     }
 
@@ -3758,7 +3799,7 @@ fn compact_sidebar_rows_inner(
         }
     }
     let row_width = sidebar_row_render_width(app, &rows, expand_worktrees);
-    mark_ambiguous_remote_titles(&mut rows, row_width);
+    mark_ambiguous_remote_titles(&mut rows, row_width, app.nerd_font);
     rows
 }
 
@@ -3793,17 +3834,17 @@ fn sidebar_row_render_width(app: &AppState, rows: &[SidebarRow], mobile: bool) -
     usize::from(list.width.saturating_sub(u16::from(has_scrollbar)))
 }
 
-fn mark_ambiguous_remote_titles(rows: &mut [SidebarRow], width: usize) {
+fn mark_ambiguous_remote_titles(rows: &mut [SidebarRow], width: usize, nerd_font: bool) {
     let rendered_title = |row: &SidebarRow| -> Option<String> {
         let (title, provider, depth) = match row {
             SidebarRow::Agent { entry, depth } => (
                 compact_row_title(entry, false),
-                compact_provider(entry),
+                compact_provider(entry, nerd_font),
                 *depth,
             ),
             SidebarRow::Tab { entry, depth } => (
                 compact_row_title(entry, true),
-                compact_provider(entry),
+                compact_provider(entry, nerd_font),
                 *depth,
             ),
             SidebarRow::RemoteAgent { entry, depth, .. } => (
@@ -8146,7 +8187,7 @@ pub(crate) fn compute_sidebar_hover_targets(
     let narrow_prefix = visible
         .iter()
         .any(|(row, _)| matches!(row, SidebarRow::Tab { .. }))
-        .then(|| narrow_view_tab_prefix_from_rows(&rows, usize::from(body.width)))
+        .then(|| narrow_view_tab_prefix_from_rows(&rows, usize::from(body.width), app.nerd_font))
         .flatten();
 
     let mut targets = Vec::new();
@@ -8158,7 +8199,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                 };
                 let tab = matches!(row, SidebarRow::Tab { .. });
                 let requested_prefix = narrow_prefix.unwrap_or_else(|| usize::from(*depth) * 3 + 1);
-                let provider = compact_provider(entry);
+                let provider = compact_provider(entry, app.nerd_font);
                 let title = compact_row_title_for_width(
                     compact_row_title(entry, tab),
                     &provider,
@@ -10423,6 +10464,17 @@ fn render_workspace_list(
         } else {
             Style::default().fg(p.subtext0)
         };
+        let space_icon = app.nerd_font.then(|| {
+            crate::ui::icons::space_icon(
+                ws.repo_binding.as_deref(),
+                ws.cached_git_space
+                    .as_ref()
+                    .map(|space| space.repo_root.as_path()),
+                &display_label,
+                &app.space_icons,
+            )
+        });
+        let space_icon_width = space_icon.map_or(0, |icon| display_width(icon) + 1);
 
         let window_count = member_indices
             .iter()
@@ -10465,8 +10517,11 @@ fn render_workspace_list(
             .and_then(|(.., sort_key, _)| sort_key.map(|_| 2))
             .unwrap_or(0);
         let prefix = if repo_header { "▾ " } else { " ▾ " };
-        let fixed_width =
-            display_width(prefix) + display_width(&count_label) + state_count_width + sort_width;
+        let fixed_width = display_width(prefix)
+            + space_icon_width
+            + display_width(&count_label)
+            + state_count_width
+            + sort_width;
         let title = truncate_end(
             &display_label,
             usize::from(card.rect.width).saturating_sub(fixed_width),
@@ -10480,6 +10535,10 @@ fn render_workspace_list(
             Style::default().fg(p.accent),
         ));
         spans.push(Span::raw(" "));
+        if let Some(icon) = space_icon {
+            spans.push(Span::styled(icon, name_style));
+            spans.push(Span::raw(" "));
+        }
         spans.push(Span::styled(title, name_style));
         spans.push(Span::styled(
             count_label,
@@ -10719,10 +10778,14 @@ fn narrow_view_tab_prefix(app: &AppState, width: usize) -> Option<usize> {
         return None;
     }
     let rows = sidebar_rows(app);
-    narrow_view_tab_prefix_from_rows(&rows, width)
+    narrow_view_tab_prefix_from_rows(&rows, width, app.nerd_font)
 }
 
-fn narrow_view_tab_prefix_from_rows(rows: &[SidebarRow], width: usize) -> Option<usize> {
+fn narrow_view_tab_prefix_from_rows(
+    rows: &[SidebarRow],
+    width: usize,
+    nerd_font: bool,
+) -> Option<usize> {
     let prefixes = rows
         .iter()
         .filter_map(|row| match row {
@@ -10732,7 +10795,7 @@ fn narrow_view_tab_prefix_from_rows(rows: &[SidebarRow], width: usize) -> Option
         })
         .map(|(entry, depth, tab)| {
             let requested_prefix = usize::from(*depth) * 3 + 1;
-            let provider = compact_provider(entry);
+            let provider = compact_provider(entry, nerd_font);
             let title = compact_row_title_for_width(
                 compact_row_title(entry, tab),
                 &provider,
@@ -10861,7 +10924,13 @@ fn render_sections_thread_card(
     let (status_glyph, status_label, status_color) =
         sidebar_card_status(&card.status, app.nerd_font, p);
     let (badge_fg, badge_bg) = project_badge_style(card.badge.color_index, app);
-    let badge_text = format!(" {} ", card.badge.letters);
+    let badge_icon = if app.nerd_font {
+        card.badge.icon.as_deref()
+    } else {
+        None
+    };
+    let badge_inner = badge_icon.unwrap_or(&card.badge.letters);
+    let badge_width = display_width(badge_inner) + 2;
     let status_text = if rect.width < 24 {
         match &card.status {
             SidebarCardStatus::Working(age) => format!("{status_glyph} {age}"),
@@ -10873,28 +10942,30 @@ fn render_sections_thread_card(
         format!("{status_glyph} {status_label}")
     };
     let first_line_width = usize::from(rect.width);
-    let fixed_width = display_width(&badge_text) + 1 + display_width(&status_text) + 1;
+    let fixed_width = badge_width + 1 + display_width(&status_text) + 1;
     let title_width = first_line_width.saturating_sub(fixed_width);
     let title = pad_right(&truncate_end(&card.title, title_width), title_width);
+    let badge_style = Style::default()
+        .fg(badge_fg)
+        .bg(badge_bg)
+        .add_modifier(Modifier::BOLD);
+    let mut first_line = Vec::with_capacity(7);
+    first_line.extend([
+        Span::styled(" ", badge_style),
+        Span::styled(badge_inner, badge_style),
+        Span::styled(" ", badge_style),
+        Span::raw(" "),
+        Span::styled(title, Style::default().fg(p.text)),
+        Span::raw(" "),
+        Span::styled(
+            status_text,
+            Style::default()
+                .fg(status_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                badge_text,
-                Style::default()
-                    .fg(badge_fg)
-                    .bg(badge_bg)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" "),
-            Span::styled(title, Style::default().fg(p.text)),
-            Span::raw(" "),
-            Span::styled(
-                status_text,
-                Style::default()
-                    .fg(status_color)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ])),
+        Paragraph::new(Line::from(first_line)),
         Rect::new(rect.x, rect.y, rect.width, 1),
     );
     if rect.height < 2 {
@@ -10903,14 +10974,15 @@ fn render_sections_thread_card(
 
     let branch_icon = if app.nerd_font { "" } else { "b" };
     let host_icon = sidebar_card_host_icon(card.host_kind, app.nerd_font);
-    let agent_icon = card.agent.map(|agent| match (agent, app.nerd_font) {
-        (SidebarCardAgent::Claude, true) => "✳",
-        (SidebarCardAgent::Codex, true) => "◉",
-        (SidebarCardAgent::Other, true) => "◆",
-        (SidebarCardAgent::Claude, false) => "*",
-        (SidebarCardAgent::Codex, false) => "o",
-        (SidebarCardAgent::Other, false) => "?",
-    });
+    let agent_icon = if app.nerd_font {
+        card.agent_icon
+    } else {
+        card.agent.map(|agent| match agent {
+            SidebarCardAgent::Claude => "*",
+            SidebarCardAgent::Codex => "o",
+            SidebarCardAgent::Other => "?",
+        })
+    };
     let mut left_fields = Vec::new();
     if let Some(branch) = card.branch.as_deref() {
         left_fields.push((format!("{branch_icon} {branch}"), p.mauve));
@@ -10920,14 +10992,17 @@ fn render_sections_thread_card(
     }
     // Keep the host before the agent so narrow cards drop the agent first;
     // render in reverse to keep the host at the far right.
-    let mut right_fields = vec![(format!("{host_icon} {}", card.host), p.overlay1)];
+    let mut right_fields = vec![(
+        std::borrow::Cow::Owned(format!("{host_icon} {}", card.host)),
+        p.overlay1,
+    )];
     if let Some(agent_icon) = agent_icon {
         let color = match card.agent {
             Some(SidebarCardAgent::Claude) => p.peach,
             Some(SidebarCardAgent::Codex) => p.green,
             _ => p.overlay0,
         };
-        right_fields.push((agent_icon.to_string(), color));
+        right_fields.push((std::borrow::Cow::Borrowed(agent_icon), color));
     }
     let has_branch = card.branch.is_some();
     let available = usize::from(rect.width).saturating_sub(2);
@@ -10987,7 +11062,7 @@ fn render_sections_thread_card(
         if index > 0 {
             right_spans.push(Span::raw(" "));
         }
-        right_spans.push(Span::styled(text.as_str(), Style::default().fg(*color)));
+        right_spans.push(Span::styled(text.as_ref(), Style::default().fg(*color)));
     }
     let left_width = left_fields
         .iter()
@@ -11125,6 +11200,7 @@ pub(crate) fn visible_tab_activity_instants_from(
                 narrow_prefix.unwrap_or_else(|| usize::from(depth) * 3 + 1),
                 &app.palette,
                 app.status_indicators,
+                app.nerd_font,
             );
             layout.activity_age.and(layout.activity_instant)
         })
@@ -12834,7 +12910,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
         let mut app = app_with_agents(&["local"]);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         app
     }
@@ -12901,7 +12977,8 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
         let mut app = AppState::test_new();
-        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 1_725_000_899);
+        app.remote_agent_panel_entries =
+            remote_agent_panel_entries_at(&snapshot, 1_725_000_899, false);
         app.view_observed_unix_s = 1_725_000_899;
 
         let rows = sidebar_rows(&app);
@@ -13078,7 +13155,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        let remote_entries = remote_agent_panel_entries(&snapshot);
+        let remote_entries = remote_agent_panel_entries(&snapshot, false);
 
         let mut empty = AppState::test_new();
         empty.remote_agent_panel_entries = remote_entries.clone();
@@ -13135,7 +13212,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         let (remote, show_host_identity) = sidebar_rows(&app)
@@ -13177,7 +13254,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         let rows = sidebar_rows(&app);
@@ -13231,7 +13308,8 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 1_725_000_899);
+        app.remote_agent_panel_entries =
+            remote_agent_panel_entries_at(&snapshot, 1_725_000_899, false);
         app.view_observed_unix_s = 1_725_000_899;
         expand_fleet(&mut app);
 
@@ -13319,6 +13397,7 @@ pub(crate) mod tests {
     #[test]
     fn a_pane_attached_to_a_fleet_host_names_the_machine_before_the_provider() {
         let mut app = app_with_agents(&["attached"]);
+        app.nerd_font = false;
         app.fleet_snapshot = crate::fleet::Snapshot {
             polled: true,
             configured_hosts: vec!["ub1".into()],
@@ -13342,7 +13421,7 @@ pub(crate) mod tests {
             .next()
             .expect("attached entry");
         assert_eq!(entry.remote_host.as_deref(), Some("ub1"));
-        let provider = compact_provider(&entry);
+        let provider = compact_provider(&entry, false);
         assert!(provider.starts_with("ub1 · "), "{provider:?}");
 
         let width = 40;
@@ -13416,7 +13495,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
         let app = AppState::test_new();
         assert_eq!(
             snapshot.hosts[0].entries[0].title.as_deref(),
@@ -13541,7 +13620,7 @@ pub(crate) mod tests {
             ],
             ..crate::fleet::Snapshot::default()
         };
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
         let app = AppState::test_new();
         for entry in &entries {
             assert_eq!(display_width(&entry.narrow_host_suffix), 6);
@@ -13607,7 +13686,7 @@ pub(crate) mod tests {
         let mut app = AppState::test_new();
         app.sidebar_width = 18;
         app.view.sidebar_rect = Rect::new(0, 0, 18, 20);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         let remote_rows = sidebar_rows(&app)
@@ -13669,7 +13748,7 @@ pub(crate) mod tests {
         let mut app = AppState::test_new();
         app.sidebar_width = 26;
         app.view.sidebar_rect = Rect::new(0, 0, 26, 8);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         let rows = sidebar_rows(&app);
@@ -13726,7 +13805,7 @@ pub(crate) mod tests {
         app.view.layout = crate::app::state::ViewLayout::Mobile;
         app.view.mobile_header_rect = Rect::new(0, 0, 20, 2);
         app.view.terminal_area = Rect::new(0, 2, 20, 16);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         let collision_rows = mobile_sidebar_rows(&app)
@@ -13808,7 +13887,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
         let cloned_entry = entries[0].entry.clone();
         assert!(std::sync::Arc::ptr_eq(
             &entries[0].entry.data,
@@ -13911,7 +13990,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
         let mut app = AppState::test_new();
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         take_remote_agent_panel_data_copies();
 
@@ -13944,14 +14023,14 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let future = remote_agent_panel_entries_at(&snapshot, 199);
+        let future = remote_agent_panel_entries_at(&snapshot, 199, false);
         assert_eq!(future[0].state, AgentState::Unknown);
         assert_eq!(future[0].attention_tier, Some(AttentionTier::None));
         assert!(!future[0].open_blockers);
         assert!(!future[0].usage_limited);
         assert_eq!(future[0].snoozed_until, Some(200));
 
-        let expired = remote_agent_panel_entries_at(&snapshot, 200);
+        let expired = remote_agent_panel_entries_at(&snapshot, 200, false);
         assert_eq!(expired[0].snoozed_until, None);
         let mut app = AppState::test_new();
         app.remote_agent_panel_entries = expired;
@@ -13999,7 +14078,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
         let entry = &entries[0].entry;
         assert_eq!(entry.attention_tier, Some(AttentionTier::Blocked));
         assert!(entry_needs_human_attention(entry));
@@ -14018,7 +14097,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        let settled_entries = remote_agent_panel_entries(&settled_snapshot);
+        let settled_entries = remote_agent_panel_entries(&settled_snapshot, false);
         let settled_entry = &settled_entries[0].entry;
         assert_eq!(settled_entry.attention_tier, Some(AttentionTier::None));
         assert!(!entry_needs_human_attention(settled_entry));
@@ -14046,11 +14125,11 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let waiting = remote_agent_panel_entries(&snapshot_for(info.clone()));
+        let waiting = remote_agent_panel_entries(&snapshot_for(info.clone()), false);
         assert!(waiting[0].entry.waiting_on_agents);
 
         info.settled_at = Some(1_725_000_023);
-        let settled = remote_agent_panel_entries(&snapshot_for(info));
+        let settled = remote_agent_panel_entries(&snapshot_for(info), false);
         assert!(!settled[0].entry.waiting_on_agents);
     }
 
@@ -14065,7 +14144,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].agent_ref.host, "laptop");
@@ -14085,7 +14164,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
 
-        let entries = remote_agent_panel_entries(&snapshot);
+        let entries = remote_agent_panel_entries(&snapshot, false);
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].agent_ref.host, "localhost");
@@ -14102,7 +14181,7 @@ pub(crate) mod tests {
             ..crate::fleet::Snapshot::default()
         };
         let mut app = app_with_agents(&["local"]);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         app.sidebar_work_filter.query = "WORKBOX reviewagent".into();
 
@@ -14537,6 +14616,79 @@ pub(crate) mod tests {
     use ratatui::{backend::TestBackend, layout::Direction, style::Color, Terminal};
 
     #[test]
+    fn compact_sidebar_row_uses_the_claude_glyph_and_keeps_the_text_fallback() {
+        let mut app = app_with_agents(&["claude row"]);
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        app.refresh_local_agent_panel_identities();
+        let entry = sidebar_thread_entries(&app)
+            .into_iter()
+            .next()
+            .expect("Claude sidebar entry");
+
+        let render = |app: &AppState| {
+            let mut terminal = Terminal::new(TestBackend::new(40, 1)).unwrap();
+            terminal
+                .draw(|frame| {
+                    render_compact_agent_row(
+                        app,
+                        frame,
+                        &entry,
+                        Rect::new(0, 0, 40, 1),
+                        0,
+                        true,
+                        None,
+                    )
+                })
+                .unwrap();
+            row_text(terminal.backend().buffer(), 0, 40)
+        };
+
+        app.nerd_font = true;
+        let icon_row = render(&app);
+        assert!(icon_row.contains("\u{EC82}"), "{icon_row:?}");
+        assert!(!icon_row.contains("cc"), "{icon_row:?}");
+
+        app.nerd_font = false;
+        let text_row = render(&app);
+        assert!(text_row.contains("cc"), "{text_row:?}");
+        assert!(!text_row.contains("\u{EC82}"), "{text_row:?}");
+    }
+
+    #[test]
+    fn space_header_renders_the_inbox_glyph_before_its_title() {
+        let mut app = app_with_agents(&["agent-inbox"]);
+        app.sidebar_group_mode = SidebarGroupMode::Spaces;
+        app.workspaces[0].cached_git_space = None;
+        app.workspaces[0].repo_binding = None;
+        app.workspaces[0].custom_name = Some("agent-inbox".into());
+        app.nerd_font = true;
+        let area = Rect::new(0, 0, 60, 20);
+        crate::ui::compute_view_with_runtime_registry(
+            &mut app,
+            &TerminalRuntimeRegistry::new(),
+            area,
+        );
+
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let rendered = (0..area.height)
+            .map(|row| row_text(terminal.backend().buffer(), row, area.width))
+            .collect::<Vec<_>>();
+        assert!(
+            rendered
+                .iter()
+                .any(|row| row.contains("\u{F0687} agent-inbox")),
+            "{rendered:?}"
+        );
+    }
+
+    #[test]
     fn collapsed_and_expanded_sidebars_render_separator_on_shared_column() {
         let app = AppState::test_new();
         let area = Rect::new(3, 1, 26, 8);
@@ -14652,6 +14804,7 @@ pub(crate) mod tests {
     #[test]
     fn working_row_opacity_matches_each_level_for_local_and_remote_at_18_and_60_columns() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut working = compact_test_entry("working task", Some(Agent::Claude));
         working.state = AgentState::Working;
         let agent_ref =
@@ -14903,13 +15056,13 @@ pub(crate) mod tests {
 
         let mut two = compact_test_entry("two", Some(Agent::Claude));
         two.active_subagents = Some(2);
-        assert_eq!(compact_provider(&two), "cc+2");
+        assert_eq!(compact_provider(&two, false), "cc+2");
         two.holds_shell = true;
-        assert_eq!(compact_provider(&two), "cc+2 >_");
+        assert_eq!(compact_provider(&two, false), "cc+2 >_");
 
         let mut stale = two;
         stale.stale = true;
-        assert_eq!(compact_provider(&stale), "cc >_");
+        assert_eq!(compact_provider(&stale, false), "cc >_");
     }
 
     #[test]
@@ -14946,6 +15099,7 @@ pub(crate) mod tests {
                 3,
                 &palette,
                 StatusIndicatorStyle::default(),
+                false,
             );
             cases.push((
                 layout.dot,
@@ -15007,11 +15161,14 @@ pub(crate) mod tests {
     #[test]
     fn compact_provider_marks_plain_shells_and_kimi() {
         let plain = compact_test_entry("terminal", None);
-        assert_eq!(compact_provider(&plain), ">_");
-        assert_eq!(tab_agent_suffix(Some(Agent::Kimi)), Some("ki"));
+        assert_eq!(compact_provider(&plain, false), ">_");
+        assert_eq!(
+            crate::ui::icons::agent_text_tag(Some(Agent::Kimi)),
+            Some("ki")
+        );
 
         let kimi = compact_test_entry("task", Some(Agent::Kimi));
-        assert_eq!(compact_provider(&kimi), "ki");
+        assert_eq!(compact_provider(&kimi, false), "ki");
     }
 
     #[test]
@@ -15669,7 +15826,7 @@ pub(crate) mod tests {
                 .collect(),
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         let rows = sidebar_rows(&app);
         let remote = rows
@@ -15734,7 +15891,7 @@ pub(crate) mod tests {
                 .collect(),
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         let area = Rect::new(0, 0, 30, 20);
         app.view.sidebar_rect = area;
@@ -15789,7 +15946,7 @@ pub(crate) mod tests {
                 .collect(),
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         let area = Rect::new(0, 0, 30, 20);
         app.view.sidebar_rect = area;
@@ -15835,7 +15992,7 @@ pub(crate) mod tests {
                     .collect(),
                 ..crate::fleet::Snapshot::default()
             };
-            app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+            app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
             expand_fleet(&mut app);
             let width = 30;
             let area = Rect::new(0, 0, width, 20);
@@ -15871,7 +16028,7 @@ pub(crate) mod tests {
             )],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
 
         take_remote_sidebar_row_visits();
@@ -16370,6 +16527,7 @@ pub(crate) mod tests {
     #[test]
     fn active_subagent_count_is_dimmed_and_right_aligned() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("render sidebar count".into());
         set_active_subagents(&mut app, 0, Some(3));
         let area = Rect::new(0, 0, 40, 20);
@@ -16406,6 +16564,7 @@ pub(crate) mod tests {
     #[test]
     fn narrow_subagent_count_preserves_title_and_column_alignment() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("narrow sidebar title".into());
         set_active_subagents(&mut app, 0, Some(3));
         let area = Rect::new(0, 0, 18, 20);
@@ -16425,6 +16584,7 @@ pub(crate) mod tests {
     #[test]
     fn blue_working_dot_and_active_subagent_count_share_the_row() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("blocked review".into());
         let pane_id = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].terminal_id(pane_id).unwrap().clone();
@@ -16512,7 +16672,8 @@ pub(crate) mod tests {
                 60,
                 4,
                 &app.palette,
-                app.status_indicators
+                app.status_indicators,
+                false
             )
             .dot,
             "●"
@@ -17144,6 +17305,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
 
         let mut terminal = Terminal::new(TestBackend::new(40, 20)).unwrap();
@@ -17233,6 +17395,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         let unlinked_layout = tab_row_layout(
             unlinked,
@@ -17241,6 +17404,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
 
         assert_eq!(display_width(&linked_layout.title), 9);
@@ -17254,6 +17418,7 @@ pub(crate) mod tests {
     #[test]
     fn narrow_flagged_tab_budget_truncates_title() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("a deliberately long tab title".into());
         app.workspaces[0].tabs[0].set_prio(true);
         let area = Rect::new(0, 0, 18, 12);
@@ -17370,6 +17535,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "●");
         assert_eq!(
@@ -17621,6 +17787,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "●");
         let mobile_layout = mobile_tab_row_layout(
@@ -17630,6 +17797,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(mobile_layout.dot, "●");
 
@@ -17645,6 +17813,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "●");
 
@@ -17657,6 +17826,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "○");
         let mobile_layout = mobile_tab_row_layout(
@@ -17666,6 +17836,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(mobile_layout.dot, "○");
     }
@@ -17690,6 +17861,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "○");
         assert_eq!(
@@ -17706,6 +17878,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "○");
 
@@ -17719,6 +17892,7 @@ pub(crate) mod tests {
             4,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.dot, "●");
         assert_eq!(
@@ -17730,6 +17904,7 @@ pub(crate) mod tests {
     #[test]
     fn usage_limited_worklist_rows_render_a_non_color_cue_at_supported_widths() {
         let mut app = app_with_agents(&["Wait for plan reset"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("Wait for plan reset".into());
         let pane = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].terminal_id(pane).unwrap().clone();
@@ -18516,6 +18691,7 @@ row_gap = 1
     #[test]
     fn sidebar_visual_evidence_renders_release_layout() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.palette = crate::app::state::Palette::one_light();
 
         let mut active = Workspace::test_new("Herdr");
@@ -18660,6 +18836,7 @@ row_gap = 1
     #[test]
     fn default_tab_row_shows_status_and_title_once_without_pane_identity_row() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         app.palette = crate::app::state::Palette::one_light();
         let mut workspace = Workspace::test_new("repo-folder");
         workspace.tabs[0].custom_name = Some("Fix Billing Retry".into());
@@ -18903,6 +19080,7 @@ row_gap = 1
     #[test]
     fn narrow_tab_rows_keep_status_before_truncated_title() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("one".into());
         let area = Rect::new(0, 0, 23, 12);
         let mut terminal = Terminal::new(TestBackend::new(23, 12)).unwrap();
@@ -18981,6 +19159,7 @@ row_gap = 1
             1,
             &app.palette,
             app.status_indicators,
+            false,
         );
 
         assert_eq!(layout.provider, "pi");
@@ -19015,6 +19194,7 @@ row_gap = 1
             1,
             &app.palette,
             app.status_indicators,
+            false,
         );
 
         assert_eq!(layout.provider, "pi");
@@ -19082,6 +19262,7 @@ row_gap = 1
             1,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.provider, "pi");
         assert_eq!(layout.dot, "●");
@@ -19326,6 +19507,7 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
     #[test]
     fn sidebar_and_tab_bar_render_the_same_agent_title() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         let pane_id = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
             .attached_terminal_id
@@ -19446,6 +19628,7 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
     #[test]
     fn prio_row_appends_the_provider_once_after_the_workspace() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = Workspace::test_new("one");
         let focused_pane = workspace.tabs[0].root_pane;
         workspace.tabs[0].set_prio(true);
@@ -19476,6 +19659,11 @@ rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }
         assert!(rendered.contains("Fix billing"), "{rendered:?}");
         assert!(rendered.contains("pi"), "{rendered:?}");
         assert!(!rendered.contains("Reviewer"), "{rendered:?}");
+
+        app.nerd_font = true;
+        let icon_rendered = render_first_tab_row(&app, 60);
+        assert!(icon_rendered.contains("Fix billing"), "{icon_rendered:?}");
+        assert!(icon_rendered.contains("\u{f03ff}"), "{icon_rendered:?}");
     }
 
     #[test]
@@ -19652,6 +19840,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn narrow_agent_rows_preserve_later_tab_tokens() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         let mut workspace = Workspace::test_new("very-long-workspace-name");
         let tab_idx = workspace.test_add_tab(Some("logs"));
         let pane_id = workspace.tabs[tab_idx].root_pane;
@@ -19887,6 +20076,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn agent_rows_end_at_age_and_return_suffix_width_to_title() {
         let mut app = app_with_agents(&["one", "two"]);
+        app.nerd_font = false;
         app.workspaces[0].custom_name = Some("t3-sample".into());
         app.workspaces[1].custom_name = Some("other-space".into());
         app.workspaces[0].tabs[0].custom_name = Some("sample-pr".into());
@@ -20154,7 +20344,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             });
         }
 
-        let prefix = narrow_view_tab_prefix_from_rows(&rows, 25);
+        let prefix = narrow_view_tab_prefix_from_rows(&rows, 25, false);
         assert_eq!(prefix, Some(1));
         let mut marker_columns = Vec::new();
         for (row, expected_title) in rows.iter().zip([
@@ -20200,7 +20390,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert_eq!(compact_row_widths(short_github, "cc", 24, 7).prefix, 7);
 
         assert_eq!(
-            narrow_view_tab_prefix_from_rows(&rows, 43),
+            narrow_view_tab_prefix_from_rows(&rows, 43, false),
             None,
             "nested rows keep their extra level when every title fits"
         );
@@ -20947,7 +21137,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             ..crate::fleet::Snapshot::default()
         };
         let mut app = app_with_agents(&["local"]);
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
 
         let rows = sidebar_rows(&app);
         assert!(
@@ -24624,7 +24814,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 80,
                 1,
                 &app.palette,
-                app.status_indicators
+                app.status_indicators,
+                false
             )
             .activity_age,
             tab_row_layout(
@@ -24633,7 +24824,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 80,
                 1,
                 &app.palette,
-                app.status_indicators
+                app.status_indicators,
+                false
             )
             .activity_age
         );
@@ -24642,6 +24834,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn tab_shell_marker_renders_in_the_provider_column() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("Use Repository Instructions".into());
         let pane = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
@@ -24664,11 +24857,25 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         );
         assert!(rendered.contains("pi >_"), "{rendered:?}");
         assert!(!rendered.contains("  2 >_"), "{rendered:?}");
+
+        app.nerd_font = true;
+        let mut icon_terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        icon_terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let icon_row = compute_tab_card_areas(&app, area)[0].rect.y;
+        let icon_rendered = row_text(icon_terminal.backend().buffer(), icon_row, area.width - 1);
+        assert!(
+            icon_rendered.contains("Use Repository Instructions"),
+            "{icon_rendered:?}"
+        );
+        assert!(icon_rendered.contains("\u{ea85}"), "{icon_rendered:?}");
     }
 
     #[test]
     fn tab_provider_suffixes_distinguish_codex_and_claude_after_title() {
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("Codex task".into());
         let codex_pane = app.workspaces[0].tabs[0].root_pane;
         let codex_terminal = app.workspaces[0].tabs[0].panes[&codex_pane]
@@ -24711,6 +24918,27 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 .any(|row| row.contains("Claude task") && row.contains("cc")),
             "{rendered:?}"
         );
+
+        app.nerd_font = true;
+        let mut icon_terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        icon_terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let icon_rows = (0..area.height)
+            .map(|row| row_text(icon_terminal.backend().buffer(), row, area.width - 1))
+            .collect::<Vec<_>>();
+        assert!(
+            icon_rows
+                .iter()
+                .any(|row| row.contains("Codex task") && row.contains("\u{ec81}")),
+            "{icon_rows:?}"
+        );
+        assert!(
+            icon_rows
+                .iter()
+                .any(|row| row.contains("Claude task") && row.contains("\u{ec82}")),
+            "{icon_rows:?}"
+        );
     }
 
     #[test]
@@ -24746,6 +24974,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn tab_rows_follow_field_priority_at_minimum_and_normal_widths() {
         let started = std::time::Instant::now();
         let mut app = app_with_agents(&["one"]);
+        app.nerd_font = false;
         app.workspaces[0].tabs[0].custom_name = Some("Investigate release regression".into());
         let pane = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
@@ -24792,9 +25021,12 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
     #[test]
     fn pi_uses_pi_suffix_while_unsupported_and_agentless_tabs_omit_it() {
-        assert_eq!(tab_agent_suffix(Some(Agent::Pi)), Some("pi"));
-        assert_eq!(tab_agent_suffix(Some(Agent::Gemini)), None);
-        assert_eq!(tab_agent_suffix(None), None);
+        assert_eq!(
+            crate::ui::icons::agent_text_tag(Some(Agent::Pi)),
+            Some("pi")
+        );
+        assert_eq!(crate::ui::icons::agent_text_tag(Some(Agent::Gemini)), None);
+        assert_eq!(crate::ui::icons::agent_text_tag(None), None);
     }
 
     #[test]
@@ -25399,6 +25631,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             2,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.title, "Codex");
         assert_eq!(layout.dot, "●");
@@ -25421,6 +25654,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             2,
             &app.palette,
             app.status_indicators,
+            false,
         );
         assert_eq!(layout.title, "manual pane");
         assert_eq!(layout.dot, "●");
@@ -25786,6 +26020,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn sidebar_agent_rows_suppress_redundant_identity() {
         let activity_at = std::time::Instant::now();
         let mut app = app_for_real_sidebar_fixtures(&["claude", "gemini"]);
+        app.nerd_font = false;
         app.agent_panel_sort = AgentPanelSort::Priority;
         configure_real_sidebar_agent(
             &mut app,
@@ -25865,6 +26100,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn sidebar_real_fixture_rows_are_compact() {
         let activity_at = std::time::Instant::now();
         let mut app = app_for_real_sidebar_fixtures(&["claude-code", "codex"]);
+        app.nerd_font = false;
         configure_real_sidebar_agent(
             &mut app,
             0,
@@ -26331,7 +26567,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             ..crate::fleet::Snapshot::default()
         };
         let mut app = AppState::test_new();
-        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = remote_agent_panel_entries(&snapshot, false);
         expand_fleet(&mut app);
         app.sidebar_work_filter.query = "label:not-on-remote".into();
 
@@ -27131,7 +27367,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn selected_local_rows_prioritize_title_then_render_snooze_and_settle_controls() {
         for width in [18, 60] {
-            let app = app_with_agents(&["alpha"]);
+            let mut app = app_with_agents(&["alpha"]);
+            app.nerd_font = false;
             let area = Rect::new(0, 0, width, 20);
             let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
             terminal
@@ -27199,7 +27436,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             )],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 1_725_000_000);
+        app.remote_agent_panel_entries =
+            remote_agent_panel_entries_at(&snapshot, 1_725_000_000, false);
         app.sidebar_selected_remote_agent = app
             .remote_agent_panel_entries
             .first()
@@ -28124,7 +28362,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             ..crate::fleet::Snapshot::default()
         };
         let mut app = AppState::test_new();
-        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 2);
+        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 2, false);
         app.fleet_snapshot = snapshot;
         let entry = app.remote_agent_panel_entries[0].clone();
         app.sidebar_selected_remote_agent = Some(entry.agent_ref.clone());
@@ -28134,6 +28372,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn c1_remote_controls_use_local_glyphs_widths_and_hit_rectangles() {
         let mut app = app_with_agents(&["alpha"]);
+        app.nerd_font = false;
         let (entry, depth, tab) = sidebar_rows(&app)
             .into_iter()
             .find_map(|row| match row {
@@ -28718,6 +28957,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             host: "ub1".into(),
             host_kind: SidebarCardHostKind::Linux,
             agent: Some(SidebarCardAgent::Codex),
+            agent_icon: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(18, 2)).expect("card terminal");
         terminal
@@ -28751,6 +28991,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             host: "ub1".into(),
             host_kind: SidebarCardHostKind::Linux,
             agent: Some(SidebarCardAgent::Codex),
+            agent_icon: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(36, 2)).expect("card terminal");
         terminal
@@ -28783,6 +29024,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             host: "ub2".into(),
             host_kind: SidebarCardHostKind::Linux,
             agent: None,
+            agent_icon: None,
         };
         let mut terminal =
             Terminal::new(TestBackend::new(40, 2)).expect("plain shell card terminal");
@@ -28809,6 +29051,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             host: "ub2".into(),
             host_kind: SidebarCardHostKind::Linux,
             agent: None,
+            agent_icon: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(40, 2)).expect("thread card terminal");
         terminal
@@ -29130,6 +29373,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             host: "ub1".into(),
             host_kind: SidebarCardHostKind::Linux,
             agent: Some(SidebarCardAgent::Codex),
+            agent_icon: None,
         };
         let mut terminal = Terminal::new(TestBackend::new(60, 2)).expect("ASCII card terminal");
         terminal
@@ -29139,6 +29383,101 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("render ASCII card");
         assert!(row_text(terminal.backend().buffer(), 0, 60).is_ascii());
         assert!(row_text(terminal.backend().buffer(), 1, 60).is_ascii());
+    }
+
+    #[test]
+    fn sections_thread_card_uses_shared_claude_and_repo_icons() {
+        let mut app = app_with_agents(&["herdr"]);
+        app.nerd_font = true;
+        app.workspaces[0].repo_binding = Some("herdrdev/herdr".into());
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&terminal_id)
+            .expect("agent terminal")
+            .detected_agent = Some(Agent::Claude);
+        app.refresh_local_agent_panel_identities();
+
+        let entry = sidebar_thread_entries(&app)
+            .into_iter()
+            .next()
+            .expect("Claude sidebar entry");
+        let card = sidebar_thread_card(&app, &entry);
+        assert_eq!(card.agent_icon, Some("\u{EC82}"));
+        assert_eq!(card.badge.icon.as_deref(), Some("\u{EBC8} "));
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 2)).expect("icon card terminal");
+        terminal
+            .draw(|frame| {
+                render_sections_thread_card(&app, frame, &card, Rect::new(0, 0, 60, 2), false)
+            })
+            .expect("render icon card");
+        assert!(row_text(terminal.backend().buffer(), 0, 60).contains("\u{EBC8}"));
+        assert!(row_text(terminal.backend().buffer(), 1, 60).contains("\u{EC82}"));
+    }
+
+    #[test]
+    fn sections_thread_card_uses_generic_icon_for_unmapped_agent() {
+        let mut app = app_with_agents(&["herdr"]);
+        app.nerd_font = true;
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&terminal_id)
+            .expect("agent terminal")
+            .detected_agent = Some(Agent::Cursor);
+        app.refresh_local_agent_panel_identities();
+
+        let entry = sidebar_thread_entries(&app)
+            .into_iter()
+            .next()
+            .expect("Cursor sidebar entry");
+        let card = sidebar_thread_card(&app, &entry);
+        assert_eq!(card.agent_icon, Some("◆"));
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 2)).expect("generic icon card");
+        terminal
+            .draw(|frame| {
+                render_sections_thread_card(&app, frame, &card, Rect::new(0, 0, 60, 2), false)
+            })
+            .expect("render generic icon card");
+        let buffer = terminal.backend().buffer();
+        let second = row_text(buffer, 1, 60);
+        assert!(
+            second.contains("◆"),
+            "generic agent mark missing: {second:?}"
+        );
+        let icon = (0..60)
+            .map(|x| &buffer[(x, 1)])
+            .find(|cell| cell.symbol() == "◆")
+            .expect("generic agent mark cell");
+        assert_eq!(icon.fg, app.palette.overlay0);
+    }
+
+    #[test]
+    fn sections_thread_card_keeps_letters_for_unknown_repositories() {
+        let mut app = app_with_agents(&["mystery project"]);
+        app.nerd_font = true;
+        app.workspaces[0].repo_binding = Some("owner/no-such-repo".into());
+        let entry = sidebar_thread_entries(&app)
+            .into_iter()
+            .next()
+            .expect("sidebar entry");
+        let card = sidebar_thread_card(&app, &entry);
+
+        assert_eq!(card.badge.icon, None);
+        assert_eq!(card.badge.letters, "MP");
+        let mut terminal = Terminal::new(TestBackend::new(60, 2)).expect("unknown repo card");
+        terminal
+            .draw(|frame| {
+                render_sections_thread_card(&app, frame, &card, Rect::new(0, 0, 60, 2), false)
+            })
+            .expect("render unknown repo card");
+        assert!(row_text(terminal.backend().buffer(), 0, 60).contains("MP"));
     }
 
     #[test]
@@ -29179,7 +29518,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             ..crate::fleet::Snapshot::default()
         };
         remote_app.remote_agent_panel_entries =
-            remote_agent_panel_entries_at(&snapshot, 1_725_000_000);
+            remote_agent_panel_entries_at(&snapshot, 1_725_000_000, false);
         let remote_card = sidebar_rows(&remote_app)
             .into_iter()
             .find_map(|row| match row {
@@ -29345,7 +29684,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let mut app = AppState::test_new();
         app.sidebar_sections_layout = true;
         app.sidebar_work_filter.machine_scope = crate::app::state::SidebarMachineScope::AllMachines;
-        app.remote_agent_panel_entries = remote_agent_panel_entries_at(&snapshot, 1_725_000_000);
+        app.remote_agent_panel_entries =
+            remote_agent_panel_entries_at(&snapshot, 1_725_000_000, false);
         app.view_observed_at = std::time::Instant::now();
 
         assert_eq!(

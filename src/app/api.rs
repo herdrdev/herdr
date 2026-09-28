@@ -39,7 +39,7 @@ enum RuntimeExitAction {
 impl App {
     pub(crate) fn refresh_remote_agent_panel_entries(&mut self) {
         self.state.remote_agent_panel_entries =
-            crate::ui::remote_agent_panel_entries(&self.state.fleet_snapshot);
+            crate::ui::remote_agent_panel_entries(&self.state.fleet_snapshot, self.state.nerd_font);
         self.state.aloop_projection =
             crate::aloop::project(&self.state.fleet_snapshot).map(std::sync::Arc::new);
         if self

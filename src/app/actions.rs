@@ -1957,7 +1957,7 @@ impl AppState {
         };
 
         let visible_user_actions = crate::ui::visible_user_actions(self);
-        let layout = crate::ui::compute_tab_bar_view(
+        let layout = crate::ui::compute_tab_bar_view_with_icons(
             ws,
             &self.terminals,
             area,
@@ -1966,6 +1966,7 @@ impl AppState {
             self.mouse_capture,
             &visible_user_actions,
             crate::ui::TabActionVisibility::from_state(self),
+            self.nerd_font,
         );
         self.tab_scroll = layout.scroll;
         self.view.tab_hit_areas = layout.tab_hit_areas;

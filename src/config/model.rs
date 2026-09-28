@@ -1824,8 +1824,10 @@ pub struct UiConfig {
     pub combine_repos_across_hosts: bool,
     /// Hide whitespace-only changes in the diff surface. Default: false.
     pub hide_whitespace_in_diff: bool,
-    /// Render Nerd Font file glyphs. Default: true.
+    /// Render Nerd Font glyphs in the UI and file lists. Default: true.
     pub nerd_font: bool,
+    /// Custom icon overrides for Space headers.
+    pub icons: UiIconsConfig,
     /// Workspace preselected in the Home composer for a new thread.
     /// Default: current_checkout.
     pub new_thread_workspace: NewThreadWorkspaceConfig,
@@ -2246,6 +2248,13 @@ impl Default for WorktreesConfig {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct UiIconsConfig {
+    /// Repo names, owner/repo bindings, or Space labels mapped to icon glyphs.
+    pub spaces: BTreeMap<String, String>,
+}
+
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
@@ -2267,6 +2276,7 @@ impl Default for UiConfig {
             combine_repos_across_hosts: false,
             hide_whitespace_in_diff: false,
             nerd_font: true,
+            icons: UiIconsConfig::default(),
             new_thread_workspace: NewThreadWorkspaceConfig::CurrentCheckout,
             add_project_start_dir: String::new(),
             prompt_new_tab_name: true,
@@ -3388,6 +3398,12 @@ scrollback_lines = 12345
         assert_eq!(Config::default().files.icons, FilesIconConfig::Nerd);
         let config: Config = toml::from_str("[ui]\nnerd_font = false\n").unwrap();
         assert!(!config.ui.nerd_font);
+
+        let config: Config =
+            toml::from_str("[ui.icons.spaces]\n\"owner/herdr\" = \"◆\"\nFriendly = \"◇\"\n")
+                .unwrap();
+        assert_eq!(config.ui.icons.spaces["owner/herdr"], "◆");
+        assert_eq!(config.ui.icons.spaces["Friendly"], "◇");
     }
 
     #[test]

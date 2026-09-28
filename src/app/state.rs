@@ -4635,6 +4635,7 @@ pub struct AppState {
         std::collections::HashMap<std::path::PathBuf, std::path::PathBuf>,
     pub(crate) files_icons: crate::config::FilesIconConfig,
     pub(crate) nerd_font: bool,
+    pub(crate) space_icons: std::collections::BTreeMap<String, String>,
     /// Selection inside the dock home tab, swapped per client through
     /// `DockPresentationState`. A key, never an index.
     pub(crate) dock_home_selection: Option<WorkItemKey>,
@@ -7771,6 +7772,7 @@ impl AppState {
             dock_files_roots_by_cwd: std::collections::HashMap::new(),
             files_icons: crate::config::FilesIconConfig::Nerd,
             nerd_font: true,
+            space_icons: std::collections::BTreeMap::new(),
             dock_home_selection: None,
             dock_home_ticket_selection: None,
             dock_home_poll_selection: None,

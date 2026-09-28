@@ -300,6 +300,17 @@ The active palette is applied in this order: built-in theme, `[theme.custom]`, t
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
+With `ui.nerd_font = true` (the default), agent badges, Space headers, usage providers, and file kinds use Nerd Font glyphs. Set it to `false` to restore text badges, bare Space names, and the `CC` / `CX` / `KI` / `AG` usage labels. Override a Space icon by repo name, `owner/repo` binding, or Space label:
+
+```toml
+[ui.icons.spaces]
+scalablev2 = "◆"
+"scalable-so/herdr" = "◇"
+"Personal tools" = "★"
+```
+
+Config overrides take precedence over the built-in repo icons and match without regard to case.
+
 `ui.pane_borders` accepts `"auto"` (the default, borders only for split panes), `"always"` (also frame a single pane), or `"off"`. A single-pane frame requires `ui.pane_outer_borders = true`, because all its edges are outer edges. Existing boolean values remain valid: `true` means `"auto"` and `false` means `"off"`.
 
 Set `tab_bar_position = "bottom"` under `[ui]` to place the desktop tab row below the terminal panes. Prefix, Navigate, Copy, and Resize mode bars temporarily replace the bottom tab row while active. The default is `"top"`.

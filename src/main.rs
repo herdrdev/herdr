@@ -533,9 +533,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Accepts: hex (#89b4fa), named colors (cyan, blue, magenta), or rgb(r,g,b)
 # accent = "cyan"
 
-# File rows use Nerd Font glyphs by default. Disable them for terminals without
-# a Nerd Font; rows then use portable two-character kinds.
+# Agent, Space, and usage labels plus file rows use Nerd Font glyphs by default.
+# Disable this for terminals without a Nerd Font.
 # nerd_font = true
+
+# Override built-in Nerd Font icons by repo name, owner/repo binding, or label.
+# [ui.icons.spaces]
+# scalablev2 = "◆"
 
 # Legacy per-surface override. "badges" also forces portable file kinds.
 [files]

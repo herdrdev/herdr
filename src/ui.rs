@@ -20,6 +20,7 @@ pub(crate) mod dropdown;
 pub(crate) mod goals;
 mod home;
 pub(crate) mod hyperspace;
+mod icons;
 mod inbox;
 mod keybind_help;
 pub(crate) mod loop_runs;
@@ -193,7 +194,7 @@ pub(crate) use self::{
     panes::{apply_pane_chrome, pane_inner_rect, pane_is_scrolled_back},
     tab_surface::{tab_surface_cursor, tab_surface_hyperlinks, TabSurfaceView},
     tabs::{
-        compute_tab_bar_view, tab_action_fallback_hit_areas, tab_bar_content_area,
+        compute_tab_bar_view_with_icons, tab_action_fallback_hit_areas, tab_bar_content_area,
         visible_user_actions, TabActionVisibility,
     },
     widgets::{centered_popup_rect, modal_stack_areas},
@@ -481,7 +482,7 @@ fn compute_view_internal_at(
         .active
         .and_then(|ws_idx| app.workspaces.get(ws_idx))
         .map(|ws| {
-            compute_tab_bar_view(
+            compute_tab_bar_view_with_icons(
                 ws,
                 &app.terminals,
                 tab_bar_content_area(app, tab_bar_rect),
@@ -490,6 +491,7 @@ fn compute_view_internal_at(
                 app.mouse_capture,
                 &visible_user_actions,
                 tabs::TabActionVisibility::from_state(app),
+                app.nerd_font,
             )
         })
         .unwrap_or_default();
@@ -3376,6 +3378,7 @@ mod tests {
     #[test]
     fn expanded_sidebar_workspace_rows_omit_redundant_branch_line() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         let mut ws = Workspace::test_new("one");
         let repo = temp_git_repo("main");
         ws.identity_cwd = repo.clone();

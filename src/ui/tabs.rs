@@ -79,9 +79,51 @@ fn tab_width(
         .max(MIN_TAB_WIDTH)
 }
 
+fn tab_width_with_icons(
+    ws: &crate::workspace::Workspace,
+    terminals: &std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::terminal::TerminalState,
+    >,
+    tab_idx: usize,
+    nerd_font: bool,
+) -> u16 {
+    if !nerd_font {
+        return tab_width(ws, terminals, tab_idx);
+    }
+    display_width_u16(&tab_chrome_label_with_icons(
+        ws,
+        terminals,
+        tab_idx,
+        u16::MAX as usize,
+        nerd_font,
+    ))
+    .saturating_add(4)
+    .max(MIN_TAB_WIDTH)
+}
+
 pub(crate) fn fit_tab_display_projection(
     projection: crate::workspace::TabDisplayProjection,
     max_width: usize,
+) -> String {
+    fit_tab_display_projection_impl(projection, max_width, false)
+}
+
+pub(super) fn fit_tab_display_projection_with_icons(
+    projection: crate::workspace::TabDisplayProjection,
+    max_width: usize,
+    nerd_font: bool,
+) -> String {
+    if !nerd_font {
+        return fit_tab_display_projection(projection, max_width);
+    }
+    fit_tab_display_projection_impl(projection, max_width, nerd_font)
+}
+
+fn fit_tab_display_projection_impl(
+    projection: crate::workspace::TabDisplayProjection,
+    max_width: usize,
+    nerd_font: bool,
 ) -> String {
     use crate::workspace::TabDisplayProjection;
 
@@ -118,6 +160,13 @@ pub(crate) fn fit_tab_display_projection(
                 }
             }
             if let Some(agent) = agent {
+                let agent = if nerd_font {
+                    crate::ui::icons::agent_icon_for_name(&agent)
+                        .unwrap_or(&agent)
+                        .to_string()
+                } else {
+                    agent
+                };
                 if !candidates.contains(&agent) {
                     candidates.push(agent);
                 }
@@ -146,13 +195,42 @@ pub(crate) fn tab_chrome_label(
     tab_idx: usize,
     max_width: usize,
 ) -> String {
+    tab_chrome_label_impl(ws, terminals, tab_idx, max_width, false)
+}
+
+fn tab_chrome_label_with_icons(
+    ws: &crate::workspace::Workspace,
+    terminals: &std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::terminal::TerminalState,
+    >,
+    tab_idx: usize,
+    max_width: usize,
+    nerd_font: bool,
+) -> String {
+    if !nerd_font {
+        return tab_chrome_label(ws, terminals, tab_idx, max_width);
+    }
+    tab_chrome_label_impl(ws, terminals, tab_idx, max_width, nerd_font)
+}
+
+fn tab_chrome_label_impl(
+    ws: &crate::workspace::Workspace,
+    terminals: &std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::terminal::TerminalState,
+    >,
+    tab_idx: usize,
+    max_width: usize,
+    nerd_font: bool,
+) -> String {
     let zoomed = ws.tabs.get(tab_idx).is_some_and(|tab| tab.zoomed);
     // Same budgeting rule as the zoom marker: the glyph is paid for out of the
     // label, never out of the cell, so a pin can never widen or shove a tab.
     let label_width = max_width.saturating_sub(if zoomed { 2 } else { 0 });
     let name = ws
         .tab_display_projection(terminals, tab_idx)
-        .map(|projection| fit_tab_display_projection(projection, label_width))
+        .map(|projection| fit_tab_display_projection_impl(projection, label_width, nerd_font))
         .unwrap_or_else(|| truncate_end(&(tab_idx + 1).to_string(), label_width));
     if zoomed {
         format!("{name} Z")
@@ -231,6 +309,7 @@ fn layout_tab_hit_areas(
     >,
     area: Rect,
     scroll: usize,
+    nerd_font: bool,
 ) -> Vec<Rect> {
     let mut rects = vec![Rect::default(); ws.tabs.len()];
     if area.width == 0 || area.height == 0 {
@@ -243,7 +322,7 @@ fn layout_tab_hit_areas(
         if x >= right {
             break;
         }
-        let desired = tab_width(ws, terminals, idx);
+        let desired = tab_width_with_icons(ws, terminals, idx, nerd_font);
         let remaining = right.saturating_sub(x);
         let width = desired.min(remaining).max(1);
         *rect = Rect::new(x, area.y, width, 1);
@@ -259,13 +338,14 @@ fn centered_tab_scroll(
         crate::terminal::TerminalState,
     >,
     area: Rect,
+    nerd_font: bool,
 ) -> usize {
     let mut best_scroll = ws.active_tab;
     let mut best_distance = u16::MAX;
     let viewport_center = area.x.saturating_mul(2).saturating_add(area.width);
 
     for scroll in 0..=ws.active_tab {
-        let rects = layout_tab_hit_areas(ws, terminals, area, scroll);
+        let rects = layout_tab_hit_areas(ws, terminals, area, scroll, nerd_font);
         let Some(active_rect) = rects.get(ws.active_tab).copied() else {
             continue;
         };
@@ -303,10 +383,11 @@ fn max_tab_scroll(
         crate::terminal::TerminalState,
     >,
     area: Rect,
+    nerd_font: bool,
 ) -> usize {
     (0..ws.tabs.len())
         .find(|&scroll| {
-            layout_tab_hit_areas(ws, terminals, area, scroll)
+            layout_tab_hit_areas(ws, terminals, area, scroll, nerd_font)
                 .last()
                 .is_some_and(|rect| rect.width > 0)
         })
@@ -357,6 +438,7 @@ impl TabActionVisibility {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn compute_tab_bar_view(
     ws: &crate::workspace::Workspace,
     terminals: &std::collections::HashMap<
@@ -370,6 +452,33 @@ pub(crate) fn compute_tab_bar_view(
     user_actions: &[(usize, String)],
     visibility: TabActionVisibility,
 ) -> TabBarView {
+    compute_tab_bar_view_with_icons(
+        ws,
+        terminals,
+        area,
+        current_scroll,
+        follow_active,
+        mouse_chrome,
+        user_actions,
+        visibility,
+        false,
+    )
+}
+
+pub(crate) fn compute_tab_bar_view_with_icons(
+    ws: &crate::workspace::Workspace,
+    terminals: &std::collections::HashMap<
+        crate::terminal::TerminalId,
+        crate::terminal::TerminalState,
+    >,
+    area: Rect,
+    current_scroll: usize,
+    follow_active: bool,
+    mouse_chrome: bool,
+    user_actions: &[(usize, String)],
+    visibility: TabActionVisibility,
+    nerd_font: bool,
+) -> TabBarView {
     if !mouse_chrome || area.width == 0 || area.height == 0 {
         return compute_tab_bar_view_inner(
             ws,
@@ -378,6 +487,7 @@ pub(crate) fn compute_tab_bar_view(
             current_scroll,
             follow_active,
             mouse_chrome,
+            nerd_font,
         );
     }
 
@@ -400,13 +510,25 @@ pub(crate) fn compute_tab_bar_view(
             current_scroll,
             follow_active,
             true,
+            nerd_font,
         );
         // The active tab may already be clipped by a narrow row; the buttons
         // only have to not make that worse.
-        let full_view =
-            compute_tab_bar_view_inner(ws, terminals, area, current_scroll, follow_active, true);
-        let budget =
-            active_tab_cell_width(ws, &full_view).min(tab_width(ws, terminals, ws.active_tab));
+        let full_view = compute_tab_bar_view_inner(
+            ws,
+            terminals,
+            area,
+            current_scroll,
+            follow_active,
+            true,
+            nerd_font,
+        );
+        let budget = active_tab_cell_width(ws, &full_view).min(tab_width_with_icons(
+            ws,
+            terminals,
+            ws.active_tab,
+            nerd_font,
+        ));
         if budget > 0 && active_tab_cell_width(ws, &view) >= budget {
             let editor_x = area.x + area.width - actions_width;
             view.repo_editor_button_hit_area =
@@ -442,7 +564,15 @@ pub(crate) fn compute_tab_bar_view(
         }
     }
 
-    compute_tab_bar_view_inner(ws, terminals, area, current_scroll, follow_active, true)
+    compute_tab_bar_view_inner(
+        ws,
+        terminals,
+        area,
+        current_scroll,
+        follow_active,
+        true,
+        nerd_font,
+    )
 }
 
 /// Where the toggles go when the tab row cannot host them.
@@ -610,21 +740,22 @@ fn compute_tab_bar_view_inner(
     current_scroll: usize,
     follow_active: bool,
     mouse_chrome: bool,
+    nerd_font: bool,
 ) -> TabBarView {
     if area.width == 0 || area.height == 0 {
         return TabBarView::default();
     }
 
     if !mouse_chrome {
-        let max_scroll = max_tab_scroll(ws, terminals, area);
+        let max_scroll = max_tab_scroll(ws, terminals, area, nerd_font);
         let scroll = if follow_active {
-            centered_tab_scroll(ws, terminals, area).min(max_scroll)
+            centered_tab_scroll(ws, terminals, area, nerd_font).min(max_scroll)
         } else {
             current_scroll.min(max_scroll)
         };
         return TabBarView {
             scroll,
-            tab_hit_areas: layout_tab_hit_areas(ws, terminals, area, scroll),
+            tab_hit_areas: layout_tab_hit_areas(ws, terminals, area, scroll, nerd_font),
             scroll_left_hit_area: Rect::default(),
             scroll_right_hit_area: Rect::default(),
             new_tab_hit_area: Rect::default(),
@@ -644,7 +775,7 @@ fn compute_tab_bar_view_inner(
         area.width.saturating_sub(NEW_TAB_WIDTH),
         area.height,
     );
-    let all_tabs = layout_tab_hit_areas(ws, terminals, all_tabs_area, 0);
+    let all_tabs = layout_tab_hit_areas(ws, terminals, all_tabs_area, 0, nerd_font);
     let overflow = all_tabs.iter().any(|rect| rect.width == 0);
     if !overflow {
         let new_tab_x = trailing_tab_controls_x(&all_tabs, area.x);
@@ -680,13 +811,13 @@ fn compute_tab_bar_view_inner(
         area.height,
     );
 
-    let max_scroll = max_tab_scroll(ws, terminals, tab_area);
+    let max_scroll = max_tab_scroll(ws, terminals, tab_area, nerd_font);
     let scroll = if follow_active {
-        centered_tab_scroll(ws, terminals, tab_area).min(max_scroll)
+        centered_tab_scroll(ws, terminals, tab_area, nerd_font).min(max_scroll)
     } else {
         current_scroll.min(max_scroll)
     };
-    let tab_hit_areas = layout_tab_hit_areas(ws, terminals, tab_area, scroll);
+    let tab_hit_areas = layout_tab_hit_areas(ws, terminals, tab_area, scroll, nerd_font);
     let trailing_x = trailing_tab_controls_x(&tab_hit_areas, tab_area_x).min(tab_area_right);
     let right_hit_area = Rect::new(
         trailing_x,
@@ -1012,7 +1143,13 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
             Style::default().fg(p.overlay1).bg(p.surface0)
         };
         let width = rect.width as usize;
-        let name = tab_chrome_label(ws, &app.terminals, idx, width.saturating_sub(1));
+        let name = tab_chrome_label_with_icons(
+            ws,
+            &app.terminals,
+            idx,
+            width.saturating_sub(1),
+            app.nerd_font,
+        );
         let pin = if tab.pinned {
             PIN_GLYPH_ON
         } else {
@@ -1556,6 +1693,26 @@ mod tests {
             "task"
         );
         assert_eq!(fit_tab_display_projection(narrow_projection, 2), "cx");
+    }
+
+    #[test]
+    fn tab_agent_projection_uses_a_glyph_only_with_nerd_font_enabled() {
+        use crate::workspace::TabDisplayProjection;
+
+        let projection = TabDisplayProjection::Derived {
+            agent: Some("Claude Code".into()),
+            ticket: None,
+            binding: None,
+            title: None,
+        };
+        assert_eq!(
+            fit_tab_display_projection_with_icons(projection.clone(), 1, true),
+            "\u{EC82}"
+        );
+        assert_eq!(
+            fit_tab_display_projection_with_icons(projection, 20, false),
+            "Claude Code"
+        );
     }
 
     #[test]

@@ -663,7 +663,7 @@ mod render_scale_benchmark {
             }],
             ..crate::fleet::Snapshot::default()
         };
-        app.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries(&snapshot);
+        app.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries(&snapshot, false);
         app.collapsed_sidebar_groups.remove("repo:Fleet");
         assert_eq!(app.remote_agent_panel_entries.len(), remote_count);
         assert_eq!(
