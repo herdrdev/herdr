@@ -11233,6 +11233,7 @@ mod tests {
     #[test]
     fn repo_editor_button_queues_only_when_an_editor_is_available() {
         let mut app = app_for_mouse_test();
+        app.state.nerd_font = false;
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.selected = 0;

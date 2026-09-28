@@ -648,6 +648,8 @@ pub(crate) fn provider_style(
     }
 }
 
+use crate::ui::icons::Metric;
+
 fn status_segments(
     app: &AppState,
     metrics: &crate::platform::status_metrics::StatusMetrics,
@@ -734,13 +736,29 @@ fn status_segments(
         elide_rank: Some(4),
     });
 
-    out.push(metric_segment("CPU", metrics.cpu_percent, expanded, p));
-    out.push(metric_segment("MEM", memory_percent(metrics), expanded, p));
+    let label = |metric| crate::ui::icons::metric_label(metric, app.nerd_font);
+    out.push(metric_segment(
+        label(Metric::Cpu),
+        metrics.cpu_percent,
+        expanded,
+        p,
+    ));
+    out.push(metric_segment(
+        label(Metric::Mem),
+        memory_percent(metrics),
+        expanded,
+        p,
+    ));
     if crate::platform::status_metrics::disk_segment_visible(
         metrics.disk_percent,
         app.status_disk_visible,
     ) {
-        out.push(metric_segment("DSK", metrics.disk_percent, expanded, p));
+        out.push(metric_segment(
+            label(Metric::Dsk),
+            metrics.disk_percent,
+            expanded,
+            p,
+        ));
     }
     out
 }
@@ -1307,6 +1325,7 @@ mod tests {
     fn required_metrics_survive_optional_segment_elision() {
         // CPU/MEM are required while branch and device elide by rank.
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.active = Some(0);
         app.status_focused_cwd = Some(PathBuf::from("/very/long/focused/folder"));
@@ -1329,6 +1348,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
 
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.mobile_width_threshold = 0;
         let required = minimum_required_status_width(&app) as u16;
         crate::ui::compute_view_with_runtime_registry(
@@ -1416,6 +1436,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
 
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.mobile_width_threshold = 0;
         let required = minimum_required_status_width(&app) as u16;
         app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
@@ -1470,6 +1491,7 @@ mod tests {
 
         const WIDTH: usize = crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD as usize;
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.active = Some(0);
         app.status_focused_cwd = Some(PathBuf::from(cwd));
@@ -1603,7 +1625,8 @@ mod tests {
     #[test]
     fn status_metrics_fallback_format_is_explicit() {
         // AC3/AC5: unavailable snapshots render stable units without sampling in render.
-        let app = AppState::test_new();
+        let mut app = AppState::test_new();
+        app.nerd_font = false;
         let segments = status_segments(&app, &StatusMetrics::default(), &app.palette);
         let rendered = segments
             .iter()
@@ -1615,7 +1638,8 @@ mod tests {
 
     #[test]
     fn status_metrics_outside_bounded_display_contract_use_fallbacks() {
-        let app = AppState::test_new();
+        let mut app = AppState::test_new();
+        app.nerd_font = false;
         let baseline = status_segments(
             &app,
             &StatusMetrics {
@@ -1821,6 +1845,7 @@ mod tests {
     #[test]
     fn attached_focused_pane_names_the_remote_host_before_the_local_one() {
         let mut app = app_with_focused_attached_pane();
+        app.nerd_font = false;
         crate::ui::compute_view_with_runtime_registry(
             &mut app,
             &TerminalRuntimeRegistry::new(),
@@ -2277,6 +2302,7 @@ mod tests {
         assert!(!disk_segment_visible(None, true));
 
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.status_disk_visible = true;
         let metrics = StatusMetrics {
             disk_percent: Some(97),
@@ -2742,6 +2768,53 @@ mod tests {
         assert_eq!(
             focused_pane_title_parts(&app),
             Some(("local-repo".into(), "manual thread".into()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod metric_icons {
+    use super::*;
+    use crate::ui::icons::{metric_label, Metric};
+
+    /// Expanded mirrors `app.status_bar_expanded`: the percentage only shows
+    /// when the status bar is expanded.
+    fn texts(nerd_font: bool, expanded: bool) -> Vec<String> {
+        let p = Palette::catppuccin();
+        [Metric::Cpu, Metric::Mem, Metric::Dsk]
+            .into_iter()
+            .map(|metric| {
+                metric_segment(metric_label(metric, nerd_font), Some(50), expanded, &p).text
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nerd_font_on_collapsed_renders_glyph_and_fill_only() {
+        assert_eq!(
+            texts(true, false),
+            [" \u{F061A} ▄ ", " \u{F035B} ▄ ", " \u{F02CA} ▄ "]
+        );
+    }
+
+    #[test]
+    fn nerd_font_on_expanded_adds_percentage() {
+        assert_eq!(
+            texts(true, true),
+            [" \u{F061A} ▄ 50 ", " \u{F035B} ▄ 50 ", " \u{F02CA} ▄ 50 "]
+        );
+    }
+
+    #[test]
+    fn nerd_font_off_collapsed_renders_text_and_fill_only() {
+        assert_eq!(texts(false, false), [" CPU ▄ ", " MEM ▄ ", " DSK ▄ "]);
+    }
+
+    #[test]
+    fn nerd_font_off_expanded_adds_percentage() {
+        assert_eq!(
+            texts(false, true),
+            [" CPU ▄ 50 ", " MEM ▄ 50 ", " DSK ▄ 50 "]
         );
     }
 }

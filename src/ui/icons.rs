@@ -128,6 +128,49 @@ pub(crate) fn shell_label(nerd_font: bool) -> &'static str {
     }
 }
 
+const CHIP: &str = "\u{F061A}"; // md-chip
+const MEMORY: &str = "\u{F035B}"; // md-memory
+const HARDDISK: &str = "\u{F02CA}"; // md-harddisk
+const FOLDER_OPEN: &str = "\u{F07C}"; // fa-folder_open
+const LIGHTBULB_ON_OUTLINE: &str = "\u{F0A00}"; // md-lightbulb_on_outline
+
+/// Host metrics shown in the status row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Metric {
+    Cpu,
+    Mem,
+    Dsk,
+}
+
+pub(crate) fn metric_label(metric: Metric, nerd_font: bool) -> &'static str {
+    match (metric, nerd_font) {
+        (Metric::Cpu, true) => CHIP,
+        (Metric::Mem, true) => MEMORY,
+        (Metric::Dsk, true) => HARDDISK,
+        (Metric::Cpu, false) => "CPU",
+        (Metric::Mem, false) => "MEM",
+        (Metric::Dsk, false) => "DSK",
+    }
+}
+
+/// Tab-row "open repo in editor" button label, padded one cell each side.
+pub(crate) fn repo_editor_button_label(nerd_font: bool) -> String {
+    if nerd_font {
+        format!(" {FOLDER_OPEN} ")
+    } else {
+        " nvim ".to_string()
+    }
+}
+
+/// Tab-row "add action" button label, padded one cell each side.
+pub(crate) fn add_action_button_label(nerd_font: bool) -> String {
+    if nerd_font {
+        format!(" {LIGHTBULB_ON_OUTLINE} ")
+    } else {
+        " + Action ".to_string()
+    }
+}
+
 pub(crate) fn usage_label(provider: QuotaProvider, nerd_font: bool) -> &'static str {
     if !nerd_font {
         return match provider {

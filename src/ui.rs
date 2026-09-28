@@ -3177,6 +3177,7 @@ mod tests {
     #[test]
     fn desktop_status_bar_renders_only_branch_device_and_metrics_segments() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![Workspace::test_new("one")];
         app.active = Some(0);
         app.selected = 0;
@@ -3234,6 +3235,7 @@ mod tests {
     fn status_bar_keeps_memory_and_cpu_legible_at_120_columns() {
         // AC3/AC7: the ordinary-width renderer retains both required metric segments.
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![Workspace::test_new("one")];
         app.active = Some(0);
         app.selected = 0;
@@ -3257,6 +3259,7 @@ mod tests {
     #[test]
     fn status_bar_visual_evidence_covers_wide_and_120_column_layouts() {
         let mut app = crate::app::state::AppState::test_new();
+        app.nerd_font = false;
         app.workspaces = vec![
             Workspace::test_new("focused"),
             Workspace::test_new("queued"),

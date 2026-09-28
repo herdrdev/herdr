@@ -25,7 +25,9 @@ pub(crate) const PANE_TOGGLE_BUTTON_WIDTH: u16 = 3;
 pub(crate) const PANE_TOGGLE_BELOW_GLYPH: char = '\u{25ad}';
 pub(crate) const PANE_TOGGLE_RIGHT_GLYPH: char = '\u{25af}';
 pub(crate) const GIT_MENU_BUTTON_WIDTH: u16 = 10;
+#[cfg(test)]
 pub(crate) const REPO_EDITOR_BUTTON_WIDTH: u16 = 6;
+#[cfg(test)]
 pub(crate) const ADD_ACTION_BUTTON_WIDTH: u16 = 10;
 pub(crate) const GIT_MENU_STATUS: &str = "⚠ Behind upstream. Pull first.";
 pub(crate) const GIT_MENU_UNAVAILABLE: &str = "Not a git repository";
@@ -411,6 +413,9 @@ fn active_tab_cell_width(ws: &crate::workspace::Workspace, view: &TabBarView) ->
 pub(crate) struct TabActionVisibility {
     pub git_menu: bool,
     pub pane_toggles: bool,
+    /// Icon labels for the editor and add-action buttons; their hit areas
+    /// follow the rendered label width.
+    pub nerd_font: bool,
 }
 
 impl TabActionVisibility {
@@ -418,7 +423,16 @@ impl TabActionVisibility {
         Self {
             git_menu: app.show_pull_button,
             pane_toggles: app.show_pane_toggle_buttons,
+            nerd_font: app.nerd_font,
         }
+    }
+
+    pub(crate) fn editor_width(self) -> u16 {
+        display_width_u16(&crate::ui::icons::repo_editor_button_label(self.nerd_font))
+    }
+
+    pub(crate) fn add_action_width(self) -> u16 {
+        display_width_u16(&crate::ui::icons::add_action_button_label(self.nerd_font))
     }
 
     fn git_menu_width(self) -> u16 {
@@ -532,10 +546,11 @@ pub(crate) fn compute_tab_bar_view_with_icons(
         if budget > 0 && active_tab_cell_width(ws, &view) >= budget {
             let editor_x = area.x + area.width - actions_width;
             view.repo_editor_button_hit_area =
-                Rect::new(editor_x, area.y, REPO_EDITOR_BUTTON_WIDTH, 1);
-            let add_x = editor_x + REPO_EDITOR_BUTTON_WIDTH;
-            view.add_action_button_hit_area = Rect::new(add_x, area.y, ADD_ACTION_BUTTON_WIDTH, 1);
-            let mut action_x = add_x + ADD_ACTION_BUTTON_WIDTH;
+                Rect::new(editor_x, area.y, visibility.editor_width(), 1);
+            let add_x = editor_x + visibility.editor_width();
+            view.add_action_button_hit_area =
+                Rect::new(add_x, area.y, visibility.add_action_width(), 1);
+            let mut action_x = add_x + visibility.add_action_width();
             view.user_action_hit_areas = user_actions
                 .iter()
                 .zip(user_widths.iter().copied())
@@ -602,8 +617,8 @@ pub(crate) fn tab_action_fallback_hit_areas(
         );
     }
     let editor_x = status_bar_rect.x + status_bar_rect.width - actions_width;
-    let add_x = editor_x + REPO_EDITOR_BUTTON_WIDTH;
-    let mut action_x = add_x + ADD_ACTION_BUTTON_WIDTH;
+    let add_x = editor_x + visibility.editor_width();
+    let mut action_x = add_x + visibility.add_action_width();
     let action_rects = user_actions
         .iter()
         .zip(user_widths.iter().copied())
@@ -623,8 +638,8 @@ pub(crate) fn tab_action_fallback_hit_areas(
         }
     };
     (
-        Rect::new(editor_x, status_bar_rect.y, REPO_EDITOR_BUTTON_WIDTH, 1),
-        Rect::new(add_x, status_bar_rect.y, ADD_ACTION_BUTTON_WIDTH, 1),
+        Rect::new(editor_x, status_bar_rect.y, visibility.editor_width(), 1),
+        Rect::new(add_x, status_bar_rect.y, visibility.add_action_width(), 1),
         action_rects,
         if visibility.git_menu {
             Rect::new(menu_x, status_bar_rect.y, GIT_MENU_BUTTON_WIDTH, 1)
@@ -641,8 +656,9 @@ fn action_button_widths(
     row_width: u16,
     visibility: TabActionVisibility,
 ) -> Vec<u16> {
-    let fixed = REPO_EDITOR_BUTTON_WIDTH
-        .saturating_add(ADD_ACTION_BUTTON_WIDTH)
+    let fixed = visibility
+        .editor_width()
+        .saturating_add(visibility.add_action_width())
         .saturating_add(visibility.git_menu_width())
         .saturating_add(visibility.pane_toggles_width());
     let mut widths = user_actions
@@ -663,8 +679,9 @@ fn action_button_widths(
 }
 
 fn action_controls_width(user_widths: &[u16], visibility: TabActionVisibility) -> u16 {
-    REPO_EDITOR_BUTTON_WIDTH
-        .saturating_add(ADD_ACTION_BUTTON_WIDTH)
+    visibility
+        .editor_width()
+        .saturating_add(visibility.add_action_width())
         .saturating_add(user_widths.iter().copied().sum::<u16>())
         .saturating_add(visibility.git_menu_width())
         .saturating_add(visibility.pane_toggles_width())
@@ -897,6 +914,7 @@ fn tab_drop_indicator_x(
 /// status row whenever the tab row is hidden.
 pub(super) fn render_tab_action_buttons(app: &AppState, frame: &mut Frame) {
     let p = &app.palette;
+    let icons = TabActionVisibility::from_state(app).nerd_font;
     let editor_rect = app.view.repo_editor_button_hit_area;
     if app.mouse_capture && editor_rect.width > 0 {
         let mut style = Style::default()
@@ -905,7 +923,10 @@ pub(super) fn render_tab_action_buttons(app: &AppState, frame: &mut Frame) {
         if !app.repo_editor_available() {
             style = style.add_modifier(Modifier::DIM);
         }
-        frame.render_widget(Paragraph::new(" nvim ").style(style), editor_rect);
+        frame.render_widget(
+            Paragraph::new(crate::ui::icons::repo_editor_button_label(icons)).style(style),
+            editor_rect,
+        );
     }
 
     let add_rect = app.view.add_action_button_hit_area;
@@ -920,7 +941,10 @@ pub(super) fn render_tab_action_buttons(app: &AppState, frame: &mut Frame) {
                 .fg(readable_fg_on(p.surface0, &[p.overlay1, p.text]))
                 .bg(p.surface0)
         };
-        frame.render_widget(Paragraph::new(" + Action ").style(style), add_rect);
+        frame.render_widget(
+            Paragraph::new(crate::ui::icons::add_action_button_label(icons)).style(style),
+            add_rect,
+        );
     }
 
     for (index, rect) in &app.view.user_action_hit_areas {
@@ -1262,6 +1286,7 @@ mod tests {
         TabActionVisibility {
             git_menu: true,
             pane_toggles: true,
+            nerd_font: false,
         }
     }
 
@@ -2098,6 +2123,7 @@ mod tests {
     #[test]
     fn repo_editor_button_renders_before_add_action_and_dims_without_an_editor() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         app.mouse_capture = true;
         let ws = Workspace::test_new("test");
         let view = compute_tab_bar_view(
@@ -2190,5 +2216,81 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod action_icons {
+    use super::*;
+    use crate::app::state::AppState;
+    use crate::workspace::Workspace;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// Renders the tab row and returns the editor and add-action cells, each as
+    /// the text inside its hit area plus that hit area's width.
+    fn rendered_buttons(nerd_font: bool) -> [(String, u16, u16); 2] {
+        let mut app = AppState::test_new();
+        app.nerd_font = nerd_font;
+        app.mouse_capture = true;
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        let area = Rect::new(0, 0, 80, 1);
+        app.view.tab_bar_rect = area;
+        let visibility = TabActionVisibility::from_state(&app);
+        let view = compute_tab_bar_view_with_icons(
+            &app.workspaces[0],
+            &app.terminals,
+            area,
+            0,
+            true,
+            true,
+            &[],
+            visibility,
+            nerd_font,
+        );
+        app.view.repo_editor_button_hit_area = view.repo_editor_button_hit_area;
+        app.view.add_action_button_hit_area = view.add_action_button_hit_area;
+
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        terminal
+            .draw(|frame| render_tab_action_buttons(&app, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let cell_text = |rect: Rect| -> (String, u16, u16) {
+            let text: String = (rect.x..rect.right())
+                .map(|x| buffer[(x, 0)].symbol())
+                .collect();
+            (
+                text.clone(),
+                rect.width,
+                crate::ui::text::display_width_u16(&text),
+            )
+        };
+        [
+            cell_text(view.repo_editor_button_hit_area),
+            cell_text(view.add_action_button_hit_area),
+        ]
+    }
+
+    #[test]
+    fn nerd_font_on_renders_glyphs_with_matching_hit_areas() {
+        let [editor, add] = rendered_buttons(true);
+        assert_eq!(editor.0, " \u{F07C} ");
+        assert_eq!(add.0, " \u{F0A00} ");
+        assert_eq!(editor.1, editor.2);
+        assert_eq!(add.1, add.2);
+    }
+
+    #[test]
+    fn nerd_font_off_keeps_text_with_matching_hit_areas() {
+        let [editor, add] = rendered_buttons(false);
+        assert_eq!(editor.0, " nvim ");
+        assert_eq!(add.0, " + Action ");
+        assert_eq!(
+            (editor.1, add.1),
+            (REPO_EDITOR_BUTTON_WIDTH, ADD_ACTION_BUTTON_WIDTH)
+        );
+        assert_eq!(editor.1, editor.2);
+        assert_eq!(add.1, add.2);
     }
 }

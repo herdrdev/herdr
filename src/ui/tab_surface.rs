@@ -319,6 +319,7 @@ mod tests {
         // AC2/AC8: deterministic frame covers geometry used by the integration gate.
         let uri = "https://example.com/full-app";
         let mut app = full_app_characterization_state(uri);
+        app.nerd_font = false;
         let frame = full_app_frame(&mut app, Rect::new(0, 0, 106, 20));
 
         assert_eq!((frame.width, frame.height), (106, 20));
