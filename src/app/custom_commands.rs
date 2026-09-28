@@ -246,7 +246,7 @@ impl App {
             crate::api::SOCKET_PATH_ENV_VAR.to_string(),
             crate::api::socket_path().display().to_string(),
         )];
-        if let Ok(current_exe) = std::env::current_exe() {
+        if let Ok(current_exe) = crate::platform::launch_executable() {
             env.push((
                 "HERDR_BIN_PATH".to_string(),
                 current_exe.display().to_string(),
@@ -778,5 +778,21 @@ mod tests {
             crate::protocol::ClientShellCommandAction::Popup
         );
         assert!(!format!("{manifest:?}").contains("secret-command"));
+    }
+
+    #[test]
+    fn custom_command_bin_path_matches_launch_executable() {
+        let app = test_app();
+        let (env, _) = app.custom_command_env();
+        let bin_path = env
+            .iter()
+            .find(|(key, _)| key == "HERDR_BIN_PATH")
+            .map(|(_, value)| value.clone());
+        assert_eq!(
+            bin_path,
+            crate::platform::launch_executable()
+                .ok()
+                .map(|path| path.display().to_string())
+        );
     }
 }
