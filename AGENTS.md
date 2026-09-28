@@ -38,6 +38,8 @@ monitoring.
 - **Detection is decoupled.** The detector reads a screen snapshot, never touches the parser or viewport state.
 - **Screen detection is evidence-based.** When changing `src/detect/manifests/`, first capture the relevant bottom-buffer state with `herdr agent read <pane> --source detection --format text` and, when styling or alternate screen behavior matters, `--format ansi`. Decide which visible controls are invariant, which are alternatives, and encode them as explicit AND/OR gates. Do not match whole-pane incidental text, and do not use the user-visible viewport for agent status because users can scroll it.
 - **UI patterns should be reused.** Herdr is a mouse-first TUI. New dialogs, onboarding, settings, and post-update flows should follow the existing UI/UX language and interaction patterns instead of inventing one-off screens. Prefer reusing existing modal/screen structure, affordances, and close actions so the app feels consistent.
+- **Icons over words.** Where an icon can say it, use the icon instead of a text label (shelf and section headers, filters, status). Every icon-only control or header has a tooltip naming it, and a plain-text fallback when Nerd Font glyphs are off.
+- **UI work needs prototype sign-off first.** Before any Herdr UI change, publish an HTML prototype with `/tsd` and give the owner its tailnet dashboard link. Wait until the owner is fully happy with it before implementation, a worker brief, or a PR. PRs #409 (sidebar folders) and #417 (compact sections sidebar) were closed unmerged after running-build QA rejected their layouts.
 
 ### Multiplicative performance paths
 
