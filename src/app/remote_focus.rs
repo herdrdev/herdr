@@ -784,15 +784,22 @@ impl crate::app::App {
         remote_host: &str,
         operation_state: std::sync::Arc<crate::remote::RemoteFocusOperationState>,
     ) -> Result<(PaneId, TerminalId, String, RemoteProxyChannels), ErrorBody> {
-        let workspace_count = self.state.workspaces.len();
-        let ws_idx = self
+        let fleet_ws_idx = self
             .state
-            .active
-            .filter(|idx| *idx < workspace_count)
-            .or_else(|| (self.state.selected < workspace_count).then_some(self.state.selected))
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.is_fleet);
+        let cwd = fleet_ws_idx
+            .or(self.state.active)
+            .or_else(|| {
+                (self.state.selected < self.state.workspaces.len()).then_some(self.state.selected)
+            })
+            .and_then(|ws_idx| self.state.workspaces.get(ws_idx))
+            .map(|workspace| workspace.identity_cwd.clone())
+            .or_else(|| std::env::current_dir().ok())
             .ok_or_else(|| ErrorBody {
                 code: "host_unreachable".into(),
-                message: "no local workspace is available for the remote focus proxy pane".into(),
+                message: "no working directory is available for the remote focus proxy pane".into(),
             })?;
         let (rows, cols) = self.state.estimate_pane_size();
         let pane_id = PaneId::alloc();
@@ -810,8 +817,7 @@ impl crate::app::App {
             code: "host_unreachable".into(),
             message: format!("failed to create remote focus proxy pane: {error}"),
         })?;
-        let cwd = self.state.workspaces[ws_idx].identity_cwd.clone();
-        let mut terminal = crate::terminal::TerminalState::new(terminal_id.clone(), cwd);
+        let mut terminal = crate::terminal::TerminalState::new(terminal_id.clone(), cwd.clone());
         // Until ControlReady, the client-supplied agent_ref is not an
         // identity claim. Keep the tab visibly provisional instead of
         // allowing chrome to fall back to an unlabeled numeric tab.
@@ -819,23 +825,46 @@ impl crate::app::App {
         terminal.remote_proxy_host = Some(remote_host.to_owned());
         self.state.terminals.insert(terminal_id.clone(), terminal);
         self.terminal_runtimes.insert(terminal_id.clone(), runtime);
-        let workspace = &mut self.state.workspaces[ws_idx];
-        // No custom tab name: the requested agent_ref is client-supplied
-        // identity that tab chrome would show first and never replace. The
-        // tab falls back to the pane label, which activate_remote_proxy sets
-        // from the server's authoritative ControlReady context.
-        let tab_idx = workspace.create_tab_from_existing_pane(
-            crate::workspace::MovedPane {
-                pane_id,
-                pane_state: crate::pane::PaneState::new(terminal_id.clone()),
-            },
-            None,
-            self.event_tx.clone(),
-            self.render_notify.clone(),
-            self.render_dirty.clone(),
-        );
-        workspace.switch_tab(tab_idx);
+        let moved = crate::workspace::MovedPane {
+            pane_id,
+            pane_state: crate::pane::PaneState::new(terminal_id.clone()),
+        };
+        let (ws_idx, tab_idx, created_workspace) = if let Some(ws_idx) = fleet_ws_idx {
+            let workspace = &mut self.state.workspaces[ws_idx];
+            if workspace.custom_name.is_none() {
+                workspace.custom_name = Some("Fleet".to_owned());
+            }
+            let tab_idx = workspace.create_tab_from_existing_pane(
+                moved,
+                None,
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+            );
+            (ws_idx, tab_idx, false)
+        } else {
+            let mut workspace = crate::workspace::Workspace::from_existing_pane(
+                Some("Fleet".to_owned()),
+                None,
+                cwd,
+                moved,
+                self.event_tx.clone(),
+                self.render_notify.clone(),
+                self.render_dirty.clone(),
+            );
+            workspace.is_fleet = true;
+            self.state.workspaces.push(workspace);
+            (self.state.workspaces.len() - 1, 0, true)
+        };
+        self.state.switch_workspace_tab(ws_idx, tab_idx);
         self.state.focus_pane_in_workspace(ws_idx, pane_id);
+        if created_workspace {
+            let workspace_id = self.state.workspaces[ws_idx].id.clone();
+            crate::logging::workspace_created(&workspace_id, pane_id.raw());
+            self.emit_workspace_open_events(ws_idx);
+        } else {
+            self.emit_tab_created_events(ws_idx, tab_idx);
+        }
         self.state.mark_session_dirty();
         let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) else {
             return Err(ErrorBody {
@@ -1076,6 +1105,8 @@ mod tests {
             crate::api::EventHub::default(),
         );
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("local")];
+        app.state.workspaces[0].is_fleet = true;
+        app.state.workspaces[0].custom_name = Some("Fleet".to_owned());
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
@@ -1093,6 +1124,47 @@ mod tests {
             .proxy_location(operation_id)
             .expect("proxy location")
             .1
+    }
+
+    #[test]
+    fn fleet_workspace_remote_focus_proxy_uses_a_dedicated_workspace() {
+        let (mut app, _recording) = proxy_app();
+        app.state.workspaces[0].is_fleet = false;
+        app.state.workspaces[0].custom_name = Some("local".to_owned());
+        let local_tab_count = app.state.workspaces[0].tabs.len();
+
+        let started = app
+            .start_remote_focus_operation(agent_ref())
+            .expect("operation starts");
+
+        let fleet_idx = app
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.is_fleet)
+            .expect("remote focus creates Fleet workspace");
+        assert_eq!(fleet_idx, 1);
+        assert_eq!(app.state.workspaces[0].tabs.len(), local_tab_count);
+        assert_eq!(
+            app.state.workspaces[fleet_idx].custom_name.as_deref(),
+            Some("Fleet")
+        );
+        let (pane_id, _) = app
+            .remote_focus_operations
+            .proxy_location(&started.operation_id)
+            .expect("proxy location");
+        assert!(app.state.workspaces[fleet_idx]
+            .pane_state(pane_id)
+            .is_some());
+        assert!(app.state.active == Some(fleet_idx));
+        app.apply_remote_focus_transition(
+            &started.operation_id,
+            RemoteFocusTransition::Failed(ErrorBody {
+                code: "connection_lost".to_owned(),
+                message: "test cleanup".to_owned(),
+            }),
+        );
+        app.shutdown_detached_terminal_runtimes();
     }
 
     fn full_frame(bytes: &[u8]) -> crate::protocol::TerminalFrame {

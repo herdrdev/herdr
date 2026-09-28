@@ -499,6 +499,8 @@ mod tests {
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
         }
     }
 

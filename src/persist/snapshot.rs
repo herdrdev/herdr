@@ -32,6 +32,18 @@ pub struct SessionSnapshot {
     pub collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     pub prio_panel_collapsed: bool,
+    #[serde(default, skip_serializing_if = "is_default_window_cycle_mode")]
+    pub window_cycle_mode: Option<crate::config::WindowCycleModeConfig>,
+    #[serde(default, skip_serializing_if = "is_default_skip_collapsed_cycle")]
+    pub skip_collapsed_cycle: Option<bool>,
+}
+
+fn is_default_window_cycle_mode(value: &Option<crate::config::WindowCycleModeConfig>) -> bool {
+    value.is_none_or(|mode| mode == crate::config::WindowCycleModeConfig::ThisMachine)
+}
+
+fn is_default_skip_collapsed_cycle(value: &Option<bool>) -> bool {
+    value.is_none_or(|skip| !skip)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,6 +73,9 @@ pub struct TabHistorySnapshot {
 pub struct WorkspaceSnapshot {
     #[serde(default)]
     pub id: Option<String>,
+    /// Fleet workspaces were added after the snapshot format existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_fleet: bool,
     #[serde(default)]
     pub custom_name: Option<String>,
     pub identity_cwd: PathBuf,
@@ -248,6 +263,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
 
         Self {
             id: None,
+            is_fleet: false,
             custom_name: snap.custom_name,
             identity_cwd,
             worktree_space: None,
@@ -283,6 +299,10 @@ struct RawSessionSnapshot {
     collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     prio_panel_collapsed: bool,
+    #[serde(default)]
+    window_cycle_mode: Option<crate::config::WindowCycleModeConfig>,
+    #[serde(default)]
+    skip_collapsed_cycle: Option<bool>,
 }
 
 fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> {
@@ -300,6 +320,8 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
         prio_panel_collapsed: raw.prio_panel_collapsed,
+        window_cycle_mode: raw.window_cycle_mode,
+        skip_collapsed_cycle: raw.skip_collapsed_cycle,
     })
 }
 
@@ -363,6 +385,8 @@ pub fn capture(
     sidebar_section_split: f32,
     collapsed_space_keys: std::collections::HashSet<String>,
     prio_panel_collapsed: bool,
+    window_cycle_mode: crate::config::WindowCycleModeConfig,
+    skip_collapsed_cycle: bool,
 ) -> SessionSnapshot {
     let captured_at = Instant::now();
     let captured_at_unix = SystemTime::now()
@@ -390,6 +414,8 @@ pub fn capture(
         sidebar_section_split: Some(sidebar_section_split),
         collapsed_space_keys,
         prio_panel_collapsed,
+        window_cycle_mode: Some(window_cycle_mode),
+        skip_collapsed_cycle: Some(skip_collapsed_cycle),
     }
 }
 
@@ -440,6 +466,7 @@ fn capture_workspace(
         .collect();
     WorkspaceSnapshot {
         id: Some(ws.id.clone()),
+        is_fleet: ws.is_fleet,
         custom_name: ws.custom_name.clone(),
         identity_cwd,
         worktree_space: ws.worktree_space.clone(),
@@ -888,6 +915,8 @@ mod tests {
             state.sidebar_section_split,
             state.collapsed_space_keys.clone(),
             state.prio_panel_collapsed,
+            state.window_cycle_mode,
+            state.skip_collapsed_cycle,
         )
     }
 
@@ -912,6 +941,53 @@ mod tests {
         assert!(!encoded.contains("never-persist-this-goal"));
         assert!(!encoded.contains("never-persist-this-status"));
         assert!(!encoded.contains("agent_states"));
+    }
+
+    #[test]
+    fn fleet_workspace_ac5_snapshot_persists_marker_and_defaults_old_sessions() {
+        let mut state = state_with_workspaces(&["fleet"]);
+        state.workspaces[0].is_fleet = true;
+
+        let snapshot = capture_from_state(&state);
+        assert!(snapshot.workspaces[0].is_fleet);
+        let mut encoded = serde_json::to_value(snapshot).expect("serialize session");
+        let workspace = encoded["workspaces"][0]
+            .as_object_mut()
+            .expect("workspace JSON object");
+        assert_eq!(
+            workspace.get("is_fleet"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        workspace.remove("is_fleet");
+        let legacy: SessionSnapshot =
+            serde_json::from_value(encoded).expect("old session without fleet marker loads");
+        assert!(!legacy.workspaces[0].is_fleet);
+    }
+
+    #[test]
+    fn fleet_workspace_ac10_cycle_settings_round_trip_and_default_old_fixture() {
+        let mut state = state_with_workspaces(&["cycle-settings"]);
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        state.skip_collapsed_cycle = true;
+
+        let snapshot = capture_from_state(&state);
+        assert_eq!(
+            snapshot.window_cycle_mode,
+            Some(crate::config::WindowCycleModeConfig::ThisMachineAndFleet)
+        );
+        assert_eq!(snapshot.skip_collapsed_cycle, Some(true));
+        let encoded = serde_json::to_string(&snapshot).expect("serialize cycle settings");
+        let restored = parse_snapshot(&encoded).expect("restore cycle settings");
+        assert_eq!(restored.window_cycle_mode, snapshot.window_cycle_mode);
+        assert_eq!(restored.skip_collapsed_cycle, Some(true));
+
+        let frozen: SessionSnapshot = serde_json::from_str(include_str!(
+            "../../tests/fixtures/session/current-herdr-session.json"
+        ))
+        .expect("load unchanged frozen session fixture");
+        assert_eq!(frozen.window_cycle_mode, None);
+        assert_eq!(frozen.skip_collapsed_cycle, None);
     }
 
     fn capture_history_from_state_with_runtimes(
@@ -1256,6 +1332,8 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored = parse_snapshot(&json).unwrap();
@@ -1831,6 +1909,7 @@ mod tests {
         let snap = SessionSnapshot {
             generation: None,
             workspaces: vec![WorkspaceSnapshot {
+                is_fleet: false,
                 repo_binding_cleared: false,
                 id: Some("wproj".to_string()),
                 custom_name: Some("pi-mono".to_string()),
@@ -1868,6 +1947,8 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
             version: SNAPSHOT_VERSION,
         };
 
@@ -2724,6 +2805,7 @@ mod tests {
             version: SNAPSHOT_VERSION,
             generation: None,
             workspaces: vec![WorkspaceSnapshot {
+                is_fleet: false,
                 repo_binding_cleared: false,
                 id: Some("test-ws".to_string()),
                 custom_name: Some("fallback test".to_string()),
@@ -2761,6 +2843,8 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
         };
 
         let json = serde_json::to_string(&snap).unwrap();

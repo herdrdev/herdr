@@ -297,6 +297,8 @@ mod tests {
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
         }
     }
 

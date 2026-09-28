@@ -388,6 +388,9 @@ fn compute_view_internal_at(
         if sidebar::sidebar_areas_menu_layout(app, area).is_none() {
             app.sidebar_areas_menu_selected = None;
         }
+        if sidebar::window_cycle_mode_menu_layout(app, area).is_none() {
+            app.window_cycle_menu_open = false;
+        }
         return;
     }
 
@@ -678,6 +681,7 @@ fn compute_view_internal_at(
     };
     let pomodoro_hit_area = pomodoro::pomodoro_hit_area(app, sidebar_area);
     let notification_hit_area = pomodoro::notification_hit_area(app, sidebar_area);
+    let window_cycle_mode_hit_area = pomodoro::window_cycle_mode_hit_area(app, sidebar_area);
     let sidebar_areas_hit_area = pomodoro::sidebar_areas_hit_area(app, sidebar_area);
     let hyperspace_rect = sidebar::sidebar_animation_rect(app, sidebar_area);
     let hyperspace_pause_hit_area = hyperspace::pause_hit_area(app, hyperspace_rect);
@@ -854,6 +858,7 @@ fn compute_view_internal_at(
         notepad_usage_max_scroll,
         pomodoro_hit_area,
         notification_hit_area,
+        window_cycle_mode_hit_area,
         sidebar_areas_hit_area,
         hyperspace_rect,
         hyperspace_pause_hit_area,
@@ -945,6 +950,9 @@ fn compute_view_internal_at(
     };
     if sidebar::sidebar_areas_menu_layout(app, area).is_none() {
         app.sidebar_areas_menu_selected = None;
+    }
+    if sidebar::window_cycle_mode_menu_layout(app, area).is_none() {
+        app.window_cycle_menu_open = false;
     }
     // The menu anchors on the `+`, so its geometry needs the strip already
     // stored on the view.
@@ -1171,6 +1179,7 @@ fn compute_mobile_view(
         notepad_usage_max_scroll: 0,
         pomodoro_hit_area: Rect::default(),
         notification_hit_area: Rect::default(),
+        window_cycle_mode_hit_area: Rect::default(),
         sidebar_areas_hit_area: Rect::default(),
         hyperspace_rect: Rect::default(),
         hyperspace_pause_hit_area: Rect::default(),

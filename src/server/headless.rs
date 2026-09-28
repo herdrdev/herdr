@@ -1923,6 +1923,8 @@ impl HeadlessServer {
             self.app.state.sidebar_section_split,
             self.app.state.collapsed_space_keys.clone(),
             self.app.state.prio_panel_collapsed,
+            self.app.state.window_cycle_mode,
+            self.app.state.skip_collapsed_cycle,
         );
 
         let mut handoff_entries = Vec::new();
@@ -11329,8 +11331,12 @@ next_tab = ""
             .remote_focus_operations
             .proxy_location(&operation_id)
             .expect("proxy pane bound");
-        let should_close = client.state.workspaces[0].remove_pane(proxy_pane_id);
-        assert!(!should_close);
+        let (proxy_ws_idx, _) = client.find_pane(proxy_pane_id).expect("proxy pane placed");
+        assert!(client.state.workspaces[proxy_ws_idx].is_fleet);
+        // The proxy is the fleet space's only pane, so closing it closes the space.
+        if client.state.workspaces[proxy_ws_idx].remove_pane(proxy_pane_id) {
+            client.state.workspaces.remove(proxy_ws_idx);
+        }
         client
             .state
             .remove_unattached_terminal_ids([proxy_terminal_id.clone()]);
@@ -14845,6 +14851,7 @@ next_tab = ""
                     path: checkout.clone(),
                     workspace: Some(Box::new(crate::api::schema::WorkspaceInfo {
                         workspace_id: workspace_id.clone(),
+                        is_fleet: false,
                         number: 1,
                         label: "issue".into(),
                         focused: true,
@@ -20173,9 +20180,11 @@ next_tab = ""
         );
         let checklist = server.app.state.view.sidebar_areas_hit_area;
         let bell = server.app.state.view.notification_hit_area;
+        let cycle = server.app.state.view.window_cycle_mode_hit_area;
         assert_eq!(checklist.width, 1);
         assert_eq!(checklist.y, bell.y);
         assert_eq!(checklist.right(), bell.x);
+        assert!(cycle.right() <= checklist.x);
 
         let (writer, _control_rx, _render_rx) = test_client_writer();
         server.clients.insert(

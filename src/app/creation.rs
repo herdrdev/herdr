@@ -315,10 +315,7 @@ impl App {
                 return;
             }
         };
-        if self.focus_attached_fleet_host_pane(&argv) {
-            return;
-        }
-        if let Err(error) = self.create_fleet_host_tab(&argv) {
+        if let Err(error) = self.open_fleet_tab_for_argv(&argv) {
             self.show_fleet_launch_error(error.to_string());
         }
     }
@@ -394,12 +391,17 @@ impl App {
         // An attach target is one thing. Clicking its row again must return to the
         // pane already attached to it rather than dial a second ssh connection
         // and leave the operator with two views of the same agent.
-        if self.focus_attached_fleet_host_pane(&argv) {
-            return;
-        }
-        if let Err(error) = self.create_fleet_host_tab(&argv) {
+        if let Err(error) = self.open_fleet_tab_for_argv(&argv) {
             tracing::warn!(host = %host.name, %error, "could not open fleet host");
             self.show_fleet_launch_error(error.to_string());
+        }
+    }
+
+    fn open_fleet_tab_for_argv(&mut self, argv: &[String]) -> std::io::Result<()> {
+        if self.focus_attached_fleet_host_pane(argv) {
+            Ok(())
+        } else {
+            self.create_fleet_host_tab(argv)
         }
     }
 
@@ -412,6 +414,7 @@ impl App {
             .workspaces
             .iter()
             .enumerate()
+            .filter(|(_, workspace)| workspace.is_fleet)
             .find_map(|(ws_idx, workspace)| {
                 workspace
                     .tabs
@@ -440,39 +443,80 @@ impl App {
     }
 
     fn create_fleet_host_tab(&mut self, argv: &[String]) -> std::io::Result<()> {
-        let Some(ws_idx) = self.state.active else {
-            return Err(std::io::Error::other("no active workspace"));
-        };
         let (rows, cols) = self.state.estimate_pane_size();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.pane_terminal_theme();
         let host_terminal_appearance = Some(self.state.pane_terminal_appearance());
-        let cwd = self.state.workspaces[ws_idx]
-            .resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+        let fleet_ws_idx = self
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.is_fleet);
+        let cwd = fleet_ws_idx
+            .or(self.state.active)
+            .and_then(|ws_idx| self.state.workspaces.get(ws_idx))
+            .and_then(|workspace| {
+                workspace.resolved_identity_cwd_from(&self.state.terminals, &self.terminal_runtimes)
+            })
             .or_else(|| std::env::current_dir().ok())
             .ok_or_else(|| std::io::Error::other("no working directory for host pane"))?;
-        let (tab_idx, terminal, runtime, root_pane) = {
-            let workspace = &mut self.state.workspaces[ws_idx];
-            let (tab_idx, terminal, runtime) = workspace.create_tab_argv_command(
-                rows,
-                cols,
-                cwd,
-                argv,
-                Vec::new(),
-                scrollback_limit_bytes,
-                host_terminal_theme,
-                host_terminal_appearance,
-            )?;
-            let root_pane = workspace.tabs[tab_idx].root_pane;
-            (tab_idx, terminal, runtime, root_pane)
-        };
+        let (ws_idx, tab_idx, terminal, runtime, root_pane, created_workspace) =
+            if let Some(ws_idx) = fleet_ws_idx {
+                let workspace = &mut self.state.workspaces[ws_idx];
+                if workspace.custom_name.is_none() {
+                    workspace.custom_name = Some("Fleet".to_owned());
+                }
+                let (tab_idx, terminal, runtime) = workspace.create_tab_argv_command(
+                    rows,
+                    cols,
+                    cwd,
+                    argv,
+                    Vec::new(),
+                    scrollback_limit_bytes,
+                    host_terminal_theme,
+                    host_terminal_appearance,
+                )?;
+                let root_pane = workspace.tabs[tab_idx].root_pane;
+                (ws_idx, tab_idx, terminal, runtime, root_pane, false)
+            } else {
+                let (mut workspace, terminal, runtime) = Workspace::new_argv_command(
+                    cwd,
+                    rows,
+                    cols,
+                    argv,
+                    scrollback_limit_bytes,
+                    host_terminal_theme,
+                    host_terminal_appearance,
+                    self.event_tx.clone(),
+                    self.render_notify.clone(),
+                    self.render_dirty.clone(),
+                )?;
+                workspace.is_fleet = true;
+                workspace.custom_name = Some("Fleet".to_owned());
+                let root_pane = workspace.tabs[0].root_pane;
+                self.state.workspaces.push(workspace);
+                (
+                    self.state.workspaces.len() - 1,
+                    0,
+                    terminal,
+                    runtime,
+                    root_pane,
+                    true,
+                )
+            };
         self.terminal_runtimes.insert(terminal.id.clone(), runtime);
         self.state.terminals.insert(terminal.id.clone(), terminal);
         self.pending_first_frame_pane = Some(root_pane);
         self.state.remove_alias_shadowed_by_new_pane(root_pane);
         self.state.switch_workspace_tab(ws_idx, tab_idx);
         self.focus_client_on_pane();
-        self.emit_tab_created_events(ws_idx, tab_idx);
+        if created_workspace {
+            let workspace_id = self.state.workspaces[ws_idx].id.clone();
+            crate::logging::workspace_created(&workspace_id, root_pane.raw());
+            self.emit_workspace_open_events(ws_idx);
+        } else {
+            self.emit_tab_created_events(ws_idx, tab_idx);
+        }
         self.schedule_session_save();
         Ok(())
     }
@@ -889,6 +933,7 @@ impl App {
         });
         crate::api::schema::WorkspaceInfo {
             workspace_id: self.public_workspace_id(index),
+            is_fleet: ws.is_fleet,
             number: index + 1,
             label: ws.display_name_from(&self.state.terminals, &self.terminal_runtimes),
             focused: self.state.active == Some(index),
@@ -1122,6 +1167,8 @@ mod tests {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
         app.state.workspaces = vec![Workspace::test_new("existing-space")];
+        app.state.workspaces[0].is_fleet = true;
+        app.state.workspaces[0].custom_name = Some("Fleet".to_owned());
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
         app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
@@ -1138,6 +1185,138 @@ mod tests {
             entries: Vec::new(),
         }];
         app
+    }
+
+    fn app_for_fleet_workspace_creation() -> App {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![
+            Workspace::test_new("local-one"),
+            Workspace::test_new("local-two"),
+        ];
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.ensure_test_terminals();
+        app
+    }
+
+    fn fleet_workspace_test_argv(label: &str) -> Vec<String> {
+        vec![
+            crate::app::api::test_support::exiting_test_command().into(),
+            label.into(),
+        ]
+    }
+
+    #[tokio::test]
+    async fn fleet_workspace_ac1_host_agent_and_run_log_use_one_dedicated_workspace() {
+        use crate::app::api::test_support::shutdown_test_runtimes;
+
+        let mut app = app_for_fleet_workspace_creation();
+        let local_tab_counts = app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.tabs.len())
+            .collect::<Vec<_>>();
+
+        for label in ["fleet-host", "fleet-agent", "fleet-run-log"] {
+            app.open_fleet_tab_for_argv(&fleet_workspace_test_argv(label))
+                .expect("fleet tab should spawn in the test process");
+        }
+
+        assert_eq!(
+            app.state
+                .workspaces
+                .iter()
+                .filter(|workspace| workspace.is_fleet)
+                .count(),
+            1
+        );
+        assert_eq!(
+            app.state.workspaces[..2]
+                .iter()
+                .map(|workspace| workspace.tabs.len())
+                .collect::<Vec<_>>(),
+            local_tab_counts
+        );
+        let fleet_workspace = app
+            .state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.is_fleet)
+            .expect("dedicated fleet workspace");
+        assert_eq!(fleet_workspace.tabs.len(), 3);
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[tokio::test]
+    async fn fleet_workspace_ac3_reclick_focuses_existing_tab_without_spawning() {
+        use crate::app::api::test_support::shutdown_test_runtimes;
+
+        let mut app = app_for_fleet_workspace_creation();
+        let argv = fleet_workspace_test_argv("same-fleet-entry");
+        app.open_fleet_tab_for_argv(&argv)
+            .expect("initial fleet tab should spawn");
+        let fleet_idx = app
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.is_fleet)
+            .expect("fleet workspace");
+        let root_pane = app.state.workspaces[fleet_idx].tabs[0].root_pane;
+        let terminal_count = app.state.terminals.len();
+        let workspace_count = app.state.workspaces.len();
+        app.state.active = Some(0);
+
+        app.open_fleet_tab_for_argv(&argv)
+            .expect("re-click should reuse the open fleet tab");
+
+        assert_eq!(app.state.active, Some(fleet_idx));
+        assert_eq!(
+            app.state.workspaces[fleet_idx].focused_pane_id(),
+            Some(root_pane)
+        );
+        assert_eq!(app.state.workspaces[fleet_idx].tabs.len(), 1);
+        assert_eq!(app.state.terminals.len(), terminal_count);
+        assert_eq!(app.state.workspaces.len(), workspace_count);
+        shutdown_test_runtimes(&mut app);
+    }
+
+    #[tokio::test]
+    async fn fleet_workspace_ac4_closing_last_fleet_tab_leaves_no_visible_fleet_space() {
+        use crate::app::api::test_support::shutdown_test_runtimes;
+
+        let mut app = app_for_fleet_workspace_creation();
+        app.open_fleet_tab_for_argv(&fleet_workspace_test_argv("last-fleet-tab"))
+            .expect("fleet tab should spawn");
+        let fleet_idx = app
+            .state
+            .workspaces
+            .iter()
+            .position(|workspace| workspace.is_fleet)
+            .expect("fleet workspace");
+        app.state.selected = fleet_idx;
+
+        app.state.close_selected_workspace();
+
+        assert!(app
+            .state
+            .workspaces
+            .iter()
+            .all(|workspace| !workspace.is_fleet));
+        assert!(crate::ui::sidebar::workspace_list_entries(&app.state)
+            .iter()
+            .all(
+                |entry| !matches!(entry, crate::ui::WorkspaceListEntry::Workspace { ws_idx, .. }
+                if app.state.workspaces[*ws_idx].is_fleet)
+            ));
+        shutdown_test_runtimes(&mut app);
     }
 
     #[test]

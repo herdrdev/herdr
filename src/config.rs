@@ -31,8 +31,8 @@ pub use self::{
         PanelSurfaceConfig, PomodoroConfig, ProjectConfig, ShellModeConfig,
         SidebarCollapsedModeConfig, StatusIndicatorStyle, TabBarPositionConfig,
         TerminalNotificationBackend, ToastClipboardPosition, ToastConfig, ToastDelivery,
-        ToastHerdrPosition, UpdateChannelConfig, UsageConfig, UsageModelPricing, WorkIndexConfig,
-        MAX_TOAST_DELAY_SECONDS,
+        ToastHerdrPosition, UpdateChannelConfig, UsageConfig, UsageModelPricing,
+        WindowCycleModeConfig, WorkIndexConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, SidebarAreasConfig, SidebarConfig,

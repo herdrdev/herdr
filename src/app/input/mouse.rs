@@ -4922,6 +4922,8 @@ mod tests {
             ..Default::default()
         });
         app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.workspaces[0].is_fleet = true;
+        app.state.workspaces[0].custom_name = Some("Fleet".to_owned());
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
         app.state.fleet_snapshot = crate::fleet::Snapshot {
@@ -6372,7 +6374,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_linear_footer_mouse_flow_renders_seeded_wide_view() {
+    fn fleet_workspace_ac6_sidebar_footer_places_cycle_after_refresh() {
         use crate::app::state::{ControlId, SidebarFooterItem, WorkProjection};
 
         let mut app = seeded_wide_sidebar_app();
@@ -6403,6 +6405,17 @@ mod tests {
             );
         }
         let bell = app.state.view.notification_hit_area;
+        let cycle = app.state.view.window_cycle_mode_hit_area;
+        assert_eq!(cycle.width, 1);
+        assert_eq!(
+            cycle.x,
+            app.state.view.sidebar_footer_refresh_hit_area.right()
+        );
+        app.handle_mouse(mouse(MouseEventKind::Moved, cycle.x, cycle.y));
+        assert_eq!(
+            app.state.hovered_control,
+            Some(ControlId::SidebarFooter(SidebarFooterItem::WindowCycleMode))
+        );
         app.handle_mouse(mouse(MouseEventKind::Moved, bell.x, bell.y));
         assert_eq!(
             app.state.hovered_control,

@@ -1774,6 +1774,14 @@ pub enum TabBarPositionConfig {
     Hidden,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowCycleModeConfig {
+    #[default]
+    ThisMachine,
+    ThisMachineAndFleet,
+}
+
 fn deserialize_working_row_opacity<'de, D>(deserializer: D) -> Result<u8, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -1798,6 +1806,10 @@ pub struct UiConfig {
     /// Whether the sidebar draws its idle animation. The panel also has a pause
     /// button; this is the switch that removes it entirely.
     pub sidebar_animation: bool,
+    /// Whether next/previous and next-blocked include fleet agents.
+    pub window_cycle_mode: WindowCycleModeConfig,
+    /// Exclude collapsed spaces and sections from next/previous and next-blocked.
+    pub skip_collapsed_cycle: bool,
     /// Minimum sidebar width (columns) when expanded. Default: 18.
     pub sidebar_min_width: u16,
     /// Maximum sidebar width (columns) when expanded. Default: 36.
@@ -2268,6 +2280,8 @@ impl Default for UiConfig {
             sidebar_width: 26,
             working_row_opacity_percent: 100,
             sidebar_animation: true,
+            window_cycle_mode: WindowCycleModeConfig::default(),
+            skip_collapsed_cycle: false,
             sidebar_min_width: 18,
             sidebar_max_width: 36,
             sidebar_start_collapsed: false,
@@ -2976,6 +2990,26 @@ sidebar_start_collapsed = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.ui.sidebar_start_collapsed);
+    }
+
+    #[test]
+    fn fleet_workspace_ac10_cycle_settings_default_and_parse_from_ui_config() {
+        let default = Config::default();
+        assert_eq!(
+            default.ui.window_cycle_mode,
+            WindowCycleModeConfig::ThisMachine
+        );
+        assert!(!default.ui.skip_collapsed_cycle);
+
+        let configured: Config = toml::from_str(
+            "[ui]\nwindow_cycle_mode = \"this-machine-and-fleet\"\nskip_collapsed_cycle = true\n",
+        )
+        .expect("cycle settings parse");
+        assert_eq!(
+            configured.ui.window_cycle_mode,
+            WindowCycleModeConfig::ThisMachineAndFleet
+        );
+        assert!(configured.ui.skip_collapsed_cycle);
     }
 
     #[test]

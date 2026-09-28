@@ -139,6 +139,7 @@ fn workspace_focus_success(id: &str, workspace_id: &str) -> Vec<u8> {
         result: crate::api::schema::ResponseResult::WorkspaceInfo {
             workspace: crate::api::schema::WorkspaceInfo {
                 workspace_id: workspace_id.into(),
+                is_fleet: false,
                 number: 1,
                 label: workspace_id.into(),
                 focused: true,

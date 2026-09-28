@@ -377,6 +377,13 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # button; this switch removes the panel and gives its rows back to the list.
 # sidebar_animation = true
 
+# Scope for next/previous and next-blocked cycles. Choices: "this-machine" or
+# "this-machine-and-fleet". The sidebar footer cycle control changes this live.
+# window_cycle_mode = "this-machine"
+
+# Exclude collapsed spaces and sidebar sections from both cycles.
+# skip_collapsed_cycle = false
+
 # Collapsed sidebar presentation: "compact" keeps the narrow status rail, "hidden" uses zero width.
 # sidebar_collapsed_mode = "compact"
 

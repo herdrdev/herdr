@@ -77,6 +77,9 @@ pub struct WorkspaceReportMetadataParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceInfo {
     pub workspace_id: String,
+    /// True for the workspace that owns tabs opened from the cross-host Fleet view.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_fleet: bool,
     pub number: usize,
     pub label: String,
     pub focused: bool,

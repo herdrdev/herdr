@@ -57,6 +57,7 @@ const HAMMER_WRENCH: &str = "\u{F1323}"; // md-hammer_wrench
 const CONFIG: &str = "\u{E615}"; // seti-config
 const OBSIDIAN: &str = "\u{E6BB}"; // custom-obsidian
 const REPO: &str = "\u{EA62}"; // cod-repo
+const CYCLE: &str = "\u{F021}"; // fa-refresh
 
 pub(crate) fn agent_text_tag(agent: Option<Agent>) -> Option<&'static str> {
     match agent {
@@ -148,6 +149,14 @@ pub(crate) fn machine_icon<'a>(
         "mbpro" => MACHINE_MBPRO,
         "mbair" => MACHINE_MBAIR,
         _ => MACHINE_UNKNOWN,
+    }
+}
+
+pub(crate) fn cycle_label(nerd_font: bool) -> &'static str {
+    if nerd_font {
+        CYCLE
+    } else {
+        "cy"
     }
 }
 
@@ -404,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn nerd_font_off_keeps_the_text_labels() {
+    fn fleet_workspace_ac6_cycle_icon_uses_nerd_font_and_ascii_fallback() {
         assert_eq!(agent_label(Agent::Claude, false), Some("cc"));
         assert_eq!(agent_label(Agent::Codex, false), Some("cx"));
         assert_eq!(agent_label(Agent::Pi, false), Some("pi"));
@@ -413,6 +422,8 @@ mod tests {
         assert_eq!(usage_label(QuotaProvider::Codex, false), "CX");
         assert_eq!(usage_label(QuotaProvider::Kimi, false), "KI");
         assert_eq!(usage_label(QuotaProvider::Agy, false), "AG");
+        assert_eq!(cycle_label(false), "cy");
+        assert_eq!(cycle_label(true), "\u{F021}");
     }
 
     #[test]

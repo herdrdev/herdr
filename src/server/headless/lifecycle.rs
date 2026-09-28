@@ -79,6 +79,8 @@ impl HeadlessServer {
             self.app.state.sidebar_section_split,
             self.app.state.collapsed_space_keys.clone(),
             self.app.state.prio_panel_collapsed,
+            self.app.state.window_cycle_mode,
+            self.app.state.skip_collapsed_cycle,
         );
 
         let mut handoff_entries = Vec::new();

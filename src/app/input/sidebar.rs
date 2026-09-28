@@ -1425,6 +1425,124 @@ impl AppState {
 }
 
 impl App {
+    pub(crate) fn handle_window_cycle_menu_key(
+        &mut self,
+        key: KeyEvent,
+        owner: InputOwner,
+    ) -> bool {
+        if !self.state.window_cycle_menu_open || !sidebar_areas_menu_accepts_input_owner(owner) {
+            return false;
+        }
+        if crate::ui::sidebar::window_cycle_mode_menu_layout(&self.state, self.state.screen_rect())
+            .is_none()
+        {
+            self.state.window_cycle_menu_open = false;
+            return false;
+        }
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.state.window_cycle_menu_selected =
+                    self.state.window_cycle_menu_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.state.window_cycle_menu_selected = self
+                    .state
+                    .window_cycle_menu_selected
+                    .saturating_add(1)
+                    .min(2);
+            }
+            KeyCode::Home => self.state.window_cycle_menu_selected = 0,
+            KeyCode::End => self.state.window_cycle_menu_selected = 2,
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.apply_window_cycle_menu_choice(self.state.window_cycle_menu_selected);
+            }
+            KeyCode::Esc | KeyCode::Char('q') => self.state.window_cycle_menu_open = false,
+            _ => {}
+        }
+        true
+    }
+
+    pub(super) fn handle_window_cycle_menu_mouse(
+        &mut self,
+        mouse: MouseEvent,
+        owner: InputOwner,
+    ) -> bool {
+        if !sidebar_areas_menu_accepts_input_owner(owner) {
+            return false;
+        }
+        if self.state.window_cycle_menu_open {
+            if let Some(index) = crate::ui::sidebar::window_cycle_mode_menu_index_at(
+                &self.state,
+                self.state.screen_rect(),
+                mouse.column,
+                mouse.row,
+            ) {
+                if matches!(mouse.kind, MouseEventKind::Moved) {
+                    self.state.window_cycle_menu_selected = index;
+                    return true;
+                }
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    self.state.window_cycle_menu_selected = index;
+                    self.apply_window_cycle_menu_choice(index);
+                    return true;
+                }
+            }
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.state.window_cycle_menu_open = false;
+            }
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && self.state.point_in_rect(
+                self.state.view.window_cycle_mode_hit_area,
+                mouse.column,
+                mouse.row,
+            )
+        {
+            self.state.sidebar_areas_menu_selected = None;
+            self.state.window_cycle_menu_selected = match self.state.window_cycle_mode {
+                crate::config::WindowCycleModeConfig::ThisMachine => 0,
+                crate::config::WindowCycleModeConfig::ThisMachineAndFleet => 1,
+            };
+            self.state.window_cycle_menu_open = true;
+            return true;
+        }
+        false
+    }
+
+    fn apply_window_cycle_menu_choice(&mut self, index: usize) {
+        match index {
+            0 => self.set_window_cycle_mode(crate::config::WindowCycleModeConfig::ThisMachine),
+            1 => self
+                .set_window_cycle_mode(crate::config::WindowCycleModeConfig::ThisMachineAndFleet),
+            2 => {
+                self.state.skip_collapsed_cycle = !self.state.skip_collapsed_cycle;
+                self.schedule_session_save();
+                self.save_config_edit(crate::app::settings_general::ConfigEdit::Bool {
+                    section: "ui",
+                    key: "skip_collapsed_cycle",
+                    value: self.state.skip_collapsed_cycle,
+                });
+                self.state.window_cycle_menu_open = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn set_window_cycle_mode(&mut self, mode: crate::config::WindowCycleModeConfig) {
+        self.state.window_cycle_mode = mode;
+        self.state.window_cycle_menu_open = false;
+        self.schedule_session_save();
+        let value = match mode {
+            crate::config::WindowCycleModeConfig::ThisMachine => "this-machine",
+            crate::config::WindowCycleModeConfig::ThisMachineAndFleet => "this-machine-and-fleet",
+        };
+        self.save_config_edit(crate::app::settings_general::ConfigEdit::Text {
+            section: "ui",
+            key: "window_cycle_mode",
+            value: value.into(),
+        });
+    }
+
     pub(crate) fn handle_sidebar_areas_menu_key(
         &mut self,
         key: KeyEvent,
@@ -1510,6 +1628,7 @@ impl App {
                 mouse.row,
             )
         {
+            self.state.window_cycle_menu_open = false;
             self.state.sidebar_areas_menu_selected = Some(0);
             return true;
         }
@@ -2739,6 +2858,68 @@ mod tests {
                 "modal owner {owner:?} must keep the checklist click blocked"
             );
         }
+    }
+
+    #[test]
+    fn fleet_workspace_ac6_cycle_dropdown_saves_radio_and_checkbox_choices() {
+        use crate::app::state::InputOwner;
+
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let config_path = unique_temp_path("fleet-cycle-config");
+        fs::write(&config_path, "[ui]\n").expect("seed config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &config_path);
+
+        let mut app = app_for_mouse_test();
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let anchor = app.state.view.window_cycle_mode_hit_area;
+        assert!(anchor.width > 0);
+        let owner = InputOwner::Pane;
+        assert!(app.handle_window_cycle_menu_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), anchor.x, anchor.y),
+            owner,
+        ));
+        let menu =
+            crate::ui::sidebar::window_cycle_mode_menu_layout(&app.state, app.state.screen_rect())
+                .expect("cycle settings dropdown");
+        app.handle_window_cycle_menu_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                menu.list_rect.x,
+                menu.list_rect.y + 1,
+            ),
+            owner,
+        );
+        assert_eq!(
+            app.state.window_cycle_mode,
+            crate::config::WindowCycleModeConfig::ThisMachineAndFleet
+        );
+        assert!(!app.state.window_cycle_menu_open);
+        assert_eq!(
+            crate::config::Config::load().config.ui.window_cycle_mode,
+            crate::config::WindowCycleModeConfig::ThisMachineAndFleet
+        );
+
+        app.handle_window_cycle_menu_mouse(
+            mouse(MouseEventKind::Down(MouseButton::Left), anchor.x, anchor.y),
+            owner,
+        );
+        let menu =
+            crate::ui::sidebar::window_cycle_mode_menu_layout(&app.state, app.state.screen_rect())
+                .expect("reopened cycle settings dropdown");
+        app.handle_window_cycle_menu_mouse(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                menu.list_rect.x,
+                menu.list_rect.y + 2,
+            ),
+            owner,
+        );
+        assert!(app.state.skip_collapsed_cycle);
+        assert!(app.state.window_cycle_menu_open);
+        assert!(crate::config::Config::load().config.ui.skip_collapsed_cycle);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        fs::remove_file(config_path).ok();
     }
 
     fn sidebar_order_app(settled: bool) -> crate::app::App {

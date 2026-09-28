@@ -956,26 +956,23 @@ impl App {
     /// Windows are Herdr tabs. Canonical workspace/vector/tab order is used so
     /// agent lifecycle or cwd changes cannot affect global navigation.
     fn focus_relative_window(&mut self, forward: bool) {
-        let windows = window_cycle_order(&self.state);
-        let Some(active_ws) = self.state.active else {
+        let windows = window_navigation_order(&self.state);
+        let Some(next) = relative_window_target_index(&self.state, &windows, forward) else {
             return;
         };
-        let active_tab = self.state.workspaces[active_ws].active_tab_index();
-        let Some(current) = windows
-            .iter()
-            .position(|window| *window == (active_ws, active_tab))
-        else {
-            return;
-        };
-        let Some(next) = crate::workspace::relative_window_index(windows.len(), current, forward)
-        else {
-            return;
-        };
-        let (ws_idx, tab_idx) = windows[next];
-        let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
-            return;
-        };
-        self.runtime_tab_focus("tui.window.focus_relative", tab_id);
+        match windows[next].clone() {
+            WindowCycleTarget::Local { ws_idx, tab_idx } => {
+                let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
+                    return;
+                };
+                self.state.sidebar_selected_remote_agent = None;
+                self.runtime_tab_focus("tui.window.focus_relative", tab_id);
+            }
+            WindowCycleTarget::Remote(agent_ref) => {
+                self.open_fleet_host_focused(&agent_ref.host, Some(&agent_ref.agent));
+                self.state.select_remote_agent_row(agent_ref);
+            }
+        }
     }
 
     fn focus_next_blocked_window(&mut self) {
@@ -990,6 +987,10 @@ impl App {
                 self.focus_pane_internal_via_api(ws_idx, pane_id);
             }
             BlockedPaneTarget::Remote(agent_ref) => {
+                self.open_fleet_host_focused(&agent_ref.host, Some(&agent_ref.agent));
+                // Focusing the attached tab clears remote row selection. Keep
+                // this anchor so the next shortcut advances to the next remote
+                // blocker rather than restarting the cycle.
                 self.state.select_remote_agent_row(agent_ref);
             }
         }
@@ -1319,7 +1320,7 @@ impl App {
     }
 
     fn relative_visible_workspace(&self, delta: isize) -> Option<usize> {
-        let order = self.state.visible_workspace_order();
+        let order = self.state.workspace_navigation_order();
         if order.is_empty() {
             return None;
         }
@@ -2058,33 +2059,199 @@ pub(crate) fn handle_navigate_key(state: &mut AppState, key: KeyEvent) {
     }
 }
 
-/// Order `prefix+n` / `prefix+p` walk tabs in.
-///
-/// The sidebar is the projection the operator actually reads, and its row
-/// order already depends on the selected View, so the window cycle follows it
-/// instead of raw workspace/tab indices. Tabs the current View does not
-/// project -- collapsed groups, an active search filter -- are appended in
-/// index order so no tab becomes unreachable from the keyboard.
-pub(crate) fn window_cycle_order(state: &AppState) -> Vec<(usize, usize)> {
-    let mut seen = std::collections::HashSet::new();
-    let mut order = crate::ui::sidebar_rows(state)
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum WindowCycleTarget {
+    Local { ws_idx: usize, tab_idx: usize },
+    Remote(crate::api::schema::AgentRef),
+}
+
+fn cycle_visible_workspaces(state: &AppState) -> std::collections::HashSet<usize> {
+    // A space is hidden only when a collapsed group drops it from the list;
+    // spaces a mode never lists (worktree members, work-item modes) stay.
+    let listed = |force_expanded| {
+        crate::ui::sidebar::workspace_list_entries_for_mode(
+            state,
+            force_expanded,
+            state.sidebar_group_mode,
+        )
         .into_iter()
-        .filter_map(|row| match row {
-            crate::ui::SidebarRow::Tab { entry, .. } => entry
-                .local_target()
-                .map(|target| (target.ws_idx, target.tab_idx)),
+        .filter_map(|entry| match entry {
+            crate::ui::sidebar::WorkspaceListEntry::Workspace { ws_idx, .. } => Some(ws_idx),
             _ => None,
         })
-        .filter(|window| seen.insert(*window))
-        .collect::<Vec<_>>();
-    for (ws_idx, ws) in state.workspaces.iter().enumerate() {
-        for tab_idx in 0..ws.tabs.len() {
-            if seen.insert((ws_idx, tab_idx)) {
-                order.push((ws_idx, tab_idx));
+        .collect::<std::collections::HashSet<_>>()
+    };
+    let shown = listed(false);
+    let collapsed = listed(true)
+        .into_iter()
+        .filter(|ws_idx| !shown.contains(ws_idx))
+        .collect::<std::collections::HashSet<_>>();
+    (0..state.workspaces.len())
+        .filter(|ws_idx| !state.workspaces[*ws_idx].is_fleet && !collapsed.contains(ws_idx))
+        .collect()
+}
+
+/// Local tabs the sidebar shows while skip-collapsed is on.
+fn cycle_shown_local_tabs(
+    state: &AppState,
+    rows: &[crate::ui::SidebarRow],
+    visible_workspaces: &std::collections::HashSet<usize>,
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut shown = rows
+        .iter()
+        .filter_map(|row| match row {
+            crate::ui::SidebarRow::Tab { entry, .. }
+            | crate::ui::SidebarRow::Agent { entry, .. } => entry.local_target(),
+            _ => None,
+        })
+        .filter(|target| !state.workspaces[target.ws_idx].is_fleet)
+        .map(|target| (target.ws_idx, target.tab_idx))
+        .collect::<std::collections::HashSet<_>>();
+    // Agent tabs own rows in any section, taken above. Agentless tabs show only through a
+    // plain space row, so they follow the space row that holds them: object,
+    // worktree and work-item group headers hide theirs.
+    if state.sidebar_sections_layout {
+        return shown;
+    }
+    let agent_tabs = crate::ui::sidebar_thread_entries(state)
+        .into_iter()
+        .filter(|entry| entry.has_agent)
+        .filter_map(|entry| entry.local_target())
+        .map(|target| (target.ws_idx, target.tab_idx))
+        .collect::<std::collections::HashSet<_>>();
+    let mut spaces = std::collections::HashSet::new();
+    for row in rows {
+        let crate::ui::SidebarRow::Workspace {
+            ws_idx,
+            count: None,
+            ..
+        } = row
+        else {
+            continue;
+        };
+        spaces.insert(*ws_idx);
+        if state.sidebar_group_mode != crate::app::state::SidebarGroupMode::Spaces {
+            spaces.extend(crate::ui::sidebar::sidebar_space_member_indices(
+                state, *ws_idx,
+            ));
+        }
+    }
+    for (ws_idx, workspace) in state.workspaces.iter().enumerate() {
+        if !spaces.contains(&ws_idx) || !visible_workspaces.contains(&ws_idx) {
+            continue;
+        }
+        shown.extend(
+            (0..workspace.tabs.len())
+                .filter(|tab_idx| !agent_tabs.contains(&(ws_idx, *tab_idx)))
+                .map(|tab_idx| (ws_idx, tab_idx)),
+        );
+    }
+    shown
+}
+
+/// Local spaces in sidebar order; spaces the list does not name follow in
+/// index order.
+fn cycle_space_order(state: &AppState) -> Vec<usize> {
+    let grouped = state.sidebar_group_mode != crate::app::state::SidebarGroupMode::Spaces;
+    let mut seen = std::collections::HashSet::new();
+    crate::ui::sidebar::workspace_list_entries_for_mode(state, true, state.sidebar_group_mode)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            crate::ui::sidebar::WorkspaceListEntry::Workspace { ws_idx, .. } => Some(ws_idx),
+            _ => None,
+        })
+        // Grouped members follow their root, as the space tree shows them.
+        .flat_map(|ws_idx| {
+            std::iter::once(ws_idx).chain(if grouped {
+                crate::ui::sidebar::sidebar_space_member_indices(state, ws_idx)
+            } else {
+                Vec::new()
+            })
+        })
+        .chain(0..state.workspaces.len())
+        .filter(|ws_idx| !state.workspaces[*ws_idx].is_fleet && seen.insert(*ws_idx))
+        .collect()
+}
+
+/// Order `prefix+n` / `prefix+p` walk: every tab of one space before the
+/// next space, then fleet agents when enabled.
+fn window_navigation_order(state: &AppState) -> Vec<WindowCycleTarget> {
+    let include_fleet =
+        state.window_cycle_mode == crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+    let rows = crate::ui::sidebar_rows(state);
+    let shown = state
+        .skip_collapsed_cycle
+        .then(|| cycle_shown_local_tabs(state, &rows, &cycle_visible_workspaces(state)));
+    let mut order = Vec::new();
+    for ws_idx in cycle_space_order(state) {
+        for tab_idx in 0..state.workspaces[ws_idx].tabs.len() {
+            if shown
+                .as_ref()
+                .is_none_or(|shown| shown.contains(&(ws_idx, tab_idx)))
+            {
+                order.push(WindowCycleTarget::Local { ws_idx, tab_idx });
+            }
+        }
+    }
+    if include_fleet {
+        let mut seen = std::collections::HashSet::new();
+        let visible = rows.iter().filter_map(|row| match row {
+            crate::ui::SidebarRow::RemoteAgent { entry, .. } => Some(entry.agent_ref.clone()),
+            _ => None,
+        });
+        // Collapsed fleet rows still cycle unless skip-collapsed is on.
+        let hidden = state
+            .remote_agent_panel_entries
+            .iter()
+            .filter(|_| !state.skip_collapsed_cycle)
+            .map(|entry| entry.agent_ref.clone());
+        for agent_ref in visible.chain(hidden) {
+            if seen.insert(agent_ref.clone()) {
+                order.push(WindowCycleTarget::Remote(agent_ref));
             }
         }
     }
     order
+}
+
+/// Local-only projection kept for pane/workspace tests and call sites that need
+/// a concrete Herdr tab identity.
+#[cfg(test)]
+pub(crate) fn window_cycle_order(state: &AppState) -> Vec<(usize, usize)> {
+    window_navigation_order(state)
+        .into_iter()
+        .filter_map(|target| match target {
+            WindowCycleTarget::Local { ws_idx, tab_idx } => Some((ws_idx, tab_idx)),
+            WindowCycleTarget::Remote(_) => None,
+        })
+        .collect()
+}
+
+fn relative_window_target_index(
+    state: &AppState,
+    windows: &[WindowCycleTarget],
+    forward: bool,
+) -> Option<usize> {
+    let current = state
+        .sidebar_selected_remote_agent
+        .as_ref()
+        .map(|agent| WindowCycleTarget::Remote(agent.clone()))
+        .or_else(|| {
+            let ws_idx = state.active?;
+            let workspace = state.workspaces.get(ws_idx)?;
+            (!workspace.is_fleet).then_some(WindowCycleTarget::Local {
+                ws_idx,
+                tab_idx: workspace.active_tab_index(),
+            })
+        })
+        .and_then(|current| windows.iter().position(|target| *target == current));
+    if let Some(current) = current {
+        crate::workspace::relative_window_index(windows.len(), current, forward)
+    } else if windows.is_empty() {
+        None
+    } else {
+        Some(if forward { 0 } else { windows.len() - 1 })
+    }
 }
 
 /// Panes `next_blocked_window` visits, in sidebar row order.
@@ -2112,18 +2279,35 @@ fn blocked_pane_cycle_in_order(
     state: &AppState,
     include_needs_you: bool,
 ) -> Vec<(BlockedPaneTarget, bool)> {
-    let visible_local = crate::ui::sidebar::sidebar_navigation_agent_entries(state)
-        .into_iter()
-        .filter_map(|entry| {
-            entry
-                .local_target()
-                .map(|target| (target.ws_idx, target.pane_id))
+    let rows = crate::ui::sidebar_rows(state);
+    // A shown row stands for its whole tab: split panes share one row.
+    let visible_tabs = rows
+        .iter()
+        .filter_map(|row| match row {
+            crate::ui::SidebarRow::Tab { entry, .. }
+            | crate::ui::SidebarRow::Agent { entry, .. } => entry.local_target(),
+            _ => None,
+        })
+        .map(|target| (target.ws_idx, target.tab_idx))
+        .collect::<std::collections::HashSet<_>>();
+    let visible_remote = rows
+        .iter()
+        .filter_map(|row| match row {
+            crate::ui::SidebarRow::RemoteAgent { entry, .. } => Some(entry.agent_ref.clone()),
+            _ => None,
         })
         .collect::<std::collections::HashSet<_>>();
     let mut local = crate::ui::all_agent_panel_entries(state)
         .into_iter()
         .filter_map(|entry| {
             let target = entry.local_target()?;
+            if state
+                .workspaces
+                .get(target.ws_idx)
+                .is_none_or(|workspace| workspace.is_fleet)
+            {
+                return None;
+            }
             let needs_attention = crate::ui::sidebar::entry_needs_human_attention(&entry);
             Some((
                 BlockedPaneTarget::Local {
@@ -2135,27 +2319,38 @@ fn blocked_pane_cycle_in_order(
             ))
         })
         .collect::<Vec<_>>();
-    let mut remote = state
-        .remote_agent_panel_entries
-        .iter()
-        .filter(|entry| entry.snoozed_until.is_none())
-        .map(|entry| {
-            (
-                BlockedPaneTarget::Remote(entry.agent_ref.clone()),
-                crate::ui::sidebar::entry_needs_human_attention(entry),
-            )
-        })
-        .collect::<Vec<_>>();
+    let include_fleet =
+        state.window_cycle_mode == crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+    let mut remote = if include_fleet {
+        state
+            .remote_agent_panel_entries
+            .iter()
+            .filter(|entry| entry.snoozed_until.is_none())
+            .map(|entry| {
+                (
+                    BlockedPaneTarget::Remote(entry.agent_ref.clone()),
+                    crate::ui::sidebar::entry_needs_human_attention(entry),
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut panes = Vec::with_capacity(local.len() + remote.len());
     let rows = if include_needs_you {
         crate::ui::sidebar::sidebar_navigation_rows(state)
     } else {
-        crate::ui::sidebar_rows(state)
+        rows
     };
     for row in rows {
         match row {
             crate::ui::SidebarRow::NeedsYou { target, .. } if include_needs_you => match target {
                 crate::ui::NeedsYouTarget::Local(entry_target) => {
+                    if state.skip_collapsed_cycle
+                        && !visible_tabs.contains(&(entry_target.ws_idx, entry_target.tab_idx))
+                    {
+                        continue;
+                    }
                     if let Some(index) = local.iter().position(|(target, _)| {
                         matches!(
                             target,
@@ -2172,6 +2367,9 @@ fn blocked_pane_cycle_in_order(
                     }
                 }
                 crate::ui::NeedsYouTarget::Remote(entry_target) => {
+                    if state.skip_collapsed_cycle && !visible_remote.contains(&entry_target) {
+                        continue;
+                    }
                     if let Some(index) = remote.iter().position(|(target, _)| {
                         matches!(
                             target,
@@ -2191,10 +2389,9 @@ fn blocked_pane_cycle_in_order(
                 while index < local.len() {
                     let same_tab = matches!(
                         local[index].0,
-                        BlockedPaneTarget::Local { ws_idx, tab_idx, pane_id }
+                        BlockedPaneTarget::Local { ws_idx, tab_idx, .. }
                             if (ws_idx, tab_idx)
                                 == (entry_target.ws_idx, entry_target.tab_idx)
-                                && visible_local.contains(&(ws_idx, pane_id))
                     );
                     if same_tab {
                         panes.push(local.remove(index));
@@ -2218,7 +2415,7 @@ fn blocked_pane_cycle_in_order(
                     panes.push(local.remove(index));
                 }
             }
-            crate::ui::SidebarRow::RemoteAgent { entry, .. } => {
+            crate::ui::SidebarRow::RemoteAgent { entry, .. } if include_fleet => {
                 if let Some(index) = remote.iter().position(|(target, _)| {
                     matches!(
                         target,
@@ -2232,10 +2429,20 @@ fn blocked_pane_cycle_in_order(
             _ => {}
         }
     }
-    // Collapsed or filtered local rows remain keyboard-reachable after the
-    // visible worklist. Remote attention rows enter through the Needs-you
-    // strip even when their Fleet body row is absent.
-    panes.extend(local);
+    // Collapsed or filtered rows remain keyboard-reachable when the operator
+    // has not enabled skip-collapsed cycling. Skip-collapsed still keeps
+    // panes whose tab a shown row stands for.
+    panes.extend(local.into_iter().filter(|(target, _)| {
+        !state.skip_collapsed_cycle
+            || matches!(
+                target,
+                BlockedPaneTarget::Local { ws_idx, tab_idx, .. }
+                    if visible_tabs.contains(&(*ws_idx, *tab_idx))
+            )
+    }));
+    if !state.skip_collapsed_cycle {
+        panes.extend(remote);
+    }
     panes
 }
 
@@ -3002,20 +3209,17 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
         }
         NavigateAction::PreviousWindow | NavigateAction::NextWindow => {
-            let windows = window_cycle_order(state);
-            if let Some(active_ws) = state.active {
-                let active_tab = state.workspaces[active_ws].active_tab_index();
-                if let Some(current) = windows
-                    .iter()
-                    .position(|window| *window == (active_ws, active_tab))
-                {
-                    let forward = matches!(action, NavigateAction::NextWindow);
-                    if let Some(next) =
-                        crate::workspace::relative_window_index(windows.len(), current, forward)
-                    {
-                        let (ws_idx, tab_idx) = windows[next];
+            let windows = window_navigation_order(state);
+            let forward = matches!(action, NavigateAction::NextWindow);
+            if let Some(next) = relative_window_target_index(state, &windows, forward) {
+                match windows[next].clone() {
+                    WindowCycleTarget::Local { ws_idx, tab_idx } => {
+                        state.sidebar_selected_remote_agent = None;
                         state.switch_workspace(ws_idx);
                         state.switch_tab(tab_idx);
+                    }
+                    WindowCycleTarget::Remote(agent_ref) => {
+                        state.select_remote_agent_row(agent_ref);
                     }
                 }
             }
@@ -3631,6 +3835,56 @@ mod tests {
         app
     }
 
+    #[test]
+    fn fleet_workspace_ac6_space_navigation_obeys_fleet_section_collapse() {
+        let mut app = app_with_test_workspaces(&["local-one", "local-two"]);
+        app.state.sidebar_group_mode = crate::app::state::SidebarGroupMode::Spaces;
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_areas.hosts = true;
+        let mut fleet = Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        app.state.workspaces.push(fleet);
+        let fleet_idx = 2;
+        let fleet_collapse_key = if app.state.sidebar_sections_layout {
+            "sections:Fleet"
+        } else {
+            "repo:Fleet"
+        };
+        if app.state.sidebar_sections_layout {
+            app.state
+                .collapsed_sidebar_groups
+                .insert(fleet_collapse_key.into());
+        } else {
+            app.state
+                .collapsed_sidebar_groups
+                .remove(fleet_collapse_key);
+        }
+        assert_eq!(app.state.visible_workspace_order(), vec![0, 1]);
+        assert_eq!(
+            app.state.workspace_navigation_order(),
+            vec![0, 1, fleet_idx]
+        );
+
+        app.state.active = Some(1);
+        assert_eq!(app.relative_visible_workspace(1), Some(fleet_idx));
+        app.state.active = Some(0);
+        assert_eq!(app.relative_visible_workspace(-1), Some(fleet_idx));
+
+        if app.state.sidebar_sections_layout {
+            app.state
+                .collapsed_sidebar_groups
+                .remove(fleet_collapse_key);
+        } else {
+            app.state
+                .collapsed_sidebar_groups
+                .insert(fleet_collapse_key.into());
+        }
+        app.state.active = Some(1);
+        assert_eq!(app.relative_visible_workspace(1), Some(0));
+        app.state.active = Some(0);
+        assert_eq!(app.relative_visible_workspace(-1), Some(1));
+    }
+
     #[cfg(unix)]
     fn assert_scratchpad_opens_as_real_pane(initially_zoomed: bool) {
         let mut env = crate::config::TestConfigEnvGuard::acquire();
@@ -3814,6 +4068,647 @@ mod tests {
     }
 
     #[test]
+    fn fleet_workspace_ac6_window_cycle_scope_adds_fleet_only_when_selected() {
+        let mut state = AppState::test_new();
+        let mut local = Workspace::test_new("local");
+        local.test_add_tab(Some("local-second"));
+        let mut fleet = Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        state.workspaces = vec![local, Workspace::test_new("other-local"), fleet];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.selected = 0;
+        let remote = remote_blocker("ub2", "fleet-agent");
+        let agent_ref = remote.agent_ref.clone();
+        state.remote_agent_panel_entries = vec![remote];
+
+        let local_order = window_navigation_order(&state);
+        assert!(!local_order.contains(&WindowCycleTarget::Remote(agent_ref.clone())));
+        assert!(!local_order
+            .iter()
+            .any(|target| matches!(target, WindowCycleTarget::Local { ws_idx: 2, .. })));
+
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        let fleet_order = window_navigation_order(&state);
+        assert!(fleet_order.contains(&WindowCycleTarget::Remote(agent_ref)));
+        assert!(!fleet_order
+            .iter()
+            .any(|target| matches!(target, WindowCycleTarget::Local { ws_idx: 2, .. })));
+    }
+
+    #[test]
+    fn fleet_workspace_ac6_window_cycle_opens_remote_fleet_tab_in_fleet_mode() {
+        let mut config = Config::default();
+        config.remote.fleet.hosts = vec![crate::config::FleetHostConfig {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            ..Default::default()
+        }];
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        let mut fleet = Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        app.state.workspaces = vec![Workspace::test_new("local"), fleet];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let remote = remote_blocker("ub2", "cycle-agent");
+        let agent_ref = remote.agent_ref.clone();
+        app.state.remote_agent_panel_entries = vec![remote];
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            entries: Vec::new(),
+        }];
+        let argv = crate::fleet::agent_attach_argv_from_config(
+            &config.remote.fleet.hosts[0],
+            "cycle-agent",
+        )
+        .expect("configured remote attach argv");
+        let fleet_tab = &app.state.workspaces[1].tabs[0];
+        let fleet_root_pane = fleet_tab.root_pane;
+        let fleet_terminal_id = fleet_tab
+            .terminal_id(fleet_tab.root_pane)
+            .expect("fleet terminal id")
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&fleet_terminal_id)
+            .expect("fleet terminal")
+            .launch_argv = Some(argv);
+
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        app.focus_relative_window(true);
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(
+            app.state.workspaces[1].focused_pane_id(),
+            Some(fleet_root_pane)
+        );
+        assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_space_excludes_its_cycle_targets() {
+        let mut app = app_with_test_workspaces(&["main", "other", "worktree"]);
+        mark_worktree_space_member(&mut app.state, 0, "repo-key");
+        mark_worktree_space_member(&mut app.state, 2, "repo-key");
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state
+            .set_sidebar_group_mode(crate::app::state::SidebarGroupMode::Repo);
+        app.state.collapsed_space_keys.insert("repo-key".into());
+        let blocked_pane = app.state.workspaces[2].tabs[0].root_pane;
+        set_tab_agent_state(&mut app.state, 2, 0, crate::detect::AgentState::Blocked);
+
+        app.state.skip_collapsed_cycle = false;
+        assert!(window_cycle_order(&app.state).contains(&(2, 0)));
+        assert!(blocked_pane_cycle(&app.state)
+            .iter()
+            .any(|(target, _)| matches!(
+                target,
+                BlockedPaneTarget::Local { ws_idx: 2, pane_id, .. } if *pane_id == blocked_pane
+            )));
+        app.state.skip_collapsed_cycle = true;
+        // The group fold hides members from the space list; the sidebar may
+        // still list their agents, and the cycles follow the sidebar.
+        let shown = crate::ui::sidebar_rows(&app.state).into_iter().any(|row| {
+            matches!(
+                row,
+                crate::ui::SidebarRow::Tab { entry, .. } | crate::ui::SidebarRow::Agent { entry, .. }
+                    if entry.local_target().is_some_and(|t| (t.ws_idx, t.tab_idx) == (2, 0))
+            )
+        });
+        let order = window_cycle_order(&app.state);
+        assert_eq!(order.contains(&(2, 0)), shown, "{order:?}");
+        assert!(order.contains(&(0, 0)));
+        assert!(order.contains(&(1, 0)), "visible window targets: {order:?}");
+        assert_eq!(
+            blocked_pane_cycle(&app.state)
+                .iter()
+                .any(|(target, _)| matches!(
+                    target,
+                    BlockedPaneTarget::Local { ws_idx: 2, pane_id, .. } if *pane_id == blocked_pane
+                )),
+            shown
+        );
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_section_excludes_fleet_from_both_cycles() {
+        let mut state = AppState::test_new();
+        state.workspaces = vec![Workspace::test_new("local")];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        state.skip_collapsed_cycle = true;
+        let remote = remote_blocker("ub2", "collapsed-agent");
+        let agent_ref = remote.agent_ref.clone();
+        state.remote_agent_panel_entries = vec![remote];
+        state.collapsed_sidebar_groups.insert("repo:Fleet".into());
+
+        let window_targets = window_navigation_order(&state);
+        assert!(!window_targets.contains(&WindowCycleTarget::Remote(agent_ref.clone())));
+        let blocked_targets = blocked_pane_cycle(&state)
+            .into_iter()
+            .map(|(target, _)| target)
+            .collect::<Vec<_>>();
+        assert!(!blocked_targets.contains(&BlockedPaneTarget::Remote(agent_ref)));
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_spaces_section_excludes_local_windows() {
+        let mut app = app_with_global_window_fixture();
+        for terminal in app.state.terminals.values_mut() {
+            terminal.set_detected_state(
+                Some(crate::detect::Agent::Claude),
+                crate::detect::AgentState::Blocked,
+            );
+        }
+        app.state.skip_collapsed_cycle = true;
+        assert!(!window_navigation_order(&app.state).is_empty());
+        assert!(!blocked_pane_cycle(&app.state).is_empty());
+
+        let key = format!(
+            "{}:{}",
+            app.state.sidebar_group_mode.collapse_namespace(),
+            crate::ui::sidebar::SPACES_SECTION_TITLE
+        );
+        app.state.collapsed_sidebar_groups.insert(key);
+        assert!(crate::ui::sidebar::section_is_collapsed(
+            &app.state,
+            crate::ui::sidebar::SPACES_SECTION_TITLE
+        ));
+        assert!(window_navigation_order(&app.state).is_empty());
+        assert!(blocked_pane_cycle(&app.state).is_empty());
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_sections_exclude_their_tabs() {
+        let mut app = app_with_global_window_fixture();
+        app.state.sidebar_sections_layout = true;
+        app.state.skip_collapsed_cycle = true;
+        assert!(!window_navigation_order(&app.state).is_empty());
+
+        // Collapse every section header the sidebar shows.
+        for _ in 0..3 {
+            let titles = crate::ui::sidebar_rows(&app.state)
+                .into_iter()
+                .filter_map(|row| match row {
+                    crate::ui::SidebarRow::SectionHeader {
+                        title,
+                        collapsed: false,
+                        ..
+                    } => Some(title.to_string()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            for title in titles {
+                let key = format!("sections:{title}");
+                if !app.state.collapsed_sidebar_groups.remove(&key) {
+                    app.state.collapsed_sidebar_groups.insert(key);
+                }
+            }
+        }
+        // The sections layout shows tabs only through their own rows.
+        let shown = crate::ui::sidebar_rows(&app.state)
+            .into_iter()
+            .filter_map(|row| match row {
+                crate::ui::SidebarRow::Tab { entry, .. } => entry.local_target(),
+                _ => None,
+            })
+            .map(|target| (target.ws_idx, target.tab_idx))
+            .collect::<std::collections::HashSet<_>>();
+        let cycled = window_cycle_order(&app.state)
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(cycled, shown);
+
+        app.state.skip_collapsed_cycle = false;
+        assert!(!window_navigation_order(&app.state).is_empty());
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_plain_layout_skips_hidden_agent_tabs() {
+        let mut app = app_with_global_window_fixture();
+        for terminal in app.state.terminals.values_mut() {
+            terminal.set_detected_state(
+                Some(crate::detect::Agent::Claude),
+                crate::detect::AgentState::Idle,
+            );
+        }
+        app.state.skip_collapsed_cycle = true;
+        let expanded = window_navigation_order(&app.state);
+        assert!(!expanded.is_empty());
+
+        let namespace = app.state.sidebar_group_mode.collapse_namespace();
+        for title in [
+            crate::ui::sidebar::SNOOZED_SECTION_TITLE,
+            crate::ui::sidebar::SETTLED_SECTION_TITLE,
+            "Active",
+            "Pinned",
+        ] {
+            app.state
+                .collapsed_sidebar_groups
+                .insert(format!("{namespace}:{title}"));
+        }
+        let rows = crate::ui::sidebar_rows(&app.state);
+        let order = window_navigation_order(&app.state);
+        for target in &order {
+            let WindowCycleTarget::Local { ws_idx, tab_idx } = target else {
+                continue;
+            };
+            assert!(
+                rows.iter().any(|row| matches!(
+                    row,
+                    crate::ui::SidebarRow::Tab { entry, .. }
+                        if entry.local_target().is_some_and(|t| (t.ws_idx, t.tab_idx) == (*ws_idx, *tab_idx))
+                )),
+                "agent tab {ws_idx}:{tab_idx} is cycled without a visible row"
+            );
+        }
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_keeps_tabs_in_work_item_modes() {
+        for mode in [
+            crate::app::state::SidebarGroupMode::LinearTeam,
+            crate::app::state::SidebarGroupMode::Missive,
+        ] {
+            let mut app = app_with_global_window_fixture();
+            for terminal in app.state.terminals.values_mut() {
+                terminal.set_detected_state(
+                    Some(crate::detect::Agent::Claude),
+                    crate::detect::AgentState::Blocked,
+                );
+            }
+            app.state.set_sidebar_group_mode(mode);
+            app.state.skip_collapsed_cycle = true;
+            assert!(!window_navigation_order(&app.state).is_empty(), "{mode:?}");
+            assert!(!blocked_pane_cycle(&app.state).is_empty(), "{mode:?}");
+
+            // One agentless tab, then collapse every work-item group.
+            if let Some(terminal) = app.state.terminals.values_mut().next() {
+                terminal.set_detected_state(None, crate::detect::AgentState::Idle);
+            }
+            let namespace = app.state.sidebar_group_mode.collapse_namespace();
+            let keys = crate::ui::sidebar::workspace_list_entries_for_mode(&app.state, false, mode)
+                .into_iter()
+                .filter_map(|entry| match entry {
+                    crate::ui::sidebar::WorkspaceListEntry::NestedHeader { key, .. } => Some(key),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!keys.is_empty(), "{mode:?}");
+            for key in keys {
+                app.state
+                    .collapsed_sidebar_groups
+                    .insert(format!("{namespace}:{key}"));
+            }
+            let rows = crate::ui::sidebar_rows(&app.state);
+            let order = window_navigation_order(&app.state);
+            for target in &order {
+                let WindowCycleTarget::Local { ws_idx, tab_idx } = target else {
+                    continue;
+                };
+                assert!(
+                    rows.iter().any(|row| matches!(
+                        row,
+                        crate::ui::SidebarRow::Tab { entry, .. }
+                            if entry.local_target().is_some_and(|t| (t.ws_idx, t.tab_idx) == (*ws_idx, *tab_idx))
+                    )),
+                    "{mode:?}: tab {ws_idx}:{tab_idx} is cycled without a visible row"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_cycles_only_shown_tabs_in_every_mode() {
+        use crate::app::state::SidebarGroupMode;
+        for sections in [false, true] {
+            for mode in [
+                SidebarGroupMode::Repo,
+                SidebarGroupMode::RepoWorktree,
+                SidebarGroupMode::Spaces,
+                SidebarGroupMode::RepoPr,
+                SidebarGroupMode::LinearTeam,
+                SidebarGroupMode::Missive,
+            ] {
+                let mut app = app_with_global_window_fixture();
+                mark_worktree_space_member(&mut app.state, 0, "repo-key");
+                mark_worktree_space_member(&mut app.state, 1, "repo-key");
+                for terminal in app.state.terminals.values_mut() {
+                    terminal.set_detected_state(
+                        Some(crate::detect::Agent::Claude),
+                        crate::detect::AgentState::Blocked,
+                    );
+                }
+                // One agentless tab: it has no row of its own.
+                if let Some(terminal) = app.state.terminals.values_mut().next() {
+                    terminal.set_detected_state(None, crate::detect::AgentState::Idle);
+                }
+                app.state.sidebar_sections_layout = sections;
+                app.state.set_sidebar_group_mode(mode);
+                app.state.skip_collapsed_cycle = true;
+                let expanded = window_navigation_order(&app.state);
+
+                // Collapse every group header except the Spaces section.
+                let namespace = mode.collapse_namespace();
+                app.state.collapsed_space_keys.insert("repo-key".into());
+                for _ in 0..3 {
+                    let mut keys = crate::ui::sidebar_rows(&app.state)
+                        .into_iter()
+                        .filter_map(|row| match row {
+                            crate::ui::SidebarRow::Workspace {
+                                count: Some(_),
+                                sort_key: Some(key),
+                                ..
+                            } => Some(key),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    keys.extend(
+                        crate::ui::sidebar::workspace_list_entries_for_mode(
+                            &app.state, false, mode,
+                        )
+                        .into_iter()
+                        .filter_map(|entry| match entry {
+                            crate::ui::sidebar::WorkspaceListEntry::NestedHeader {
+                                key, ..
+                            } => Some(key),
+                            _ => None,
+                        }),
+                    );
+                    for key in keys {
+                        app.state
+                            .collapsed_sidebar_groups
+                            .insert(format!("{namespace}:{key}"));
+                    }
+                }
+                let rows = crate::ui::sidebar_rows(&app.state);
+                let order = window_navigation_order(&app.state);
+                // Every tab the sidebar still shows keeps its place.
+                for row in &rows {
+                    let (crate::ui::SidebarRow::Tab { entry, .. }
+                    | crate::ui::SidebarRow::Agent { entry, .. }) = row
+                    else {
+                        continue;
+                    };
+                    let Some(t) = entry.local_target() else {
+                        continue;
+                    };
+                    assert!(
+                        order.contains(&WindowCycleTarget::Local {
+                            ws_idx: t.ws_idx,
+                            tab_idx: t.tab_idx
+                        }),
+                        "{mode:?} sections={sections}: shown tab {t:?} skipped"
+                    );
+                }
+                for target in &order {
+                    assert!(expanded.contains(target), "{mode:?} sections={sections}");
+                    let WindowCycleTarget::Local { ws_idx, tab_idx } = *target else {
+                        continue;
+                    };
+                    let shown = rows.iter().any(|row| match row {
+                        crate::ui::SidebarRow::Tab { entry, .. } => entry
+                            .local_target()
+                            .is_some_and(|t| (t.ws_idx, t.tab_idx) == (ws_idx, tab_idx)),
+                        crate::ui::SidebarRow::Workspace {
+                            ws_idx: row_ws,
+                            count: None,
+                            ..
+                        } => {
+                            !sections
+                                && (*row_ws == ws_idx
+                                    || (mode != SidebarGroupMode::Spaces
+                                        && crate::ui::sidebar::sidebar_space_member_indices(
+                                            &app.state, *row_ws,
+                                        )
+                                        .contains(&ws_idx)))
+                        }
+                        _ => false,
+                    });
+                    assert!(
+                        shown,
+                        "{mode:?} sections={sections}: tab {ws_idx}:{tab_idx} is cycled without a shown row"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn next_window_finishes_each_space_before_the_next() {
+        use crate::app::state::SidebarGroupMode;
+        for mode in [
+            SidebarGroupMode::Repo,
+            SidebarGroupMode::RepoWorktree,
+            SidebarGroupMode::Spaces,
+            SidebarGroupMode::RepoPr,
+        ] {
+            let mut app = app_with_global_window_fixture();
+            // Agents in some tabs only: agent rows must not jump the queue.
+            for terminal in app.state.terminals.values_mut() {
+                terminal.set_detected_state(
+                    Some(crate::detect::Agent::Claude),
+                    crate::detect::AgentState::Blocked,
+                );
+            }
+            if let Some(terminal) = app.state.terminals.values_mut().next() {
+                terminal.set_detected_state(None, crate::detect::AgentState::Idle);
+            }
+            app.state.set_sidebar_group_mode(mode);
+            let order = window_cycle_order(&app.state);
+            let spaces = order.iter().map(|(ws_idx, _)| *ws_idx).collect::<Vec<_>>();
+            assert_eq!(spaces.len(), 4, "{mode:?}");
+            let mut sorted = spaces.clone();
+            sorted.dedup();
+            assert_eq!(sorted.len(), 2, "{mode:?}: spaces interleave in {order:?}");
+            for (ws_idx, tabs) in [(sorted[0], &order[..2]), (sorted[1], &order[2..])] {
+                assert_eq!(
+                    tabs,
+                    &[(ws_idx, 0), (ws_idx, 1)],
+                    "{mode:?}: tabs out of order in {order:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn next_window_keeps_worktree_groups_together_and_visible() {
+        use crate::app::state::SidebarGroupMode;
+        for sections in [false, true] {
+            for mode in [
+                SidebarGroupMode::Repo,
+                SidebarGroupMode::RepoWorktree,
+                SidebarGroupMode::RepoPr,
+            ] {
+                // Root `a`, unrelated `b`, then `a`'s worktree.
+                let mut app = app_with_test_workspaces(&["a", "b", "a-wt"]);
+                mark_worktree_space_member(&mut app.state, 0, "repo-a");
+                mark_worktree_space_member(&mut app.state, 2, "repo-a");
+                for terminal in app.state.terminals.values_mut() {
+                    terminal.set_detected_state(
+                        Some(crate::detect::Agent::Claude),
+                        crate::detect::AgentState::Blocked,
+                    );
+                }
+                app.state.sidebar_sections_layout = sections;
+                app.state.set_sidebar_group_mode(mode);
+
+                let spaces = window_cycle_order(&app.state)
+                    .into_iter()
+                    .map(|(ws_idx, _)| ws_idx)
+                    .collect::<Vec<_>>();
+                let root = spaces.iter().position(|ws_idx| *ws_idx == 0);
+                let member = spaces.iter().position(|ws_idx| *ws_idx == 2);
+                assert_eq!(
+                    member.zip(root).map(|(member, root)| member.abs_diff(root)),
+                    Some(1),
+                    "{mode:?} sections={sections}: worktree split from its root in {spaces:?}"
+                );
+
+                // Nothing is collapsed, so skip-collapsed keeps every shown tab.
+                app.state.skip_collapsed_cycle = true;
+                let cycled = window_cycle_order(&app.state);
+                let shown_rows = crate::ui::sidebar_rows(&app.state)
+                    .into_iter()
+                    .filter_map(|row| match row {
+                        crate::ui::SidebarRow::Tab { entry, .. } => entry.local_target(),
+                        _ => None,
+                    })
+                    .map(|target| (target.ws_idx, target.tab_idx))
+                    .collect::<Vec<_>>();
+                for tab in shown_rows {
+                    assert!(
+                        cycled.contains(&tab),
+                        "{mode:?} sections={sections}: shown tab {tab:?} left out of {cycled:?}"
+                    );
+                }
+                let blocked = blocked_pane_cycle(&app.state);
+                for row in crate::ui::sidebar_rows(&app.state) {
+                    let (crate::ui::SidebarRow::Tab { entry, .. }
+                    | crate::ui::SidebarRow::Agent { entry, .. }) = row
+                    else {
+                        continue;
+                    };
+                    let Some(target) = entry.local_target() else {
+                        continue;
+                    };
+                    assert!(
+                        blocked.iter().any(|(pane, _)| matches!(
+                            pane,
+                            BlockedPaneTarget::Local { ws_idx, pane_id, .. }
+                                if (*ws_idx, *pane_id) == (target.ws_idx, target.pane_id)
+                        )),
+                        "{mode:?} sections={sections}: shown blocked pane {target:?} skipped"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_keeps_snoozed_tabs_shown_elsewhere() {
+        let spaces = crate::ui::sidebar::SPACES_SECTION_TITLE;
+        let snoozed = crate::ui::sidebar::SNOOZED_SECTION_TITLE;
+        for sections in [false, true] {
+            let mut app = app_with_global_window_fixture();
+            for terminal in app.state.terminals.values_mut() {
+                terminal.set_detected_state(
+                    Some(crate::detect::Agent::Claude),
+                    crate::detect::AgentState::Idle,
+                );
+            }
+            app.state.sidebar_sections_layout = sections;
+            let pane_id = crate::ui::sidebar_thread_entries(&app.state)
+                .into_iter()
+                .filter_map(|entry| entry.local_target())
+                .find(|target| (target.ws_idx, target.tab_idx) == (0, 0))
+                .expect("agent row for tab 0:0")
+                .pane_id;
+            assert!(app.state.snooze_pane_at(0, pane_id, u64::MAX / 2));
+            let namespace = if sections {
+                "sections".to_string()
+            } else {
+                app.state
+                    .sidebar_group_mode
+                    .collapse_namespace()
+                    .to_string()
+            };
+            for (title, collapsed) in [(spaces, true), (snoozed, false)] {
+                let key = format!("{namespace}:{title}");
+                if crate::ui::sidebar::section_is_collapsed(&app.state, title) != collapsed
+                    && !app.state.collapsed_sidebar_groups.remove(&key)
+                {
+                    app.state.collapsed_sidebar_groups.insert(key);
+                }
+            }
+            app.state.skip_collapsed_cycle = true;
+            let shown = crate::ui::sidebar_rows(&app.state).into_iter().any(|row| {
+                matches!(
+                    row,
+                    crate::ui::SidebarRow::Tab { entry, .. } | crate::ui::SidebarRow::Agent { entry, .. }
+                        if entry.local_target().is_some_and(|t| (t.ws_idx, t.tab_idx) == (0, 0))
+                )
+            });
+            assert_eq!(
+                window_cycle_order(&app.state).contains(&(0, 0)),
+                shown,
+                "sections={sections}: snoozed tab cycle membership must follow its row"
+            );
+            assert!(
+                shown,
+                "sections={sections}: fixture should show the snoozed tab"
+            );
+        }
+    }
+
+    #[test]
+    fn fleet_workspace_ac9_skip_collapsed_keeps_both_blockers_in_a_split_tab() {
+        for sections in [false, true] {
+            let mut app = app_with_test_workspaces(&["split"]);
+            app.state.active = Some(0);
+            let first = app.state.workspaces[0].tabs[0].root_pane;
+            let second = app.state.workspaces[0].test_split(Direction::Horizontal);
+            app.state.ensure_test_terminals();
+            for pane in [first, second] {
+                set_pane_agent_state(
+                    &mut app.state,
+                    0,
+                    0,
+                    pane,
+                    crate::detect::AgentState::Blocked,
+                );
+            }
+            app.state.sidebar_sections_layout = sections;
+            app.state.skip_collapsed_cycle = true;
+            let blocked = blocked_pane_cycle(&app.state)
+                .into_iter()
+                .filter_map(|(target, _)| match target {
+                    BlockedPaneTarget::Local { pane_id, .. } => Some(pane_id),
+                    BlockedPaneTarget::Remote(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                blocked.contains(&first) && blocked.contains(&second),
+                "sections={sections}: {blocked:?}"
+            );
+        }
+    }
+
+    #[test]
     fn global_window_cycle_ignores_presentation_state() {
         let mut app = app_with_global_window_fixture();
         mark_worktree_space_member(&mut app.state, 0, "repo-key");
@@ -3928,11 +4823,19 @@ mod tests {
         host: &str,
         pane_id: &str,
     ) -> std::sync::Arc<crate::ui::RemoteAgentPanelEntry> {
+        remote_agent_with_status(host, pane_id, "blocked")
+    }
+
+    fn remote_agent_with_status(
+        host: &str,
+        pane_id: &str,
+        agent_status: &str,
+    ) -> std::sync::Arc<crate::ui::RemoteAgentPanelEntry> {
         let info = serde_json::from_value(serde_json::json!({
             "terminal_id": format!("terminal-{pane_id}"),
             "name": pane_id,
             "agent": "codex",
-            "agent_status": "blocked",
+            "agent_status": agent_status,
             "workspace_id": "workspace",
             "tab_id": "tab",
             "pane_id": pane_id,
@@ -4374,6 +5277,7 @@ mod tests {
             ..crate::fleet::Snapshot::default()
         };
         let mut state = AppState::test_new();
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         state.remote_agent_panel_entries =
             crate::ui::remote_agent_panel_entries_at(&snapshot, 100, false);
         state.view_observed_unix_s = 100;
@@ -4395,6 +5299,7 @@ mod tests {
     #[test]
     fn next_blocked_window_reaches_remote_needs_you_row_when_fleet_is_collapsed() {
         let mut state = AppState::test_new();
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         let remote = remote_blocker("ub2", "blocked-pane");
         let agent_ref = remote.agent_ref.clone();
         state.remote_agent_panel_entries = vec![remote];
@@ -4419,8 +5324,203 @@ mod tests {
     }
 
     #[test]
+    fn fleet_workspace_ac7_next_blocked_window_focuses_remote_agent_tab() {
+        let mut config = Config::default();
+        config.remote.fleet.hosts = vec![crate::config::FleetHostConfig {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            ..Default::default()
+        }];
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.workspaces = vec![Workspace::test_new("local"), Workspace::test_new("fleet")];
+        app.state.workspaces[1].is_fleet = true;
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        let remote = remote_blocker("ub2", "blocked-agent");
+        app.state.remote_agent_panel_entries = vec![remote];
+        assert_eq!(next_blocked_window_target(&app.state), None);
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            entries: Vec::new(),
+        }];
+        let argv = crate::fleet::agent_attach_argv_from_config(
+            &config.remote.fleet.hosts[0],
+            "blocked-agent",
+        )
+        .expect("configured remote attach argv");
+        let fleet_tab = &app.state.workspaces[1].tabs[0];
+        let fleet_root_pane = fleet_tab.root_pane;
+        let fleet_terminal_id = fleet_tab
+            .terminal_id(fleet_tab.root_pane)
+            .expect("fleet terminal id")
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&fleet_terminal_id)
+            .expect("fleet terminal")
+            .launch_argv = Some(argv);
+        let local_tab_count = app.state.workspaces[0].tabs.len();
+        let terminal_count = app.state.terminals.len();
+
+        app.focus_next_blocked_window();
+
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.workspaces[1].active_tab_index(), 0);
+        assert_eq!(
+            app.state.workspaces[1].focused_pane_id(),
+            Some(fleet_root_pane)
+        );
+        assert_eq!(app.state.workspaces[0].tabs.len(), local_tab_count);
+        assert_eq!(app.state.terminals.len(), terminal_count);
+        assert_eq!(
+            app.state.sidebar_selected_remote_agent,
+            Some(
+                crate::api::schema::AgentRef::new("ub2", "blocked-agent")
+                    .expect("valid remote reference")
+            )
+        );
+    }
+
+    #[test]
+    fn fleet_workspace_ac8_blocked_filter_lists_and_cycles_only_blocked_fleet_agents() {
+        let mut config = Config::default();
+        config.remote.fleet.hosts = vec![crate::config::FleetHostConfig {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            ..Default::default()
+        }];
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        let mut fleet = Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        fleet.test_add_tab(Some("blocked-two"));
+        app.state.workspaces = vec![Workspace::test_new("local"), fleet];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.remote_agent_panel_entries = vec![
+            remote_blocker("ub2", "blocked-one"),
+            remote_agent_with_status("ub2", "working", "working"),
+            remote_blocker("ub2", "blocked-two"),
+        ];
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            entries: Vec::new(),
+        }];
+        let fleet_terminal_ids = app.state.workspaces[1]
+            .tabs
+            .iter()
+            .map(|tab| {
+                tab.terminal_id(tab.root_pane)
+                    .expect("fleet tab terminal")
+                    .clone()
+            })
+            .collect::<Vec<_>>();
+        for (tab_idx, agent) in [(0, "blocked-one"), (1, "blocked-two")] {
+            let argv =
+                crate::fleet::agent_attach_argv_from_config(&config.remote.fleet.hosts[0], agent)
+                    .expect("configured remote attach argv");
+            app.state
+                .terminals
+                .get_mut(&fleet_terminal_ids[tab_idx])
+                .expect("fleet terminal")
+                .launch_argv = Some(argv);
+        }
+        let fleet_key = if app.state.sidebar_sections_layout {
+            "sections:Fleet"
+        } else {
+            "repo:Fleet"
+        };
+        app.state.collapsed_sidebar_groups.remove(fleet_key);
+        execute_navigate_action_in_context(
+            &mut app.state,
+            &mut app.terminal_runtimes,
+            NavigateAction::ToggleBlockedFilter,
+            ActionContext::Prefix,
+        );
+        assert!(app.state.blocked_filter);
+
+        let visible_agents = crate::ui::sidebar_rows(&app.state)
+            .into_iter()
+            .filter_map(|row| match row {
+                crate::ui::SidebarRow::RemoteAgent { entry, .. } => {
+                    Some(entry.agent_ref.agent.clone())
+                }
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            visible_agents,
+            ["blocked-one".to_string(), "blocked-two".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let blocked_targets = blocked_pane_cycle(&app.state)
+            .into_iter()
+            .filter_map(|(target, blocked)| blocked.then_some(target))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            blocked_targets,
+            vec![
+                BlockedPaneTarget::Remote(
+                    crate::api::schema::AgentRef::new("ub2", "blocked-one")
+                        .expect("valid remote reference")
+                ),
+                BlockedPaneTarget::Remote(
+                    crate::api::schema::AgentRef::new("ub2", "blocked-two")
+                        .expect("valid remote reference")
+                ),
+            ]
+        );
+
+        app.focus_next_blocked_window();
+        assert_eq!(
+            app.state
+                .sidebar_selected_remote_agent
+                .as_ref()
+                .unwrap()
+                .agent,
+            "blocked-one"
+        );
+        assert_eq!(app.state.workspaces[1].active_tab_index(), 0);
+        app.focus_next_blocked_window();
+        assert_eq!(
+            app.state
+                .sidebar_selected_remote_agent
+                .as_ref()
+                .unwrap()
+                .agent,
+            "blocked-two"
+        );
+        assert_eq!(app.state.workspaces[1].active_tab_index(), 1);
+    }
+
+    #[test]
     fn next_blocked_window_visits_each_strip_target_once_per_lap() {
         let mut state = AppState::test_new();
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         state.workspaces = vec![Workspace::test_new("local")];
         state.ensure_test_terminals();
         state.active = Some(0);
@@ -4487,6 +5587,7 @@ mod tests {
     #[test]
     fn next_blocked_window_selects_remote_row_without_focusing_a_local_pane() {
         let mut app = app_with_global_window_fixture();
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         let original_window = active_window(&app.state);
         let original_pane = app.state.workspaces[original_window.0]
             .focused_pane_id()
@@ -4529,6 +5630,40 @@ mod tests {
             .state
             .focus_pane_in_workspace(original_window.0, original_pane));
         assert!(app.state.sidebar_selected_remote_agent.is_none());
+    }
+
+    #[test]
+    fn next_blocked_window_reaches_fleet_blockers_hidden_by_the_machine_filter() {
+        for sections in [false, true] {
+            let mut app = app_with_global_window_fixture();
+            app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+            app.state.sidebar_sections_layout = sections;
+            let mut remote = crate::ui::all_agent_panel_entries(&app.state)
+                .into_iter()
+                .next()
+                .expect("agent panel fixture");
+            remote.state = crate::detect::AgentState::Idle;
+            remote.open_blockers = true;
+            remote.attention_tier = Some(crate::terminal::state::AttentionTier::Blocked);
+            let agent_ref = crate::api::schema::AgentRef::new("ub1", "blocked")
+                .expect("valid remote agent reference");
+            app.state.remote_agent_panel_entries = vec![std::sync::Arc::new(
+                crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), remote),
+            )];
+            app.state.sidebar_work_filter.machine_scope =
+                crate::app::state::SidebarMachineScope::ThisMachine;
+            let reaches_fleet = |state: &AppState| {
+                blocked_pane_cycle(state).iter().any(|(target, _)| {
+                    matches!(target, BlockedPaneTarget::Remote(found) if *found == agent_ref)
+                })
+            };
+
+            app.state.skip_collapsed_cycle = false;
+            assert!(reaches_fleet(&app.state), "sections={sections}");
+            // Skip-collapsed follows the sidebar, which hides the fleet row.
+            app.state.skip_collapsed_cycle = true;
+            assert!(!reaches_fleet(&app.state), "sections={sections}");
+        }
     }
 
     #[test]

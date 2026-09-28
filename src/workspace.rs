@@ -201,6 +201,8 @@ pub(crate) fn reserve_workspace_ids(workspaces: &[Workspace]) {
 pub struct Workspace {
     /// Stable public workspace identity, independent of display order.
     pub id: String,
+    /// This workspace contains tabs opened from the cross-host Fleet view.
+    pub is_fleet: bool,
     /// User-provided override. If set, auto-derived identity stops updating.
     pub custom_name: Option<String>,
     /// Fallback workspace identity source for tests, old snapshots, or missing runtimes.
@@ -289,6 +291,7 @@ impl Workspace {
             discover_workspace_git_identity(&identity_cwd);
         Self {
             id,
+            is_fleet: false,
             custom_name: label,
             identity_cwd: identity_cwd.clone(),
             cached_identity_cwd: identity_cwd.clone(),
@@ -373,8 +376,7 @@ impl Workspace {
         )
     }
 
-    // Kept for tests that do not need launch-env customization.
-    #[allow(dead_code)]
+    // Use this when a new workspace command needs no extra launch environment.
     pub fn new_argv_command(
         initial_cwd: PathBuf,
         rows: u16,
@@ -491,6 +493,7 @@ impl Workspace {
         Ok((
             Self {
                 id,
+                is_fleet: false,
                 custom_name: None,
                 identity_cwd: initial_cwd.clone(),
                 cached_identity_cwd: initial_cwd.clone(),
@@ -1569,6 +1572,7 @@ impl Workspace {
         public_pane_numbers.insert(tab.root_pane, 1);
         Self {
             id: generate_workspace_id(),
+            is_fleet: false,
             custom_name: Some(name.to_string()),
             identity_cwd: identity_cwd.clone(),
             cached_identity_cwd: identity_cwd.clone(),

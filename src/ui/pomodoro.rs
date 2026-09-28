@@ -26,6 +26,7 @@ const INDICATOR_WIDTH: u16 = 9;
 /// Columns the footer icon strip already owns.
 const FOOTER_ICON_COLUMNS: u16 = 13;
 const NOTIFICATION_WIDTH: u16 = 2;
+const CYCLE_MODE_WIDTH: u16 = 1;
 const SIDEBAR_AREAS_WIDTH: u16 = 1;
 const PROMPT_WIDTH: u16 = 62;
 const PROMPT_HEIGHT: u16 = 12;
@@ -370,7 +371,9 @@ pub(crate) fn pomodoro_hit_area(app: &AppState, sidebar: Rect) -> Rect {
     } else {
         0
     };
-    if content_width < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH + area_width + INDICATOR_WIDTH {
+    if content_width
+        < FOOTER_ICON_COLUMNS + CYCLE_MODE_WIDTH + NOTIFICATION_WIDTH + area_width + INDICATOR_WIDTH
+    {
         return Rect::default();
     }
     Rect::new(
@@ -389,7 +392,7 @@ pub(crate) fn notification_hit_area(app: &AppState, sidebar: Rect) -> Rect {
         return Rect::default();
     }
     let content_width = sidebar.width.saturating_sub(1);
-    if content_width < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH {
+    if content_width < FOOTER_ICON_COLUMNS + CYCLE_MODE_WIDTH + NOTIFICATION_WIDTH {
         return Rect::default();
     }
     let timer = pomodoro_hit_area(app, sidebar);
@@ -401,6 +404,20 @@ pub(crate) fn notification_hit_area(app: &AppState, sidebar: Rect) -> Rect {
     Rect::new(x, sidebar.bottom().saturating_sub(1), NOTIFICATION_WIDTH, 1)
 }
 
+pub(crate) fn window_cycle_mode_hit_area(app: &AppState, sidebar: Rect) -> Rect {
+    let notification = notification_hit_area(app, sidebar);
+    if notification.width == 0 {
+        return Rect::default();
+    }
+    // The cycle icon trails the left footer icons, after refresh.
+    Rect::new(
+        sidebar.x + FOOTER_ICON_COLUMNS,
+        notification.y,
+        CYCLE_MODE_WIDTH,
+        notification.height,
+    )
+}
+
 pub(crate) fn sidebar_areas_hit_area(app: &AppState, sidebar: Rect) -> Rect {
     if !app.sidebar_sections_layout || app.sidebar_collapsed || sidebar.height == 0 {
         return Rect::default();
@@ -409,21 +426,51 @@ pub(crate) fn sidebar_areas_hit_area(app: &AppState, sidebar: Rect) -> Rect {
     let timer = pomodoro_hit_area(app, sidebar);
     let reserved_timer = timer.width;
     if content_width
-        < FOOTER_ICON_COLUMNS + NOTIFICATION_WIDTH + SIDEBAR_AREAS_WIDTH + reserved_timer
+        < FOOTER_ICON_COLUMNS
+            + CYCLE_MODE_WIDTH
+            + NOTIFICATION_WIDTH
+            + SIDEBAR_AREAS_WIDTH
+            + reserved_timer
     {
         return Rect::default();
     }
-    let bell = if timer.width > 0 {
+    let notification = if timer.width > 0 {
         timer.x.saturating_sub(NOTIFICATION_WIDTH)
     } else {
         sidebar.x + content_width - NOTIFICATION_WIDTH
     };
     Rect::new(
-        bell.saturating_sub(SIDEBAR_AREAS_WIDTH),
+        notification.saturating_sub(SIDEBAR_AREAS_WIDTH),
         sidebar.bottom().saturating_sub(1),
         SIDEBAR_AREAS_WIDTH,
         1,
     )
+}
+
+pub(crate) fn render_window_cycle_mode_toggle(app: &AppState, frame: &mut Frame, area: Rect) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let selected = app.window_cycle_menu_open
+        || app.window_cycle_mode != crate::config::WindowCycleModeConfig::ThisMachine
+        || app.skip_collapsed_cycle;
+    let hovered = app.hovered_control
+        == Some(crate::app::state::ControlId::SidebarFooter(
+            crate::app::state::SidebarFooterItem::WindowCycleMode,
+        ));
+    let style = if selected {
+        Style::default()
+            .fg(app.palette.accent)
+            .bg(app.palette.surface0)
+    } else if hovered {
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.surface0)
+    } else {
+        Style::default().fg(app.palette.overlay0)
+    };
+    let glyph = crate::ui::icons::cycle_label(app.nerd_font);
+    frame.render_widget(Paragraph::new(Span::styled(glyph, style)), area);
 }
 
 fn phase_color(app: &AppState, phase: PomodoroPhase) -> ratatui::style::Color {
@@ -1081,11 +1128,15 @@ mod tests {
     }
 
     #[test]
-    fn notification_bell_stays_visible_and_never_overlaps_the_timer() {
+    fn fleet_workspace_ac6_cycle_icon_trails_left_footer_icons() {
         let app = state();
         let narrow = Rect::new(0, 0, 18, 20);
         assert_eq!(pomodoro_hit_area(&app, narrow), Rect::default());
         assert_eq!(notification_hit_area(&app, narrow), Rect::new(15, 19, 2, 1));
+        assert_eq!(
+            window_cycle_mode_hit_area(&app, narrow),
+            Rect::new(13, 19, 1, 1)
+        );
 
         let almost_wide = Rect::new(0, 0, 24, 20);
         assert_eq!(pomodoro_hit_area(&app, almost_wide), Rect::default());
@@ -1093,12 +1144,27 @@ mod tests {
             notification_hit_area(&app, almost_wide),
             Rect::new(21, 19, 2, 1)
         );
+        assert_eq!(
+            window_cycle_mode_hit_area(&app, almost_wide),
+            Rect::new(13, 19, 1, 1)
+        );
 
-        let wide = Rect::new(0, 0, 25, 20);
+        // The one-column cycle icon leaves the countdown room at 26 columns.
+        let default_width = Rect::new(0, 0, 26, 20);
+        assert_eq!(
+            pomodoro_hit_area(&app, default_width),
+            Rect::new(16, 19, 9, 1)
+        );
+
+        let wide = Rect::new(0, 0, 27, 20);
         let bell = notification_hit_area(&app, wide);
         let timer = pomodoro_hit_area(&app, wide);
-        assert_eq!(bell, Rect::new(13, 19, 2, 1));
-        assert_eq!(timer, Rect::new(15, 19, 9, 1));
+        assert_eq!(bell, Rect::new(15, 19, 2, 1));
+        assert_eq!(
+            window_cycle_mode_hit_area(&app, wide),
+            Rect::new(13, 19, 1, 1)
+        );
+        assert_eq!(timer, Rect::new(17, 19, 9, 1));
         assert_eq!(bell.right(), timer.x);
     }
 

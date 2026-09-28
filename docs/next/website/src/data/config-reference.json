@@ -1267,6 +1267,22 @@
           "description": "Whether the sidebar draws its idle animation. The panel also has a pause button; this switch removes the animation entirely."
         },
         {
+          "key": "ui.window_cycle_mode",
+          "type": "enum",
+          "default": "this-machine",
+          "description": "Whether next/previous and next-blocked cycles include fleet agents.",
+          "values": [
+            "this-machine",
+            "this-machine-and-fleet"
+          ]
+        },
+        {
+          "key": "ui.skip_collapsed_cycle",
+          "type": "boolean",
+          "default": "false",
+          "description": "Exclude collapsed spaces and sidebar sections from next/previous and next-blocked cycles."
+        },
+        {
           "key": "ui.sidebar_min_width",
           "type": "integer",
           "default": "18",

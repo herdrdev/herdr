@@ -433,6 +433,32 @@ mod tests {
     use crate::api::schema::WorkspaceBindParams;
     use crate::{api::schema::SuccessResponse, config::Config, workspace::Workspace};
 
+    #[test]
+    fn fleet_workspace_api_list_keeps_and_marks_fleet_workspace() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("local"), Workspace::test_new("fleet")];
+        app.state.workspaces[1].is_fleet = true;
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+
+        let response = app.handle_workspace_list("fleet-list".into());
+        let success: SuccessResponse = serde_json::from_str(&response).expect("workspace list");
+        let crate::api::schema::ResponseResult::WorkspaceList { workspaces } = success.result
+        else {
+            panic!("expected workspace list response");
+        };
+        assert_eq!(workspaces.len(), 2);
+        assert!(!workspaces[0].is_fleet);
+        assert!(workspaces[1].is_fleet);
+    }
+
     // `new_cwd = follow` must anchor on the focused pane for every creation
     // surface. Splits and tabs already do; a new workspace must follow the
     // focused pane too, not the source workspace's first-tab root pane.

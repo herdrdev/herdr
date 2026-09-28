@@ -1837,6 +1837,10 @@
             "focused": {
               "type": "boolean"
             },
+            "is_fleet": {
+              "description": "True for the workspace that owns tabs opened from the cross-host Fleet view.",
+              "type": "boolean"
+            },
             "label": {
               "type": "string"
             },
@@ -15010,6 +15014,10 @@
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
             },
             "focused": {
+              "type": "boolean"
+            },
+            "is_fleet": {
+              "description": "True for the workspace that owns tabs opened from the cross-host Fleet view.",
               "type": "boolean"
             },
             "label": {

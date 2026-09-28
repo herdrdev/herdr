@@ -1478,10 +1478,33 @@ impl AppState {
             })
             .collect::<Vec<_>>();
         if order.is_empty() {
-            (0..self.workspaces.len()).collect()
+            (0..self.workspaces.len())
+                .filter(|idx| !self.workspaces[*idx].is_fleet)
+                .collect()
         } else {
             order
         }
+    }
+
+    /// Workspace switch shortcuts follow the local list, then open Fleet tabs
+    /// when the Fleet section is visible and expanded.
+    pub(crate) fn workspace_navigation_order(&self) -> Vec<usize> {
+        let mut order = self.visible_workspace_order();
+        if crate::ui::sidebar::sidebar_area_is_visible(self, crate::config::SidebarArea::Hosts)
+            && !crate::ui::sidebar::section_is_collapsed(
+                self,
+                crate::ui::sidebar::FLEET_SECTION_TITLE,
+            )
+        {
+            if let Some(fleet_idx) = self
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.is_fleet)
+            {
+                order.push(fleet_idx);
+            }
+        }
+        order
     }
 
     pub(crate) fn workspace_at_visible_position(&self, position: usize) -> Option<usize> {
@@ -1512,7 +1535,10 @@ impl AppState {
             return;
         }
         let current = self.active.unwrap_or(self.selected);
-        let order = self.visible_workspace_order();
+        let order = self.workspace_navigation_order();
+        if order.is_empty() {
+            return;
+        }
         let current_pos = order.iter().position(|idx| *idx == current).unwrap_or(0);
         let next = order[(current_pos + 1) % order.len()];
         self.switch_workspace(next);
@@ -1524,7 +1550,10 @@ impl AppState {
             return;
         }
         let current = self.active.unwrap_or(self.selected);
-        let order = self.visible_workspace_order();
+        let order = self.workspace_navigation_order();
+        if order.is_empty() {
+            return;
+        }
         let current_pos = order.iter().position(|idx| *idx == current).unwrap_or(0);
         let prev = if current_pos == 0 {
             order[order.len() - 1]

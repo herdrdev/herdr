@@ -737,6 +737,8 @@ impl App {
             sidebar_section_split,
             collapsed_space_keys,
             prio_panel_collapsed,
+            window_cycle_mode,
+            skip_collapsed_cycle,
         ) = if no_session {
             (
                 Vec::new(),
@@ -747,6 +749,8 @@ impl App {
                 0.5_f32,
                 std::collections::HashSet::new(),
                 false,
+                config.ui.window_cycle_mode,
+                config.ui.skip_collapsed_cycle,
             )
         } else if let Some(snap) = restored_snapshot {
             let history = config
@@ -784,6 +788,10 @@ impl App {
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
                     snap.prio_panel_collapsed,
+                    snap.window_cycle_mode
+                        .unwrap_or(config.ui.window_cycle_mode),
+                    snap.skip_collapsed_cycle
+                        .unwrap_or(config.ui.skip_collapsed_cycle),
                 )
             } else {
                 crate::logging::session_restored(ws.len(), "ok");
@@ -802,6 +810,10 @@ impl App {
                     snap.sidebar_section_split.unwrap_or(0.5),
                     snap.collapsed_space_keys,
                     snap.prio_panel_collapsed,
+                    snap.window_cycle_mode
+                        .unwrap_or(config.ui.window_cycle_mode),
+                    snap.skip_collapsed_cycle
+                        .unwrap_or(config.ui.skip_collapsed_cycle),
                 )
             }
         } else {
@@ -814,6 +826,8 @@ impl App {
                 0.5_f32,
                 std::collections::HashSet::new(),
                 false,
+                config.ui.window_cycle_mode,
+                config.ui.skip_collapsed_cycle,
             )
         };
 
@@ -919,6 +933,8 @@ impl App {
             sidebar_starred_only: false,
             sidebar_new_menu: None,
             sidebar_areas_menu_selected: None,
+            window_cycle_menu_open: false,
+            window_cycle_menu_selected: 0,
             sidebar_new_thread: None,
             sidebar_project_menu: None,
             sidebar_refresh_requested: false,
@@ -1119,6 +1135,7 @@ impl App {
                 notepad_usage_max_scroll: 0,
                 pomodoro_hit_area: Rect::default(),
                 notification_hit_area: Rect::default(),
+                window_cycle_mode_hit_area: Rect::default(),
                 sidebar_areas_hit_area: Rect::default(),
                 hyperspace_rect: Rect::default(),
                 hyperspace_pause_hit_area: Rect::default(),
@@ -1313,6 +1330,8 @@ impl App {
             sidebar_width_auto: false,
             sidebar_collapsed: config.ui.sidebar_start_collapsed,
             blocked_filter: false,
+            window_cycle_mode,
+            skip_collapsed_cycle,
             sidebar_collapsed_mode: config.ui.sidebar_collapsed_mode,
             sidebar_section_split,
             prio_panel_collapsed,
@@ -2770,6 +2789,8 @@ impl App {
                 self.state.sidebar_min_width = config.ui.sidebar_min_width;
                 self.state.sidebar_max_width = config.ui.sidebar_max_width;
                 self.state.sidebar_collapsed_mode = config.ui.sidebar_collapsed_mode;
+                self.state.window_cycle_mode = config.ui.window_cycle_mode;
+                self.state.skip_collapsed_cycle = config.ui.skip_collapsed_cycle;
                 self.state
                     .hyperspace
                     .set_enabled(config.ui.sidebar_animation, Instant::now());
@@ -3883,6 +3904,8 @@ mod tests {
             source.sidebar_section_split,
             source.collapsed_space_keys.clone(),
             source.prio_panel_collapsed,
+            source.window_cycle_mode,
+            source.skip_collapsed_cycle,
         );
         let mut imports = std::collections::HashMap::new();
 

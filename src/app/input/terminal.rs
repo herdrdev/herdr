@@ -63,7 +63,9 @@ impl App {
         }
 
         let key_event = key.as_key_event();
-        if self.handle_sidebar_areas_menu_key(key_event, self.state.input_owner()) {
+        if self.handle_window_cycle_menu_key(key_event, self.state.input_owner())
+            || self.handle_sidebar_areas_menu_key(key_event, self.state.input_owner())
+        {
             return None;
         }
         if self.state.handle_sidebar_subgroup_picker_key(key_event) {
@@ -2009,6 +2011,8 @@ mod tests {
             app.state.sidebar_section_split,
             app.state.collapsed_space_keys.clone(),
             app.state.prio_panel_collapsed,
+            app.state.window_cycle_mode,
+            app.state.skip_collapsed_cycle,
         );
         assert_eq!(snapshot.workspaces[0].tabs[0].panes.len(), 1);
         assert!(matches!(

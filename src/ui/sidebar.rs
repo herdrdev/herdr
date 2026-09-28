@@ -2245,6 +2245,12 @@ fn collect_sidebar_thread_entries_with_runtimes(
     // order and includes agentless terminals. Do not apply attention sorting:
     // lifecycle changes must never move sidebar rows.
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
+    // Fleet tabs belong to the Fleet section only, never to local rows.
+    entries.retain(|entry| {
+        entry
+            .local_target()
+            .is_none_or(|target| !app.workspaces[target.ws_idx].is_fleet)
+    });
     let mut previous_tab = None;
     for entry in &mut entries {
         let Some(target) = entry.local_target() else {
@@ -3230,12 +3236,6 @@ fn sidebar_rows_inner(
         true,
         expand_needs_you,
     )
-}
-
-pub(crate) fn sidebar_navigation_agent_entries(app: &AppState) -> Vec<AgentPanelEntry> {
-    let mut entries = sidebar_filtered_agent_entries_from(app, None);
-    crate::app::agent_view::apply_agent_view(app, &mut entries);
-    entries
 }
 
 fn sidebar_filtered_agent_entries_from(
@@ -6793,7 +6793,7 @@ fn entry_is_past_done_hide_threshold(app: &AppState, entry: &AgentPanelEntry) ->
         })
 }
 
-pub(super) fn sidebar_space_member_indices(app: &AppState, root_idx: usize) -> Vec<usize> {
+pub(crate) fn sidebar_space_member_indices(app: &AppState, root_idx: usize) -> Vec<usize> {
     if workspace_parent_group_state(app, root_idx).is_none() {
         return vec![root_idx];
     }
@@ -6852,6 +6852,7 @@ fn workspace_list_entries_inner(
         // Spaces are the top level here: every Space is its own row, with no
         // repository grouping and no worktree indentation above it.
         SidebarGroupMode::Spaces => (0..app.workspaces.len())
+            .filter(|ws_idx| !app.workspaces[*ws_idx].is_fleet)
             .map(|ws_idx| WorkspaceListEntry::Workspace {
                 ws_idx,
                 indented: false,
@@ -6913,7 +6914,13 @@ fn workspace_list_entries_inner(
 
 fn workspace_list_entries_repo(app: &AppState, force_expanded: bool) -> Vec<WorkspaceListEntry> {
     let keys = (0..app.workspaces.len())
-        .map(|ws_idx| workspace_group_ident(app, ws_idx).map(|(ident, home)| (ident.key(), home)))
+        .map(|ws_idx| {
+            if app.workspaces[ws_idx].is_fleet {
+                None
+            } else {
+                workspace_group_ident(app, ws_idx).map(|(ident, home)| (ident.key(), home))
+            }
+        })
         .collect::<Vec<_>>();
     let mut members_by_key = std::collections::HashMap::<String, Vec<usize>>::new();
     for (ws_idx, key) in keys.iter().enumerate() {
@@ -6946,6 +6953,9 @@ fn workspace_list_entries_repo(app: &AppState, force_expanded: bool) -> Vec<Work
     let mut emitted_groups = std::collections::HashSet::<String>::new();
     let mut entries = Vec::new();
     for ws_idx in 0..app.workspaces.len() {
+        if app.workspaces[ws_idx].is_fleet {
+            continue;
+        }
         let Some(group_key) = keys
             .get(ws_idx)
             .and_then(Option::as_ref)
@@ -9631,6 +9641,11 @@ pub(super) fn render_sidebar(
         crate::ui::pomodoro::pomodoro_hit_area(app, area),
         app.view_observed_at,
     );
+    crate::ui::pomodoro::render_window_cycle_mode_toggle(
+        app,
+        frame,
+        crate::ui::pomodoro::window_cycle_mode_hit_area(app, area),
+    );
     crate::ui::pomodoro::render_notification_toggle(
         app,
         frame,
@@ -9652,6 +9667,7 @@ pub(super) fn render_sidebar(
         frame.render_widget(Paragraph::new(Span::styled("⟳ ", style)), refresh);
     }
     render_sidebar_areas_menu(app, frame);
+    render_window_cycle_mode_menu(app, frame);
 }
 
 fn sidebar_footer_style(
@@ -11385,6 +11401,104 @@ pub(crate) fn sidebar_areas_menu_index_at(
 ) -> Option<usize> {
     super::dropdown::hit_test(&sidebar_areas_menu_layout(app, area)?, x, y)
         .filter(|index| *index < SIDEBAR_AREAS.len())
+}
+
+pub(crate) fn window_cycle_mode_menu_layout(
+    app: &AppState,
+    area: Rect,
+) -> Option<super::dropdown::DropdownLayout> {
+    if !app.window_cycle_menu_open || app.sidebar_collapsed || area.width == 0 || area.height == 0 {
+        return None;
+    }
+    let anchor = app.view.window_cycle_mode_hit_area;
+    if anchor.width == 0 || anchor.y <= area.y {
+        return None;
+    }
+    let rows = window_cycle_menu_rows(app);
+    let desired_width = rows
+        .iter()
+        .map(|row| display_width(row))
+        .max()
+        .unwrap_or(1)
+        .saturating_add(2);
+    let width = u16::try_from(desired_width)
+        .unwrap_or(u16::MAX)
+        .min(app.view.sidebar_rect.width)
+        .min(area.width)
+        .max(1);
+    let visible_rows = 3usize.min(usize::from(anchor.y.saturating_sub(area.y)));
+    if visible_rows == 0 {
+        return None;
+    }
+    let height = u16::try_from(visible_rows).ok()?;
+    let x = anchor.x.max(area.x).min(area.right().saturating_sub(width));
+    let rect = Rect::new(x, anchor.y.saturating_sub(height), width, height);
+    let selected = app.window_cycle_menu_selected.min(2);
+    let first_visible = selected
+        .saturating_sub(visible_rows.saturating_sub(1))
+        .min(3usize.saturating_sub(visible_rows));
+    Some(super::dropdown::DropdownLayout {
+        rect,
+        first_visible,
+        visible_rows,
+        filter_rect: None,
+        list_rect: rect,
+    })
+}
+
+fn window_cycle_menu_rows(app: &AppState) -> [String; 3] {
+    [
+        format!(
+            "({}) This machine",
+            if app.window_cycle_mode == crate::config::WindowCycleModeConfig::ThisMachine {
+                "*"
+            } else {
+                " "
+            }
+        ),
+        format!(
+            "({}) This machine + fleet",
+            if app.window_cycle_mode == crate::config::WindowCycleModeConfig::ThisMachineAndFleet {
+                "*"
+            } else {
+                " "
+            }
+        ),
+        format!(
+            "[{}] Skip collapsed",
+            if app.skip_collapsed_cycle { "x" } else { " " }
+        ),
+    ]
+}
+
+pub(crate) fn window_cycle_mode_menu_index_at(
+    app: &AppState,
+    area: Rect,
+    x: u16,
+    y: u16,
+) -> Option<usize> {
+    super::dropdown::hit_test(&window_cycle_mode_menu_layout(app, area)?, x, y)
+        .filter(|index| *index < 3)
+}
+
+fn render_window_cycle_mode_menu(app: &AppState, frame: &mut Frame) {
+    let Some(layout) = window_cycle_mode_menu_layout(app, frame.area()) else {
+        return;
+    };
+    let rows = window_cycle_menu_rows(app)
+        .into_iter()
+        .map(|label| super::dropdown::DropdownMenuRow::Item {
+            label,
+            enabled: true,
+        })
+        .collect::<Vec<_>>();
+    super::dropdown::render_menu(
+        &app.palette,
+        frame,
+        &layout,
+        &rows,
+        app.window_cycle_menu_selected.min(2),
+    );
 }
 
 pub(super) fn render_sidebar_areas_menu(app: &AppState, frame: &mut Frame) {
@@ -18483,6 +18597,8 @@ pub(crate) mod tests {
             sidebar_section_split: Some(0.4),
             collapsed_space_keys: std::collections::HashSet::new(),
             prio_panel_collapsed: false,
+            window_cycle_mode: None,
+            skip_collapsed_cycle: None,
         };
         let value = serde_json::to_value(snapshot).unwrap();
         let object = value.as_object().unwrap();
@@ -24085,6 +24201,41 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn fleet_workspace_ac2_is_omitted_from_upper_workspace_list_modes() {
+        let mut app = app_with_agents(&["local-one", "fleet", "local-two"]);
+        app.workspaces[1].is_fleet = true;
+
+        for mode in SidebarGroupMode::ALL {
+            let entries = workspace_list_entries_for_mode(&app, false, mode);
+            assert!(entries
+                .iter()
+                .all(|entry| !matches!(entry, WorkspaceListEntry::Workspace { ws_idx: 1, .. })));
+        }
+        assert_eq!(
+            workspace_list_entries_for_mode(&app, false, SidebarGroupMode::Repo)
+                .iter()
+                .filter(|entry| matches!(entry, WorkspaceListEntry::Workspace { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn fleet_workspace_ui1_fleet_tabs_never_become_local_sidebar_rows() {
+        let mut app = app_with_agents(&["local-one", "fleet", "local-two"]);
+        assert!(sidebar_thread_entries(&app).iter().any(|entry| entry
+            .local_target()
+            .is_some_and(|target| target.ws_idx == 1)));
+        app.workspaces[1].is_fleet = true;
+
+        let entries = sidebar_thread_entries(&app);
+        assert!(entries
+            .iter()
+            .all(|entry| entry.local_target().is_none_or(|target| target.ws_idx != 1)));
+        assert!(!entries.is_empty());
+    }
+
+    #[test]
     fn repo_mode_matches_frozen_workspace_entries() {
         let app = sidebar_grouping_fixture();
         let before = workspace_list_entries(&app);
@@ -25624,6 +25775,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             sidebar_section_split: Some(app.sidebar_section_split),
             collapsed_space_keys: app.collapsed_space_keys.clone(),
             prio_panel_collapsed: app.prio_panel_collapsed,
+            window_cycle_mode: Some(app.window_cycle_mode),
+            skip_collapsed_cycle: Some(app.skip_collapsed_cycle),
         };
         let restored: crate::persist::SessionSnapshot =
             serde_json::from_value(serde_json::to_value(snapshot).unwrap()).unwrap();
