@@ -236,6 +236,11 @@ pub fn read_clipboard_text() -> Option<String> {
 }
 
 /// Unsupported platform stub.
+pub fn clipboard_text_matches(_bytes: &[u8]) -> Option<bool> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn open_url(_url: &str) -> std::io::Result<Option<std::process::Child>> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,

@@ -358,14 +358,22 @@ fn should_prefer_osc52() -> bool {
 ///
 /// Some terminals still only honor BEL-terminated OSC 52 writes, so herdr
 /// emits BEL here even though ST works in newer emulators.
-pub fn write_osc52_bytes(bytes: &[u8]) {
-    if !should_prefer_osc52() && crate::platform::write_clipboard(bytes) {
-        return;
+///
+/// Returns false when the clipboard already holds the same text or output fails.
+pub fn write_osc52_bytes(bytes: &[u8]) -> bool {
+    let prefer_osc52 = should_prefer_osc52();
+    if !prefer_osc52 && crate::platform::clipboard_text_matches(bytes) == Some(true) {
+        tracing::debug!(bytes = bytes.len(), "suppressed duplicate clipboard write");
+        return false;
     }
 
-    let sequence = osc52_sequence(bytes);
-    let _ = std::io::stdout().write_all(sequence.as_bytes());
-    let _ = std::io::stdout().flush();
+    if !prefer_osc52 && crate::platform::write_clipboard(bytes) {
+        true
+    } else {
+        let sequence = osc52_sequence(bytes);
+        let mut stdout = std::io::stdout();
+        stdout.write_all(sequence.as_bytes()).is_ok() && stdout.flush().is_ok()
+    }
 }
 
 #[cfg(test)]

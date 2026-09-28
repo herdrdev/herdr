@@ -7,7 +7,7 @@ use std::{
     path::PathBuf,
     ptr::{copy_nonoverlapping, null_mut},
     sync::{
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicU32, AtomicU64, Ordering as AtomicOrdering},
         Arc, LazyLock, Mutex, OnceLock,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -329,7 +329,8 @@ use windows_sys::{
         System::{
             Console::GetConsoleWindow,
             DataExchange::{
-                CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
+                CloseClipboard, CountClipboardFormats, EmptyClipboard, EnumClipboardFormats,
+                GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber, OpenClipboard,
                 RegisterClipboardFormatW, SetClipboardData,
             },
             Diagnostics::{
@@ -350,7 +351,7 @@ use windows_sys::{
                 GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, VirtualQueryEx, GMEM_MOVEABLE,
                 MEMORY_BASIC_INFORMATION,
             },
-            Ole::{CF_DIB, CF_DIBV5, CF_UNICODETEXT},
+            Ole::{CF_DIB, CF_DIBV5, CF_LOCALE, CF_OEMTEXT, CF_TEXT, CF_UNICODETEXT},
             Threading::{
                 GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, IsWow64Process2,
                 OpenProcess, OpenThread, QueryFullProcessImageNameW, ResumeThread,
@@ -2355,6 +2356,8 @@ pub fn process_exists(pid: u32) -> bool {
     ok && exit_code == STILL_ACTIVE
 }
 
+static LAST_CLIPBOARD_WRITE_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
 pub fn write_clipboard(bytes: &[u8]) -> bool {
     let Ok(text) = std::str::from_utf8(bytes) else {
         return false;
@@ -2397,11 +2400,91 @@ pub fn write_clipboard(bytes: &[u8]) -> bool {
             return false;
         }
 
+        // Closing may generate additional text formats and advance the sequence.
+        drop(_clipboard);
+        // Read the sequence first: a later writer must not become our last write.
+        let sequence = GetClipboardSequenceNumber();
+        let sequence = if GetClipboardOwner() == owner {
+            sequence
+        } else {
+            0
+        };
+        LAST_CLIPBOARD_WRITE_SEQUENCE.store(sequence, AtomicOrdering::Relaxed);
         true
     }
 }
 
 pub fn read_clipboard_text() -> Option<String> {
+    None
+}
+
+/// Whether the system clipboard currently holds exactly this text.
+///
+/// Returns `None` when the clipboard changed since our last write, cannot be read,
+/// or has non-text formats.
+/// Kept separate from [`read_clipboard_text`] so unsupported modal paste on
+/// Windows is unchanged.
+pub fn clipboard_text_matches(bytes: &[u8]) -> Option<bool> {
+    let current = read_clipboard_unicode_text()?;
+    Some(clipboard_text_equals(&current, bytes))
+}
+
+fn clipboard_text_equals(current: &str, bytes: &[u8]) -> bool {
+    let Ok(payload) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    normalized_clipboard_newlines(payload) == normalized_clipboard_newlines(current)
+}
+
+fn normalized_clipboard_newlines(text: &str) -> std::borrow::Cow<'_, str> {
+    if text.contains("\r\n") {
+        std::borrow::Cow::Owned(text.replace("\r\n", "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+fn plain_text_clipboard_format(format: u32) -> bool {
+    format == CF_UNICODETEXT as u32
+        || format == CF_TEXT as u32
+        || format == CF_OEMTEXT as u32
+        || format == CF_LOCALE as u32
+}
+
+fn read_clipboard_unicode_text() -> Option<String> {
+    const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
+
+    for attempt in 0..10 {
+        if unsafe { OpenClipboard(null_mut()) } != 0 {
+            let _clipboard = ClipboardGuard;
+            let sequence = unsafe { GetClipboardSequenceNumber() };
+            if sequence == 0
+                || sequence != LAST_CLIPBOARD_WRITE_SEQUENCE.load(AtomicOrdering::Relaxed)
+            {
+                return None;
+            }
+            let format_count = unsafe { CountClipboardFormats() };
+            if format_count <= 0 {
+                return None;
+            }
+            let mut format = 0;
+            for _ in 0..format_count {
+                format = unsafe { EnumClipboardFormats(format) };
+                if format == 0 || !plain_text_clipboard_format(format) {
+                    return None;
+                }
+            }
+            let bytes = clipboard_global_bytes(CF_UNICODETEXT as u32, MAX_CLIPBOARD_TEXT_BYTES)?;
+            let units = bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
+                .take_while(|unit| *unit != 0);
+            return String::from_utf16(&units.collect::<Vec<_>>()).ok();
+        }
+        if attempt < 9 {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     None
 }
 
@@ -3036,6 +3119,31 @@ mod tests {
     use windows_sys::Win32::System::Console::{
         AllocConsole, FreeConsole, GetConsoleProcessList, GetConsoleWindow,
     };
+
+    #[test]
+    fn clipboard_text_equals_normalizes_line_endings() {
+        assert!(super::clipboard_text_equals("hello", b"hello"));
+        assert!(super::clipboard_text_equals("a\r\nb", b"a\nb"));
+        assert!(super::clipboard_text_equals("a\nb", b"a\r\nb"));
+        assert!(!super::clipboard_text_equals("hello ", b"hello"));
+        assert!(!super::clipboard_text_equals("hello", b"world"));
+        assert!(!super::clipboard_text_equals("hello", &[0xff]));
+        assert!(!super::clipboard_text_equals("a\rb", b"a\nb"));
+    }
+
+    #[test]
+    fn clipboard_format_check_rejects_rich_content() {
+        for format in [
+            super::CF_UNICODETEXT,
+            super::CF_TEXT,
+            super::CF_OEMTEXT,
+            super::CF_LOCALE,
+        ] {
+            assert!(super::plain_text_clipboard_format(format as u32));
+        }
+        assert!(!super::plain_text_clipboard_format(super::CF_DIB as u32));
+        assert!(!super::plain_text_clipboard_format(0xC000));
+    }
 
     #[test]
     fn windows_standard_plugin_runtime_paths_drop_only_disk_and_unc_verbatim_prefixes() {

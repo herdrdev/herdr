@@ -795,6 +795,10 @@ pub fn read_clipboard_text() -> Option<String> {
     None
 }
 
+pub fn clipboard_text_matches(_bytes: &[u8]) -> Option<bool> {
+    None
+}
+
 pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
     Command::new("xdg-open")
         .arg(url)
