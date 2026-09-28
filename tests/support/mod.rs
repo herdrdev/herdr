@@ -95,6 +95,20 @@ pub fn cleanup_test_base(base: &Path) {
     let runtime_dirs = HashSet::from([runtime_dir.clone()]);
 
     terminate_servers_for_runtime_dirs(&runtime_dirs);
+    #[cfg(target_os = "linux")]
+    {
+        let remaining = herdr_server_pids_for_runtime_dir(&runtime_dir).unwrap_or_else(|err| {
+            panic!(
+                "failed to verify server cleanup for {}: {err}",
+                runtime_dir.display()
+            )
+        });
+        assert!(
+            remaining.is_empty(),
+            "test servers still running for {}: {remaining:?}",
+            runtime_dir.display()
+        );
+    }
     unregister_runtime_dir(&runtime_dir);
     let _ = fs::remove_dir_all(base);
 }
@@ -563,7 +577,7 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
             continue;
         }
 
-        if is_test_herdr_server_process(pid) {
+        if is_test_herdr_process(pid) {
             pids.push(pid);
         }
     }
@@ -571,33 +585,16 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
     Ok(pids)
 }
 
-fn is_test_herdr_server_process(pid: u32) -> bool {
+fn is_test_herdr_process(pid: u32) -> bool {
     let Some(exe_path) = proc_link_target(pid, "exe") else {
         return false;
     };
 
-    if !is_test_herdr_binary(&exe_path) {
-        return false;
-    }
-
-    let Ok(cmdline) = read_cmdline(pid) else {
-        return false;
-    };
-
-    cmdline.iter().any(|arg| arg == "server")
+    is_test_herdr_binary(&exe_path)
 }
 
 fn proc_link_target(pid: u32, link: &str) -> Option<PathBuf> {
     fs::read_link(format!("/proc/{pid}/{link}")).ok()
-}
-
-fn read_cmdline(pid: u32) -> std::io::Result<Vec<String>> {
-    let cmdline = fs::read(format!("/proc/{pid}/cmdline"))?;
-    Ok(cmdline
-        .split(|byte| *byte == 0)
-        .filter(|chunk| !chunk.is_empty())
-        .map(|chunk| String::from_utf8_lossy(chunk).to_string())
-        .collect())
 }
 
 fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
@@ -636,12 +633,8 @@ fn runtime_dir_owner_alive(runtime_dir: &Path) -> bool {
     process_exists(owner_pid)
 }
 
-fn current_checkout_root() -> &'static Path {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-}
-
 fn is_test_herdr_binary(path: &Path) -> bool {
-    path.ends_with("target/debug/herdr") && path.starts_with(current_checkout_root())
+    path == Path::new(env!("CARGO_BIN_EXE_herdr"))
 }
 
 extern "C" fn run_atexit_cleanup() {
@@ -764,11 +757,11 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_matcher_accepts_current_checkout_debug_binary() {
-        let binary = current_checkout_root().join("target/debug/herdr");
+    fn test_binary_matcher_accepts_cargo_test_binary() {
+        let binary = Path::new(env!("CARGO_BIN_EXE_herdr"));
         assert!(
-            is_test_herdr_binary(&binary),
-            "current checkout debug binary should be considered test-owned"
+            is_test_herdr_binary(binary),
+            "Cargo's test executable should be considered test-owned"
         );
     }
 
