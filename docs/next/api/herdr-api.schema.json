@@ -4491,6 +4491,11 @@
                   "type": "null"
                 }
               ]
+            },
+            "work_title_long_brief": {
+              "default": false,
+              "description": "Whether this prompt is long enough to establish a new work topic.",
+              "type": "boolean"
             }
           },
           "required": [

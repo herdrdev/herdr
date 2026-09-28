@@ -1988,6 +1988,7 @@ fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
         agent_session_id,
         title,
         work_context: None,
+        work_title_long_brief: false,
         display_agent,
         state_labels,
         tokens,

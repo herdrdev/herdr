@@ -1775,6 +1775,7 @@ impl TerminalState {
         lifecycle_source: &str,
         session_id: &str,
         latest_title: Option<String>,
+        replace_existing_title: bool,
     ) -> Option<String> {
         let same_session = self
             .work_title_initial_subject
@@ -1785,11 +1786,15 @@ impl TerminalState {
                     && initial.session_id == session_id
             });
         if same_session {
-            return latest_title.or_else(|| {
-                self.work_title_initial_subject
-                    .as_ref()
-                    .map(|initial| initial.title.clone())
-            });
+            if let Some(initial) = self.work_title_initial_subject.as_mut() {
+                if replace_existing_title {
+                    if let Some(title) = latest_title {
+                        initial.title = title;
+                    }
+                }
+                return Some(initial.title.clone());
+            }
+            return None;
         }
         let title = latest_title?;
         self.work_title_initial_subject = Some(WorkTitleInitialSubject {

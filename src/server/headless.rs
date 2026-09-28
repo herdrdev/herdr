@@ -21884,6 +21884,7 @@ next_tab = ""
                 agent_session_id: Some("session-1".into()),
                 title: Some(title.into()),
                 work_context: None,
+                work_title_long_brief: false,
                 display_agent: None,
                 state_labels: HashMap::new(),
                 tokens: HashMap::new(),

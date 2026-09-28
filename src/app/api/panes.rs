@@ -1892,7 +1892,7 @@ impl App {
             Ok(ttl) => ttl,
             Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
         };
-        let title = normalize_presentation_text(params.title);
+        let mut title = normalize_presentation_text(params.title);
         let requested_work_title = (source == crate::work_title::WORK_TITLE_SOURCE)
             .then(|| title.clone())
             .flatten();
@@ -2169,13 +2169,23 @@ impl App {
             applies_to_source.as_deref(),
             agent_session_id.as_deref(),
         ) {
-            (true, Some(agent), Some(lifecycle_source), Some(session_id)) => terminal
-                .resolve_work_title_for_session(
+            (true, Some(agent), Some(lifecycle_source), Some(session_id)) => {
+                let has_new_reference = requested_hook_context.as_ref().is_some_and(|requested| {
+                    crate::work_title::work_title_has_new_reference(
+                        terminal.effective_work_context(),
+                        requested,
+                    )
+                });
+                let work_title = terminal.resolve_work_title_for_session(
                     agent,
                     lifecycle_source,
                     session_id,
                     requested_work_title,
-                ),
+                    params.work_title_long_brief || has_new_reference,
+                );
+                title = work_title.clone();
+                work_title
+            }
             _ => None,
         };
         let session_name_changed = if session_name_request {
@@ -4045,6 +4055,7 @@ mod tests {
             agent_session_id: None,
             title: Some("activity".into()),
             work_context: None,
+            work_title_long_brief: false,
             display_agent: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),
@@ -4175,6 +4186,7 @@ mod tests {
         params.applies_to_source = Some(lifecycle_source.into());
         params.agent_session_id = Some(session_id.into());
         params.title = Some(title.into());
+        params.work_title_long_brief = false;
         params.seq = Some(seq);
         params
     }
@@ -8417,6 +8429,123 @@ mod tests {
     }
 
     #[test]
+    fn guarded_work_titles_keep_followups_and_retitle_for_new_work() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let terminal_id =
+            bind_test_agent_session(&mut app, &pane_id, "herdr:codex", "codex", "session-new");
+
+        let mut first = guarded_work_title_params(
+            pane_id.clone(),
+            "codex",
+            "herdr:codex",
+            "session-new",
+            "Fix MAT-1549 Vault Retention",
+            20,
+        );
+        first.work_context = Some(crate::work_context::PaneWorkContext {
+            ticket_ids: vec!["MAT-1549".into()],
+            pr_urls: vec!["https://github.com/o/r/pull/1549".into()],
+            work_title: first.title.clone(),
+            ..Default::default()
+        });
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_metadata("first".into(), first)).unwrap();
+
+        app.state.workspaces[0].tabs[0].set_user_custom_name("Human tab label".into());
+
+        let mut follow_up = guarded_work_title_params(
+            pane_id.clone(),
+            "codex",
+            "herdr:codex",
+            "session-new",
+            "Can We Fix the Fact That Windows Have No Stable Task Title",
+            21,
+        );
+        follow_up.work_context = Some(crate::work_context::PaneWorkContext {
+            work_title: follow_up.title.clone(),
+            ..Default::default()
+        });
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_metadata("follow-up".into(), follow_up))
+                .unwrap();
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .effective_work_context()
+                .work_title
+                .as_deref(),
+            Some("Fix MAT-1549 Vault Retention")
+        );
+
+        let mut new_ticket = guarded_work_title_params(
+            pane_id.clone(),
+            "codex",
+            "herdr:codex",
+            "session-new",
+            "Review SCA-42 Sidebar Labels",
+            22,
+        );
+        new_ticket.work_context = Some(crate::work_context::PaneWorkContext {
+            ticket_ids: vec!["SCA-42".into()],
+            work_title: new_ticket.title.clone(),
+            ..Default::default()
+        });
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_metadata("new-ticket".into(), new_ticket))
+                .unwrap();
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .effective_work_context()
+                .work_title
+                .as_deref(),
+            Some("Review SCA-42 Sidebar Labels")
+        );
+
+        let mut long_brief = guarded_work_title_params(
+            pane_id.clone(),
+            "codex",
+            "herdr:codex",
+            "session-new",
+            "Rebuild the Audit Event Index",
+            23,
+        );
+        long_brief.work_title_long_brief = true;
+        long_brief.work_context = Some(crate::work_context::PaneWorkContext {
+            work_title: long_brief.title.clone(),
+            ..Default::default()
+        });
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_metadata("long-brief".into(), long_brief))
+                .unwrap();
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .effective_work_context()
+                .work_title
+                .as_deref(),
+            Some("Rebuild the Audit Event Index")
+        );
+
+        let mut one_a =
+            guarded_work_title_params(pane_id, "codex", "herdr:codex", "session-new", "1A", 24);
+        one_a.work_context = Some(crate::work_context::PaneWorkContext {
+            work_title: one_a.title.clone(),
+            ..Default::default()
+        });
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_pane_report_metadata("one-a".into(), one_a)).unwrap();
+        assert_eq!(
+            app.state.terminals[&terminal_id]
+                .effective_work_context()
+                .work_title
+                .as_deref(),
+            Some("Rebuild the Audit Event Index")
+        );
+        assert_eq!(
+            app.state.workspaces[0].tabs[0].custom_name.as_deref(),
+            Some("Human tab label")
+        );
+    }
+
+    #[test]
     fn ac1_ac4_ac5_ac6_guarded_turns_replace_hook_context_with_manual_precedence() {
         let (mut app, pane_id) = app_with_test_workspace();
         let terminal_id =
@@ -9118,6 +9247,7 @@ mod tests {
             agent_session_id: None,
             title: None,
             work_context: None,
+            work_title_long_brief: false,
             display_agent: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::from([
@@ -10021,7 +10151,7 @@ mod tests {
     }
 
     #[test]
-    fn work_title_initial_briefings_are_session_scoped_and_later_objectives_replace_them() {
+    fn work_title_initial_briefings_are_session_scoped_and_followups_keep_the_title() {
         let (mut app, codex_pane) = app_with_test_workspace();
         app.state.workspaces.push(Workspace::test_new("claude"));
         app.state.ensure_test_terminals();
@@ -10081,7 +10211,7 @@ mod tests {
                 crate::work_title::WorkTitleProvider::Codex,
                 codex_pane.as_str(),
                 "codex-session",
-                "Real-time policy management is unrelated. Implement sidebar lifecycle assertions",
+                "Can we fix why this tab keeps its old name?",
                 42,
             ),
         ] {
@@ -10106,7 +10236,7 @@ mod tests {
                 .effective_work_context()
                 .work_title
                 .as_deref(),
-            Some("Implement Sidebar Lifecycle Assertions")
+            Some("Review Billing Retry Regression")
         );
         assert_eq!(
             app.state.terminals[&app.state.workspaces[1]
@@ -10127,7 +10257,7 @@ mod tests {
             .as_deref()
             .unwrap()
             .to_ascii_lowercase()
-            .contains("real-time policy management"));
+            .contains("can we fix why this tab keeps its old name"));
     }
 
     #[tokio::test]

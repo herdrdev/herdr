@@ -715,6 +715,9 @@ pub struct PaneReportMetadataParams {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_context: Option<crate::work_context::PaneWorkContext>,
+    /// Whether this prompt is long enough to establish a new work topic.
+    #[serde(default)]
+    pub work_title_long_brief: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_agent: Option<String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

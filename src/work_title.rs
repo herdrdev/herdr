@@ -19,6 +19,8 @@ pub(crate) const SESSION_NAME_MAX_CHARS: usize = 80;
 pub(crate) const WORK_TITLE_MAX_CHARS: usize = 48;
 const WORK_TITLE_MIN_WORDS: usize = 1;
 const WORK_TITLE_MAX_WORDS: usize = 7;
+const WORK_TITLE_LONG_BRIEF_MIN_WORDS: usize = 40;
+const SYSTEM_NOTIFICATION_MARKER: &str = "[SYSTEM NOTIFICATION - NOT USER INPUT]";
 
 #[derive(Debug, Deserialize)]
 struct TurnStartHookInput {
@@ -153,17 +155,20 @@ pub(crate) fn request_from_turn_start(
         .session_id
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())?;
-    let prompt = input.prompt.as_deref()?;
-    let title = calculate_work_title(prompt);
+    let prompt = sanitize_prompt(input.prompt.as_deref()?);
+    if prompt.trim().is_empty() {
+        return None;
+    }
+    let title = calculate_work_title(&prompt);
     // `repo` is intentionally absent: this context is mined from the prompt
     // text, and a repository named in prose is ambient noise rather than
     // evidence of the work. Repositories are declared or observed, never read
     // out of what the human happened to type.
     let mut work_context = crate::work_context::PaneWorkContext {
-        ticket_ids: crate::work_context::extract_ticket_ids(prompt),
-        pr_urls: crate::work_context::extract_pr_urls(prompt),
-        preview_urls: crate::work_context::extract_preview_urls(prompt),
-        missive_urls: crate::work_context::extract_missive_urls(prompt),
+        ticket_ids: crate::work_context::extract_ticket_ids(&prompt),
+        pr_urls: crate::work_context::extract_pr_urls(&prompt),
+        preview_urls: crate::work_context::extract_preview_urls(&prompt),
+        missive_urls: crate::work_context::extract_missive_urls(&prompt),
         branch: None,
         repo: None,
         work_title: title.clone(),
@@ -183,6 +188,7 @@ pub(crate) fn request_from_turn_start(
         agent_session_id: Some(session_id),
         title,
         work_context: Some(work_context),
+        work_title_long_brief: is_long_work_brief(&prompt),
         display_agent: None,
         state_labels: std::collections::HashMap::new(),
         tokens: std::collections::HashMap::new(),
@@ -217,7 +223,8 @@ pub(crate) fn calculate_work_title(prompt: &str) -> Option<String> {
 }
 
 fn sanitize_prompt(prompt: &str) -> String {
-    let without_escapes = ansi_regex().replace_all(prompt, " ");
+    let without_injected = strip_machine_injected_text(prompt);
+    let without_escapes = ansi_regex().replace_all(&without_injected, " ");
     let without_secrets = secret_regex().replace_all(&without_escapes, " ");
     without_secrets
         .chars()
@@ -231,6 +238,78 @@ fn sanitize_prompt(prompt: &str) -> String {
             }
         })
         .collect()
+}
+
+fn strip_machine_injected_text(prompt: &str) -> String {
+    let without_task_notifications = task_notification_regex().replace_all(prompt, " ");
+    let without_system_reminders =
+        system_reminder_regex().replace_all(&without_task_notifications, " ");
+
+    let mut paragraphs = Vec::new();
+    let mut current = Vec::new();
+    for line in without_system_reminders.lines() {
+        if line.trim().is_empty() {
+            if !current.is_empty() {
+                paragraphs.push(current.join("\n"));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        paragraphs.push(current.join("\n"));
+    }
+
+    paragraphs
+        .into_iter()
+        .filter(|paragraph| {
+            !paragraph.contains(SYSTEM_NOTIFICATION_MARKER)
+                && !paragraph
+                    .trim_start()
+                    .to_ascii_lowercase()
+                    .starts_with("stop hook feedback:")
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn task_notification_regex() -> &'static Regex {
+    static TASK_NOTIFICATION: OnceLock<Regex> = OnceLock::new();
+    TASK_NOTIFICATION.get_or_init(|| {
+        Regex::new(r"(?is)<task-notification\b[^>]*>.*?(?:</task-notification\s*>|\z)")
+            .expect("static task-notification regex")
+    })
+}
+
+fn system_reminder_regex() -> &'static Regex {
+    static SYSTEM_REMINDER: OnceLock<Regex> = OnceLock::new();
+    SYSTEM_REMINDER.get_or_init(|| {
+        Regex::new(r"(?is)<system-reminder\b[^>]*>.*?(?:</system-reminder\s*>|\z)")
+            .expect("static system-reminder regex")
+    })
+}
+
+pub(crate) fn work_title_has_new_reference(
+    current: &crate::work_context::PaneWorkContext,
+    requested: &crate::work_context::PaneWorkContext,
+) -> bool {
+    requested
+        .ticket_ids
+        .iter()
+        .any(|ticket| !current.ticket_ids.contains(ticket))
+        || requested
+            .pr_urls
+            .iter()
+            .any(|pr_url| !current.pr_urls.contains(pr_url))
+}
+
+fn is_long_work_brief(prompt: &str) -> bool {
+    prompt
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .count()
+        >= WORK_TITLE_LONG_BRIEF_MIN_WORDS
 }
 
 fn meaningful_objective_words(prompt: &str) -> Option<Vec<String>> {
@@ -746,6 +825,7 @@ pub(crate) fn request_from_session_name(
             session_name: Some(session_name),
             ..Default::default()
         }),
+        work_title_long_brief: false,
         display_agent: None,
         state_labels: std::collections::HashMap::new(),
         tokens: std::collections::HashMap::new(),
@@ -855,6 +935,113 @@ mod tests {
     #[test]
     fn terse_continuation_has_no_standalone_title() {
         assert_eq!(calculate_work_title("please do it now"), None);
+    }
+
+    #[test]
+    fn task_notification_prompt_does_not_set_a_title() {
+        let input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-notification",
+            "prompt": "<task-notification>\nClose PR 1549 and remove the work title.\n</task-notification>"
+        })
+        .to_string();
+
+        assert!(
+            request_from_turn_start(WorkTitleProvider::Codex, Some("w1:p1"), &input, 1,).is_none()
+        );
+    }
+
+    #[test]
+    fn system_reminder_only_prompt_does_not_set_a_title() {
+        let input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-reminder",
+            "prompt": "<system-reminder>\nFix SCA-42 and rename this tab.\n</system-reminder>"
+        })
+        .to_string();
+
+        assert!(
+            request_from_turn_start(WorkTitleProvider::Codex, Some("w1:p1"), &input, 1,).is_none()
+        );
+    }
+
+    #[test]
+    fn injected_paragraphs_do_not_contribute_titles_or_references() {
+        let input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-injected-paragraph",
+            "prompt": "Keep the work title stable.\n\n[SYSTEM NOTIFICATION - NOT USER INPUT]\nClose https://github.com/o/r/pull/1549\n\nStop hook feedback: rename the tab to billing."
+        })
+        .to_string();
+        let request =
+            request_from_turn_start(WorkTitleProvider::Codex, Some("w1:p1"), &input, 1).unwrap();
+
+        assert_eq!(request.title.as_deref(), Some("Keep Work Title Stable"));
+        let context = request.work_context.unwrap();
+        assert!(context.pr_urls.is_empty());
+        assert!(context.ticket_ids.is_empty());
+    }
+
+    #[test]
+    fn long_brief_threshold_counts_words_across_paragraphs() {
+        let twenty_words = "keep this work title stable across every short follow up turn and retain the task topic while ordinary questions arrive";
+        let prompt = format!("{}\n\n{}", twenty_words, twenty_words);
+        assert!(is_long_work_brief(&prompt));
+        assert!(!is_long_work_brief(twenty_words));
+
+        let input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-long-brief",
+            "prompt": prompt
+        })
+        .to_string();
+        let request =
+            request_from_turn_start(WorkTitleProvider::Codex, Some("w1:p1"), &input, 1).unwrap();
+        assert!(request.work_title_long_brief);
+    }
+
+    #[test]
+    fn new_work_reference_means_a_ticket_or_pull_request_not_in_context() {
+        let current = crate::work_context::PaneWorkContext {
+            ticket_ids: vec!["SCA-9".into()],
+            pr_urls: vec!["https://github.com/o/r/pull/9".into()],
+            ..Default::default()
+        };
+        let repeated = crate::work_context::PaneWorkContext {
+            ticket_ids: vec!["SCA-9".into()],
+            pr_urls: vec!["https://github.com/o/r/pull/9".into()],
+            ..Default::default()
+        };
+        let new_ticket = crate::work_context::PaneWorkContext {
+            ticket_ids: vec!["SCA-10".into()],
+            ..Default::default()
+        };
+        let new_pr = crate::work_context::PaneWorkContext {
+            pr_urls: vec!["https://github.com/o/r/pull/10".into()],
+            ..Default::default()
+        };
+
+        assert!(!work_title_has_new_reference(&current, &repeated));
+        assert!(work_title_has_new_reference(&current, &new_ticket));
+        assert!(work_title_has_new_reference(&current, &new_pr));
+    }
+
+    #[test]
+    fn one_a_is_a_short_non_brief_prompt() {
+        let input = serde_json::json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-one-a",
+            "prompt": "1a"
+        })
+        .to_string();
+        let request =
+            request_from_turn_start(WorkTitleProvider::Codex, Some("w1:p1"), &input, 1).unwrap();
+
+        assert_eq!(request.title.as_deref(), Some("1A"));
+        assert!(!request.work_title_long_brief);
+        assert!(request
+            .work_context
+            .is_some_and(|context| context.ticket_ids.is_empty() && context.pr_urls.is_empty()));
     }
 
     #[test]
