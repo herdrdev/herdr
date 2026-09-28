@@ -423,6 +423,12 @@ fn promoted_agent_link_fixture(
     server.app.state.notepad.agent_tab = true;
     server.app.state.notepad.agent_collapsed.links = true;
     server.app.state.notepad.agent_scroll = 0;
+    // Both clients select the Agent tab, so it must be visible.
+    server
+        .app
+        .state
+        .notepad
+        .set_visible_tabs(vec!["agent".into(), "usage".into()]);
     server.app.state.mouse_capture = true;
 
     let cell_size = crate::kitty_graphics::HostCellSize {

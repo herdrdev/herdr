@@ -355,6 +355,7 @@ pub(crate) fn prompt_button_rects(area: Rect) -> Option<(Rect, Rect)> {
 /// the timer is off or the sidebar is too narrow to hold it beside the icons.
 pub(crate) fn pomodoro_hit_area(app: &AppState, sidebar: Rect) -> Rect {
     if !app.pomodoro.enabled
+        || !app.pomodoro.sidebar_visible
         || (app.sidebar_sections_layout && !app.sidebar_areas.pomodoro)
         || app.sidebar_collapsed
         || sidebar.height == 0
@@ -441,7 +442,8 @@ pub(crate) fn render_indicator(
     area: Rect,
     now: std::time::Instant,
 ) {
-    if area.width == 0 || area.height == 0 || !app.pomodoro.enabled {
+    if area.width == 0 || area.height == 0 || !app.pomodoro.enabled || !app.pomodoro.sidebar_visible
+    {
         return;
     }
     let held = app.pomodoro.held();
@@ -903,6 +905,7 @@ mod tests {
     fn state() -> AppState {
         let mut app = AppState::test_new();
         app.pomodoro.enabled = true;
+        app.pomodoro.sidebar_visible = true;
         app
     }
 
@@ -1048,6 +1051,16 @@ mod tests {
     fn a_disabled_timer_claims_no_footer_slot() {
         let mut app = state();
         app.pomodoro.enabled = false;
+        assert_eq!(
+            pomodoro_hit_area(&app, Rect::new(0, 0, 30, 20)),
+            Rect::default()
+        );
+    }
+
+    #[test]
+    fn a_hidden_widget_claims_no_footer_slot_while_the_timer_runs() {
+        let mut app = state();
+        app.pomodoro.sidebar_visible = false;
         assert_eq!(
             pomodoro_hit_area(&app, Rect::new(0, 0, 30, 20)),
             Rect::default()
@@ -1577,6 +1590,7 @@ mod render_tests {
         app.pomodoro = crate::pomodoro::PomodoroState::from_config(
             &crate::config::PomodoroConfig {
                 enabled: true,
+                sidebar_visible: true,
                 ..Default::default()
             },
             now,

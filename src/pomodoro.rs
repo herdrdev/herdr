@@ -71,6 +71,7 @@ pub struct PomodoroTick {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PomodoroState {
     pub enabled: bool,
+    pub sidebar_visible: bool,
     pub work: Duration,
     pub short_break: Duration,
     pub long_break: Duration,
@@ -100,6 +101,7 @@ impl Default for PomodoroState {
         let work = Duration::from_secs(25 * 60);
         Self {
             enabled: false,
+            sidebar_visible: false,
             work,
             short_break: Duration::from_secs(5 * 60),
             long_break: Duration::from_secs(20 * 60),
@@ -121,6 +123,7 @@ impl PomodoroState {
     pub fn from_config(config: &crate::config::PomodoroConfig, now: Instant) -> Self {
         let mut state = Self {
             enabled: config.enabled,
+            sidebar_visible: config.sidebar_visible,
             work: minutes(config.work_minutes, 25),
             short_break: minutes(config.short_break_minutes, 5),
             long_break: minutes(config.long_break_minutes, 20),
@@ -147,6 +150,7 @@ impl PomodoroState {
         self.long_break_every = config.long_break_every.max(1);
         self.min_confirm_chars = config.min_confirm_chars;
         self.enabled = config.enabled;
+        self.sidebar_visible = config.sidebar_visible;
         if !self.enabled {
             self.deadline = None;
             self.prompt = None;

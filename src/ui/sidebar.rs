@@ -29267,6 +29267,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.sidebar_areas.hosts = true;
         app.notepad.enabled = true;
         app.notepad.height = 18;
+        app.notepad.set_visible_tabs(vec!["usage".to_string()]);
         app.goals.enabled = true;
         app.goals.load = crate::goals::GoalsLoad::Ready(
             crate::goals::parse(
@@ -29281,6 +29282,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("goals fixture"),
         );
         app.pomodoro.enabled = true;
+        app.pomodoro.sidebar_visible = true;
         app.machines = vec![crate::app::machines::Machine {
             name: "ub2".into(),
             target: None,

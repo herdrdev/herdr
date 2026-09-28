@@ -1858,7 +1858,16 @@ mod tests {
 
     #[test]
     fn cli_user_dir_creation_seeds_legacy_config_before_printing_config_dir() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
         let plugin_id = unique_plugin_id("legacy-config");
+        let root = std::env::temp_dir().join(format!(
+            "herdr-cli-plugin-legacy-{}-{}",
+            std::process::id(),
+            crate::config::test_unique_suffix()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        env.set("XDG_CONFIG_HOME", root.join("config"));
+        env.set("XDG_STATE_HOME", root.join("state"));
         let config_dir = crate::plugin_paths::plugin_config_dir(&plugin_id);
         let state_dir = crate::plugin_paths::plugin_state_dir(&plugin_id);
         let legacy_dir = crate::config::config_dir().join("plugins").join(&plugin_id);
@@ -1881,5 +1890,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(config_dir);
         let _ = std::fs::remove_dir_all(state_dir);
         let _ = std::fs::remove_dir_all(legacy_dir);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

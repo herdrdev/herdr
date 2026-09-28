@@ -7491,6 +7491,9 @@ mod tests {
             })
             .expect("work context");
         app.state.notepad.enabled = true;
+        app.state
+            .notepad
+            .set_visible_tabs(vec!["context".to_string()]);
         app.state.notepad.context_active = true;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 30));
         let panel = app.state.view.notepad_rect;

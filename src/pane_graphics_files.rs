@@ -272,6 +272,9 @@ fn create_generation(base: &Path) -> io::Result<Generation> {
 fn runtime_base() -> PathBuf {
     #[cfg(unix)]
     {
+        #[cfg(test)]
+        let root = std::env::temp_dir();
+        #[cfg(not(test))]
         let root = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .filter(|path| path.is_absolute())

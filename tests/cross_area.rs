@@ -814,11 +814,12 @@ fn cross_area_agent_process_survives_detach_and_reattach() {
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let path_override = format!("{}:{}", bin_dir.display(), inherited_path);
 
-    let server = spawn_server_with_path(
+    let server = spawn_server_with_config_text(
         &config_home,
         &runtime_dir,
         &api_socket,
         Some(Path::new(&path_override)),
+        "onboarding = false\n[ui]\nshow_home_on_start = false\n[notepad]\nvisible_tabs = []\n",
     );
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_socket(&client_socket, Duration::from_secs(10));

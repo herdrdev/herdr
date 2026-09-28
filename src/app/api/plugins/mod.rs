@@ -736,6 +736,16 @@ mod tests {
         ))
     }
 
+    fn isolate_plugin_user_dirs(
+        env: &mut crate::config::TestConfigEnvGuard,
+        name: &str,
+    ) -> std::path::PathBuf {
+        let root = unique_temp_path(name);
+        env.set("XDG_CONFIG_HOME", root.join("config"));
+        env.set("XDG_STATE_HOME", root.join("state"));
+        root
+    }
+
     fn canonical_path_string(path: &std::path::Path) -> String {
         crate::platform::plugin_runtime_path(
             &path.canonicalize().unwrap_or_else(|_| path.to_path_buf()),
@@ -834,7 +844,8 @@ action = "bootstrap"
     fn plugin_link_creates_stable_config_and_state_dirs() {
         // Reads env-derived config/state paths; hold the env guard so no
         // concurrent test can repoint XDG_CONFIG_HOME underneath it.
-        let _env = crate::config::TestConfigEnvGuard::acquire();
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let user_dirs = isolate_plugin_user_dirs(&mut env, "plugin-link-dirs-home");
         let mut app = test_app();
         let root = unique_temp_path("plugin-link-dirs");
         let config_dir = super::env::plugin_config_dir("example.config-dirs");
@@ -860,13 +871,15 @@ platforms = ["linux", "macos", "windows"]
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(config_dir);
         let _ = std::fs::remove_dir_all(state_dir);
+        let _ = std::fs::remove_dir_all(user_dirs);
     }
 
     #[test]
     fn plugin_link_seeds_stable_config_dir_from_legacy_unhashed_dir() {
         // Reads env-derived config/state paths; hold the env guard so no
         // concurrent test can repoint XDG_CONFIG_HOME underneath it.
-        let _env = crate::config::TestConfigEnvGuard::acquire();
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let user_dirs = isolate_plugin_user_dirs(&mut env, "plugin-link-legacy-home");
         let mut app = test_app();
         let root = unique_temp_path("plugin-link-legacy-config");
         let config_dir = super::env::plugin_config_dir("example.legacy-config");
@@ -901,6 +914,7 @@ platforms = ["linux", "macos", "windows"]
         let _ = std::fs::remove_dir_all(config_dir);
         let _ = std::fs::remove_dir_all(state_dir);
         let _ = std::fs::remove_dir_all(legacy_dir);
+        let _ = std::fs::remove_dir_all(user_dirs);
     }
 
     #[test]
@@ -1589,7 +1603,8 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \"$PWD\" \
     async fn plugin_pane_open_injects_plugin_paths_and_protects_overrides() {
         // Reads env-derived config/state paths; hold the env guard so no
         // concurrent test can repoint XDG_CONFIG_HOME underneath it.
-        let _env = crate::config::TestConfigEnvGuard::acquire();
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let user_dirs = isolate_plugin_user_dirs(&mut env, "plugin-pane-path-env-home");
         let mut app = test_app();
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("plugin-path-env")];
         app.state.ensure_test_terminals();
@@ -1682,6 +1697,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s\n' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PL
             runtime.shutdown();
         }
         let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(user_dirs);
     }
 
     #[cfg(unix)]
@@ -2187,6 +2203,7 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
         let mut guard = crate::config::TestConfigEnvGuard::acquire();
         let base = unique_temp_path("plugin-global-refresh");
         guard.set("XDG_CONFIG_HOME", &base);
+        guard.set("XDG_STATE_HOME", base.join("state"));
         let root = base.join("plugin");
         write_manifest(&root);
         let plugin = load_plugin_manifest(&root.display().to_string(), false).unwrap();
@@ -2344,7 +2361,8 @@ command = ["sh", "-c", "printf '%s' \"$HERDR_PLUGIN_ACTION_ID\""]
     fn manifest_action_invoke_injects_plugin_paths() {
         // Reads env-derived config/state paths; hold the env guard so no
         // concurrent test can repoint XDG_CONFIG_HOME underneath it.
-        let _env = crate::config::TestConfigEnvGuard::acquire();
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let user_dirs = isolate_plugin_user_dirs(&mut env, "plugin-action-path-env-home");
         let mut app = test_app();
         let root = unique_temp_path("plugin-action-path-env");
         write_manifest_content(
@@ -2429,6 +2447,7 @@ command = ["sh", "-c", "printf '%s\n%s\n%s' \"$HERDR_PLUGIN_ROOT\" \"$HERDR_PLUG
         );
 
         let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(user_dirs);
     }
 
     #[tokio::test]

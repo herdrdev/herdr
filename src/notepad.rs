@@ -119,6 +119,8 @@ pub(crate) struct NotepadState {
     pub(crate) dir: Option<PathBuf>,
     pub(crate) files: Vec<NotepadFile>,
     pub(crate) active: usize,
+    /// Configured sidebar tabs. Note entries use `note:<stem>` keys.
+    pub(crate) visible_tabs: Vec<String>,
     /// The Context tab is showing instead of a note. `active` still names the
     /// note the operator was on, so leaving the tab lands back on it.
     pub(crate) context_active: bool,
@@ -158,6 +160,7 @@ impl Default for NotepadState {
             dir: None,
             files: Vec::new(),
             active: 0,
+            visible_tabs: vec!["usage".to_string()],
             context_active: false,
             lines: vec![String::new()],
             cursor_line: 0,
@@ -169,7 +172,7 @@ impl Default for NotepadState {
             error: None,
             save_due: None,
             agent_tab: false,
-            usage_tab: false,
+            usage_tab: true,
             agent_collapsed: AgentSectionCollapse::default(),
             agent_scroll: 0,
             usage_scroll: 0,
@@ -184,15 +187,163 @@ impl NotepadState {
         std::mem::swap(&mut self.agent_collapsed, &mut other.agent_collapsed);
         std::mem::swap(&mut self.agent_scroll, &mut other.agent_scroll);
         std::mem::swap(&mut self.usage_scroll, &mut other.usage_scroll);
+        // A client's saved selection can predate a visibility change.
+        self.reconcile_active_tab();
     }
 
     pub(crate) fn from_config(config: &crate::config::NotepadConfig) -> Self {
-        Self {
+        let mut state = Self {
             enabled: config.enabled,
             height: config.height.clamp(MIN_HEIGHT, MAX_HEIGHT),
             dir: config.enabled.then(|| notes_dir(config)),
+            visible_tabs: config.visible_tabs.clone(),
             ..Self::default()
+        };
+        state.reconcile_active_tab();
+        state
+    }
+
+    pub(crate) fn tab_config_key(&self, target: NotepadTabTarget) -> Option<String> {
+        match target {
+            NotepadTabTarget::Note(index) => self
+                .files
+                .get(index)
+                .map(|file| format!("note:{}", file.name)),
+            NotepadTabTarget::Context => Some("context".to_string()),
+            NotepadTabTarget::Agent => Some("agent".to_string()),
+            NotepadTabTarget::Usage => Some("usage".to_string()),
         }
+    }
+
+    pub(crate) fn is_tab_visible(&self, target: NotepadTabTarget) -> bool {
+        self.tab_config_key(target)
+            .is_some_and(|key| self.visible_tabs.iter().any(|visible| visible == &key))
+    }
+
+    pub(crate) fn visible_tab_targets(&self) -> Vec<NotepadTabTarget> {
+        let mut targets = self
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(index, _)| {
+                let target = NotepadTabTarget::Note(index);
+                self.is_tab_visible(target).then_some(target)
+            })
+            .collect::<Vec<_>>();
+        for target in [
+            NotepadTabTarget::Context,
+            NotepadTabTarget::Agent,
+            NotepadTabTarget::Usage,
+        ] {
+            if self.is_tab_visible(target) {
+                targets.push(target);
+            }
+        }
+        targets
+    }
+
+    pub(crate) fn has_visible_tabs(&self) -> bool {
+        self.files
+            .iter()
+            .enumerate()
+            .any(|(index, _)| self.is_tab_visible(NotepadTabTarget::Note(index)))
+            || [
+                NotepadTabTarget::Context,
+                NotepadTabTarget::Agent,
+                NotepadTabTarget::Usage,
+            ]
+            .into_iter()
+            .any(|target| self.is_tab_visible(target))
+    }
+
+    /// Replaces the configured visibility and moves selection away from a tab
+    /// that became hidden.
+    pub(crate) fn set_visible_tabs(&mut self, visible_tabs: Vec<String>) -> bool {
+        self.visible_tabs = visible_tabs;
+        self.reconcile_active_tab()
+    }
+
+    pub(crate) fn set_tab_visible(&mut self, target: NotepadTabTarget, visible: bool) -> bool {
+        let Some(key) = self.tab_config_key(target) else {
+            return false;
+        };
+        self.set_tab_key_visible(&key, visible)
+    }
+
+    pub(crate) fn set_note_tab_visible(&mut self, name: &str, visible: bool) -> bool {
+        self.set_tab_key_visible(&format!("note:{name}"), visible)
+    }
+
+    fn set_tab_key_visible(&mut self, key: &str, visible: bool) -> bool {
+        let was_visible = self.visible_tabs.iter().any(|item| item == key);
+        if was_visible == visible {
+            return false;
+        }
+        if visible {
+            self.visible_tabs.push(key.to_string());
+        } else {
+            self.visible_tabs.retain(|item| item != key);
+        }
+        self.reconcile_active_tab();
+        true
+    }
+
+    pub(crate) fn active_tab_target(&self) -> Option<NotepadTabTarget> {
+        if self.context_active {
+            Some(NotepadTabTarget::Context)
+        } else if self.agent_tab {
+            Some(NotepadTabTarget::Agent)
+        } else if self.usage_tab {
+            Some(NotepadTabTarget::Usage)
+        } else {
+            let target = self
+                .active_file()
+                .map(|_| NotepadTabTarget::Note(self.active));
+            target.filter(|target| self.is_tab_visible(*target))
+        }
+    }
+
+    fn reconcile_active_tab(&mut self) -> bool {
+        let previous = self.active_tab_target();
+        if previous.is_some_and(|target| self.is_tab_visible(target)) {
+            return false;
+        }
+        let next = self.visible_tab_targets().into_iter().next();
+        match next {
+            Some(NotepadTabTarget::Note(index)) => {
+                self.active = index;
+                self.context_active = false;
+                self.agent_tab = false;
+                self.usage_tab = false;
+                self.cursor_line = 0;
+                self.cursor_col = 0;
+                self.scroll = 0;
+            }
+            Some(NotepadTabTarget::Context) => {
+                self.context_active = true;
+                self.agent_tab = false;
+                self.usage_tab = false;
+            }
+            Some(NotepadTabTarget::Agent) => {
+                self.context_active = false;
+                self.agent_tab = true;
+                self.usage_tab = false;
+                self.focused = false;
+            }
+            Some(NotepadTabTarget::Usage) => {
+                self.context_active = false;
+                self.agent_tab = false;
+                self.usage_tab = true;
+                self.focused = false;
+            }
+            None => {
+                self.context_active = false;
+                self.agent_tab = false;
+                self.usage_tab = false;
+                self.focused = false;
+            }
+        }
+        previous != self.active_tab_target()
     }
 
     pub(crate) fn active_file(&self) -> Option<&NotepadFile> {
@@ -231,10 +382,14 @@ impl NotepadState {
         self.active = current
             .and_then(|path| self.files.iter().position(|file| file.path == path))
             .unwrap_or(0);
+        self.reconcile_active_tab();
     }
 
     pub(crate) fn select(&mut self, index: usize) -> bool {
-        if self.files.is_empty() || index >= self.files.len() {
+        if self.files.is_empty()
+            || index >= self.files.len()
+            || !self.is_tab_visible(NotepadTabTarget::Note(index))
+        {
             return false;
         }
         if index == self.active && !self.context_active && !self.agent_tab && !self.usage_tab {
@@ -253,7 +408,7 @@ impl NotepadState {
     /// Shows the focused pane's agent state instead of a note. The view is
     /// read-only, so the editor focus is released.
     pub(crate) fn select_agent_tab(&mut self) -> bool {
-        if self.agent_tab {
+        if !self.is_tab_visible(NotepadTabTarget::Agent) || self.agent_tab {
             return false;
         }
         self.agent_tab = true;
@@ -265,7 +420,7 @@ impl NotepadState {
     }
 
     pub(crate) fn select_usage_tab(&mut self) -> bool {
-        if self.usage_tab {
+        if !self.is_tab_visible(NotepadTabTarget::Usage) || self.usage_tab {
             return false;
         }
         self.usage_tab = true;
@@ -295,7 +450,7 @@ impl NotepadState {
     /// Shows the Context tab. The note buffer is untouched, so returning to a
     /// note needs no reload.
     pub(crate) fn select_context(&mut self) -> bool {
-        if self.context_active {
+        if !self.is_tab_visible(NotepadTabTarget::Context) || self.context_active {
             return false;
         }
         self.context_active = true;
@@ -305,36 +460,24 @@ impl NotepadState {
     }
 
     pub(crate) fn cycle(&mut self, backwards: bool) -> bool {
-        // The read-only tabs ride after the last note.
-        let context_stop = self.files.len();
-        let agent_stop = context_stop + 1;
-        let usage_stop = agent_stop + 1;
-        let stops = usage_stop + 1;
-        if stops < 2 {
+        let targets = self.visible_tab_targets();
+        if targets.len() < 2 {
             return false;
         }
-        let current = if self.usage_tab {
-            usage_stop
-        } else if self.agent_tab {
-            agent_stop
-        } else if self.context_active {
-            context_stop
-        } else {
-            self.active
-        };
+        let current = self
+            .active_tab_target()
+            .and_then(|active| targets.iter().position(|target| *target == active))
+            .unwrap_or(0);
         let next = if backwards {
-            (current + stops - 1) % stops
+            (current + targets.len() - 1) % targets.len()
         } else {
-            (current + 1) % stops
+            (current + 1) % targets.len()
         };
-        if next == usage_stop {
-            self.select_usage_tab()
-        } else if next == agent_stop {
-            self.select_agent_tab()
-        } else if next == context_stop {
-            self.select_context()
-        } else {
-            self.select(next)
+        match targets[next] {
+            NotepadTabTarget::Note(index) => self.select(index),
+            NotepadTabTarget::Context => self.select_context(),
+            NotepadTabTarget::Agent => self.select_agent_tab(),
+            NotepadTabTarget::Usage => self.select_usage_tab(),
         }
     }
 
@@ -754,6 +897,21 @@ mod tests {
     }
 
     #[test]
+    fn restoring_a_client_selection_drops_a_tab_hidden_since() {
+        let mut state = state_with("");
+        state.set_visible_tabs(vec!["agent".into()]);
+        let mut saved = NotepadPresentationState {
+            usage_tab: true,
+            ..NotepadPresentationState::default()
+        };
+
+        state.swap_presentation(&mut saved);
+
+        assert!(!state.usage_tab);
+        assert_eq!(state.active_tab_target(), Some(NotepadTabTarget::Agent));
+    }
+
+    #[test]
     fn typing_marks_the_buffer_dirty_and_schedules_one_write() {
         let now = Instant::now();
         let mut state = state_with("");
@@ -831,6 +989,7 @@ mod tests {
                 name: "todo".into(),
             },
         ]);
+        state.set_visible_tabs(vec!["note:ideas".into(), "note:todo".into()]);
         assert!(state.select(1));
         state.set_files(vec![
             NotepadFile {
@@ -865,6 +1024,14 @@ mod tests {
                 name: "b".into(),
             },
         ]);
+        state.set_visible_tabs(vec![
+            "note:a".into(),
+            "note:b".into(),
+            "context".into(),
+            "agent".into(),
+            "usage".into(),
+        ]);
+        assert!(state.select(0));
         // The read-only tabs are the last stops.
         assert!(state.cycle(false));
         assert_eq!(state.active, 1);
@@ -899,6 +1066,7 @@ mod tests {
             path: PathBuf::from("/notes/todo.md"),
             name: "todo".into(),
         }]);
+        state.set_visible_tabs(vec!["note:todo".into(), "agent".into()]);
         state.focused = true;
 
         assert!(state.select_agent_tab());
@@ -947,6 +1115,7 @@ mod tests {
             path: PathBuf::from("/notes/a.md"),
             name: "a".into(),
         }]);
+        state.set_visible_tabs(vec!["note:a".into(), "context".into()]);
         assert!(state.select_context());
         assert!(!state.select_context());
         // Re-selecting the already-active note still leaves the Context tab.

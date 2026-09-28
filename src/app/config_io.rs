@@ -30,6 +30,13 @@ impl App {
     pub(super) fn save_config_edit(&mut self, edit: crate::app::settings_general::ConfigEdit) {
         use crate::app::settings_general::ConfigEdit;
 
+        let ensure_note = match &edit {
+            ConfigEdit::NotepadTabVisibility {
+                ensure_note: Some(name),
+                ..
+            } => Some(name.clone()),
+            _ => None,
+        };
         let saved = match edit {
             ConfigEdit::Notifications {
                 delivery,
@@ -67,9 +74,53 @@ impl App {
             } => self.update_config_file(key, |content| {
                 crate::config::upsert_section_value(content, section, key, &format!("\"{value}\""))
             }),
+            ConfigEdit::StringList {
+                section,
+                key,
+                value,
+            } => self.update_config_file(key, |content| {
+                let value =
+                    toml::Value::Array(value.into_iter().map(toml::Value::String).collect())
+                        .to_string();
+                crate::config::upsert_section_value(content, section, key, &value)
+            }),
+            ConfigEdit::NotepadTabVisibility {
+                visible_tabs,
+                enable_notepad,
+                ..
+            } => self.update_config_file("notepad visible tabs", |content| {
+                let value =
+                    toml::Value::Array(visible_tabs.into_iter().map(toml::Value::String).collect())
+                        .to_string();
+                let content =
+                    crate::config::upsert_section_value(content, "notepad", "visible_tabs", &value);
+                if enable_notepad {
+                    crate::config::upsert_section_bool(&content, "notepad", "enabled", true)
+                } else {
+                    content
+                }
+            }),
+            ConfigEdit::PomodoroSidebarVisible { visible } => {
+                self.update_config_file("pomodoro sidebar visibility", |content| {
+                    let content = crate::config::upsert_section_bool(
+                        content,
+                        "pomodoro",
+                        "sidebar_visible",
+                        visible,
+                    );
+                    if visible {
+                        crate::config::upsert_section_bool(&content, "pomodoro", "enabled", true)
+                    } else {
+                        content
+                    }
+                })
+            }
         };
         if saved {
             self.apply_config_from_disk(false);
+            if let Some(name) = ensure_note {
+                self.ensure_notepad_note_file(&name);
+            }
         }
     }
 

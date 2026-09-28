@@ -339,11 +339,25 @@ mod tests {
         ));
         app.notepad.enabled = true;
         app.notepad.height = 5;
+        app.notepad.set_visible_tabs(vec!["usage".to_string()]);
         let rects = split_sidebar_panels(&app, Rect::new(0, 1, 36, 12));
 
         assert!(rects.workspaces.height >= crate::ui::sidebar::sidebar_workspace_floor(&app));
         assert!(rects.workspaces.bottom() <= rects.notepad.y);
         assert!(rects.notepad.bottom() <= rects.goals.y);
         assert_eq!(rects.goals.bottom(), 13);
+    }
+
+    #[test]
+    fn hidden_goals_reserve_no_sidebar_rows() {
+        let mut app = app(GoalsLoad::Ready(
+            crate::goals::parse(FILE).expect("fixture"),
+        ));
+        app.goals.enabled = false;
+        let content = Rect::new(0, 1, 36, 20);
+        let rects = split_sidebar_panels(&app, content);
+
+        assert_eq!(rects.goals, Rect::default());
+        assert_eq!(rects.workspaces, content);
     }
 }

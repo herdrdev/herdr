@@ -859,6 +859,8 @@ mod render_scale_benchmark {
         app.notepad.enabled = true;
         app.notepad.height = 18;
         if open {
+            app.notepad
+                .set_visible_tabs(vec!["context".into(), "agent".into()]);
             assert!(app.notepad.select_agent_tab());
         }
         app
@@ -874,6 +876,8 @@ mod render_scale_benchmark {
             crate::provider_usage::AccountUsage::default(),
         );
         if open {
+            app.notepad
+                .set_visible_tabs(vec!["context".into(), "usage".into()]);
             assert!(app.notepad.select_usage_tab());
         }
         app

@@ -101,6 +101,7 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         );
+        app.state.goals.enabled = true;
         app.goals_focused_cwd = Some("/previous".into());
         app.goals_refresh_in_flight = true;
         app.state.goals.load = crate::goals::GoalsLoad::Malformed("previous".into());

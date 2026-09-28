@@ -266,6 +266,10 @@ impl super::App {
     /// Applies a live config reload to both surfaces.
     pub(crate) fn apply_notepad_config(&mut self, config: &crate::config::NotepadConfig) {
         self.notepad_preferred_files = config.files.clone();
+        self.state.sidebar_note_names = crate::app::state::sidebar_panel_note_names(
+            &self.notepad_preferred_files,
+            &self.pomodoro_log_file,
+        );
         self.notepad_git_sync = config.git_sync;
         self.notepad_git_sync_interval =
             std::time::Duration::from_secs(config.git_sync_interval_seconds.clamp(15, 3600));
@@ -275,29 +279,103 @@ impl super::App {
         if next.dir != self.state.notepad.dir || next.enabled != self.state.notepad.enabled {
             self.write_notepad_now();
             let focused = self.state.notepad.focused && next.enabled;
-            // Read-only tabs are view choices, not note content.
-            let agent_tab = self.state.notepad.agent_tab && next.enabled;
-            let usage_tab = self.state.notepad.usage_tab && next.enabled;
+            let active_target = self.state.notepad.active_tab_target();
             let agent_collapsed = self.state.notepad.agent_collapsed;
             self.state.notepad = next;
             self.state.notepad.focused = focused;
-            self.state.notepad.agent_tab = agent_tab;
-            self.state.notepad.usage_tab = usage_tab;
             self.state.notepad.agent_collapsed = agent_collapsed;
+            match active_target {
+                Some(crate::notepad::NotepadTabTarget::Context) => {
+                    self.state.notepad.select_context();
+                }
+                Some(crate::notepad::NotepadTabTarget::Agent) => {
+                    self.state.notepad.select_agent_tab();
+                }
+                Some(crate::notepad::NotepadTabTarget::Usage) => {
+                    self.state.notepad.select_usage_tab();
+                }
+                _ => {}
+            }
             self.notepad_watcher = None;
             self.notepad_watched_dir = None;
-        } else if self.applied_notepad_config_height != Some(next_height) {
-            // A reload that left `[notepad] height` untouched must not stomp a
-            // height the operator dragged the panel to; one that changed it
-            // applies the new configured value.
-            self.state.notepad.height = next_height;
+        } else {
+            let previous_path = self.state.notepad.active_path().map(PathBuf::from);
+            let previous_target = self.state.notepad.active_tab_target();
+            let mut projected = self.state.notepad.clone();
+            projected.set_visible_tabs(config.visible_tabs.clone());
+            let next_path = projected.active_path().map(PathBuf::from);
+            let path_changed = previous_path != next_path;
+            let active_note_was_hidden = matches!(
+                previous_target,
+                Some(crate::notepad::NotepadTabTarget::Note(_))
+            ) && projected.active_tab_target() != previous_target;
+            if path_changed || active_note_was_hidden {
+                self.write_notepad_now();
+            }
+            self.state
+                .notepad
+                .set_visible_tabs(config.visible_tabs.clone());
+            if self.applied_notepad_config_height != Some(next_height) {
+                self.state.notepad.height = next_height;
+            }
+            if path_changed && self.state.notepad.enabled {
+                self.load_active_note();
+            }
         }
         self.applied_notepad_config_height = Some(next_height);
     }
 
     pub(crate) fn apply_pomodoro_config(&mut self, config: &crate::config::PomodoroConfig) {
         self.pomodoro_log_file = config.log_file.clone();
+        self.state.sidebar_note_names = crate::app::state::sidebar_panel_note_names(
+            &self.notepad_preferred_files,
+            &self.pomodoro_log_file,
+        );
         self.state.pomodoro.apply_config(config, Instant::now());
+    }
+
+    /// Creates a note chosen from Sidebar panels and refreshes discovery so its
+    /// newly enabled tab is immediately available.
+    pub(crate) fn ensure_notepad_note_file(&mut self, note_name: &str) {
+        let name = note_name.trim().trim_end_matches(".md");
+        if name.is_empty() || name.contains(['/', '\\']) {
+            return;
+        }
+        let Some(dir) = self.state.notepad.dir.clone() else {
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(error = %error, path = %dir.display(), "failed to create notepad directory");
+            self.state.notepad.error = Some(error.to_string());
+            return;
+        }
+        let path = dir.join(format!("{name}.md"));
+        let created = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => false,
+            Err(error) => {
+                tracing::warn!(error = %error, path = %path.display(), "failed to create notepad note");
+                self.state.notepad.error = Some(error.to_string());
+                return;
+            }
+        };
+        let watched = self.notepad_watched_dir.as_ref() == Some(&dir);
+        if watched {
+            if created {
+                let previous = self.state.notepad.active_path().map(PathBuf::from);
+                self.rescan_notepad_files();
+                if previous != self.state.notepad.active_path().map(PathBuf::from) {
+                    self.load_active_note();
+                }
+                self.request_notepad_repaint();
+            }
+        } else {
+            self.ensure_notepad();
+        }
     }
 }
 
@@ -322,6 +400,7 @@ mod tests {
                 enabled: true,
                 dir: dir.display().to_string(),
                 files: vec!["todo".into()],
+                visible_tabs: vec!["note:todo".into(), "note:ideas".into()],
                 ..Default::default()
             },
             ..Default::default()

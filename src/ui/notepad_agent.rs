@@ -604,6 +604,7 @@ mod tests {
         app.active = Some(0);
         app.notepad.enabled = true;
         app.notepad.height = 18;
+        app.notepad.set_visible_tabs(vec!["agent".to_string()]);
         app.status_now_unix = Some(BASE_SECS as i64 + 600);
         app.view_observed_unix_s = BASE_SECS + 600;
         let pane_id = app.workspaces[0].focused_pane_id().unwrap();
@@ -882,6 +883,12 @@ mod tests {
         const HEIGHT: u16 = 40;
         let (mut app, pane_id) = app_with_agent();
         report(&mut app, pane_id);
+        app.notepad.set_visible_tabs(vec![
+            "note:todo".to_string(),
+            "context".to_string(),
+            "agent".to_string(),
+            "usage".to_string(),
+        ]);
         app.notepad.set_files(vec![crate::notepad::NotepadFile {
             path: "/notes/todo.md".into(),
             name: "todo".into(),

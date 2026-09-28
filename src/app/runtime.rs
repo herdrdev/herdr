@@ -821,6 +821,10 @@ impl App {
         }
         if self.state.status_bar_enabled
             || self.state.notepad.enabled
+            || self
+                .state
+                .notepad
+                .is_tab_visible(crate::notepad::NotepadTabTarget::Usage)
             || self.state.usage_view.is_some()
             || self.state.home.is_some()
         {

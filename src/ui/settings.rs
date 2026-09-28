@@ -640,6 +640,7 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
             app.sound_enabled(),
             app.settings.list.selected,
         ),
+        SettingsSection::SidebarPanels => render_settings_sidebar_panels(app, frame, content_area),
         SettingsSection::Toast => render_modal_choice_list(
             frame,
             content_area,
@@ -995,6 +996,67 @@ fn render_settings_toggle(
         p,
         1,
     );
+}
+
+fn render_settings_sidebar_panels(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+    let [title, description, list] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Min(0),
+    ])
+    .areas(area);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "sidebar panels",
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD),
+        )),
+        title,
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "Choose which tabs and widgets appear in the bottom-left dock. Enter or click to toggle.",
+            Style::default().fg(p.overlay1),
+        )),
+        description,
+    );
+
+    let items = crate::app::state::settings_sidebar_panel_items(app);
+    let visible = list.height as usize;
+    let scroll = app
+        .settings
+        .list
+        .selected
+        .saturating_sub(visible.saturating_sub(1));
+    let rows = items
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible)
+        .map(|(index, item)| {
+            let selected = index == app.settings.list.selected;
+            let style = if selected {
+                Style::default()
+                    .fg(p.text)
+                    .bg(p.surface0)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(p.subtext0)
+            };
+            let marker = if item.visible { "[x]" } else { "[ ]" };
+            ListItem::new(Line::from(vec![
+                Span::styled(format!("{} ", if selected { "▸" } else { " " }), style),
+                Span::styled(
+                    marker,
+                    Style::default().fg(if item.visible { p.accent } else { p.overlay0 }),
+                ),
+                Span::styled(format!(" {}", item.label), style),
+            ]))
+        })
+        .collect::<Vec<_>>();
+    let mut state =
+        ListState::default().with_selected(Some(app.settings.list.selected.saturating_sub(scroll)));
+    frame.render_stateful_widget(List::new(rows), list, &mut state);
 }
 
 #[cfg(test)]

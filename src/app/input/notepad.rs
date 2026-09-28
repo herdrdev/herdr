@@ -6,8 +6,8 @@
 //!
 //! - The break prompt takes every key while it is up. That is the feature.
 //!   `ctrl+alt+b` is its documented escape hatch and pauses the timer instead.
-//! - The notepad only takes keys while it is focused, which only a click on the
-//!   panel or the `toggle_notepad` action can do.
+//! - The notepad only takes keys while a visible tab is focused, which a panel
+//!   click or the `toggle_notepad` action can do.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -59,14 +59,38 @@ impl AppState {
     }
 
     pub(crate) fn set_notepad_focus(&mut self, focused: bool) {
-        if focused && !self.notes_area_visible() {
+        // A zero-row panel has nothing to focus; typing would edit a hidden note.
+        if focused && (!self.notes_area_visible() || !self.notepad.has_visible_tabs()) {
             return;
         }
         if focused {
-            // The agent tab is read-only: taking the editor focus means going
-            // back to the active note.
-            self.notepad.agent_tab = false;
-            self.notepad.usage_tab = false;
+            let active_note = crate::notepad::NotepadTabTarget::Note(self.notepad.active);
+            let active_note_visible = self.notepad.enabled
+                && self.notepad.active_file().is_some()
+                && self.notepad.is_tab_visible(active_note);
+            if active_note_visible {
+                // Read-only tabs have no editor focus. Return to the active
+                // note only when an enabled, visible note can take over.
+                self.notepad.context_active = false;
+                self.notepad.agent_tab = false;
+                self.notepad.usage_tab = false;
+            } else if self.notepad.enabled {
+                if let Some(index) = self
+                    .notepad
+                    .files
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, _)| {
+                        self.notepad
+                            .is_tab_visible(crate::notepad::NotepadTabTarget::Note(index))
+                            .then_some(index)
+                    })
+                {
+                    // Keep the read-only tab active until the app has loaded
+                    // the visible note through its normal selection path.
+                    self.request_notepad(NotepadRequest::Select(index));
+                }
+            }
         }
         if self.notepad.focused == focused {
             return;
@@ -77,10 +101,14 @@ impl AppState {
         }
     }
 
-    /// Toggles notepad focus. Off when the panel is disabled or hidden.
+    /// Toggles focus for an enabled note editor or a visible read-only tab.
     pub(crate) fn toggle_notepad_focus(&mut self) -> bool {
         let focused = !self.notepad.focused;
-        if !self.notepad.enabled || (focused && !self.notes_area_visible()) {
+        let readonly_tab =
+            self.notepad.context_active || self.notepad.agent_tab || self.notepad.usage_tab;
+        if (!self.notepad.enabled && !readonly_tab)
+            || (focused && (!self.notes_area_visible() || !self.notepad.has_visible_tabs()))
+        {
             return false;
         }
         self.set_notepad_focus(focused);
@@ -131,19 +159,65 @@ impl AppState {
         true
     }
 
-    /// Routes a key into the note buffer while the panel is focused. Unhandled
-    /// modifier combinations fall through so global shortcuts keep working.
+    /// Routes a key into the focused panel tab. Unhandled modifier combinations
+    /// fall through so global shortcuts keep working.
     pub(crate) fn handle_notepad_key(&mut self, key: KeyEvent, now: std::time::Instant) -> bool {
-        if !self.notepad.enabled
-            || !self.notepad.focused
-            || self.notepad.agent_tab
-            || self.notepad.usage_tab
+        let readonly_tab = self.notepad.agent_tab || self.notepad.usage_tab;
+        if !self.notepad.focused
+            || (!self.notepad.enabled && !readonly_tab && !self.notepad.context_active)
         {
             return false;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if readonly_tab {
+            match key.code {
+                KeyCode::Esc => self.set_notepad_focus(false),
+                KeyCode::Tab => self.request_notepad(NotepadRequest::Cycle { backwards: false }),
+                KeyCode::BackTab => self.request_notepad(NotepadRequest::Cycle { backwards: true }),
+                KeyCode::Up => {
+                    if self.notepad.agent_tab {
+                        self.notepad
+                            .agent_scroll_by(-1, self.view.notepad_agent_max_scroll);
+                    } else {
+                        self.notepad
+                            .usage_scroll_by(-1, self.view.notepad_usage_max_scroll);
+                    }
+                }
+                KeyCode::Down => {
+                    if self.notepad.agent_tab {
+                        self.notepad
+                            .agent_scroll_by(1, self.view.notepad_agent_max_scroll);
+                    } else {
+                        self.notepad
+                            .usage_scroll_by(1, self.view.notepad_usage_max_scroll);
+                    }
+                }
+                KeyCode::PageUp => {
+                    let delta = -(i32::from(self.notepad.body_rows()) as isize);
+                    if self.notepad.agent_tab {
+                        self.notepad
+                            .agent_scroll_by(delta, self.view.notepad_agent_max_scroll);
+                    } else {
+                        self.notepad
+                            .usage_scroll_by(delta, self.view.notepad_usage_max_scroll);
+                    }
+                }
+                KeyCode::PageDown => {
+                    let delta = i32::from(self.notepad.body_rows()) as isize;
+                    if self.notepad.agent_tab {
+                        self.notepad
+                            .agent_scroll_by(delta, self.view.notepad_agent_max_scroll);
+                    } else {
+                        self.notepad
+                            .usage_scroll_by(delta, self.view.notepad_usage_max_scroll);
+                    }
+                }
+                _ => return false,
+            }
+            return true;
+        }
         // The Context tab is read-only: navigation keys scroll it, everything
         // else plain is swallowed so it cannot edit the note it hides, and
         // modifier combinations keep reaching the global shortcuts.
@@ -201,9 +275,6 @@ impl AppState {
     /// was consumed; a click outside the panel only drops focus and is left for
     /// its real target.
     pub(crate) fn handle_notepad_mouse(&mut self, mouse: &MouseEvent) -> bool {
-        if !self.notepad.enabled {
-            return false;
-        }
         // A drag off the top edge leaves the panel's rows; the active
         // resize owns the gesture wherever the pointer goes.
         if matches!(mouse.kind, MouseEventKind::Drag(MouseButton::Left))
@@ -573,7 +644,6 @@ mod tests {
     fn state_with_notepad() -> AppState {
         let mut state = AppState::test_new();
         state.notepad.enabled = true;
-        state.notepad.focused = true;
         state.notepad.set_files(vec![
             crate::notepad::NotepadFile {
                 path: "/notes/todo.md".into(),
@@ -584,7 +654,88 @@ mod tests {
                 name: "ideas".into(),
             },
         ]);
+        state.notepad.set_visible_tabs(vec![
+            "note:todo".to_string(),
+            "note:ideas".to_string(),
+            "context".to_string(),
+            "agent".to_string(),
+            "usage".to_string(),
+        ]);
+        state.notepad.focused = true;
         state
+    }
+
+    #[test]
+    fn focusing_the_default_usage_only_panel_keeps_the_usage_tab() {
+        let mut state = AppState::test_new();
+        let config = crate::config::Config::default();
+        state.notepad = crate::notepad::NotepadState::from_config(&config.notepad);
+
+        assert_eq!(
+            state.notepad.active_tab_target(),
+            Some(NotepadTabTarget::Usage)
+        );
+        assert!(state.toggle_notepad_focus());
+
+        assert!(state.notepad.usage_tab);
+        assert_eq!(
+            state.notepad.active_tab_target(),
+            Some(NotepadTabTarget::Usage)
+        );
+    }
+
+    #[test]
+    fn hiding_every_tab_blocks_focus_so_typing_cannot_reach_a_hidden_note() {
+        let mut state = AppState::test_new();
+        state.notepad.enabled = true;
+        state.notepad.set_files(vec![crate::notepad::NotepadFile {
+            path: "/notes/hidden.md".into(),
+            name: "hidden".into(),
+        }]);
+        state.notepad.set_visible_tabs(Vec::new());
+
+        assert!(!state.notepad.has_visible_tabs());
+        assert!(!state.toggle_notepad_focus());
+        state.set_notepad_focus(true);
+        assert!(!state.notepad.focused);
+        assert!(!state.handle_notepad_key(key(KeyCode::Char('x')), Instant::now()));
+    }
+
+    #[test]
+    fn focusing_from_usage_selects_a_visible_note_when_the_active_note_is_hidden() {
+        let mut state = AppState::test_new();
+        state.notepad.enabled = true;
+        state.notepad.set_files(vec![
+            crate::notepad::NotepadFile {
+                path: "/notes/hidden.md".into(),
+                name: "hidden".into(),
+            },
+            crate::notepad::NotepadFile {
+                path: "/notes/visible.md".into(),
+                name: "visible".into(),
+            },
+        ]);
+        state
+            .notepad
+            .set_visible_tabs(vec!["note:visible".into(), "usage".into()]);
+        state.notepad.active = 0;
+        state.notepad.usage_tab = true;
+
+        assert_eq!(
+            state.notepad.active_tab_target(),
+            Some(NotepadTabTarget::Usage)
+        );
+        assert!(state.toggle_notepad_focus());
+
+        assert_eq!(state.notepad_request, Some(NotepadRequest::Select(1)));
+        assert_eq!(
+            state.notepad.active, 0,
+            "selection waits for the app to load it"
+        );
+        assert!(
+            state.notepad.usage_tab,
+            "keep the read-only tab active until load"
+        );
     }
 
     #[test]
@@ -808,6 +959,9 @@ mod tests {
             path: "/notes/todo.md".into(),
             name: "todo".into(),
         }]);
+        state
+            .notepad
+            .set_visible_tabs(vec!["note:todo".to_string(), "agent".to_string()]);
         state.status_now_unix = Some(AGENT_BASE_SECS as i64 + 600);
         let pane_id = state.workspaces[0].focused_pane_id().unwrap();
         let terminal_id = state.workspaces[0].terminal_id(pane_id).unwrap().clone();

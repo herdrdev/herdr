@@ -3188,6 +3188,7 @@ pub enum SettingsSection {
     Theme,
     Indicators,
     Sound,
+    SidebarPanels,
     Toast,
     PaneLabels,
     Keybindings,
@@ -3204,6 +3205,7 @@ impl SettingsSection {
         Self::Theme,
         Self::Indicators,
         Self::Sound,
+        Self::SidebarPanels,
         Self::Toast,
         Self::PaneLabels,
         Self::Keybindings,
@@ -3220,6 +3222,7 @@ impl SettingsSection {
             Self::Theme => "theme",
             Self::Indicators => "indicators",
             Self::Sound => "sound",
+            Self::SidebarPanels => "sidebar panels",
             Self::Toast => "toasts",
             Self::PaneLabels => "pane labels",
             Self::Keybindings => "keybindings",
@@ -3238,6 +3241,7 @@ impl SettingsSection {
             Self::Theme => "◐",
             Self::Indicators => "●",
             Self::Sound => "♪",
+            Self::SidebarPanels => "▤",
             Self::Toast => "▣",
             Self::PaneLabels => "▭",
             Self::Keybindings => "⌨",
@@ -3273,6 +3277,96 @@ pub fn settings_sections_matching(query: &str) -> Vec<SettingsSection> {
         .copied()
         .filter(|section| section.label().contains(&query))
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SidebarPanelSettingTarget {
+    Note(String),
+    NotepadTab(crate::notepad::NotepadTabTarget),
+    Goals,
+    Pomodoro,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SidebarPanelSettingItem {
+    pub(crate) target: SidebarPanelSettingTarget,
+    pub(crate) label: String,
+    pub(crate) visible: bool,
+}
+
+pub(crate) fn settings_sidebar_panel_items(state: &AppState) -> Vec<SidebarPanelSettingItem> {
+    let mut note_names = state.sidebar_note_names.clone();
+    note_names.extend(state.notepad.files.iter().map(|file| file.name.clone()));
+    note_names.extend(
+        state
+            .notepad
+            .visible_tabs
+            .iter()
+            .filter_map(|tab| tab.strip_prefix("note:").map(str::to_string)),
+    );
+    let mut items = Vec::new();
+    for name in note_names {
+        if name.is_empty()
+            || name.contains(['/', '\\'])
+            || items.iter().any(|item: &SidebarPanelSettingItem| {
+                matches!(&item.target, SidebarPanelSettingTarget::Note(existing) if existing == &name)
+            })
+        {
+            continue;
+        }
+        let key = format!("note:{name}");
+        items.push(SidebarPanelSettingItem {
+            target: SidebarPanelSettingTarget::Note(name.clone()),
+            label: format!("Note · {name}"),
+            visible: state.notepad.visible_tabs.iter().any(|tab| tab == &key),
+        });
+    }
+    for (target, label) in [
+        (crate::notepad::NotepadTabTarget::Context, "Context tab"),
+        (crate::notepad::NotepadTabTarget::Agent, "Agent tab"),
+        (crate::notepad::NotepadTabTarget::Usage, "Usage tab"),
+    ] {
+        items.push(SidebarPanelSettingItem {
+            target: SidebarPanelSettingTarget::NotepadTab(target),
+            label: label.to_string(),
+            visible: state.notepad.is_tab_visible(target),
+        });
+    }
+    items.push(SidebarPanelSettingItem {
+        target: SidebarPanelSettingTarget::Goals,
+        label: "Goals section".to_string(),
+        visible: state.goals.enabled,
+    });
+    items.push(SidebarPanelSettingItem {
+        target: SidebarPanelSettingTarget::Pomodoro,
+        label: "Pomodoro widget".to_string(),
+        visible: state.pomodoro.sidebar_visible,
+    });
+    items
+}
+
+pub(crate) fn sidebar_panel_note_names(
+    configured_files: &[String],
+    pomodoro_log_file: &str,
+) -> Vec<String> {
+    let mut names = vec!["notes".to_string()];
+    for configured in configured_files {
+        let name = configured.trim().trim_end_matches(".md");
+        if !name.is_empty()
+            && !name.contains(['/', '\\'])
+            && !names.iter().any(|existing| existing == name)
+        {
+            names.push(name.to_string());
+        }
+    }
+    let log_name = pomodoro_log_file.trim().trim_end_matches(".md");
+    if !log_name.is_empty()
+        && !log_name.contains(['/', '\\'])
+        && !names.iter().any(|existing| existing == log_name)
+    {
+        names.push(log_name.to_string());
+    }
+    names
 }
 
 /// All built-in theme names in display order.
@@ -4703,6 +4797,8 @@ pub struct AppState {
     pub(crate) scratchpad: crate::scratchpad::ScratchpadDoc,
     /// The sidebar notepad: a folder of Markdown notes edited in place.
     pub(crate) notepad: crate::notepad::NotepadState,
+    /// Configured note names available to Sidebar panels before files are discovered.
+    pub(crate) sidebar_note_names: Vec<String>,
     /// Cached goals for the focused session. Rendering never reads the file.
     pub(crate) goals: crate::goals::GoalsPanelState,
     /// The break reminder shown next to it.
@@ -6232,12 +6328,13 @@ impl AppState {
         if let Some(owner) = ClientInputOwnerState::from_app(self).resolve() {
             return InputOwner::Client(owner);
         }
-        // The notepad is a visible client editor. Once focused it owns input
-        // and the host cursor ahead of shared modes and underlying surfaces.
-        // Config reloads can hide Notes without clearing its focus flag, so
-        // resolve ownership from the same visibility settings as the panel.
+        // A focused note editor or read-only dock tab owns input ahead of
+        // shared modes and underlying surfaces. Config reloads can hide Notes
+        // without clearing focus, so use the panel's current visibility.
+        let readonly_notepad_tab =
+            self.notepad.context_active || self.notepad.agent_tab || self.notepad.usage_tab;
         if self.notepad.focused
-            && self.notepad.enabled
+            && (self.notepad.enabled || readonly_notepad_tab)
             && (!self.sidebar_sections_layout || self.sidebar_areas.notes)
         {
             return InputOwner::Notepad;
@@ -7804,7 +7901,17 @@ impl AppState {
             dock_editor_errors: std::collections::HashMap::new(),
             dock_editor_requested_paths: std::collections::HashMap::new(),
             scratchpad: crate::scratchpad::ScratchpadDoc::default(),
-            notepad: crate::notepad::NotepadState::default(),
+            notepad: {
+                // Keep broad UI fixtures layout-neutral. Tests for shipped
+                // sidebar defaults load NotepadConfig::default() explicitly.
+                let mut notepad = crate::notepad::NotepadState::default();
+                notepad.set_visible_tabs(Vec::new());
+                notepad
+            },
+            sidebar_note_names: sidebar_panel_note_names(
+                &crate::config::NotepadConfig::default().files,
+                &crate::config::PomodoroConfig::default().log_file,
+            ),
             goals: crate::goals::GoalsPanelState::default(),
             pomodoro: crate::pomodoro::PomodoroState::default(),
             // Off in fixtures, the way the break timer is: a decorative panel

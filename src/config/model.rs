@@ -540,6 +540,11 @@ pub struct LaunchProfileConfig {
 pub struct NotepadConfig {
     /// Show the notepad panel at the bottom of the sidebar.
     pub enabled: bool,
+    /// Stable tab keys to show in the sidebar. Note files use `note:<stem>`;
+    /// the built-in tabs use `context`, `agent`, and `usage`. Turning on a note
+    /// in Sidebar panels also enables the notepad backend and creates a missing
+    /// note file.
+    pub visible_tabs: Vec<String>,
     /// Notes directory. Empty uses `<config dir>/notes`. `~` is expanded.
     pub dir: String,
     /// Note names to offer first, in this order. Others follow alphabetically.
@@ -557,6 +562,7 @@ impl Default for NotepadConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            visible_tabs: vec!["usage".to_string()],
             dir: String::new(),
             files: Vec::new(),
             height: 8,
@@ -567,17 +573,11 @@ impl Default for NotepadConfig {
 }
 
 /// `[goals_panel]` - the focused session's read-only goals panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(default)]
 pub struct GoalsPanelConfig {
     /// Show goals and work streams from `.streams.json` in the sidebar.
     pub enabled: bool,
-}
-
-impl Default for GoalsPanelConfig {
-    fn default() -> Self {
-        Self { enabled: true }
-    }
 }
 
 /// `[pomodoro]` — the break reminder.
@@ -585,6 +585,10 @@ impl Default for GoalsPanelConfig {
 #[serde(default)]
 pub struct PomodoroConfig {
     pub enabled: bool,
+    /// Show the countdown widget in the sidebar footer. Turning it on in
+    /// Sidebar panels also enables the timer; turning it off leaves the timer
+    /// setting alone.
+    pub sidebar_visible: bool,
     /// Minutes of focus before a break is due.
     pub work_minutes: u64,
     pub short_break_minutes: u64,
@@ -602,6 +606,7 @@ impl Default for PomodoroConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            sidebar_visible: false,
             work_minutes: 25,
             short_break_minutes: 5,
             long_break_minutes: 20,
@@ -2493,6 +2498,19 @@ manifest_check = false
             without_update_channel.update.channel,
             default_update_channel()
         );
+    }
+
+    #[test]
+    fn sidebar_panel_defaults_load_when_older_configs_omit_the_keys() {
+        let config: Config = toml::from_str(
+            "[notepad]\nenabled = true\n[goals_panel]\n[pomodoro]\nenabled = true\n",
+        )
+        .expect("older config parses with sidebar panel defaults");
+
+        assert_eq!(config.notepad.visible_tabs, ["usage"]);
+        assert!(!config.goals_panel.enabled);
+        assert!(config.pomodoro.enabled);
+        assert!(!config.pomodoro.sidebar_visible);
     }
 
     #[test]

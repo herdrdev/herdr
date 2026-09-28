@@ -4706,9 +4706,18 @@ impl App {
     pub(crate) fn paste_into_input_owner(&mut self, owner: InputOwner, text: &str) -> bool {
         match owner {
             InputOwner::Notepad => {
-                self.state
-                    .notepad
-                    .insert_text(text, std::time::Instant::now());
+                // Read-only tabs own the input but have no buffer; pasting there
+                // must not reach a note the user cannot see.
+                if self.state.notepad.enabled
+                    && matches!(
+                        self.state.notepad.active_tab_target(),
+                        Some(crate::notepad::NotepadTabTarget::Note(_))
+                    )
+                {
+                    self.state
+                        .notepad
+                        .insert_text(text, std::time::Instant::now());
+                }
                 true
             }
             InputOwner::Client(ClientInputOwner::SnoozeTime) => {
@@ -6108,6 +6117,9 @@ fn app_for_mouse_test() -> App {
     );
     app.state.set_server_mode(Mode::Terminal);
     app.state.sidebar_collapsed = false;
+    // Keep bottom-left dock geometry stable for input tests. Sidebar panel
+    // defaults are covered by tests that load `Config::default()` directly.
+    app.state.notepad.set_visible_tabs(Vec::new());
     // Deliberately not the shipped default (`Hidden`): these tests click on a
     // tab row, so they need one.
     app.state.tab_bar_position = crate::config::TabBarPositionConfig::Top;
@@ -6291,6 +6303,7 @@ enabled = true
 
 [pomodoro]
 enabled = true
+sidebar_visible = true
 "#,
         )
         .expect("write config fixture");
@@ -6782,6 +6795,27 @@ enabled = true
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[test]
+    fn pasting_on_a_read_only_tab_leaves_the_hidden_note_untouched() {
+        let mut app = test_app();
+        app.state.notepad.enabled = true;
+        app.state
+            .notepad
+            .set_files(vec![crate::notepad::NotepadFile {
+                path: "/notes/hidden.md".into(),
+                name: "hidden".into(),
+            }]);
+        app.state.notepad.set_visible_tabs(vec!["usage".into()]);
+        assert_eq!(
+            app.state.notepad.active_tab_target(),
+            Some(crate::notepad::NotepadTabTarget::Usage)
+        );
+
+        assert!(app.paste_into_input_owner(InputOwner::Notepad, "secret"));
+
+        assert!(!app.state.notepad.dirty);
     }
 
     #[tokio::test]

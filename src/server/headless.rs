@@ -8770,6 +8770,14 @@ esac
             server.app.state.provider_usage.accounts.push(account);
         }
 
+        // Each client selects a different tab, so all of them must be visible.
+        let mut visible_tabs = server.app.state.notepad.visible_tabs.clone();
+        for tab in ["note:todo", "agent", "usage"] {
+            if !visible_tabs.iter().any(|visible| visible == tab) {
+                visible_tabs.push(tab.to_string());
+            }
+        }
+        server.app.state.notepad.set_visible_tabs(visible_tabs);
         let (first_writer, _first_control, first_render) = test_client_writer();
         let (second_writer, _second_control, second_render) = test_client_writer();
         let (third_writer, _third_control, third_render) = test_client_writer();

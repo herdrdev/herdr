@@ -251,6 +251,19 @@ pub(crate) enum ConfigEdit {
         key: &'static str,
         value: String,
     },
+    StringList {
+        section: &'static str,
+        key: &'static str,
+        value: Vec<String>,
+    },
+    NotepadTabVisibility {
+        visible_tabs: Vec<String>,
+        enable_notepad: bool,
+        ensure_note: Option<String>,
+    },
+    PomodoroSidebarVisible {
+        visible: bool,
+    },
 }
 
 /// The next value for `row`, or `None` when the row is not editable here.
