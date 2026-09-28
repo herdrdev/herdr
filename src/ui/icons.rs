@@ -1,17 +1,52 @@
 use std::{collections::BTreeMap, path::Path};
 
-use crate::{detect::Agent, provider_usage::QuotaProvider};
+use ratatui::style::Color;
+
+use crate::{app::state::Palette, detect::Agent, provider_usage::QuotaProvider};
+
+/// Claude's brand orange, one step brighter on dark themes.
+pub(crate) fn claude_color(p: &Palette) -> Color {
+    if is_dark(p) {
+        Color::Rgb(240, 122, 53)
+    } else {
+        Color::Rgb(217, 97, 31)
+    }
+}
+
+/// Codex follows OpenAI's monochrome mark: the theme's main text colour, so it
+/// is black on light themes and stays legible on dark ones.
+pub(crate) fn codex_color(p: &Palette) -> Color {
+    p.text
+}
+
+fn is_dark(p: &Palette) -> bool {
+    p.appearance() == Some(crate::terminal_theme::HostAppearance::Dark)
+}
+
+/// Swaps an icon for its dark-theme variant where the brand mark has one.
+pub(crate) fn themed<'a>(icon: &'a str, p: &Palette) -> &'a str {
+    if icon == SCALABLE && is_dark(p) {
+        SCALABLE_DARK
+    } else {
+        icon
+    }
+}
 
 const CLAUDE: &str = "\u{EC82}"; // cod-claude
 const OPENAI: &str = "\u{EC81}"; // cod-openai
-const KIMI: &str = "\u{F0F65}"; // md-moon_waning_crescent
 const PI: &str = "\u{F03FF}"; // md-pi
 const GEMINI: &str = "\u{F0AE2}"; // md-star_four_points
-const GOOGLE: &str = "\u{F02AD}"; // md-google
+                                  // Brand marks from the Herdr Icons font (dotfiles wezterm/fonts), traced from
+                                  // each site's favicon.
+const ANTIGRAVITY: &str = "\u{F6000}";
+const KIMI: &str = "\u{F6001}";
+const SCALABLE: &str = "\u{F6002}";
+const SCALABLE_DARK: &str = "\u{F6007}";
+const HERDR: &str = "\u{F6003}";
+const INBOX: &str = "\u{F6004}";
+const OPENCODE: &str = "\u{F6005}";
+pub(crate) const GITHUB: &str = "\u{F6006}";
 const SHELL: &str = "\u{EA85}"; // cod-terminal
-const INBOX: &str = "\u{F0687}"; // md-inbox
-const IMAGE_MULTIPLE: &str = "\u{F02F9}"; // md-image_multiple
-const TMUX: &str = "\u{EBC8}"; // cod-terminal_tmux
 const ROBOT: &str = "\u{F06A9}"; // md-robot
 const HAMMER_WRENCH: &str = "\u{F1323}"; // md-hammer_wrench
 const CONFIG: &str = "\u{E615}"; // seti-config
@@ -35,7 +70,8 @@ pub(crate) fn agent_icon(agent: Agent) -> Option<&'static str> {
         Agent::Kimi => Some(KIMI),
         Agent::Pi => Some(PI),
         Agent::Gemini => Some(GEMINI),
-        Agent::Antigravity => Some(GOOGLE),
+        Agent::Antigravity => Some(ANTIGRAVITY),
+        Agent::OpenCode => Some(OPENCODE),
         _ => None,
     }
 }
@@ -76,7 +112,9 @@ pub(crate) fn agent_icon_for_name(name: &str) -> Option<&'static str> {
         .iter()
         .any(|known| name.eq_ignore_ascii_case(known))
     {
-        Some(GOOGLE)
+        Some(ANTIGRAVITY)
+    } else if name.eq_ignore_ascii_case("opencode") {
+        Some(OPENCODE)
     } else {
         None
     }
@@ -103,7 +141,7 @@ pub(crate) fn usage_label(provider: QuotaProvider, nerd_font: bool) -> &'static 
         QuotaProvider::Claude => CLAUDE,
         QuotaProvider::Codex => OPENAI,
         QuotaProvider::Kimi => KIMI,
-        QuotaProvider::Agy => GOOGLE,
+        QuotaProvider::Agy => ANTIGRAVITY,
     }
 }
 
@@ -160,9 +198,9 @@ fn builtin_repo_icon(name: &str) -> Option<&'static str> {
     if matches_any(name, &["inbox", "agent-inbox"]) {
         Some(INBOX)
     } else if name.eq_ignore_ascii_case("scalablev2") {
-        Some(IMAGE_MULTIPLE)
+        Some(SCALABLE)
     } else if name.eq_ignore_ascii_case("herdr") {
-        Some(TMUX)
+        Some(HERDR)
     } else if matches_any(name, &["scalable-agent-fleet", "agent-fleet"]) {
         Some(ROBOT)
     } else if name.eq_ignore_ascii_case("agent-harness") {
@@ -180,9 +218,9 @@ fn builtin_label_icon(label: &str) -> Option<&'static str> {
     if matches_any(label, &["inbox", "agent-inbox"]) {
         Some(INBOX)
     } else if label.eq_ignore_ascii_case("scalablev2") {
-        Some(IMAGE_MULTIPLE)
+        Some(SCALABLE)
     } else if label.eq_ignore_ascii_case("herdr") {
-        Some(TMUX)
+        Some(HERDR)
     } else if matches_any(label, &["scalable-agent-fleet", "agent-fleet"]) {
         Some(ROBOT)
     } else if label.eq_ignore_ascii_case("agent-harness") {
@@ -211,26 +249,27 @@ mod tests {
         for (agent, glyph) in [
             (Agent::Claude, "\u{EC82}"),
             (Agent::Codex, "\u{EC81}"),
-            (Agent::Kimi, "\u{F0F65}"),
+            (Agent::Kimi, "\u{F6001}"),
             (Agent::Pi, "\u{F03FF}"),
             (Agent::Gemini, "\u{F0AE2}"),
-            (Agent::Antigravity, "\u{F02AD}"),
+            (Agent::Antigravity, "\u{F6000}"),
+            (Agent::OpenCode, "\u{F6005}"),
         ] {
             assert_eq!(agent_icon(agent), Some(glyph));
         }
         assert_eq!(usage_label(QuotaProvider::Claude, true), "\u{EC82}");
         assert_eq!(usage_label(QuotaProvider::Codex, true), "\u{EC81}");
-        assert_eq!(usage_label(QuotaProvider::Kimi, true), "\u{F0F65}");
-        assert_eq!(usage_label(QuotaProvider::Agy, true), "\u{F02AD}");
+        assert_eq!(usage_label(QuotaProvider::Kimi, true), "\u{F6001}");
+        assert_eq!(usage_label(QuotaProvider::Agy, true), "\u{F6000}");
     }
 
     #[test]
     fn space_icons_cover_builtin_repositories_and_fallbacks() {
         let overrides = BTreeMap::new();
         for (repo, glyph) in [
-            ("inbox", "\u{F0687}"),
-            ("scalablev2", "\u{F02F9}"),
-            ("herdr", "\u{EBC8}"),
+            ("inbox", "\u{F6004}"),
+            ("scalablev2", "\u{F6002}"),
+            ("herdr", "\u{F6003}"),
             ("scalable-agent-fleet", "\u{F06A9}"),
             ("agent-fleet", "\u{F06A9}"),
             ("agent-harness", "\u{F1323}"),
@@ -242,7 +281,7 @@ mod tests {
         }
         assert_eq!(
             space_icon(None, None, "agent-inbox", &overrides),
-            "\u{F0687}"
+            "\u{F6004}"
         );
         assert_eq!(
             space_icon(None, None, "plain Space", &overrides),
@@ -250,8 +289,20 @@ mod tests {
         );
         assert_eq!(
             space_icon(None, Some(Path::new("/work/herdr")), "ignored", &overrides),
-            "\u{EBC8}"
+            "\u{F6003}"
         );
+    }
+
+    #[test]
+    fn scalable_icon_swaps_to_its_bordered_variant_on_dark_themes() {
+        let mut palette = crate::app::state::AppState::test_new().palette;
+        palette.panel_bg = Color::Rgb(250, 250, 250);
+        assert_eq!(themed(SCALABLE, &palette), SCALABLE);
+        assert_eq!(claude_color(&palette), Color::Rgb(217, 97, 31));
+        palette.panel_bg = Color::Rgb(30, 30, 46);
+        assert_eq!(themed(SCALABLE, &palette), SCALABLE_DARK);
+        assert_eq!(themed(HERDR, &palette), HERDR);
+        assert_eq!(claude_color(&palette), Color::Rgb(240, 122, 53));
     }
 
     #[test]

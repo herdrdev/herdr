@@ -558,8 +558,8 @@ fn compact_row_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
 
 fn provider_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
     match entry.agent.or(entry.agent_context) {
-        Some(Agent::Claude) => p.peach,
-        Some(Agent::Codex) => p.green,
+        Some(Agent::Claude) => crate::ui::icons::claude_color(p),
+        Some(Agent::Codex) => crate::ui::icons::codex_color(p),
         Some(Agent::Pi) => p.mauve,
         Some(Agent::Kimi) => p.yellow,
         _ => p.overlay0,
@@ -3051,6 +3051,7 @@ fn sidebar_thread_card(app: &AppState, entry: &AgentPanelEntry) -> SidebarThread
             &entry.space_label,
             &app.space_icons,
         )
+        .map(|icon| crate::ui::icons::themed(icon, &app.palette))
         .map(|icon| pad_right(icon, display_width(&badge.letters)));
     }
     let reported_age = compact_age(entry, app.view_observed_at).0;
@@ -10465,14 +10466,15 @@ fn render_workspace_list(
             Style::default().fg(p.subtext0)
         };
         let space_icon = app.nerd_font.then(|| {
-            crate::ui::icons::space_icon(
+            let icon = crate::ui::icons::space_icon(
                 ws.repo_binding.as_deref(),
                 ws.cached_git_space
                     .as_ref()
                     .map(|space| space.repo_root.as_path()),
                 &display_label,
                 &app.space_icons,
-            )
+            );
+            crate::ui::icons::themed(icon, &app.palette)
         });
         let space_icon_width = space_icon.map_or(0, |icon| display_width(icon) + 1);
 
@@ -10988,7 +10990,12 @@ fn render_sections_thread_card(
         left_fields.push((format!("{branch_icon} {branch}"), p.mauve));
     }
     if let Some(pull_request) = card.pull_request.as_deref() {
-        left_fields.push((format!("# {pull_request}"), p.blue));
+        let pr_icon = if app.nerd_font {
+            crate::ui::icons::GITHUB
+        } else {
+            "#"
+        };
+        left_fields.push((format!("{pr_icon} {pull_request}"), p.blue));
     }
     // Keep the host before the agent so narrow cards drop the agent first;
     // render in reverse to keep the host at the far right.
@@ -10998,8 +11005,8 @@ fn render_sections_thread_card(
     )];
     if let Some(agent_icon) = agent_icon {
         let color = match card.agent {
-            Some(SidebarCardAgent::Claude) => p.peach,
-            Some(SidebarCardAgent::Codex) => p.green,
+            Some(SidebarCardAgent::Claude) => crate::ui::icons::claude_color(p),
+            Some(SidebarCardAgent::Codex) => crate::ui::icons::codex_color(p),
             _ => p.overlay0,
         };
         right_fields.push((std::borrow::Cow::Borrowed(agent_icon), color));
@@ -14683,7 +14690,7 @@ pub(crate) mod tests {
         assert!(
             rendered
                 .iter()
-                .any(|row| row.contains("\u{F0687} agent-inbox")),
+                .any(|row| row.contains("\u{F6004} agent-inbox")),
             "{rendered:?}"
         );
     }
@@ -14816,7 +14823,11 @@ pub(crate) mod tests {
             app.working_row_opacity_percent = opacity;
             let expected_dot = blended_test_color(app.palette.blue, background, opacity);
             let expected_title = blended_test_color(app.palette.subtext0, background, opacity);
-            let expected_provider = blended_test_color(app.palette.peach, background, opacity);
+            let expected_provider = blended_test_color(
+                crate::ui::icons::claude_color(&app.palette),
+                background,
+                opacity,
+            );
             let expected_remote_suffix =
                 blended_test_color(app.palette.overlay0, background, opacity);
             for width in [18, 60] {
@@ -29406,7 +29417,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .expect("Claude sidebar entry");
         let card = sidebar_thread_card(&app, &entry);
         assert_eq!(card.agent_icon, Some("\u{EC82}"));
-        assert_eq!(card.badge.icon.as_deref(), Some("\u{EBC8} "));
+        assert_eq!(card.badge.icon.as_deref(), Some("\u{F6003} "));
 
         let mut terminal = Terminal::new(TestBackend::new(60, 2)).expect("icon card terminal");
         terminal
@@ -29414,7 +29425,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 render_sections_thread_card(&app, frame, &card, Rect::new(0, 0, 60, 2), false)
             })
             .expect("render icon card");
-        assert!(row_text(terminal.backend().buffer(), 0, 60).contains("\u{EBC8}"));
+        assert!(row_text(terminal.backend().buffer(), 0, 60).contains("\u{F6003}"));
         assert!(row_text(terminal.backend().buffer(), 1, 60).contains("\u{EC82}"));
     }
 

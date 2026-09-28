@@ -30,8 +30,8 @@ pub(crate) struct NotepadUsageRow {
 
 fn provider_presentation(provider: QuotaProvider, app: &AppState) -> (&'static str, Color) {
     match provider {
-        QuotaProvider::Claude => ("claude", app.palette.peach),
-        QuotaProvider::Codex => ("codex", app.palette.blue),
+        QuotaProvider::Claude => ("claude", crate::ui::icons::claude_color(&app.palette)),
+        QuotaProvider::Codex => ("codex", crate::ui::icons::codex_color(&app.palette)),
         QuotaProvider::Kimi => ("opencode", app.palette.mauve),
         QuotaProvider::Agy => ("antigravity", app.palette.teal),
     }

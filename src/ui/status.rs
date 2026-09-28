@@ -660,8 +660,16 @@ fn status_segments(
     // Providers elide from the right of the group inwards: Antigravity is the
     // most recent addition and the least load-bearing, Claude the most.
     for (provider, color, rank) in [
-        (crate::provider_usage::QuotaProvider::Claude, p.peach, 3u8),
-        (crate::provider_usage::QuotaProvider::Codex, p.blue, 2),
+        (
+            crate::provider_usage::QuotaProvider::Claude,
+            crate::ui::icons::claude_color(p),
+            3u8,
+        ),
+        (
+            crate::provider_usage::QuotaProvider::Codex,
+            crate::ui::icons::codex_color(p),
+            2,
+        ),
         (crate::provider_usage::QuotaProvider::Kimi, p.mauve, 1),
         (crate::provider_usage::QuotaProvider::Agy, p.teal, 0),
     ] {
@@ -1352,7 +1360,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_status_bar_uses_the_claude_glyph_in_peach() {
+    fn rendered_status_bar_uses_the_claude_glyph_in_claude_orange() {
         use ratatui::{backend::TestBackend, Terminal};
 
         let mut app = AppState::test_new();
@@ -1370,7 +1378,10 @@ mod tests {
             .iter()
             .find(|cell| cell.symbol() == "\u{EC82}")
             .expect("Claude provider icon");
-        assert_eq!(claude_cell.style().fg, Some(app.palette.peach));
+        assert_eq!(
+            claude_cell.style().fg,
+            Some(crate::ui::icons::claude_color(&app.palette))
+        );
     }
 
     #[test]
@@ -2076,7 +2087,7 @@ mod tests {
                 .unwrap()
                 .style
                 .fg,
-            Some(app.palette.peach)
+            Some(crate::ui::icons::claude_color(&app.palette))
         );
         assert_eq!(
             segments
@@ -2085,7 +2096,7 @@ mod tests {
                 .unwrap()
                 .style
                 .fg,
-            Some(app.palette.blue)
+            Some(crate::ui::icons::codex_color(&app.palette))
         );
         assert_eq!(
             segments
