@@ -4043,6 +4043,7 @@ mod tests {
         FleetConfig {
             hosts: vec![FleetHostConfig {
                 name: "office".into(),
+                icon: None,
                 target: target.into(),
                 local: false,
                 session: Some("agents".into()),

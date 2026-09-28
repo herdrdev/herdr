@@ -25,6 +25,8 @@ const REMOTE_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) struct Machine {
     /// Display name and the `--hosts` selector the fleet already uses.
     pub(crate) name: String,
+    /// Optional sidebar glyph, resolved from the local fleet configuration.
+    pub(crate) icon: Option<String>,
     /// `None` for this host. `Some(target)` is an OpenSSH destination.
     pub(crate) target: Option<String>,
     /// Herdr socket override on that host, when its fleet entry declares one.
@@ -75,6 +77,7 @@ pub(crate) fn resolve(fleet: &FleetConfig) -> Vec<Machine> {
     if machines.is_empty() {
         machines.push(Machine {
             name: LOCAL_MACHINE.into(),
+            icon: None,
             target: None,
             socket: None,
         });
@@ -94,6 +97,7 @@ fn machine_from_host(host: &FleetHostConfig) -> Machine {
     };
     Machine {
         name: host.name.clone(),
+        icon: host.icon.clone(),
         target,
         socket: host.socket.clone(),
     }
@@ -226,6 +230,7 @@ mod tests {
     fn host(name: &str, target: &str, local: bool) -> FleetHostConfig {
         FleetHostConfig {
             name: name.into(),
+            icon: None,
             target: target.into(),
             local,
             socket: None,
@@ -263,6 +268,9 @@ mod tests {
         assert_eq!(names, ["ub2", "ub1", "mbpro"], "the local host leads");
         assert!(machines[0].is_local());
         assert_eq!(machines[1].target.as_deref(), Some("ub1"));
+        let mut customized = fleet;
+        customized.hosts[0].icon = Some("◆".into());
+        assert_eq!(resolve(&customized)[1].icon.as_deref(), Some("◆"));
     }
 
     #[test]

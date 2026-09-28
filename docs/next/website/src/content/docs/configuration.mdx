@@ -385,6 +385,15 @@ area is shown by default. The current layout ignores this table.
 
 Pin or unpin a tab from the CLI with `herdr tab pin <tab_id>` and `herdr tab unpin <tab_id>`. The Needs you rows appear above the Spaces view in both layouts. Up to five show initially; use `▸ N more` to show the rest and `▴ less` to fold them back.
 
+Sidebar session rows show a machine glyph between the provider and age. The default glyphs identify `ub1` (tower), `ub2` (server), `mbpro` (code laptop), and `mbair` (laptop); other hosts show a monitor. With Nerd Font disabled, they become `1`, `2`, `P`, `A`, and `?`. Hover the glyph to see the host name. Set `icon` in a `[[remote.fleet.hosts]]` entry to override its Nerd Font glyph:
+
+```toml
+[[remote.fleet.hosts]]
+name = "workbox"
+target = "workbox"
+icon = "󰒋"
+```
+
 The expanded desktop sidebar renders each inner array in `rows` as one line. These are the complete default layouts:
 
 ```toml
