@@ -2147,7 +2147,12 @@ fn blocked_pane_cycle_in_order(
         })
         .collect::<Vec<_>>();
     let mut panes = Vec::with_capacity(local.len() + remote.len());
-    for row in crate::ui::sidebar_rows(state) {
+    let rows = if include_needs_you {
+        crate::ui::sidebar::sidebar_navigation_rows(state)
+    } else {
+        crate::ui::sidebar_rows(state)
+    };
+    for row in rows {
         match row {
             crate::ui::SidebarRow::NeedsYou { target, .. } if include_needs_you => match target {
                 crate::ui::NeedsYouTarget::Local(entry_target) => {
@@ -4399,9 +4404,8 @@ mod tests {
         assert!(rows.iter().any(|row| matches!(
             row,
             crate::ui::SidebarRow::NeedsYou {
-                target: crate::ui::NeedsYouTarget::Remote(target),
-                ..
-            } if target == &agent_ref
+                target: crate::ui::sidebar::NeedsYouTarget::Remote(target), ..
+            } if *target == agent_ref
         )));
         assert!(!rows.iter().any(|row| matches!(
             row,

@@ -327,6 +327,3 @@ pub(crate) fn sample_status_metrics(
         ..super::status_metrics::StatusMetrics::default()
     }
 }
-pub(super) const fn local_host_os() -> crate::platform::HostOs {
-    crate::platform::HostOs::Other
-}

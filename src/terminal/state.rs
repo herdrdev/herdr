@@ -860,6 +860,7 @@ impl TerminalState {
         self.state
     }
 
+    #[cfg(test)]
     pub(crate) fn working_since(&self) -> Option<Instant> {
         self.working_since
     }

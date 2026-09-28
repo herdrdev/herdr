@@ -1248,6 +1248,10 @@ impl AppState {
                         self.toggle_workspace_agent_disclosure(card.ws_idx);
                         return None;
                     }
+                    if crate::ui::needs_you_more_at(self, mouse.row) {
+                        self.toggle_sidebar_group(crate::ui::sidebar::NEEDS_YOU_SECTION_TITLE);
+                        return None;
+                    }
                     // Headers are tested before spaces: a header row owns its
                     // whole width, so anywhere on it folds the group.
                     if let Some(title) = self.sidebar_section_header_at(mouse.row) {
@@ -2761,6 +2765,26 @@ impl AppState {
         match crate::ui::mobile_switcher_target_at(self, mouse.column, mouse.row) {
             Some(crate::ui::MobileSwitcherTarget::Section(title)) => {
                 self.toggle_sidebar_group(title);
+            }
+            Some(crate::ui::MobileSwitcherTarget::NeedsYouMore) => {
+                self.toggle_sidebar_group(crate::ui::sidebar::NEEDS_YOU_SECTION_TITLE);
+            }
+            Some(crate::ui::MobileSwitcherTarget::NeedsYou(target)) => {
+                self.close_workspace_picker();
+                return match target {
+                    crate::ui::sidebar::NeedsYouTarget::Local(target) => {
+                        MobileMouseResult::Action(MouseAction::FocusPane {
+                            ws_idx: target.ws_idx,
+                            pane_id: target.pane_id,
+                        })
+                    }
+                    crate::ui::sidebar::NeedsYouTarget::Remote(agent_ref) => {
+                        MobileMouseResult::Action(MouseAction::OpenFleetHost {
+                            name: agent_ref.host,
+                            focus_agent: Some(agent_ref.agent),
+                        })
+                    }
+                };
             }
             Some(crate::ui::MobileSwitcherTarget::NewWorkspace) => {
                 return MobileMouseResult::Action(MouseAction::NewWorkspace);
