@@ -3662,14 +3662,15 @@ fn compact_sidebar_rows_inner(
         let remote_activity = sidebar_remote_activity(app, &remote_entries);
         let mut space_entries = Vec::new();
         let mut working_entries = Vec::new();
+        // Working agents get their own section; every other active pane
+        // (blocked, done, idle, unknown) stays in the tree above it, so the
+        // sidebar holds every pane agent cycling can reach.
         for mut entry in visible_entries.iter().cloned() {
-            if entry.has_agent
-                && (entry_is_blocked(&entry) || (entry.state == AgentState::Idle && !entry.seen))
-            {
-                space_entries.push(entry);
-            } else if entry.has_agent && entry.state == AgentState::Working {
+            if sidebar_entry_is_working(&entry) {
                 entry.working_shelf = true;
                 working_entries.push(entry);
+            } else {
+                space_entries.push(entry);
             }
         }
         let mut remote_snoozed = Vec::new();
@@ -3677,14 +3678,11 @@ fn compact_sidebar_rows_inner(
         for mut entry in remote_entries.iter().cloned() {
             match sidebar_entry_lifecycle(app, &entry) {
                 SidebarEntryLifecycle::Active => {
-                    if entry.has_agent
-                        && (entry_is_blocked(&entry)
-                            || (entry.state == AgentState::Idle && !entry.seen))
-                    {
-                        space_entries.push(entry);
-                    } else if entry.has_agent && entry.state == AgentState::Working {
+                    if sidebar_entry_is_working(&entry) {
                         entry.working_shelf = true;
                         working_entries.push(entry);
+                    } else {
+                        space_entries.push(entry);
                     }
                 }
                 SidebarEntryLifecycle::Snoozed => remote_snoozed.push(entry),
@@ -4088,6 +4086,10 @@ fn append_legacy_space_rows(
         None,
         None,
     );
+}
+
+fn sidebar_entry_is_working(entry: &AgentPanelEntry) -> bool {
+    entry.has_agent && entry.state == AgentState::Working && !entry_is_blocked(entry)
 }
 
 fn append_shelf_space_rows(
@@ -29701,6 +29703,37 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             SidebarRow::SectionHeader {
                 title: SETTLED_SECTION_TITLE,
                 collapsed: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn focus_sidebar_keeps_seen_idle_tabs_in_spaces() {
+        let mut app = sort_app(&[
+            sort_tab("read", "owner/herdr", AgentState::Idle, 1),
+            sort_tab("build", "owner/herdr", AgentState::Working, 2),
+        ]);
+        app.sidebar_sections_layout = true;
+        app.sidebar_group_mode = SidebarGroupMode::Spaces;
+        let read_pane = app.workspaces[0].tabs[0].root_pane;
+        app.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&read_pane)
+            .expect("read pane")
+            .seen = true;
+        app.reconcile_sidebar_presentation();
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if !entry.working_shelf && entry.state == AgentState::Idle
+        )));
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
                 ..
             }
         )));
