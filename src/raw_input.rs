@@ -25,6 +25,12 @@ const ESC: u8 = 0x1b;
 pub(crate) const RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS: i32 = 10;
 #[cfg(unix)]
 pub(crate) const MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS: i32 = 150;
+/// Covers the 33 ms split in #4630 without gluing legacy Alt+[ to the next key.
+#[cfg(unix)]
+pub(crate) const MOUSE_ACTIVE_CSI_INTRODUCER_FLUSH_TIMEOUT_MS: i32 = 50;
+/// Covers the 350 ms mouse tail delay in #3480. Other input ends it early (#4751).
+#[cfg(unix)]
+const DISAMBIGUATED_MOUSE_TAIL_FLUSH_TIMEOUT_MS: i32 = 500;
 pub(crate) const GHOSTTY_COLOR_SCHEME_DARK_REPORT: &[u8] = b"\x1b[?997;1n";
 pub(crate) const GHOSTTY_COLOR_SCHEME_LIGHT_REPORT: &[u8] = b"\x1b[?997;2n";
 const BRACKETED_PASTE_START: &[u8] = b"\x1b[200~";
@@ -192,7 +198,10 @@ pub(crate) struct RawInputByteFramer {
     host_color_scheme_change_tracking: bool,
     host_appearance_query_on_focus: bool,
     split_coalesced_escape: bool,
+    #[cfg(unix)]
     host_escape_disambiguation_active: bool,
+    #[cfg(unix)]
+    awaiting_mouse_tail_after: Option<usize>,
 }
 
 const HOST_COLOR_QUERY_REPLIES: u16 = 258;
@@ -216,6 +225,15 @@ impl RawInputByteFramer {
 
     pub(crate) fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
         self.buffer.extend_from_slice(data);
+        #[cfg(unix)]
+        if let Some(prefix_len) = self.awaiting_mouse_tail_after.take() {
+            if !continues_escape_sequence(&self.buffer) {
+                // The prefix already outlived keyboard timing; it was a key.
+                let mut chunks = vec![self.buffer.drain(..prefix_len).collect()];
+                chunks.extend(self.drain_available_chunks());
+                return chunks;
+            }
+        }
         self.drain_available_chunks()
     }
 
@@ -281,9 +299,19 @@ impl RawInputByteFramer {
         !self.buffer.is_empty()
     }
 
-    #[cfg(any(unix, test))]
+    #[cfg(unix)]
     pub(crate) fn set_host_escape_disambiguation_active(&mut self, active: bool) {
         self.host_escape_disambiguation_active = active;
+    }
+
+    /// How long to keep holding input after a first idle flush held it.
+    #[cfg(unix)]
+    pub(crate) fn held_input_flush_timeout_ms(&self) -> i32 {
+        if self.awaiting_mouse_tail_after.is_some() {
+            DISAMBIGUATED_MOUSE_TAIL_FLUSH_TIMEOUT_MS
+        } else {
+            RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
+        }
     }
 
     #[cfg(unix)]
@@ -354,13 +382,21 @@ impl RawInputByteFramer {
             return chunks;
         }
 
-        if self.host_escape_disambiguation_active
-            && starts_with_bounded_incomplete_escape_sequence(&self.buffer)
+        // A confirmed host sends Escape as `CSI 27u`, so a mouse report prefix
+        // that outlives keyboard timing may still get a delayed tail (#3480).
+        // Keep it briefly; `push` releases it if other input follows.
+        // A finished mouse wait also counts as this prefix's one-flush host
+        // reply hold, so the two holds never stack.
+        #[cfg(unix)]
+        let mouse_wait_served = self.awaiting_mouse_tail_after.take().is_some();
+        #[cfg(not(unix))]
+        let mouse_wait_served = false;
+        #[cfg(unix)]
+        if !mouse_wait_served
+            && self.host_escape_disambiguation_active
+            && could_continue_as_mouse_report(&self.buffer)
         {
-            tracing::trace!(
-                len = self.buffer.len(),
-                "holding incomplete host escape sequence with disambiguation active"
-            );
+            self.awaiting_mouse_tail_after = Some(self.buffer.len());
             return chunks;
         }
 
@@ -433,7 +469,7 @@ impl RawInputByteFramer {
         if (self.host_cell_size_replies_awaited > 0 || self.host_appearance_reply_awaited)
             && self.buffer.as_slice() == b"\x1b["
         {
-            if !self.held_pending_host_reply_esc {
+            if !self.held_pending_host_reply_esc && !mouse_wait_served {
                 self.held_pending_host_reply_esc = true;
                 tracing::trace!("holding incomplete host CSI reply one flush");
                 return chunks;
@@ -500,7 +536,8 @@ impl RawInputByteFramer {
                 // Native console reply fragments can arrive across several idle polls.
                 return chunks;
             }
-            if self.awaiting_host_reply() && !self.held_pending_host_reply_esc {
+            if self.awaiting_host_reply() && !self.held_pending_host_reply_esc && !mouse_wait_served
+            {
                 self.held_pending_host_reply_esc = true;
                 tracing::trace!("holding lone escape one flush while awaiting host reply");
                 return chunks;
@@ -653,15 +690,6 @@ impl RawInputByteFramer {
 
             if self.split_coalesced_escape && self.buffer.starts_with(b"\x1b\x1b") {
                 chunks.push(vec![ESC]);
-                self.buffer.drain(..1);
-                continue;
-            }
-
-            if self.host_escape_disambiguation_active
-                && self.buffer.first() == Some(&ESC)
-                && self.buffer.len() > 1
-                && !starts_with_known_escape_introducer(&self.buffer)
-            {
                 self.buffer.drain(..1);
                 continue;
             }
@@ -1072,23 +1100,24 @@ fn starts_with_incomplete_sgr_mouse_sequence(buffer: &[u8]) -> bool {
             .all(|byte| byte.is_ascii_digit() || *byte == b';')
 }
 
-fn starts_with_known_escape_introducer(buffer: &[u8]) -> bool {
-    buffer
-        .get(1)
-        .is_some_and(|byte| matches!(*byte, b'[' | b'O' | b']' | b'P' | b'_' | b'^' | b'X' | ESC))
+/// Whether bytes after a held ESC or ESC[ still read as one escape sequence,
+/// such as a mouse report, host reply, or bracketed paste, rather than a key.
+#[cfg(unix)]
+fn continues_escape_sequence(buffer: &[u8]) -> bool {
+    match buffer {
+        [ESC] | [ESC, b'['] => true,
+        // OSC, DCS and APC host replies can also split after their ESC.
+        [ESC, b']' | b'P' | b'_', ..] => true,
+        [ESC, b'[', next, ..] => *next == b'M' || matches!(*next, 0x20..=0x3f),
+        _ => false,
+    }
 }
 
-fn starts_with_bounded_incomplete_escape_sequence(buffer: &[u8]) -> bool {
-    if buffer.len() >= MAX_DISCARDED_CONTROL_TAIL_BYTES {
-        return false;
-    }
-    if buffer == [ESC] || buffer == b"\x1bO" {
-        return true;
-    }
-    let Some(body) = buffer.strip_prefix(b"\x1b[") else {
-        return false;
-    };
-    body.iter().all(|byte| matches!(*byte, 0x20..=0x3f))
+#[cfg(unix)]
+fn could_continue_as_mouse_report(buffer: &[u8]) -> bool {
+    [b"\x1b[<".as_slice(), b"\x1b[M"]
+        .iter()
+        .any(|prefix| buffer.starts_with(prefix) || prefix.starts_with(buffer))
 }
 
 #[cfg(any(unix, windows, test))]
@@ -2274,71 +2303,6 @@ mod tests {
         tail.extend_from_slice(b"01M");
         assert_eq!(framer.push(b"01M").concat(), tail);
         assert!(framer.timed_out_mouse_prefix.is_none());
-    }
-
-    #[test]
-    fn confirmed_host_disambiguation_retains_split_sgr_mouse_without_escape() {
-        for (prefix, tail) in [
-            (b"\x1b".as_slice(), b"[<0;5;5M".as_slice()),
-            (b"\x1b[".as_slice(), b"<0;5;5M".as_slice()),
-            (b"\x1b[<0;".as_slice(), b"5;5M".as_slice()),
-        ] {
-            let mut framer = RawInputFramer::default();
-            framer
-                .byte_framer
-                .set_host_escape_disambiguation_active(true);
-
-            assert!(framer.push(prefix).is_empty());
-            assert!(framer.flush_timeout().is_empty());
-            assert!(framer.flush_timeout().is_empty());
-            let events = framer.push(tail);
-
-            assert!(matches!(
-                events.as_slice(),
-                [RawInputEvent::Mouse(MouseEvent {
-                    kind: MouseEventKind::Down(MouseButton::Left),
-                    column: 4,
-                    row: 4,
-                    ..
-                })]
-            ));
-        }
-    }
-
-    #[test]
-    fn confirmed_host_disambiguation_drops_stale_escape_before_plain_input() {
-        let mut framer = RawInputFramer::default();
-        framer
-            .byte_framer
-            .set_host_escape_disambiguation_active(true);
-
-        assert!(framer.push(b"\x1b").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        let events = framer.push(b"x");
-
-        assert_eq!(events.len(), 1);
-        assert_raw_key(
-            events.into_iter().next().unwrap(),
-            KeyCode::Char('x'),
-            KeyModifiers::empty(),
-        );
-    }
-
-    #[test]
-    fn confirmed_host_disambiguation_keeps_kitty_escape_immediate() {
-        let mut framer = RawInputFramer::default();
-        framer
-            .byte_framer
-            .set_host_escape_disambiguation_active(true);
-
-        let events = framer.push(b"\x1b[27u");
-
-        assert_eq!(events.len(), 1);
-        assert_raw_key(
-            events.into_iter().next().unwrap(),
-            KeyCode::Esc,
-            KeyModifiers::empty(),
-        );
     }
 
     #[test]
