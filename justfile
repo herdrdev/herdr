@@ -80,8 +80,13 @@ install-hooks:
     @echo "installed git hooks from .githooks"
 
 # Build release binary
+[unix]
 build:
     cargo build --release --locked
+
+[windows]
+build:
+    python scripts/package_windows_conpty.py build-local
 
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:

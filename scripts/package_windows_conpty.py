@@ -4,8 +4,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import struct
+import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -313,6 +316,94 @@ def stage_bundle(
         staging.rename(output_dir)
 
 
+def install_local_bundle(
+    metadata_path: Path, architecture: str, package_path: Path, herdr_exe: Path
+) -> None:
+    release_dir = herdr_exe.resolve().parent
+    destination = release_dir / "conpty"
+    with tempfile.TemporaryDirectory(prefix="herdr-conpty-install-", dir=release_dir) as temporary:
+        stage = Path(temporary) / "stage"
+        stage_bundle(metadata_path, architecture, package_path, herdr_exe, stage)
+        staged_bundle = stage / "conpty"
+        if destination.exists() or destination.is_symlink():
+            staged_files = {
+                path.relative_to(staged_bundle)
+                for path in staged_bundle.rglob("*")
+                if path.is_file()
+            }
+            installed_files = {
+                path.relative_to(destination)
+                for path in destination.rglob("*")
+                if path.is_file()
+            }
+            matches = (
+                destination.is_dir()
+                and not destination.is_symlink()
+                and not any(path.is_symlink() for path in destination.rglob("*"))
+                and installed_files == staged_files
+                and all(
+                    not (destination / relative).is_symlink()
+                    and sha256_file(destination / relative) == sha256_file(staged_bundle / relative)
+                    for relative in staged_files
+                )
+            )
+            # ponytail: pin upgrades require stopping Herdr and removing the old local bundle.
+            if not matches:
+                raise ValueError(
+                    f"local ConPTY bundle at {destination} differs from the pinned version; "
+                    "stop Herdr, remove that directory, then run just build again"
+                )
+
+        for notice in load_metadata(metadata_path)["notices"]:
+            relative = PurePosixPath(notice["destination"])
+            target = release_dir / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(stage / relative, target)
+        if not destination.exists():
+            staged_bundle.rename(destination)
+
+
+def build_local_bundle(metadata_path: Path) -> None:
+    executable = None
+    with subprocess.Popen(
+        ["cargo", "build", "--release", "--locked", "--message-format=json"],
+        cwd=PROJECT_ROOT,
+        stdout=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+    ) as cargo:
+        assert cargo.stdout is not None
+        for line in cargo.stdout:
+            if not line.startswith("{"):
+                print(line, end="")
+                continue
+            message = json.loads(line)
+            if message.get("reason") == "compiler-message":
+                print(message["message"]["rendered"], end="", file=sys.stderr)
+            elif (
+                message.get("reason") == "compiler-artifact"
+                and message["manifest_path"] == str(PROJECT_ROOT / "Cargo.toml")
+                and message["target"]["name"] == "herdr"
+                and "bin" in message["target"]["kind"]
+            ):
+                executable = Path(message["executable"])
+        status = cargo.wait()
+    if status:
+        raise SystemExit(status)
+    if executable is None:
+        raise ValueError("cargo did not report the Herdr executable")
+
+    target = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
+    if not target.is_absolute():
+        target = PROJECT_ROOT / target
+    install_local_bundle(
+        metadata_path,
+        "x86_64",
+        target / "conpty" / "Microsoft.Windows.Console.ConPTY.nupkg",
+        executable,
+    )
+
+
 def expected_stage_files(metadata: dict[str, Any], architecture: str) -> set[str]:
     files = {"herdr.exe", MARKER_PATH.as_posix()}
     files.update(item["destination"] for item in metadata["bundles"][architecture]["files"])
@@ -376,6 +467,7 @@ def parse_args() -> argparse.Namespace:
     archive.add_argument("--architecture", choices=("x86_64",), default="x86_64")
     archive.add_argument("--stage-dir", type=Path, required=True)
     archive.add_argument("--output", type=Path, required=True)
+    subparsers.add_parser("build-local")
     return parser.parse_args()
 
 
@@ -389,8 +481,10 @@ def main() -> None:
             args.herdr_exe,
             args.output_dir,
         )
-    else:
+    elif args.command == "archive":
         archive_bundle(args.metadata, args.architecture, args.stage_dir, args.output)
+    else:
+        build_local_bundle(args.metadata)
 
 
 if __name__ == "__main__":

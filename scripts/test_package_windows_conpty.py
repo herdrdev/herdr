@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import struct
 import tempfile
 import unittest
@@ -15,6 +16,29 @@ from scripts import package_windows_conpty as package
 
 
 class WindowsConptyPackageTests(unittest.TestCase):
+    def test_local_build_installs_beside_cargos_reported_executable(self) -> None:
+        executable = Path("other-target/x86_64-pc-windows-msvc/release/herdr.exe")
+        cargo = mock.MagicMock()
+        cargo.__enter__.return_value = cargo
+        cargo.stdout = io.StringIO(
+            json.dumps(
+                {
+                    "reason": "compiler-artifact",
+                    "manifest_path": str(package.PROJECT_ROOT / "Cargo.toml"),
+                    "target": {"name": "herdr", "kind": ["bin"]},
+                    "executable": str(executable),
+                }
+            )
+            + "\n"
+        )
+        cargo.wait.return_value = 0
+        with (
+            mock.patch.object(package.subprocess, "Popen", return_value=cargo),
+            mock.patch.object(package, "install_local_bundle") as install,
+        ):
+            package.build_local_bundle(package.DEFAULT_METADATA)
+        self.assertEqual(install.call_args.args[-1], executable)
+
     def test_pinned_metadata_and_notices_are_consistent(self) -> None:
         metadata = package.load_metadata(package.DEFAULT_METADATA)
         self.assertEqual(metadata["package"]["id"], "Microsoft.Windows.Console.ConPTY")
@@ -110,7 +134,11 @@ class WindowsConptyPackageTests(unittest.TestCase):
             ]
             nupkg = root / "conpty.nupkg"
             self._write_package(nupkg, files, {item["source"]: data for item, data in zip(files, (dll, x64_host, arm64_host))})
-            metadata_path = root / "conpty.json"
+            notice_paths = [root / "NOTICE-a.txt", root / "NOTICE-b.txt"]
+            for index, notice in enumerate(notice_paths):
+                notice.write_text(f"notice {index}", encoding="utf-8")
+            metadata_path = root / "packaging" / "windows" / "conpty.json"
+            metadata_path.parent.mkdir(parents=True)
             metadata_path.write_text(
                 json.dumps(
                     {
@@ -123,7 +151,14 @@ class WindowsConptyPackageTests(unittest.TestCase):
                             "license": "MIT",
                         },
                         "bundles": {"x86_64": {"files": files}},
-                        "notices": [],
+                        "notices": [
+                            {
+                                "source": notice.name,
+                                "destination": f"THIRD-PARTY-NOTICES/{notice.name}",
+                                "sha256": package.sha256_file(notice),
+                            }
+                            for notice in notice_paths
+                        ],
                     }
                 ),
                 encoding="utf-8",
@@ -152,6 +187,55 @@ class WindowsConptyPackageTests(unittest.TestCase):
                         package.load_metadata(metadata_path), "x86_64"
                     ),
                 )
+
+            local = root / "local" / "release"
+            local.mkdir(parents=True)
+            local_exe = local / "herdr.exe"
+            local_exe.write_bytes(herdr.read_bytes())
+            package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
+            self.assertEqual((local / "conpty" / "conpty.dll").read_bytes(), dll)
+            self.assertEqual(
+                (local / "conpty" / "herdr-conpty.json").read_bytes(),
+                package.marker_data(package.load_metadata(metadata_path), "x86_64"),
+            )
+            for notice in notice_paths:
+                self.assertEqual(
+                    (local / "THIRD-PARTY-NOTICES" / notice.name).read_bytes(),
+                    notice.read_bytes(),
+                )
+
+            package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
+            (local / "conpty" / "stale-file").write_bytes(b"stale")
+            with self.assertRaisesRegex(ValueError, "differs from the pinned version"):
+                package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
+            self.assertTrue((local / "conpty" / "stale-file").exists())
+            (local / "conpty" / "stale-file").unlink()
+            package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
+
+            dangling = local / "conpty" / "dangling"
+            try:
+                dangling.symlink_to("missing")
+            except OSError:
+                if os.name != "nt":
+                    raise
+            else:
+                with self.assertRaisesRegex(ValueError, "differs from the pinned version"):
+                    package.install_local_bundle(metadata_path, "x86_64", nupkg, local_exe)
+                dangling.unlink()
+
+            dangling_root = root / "dangling-root"
+            dangling_root.mkdir()
+            dangling_exe = dangling_root / "herdr.exe"
+            dangling_exe.write_bytes(herdr.read_bytes())
+            try:
+                (dangling_root / "conpty").symlink_to("missing", target_is_directory=True)
+            except OSError:
+                if os.name != "nt":
+                    raise
+            else:
+                with self.assertRaisesRegex(ValueError, "differs from the pinned version"):
+                    package.install_local_bundle(metadata_path, "x86_64", nupkg, dangling_exe)
+                self.assertFalse((dangling_root / "THIRD-PARTY-NOTICES").exists())
 
             (stage / "conpty" / "conpty.dll").write_bytes(b"tampered")
             with self.assertRaisesRegex(ValueError, "staged file hash mismatch"):
