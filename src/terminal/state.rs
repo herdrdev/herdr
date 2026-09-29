@@ -733,6 +733,15 @@ impl TerminalState {
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
             return None;
         }
+        if (source.as_str(), agent_label.as_str()) == ("herdr:codex", "codex")
+            && session_ref.as_ref().is_some_and(|incoming| {
+                self.current_session_identity_for_persistence().is_some_and(
+                    |(_, _, kind, value)| kind != incoming.kind || value != incoming.value,
+                )
+            })
+        {
+            return None;
+        }
         let owner_conflicts = self.current_session_owner_conflicts(&source, &agent_label);
         let foreground_takeover_allowed = owner_conflicts
             && self.foreground_agent_confirms_hook_authority_takeover(
@@ -1651,6 +1660,16 @@ impl TerminalState {
         let previous_state = self.state;
         let previous_presentation = self.effective_presentation_for_state_at(previous_state, now);
         let previous_session = self.current_session_identity_for_persistence();
+        if (source.as_str(), agent_label.as_str()) == ("herdr:codex", "codex")
+            && session_replacement_allowed
+            && self.hook_authority.as_ref().is_some_and(|authority| {
+                authority.source == source
+                    && authority.agent_label == agent_label
+                    && authority.session_ref.as_ref() != Some(&session_ref)
+            })
+        {
+            self.hook_authority = None;
+        }
         if session_replacement_allowed || foreground_takeover_allowed {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
         }

@@ -3598,6 +3598,76 @@ mod tests {
     }
 
     #[test]
+    fn codex_hook_turn_lifecycle_preserves_session_and_beats_stale_working_screen() {
+        let mut state = app_with_workspaces(&["one"]);
+        let (pane_id, terminal_id) = first_pane_terminal(&state);
+        state.handle_app_event(AppEvent::StateChanged {
+            pane_id,
+            agent: Some(Agent::Codex),
+            state: AgentState::Working,
+            visible_blocker: false,
+            visible_working: true,
+            process_exited: false,
+            observed_at: std::time::Instant::now(),
+        });
+
+        for (session, seq) in [("first", 1), ("second", 4)] {
+            state.handle_app_event(AppEvent::AgentSessionReported {
+                pane_id,
+                source: "herdr:codex".into(),
+                agent_label: "codex".into(),
+                seq: Some(seq),
+                session_ref: crate::agent_resume::AgentSessionRef::id(session),
+                session_start_source: Some("startup".into()),
+            });
+            state.handle_app_event(AppEvent::HookStateReported {
+                pane_id,
+                source: "herdr:codex".into(),
+                agent_label: "codex".into(),
+                state: AgentState::Working,
+                message: None,
+                seq: Some(seq + 1),
+                session_ref: crate::agent_resume::AgentSessionRef::id(session),
+            });
+            state.handle_app_event(AppEvent::HookStateReported {
+                pane_id,
+                source: "herdr:codex".into(),
+                agent_label: "codex".into(),
+                state: AgentState::Idle,
+                message: None,
+                seq: Some(seq + 2),
+                session_ref: crate::agent_resume::AgentSessionRef::id(session),
+            });
+            assert_eq!(state.terminals[&terminal_id].state, AgentState::Idle);
+            assert!(state.terminals[&terminal_id]
+                .last_agent_completion_seq
+                .is_some());
+            assert!(state.terminals[&terminal_id].session_ref_is_current(
+                &crate::agent_resume::AgentSessionRef::id(session).unwrap()
+            ));
+        }
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:codex".into(),
+            agent_label: "codex".into(),
+            state: AgentState::Working,
+            message: None,
+            seq: Some(7),
+            session_ref: crate::agent_resume::AgentSessionRef::id("second"),
+        });
+        state.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: "herdr:codex".into(),
+            agent_label: "codex".into(),
+            state: AgentState::Idle,
+            message: None,
+            seq: Some(8),
+            session_ref: crate::agent_resume::AgentSessionRef::id("first"),
+        });
+        assert_eq!(state.terminals[&terminal_id].state, AgentState::Working);
+    }
+
+    #[test]
     fn reported_resume_follows_the_reporting_agent_until_release() {
         let mut state = app_with_workspaces(&["one"]);
         let (pane_id, terminal_id) = first_pane_terminal(&state);

@@ -222,6 +222,21 @@ fn codex_hook_reports_persisted_root_session_and_ignores_ephemeral_or_nested_ses
         &[("CODEX_THREAD_ID", "parent-session")],
     )
     .is_none());
+
+    for (action, event) in [
+        ("working", "UserPromptSubmit"),
+        ("idle", "Stop"),
+        ("idle", "Interrupt"),
+    ] {
+        let request = run_codex_hook(
+            action,
+            &format!(r#"{{"hook_event_name":"{event}","session_id":"codex-session"}}"#),
+        )
+        .expect("Codex turn hook should report state");
+        assert_eq!(request["method"], "pane.report_agent");
+        assert_eq!(request["params"]["state"], action);
+        assert_eq!(request["params"]["agent_session_id"], "codex-session");
+    }
 }
 
 #[test]
