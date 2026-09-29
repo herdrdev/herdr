@@ -10199,7 +10199,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clicking_pane_context_menu_close_last_parent_group_pane_keeps_group() {
+    async fn clicking_pane_context_menu_close_last_parent_group_pane_confirms_group_close() {
         let mut app = app_for_mouse_test();
         let mut parent = Workspace::test_new("main");
         let pane_id = parent.tabs[0].root_pane;
@@ -10209,6 +10209,7 @@ mod tests {
         app.state.workspaces = vec![parent, child];
         app.state.active = Some(0);
         app.state.selected = 1;
+        app.state.confirm_close = true;
         app.state.set_server_mode(Mode::Terminal);
 
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
@@ -10244,11 +10245,11 @@ mod tests {
             menu.y + 1 + close_idx as u16,
         ));
 
-        assert_eq!(app.state.selected, 1);
-        assert_ne!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
+        assert_eq!(app.state.selected, 0);
+        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
         assert_eq!(app.state.workspaces[0].tabs.len(), 1);
-        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, pane_id);
+        assert_eq!(app.state.workspaces[0].tabs[0].root_pane, pane_id);
         assert!(app.state.context_menu.is_none());
         for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();

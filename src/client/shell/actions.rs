@@ -833,8 +833,7 @@ impl ClientShellState {
         let repaint = match result {
             Ok(_) => false,
             Err(error)
-                if self.config.confirm_close
-                    && error.code.as_deref() == Some("confirmation_required")
+                if error.code.as_deref() == Some("confirmation_required")
                     && pending.confirmation_workspace_id.is_some() =>
             {
                 if let Some(workspace_id) = pending.confirmation_workspace_id {

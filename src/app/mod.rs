@@ -8336,16 +8336,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pane_close_request_replaces_last_tab_without_closing_workspace() {
+    async fn pane_close_request_closes_workspace_with_final_tab() {
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-close-last");
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
-        let workspace_id = app.state.workspaces[0].id.clone();
-        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
-
         let target_pane = app.state.workspaces[0].tabs[0].root_pane;
         let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
 
@@ -8358,20 +8355,8 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "ok");
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].id, workspace_id);
-        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
-        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
-        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, target_pane);
-        let replacement_terminal = app
-            .state
-            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
-            .unwrap();
-        assert_eq!(
-            app.state.terminals[&replacement_terminal].cwd,
-            workspace_cwd
-        );
-        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+        assert!(app.state.workspaces.is_empty());
+        assert!(app.event_hub.events_after(0).iter().any(|(_, event)| {
             matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
         }));
         for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
@@ -8414,7 +8399,7 @@ mod tests {
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
-        assert_eq!(response["result"]["type"], "ok");
+        assert_eq!(response["error"]["code"], "confirmation_required");
         assert_ne!(
             app.state.client_overlay,
             crate::app::state::ClientOverlay::ConfirmClose
@@ -8422,7 +8407,7 @@ mod tests {
         assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.workspaces.len(), 2);
         assert_eq!(app.state.workspaces[0].tabs.len(), 1);
-        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, target_pane);
+        assert_eq!(app.state.workspaces[0].tabs[0].root_pane, target_pane);
         assert!(app.state.workspaces[0].worktree_space.is_some());
         assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
             matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)

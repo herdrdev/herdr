@@ -124,6 +124,74 @@ fn tab_close_stays_immediate_with_confirmation_disabled_or_other_tabs() {
 }
 
 #[test]
+fn final_pane_close_uses_workspace_confirmation_after_server_group_guard() {
+    let mut state = close_state(true, 1);
+    let mut requested = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::ClosePane),
+        &mut requested,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = requested.actions.as_slice() else {
+        panic!("pane close request");
+    };
+    assert!(matches!(&request.method, Method::PaneClose(_)));
+
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("confirmation_required".into()),
+            message: "closing this pane would close a worktree group".into(),
+        }),
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::ConfirmClose(_))
+    ));
+}
+
+#[test]
+fn server_group_confirmation_opens_when_preference_is_disabled() {
+    let mut state = close_state(false, 1);
+    let mut projected = state.snapshot.as_deref().unwrap().clone();
+    projected.workspaces[0].worktree = Some(ClientShellWorktree {
+        key: "repo".into(),
+        label: "repo".into(),
+        is_linked_worktree: false,
+    });
+    let mut sibling = projected.workspaces[0].clone();
+    sibling.workspace_id = "ws_2".into();
+    sibling.active_tab_id = "tab_2".into();
+    sibling.focused = false;
+    sibling.worktree.as_mut().unwrap().is_linked_worktree = true;
+    projected.workspaces.push(sibling);
+    let mut sibling_tab = projected.tabs[0].clone();
+    sibling_tab.tab_id = "tab_2".into();
+    sibling_tab.workspace_id = "ws_2".into();
+    sibling_tab.focused = false;
+    projected.tabs.push(sibling_tab);
+    state.set_snapshot(Box::new(projected));
+
+    let close = request_close(&mut state, false);
+    let [ClientShellAction::Endpoint { request, .. }] = close.actions.as_slice() else {
+        panic!("final tab close request");
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("confirmation_required".into()),
+            message: "closing this tab would close a worktree group".into(),
+        }),
+    );
+
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::ConfirmClose(_))
+    ));
+}
+
+#[test]
 fn last_tab_confirmation_preserves_target_across_focus_changes_and_new_tabs() {
     let mut state = close_state(true, 1);
     let mut projected = state.snapshot.as_deref().unwrap().clone();

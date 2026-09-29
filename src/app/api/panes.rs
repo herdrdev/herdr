@@ -2698,6 +2698,23 @@ impl App {
                 (tab.layout.pane_count() <= 1 || leaves_only_companions).then_some(tab_idx)
             });
             if let Some(tab_idx) = close_tab_idx {
+                if self
+                    .state
+                    .workspaces
+                    .get(ws_idx)
+                    .is_some_and(|workspace| workspace.tabs.len() == 1)
+                {
+                    return self
+                        .close_last_tab_workspace(ws_idx, tab_idx)
+                        .map_err(|message| {
+                            let code = if message.starts_with("confirmation_required:") {
+                                "confirmation_required"
+                            } else {
+                                "pane_close_failed"
+                            };
+                            encode_error(id, code, message)
+                        });
+                }
                 return self
                     .close_tab_preserving_workspace(ws_idx, tab_idx, true)
                     .map_err(|message| encode_error(id, "pane_close_failed", message));
@@ -4990,10 +5007,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_pane_close_last_pane_keeps_linked_worktree_workspace() {
+    async fn api_pane_close_last_pane_closes_linked_worktree_workspace() {
         let mut app = app_with_linked_worktree();
-        let workspace_id = app.state.workspaces[0].id.clone();
-        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
 
@@ -5007,12 +5022,7 @@ mod tests {
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.id, "req");
         assert_eq!(app.state.request_remove_linked_worktree, None);
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].id, workspace_id);
-        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
-        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
-        assert!(app.state.workspaces[0].worktree_space.is_some());
-        assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+        assert!(app.state.workspaces.is_empty());
         for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
@@ -5023,8 +5033,6 @@ mod tests {
         let (mut app, _) = app_with_test_workspace();
         let primary = app.state.workspaces[0].tabs[0].root_pane;
         let companion = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
-        let workspace_id = app.state.workspaces[0].id.clone();
-        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
         app.state.workspaces[0].tabs[0].layout.focus_pane(primary);
         app.state.workspaces[0]
             .pane_state_mut(companion)
@@ -5043,22 +5051,9 @@ mod tests {
         );
 
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
-        assert_eq!(app.state.workspaces.len(), 1);
-        assert_eq!(app.state.workspaces[0].id, workspace_id);
-        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
-        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
-        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, primary);
-        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, companion);
+        assert!(app.state.workspaces.is_empty());
         assert!(!app.state.terminals.contains_key(&primary_terminal));
         assert!(!app.state.terminals.contains_key(&companion_terminal));
-        let replacement_terminal = app
-            .state
-            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
-            .unwrap();
-        assert_eq!(
-            app.state.terminals[&replacement_terminal].cwd,
-            workspace_cwd
-        );
         for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
