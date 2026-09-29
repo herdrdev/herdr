@@ -474,7 +474,7 @@ fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
 }
 
 #[test]
-fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close() {
+fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_close() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
@@ -520,6 +520,6 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
     assert!(matches!(
         &request.method,
         crate::api::schema::Method::WorkspaceClose(params)
-            if params.workspace_id == "ws_1" && params.close_group
+            if params.workspace_id == "ws_1" && !params.close_group
     ));
 }

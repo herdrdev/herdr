@@ -534,6 +534,7 @@ pub(super) enum ClientContextMenuTarget {
         is_git: bool,
         is_linked_worktree: bool,
         has_worktree_children: bool,
+        close_group: bool,
         collapsed: bool,
     },
     Tab {
@@ -571,6 +572,7 @@ pub(super) struct ClientTabCloseConfirmation {
 #[derive(Debug)]
 pub(super) struct ClientConfirmCloseOverlay {
     pub(super) workspace_id: String,
+    pub(super) close_group: bool,
     pub(super) tab_target: Option<ClientTabCloseConfirmation>,
     pub(super) title: String,
     pub(super) detail: String,

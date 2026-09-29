@@ -107,19 +107,7 @@ impl ClientShellState {
                 }
                 if action == crate::input::KeybindAction::CloseWorkspace {
                     if let Some(workspace_id) = self.workspace_action_id() {
-                        if self.config.confirm_close {
-                            self.open_confirm_close_overlay(workspace_id);
-                        } else {
-                            self.push_endpoint_method(
-                                crate::api::schema::Method::WorkspaceClose(
-                                    crate::api::schema::WorkspaceCloseParams {
-                                        workspace_id,
-                                        close_group: true,
-                                    },
-                                ),
-                                outcome,
-                            );
-                        }
+                        self.request_workspace_close(workspace_id, None, outcome);
                     }
                     outcome.repaint = true;
                     return;

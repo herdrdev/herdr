@@ -664,11 +664,15 @@ impl AppState {
     }
 
     pub fn close_selected_workspace(&mut self) {
+        let close_indices = self.workspace_close_indices(self.selected);
+        self.close_workspaces(close_indices);
+    }
+
+    pub(crate) fn close_workspaces(&mut self, close_indices: Vec<usize>) {
         if self.workspaces.is_empty() {
             return;
         }
         self.mark_session_dirty();
-        let close_indices = self.workspace_close_indices(self.selected);
 
         let mut terminal_ids = Vec::new();
         let mut pane_ids = Vec::new();
@@ -879,6 +883,20 @@ impl AppState {
     }
 
     pub(crate) fn workspace_close_indices(&self, ws_idx: usize) -> Vec<usize> {
+        let group = self.workspace_group_close_indices(ws_idx);
+        if group.iter().any(|index| {
+            *index != ws_idx
+                && self.workspaces[*index]
+                    .worktree_space()
+                    .is_some_and(|space| !space.is_linked_worktree)
+        }) {
+            vec![ws_idx]
+        } else {
+            group
+        }
+    }
+
+    pub(crate) fn workspace_group_close_indices(&self, ws_idx: usize) -> Vec<usize> {
         self.workspaces
             .get(ws_idx)
             .and_then(|ws| ws.worktree_space())
