@@ -477,9 +477,16 @@ fn restored_worktree_space_membership(
     space: Option<crate::workspace::WorktreeSpaceMembership>,
 ) -> Option<crate::workspace::WorktreeSpaceMembership> {
     space.filter(|space| {
-        space.checkout_path.exists()
-            && crate::workspace::git_space_metadata(&space.checkout_path)
-                .is_some_and(|current| current.key == space.key)
+        crate::workspace::git_space_metadata(&space.checkout_path).is_none_or(|current| {
+            // Discovery may find an ancestor repo, or fall back to a per-worktree
+            // Git directory without objects when common-directory metadata is unreadable.
+            current.checkout_key
+                != crate::worktree::canonical_or_original(&space.checkout_path)
+                    .display()
+                    .to_string()
+                || current.key == space.key
+                || !std::path::Path::new(&current.key).join("objects").is_dir()
+        })
     })
 }
 
@@ -1087,18 +1094,80 @@ mod tests {
     }
 
     #[test]
-    fn restored_worktree_space_membership_drops_missing_checkout() {
-        let missing =
-            std::env::temp_dir().join(format!("herdr-missing-worktree-{}", std::process::id()));
+    fn restored_worktree_space_membership_preserves_unavailable_checkout_and_rejects_replacement() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-restored-worktree-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join(".git/objects")).unwrap();
+        std::fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        let ancestor = crate::workspace::git_space_metadata(&root).unwrap();
+        let checkout = root.join("checkout");
         let membership = crate::workspace::WorktreeSpaceMembership {
-            key: "repo-key".into(),
+            key: "original-repo-key".into(),
             label: "herdr".into(),
-            repo_root: missing.join("repo"),
-            checkout_path: missing.join("checkout"),
+            repo_root: root.join("original-repo"),
+            checkout_path: checkout.clone(),
             is_linked_worktree: true,
         };
 
-        assert_eq!(restored_worktree_space_membership(Some(membership)), None);
+        // Missing and leftover directories may discover an unrelated ancestor repo.
+        assert_eq!(
+            restored_worktree_space_membership(Some(membership.clone())),
+            Some(membership.clone())
+        );
+        std::fs::create_dir_all(&checkout).unwrap();
+        assert_eq!(
+            restored_worktree_space_membership(Some(membership.clone())),
+            Some(membership.clone())
+        );
+
+        // A real repository at the saved checkout path can prove replacement.
+        std::fs::create_dir_all(checkout.join(".git/objects")).unwrap();
+        std::fs::write(checkout.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert_eq!(
+            restored_worktree_space_membership(Some(membership.clone())),
+            None
+        );
+        let current = crate::workspace::git_space_metadata(&checkout).unwrap();
+        assert_ne!(current.key, ancestor.key);
+        let matching = crate::workspace::WorktreeSpaceMembership {
+            key: current.key,
+            ..membership.clone()
+        };
+        assert_eq!(
+            restored_worktree_space_membership(Some(matching.clone())),
+            Some(matching)
+        );
+
+        // Partial linked-worktree metadata is not evidence of replacement.
+        std::fs::remove_dir_all(checkout.join(".git")).unwrap();
+        let git_dir = root.join(".git/worktrees/restored");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            checkout.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+        let linked = crate::workspace::WorktreeSpaceMembership {
+            key: ancestor.key,
+            ..membership.clone()
+        };
+        assert_eq!(
+            restored_worktree_space_membership(Some(linked.clone())),
+            Some(linked)
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(crate::workspace::git_space_metadata(&checkout).is_none());
+        assert_eq!(
+            restored_worktree_space_membership(Some(membership.clone())),
+            Some(membership)
+        );
     }
 
     #[test]
@@ -1374,6 +1443,14 @@ mod tests {
                     }
                 }
             }
+            let membership = crate::workspace::WorktreeSpaceMembership {
+                key: "saved-repo-key".into(),
+                label: "saved-repo".into(),
+                repo_root: cwd.clone(),
+                checkout_path: missing.clone(),
+                is_linked_worktree: true,
+            };
+            snapshot.workspaces[0].worktree_space = Some(membership.clone());
             let failed = snapshot.workspaces[0].tabs[0].panes.get_mut(&1).unwrap();
             failed.cwd = missing.clone();
             failed.label = Some("keep my pane".into());
@@ -1409,6 +1486,11 @@ mod tests {
                 "a launch failure must not delete a workspace"
             );
             assert_eq!(captured.workspaces[0].tabs.len(), 2);
+            assert_eq!(
+                captured.workspaces[0].worktree_space,
+                Some(membership),
+                "an unavailable checkout must retain its saved repository group across restart"
+            );
             let pane = captured.workspaces[0].tabs[0]
                 .panes
                 .values()
