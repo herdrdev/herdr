@@ -2646,6 +2646,8 @@ pub struct ViewState {
     pub sidebar_rect: Rect,
     /// Sidebar-footer entry for the settings screen.
     pub(crate) sidebar_footer_settings_hit_area: Rect,
+    /// Sidebar-footer toggle for pending ask subtitles.
+    pub(crate) sidebar_footer_ask_subtitles_hit_area: Rect,
     /// Sidebar-footer entry for the full-screen pull-request view.
     pub(crate) sidebar_footer_work_hit_area: Rect,
     /// Sidebar-footer entry for the client-local historical usage view.
@@ -3196,6 +3198,7 @@ pub enum AgentPanelSort {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsSection {
     General,
+    Sidebar,
     Theme,
     Indicators,
     Sound,
@@ -3213,6 +3216,7 @@ pub enum SettingsSection {
 impl SettingsSection {
     pub const ALL: &[Self] = &[
         Self::General,
+        Self::Sidebar,
         Self::Theme,
         Self::Indicators,
         Self::Sound,
@@ -3230,6 +3234,7 @@ impl SettingsSection {
     pub fn label(self) -> &'static str {
         match self {
             Self::General => "general",
+            Self::Sidebar => "sidebar",
             Self::Theme => "theme",
             Self::Indicators => "indicators",
             Self::Sound => "sound",
@@ -3249,6 +3254,7 @@ impl SettingsSection {
     pub fn glyph(self) -> &'static str {
         match self {
             Self::General => "⚙",
+            Self::Sidebar => "▤",
             Self::Theme => "◐",
             Self::Indicators => "●",
             Self::Sound => "♪",
@@ -4855,6 +4861,8 @@ pub struct AppState {
     pub sidebar_areas: crate::config::SidebarAreasConfig,
     /// Config-selected sidebar presentation. It is view state, never session data.
     pub sidebar_sections_layout: bool,
+    /// Whether the sections Spaces tree shows one-line blocked-agent asks.
+    pub sidebar_show_ask_subtitles: bool,
     pub sidebar_header_plain: bool,
     pub next_agent_state_change_seq: u64,
     /// Capture mouse input for Herdr's own mouse UI. When false, Herdr only
@@ -5355,6 +5363,7 @@ impl From<crate::config::LinearLayoutConfig> for LinearViewLayout {
 pub(crate) enum SidebarFooterItem {
     Board,
     Settings,
+    AskSubtitles,
     PullRequests,
     Usage,
     Linear,
@@ -7774,6 +7783,7 @@ impl AppState {
                 status_bar_rect: Rect::default(),
                 sidebar_rect: Rect::default(),
                 sidebar_footer_settings_hit_area: Rect::default(),
+                sidebar_footer_ask_subtitles_hit_area: Rect::default(),
                 sidebar_footer_work_hit_area: Rect::default(),
                 sidebar_footer_usage_hit_area: Rect::default(),
                 usage_hit_areas: Vec::new(),
@@ -8005,6 +8015,7 @@ impl AppState {
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
             sidebar_areas: crate::config::SidebarAreasConfig::default(),
             sidebar_sections_layout: false,
+            sidebar_show_ask_subtitles: false,
             sidebar_header_plain: false,
             next_agent_state_change_seq: 0,
             mouse_capture: true,

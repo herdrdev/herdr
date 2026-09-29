@@ -5126,6 +5126,18 @@ impl App {
                 settings::open_settings(&mut self.state);
                 return;
             }
+            let ask_subtitles = self.state.view.sidebar_footer_ask_subtitles_hit_area;
+            if self
+                .state
+                .point_in_rect(ask_subtitles, mouse.column, mouse.row)
+            {
+                self.save_config_edit(crate::app::settings_general::ConfigEdit::Bool {
+                    section: "ui.sidebar",
+                    key: "show_ask_subtitles",
+                    value: !self.state.sidebar_show_ask_subtitles,
+                });
+                return;
+            }
             let work = self.state.view.sidebar_footer_work_hit_area;
             if mouse.column >= work.x
                 && mouse.column < work.x.saturating_add(work.width)

@@ -616,6 +616,15 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
     let content_area = areas.content;
     match app.settings.section {
         SettingsSection::General => render_settings_general(app, frame, content_area),
+        SettingsSection::Sidebar => render_settings_toggle(
+            frame,
+            content_area,
+            p,
+            "sidebar",
+            "show ask subtitles",
+            app.sidebar_show_ask_subtitles,
+            app.settings.list.selected,
+        ),
         SettingsSection::Theme => render_settings_theme(app, frame, content_area),
         SettingsSection::Indicators => render_modal_choice_list(
             frame,

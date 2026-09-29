@@ -3947,6 +3947,20 @@ mod tests {
         app.state.sidebar_group_mode = crate::app::state::SidebarGroupMode::Spaces;
         app.state.sidebar_sections_layout = true;
         app.state.sidebar_areas.hosts = true;
+        for ws_idx in 0..2 {
+            let pane_id = app.state.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("local agent terminal")
+                .set_detected_state(
+                    Some(crate::detect::Agent::Claude),
+                    crate::detect::AgentState::Blocked,
+                );
+        }
         let mut fleet = Workspace::test_new("fleet");
         fleet.is_fleet = true;
         app.state.workspaces.push(fleet);
@@ -4174,6 +4188,111 @@ mod tests {
     }
 
     #[test]
+    fn focus_sidebar_shortcuts_follow_filtered_and_expanded_rows() {
+        let mut app = app_with_test_workspaces(&["blocked", "done", "working"]);
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_group_mode = crate::app::state::SidebarGroupMode::Spaces;
+
+        for (ws_idx, status) in [
+            crate::detect::AgentState::Blocked,
+            crate::detect::AgentState::Idle,
+            crate::detect::AgentState::Working,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let pane_id = app.state.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.state
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("agent terminal")
+                .set_detected_state(Some(crate::detect::Agent::Claude), status);
+            if ws_idx == 1 {
+                app.state.workspaces[ws_idx].tabs[0]
+                    .panes
+                    .get_mut(&pane_id)
+                    .expect("done pane")
+                    .seen = false;
+            }
+        }
+
+        let working = "Working";
+        assert!(crate::ui::sidebar::section_is_collapsed(
+            &app.state, working
+        ));
+        assert_eq!(app.state.visible_workspace_order(), vec![0, 1]);
+        assert_eq!(app.state.workspace_at_visible_position(2), None);
+        let third_workspace = navigate_reserved_action_for_key(
+            &app.state,
+            &TerminalKey::new(KeyCode::Char('3'), KeyModifiers::empty()),
+        )
+        .expect("workspace jump shortcut");
+        assert_eq!(third_workspace, NavigateAction::SwitchWorkspace(2));
+        execute_navigate_action(&mut app.state, third_workspace);
+        assert_eq!(
+            app.state.active,
+            Some(0),
+            "hidden workspaces have no jump number"
+        );
+        app.state.selected = 2;
+        app.state.move_selected_workspace_by_visible_delta(-1);
+        assert_eq!(
+            app.state.selected, 1,
+            "up from a hidden row starts at the last visible row"
+        );
+        app.state.selected = 2;
+        app.state.move_selected_workspace_by_visible_delta(1);
+        assert_eq!(
+            app.state.selected, 0,
+            "down from a hidden row starts at the first visible row"
+        );
+
+        app.state.toggle_sidebar_group(working);
+        assert_eq!(app.state.visible_workspace_order(), vec![0, 1, 2]);
+        let third_workspace = navigate_reserved_action_for_key(
+            &app.state,
+            &TerminalKey::new(KeyCode::Char('3'), KeyModifiers::empty()),
+        )
+        .expect("workspace jump shortcut");
+        execute_navigate_action(&mut app.state, third_workspace);
+        assert_eq!(
+            app.state.active,
+            Some(2),
+            "expanded Working rows get jump numbers"
+        );
+
+        app.state.sidebar_work_filter.query = "done".into();
+        assert_eq!(app.state.visible_workspace_order(), vec![1]);
+        assert_eq!(app.state.workspace_at_visible_position(0), Some(1));
+        assert_eq!(app.state.workspace_at_visible_position(1), None);
+        let second_workspace = navigate_reserved_action_for_key(
+            &app.state,
+            &TerminalKey::new(KeyCode::Char('2'), KeyModifiers::empty()),
+        )
+        .expect("workspace jump shortcut");
+        execute_navigate_action(&mut app.state, second_workspace);
+        assert_eq!(
+            app.state.active,
+            Some(2),
+            "filtered workspaces have no jump number"
+        );
+        let first_workspace = navigate_reserved_action_for_key(
+            &app.state,
+            &TerminalKey::new(KeyCode::Char('1'), KeyModifiers::empty()),
+        )
+        .expect("workspace jump shortcut");
+        execute_navigate_action(&mut app.state, first_workspace);
+        assert_eq!(
+            app.state.active,
+            Some(1),
+            "jump numbers follow filtered row order"
+        );
+    }
+
+    #[test]
     fn fleet_workspace_ac6_window_cycle_scope_adds_fleet_only_when_selected() {
         let mut state = AppState::test_new();
         let mut local = Workspace::test_new("local");
@@ -4361,6 +4480,12 @@ mod tests {
     #[test]
     fn fleet_workspace_ac9_skip_collapsed_sections_exclude_their_tabs() {
         let mut app = app_with_global_window_fixture();
+        for terminal in app.state.terminals.values_mut() {
+            terminal.set_detected_state(
+                Some(crate::detect::Agent::Claude),
+                crate::detect::AgentState::Blocked,
+            );
+        }
         app.state.sidebar_sections_layout = true;
         app.state.skip_collapsed_cycle = true;
         assert!(!window_navigation_order(&app.state).is_empty());

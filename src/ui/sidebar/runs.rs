@@ -73,6 +73,7 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
                 .cloned()
                 .expect("host token for Runs host"),
             count: host.active_count,
+            activity_count: None,
             collapsed,
             dim: false,
             status: None,

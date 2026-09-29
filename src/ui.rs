@@ -626,6 +626,8 @@ fn compute_view_internal_at(
     } else {
         sidebar::sidebar_footer_settings_hit_area(sidebar_area)
     };
+    let sidebar_footer_ask_subtitles_hit_area =
+        sidebar::sidebar_footer_ask_subtitles_hit_area(app, sidebar_area);
     let sidebar_footer_usage_hit_area = if app.sidebar_collapsed {
         Rect::default()
     } else {
@@ -857,6 +859,7 @@ fn compute_view_internal_at(
         status_bar_rect,
         sidebar_rect: sidebar_area,
         sidebar_footer_settings_hit_area,
+        sidebar_footer_ask_subtitles_hit_area,
         sidebar_footer_work_hit_area,
         sidebar_footer_usage_hit_area,
         usage_hit_areas,
@@ -1184,6 +1187,7 @@ fn compute_mobile_view(
         status_bar_rect: Rect::default(),
         sidebar_rect: Rect::default(),
         sidebar_footer_settings_hit_area: Rect::default(),
+        sidebar_footer_ask_subtitles_hit_area: Rect::default(),
         sidebar_footer_work_hit_area: Rect::default(),
         sidebar_footer_usage_hit_area: Rect::default(),
         usage_hit_areas: Vec::new(),

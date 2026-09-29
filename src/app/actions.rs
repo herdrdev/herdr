@@ -1478,6 +1478,44 @@ impl AppState {
     }
 
     pub(crate) fn visible_workspace_order(&self) -> Vec<usize> {
+        if self.sidebar_sections_layout {
+            // Focus layout orders jumps and workspace arrows by the rows it
+            // actually builds, so filters and collapsed shelves agree with
+            // the sidebar. Multiple visible agent rows in one space still
+            // target that space once.
+            let rows = if self.view.layout == ViewLayout::Mobile {
+                crate::ui::sidebar::mobile_sidebar_rows(self)
+            } else {
+                crate::ui::sidebar_rows(self)
+            };
+            let mut seen = std::collections::HashSet::new();
+            let mut order = Vec::new();
+            for row in rows {
+                let ws_idx = match row {
+                    crate::ui::SidebarRow::Workspace { ws_idx, .. } => Some(ws_idx),
+                    crate::ui::SidebarRow::Tab { entry, .. }
+                    | crate::ui::SidebarRow::Agent { entry, .. } => {
+                        entry.local_target().map(|target| target.ws_idx)
+                    }
+                    crate::ui::SidebarRow::NeedsYou {
+                        target: crate::ui::NeedsYouTarget::Local(target),
+                        ..
+                    } => Some(target.ws_idx),
+                    _ => None,
+                };
+                if let Some(ws_idx) = ws_idx.filter(|ws_idx| {
+                    self.workspaces
+                        .get(*ws_idx)
+                        .is_some_and(|workspace| !workspace.is_fleet)
+                }) {
+                    if seen.insert(ws_idx) {
+                        order.push(ws_idx);
+                    }
+                }
+            }
+            return order;
+        }
+
         // Mobile always shows the worktree tree expanded, so its visible order
         // must ignore collapse state to match what the switcher renders.
         let entries = if self.view.layout == ViewLayout::Mobile {
@@ -1531,13 +1569,16 @@ impl AppState {
             return;
         }
         let order = self.visible_workspace_order();
-        let current_pos = order
-            .iter()
-            .position(|idx| *idx == self.selected)
-            .unwrap_or(0);
-        let target_pos = current_pos
-            .saturating_add_signed(delta)
-            .min(order.len().saturating_sub(1));
+        let target_pos = match order.iter().position(|idx| *idx == self.selected) {
+            Some(current_pos) => current_pos
+                .saturating_add_signed(delta)
+                .min(order.len().saturating_sub(1)),
+            None if self.sidebar_sections_layout && delta < 0 => order.len().saturating_sub(1),
+            None if self.sidebar_sections_layout => 0,
+            None => 0usize
+                .saturating_add_signed(delta)
+                .min(order.len().saturating_sub(1)),
+        };
         if let Some(ws_idx) = order.get(target_pos).copied() {
             self.selected = ws_idx;
             self.ensure_workspace_visible(ws_idx);

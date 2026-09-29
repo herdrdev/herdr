@@ -427,11 +427,11 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     /// Sidebar row layout. `current` preserves the existing layout; `sections`
-    /// shows active, snoozed, and settled Spaces shelves.
+    /// shows the Spaces tree with focused agents and deferred shelves.
     pub layout: SidebarLayoutConfig,
     /// Header decoration used by the sections layout. `plain` removes the sky
     /// band and places search and goto in the control row.
@@ -441,6 +441,9 @@ pub struct SidebarConfig {
     pub areas: SidebarAreasConfig,
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    /// Show the pending human question under blocked rows in the sections
+    /// layout. Settings: Sidebar → Show ask subtitles. Default: false.
+    pub show_ask_subtitles: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -581,14 +584,19 @@ mod tests {
         );
         // ac3: distinct Space groups get one compact blank row by default.
         assert_eq!(config.spaces.row_gap, 1);
+        assert!(!config.show_ask_subtitles);
     }
 
     #[test]
     fn sections_layout_and_plain_header_parse_from_sidebar_config() {
-        let config: SidebarConfig = toml::from_str("layout = \"sections\"\n").unwrap();
+        let config: SidebarConfig = toml::from_str(
+            "layout = \"sections\"\nheader = \"plain\"\nshow_ask_subtitles = false\n",
+        )
+        .unwrap();
 
         assert_eq!(config.layout, SidebarLayoutConfig::Sections);
         assert_eq!(config.header, SidebarHeaderConfig::Plain);
+        assert!(!config.show_ask_subtitles);
         let sky: SidebarConfig =
             toml::from_str("layout = \"sections\"\nheader = \"sky\"\n").unwrap();
         assert_eq!(sky.header, SidebarHeaderConfig::Sky);

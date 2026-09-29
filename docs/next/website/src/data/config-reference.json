@@ -1547,7 +1547,7 @@
           "key": "ui.sidebar.layout",
           "type": "enum",
           "default": "current",
-          "description": "Sidebar row layout. `current` preserves the existing layout; `sections` shows pinned, active, snoozed, and settled thread shelves.",
+          "description": "Sidebar row layout. `current` preserves the existing layout; `sections` shows pinned agents, blocked and done agents in the Spaces tree, then Active, Working, Snoozed, and Settled shelves.",
           "values": [
             "current",
             "sections"
@@ -1646,6 +1646,12 @@
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"workspace\"]]",
           "description": "Legacy Space-row layout accepted for compatibility. The visible Space projection always renders disclosure, title, and direct window count on one line; declarations are still limited to 16 rows and 16 tokens per row."
+        },
+        {
+          "key": "ui.sidebar.show_ask_subtitles",
+          "type": "boolean",
+          "default": "false",
+          "description": "Show the pending human question under blocked rows in the sections layout. Settings: Sidebar → Show ask subtitles. Default: false."
         },
         {
           "key": "ui.accent",

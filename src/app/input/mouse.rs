@@ -10694,6 +10694,59 @@ mod tests {
     }
 
     #[test]
+    fn clicking_sidebar_ask_subtitle_toggle_persists_the_sidebar_setting() {
+        use crate::app::state::{ControlId, SidebarFooterItem};
+
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let directory = std::env::temp_dir().join(format!(
+            "herdr-sidebar-ask-subtitles-{}",
+            crate::config::test_unique_suffix()
+        ));
+        std::fs::create_dir_all(&directory).expect("temp config directory");
+        let path = directory.join("config.toml");
+        std::fs::write(&path, "# per-machine config\n").expect("seed config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_show_ask_subtitles = true;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 80, 24));
+        let toggle = app.state.view.sidebar_footer_ask_subtitles_hit_area;
+        assert_eq!(toggle.width, 1);
+        assert_eq!(toggle.height, 1);
+        assert!(app.state.sidebar_show_ask_subtitles);
+
+        app.handle_mouse(mouse(MouseEventKind::Moved, toggle.x, toggle.y));
+        assert_eq!(
+            app.state.hovered_control,
+            Some(ControlId::SidebarFooter(SidebarFooterItem::AskSubtitles))
+        );
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            toggle.x,
+            toggle.y,
+        ));
+        assert!(!app.state.sidebar_show_ask_subtitles);
+        let saved: crate::config::Config =
+            toml::from_str(&std::fs::read_to_string(&path).expect("saved config"))
+                .expect("valid config");
+        assert!(!saved.ui.sidebar.show_ask_subtitles);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            toggle.x,
+            toggle.y,
+        ));
+        assert!(app.state.sidebar_show_ask_subtitles);
+        let saved: crate::config::Config =
+            toml::from_str(&std::fs::read_to_string(&path).expect("saved config"))
+                .expect("valid config");
+        assert!(saved.ui.sidebar.show_ask_subtitles);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
     fn sidebar_footer_order_hit_areas_settings_and_hover_are_complete() {
         use crate::app::state::SidebarFooterItem;
 
