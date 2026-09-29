@@ -604,8 +604,60 @@ impl App {
             self.state
                 .refresh_settled_panes_at(self.work_index_snapshot.as_ref(), now, now_unix)
                 > 0;
+        self.flush_status_transitions();
         changed |= self.flush_pane_settlement_events();
         changed
+    }
+
+    pub(crate) fn flush_status_transitions(&mut self) {
+        let transitions = std::mem::take(&mut self.state.pending_status_transitions);
+        let Some(status_log) = self.status_log.as_ref() else {
+            return;
+        };
+        for transition in transitions {
+            let Some((ws_idx, pane)) = self.find_pane(transition.pane_id) else {
+                continue;
+            };
+            let Some(pane_id) = self.public_pane_id(ws_idx, transition.pane_id) else {
+                continue;
+            };
+            let (tail, tail_truncated) = self
+                .terminal_runtimes
+                .get(&pane.attached_terminal_id)
+                .map(|runtime| {
+                    let snapshot = runtime.recent_text_snapshot(crate::status_log::TAIL_MAX_LINES);
+                    (snapshot.text, snapshot.truncated)
+                })
+                .unwrap_or_default();
+            let mut record = crate::status_log::NewRecord {
+                pane: &pane_id,
+                session: Some(
+                    crate::session::active_name()
+                        .unwrap_or_else(|| crate::session::DEFAULT_SESSION_NAME.to_string()),
+                ),
+                agent: transition
+                    .agent
+                    .map(crate::detect::agent_label)
+                    .map(str::to_string),
+                host: crate::platform::hostname(),
+                from_state: crate::status_log::state_label(transition.from_state),
+                to_state: crate::status_log::state_label(transition.to_state),
+                source: crate::status_log::Source::Detector,
+                note: None,
+                tail: &tail,
+            }
+            .into_record(time::OffsetDateTime::now_utc());
+            record.tail_truncated |= tail_truncated;
+            match status_log.append(&record) {
+                Ok(crate::status_log::AppendOutcome::Written(_)) => {}
+                Ok(crate::status_log::AppendOutcome::Capped) => {
+                    tracing::warn!(pane = %pane_id, "agent status log day file is full; transition was dropped");
+                }
+                Err(error) => {
+                    tracing::warn!(pane = %pane_id, %error, "could not append agent status transition");
+                }
+            }
+        }
     }
 
     pub(crate) fn flush_pane_settlement_events(&mut self) -> bool {
@@ -2707,5 +2759,78 @@ mod tests {
             event.data,
             crate::api::schema::EventData::PaneUnsettled { .. }
         )));
+    }
+
+    #[tokio::test]
+    async fn agent_status_transition_is_queued_and_flushed_to_log() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            event_hub,
+        );
+        let (mut state, pane_id) = state_with_context(Default::default());
+        let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let _ = state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("root terminal")
+            .set_detected_state(Some(crate::detect::Agent::Codex), AgentState::Working);
+        app.state = state;
+        app.terminal_runtimes.insert(
+            terminal_id,
+            crate::terminal::TerminalRuntime::test_with_screen_bytes(
+                80,
+                24,
+                b"recent session tail\n",
+            ),
+        );
+        let log = crate::status_log::StatusLog::new(crate::status_log::test_tempdir());
+        app.status_log = Some(log.clone());
+
+        transition_agent_state(&mut app.state, pane_id, AgentState::Blocked, Instant::now());
+
+        assert_eq!(
+            app.state.pending_status_transitions,
+            [crate::status_log::PendingTransition {
+                pane_id,
+                agent: Some(crate::detect::Agent::Codex),
+                from_state: AgentState::Working,
+                to_state: AgentState::Blocked,
+            }]
+        );
+        app.flush_status_transitions();
+
+        assert!(app.state.pending_status_transitions.is_empty());
+        let records = log.read(&crate::status_log::ReadFilter::default());
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].pane, app.public_pane_id(0, pane_id).unwrap());
+        assert!(time::OffsetDateTime::parse(
+            &records[0].ts,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .is_ok());
+        assert!(records[0].host.is_some());
+        assert!(records[0].session.is_some());
+        assert_eq!(records[0].agent.as_deref(), Some("codex"));
+        assert_eq!(records[0].from_state, "working");
+        assert_eq!(records[0].to_state, "blocked");
+        assert_eq!(records[0].source, crate::status_log::Source::Detector);
+        assert!(records[0].tail.contains("recent session tail"));
+        assert!(records[0].tail.len() <= crate::status_log::TAIL_MAX_BYTES);
+        assert!(records[0].tail.lines().count() <= crate::status_log::TAIL_MAX_LINES);
+
+        transition_agent_state(&mut app.state, pane_id, AgentState::Idle, Instant::now());
+        assert_eq!(app.state.pending_status_transitions.len(), 1);
+        app.status_log = None;
+        app.flush_status_transitions();
+
+        assert!(app.state.pending_status_transitions.is_empty());
+        assert_eq!(log.read(&crate::status_log::ReadFilter::default()).len(), 1);
     }
 }

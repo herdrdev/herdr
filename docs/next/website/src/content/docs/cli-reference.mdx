@@ -3,7 +3,7 @@ title: CLI reference
 description: Herdr commands for sessions, workspaces, tabs, panes, notifications, agents, waits, integrations, and status.
 ---
 
-Herdr’s CLI talks to the running server over the same local socket API used by integrations and agents.
+Most Herdr CLI commands talk to the running server over the same local socket API used by integrations and agents. `status-log` reads and writes its local files directly, without a running server.
 
 Most commands print JSON responses for deterministic automation in scripts.
 
@@ -33,7 +33,11 @@ Status commands:
 herdr status
 herdr status server
 herdr status client
+herdr status-log read [--since RFC3339|UNIX-SECS|AGE] [--pane ID] [--limit N] [--dir PATH]
+herdr status-log record --pane ID --to STATE [--from STATE] [--source watchdog|user|detector] [--agent KIND] [--session NAME] [--note TEXT] [--tail-file PATH|-] [--dir PATH]
 ```
+
+`status-log read` prints matching records as a JSON array. `--since` accepts an RFC 3339 timestamp, Unix seconds, or a relative age such as `90s`, `30m`, `2h`, or `7d`; `--limit` keeps the newest matching records. `status-log record` appends one record and prints it as JSON. Its source defaults to `watchdog`; `--tail-file -` reads the tail from standard input. Both commands use daily JSONL files under the Herdr state directory, retain up to 30 daily files, and accept `--dir` to use another directory.
 
 API schema commands:
 

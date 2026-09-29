@@ -38,6 +38,7 @@ mod server;
 mod server_not_running;
 mod spec;
 mod status;
+mod status_log;
 mod tab;
 mod target;
 mod theme;
@@ -187,6 +188,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         }
         "api" => api::run_api_command(&args[2..])?,
         "status" => status::run_status_command(&args[2..])?,
+        "status-log" => status_log::run_status_log_command(&args[2..])?,
         "completion" | "completions" => completion::run_completion_command(&args[2..])?,
         "config" => run_config_command(&args[2..])?,
         "fleet" => fleet::run_fleet_command(&args[2..])?,

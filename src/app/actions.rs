@@ -4272,6 +4272,16 @@ impl AppState {
             self.mark_session_dirty();
         }
 
+        if agent_state_changed {
+            self.pending_status_transitions
+                .push(crate::status_log::PendingTransition {
+                    pane_id,
+                    agent: change.known_agent,
+                    from_state: change.previous_state,
+                    to_state: change.state,
+                });
+        }
+
         if unsettled {
             let workspace_id = self.workspaces[ws_idx].id.clone();
             self.pending_pane_settlement_changes

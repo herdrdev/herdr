@@ -4588,6 +4588,7 @@ pub struct AppState {
     /// the confirming second press. Only armed while `ui.confirm_close` is on.
     pub(crate) sidebar_settled_menu_delete_armed: bool,
     pub(crate) pending_pane_settlement_changes: Vec<PaneSettlementChange>,
+    pub(crate) pending_status_transitions: Vec<crate::status_log::PendingTransition>,
     pub(crate) pending_pane_snooze_changes: Vec<PaneSnoozeChange>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
@@ -7713,6 +7714,7 @@ impl AppState {
             sidebar_settled_menu_selected: 0,
             sidebar_settled_menu_delete_armed: false,
             pending_pane_settlement_changes: Vec::new(),
+            pending_status_transitions: Vec::new(),
             pending_pane_snooze_changes: Vec::new(),
             request_complete_onboarding: false,
             name_input: String::new(),

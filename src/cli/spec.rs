@@ -32,6 +32,7 @@ pub(super) fn command() -> Command {
         .subcommand(completion::command())
         .subcommand(update_command())
         .subcommand(status_command())
+        .subcommand(status_log_command())
         .subcommand(config_command())
         .subcommand(fleet_command())
         .subcommand(work_index_command())
@@ -137,6 +138,39 @@ fn status_command() -> Command {
             Command::new("client")
                 .about("Show local client status")
                 .arg(json_flag()),
+        )
+}
+
+fn status_log_command() -> Command {
+    Command::new("status-log")
+        .about("Read or append the local agent status history")
+        .subcommand(
+            Command::new("read")
+                .about("Print matching local status records as a JSON array")
+                .arg(option("since", "RFC3339|UNIX-SECS|AGE"))
+                .arg(option("pane", "ID"))
+                .arg(option("limit", "N"))
+                .arg(path_option("dir", "PATH")),
+        )
+        .subcommand(
+            Command::new("record")
+                .about("Append one local status record and print it as JSON")
+                .arg(option("pane", "ID").required(true))
+                .arg(option("to", "STATE").required(true))
+                .arg(option("from", "STATE"))
+                .arg(
+                    option("source", "SOURCE")
+                        .value_parser(["watchdog", "user", "detector"])
+                        .default_value("watchdog"),
+                )
+                .arg(option("agent", "KIND"))
+                .arg(option("session", "NAME"))
+                .arg(option("note", "TEXT"))
+                .arg(path_option("tail-file", "PATH|-"))
+                .arg(path_option("dir", "PATH")),
+        )
+        .after_help(
+            "Files are stored under the Herdr state directory in daily JSONL files. Use --dir to select another directory.",
         )
 }
 

@@ -110,6 +110,7 @@ mod selection;
 mod server;
 mod session;
 mod sound;
+mod status_log;
 mod symphony;
 mod terminal;
 mod terminal_effects;

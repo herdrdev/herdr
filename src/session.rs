@@ -17,6 +17,16 @@ const MIN_SOCKET_TIMEOUT: Duration = Duration::from_millis(1);
 
 static EXPLICIT_SESSION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
+fn command_owns_session_option(args: &[String]) -> bool {
+    matches!(
+        (
+            args.get(1).map(String::as_str),
+            args.get(2).map(String::as_str)
+        ),
+        (Some("pane"), Some("send-text-if")) | (Some("status-log"), Some("record"))
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionInfo {
     pub name: String,
@@ -63,9 +73,7 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             let Some(value) = args.get(index + 1) else {
                 return Err("missing value for --session".to_string());
             };
-            if cleaned.get(1).map(String::as_str) == Some("pane")
-                && cleaned.get(2).map(String::as_str) == Some("send-text-if")
-            {
+            if command_owns_session_option(&cleaned) {
                 cleaned.push(arg.clone());
                 cleaned.push(value.clone());
                 index += 2;
@@ -76,6 +84,11 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             continue;
         }
         if let Some(value) = arg.strip_prefix("--session=") {
+            if command_owns_session_option(&cleaned) {
+                cleaned.push(arg.clone());
+                index += 1;
+                continue;
+            }
             requested_session = Some(value.to_string());
             index += 1;
             continue;
@@ -811,6 +824,53 @@ mod tests {
         assert_eq!(cleaned, args);
         assert!(std::env::var(SESSION_ENV_VAR).is_err());
         assert!(!explicit_session_requested());
+    }
+
+    #[test]
+    fn configure_from_args_preserves_status_log_record_session_option() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var(SESSION_ENV_VAR);
+        clear_explicit_session_for_test();
+        let args = [
+            "herdr",
+            "status-log",
+            "record",
+            "--pane",
+            "w1:p2",
+            "--to",
+            "blocked",
+            "--session",
+            "tracking-session",
+        ]
+        .map(str::to_string)
+        .to_vec();
+
+        let cleaned = configure_from_args(&args).unwrap();
+
+        assert_eq!(cleaned, args);
+        assert!(std::env::var(SESSION_ENV_VAR).is_err());
+        assert!(!explicit_session_requested());
+
+        let args = [
+            "herdr",
+            "status-log",
+            "record",
+            "--pane",
+            "w1:p2",
+            "--to",
+            "blocked",
+            "--session=tracking-session",
+        ]
+        .map(str::to_string)
+        .to_vec();
+        let cleaned = configure_from_args(&args).unwrap();
+
+        assert_eq!(cleaned, args);
+        assert!(std::env::var(SESSION_ENV_VAR).is_err());
+        assert!(!explicit_session_requested());
+        clear_explicit_session_for_test();
     }
 
     #[test]

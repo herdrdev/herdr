@@ -191,6 +191,7 @@ pub struct App {
     pub(crate) connectivity_probed_at: Option<Instant>,
     pub(crate) connectivity_probe_in_flight: bool,
     pub(crate) terminal_runtimes: crate::terminal::TerminalRuntimeRegistry,
+    pub(crate) status_log: Option<crate::status_log::StatusLog>,
     /// Server-owned remote focus operations. This state is touched only by
     /// API requests and transport events, never by render or pane loops.
     pub(crate) remote_focus_operations: remote_focus::RemoteFocusOperations,
@@ -957,6 +958,7 @@ impl App {
             sidebar_settled_menu_selected: 0,
             sidebar_settled_menu_delete_armed: false,
             pending_pane_settlement_changes: Vec::new(),
+            pending_status_transitions: Vec::new(),
             pending_pane_snooze_changes: Vec::new(),
             view_observed_at: Instant::now(),
             view_observed_unix_s: settled::unix_seconds(std::time::SystemTime::now()),
@@ -1573,6 +1575,7 @@ impl App {
             connectivity_probed_at: cfg!(test).then(Instant::now),
             connectivity_probe_in_flight: false,
             terminal_runtimes: restored_terminal_runtimes,
+            status_log: crate::status_log::StatusLog::for_server(),
             remote_focus_operations: remote_focus::RemoteFocusOperations::default(),
             remote_focus_transport: Box::new(crate::remote::SshRemoteFocusTransport::new(
                 &config.remote.fleet,
