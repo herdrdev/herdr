@@ -819,15 +819,32 @@ fn parse_pane_input_args(
 
 fn pane_split(args: &[String]) -> std::io::Result<i32> {
     let env_pane_id = super::target::caller_pane_id();
-    let params = match parse_pane_split_args(args, env_pane_id.as_deref()) {
-        Ok(params) => params,
+    let parsed = match parse_pane_split_args(args, env_pane_id.as_deref()) {
+        Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}");
             return Ok(2);
         }
     };
 
-    super::runtime::pane_split(params)
+    if parsed.companion {
+        super::runtime::pane_split_companion(parsed.params)
+    } else {
+        super::runtime::pane_split(parsed.params)
+    }
+}
+
+struct ParsedPaneSplitArgs {
+    params: PaneSplitParams,
+    companion: bool,
+}
+
+impl std::ops::Deref for ParsedPaneSplitArgs {
+    type Target = PaneSplitParams;
+
+    fn deref(&self) -> &Self::Target {
+        &self.params
+    }
 }
 
 fn parse_right_click_target(value: &str) -> Result<PaneRightClickTarget, String> {
@@ -841,7 +858,7 @@ fn parse_right_click_target(value: &str) -> Result<PaneRightClickTarget, String>
 fn parse_pane_split_args(
     args: &[String],
     env_pane_id: Option<&str>,
-) -> Result<PaneSplitParams, String> {
+) -> Result<ParsedPaneSplitArgs, String> {
     let args = super::expand_equals_args(args, &["--right-click"]);
     let mut env = std::collections::HashMap::new();
     let mut pane_id = None;
@@ -849,6 +866,7 @@ fn parse_pane_split_args(
     let mut ratio = None;
     let mut cwd = None;
     let mut focus = false;
+    let mut companion = false;
     let mut right_click = PaneRightClickTarget::Herdr;
     let mut work_context = None;
 
@@ -920,6 +938,10 @@ fn parse_pane_split_args(
                 focus = false;
                 index += 1;
             }
+            "--companion" => {
+                companion = true;
+                index += 1;
+            }
             "--env" => {
                 let Some(value) = args.get(index + 1) else {
                     return Err("missing value for --env".into());
@@ -937,21 +959,24 @@ fn parse_pane_split_args(
 
     let Some(direction) = direction else {
         return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction left|right|up|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus]"
+            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction left|right|up|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--focus] [--no-focus] [--companion]"
                 .into(),
         );
     };
 
-    Ok(PaneSplitParams {
-        workspace_id: None,
-        target_pane_id: pane_id,
-        direction,
-        ratio,
-        cwd,
-        focus,
-        right_click,
-        env,
-        work_context,
+    Ok(ParsedPaneSplitArgs {
+        params: PaneSplitParams {
+            workspace_id: None,
+            target_pane_id: pane_id,
+            direction,
+            ratio,
+            cwd,
+            focus,
+            right_click,
+            env,
+            work_context,
+        },
+        companion,
     })
 }
 
@@ -2022,7 +2047,10 @@ fn print_pane_help() {
     eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
     eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
     eprintln!(
-        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--ticket ID] [--pr URL --branch BRANCH --role ROLE [--active-owner]] [--focus] [--no-focus]"
+        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--ticket ID] [--pr URL --branch BRANCH --role ROLE [--active-owner]] [--focus] [--no-focus] [--companion]"
+    );
+    eprintln!(
+        "    --companion marks an agent-owned side pane to close when its primary pane closes"
     );
     eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
     eprintln!("  herdr pane swap --source-pane ID --target-pane ID");
@@ -2060,7 +2088,16 @@ mod tests {
         assert_eq!(params.target_pane_id, Some("issue-1".into()));
         assert_eq!(params.direction, crate::api::schema::SplitDirection::Right);
         assert_eq!(params.ratio, Some(0.333));
+        assert!(!params.companion);
         assert_eq!(params.right_click, PaneRightClickTarget::Herdr);
+    }
+
+    #[test]
+    fn parse_pane_split_args_marks_companion_panes_explicitly() {
+        let params =
+            parse_pane_split_args(&args(&["--direction", "right", "--companion"]), None).unwrap();
+
+        assert!(params.companion);
     }
 
     #[test]

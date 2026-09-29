@@ -325,7 +325,8 @@ fn workspace_command() -> Command {
                 .arg(env_option())
                 .args(spawn_work_context_options())
                 .arg(flag("focus"))
-                .arg(flag("no-focus")),
+                .arg(flag("no-focus"))
+                .arg(flag("companion")),
         )
         .subcommand(id_command("get", "workspace_id", "Show a workspace"))
         .subcommand(id_command("focus", "workspace_id", "Focus a workspace"))

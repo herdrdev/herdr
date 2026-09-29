@@ -7997,7 +7997,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pane_split_request_focuses_new_pane_when_requested() {
+    async fn pane_split_companion_request_focuses_new_pane_when_requested() {
         let mut env = crate::config::TestConfigEnvGuard::acquire();
         let original_shell = std::env::var_os("SHELL");
         env.set("SHELL", exiting_test_command());
@@ -8017,23 +8017,35 @@ mod tests {
 
         let response = app.handle_api_request(crate::api::schema::Request {
             id: "req_pane_split_focus_background_tab".into(),
-            method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
-                workspace_id: None,
-                target_pane_id: Some(target_pane_id),
-                direction: crate::api::schema::SplitDirection::Right,
-                ratio: None,
-                cwd: None,
-                focus: true,
-                right_click: Default::default(),
-                env: Default::default(),
-                work_context: None,
-            }),
+            method: crate::api::schema::Method::PaneSplitCompanion(
+                crate::api::schema::PaneSplitParams {
+                    workspace_id: None,
+                    target_pane_id: Some(target_pane_id),
+                    direction: crate::api::schema::SplitDirection::Right,
+                    ratio: None,
+                    cwd: None,
+                    focus: true,
+                    right_click: Default::default(),
+                    env: Default::default(),
+                    work_context: None,
+                },
+            ),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "pane_info");
         assert_eq!(response["result"]["pane"]["tab_id"], target_tab_id);
         assert_eq!(response["result"]["pane"]["focused"], true);
+        let created_pane_id = app
+            .parse_pane_id(response["result"]["pane"]["pane_id"].as_str().unwrap())
+            .unwrap()
+            .1;
+        assert!(
+            app.state.workspaces[0]
+                .pane_state(created_pane_id)
+                .unwrap()
+                .is_companion
+        );
         assert_eq!(app.state.active, Some(0));
         assert_eq!(app.state.workspaces[0].active_tab, background_tab);
 
@@ -8087,6 +8099,12 @@ mod tests {
         assert!((splits[0].ratio - 0.333).abs() < f32::EPSILON);
         let response_pane_id = response["result"]["pane"]["pane_id"].as_str().unwrap();
         let (_, response_pane_id) = app.parse_pane_id(response_pane_id).unwrap();
+        assert!(
+            !app.state.workspaces[0]
+                .pane_state(response_pane_id)
+                .unwrap()
+                .is_companion
+        );
         assert!(
             app.state.workspaces[0]
                 .pane_state(response_pane_id)
@@ -8280,14 +8298,16 @@ mod tests {
         assert_eq!(app.state.workspaces[0].display_name(), "api-pane-close");
     }
 
-    #[test]
-    fn pane_close_request_closes_workspace_when_it_removes_the_last_pane() {
+    #[tokio::test]
+    async fn pane_close_request_replaces_last_tab_without_closing_workspace() {
         let mut app = test_app();
         let workspace = Workspace::test_new("api-pane-close-last");
         app.state.workspaces = vec![workspace];
         app.state.ensure_test_terminals();
         app.state.active = Some(0);
         app.state.selected = 0;
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
 
         let target_pane = app.state.workspaces[0].tabs[0].root_pane;
         let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
@@ -8301,11 +8321,29 @@ mod tests {
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
         assert_eq!(response["result"]["type"], "ok");
-        assert!(app.state.workspaces.is_empty());
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].id, workspace_id);
+        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, target_pane);
+        let replacement_terminal = app
+            .state
+            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        assert_eq!(
+            app.state.terminals[&replacement_terminal].cwd,
+            workspace_cwd
+        );
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
+        for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
     }
 
-    #[test]
-    fn pane_close_request_requires_confirmation_before_closing_parent_worktree_group() {
+    #[tokio::test]
+    async fn pane_close_request_keeps_parent_worktree_group_open() {
         let mut app = test_app();
         let mut parent = Workspace::test_new("api-pane-close-parent");
         parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
@@ -8339,10 +8377,22 @@ mod tests {
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
 
-        assert_eq!(response["error"]["code"], "confirmation_required");
-        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
-        assert_eq!(app.state.selected, 0);
+        assert_eq!(response["result"]["type"], "ok");
+        assert_ne!(
+            app.state.client_overlay,
+            crate::app::state::ClientOverlay::ConfirmClose
+        );
+        assert_eq!(app.state.selected, 1);
         assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, target_pane);
+        assert!(app.state.workspaces[0].worktree_space.is_some());
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
+        for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
     }
 
     #[test]

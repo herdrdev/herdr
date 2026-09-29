@@ -125,6 +125,13 @@ pub(super) fn pane_split(params: PaneSplitParams) -> std::io::Result<i32> {
     print_method_response("cli:pane:split", Method::PaneSplit(params))
 }
 
+pub(super) fn pane_split_companion(params: PaneSplitParams) -> std::io::Result<i32> {
+    print_method_response(
+        "cli:pane:split:companion",
+        Method::PaneSplitCompanion(params),
+    )
+}
+
 pub(super) fn pane_swap(params: PaneSwapParams) -> std::io::Result<i32> {
     print_method_response("cli:pane:swap", Method::PaneSwap(params))
 }

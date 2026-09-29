@@ -7593,6 +7593,22 @@
         {
           "properties": {
             "method": {
+              "const": "pane.split_companion",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneSplitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "pane.swap",
               "type": "string"
             },

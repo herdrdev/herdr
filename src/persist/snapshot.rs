@@ -9,6 +9,10 @@ use crate::layout::Node;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 use crate::workspace::Workspace;
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Current snapshot format version.
 pub(super) const SNAPSHOT_VERSION: u32 = 4;
 
@@ -147,6 +151,8 @@ pub struct TabSnapshot {
 #[derive(Serialize, Deserialize)]
 pub struct PaneSnapshot {
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_companion: bool,
     #[serde(
         default,
         skip_serializing_if = "crate::groups::PaneGroupMembership::is_default"
@@ -620,6 +626,7 @@ fn capture_tab(
             id.raw(),
             PaneSnapshot {
                 cwd,
+                is_companion: pane.is_some_and(|pane| pane.is_companion),
                 group_membership: pane
                     .map(|pane| pane.group_membership.clone())
                     .unwrap_or_default(),
@@ -918,6 +925,24 @@ mod tests {
             state.window_cycle_mode,
             state.skip_collapsed_cycle,
         )
+    }
+
+    #[test]
+    fn pane_companion_marker_round_trips_and_defaults_for_legacy_snapshots() {
+        let companion: PaneSnapshot = serde_json::from_value(serde_json::json!({
+            "cwd": "/tmp",
+            "is_companion": true,
+        }))
+        .unwrap();
+        assert!(companion.is_companion);
+        assert_eq!(
+            serde_json::to_value(&companion).unwrap()["is_companion"],
+            true
+        );
+
+        let legacy: PaneSnapshot =
+            serde_json::from_value(serde_json::json!({ "cwd": "/tmp" })).unwrap();
+        assert!(!legacy.is_companion);
     }
 
     #[test]
@@ -1867,6 +1892,7 @@ mod tests {
             0,
             PaneSnapshot {
                 cwd: PathBuf::from("/home/can/Projects/herdr"),
+                is_companion: false,
                 last_activity_at: None,
                 detection_output_at: None,
                 quiet_since_at: None,
@@ -1888,6 +1914,7 @@ mod tests {
             1,
             PaneSnapshot {
                 cwd: PathBuf::from("/home/can/Projects/website"),
+                is_companion: false,
                 last_activity_at: None,
                 detection_output_at: None,
                 quiet_since_at: None,
@@ -2760,6 +2787,7 @@ mod tests {
             0,
             PaneSnapshot {
                 cwd: PathBuf::from("/tmp/this-directory-does-not-exist-for-herdr-test"),
+                is_companion: false,
                 last_activity_at: None,
                 detection_output_at: None,
                 quiet_since_at: None,
@@ -2783,6 +2811,7 @@ mod tests {
                 cwd: std::env::var("HOME")
                     .map(PathBuf::from)
                     .unwrap_or_else(|_| PathBuf::from("/tmp")),
+                is_companion: false,
                 last_activity_at: None,
                 detection_output_at: None,
                 quiet_since_at: None,

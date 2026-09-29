@@ -52,6 +52,8 @@ impl PaneAgentProjection {
 /// Terminal identity, cwd, labels, and agent metadata live in TerminalState.
 pub struct PaneState {
     pub attached_terminal_id: TerminalId,
+    /// Marks a non-primary side pane created for an agent tool.
+    pub is_companion: bool,
     /// Owner-issued group assignment. It moves with the pane rather than its public locator.
     pub group_membership: crate::groups::PaneGroupMembership,
     /// Whether the user has seen this pane since its last state change to Idle.
@@ -78,6 +80,7 @@ impl PaneState {
     pub fn new(attached_terminal_id: TerminalId) -> Self {
         Self {
             attached_terminal_id,
+            is_companion: false,
             group_membership: crate::groups::PaneGroupMembership::default(),
             seen: true,
             right_click_passthrough: false,

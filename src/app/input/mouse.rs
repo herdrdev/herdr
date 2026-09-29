@@ -10158,8 +10158,8 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn clicking_pane_context_menu_close_last_parent_group_pane_keeps_confirmation_mode() {
+    #[tokio::test]
+    async fn clicking_pane_context_menu_close_last_parent_group_pane_keeps_group() {
         let mut app = app_for_mouse_test();
         let mut parent = Workspace::test_new("main");
         let pane_id = parent.tabs[0].root_pane;
@@ -10204,10 +10204,15 @@ mod tests {
             menu.y + 1 + close_idx as u16,
         ));
 
-        assert_eq!(app.state.selected, 0);
-        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
+        assert_eq!(app.state.selected, 1);
+        assert_ne!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, pane_id);
         assert!(app.state.context_menu.is_none());
+        for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
     }
 
     #[test]

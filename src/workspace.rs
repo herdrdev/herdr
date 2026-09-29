@@ -732,11 +732,6 @@ impl Workspace {
     }
 
     #[cfg(test)]
-    pub fn close_active_tab(&mut self) -> bool {
-        self.close_tab(self.active_tab)
-    }
-
-    #[cfg(test)]
     pub fn split_focused(
         &mut self,
         direction: Direction,
@@ -1192,24 +1187,6 @@ impl Workspace {
         Some(Ok((tab_idx, new_pane)))
     }
 
-    /// Close the focused pane. Returns true if the workspace should close.
-    #[cfg(test)]
-    pub fn close_focused(&mut self) -> bool {
-        let pane_count = self
-            .active_tab()
-            .map(|tab| tab.layout.pane_count())
-            .unwrap_or(0);
-        let tab_count = self.tabs.len();
-        if pane_count <= 1 {
-            return tab_count <= 1 || self.close_active_tab_and_report();
-        }
-
-        if let Some((removed, _terminal_id)) = self.active_tab_mut().and_then(Tab::close_focused) {
-            self.unregister_pane(removed);
-        }
-        false
-    }
-
     /// Remove a specific pane from this workspace without terminating its runtime.
     /// Returns true if the workspace should close.
     pub fn remove_pane(&mut self, pane_id: PaneId) -> bool {
@@ -1522,15 +1499,6 @@ impl Workspace {
 
     fn unregister_pane(&mut self, pane_id: PaneId) {
         self.public_pane_numbers.remove(&pane_id);
-    }
-
-    #[cfg(test)]
-    fn close_active_tab_and_report(&mut self) -> bool {
-        if self.tabs.len() <= 1 {
-            return true;
-        }
-        self.close_active_tab();
-        false
     }
 }
 

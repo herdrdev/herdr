@@ -753,6 +753,59 @@ fn pane_send_text_if_is_a_distinct_method_that_legacy_servers_reject_before_send
 }
 
 #[test]
+fn pane_split_companion_uses_a_new_method_without_changing_pane_split_shape() {
+    #[derive(serde::Deserialize)]
+    struct LegacyRequest {
+        #[serde(flatten)]
+        method: LegacyMethod,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "method", content = "params")]
+    enum LegacyMethod {
+        #[serde(rename = "pane.split")]
+        PaneSplit(PaneSplitParams),
+    }
+
+    fn legacy_accepts(encoded: &str) -> Result<(), serde_json::Error> {
+        let request = serde_json::from_str::<LegacyRequest>(encoded)?;
+        match request.method {
+            LegacyMethod::PaneSplit(params) => {
+                assert_eq!(params.target_pane_id.as_deref(), Some("pane-1"));
+                Ok(())
+            }
+        }
+    }
+
+    let params = PaneSplitParams {
+        workspace_id: None,
+        target_pane_id: Some("pane-1".into()),
+        direction: SplitDirection::Right,
+        ratio: None,
+        cwd: None,
+        focus: false,
+        right_click: PaneRightClickTarget::Herdr,
+        env: HashMap::new(),
+        work_context: None,
+    };
+    let split = Request {
+        id: "split".into(),
+        method: Method::PaneSplit(params.clone()),
+    };
+    let encoded_split = serde_json::to_string(&split).unwrap();
+    assert!(encoded_split.contains(r#""method":"pane.split""#));
+    assert!(!encoded_split.contains("companion"));
+    legacy_accepts(&encoded_split).unwrap();
+
+    let companion = Request {
+        id: "companion".into(),
+        method: Method::PaneSplitCompanion(params),
+    };
+    let encoded_companion = serde_json::to_string(&companion).unwrap();
+    assert!(encoded_companion.contains(r#""method":"pane.split_companion""#));
+    assert!(legacy_accepts(&encoded_companion).is_err());
+}
+
+#[test]
 fn missing_required_params_are_rejected() {
     let json = r#"{"id":"req_1","method":"pane.send_text","params":{"pane_id":"p_1"}}"#;
     let err = serde_json::from_str::<Request>(json)

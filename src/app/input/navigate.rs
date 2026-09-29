@@ -398,9 +398,8 @@ impl App {
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::CloseTab => {
-                if !self.close_active_tab_via_api_requires_confirmation() {
-                    leave_navigate_mode(&mut self.state);
-                }
+                self.close_active_tab_via_api();
+                leave_navigate_mode(&mut self.state);
             }
             NavigateAction::RenamePane => {
                 if let Some(pane_id) = self
@@ -996,28 +995,22 @@ impl App {
         }
     }
 
-    pub(crate) fn close_active_tab_via_api_requires_confirmation(&mut self) -> bool {
+    pub(crate) fn close_active_tab_via_api(&mut self) {
         let Some(ws_idx) = self.state.active else {
-            return false;
+            return;
         };
-        if self
+        let Some(tab_idx) = self
             .state
             .workspaces
             .get(ws_idx)
-            .is_some_and(|ws| ws.tabs.len() <= 1)
-        {
-            if self.state.confirm_implicit_worktree_group_close(ws_idx) {
-                return true;
-            }
-            self.close_workspace_idx_with_group_via_api(ws_idx);
-            return false;
-        }
-        let tab_idx = self.state.workspaces[ws_idx].active_tab_index();
+            .map(|workspace| workspace.active_tab_index())
+        else {
+            return;
+        };
         let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
-            return false;
+            return;
         };
         self.runtime_tab_close("tui.tab.close", tab_id);
-        false
     }
 
     pub(crate) fn move_tab_via_api(
@@ -8459,7 +8452,7 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
-    fn prefix_close_pane_last_parent_group_pane_opens_confirmation() {
+    fn prefix_close_pane_last_parent_group_pane_keeps_group() {
         let mut state = state_with_workspaces(&["main", "issue"]);
         mark_worktree_space_member(&mut state, 0, "repo-key");
         mark_worktree_space_member(&mut state, 1, "repo-key");
@@ -8469,41 +8462,147 @@ navigate_pane_down = "ctrl+j"
 
         execute_navigate_action(&mut state, NavigateAction::ClosePane);
 
-        assert_eq!(state.selected, 0);
-        assert_eq!(state.effective_interaction_mode(), Mode::ConfirmClose);
+        assert_eq!(state.selected, 1);
+        assert_ne!(state.effective_interaction_mode(), Mode::ConfirmClose);
         assert_eq!(state.workspaces.len(), 2);
     }
 
-    #[test]
-    fn tui_close_tab_last_parent_group_workspace_opens_confirmation_via_api() {
+    #[tokio::test]
+    async fn tui_close_tab_last_tab_replaces_tab_without_closing_workspace() {
+        let mut app = app_with_test_workspaces(&["main"]);
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
+        let old_tab_id = app.public_tab_id(0, 0).unwrap();
+        let old_root = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Navigate);
+
+        app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
+
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].id, workspace_id);
+        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, old_root);
+        assert_ne!(app.public_tab_id(0, 0).unwrap(), old_tab_id);
+        let replacement_terminal = app
+            .state
+            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        assert_eq!(
+            app.state.terminals[&replacement_terminal].cwd,
+            workspace_cwd
+        );
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
+    }
+
+    #[tokio::test]
+    async fn tui_close_last_pane_replaces_tab_without_closing_workspace() {
+        let mut app = app_with_test_workspaces(&["main"]);
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Navigate);
+
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Navigate);
+
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].id, workspace_id);
+        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, pane_id);
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+        let replacement_terminal = app
+            .state
+            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        assert_eq!(
+            app.state.terminals[&replacement_terminal].cwd,
+            workspace_cwd
+        );
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
+    }
+
+    #[tokio::test]
+    async fn tui_close_tab_last_parent_group_workspace_keeps_group_via_api() {
         let mut app = app_with_test_workspaces(&["main", "issue"]);
         mark_worktree_space_member(&mut app.state, 0, "repo-key");
         mark_worktree_space_member(&mut app.state, 1, "repo-key");
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
+        let old_root = app.state.workspaces[0].tabs[0].root_pane;
         app.state.active = Some(0);
         app.state.selected = 1;
         app.state.set_server_mode(Mode::Navigate);
 
         app.execute_tui_navigate_action(NavigateAction::CloseTab, ActionContext::Navigate);
 
-        assert_eq!(app.state.selected, 0);
-        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[0].id, workspace_id);
+        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, old_root);
+        assert_eq!(app.state.selected, 1);
+        let replacement_terminal = app
+            .state
+            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        assert_eq!(
+            app.state.terminals[&replacement_terminal].cwd,
+            workspace_cwd
+        );
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
     }
 
-    #[test]
-    fn tui_close_pane_last_parent_group_pane_opens_confirmation_via_api() {
+    #[tokio::test]
+    async fn tui_close_pane_last_parent_group_pane_keeps_group_via_api() {
         let mut app = app_with_test_workspaces(&["main", "issue"]);
         mark_worktree_space_member(&mut app.state, 0, "repo-key");
         mark_worktree_space_member(&mut app.state, 1, "repo-key");
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let workspace_cwd = app.state.workspaces[0].identity_cwd.clone();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         app.state.active = Some(0);
         app.state.selected = 1;
         app.state.set_server_mode(Mode::Navigate);
 
         app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Navigate);
 
-        assert_eq!(app.state.selected, 0);
-        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
         assert_eq!(app.state.workspaces.len(), 2);
+        assert_eq!(app.state.workspaces[0].id, workspace_id);
+        assert_eq!(app.state.workspaces[0].identity_cwd, workspace_cwd);
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_ne!(app.state.workspaces[0].tabs[0].root_pane, pane_id);
+        assert_eq!(app.state.selected, 1);
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+        let replacement_terminal = app
+            .state
+            .terminal_id_for_pane(0, app.state.workspaces[0].tabs[0].root_pane)
+            .unwrap();
+        assert_eq!(
+            app.state.terminals[&replacement_terminal].cwd,
+            workspace_cwd
+        );
+        assert_eq!(app.state.active, Some(0));
+        assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
+        assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
+            matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
+        }));
     }
 
     #[cfg(unix)]

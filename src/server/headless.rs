@@ -16422,8 +16422,8 @@ next_tab = ""
             .is_none());
     }
 
-    #[test]
-    fn attached_settled_focus_and_delete_preserve_other_clients_settings() {
+    #[tokio::test]
+    async fn attached_settled_focus_and_delete_preserve_other_clients_settings() {
         for selected in [0, 3] {
             let mut server = test_headless_server();
             let workspace = crate::workspace::Workspace::test_new("settled");
