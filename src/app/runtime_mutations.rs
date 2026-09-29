@@ -220,6 +220,14 @@ impl App {
         self.dispatch_remote_pane_lifecycle(agent_ref, Method::PaneSettle(PaneTarget { pane_id }))
     }
 
+    pub(crate) fn remote_pane_close(
+        &mut self,
+        agent_ref: crate::api::schema::AgentRef,
+    ) -> Result<(), String> {
+        let pane_id = agent_ref.agent.clone();
+        self.dispatch_remote_pane_lifecycle(agent_ref, Method::PaneClose(PaneTarget { pane_id }))
+    }
+
     pub(crate) fn remote_pane_snooze(
         &mut self,
         agent_ref: crate::api::schema::AgentRef,

@@ -80,6 +80,14 @@ fn api_authority_snapshot(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn api_relay(args: &[String]) -> std::io::Result<i32> {
+    if matches!(args, [flag] if flag == "--stream") {
+        let request: Request = serde_json::from_reader(std::io::stdin())?;
+        let mut output = std::io::stdout().lock();
+        crate::api::client::ApiClient::local()
+            .stream_request_to(&request, &mut output)
+            .map_err(std::io::Error::other)?;
+        return Ok(0);
+    }
     if !args.is_empty() {
         eprintln!("usage: herdr api relay");
         return Ok(2);
@@ -126,6 +134,7 @@ fn print_api_help() {
     eprintln!("  herdr api snapshot");
     eprintln!("  herdr api authority-snapshot");
     eprintln!("  herdr api relay < request.json");
+    eprintln!("  herdr api relay --stream < subscription.json");
     eprintln!("  herdr api schema [--json | --output PATH]");
 }
 

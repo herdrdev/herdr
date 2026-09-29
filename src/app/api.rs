@@ -78,6 +78,9 @@ impl App {
         if snapshot.config_generation != self.fleet_poller_config.generation() {
             return false;
         }
+        snapshot.preserve_live_agent_inventory_from(&self.state.fleet_snapshot, |host| {
+            self.fleet_poller_config.agent_stream_is_live(host)
+        });
         snapshot.sanitize_group_catalog_memberships();
         let raw_snapshot = snapshot.clone();
         snapshot.retain_unreachable_inventory_from(&self.state.fleet_snapshot);
@@ -281,6 +284,22 @@ impl App {
         changed
     }
 
+    fn install_fleet_agent_inventory(
+        &mut self,
+        host: crate::config::FleetHostConfig,
+        config_generation: u64,
+        agents: Vec<crate::api::schema::AgentInfo>,
+    ) -> bool {
+        if config_generation != self.fleet_poller_config.generation() {
+            return false;
+        }
+        let mut snapshot = self.state.fleet_snapshot.clone();
+        if !snapshot.apply_agent_inventory_update(&host, agents, config_generation) {
+            return false;
+        }
+        self.commit_fleet_snapshot(snapshot)
+    }
+
     pub(crate) fn pane_runtime_is_suspended(&self, pane_id: crate::layout::PaneId) -> bool {
         self.find_pane(pane_id)
             .and_then(|(_, pane)| self.terminal_runtimes.get(&pane.attached_terminal_id))
@@ -364,6 +383,11 @@ impl App {
                 complete,
                 lines,
             ),
+            AppEvent::FleetAgentInventoryChanged {
+                host,
+                config_generation,
+                agents,
+            } => self.install_fleet_agent_inventory(host, config_generation, agents),
             AppEvent::RemoteApiRequestFinished {
                 agent_ref,
                 response,
@@ -659,6 +683,15 @@ impl App {
                 complete,
                 lines,
             ));
+        }
+
+        if let AppEvent::FleetAgentInventoryChanged {
+            host,
+            config_generation,
+            agents,
+        } = ev
+        {
+            return Some(self.install_fleet_agent_inventory(host, config_generation, agents));
         }
 
         if let AppEvent::RemoteApiRequestFinished {

@@ -5925,6 +5925,18 @@
                 "type"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "fleet.agents_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -8500,6 +8512,219 @@
     },
     "subscription_event": {
       "$defs": {
+        "AgentInfo": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/AgentRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cross-host identity. Older remote servers may omit this while fleet\ninventory remains version-skew tolerant."
+            },
+            "agent_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/AgentSessionInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "agent_status": {
+              "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decisions": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockDecision"
+              },
+              "type": "array"
+            },
+            "display_agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display_title": {
+              "description": "Exact session title resolved by the host that owns this agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "eta_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "focused": {
+              "type": "boolean"
+            },
+            "foreground_cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gates": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "interactive_ready": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "launch_pending": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "reported_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "screen_detection_skipped": {
+              "type": "boolean"
+            },
+            "settled_at": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "snoozed_until": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state_change_seq": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state_labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "terminal_title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_title_stripped": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
+            },
+            "usage_limited": {
+              "type": "boolean"
+            },
+            "wait": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "waiting_on_agents": {
+              "type": "boolean"
+            },
+            "work_context": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneWorkContext",
+              "default": {
+                "missive_urls": [],
+                "pr_urls": [],
+                "preview_urls": [],
+                "ticket_ids": []
+              }
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "agent_status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "focused",
+            "revision"
+          ],
+          "type": "object"
+        },
         "AgentRef": {
           "description": "Cross-host identity for a pane-backed agent or windowless run.",
           "type": "string"
@@ -8544,6 +8769,111 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "ClosingBlockDecision": {
+          "properties": {
+            "decided_at": {
+              "type": "string"
+            },
+            "n": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "recommendation": {
+              "type": "string"
+            },
+            "reversible": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "n",
+            "text",
+            "recommendation",
+            "reversible",
+            "decided_at"
+          ],
+          "type": "object"
+        },
+        "ClosingBlockItem": {
+          "properties": {
+            "blocking": {
+              "default": true,
+              "type": "boolean"
+            },
+            "default": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "default_at": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "n": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pr": {
+              "default": null,
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            },
+            "ticket": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "url": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "n",
+            "label",
+            "text"
+          ],
+          "type": "object"
+        },
+        "FleetAgentsChangedEvent": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/AgentInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "agents"
+          ],
+          "type": "object"
         },
         "PaneAgentStatusChangedEvent": {
           "properties": {
@@ -8760,6 +9090,89 @@
           ],
           "type": "object"
         },
+        "PaneWorkContext": {
+          "properties": {
+            "active_owner": {
+              "description": "Whether this pane currently owns its pull request. Other attached runs\nremain visible as history.",
+              "type": "boolean"
+            },
+            "branch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "missive_urls": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "pr_urls": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "preview_urls": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "repo": {
+              "description": "Canonical `owner/repo` of the repository this pane actually works on.\n\nDeliberately NOT derived from prose: a repository named in a prompt is\nambient noise, not evidence of the work. It is either declared (manual\nor spawn binding) or observed from the checkout's `origin` remote, and\nthe declaration always outranks the observation — see `recompute`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/PaneWorkRole"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Role of this run in the lifecycle of its primary pull request."
+            },
+            "session_name": {
+              "description": "Name the agent gave this session (Claude's `ai-title`). It is an\nexplicit identity for the work, not a derivation from the prompt or the\ncheckout path, so display surfaces rank it above every derived title.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "ticket_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "work_title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "PaneWorkRole": {
+          "enum": [
+            "baseline",
+            "repair",
+            "ship",
+            "review"
+          ],
+          "type": "string"
+        },
         "ReadFormat": {
           "enum": [
             "text",
@@ -8786,6 +9199,9 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/PaneScrollChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/FleetAgentsChangedEvent"
             }
           ]
         },
@@ -8793,7 +9209,8 @@
           "enum": [
             "pane.output_matched",
             "pane.agent_status_changed",
-            "pane.scroll_changed"
+            "pane.scroll_changed",
+            "fleet.agents_changed"
           ],
           "type": "string"
         }
@@ -14801,6 +15218,10 @@
         "ServerCapabilities": {
           "properties": {
             "detached_server_daemon": {
+              "default": false,
+              "type": "boolean"
+            },
+            "fleet_agent_events": {
               "default": false,
               "type": "boolean"
             },

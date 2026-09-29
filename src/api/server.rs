@@ -77,6 +77,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         live_handoff: crate::platform::capabilities().live_handoff,
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         groups_v1: true,
+        fleet_agent_events: true,
     })
 }
 
@@ -1193,6 +1194,7 @@ mod tests {
                 live_handoff: true,
                 detached_server_daemon: true,
                 groups_v1: true,
+                fleet_agent_events: true,
             }),
             None,
             None,

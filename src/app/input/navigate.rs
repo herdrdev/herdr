@@ -1145,6 +1145,19 @@ impl App {
     }
 
     pub(crate) fn close_focused_pane_via_api_requires_confirmation(&mut self) -> bool {
+        if let Some(agent_ref) = self.state.sidebar_selected_remote_agent.clone() {
+            if self.state.confirm_close {
+                self.state.confirm_close_workspace_id = None;
+                self.state.confirm_close_remote_agent_ref = Some(agent_ref);
+                self.state
+                    .open_client_overlay(crate::app::state::ClientOverlay::ConfirmClose);
+                return true;
+            }
+            if let Err(error) = self.remote_pane_close(agent_ref.clone()) {
+                self.show_remote_pane_lifecycle_error(&agent_ref, error);
+            }
+            return false;
+        }
         let Some((ws_idx, pane_id)) = self.focused_pane_target() else {
             return false;
         };
@@ -3910,6 +3923,22 @@ mod tests {
             crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), local_entry),
         )];
         (app, agent_ref)
+    }
+
+    #[test]
+    fn close_remote_pane_uses_the_standard_confirmation_overlay() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        app.state.confirm_close = true;
+        app.state.sidebar_selected_remote_agent = Some(agent_ref.clone());
+
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Prefix);
+
+        assert_eq!(
+            app.state.client_overlay,
+            crate::app::state::ClientOverlay::ConfirmClose
+        );
+        assert_eq!(app.state.confirm_close_remote_agent_ref, Some(agent_ref));
+        assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
     }
 
     #[test]

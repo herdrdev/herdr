@@ -20,6 +20,8 @@ pub struct ServerCapabilities {
     pub detached_server_daemon: bool,
     #[serde(default)]
     pub groups_v1: bool,
+    #[serde(default)]
+    pub fleet_agent_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

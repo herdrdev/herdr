@@ -1610,7 +1610,11 @@ impl App {
     }
 
     pub(super) fn confirm_close_accept_via_api(&mut self) {
-        if let Some(ws_idx) = self.state.take_confirmed_workspace_close_index() {
+        if let Some(agent_ref) = self.state.confirm_close_remote_agent_ref.take() {
+            if let Err(error) = self.remote_pane_close(agent_ref.clone()) {
+                self.show_remote_pane_lifecycle_error(&agent_ref, error);
+            }
+        } else if let Some(ws_idx) = self.state.take_confirmed_workspace_close_index() {
             self.close_workspace_idx_with_group_via_api(ws_idx);
         }
         self.state.close_client_overlay();

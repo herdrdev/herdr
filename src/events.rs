@@ -73,6 +73,12 @@ pub struct WorktreeRemoveResult {
 pub enum AppEvent {
     /// A read-only fleet host inventory poll completed.
     FleetRefreshed { snapshot: crate::fleet::Snapshot },
+    /// A remote owner pushed its current agent inventory over the host event stream.
+    FleetAgentInventoryChanged {
+        host: crate::config::FleetHostConfig,
+        config_generation: u64,
+        agents: Vec<crate::api::schema::AgentInfo>,
+    },
     /// Latest lines for only the remote terminals linked on the open board.
     BoardRemoteLinesFetched {
         note_path: std::path::PathBuf,

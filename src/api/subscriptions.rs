@@ -2,9 +2,9 @@ use regex::Regex;
 
 use crate::api::event_hub::EventHistoryError;
 use crate::api::schema::{
-    ErrorBody, ErrorResponse, EventKind, Method, PaneAgentStatusChangedEvent,
+    EmptyParams, ErrorBody, ErrorResponse, EventKind, Method, PaneAgentStatusChangedEvent,
     PaneOutputMatchedEvent, PaneScrollChangedEvent, PaneScrollInfo, Request, Subscription,
-    SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind,
+    SubscriptionEventData, SubscriptionEventEnvelope, SubscriptionEventKind, SuccessResponse,
 };
 use crate::api::server::{dispatch_to_app_with_timeout, APP_RESPONSE_TIMEOUT};
 use crate::api::{ApiRequestSender, EventHub};
@@ -113,11 +113,18 @@ pub(super) struct ActiveEventSubscription {
     last_sequence: u64,
 }
 
+pub(super) struct ActiveFleetAgentsSubscription {
+    last_sequence: u64,
+    initial: bool,
+    request_prefix: String,
+}
+
 pub(super) enum ActiveSubscription {
     Event(ActiveEventSubscription),
     OutputMatched(ActiveOutputMatchedSubscription),
     AgentStatusChanged(Box<ActiveAgentStatusChangedSubscription>),
     ScrollChanged(ActiveScrollChangedSubscription),
+    FleetAgentsChanged(ActiveFleetAgentsSubscription),
 }
 
 impl ActiveSubscription {
@@ -185,6 +192,13 @@ impl ActiveSubscription {
                 Ok(event_subscription(EventKind::AuthorityCatalogsUpdated))
             }
             Subscription::LayoutUpdated {} => Ok(event_subscription(EventKind::LayoutUpdated)),
+            Subscription::FleetAgentsChanged {} => {
+                Ok(Self::FleetAgentsChanged(ActiveFleetAgentsSubscription {
+                    last_sequence: event_start_sequence,
+                    initial: true,
+                    request_prefix: format!("{request_id}:sub:{index}"),
+                }))
+            }
             Subscription::PaneOutputMatched {
                 pane_id,
                 source,
@@ -293,6 +307,11 @@ impl ActiveSubscription {
             Self::ScrollChanged(subscription) => {
                 serde_json::to_value(subscription.poll(api_tx)?).ok()
             }
+            Self::FleetAgentsChanged(subscription) => subscription
+                .poll_batch(api_tx, event_hub)
+                .ok()?
+                .into_iter()
+                .next(),
         }
     }
 
@@ -348,8 +367,93 @@ impl ActiveSubscription {
             Self::OutputMatched(_) | Self::ScrollChanged(_) => {
                 Ok(self.poll(api_tx, event_hub).into_iter().collect())
             }
+            Self::FleetAgentsChanged(subscription) => subscription.poll_batch(api_tx, event_hub),
         }
     }
+}
+
+impl ActiveFleetAgentsSubscription {
+    fn poll_batch(
+        &mut self,
+        api_tx: &ApiRequestSender,
+        event_hub: &EventHub,
+    ) -> Result<Vec<serde_json::Value>, ErrorBody> {
+        let events = subscription_events_after(event_hub, self.last_sequence)?;
+        let changed = self.initial
+            || events
+                .iter()
+                .any(|(_, event)| changes_fleet_agent_inventory(event.event));
+        if let Some((sequence, _)) = events.last() {
+            self.last_sequence = *sequence;
+        }
+        self.initial = false;
+        if !changed {
+            return Ok(Vec::new());
+        }
+
+        let response = dispatch_to_app_with_timeout(
+            Request {
+                id: format!("{}:{}", self.request_prefix, self.last_sequence),
+                method: Method::AgentList(EmptyParams::default()),
+            },
+            api_tx,
+            Some(APP_RESPONSE_TIMEOUT),
+        );
+        if let Ok(error) = serde_json::from_str::<ErrorResponse>(&response) {
+            return Err(error.error);
+        }
+        let success =
+            serde_json::from_str::<SuccessResponse>(&response).map_err(|error| ErrorBody {
+                code: "invalid_response".into(),
+                message: format!("invalid fleet agent response: {error}"),
+            })?;
+        let crate::api::schema::ResponseResult::AgentList { agents } = success.result else {
+            return Err(ErrorBody {
+                code: "invalid_response".into(),
+                message: "fleet agent request returned an unexpected result".into(),
+            });
+        };
+        let event = crate::api::schema::SubscriptionEventEnvelope {
+            event: SubscriptionEventKind::FleetAgentsChanged,
+            data: SubscriptionEventData::FleetAgentsChanged(
+                crate::api::schema::FleetAgentsChangedEvent { agents },
+            ),
+        };
+        serde_json::to_value(event)
+            .map(|event| vec![event])
+            .map_err(event_encoding_error)
+    }
+}
+
+fn changes_fleet_agent_inventory(event: EventKind) -> bool {
+    matches!(
+        event,
+        EventKind::WorkspaceCreated
+            | EventKind::WorkspaceUpdated
+            | EventKind::WorkspaceMetadataUpdated
+            | EventKind::WorkspaceClosed
+            | EventKind::WorkspaceRenamed
+            | EventKind::WorkspaceMoved
+            | EventKind::WorkspaceFocused
+            | EventKind::TabCreated
+            | EventKind::TabClosed
+            | EventKind::TabRenamed
+            | EventKind::TabMoved
+            | EventKind::TabFocused
+            | EventKind::PaneCreated
+            | EventKind::PaneClosed
+            | EventKind::PaneUpdated
+            | EventKind::PaneSettled
+            | EventKind::PaneUnsettled
+            | EventKind::PaneSnoozed
+            | EventKind::PaneUnsnoozed
+            | EventKind::PaneFocused
+            | EventKind::PaneMoved
+            | EventKind::PaneExited
+            | EventKind::PaneAgentDetected
+            | EventKind::PaneAgentStatusChanged
+            | EventKind::LayoutUpdated
+    )
 }
 
 fn subscription_events_after(
@@ -718,6 +822,21 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
+
+    #[test]
+    fn fleet_inventory_refreshes_for_lifecycle_and_focus_changes() {
+        for event in [
+            EventKind::WorkspaceFocused,
+            EventKind::TabFocused,
+            EventKind::PaneFocused,
+            EventKind::PaneCreated,
+            EventKind::PaneClosed,
+            EventKind::PaneAgentStatusChanged,
+        ] {
+            assert!(changes_fleet_agent_inventory(event), "{event:?}");
+        }
+        assert!(!changes_fleet_agent_inventory(EventKind::PaneOutputChanged));
+    }
     use crate::api::schema::{AgentStatus, EventData, EventEnvelope, EventKind, PaneInfo};
 
     fn presentation_event(title: Option<&str>) -> EventEnvelope {

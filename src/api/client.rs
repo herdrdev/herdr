@@ -60,6 +60,18 @@ impl ApiClient {
         read_json_line(&mut reader)
     }
 
+    pub fn stream_request_to<W: Write>(
+        &self,
+        request: &Request,
+        output: &mut W,
+    ) -> Result<(), ApiClientError> {
+        let mut stream = self.connect()?;
+        write_request(&mut stream, request)?;
+        io::copy(&mut stream, output)?;
+        output.flush()?;
+        Ok(())
+    }
+
     pub fn request_value_with_timeout(
         &self,
         request: &Request,

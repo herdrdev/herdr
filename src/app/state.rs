@@ -1873,6 +1873,7 @@ pub(crate) struct ClientOverlayState {
     pub(crate) snooze: Option<SidebarSnoozeUiState>,
     pub(crate) rename_target: Option<RenameTarget>,
     pub(crate) confirm_close_workspace_id: Option<String>,
+    pub(crate) confirm_close_remote_agent_ref: Option<crate::api::schema::AgentRef>,
     pub(crate) name_input: String,
     pub(crate) name_input_replace_on_type: bool,
     pub(crate) creating_new_tab: bool,
@@ -4464,6 +4465,8 @@ pub struct AppState {
     pub(crate) server_interaction: ServerInteractionState,
     /// Stable workspace identity captured when the close confirmation opens.
     pub(crate) confirm_close_workspace_id: Option<String>,
+    /// Remote pane selected for the same close confirmation flow.
+    pub(crate) confirm_close_remote_agent_ref: Option<crate::api::schema::AgentRef>,
     /// Stable target for an existing-object rename. Creation dialogs use their
     /// own pending payload because no target exists yet.
     pub(crate) rename_target: Option<RenameTarget>,
@@ -6283,6 +6286,10 @@ impl AppState {
             &mut other.overlay.confirm_close_workspace_id,
         );
         std::mem::swap(
+            &mut self.confirm_close_remote_agent_ref,
+            &mut other.overlay.confirm_close_remote_agent_ref,
+        );
+        std::mem::swap(
             &mut self.worktree_create,
             &mut other.overlay.worktree_create,
         );
@@ -6457,6 +6464,7 @@ impl AppState {
 
     pub(crate) fn close_client_overlay(&mut self) {
         self.client_overlay = ClientOverlay::None;
+        self.confirm_close_remote_agent_ref = None;
     }
 
     pub(crate) fn reconcile_client_modal_target(&mut self) {
@@ -6515,6 +6523,7 @@ impl AppState {
         }
 
         if self.client_overlay == ClientOverlay::ConfirmClose
+            && self.confirm_close_remote_agent_ref.is_none()
             && self
                 .confirm_close_workspace_id
                 .as_ref()
@@ -7653,6 +7662,7 @@ impl AppState {
             client_overlay: ClientOverlay::None,
             server_interaction: ServerInteractionState::new(Mode::Navigate),
             confirm_close_workspace_id: None,
+            confirm_close_remote_agent_ref: None,
             rename_target: None,
             should_quit: false,
             detach_exits: false,

@@ -3656,7 +3656,7 @@ impl HeadlessServer {
             return self.handle_client_owned_worktree_event(client_id, ev);
         }
         match &ev {
-            AppEvent::FleetRefreshed { .. } => {
+            AppEvent::FleetRefreshed { .. } | AppEvent::FleetAgentInventoryChanged { .. } => {
                 let changed = self.app.handle_internal_event_with_render_impact(ev);
                 let remote_entries = &self.app.state.remote_agent_panel_entries;
                 let mut client_changed = false;
