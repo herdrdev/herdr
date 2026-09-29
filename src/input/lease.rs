@@ -90,9 +90,12 @@ where
         resulting_context: Option<&Context>,
         target: Option<Target>,
     ) -> RepeatPlan<Context, Target> {
-        if key.generated_text.is_some() && !key.has_physical_identity() {
-            return RepeatPlan::Ignore;
-        }
+        // Text-commit presses (bare printable bytes, or CSI-u presses carrying
+        // associated text) must register leases like any other press so their
+        // release events stay routable; skipping them silently dropped
+        // printable key releases before they could reach panes. Panes that
+        // did not negotiate kitty event types still never see these releases
+        // because the pane encoder emits nothing for them.
         if let Some(target) = target {
             self.insert_forwarded(lease_key, target, key.clone());
             return RepeatPlan::Ignore;
@@ -396,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn forwarded_semantic_generated_text_has_no_release_lease() {
+    fn forwarded_semantic_generated_text_gets_release_lease() {
         let key = TerminalKey::new(KeyCode::Char('/'), KeyModifiers::SHIFT)
             .with_generated_text(Some("/".to_owned()))
             .with_repeat_count(3);
@@ -408,7 +411,31 @@ mod tests {
             leases.complete_press(lease_key, &key, Some(&context), Some(&context), Some(10)),
             RepeatPlan::Ignore
         ));
-        assert_eq!(leases.remove_forwarded(&lease_key), None);
+        let lease = leases
+            .remove_forwarded(&lease_key)
+            .expect("text commit press keeps a routable release lease");
+        assert_eq!(lease.target, 10);
+    }
+
+    #[test]
+    fn consumed_semantic_generated_text_press_registers_consumed_lease() {
+        let key = TerminalKey::new(KeyCode::Char('/'), KeyModifiers::SHIFT)
+            .with_generated_text(Some("/".to_owned()));
+        let lease_key = InputLeaseKey::new(7, &key);
+        let context = Context::Pane;
+        let mut leases = Leases::default();
+
+        assert!(matches!(
+            leases.complete_press(lease_key, &key, Some(&context), Some(&context), None),
+            RepeatPlan::Ignore
+        ));
+        let removed = leases.remove(&lease_key);
+        assert!(matches!(
+            removed,
+            Some(InputLease::Consumed(ConsumedInputLease::ReprocessRepeats(
+                Context::Pane
+            )))
+        ));
     }
 
     #[test]

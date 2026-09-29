@@ -2982,6 +2982,51 @@ async fn client_shell_hidden_pane_rejects_presses_but_accepts_releases() {
 }
 
 #[tokio::test]
+async fn client_shell_forwards_printable_release_to_report_all_pane() {
+    let mut server = test_headless_server();
+    let mut pane_input = install_focused_test_runtime(&mut server, b"\x1b[>11u");
+    let (control, _render) = connect_test_shell(&mut server, 11, 80, 24);
+    let _snapshot = client_shell_snapshot(&control);
+
+    let key = |kind, generated_text: Option<&str>, tracks_release| {
+        crate::protocol::ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            modifiers: 0,
+            kind,
+            repeat_count: 1,
+            shifted_codepoint: None,
+            generated_text: generated_text.map(str::to_owned),
+            tracks_release,
+            physical_key_id: None,
+            windows_record: None,
+        }
+    };
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: server.app.session_snapshot().focused_pane_id.unwrap(),
+        events: vec![key(crate::protocol::ClientKeyKind::Press, Some("a"), false)],
+    });
+    // Text-commit presses pass through as text for now; re-encoding them as
+    // CSI-u for report-all panes is a known follow-up.
+    assert_eq!(
+        pane_input.try_recv().expect("press bytes"),
+        Bytes::from_static(b"a")
+    );
+
+    server.handle_server_event(ServerEvent::ClientShellPaneInput {
+        client_id: 11,
+        pane_id: server.app.session_snapshot().focused_pane_id.unwrap(),
+        events: vec![key(crate::protocol::ClientKeyKind::Release, None, true)],
+    });
+    assert_eq!(
+        pane_input.try_recv().expect("release bytes"),
+        Bytes::from_static(b"\x1b[97;1:3u")
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn client_shell_streams_and_targets_popup_terminal_content() {
     let mut server = test_headless_server();
     let mut pane_input = install_focused_test_runtime(&mut server, b"base-pane");

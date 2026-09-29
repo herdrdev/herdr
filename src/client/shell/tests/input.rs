@@ -555,6 +555,95 @@ fn pane_key_release_keeps_the_press_target() {
 }
 
 #[test]
+fn plain_text_press_release_reaches_the_pane() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+
+    // Hosts without kitty report-all send printable presses as bare text
+    // bytes; their releases still arrive as CSI-u with event type 3.
+    let press = state.handle_input_bytes(b"a");
+    let ClientMessage::ClientShellPaneInput {
+        pane_id: press_target,
+        events: press_events,
+    } = &press.requests[0]
+    else {
+        panic!("expected targeted press");
+    };
+    assert!(matches!(
+        &press_events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            kind: crate::protocol::ClientKeyKind::Press,
+            generated_text: Some(text),
+            ..
+        }] if text == "a"
+    ));
+
+    let release = state.handle_input_bytes(b"\x1b[97;1:3u");
+    let ClientMessage::ClientShellPaneInput {
+        pane_id: release_target,
+        events,
+    } = &release.requests[0]
+    else {
+        panic!("expected targeted release");
+    };
+    assert_eq!(release_target, press_target);
+    assert!(matches!(
+        &events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            kind: crate::protocol::ClientKeyKind::Release,
+            generated_text: None,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn text_carrying_kitty_press_release_reaches_the_pane() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+
+    // Hosts with kitty report-all + associated text attach text to printable
+    // presses; those presses must still lease their release.
+    let press = state.handle_input_bytes(b"\x1b[97;1:1;97u");
+    let ClientMessage::ClientShellPaneInput {
+        pane_id: press_target,
+        events: press_events,
+    } = &press.requests[0]
+    else {
+        panic!("expected targeted press");
+    };
+    assert!(matches!(
+        &press_events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            kind: crate::protocol::ClientKeyKind::Press,
+            generated_text: Some(text),
+            ..
+        }] if text == "a"
+    ));
+
+    let release = state.handle_input_bytes(b"\x1b[97;1:3u");
+    let ClientMessage::ClientShellPaneInput {
+        pane_id: release_target,
+        events,
+    } = &release.requests[0]
+    else {
+        panic!("expected targeted release");
+    };
+    assert_eq!(release_target, press_target);
+    assert!(matches!(
+        &events[..],
+        [ClientPaneInputEvent::Key {
+            code: crate::protocol::ClientKeyCode::Char('a'),
+            kind: crate::protocol::ClientKeyKind::Release,
+            ..
+        }]
+    ));
+}
+
+#[test]
 fn help_overlay_uses_live_keymap_and_owns_filter_state() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
     state.set_snapshot(Box::new(snapshot()));
