@@ -457,6 +457,7 @@ impl AppState {
                     // pending. Use the pane activity clock rather than the
                     // transient unread-Done clock, which focus clears.
                     let quiet_ripe = self.auto_settle_done
+                        && pane.seen
                         && !self.is_active_pane(ws_idx, tab_idx, *pane_id)
                         && !tab.pinned
                         && quiet
@@ -1604,14 +1605,36 @@ mod tests {
         let done_since = Instant::now();
         let now = done_since + Duration::from_secs(29 * 60);
         let (mut state, pane_id) = done_state(true, done_since);
+        state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("done pane")
+            .seen = true;
         assert_eq!(state.refresh_settled_panes_at(None, now, 1_725_000_030), 0);
         assert!(!state.pane_is_settled(0, pane_id));
 
         let done_since = Instant::now();
         let now = done_since + Duration::from_secs(31 * 60);
         let (mut state, pane_id) = done_state(true, done_since);
+        state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("done pane")
+            .seen = true;
         assert_eq!(state.refresh_settled_panes_at(None, now, 1_725_000_031), 1);
         assert!(state.pane_is_settled(0, pane_id));
+    }
+
+    #[test]
+    fn unread_done_pane_does_not_auto_settle() {
+        let done_since = Instant::now();
+        let (mut state, pane_id) = done_state(true, done_since);
+        let deadline = done_since + state.settle_done_after;
+        assert_eq!(
+            state.refresh_settled_panes_at(None, deadline, 1_725_000_031),
+            0
+        );
+        assert!(!state.pane_is_settled(0, pane_id));
     }
 
     #[test]
@@ -1637,6 +1660,11 @@ mod tests {
         let quiet_since = Instant::now();
         let now = quiet_since + Duration::from_secs(31 * 60);
         let (mut state, pane_id) = done_state(true, quiet_since);
+        state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("done pane")
+            .seen = true;
         let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
             .attached_terminal_id
             .clone();
@@ -1718,9 +1746,9 @@ mod tests {
             + idle.settle_done_after;
         assert_eq!(
             idle.refresh_settled_panes_at(None, settle_at, 1_725_000_037),
-            1
+            0
         );
-        assert!(idle.pane_is_settled(0, idle_pane));
+        assert!(!idle.pane_is_settled(0, idle_pane));
 
         let (mut unresolved, unresolved_pane) = stale_state(None, now);
         let settle_at = unresolved.workspaces[0].tabs[0].panes[&unresolved_pane]
@@ -1794,7 +1822,7 @@ mod tests {
         );
         assert_eq!(
             state.refresh_settled_panes_at(None, now + state.settle_done_after, 1_725_001_840,),
-            1
+            0
         );
     }
 
@@ -1829,7 +1857,7 @@ mod tests {
         );
         assert_eq!(
             state.refresh_settled_panes_at(None, now + state.settle_done_after, 1_725_001_842,),
-            1
+            0
         );
     }
 
@@ -1966,6 +1994,11 @@ mod tests {
         let done_since = Instant::now();
         let now = done_since + Duration::from_secs(5 * 60 * 60);
         let (mut state, pane_id) = done_state(false, done_since);
+        state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("done pane")
+            .seen = true;
         assert_eq!(state.refresh_settled_panes_at(None, now, 1_725_000_032), 1);
         assert!(state.pane_is_settled(0, pane_id));
         assert_eq!(
@@ -1973,7 +2006,7 @@ mod tests {
             Some(now),
             "settling an unresumable pane must preserve its reap clock"
         );
-        assert!(state.next_done_settle_deadline(now).is_none());
+        assert_eq!(state.next_done_settle_deadline(now), None);
     }
 
     #[test]

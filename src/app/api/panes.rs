@@ -3495,11 +3495,26 @@ mod tests {
             ),
             0
         );
+        // Clearing a gate reports fresh output, which stays unread until the human sees it.
+        let settle_at = cleared_at + app.state.settle_done_after;
+        if !app.state.workspaces[0].tabs[0].panes[&pane_id].seen {
+            assert_eq!(
+                app.state
+                    .refresh_settled_panes_at(None, settle_at, 1_725_001_800),
+                0,
+                "unread result must not settle"
+            );
+            app.state.workspaces[0].tabs[0]
+                .panes
+                .get_mut(&pane_id)
+                .unwrap()
+                .seen = true;
+        }
         assert_eq!(
             app.state.refresh_settled_panes_at(
                 None,
-                cleared_at + app.state.settle_done_after,
-                1_725_001_800,
+                settle_at + std::time::Duration::from_nanos(1),
+                1_725_001_801,
             ),
             1
         );

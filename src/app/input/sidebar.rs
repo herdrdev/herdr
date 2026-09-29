@@ -1882,6 +1882,7 @@ impl super::super::App {
     }
 
     fn show_pane_lifecycle_error(&mut self, title: String, message: String) {
+        let previous_toast = self.state.toast.clone();
         self.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
             title,
@@ -1889,6 +1890,7 @@ impl super::super::App {
             position: None,
             target: None,
         });
+        self.sync_toast_deadline(previous_toast);
     }
 
     fn show_sidebar_shelf_toast(
@@ -1896,6 +1898,7 @@ impl super::super::App {
         target: &crate::app::state::SidebarPaneLifecycleTarget,
         shelf: &str,
     ) {
+        let previous_toast = self.state.toast.clone();
         let name = match target {
             crate::app::state::SidebarPaneLifecycleTarget::Local(pane_target) => self
                 .state
@@ -1930,6 +1933,7 @@ impl super::super::App {
             position: None,
             target: None,
         });
+        self.sync_toast_deadline(previous_toast);
     }
 
     fn show_local_pane_lifecycle_error(&mut self, action: &str, response: &str) -> bool {
@@ -3492,6 +3496,9 @@ mod tests {
             app.state.toast.as_ref().map(|toast| toast.context.as_str()),
             Some("Moved to Settled")
         );
+        let deadline = app.toast_deadline.expect("settle toast deadline");
+        assert!(app.handle_scheduled_tasks(deadline, false));
+        assert!(app.state.toast.is_none(), "settle toast expires");
     }
 
     #[test]
