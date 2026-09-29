@@ -926,7 +926,9 @@ fn cross_area_client_and_api_workspace_views_are_consistent() {
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
     let mut client = UnixStream::connect(&client_socket).expect("client should connect");
-    client_handshake(&mut client, CURRENT_PROTOCOL, 100, 30);
+    // Tall enough that the always-visible Snoozed/Settled shelves leave the
+    // new workspace row on screen.
+    client_handshake(&mut client, CURRENT_PROTOCOL, 100, 40);
     assert!(wait_for_frame(&mut client, Duration::from_secs(2)));
     drain_server_messages(&mut client, Duration::from_millis(300));
 

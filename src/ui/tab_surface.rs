@@ -360,7 +360,7 @@ mod tests {
             // One-line mobile Space → direct tab/window projection followed by
             // the collapsed section structure. The digest includes content
             // and style.
-            "8f55d95c84d38343b4a72e6888dd0e922f9dea536fe701e3b724467b11ac84de"
+            "226b71905b237b6b7cd8b01506a96195f65df6ce440b39409a5cdaaa3996462c"
         );
     }
 }

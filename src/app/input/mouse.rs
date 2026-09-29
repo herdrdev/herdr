@@ -4889,7 +4889,7 @@ mod tests {
             })
             .collect();
         app.state.collapsed_sidebar_groups.remove("repo:Fleet");
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 40));
         let rows =
             crate::ui::compute_remote_agent_row_areas(&app.state, app.state.view.sidebar_rect);
         assert_eq!(rows.len(), 2);
@@ -10564,17 +10564,16 @@ mod tests {
 
         let viewport = crate::ui::mobile_switcher_areas(&app.state).viewport;
 
-        app.handle_mouse(mouse(
-            MouseEventKind::ScrollDown,
-            viewport.x + 2,
-            viewport.y,
-        ));
-        app.handle_mouse(mouse(
-            MouseEventKind::ScrollDown,
-            viewport.x + 2,
-            viewport.y,
-        ));
-        assert_eq!(app.state.mobile_switcher_scroll, 4);
+        // The tabs list sits below the section shelves, which always render
+        // (Snoozed and Settled show `(0)` when empty).
+        for _ in 0..4 {
+            app.handle_mouse(mouse(
+                MouseEventKind::ScrollDown,
+                viewport.x + 2,
+                viewport.y,
+            ));
+        }
+        assert_eq!(app.state.mobile_switcher_scroll, 8);
         let tab_row = (viewport.y..viewport.y + viewport.height)
             .find(|row| {
                 matches!(

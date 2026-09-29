@@ -2188,7 +2188,7 @@ mod tests {
         assert!(!crate::ui::sidebar_rows(&app.state).into_iter().any(|row| {
             matches!(
                 row,
-                crate::ui::SidebarRow::SectionHeader { title, .. }
+                crate::ui::SidebarRow::SectionHeader { title, count: 1.., .. }
                     if title == "Settled"
             )
         }));

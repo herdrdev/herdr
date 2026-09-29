@@ -1124,16 +1124,22 @@ fn render_mobile_switcher_content(
                 );
             }
             SidebarRow::NestedHeader {
+                key,
                 title,
                 collapsed,
                 dim,
                 activity_count,
                 ..
             } => {
-                let mut label = if *dim {
-                    format!("   {title}")
+                let indent = if key.starts_with("fleet:repo:") {
+                    "     "
                 } else {
-                    format!("   {} {title}", if *collapsed { "▸" } else { "▾" })
+                    "   "
+                };
+                let mut label = if *dim {
+                    format!("{indent}{title}")
+                } else {
+                    format!("{indent}{} {title}", if *collapsed { "▸" } else { "▾" })
                 };
                 if let Some((working, total)) = activity_count {
                     label.push_str(&format!(" ({working} of {total})"));
