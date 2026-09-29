@@ -141,6 +141,8 @@ Stable is the recommended channel for normal Windows use. Preview receives fixes
 
 By default, `herdr update` installs the new binary and leaves endpoint-generation-1 servers and their pane processes running. Start Herdr again to reconnect with the updated client. Client-only changes work immediately. A new server-side action stays unavailable until that server is updated and restarted; the client shows a notice instead of disconnecting. Servers from before endpoint generation 1 need one final stop during update.
 
+When it finishes, `herdr update` lists any running server still on the old version with the command that restarts it, and your saved SSH machines, which run their own Herdr. Run `herdr update` on each machine to update it too.
+
 To opt into experimental live server handoff for supported running sessions, run:
 
 ```bash
