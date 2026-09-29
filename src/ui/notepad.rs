@@ -112,6 +112,7 @@ fn header_tab_positions(
         2u16.saturating_add(static_widths.iter().copied().sum::<u16>())
             .saturating_add(static_targets.len().saturating_sub(1) as u16)
     };
+    let suffix_width = suffix_width.saturating_add(u16::from(app.notepad.usage_tab));
 
     let mut tabs = Vec::new();
     let mut used = 2u16;
@@ -234,11 +235,34 @@ fn header_spans<'a>(app: &'a AppState, palette: &Palette, width: u16) -> Line<'a
         None
     };
     if let Some((glyph, color)) = marker {
-        if used < width {
+        let marker_end = width.saturating_sub(u16::from(app.notepad.usage_tab));
+        if used < marker_end {
             spans.push(Span::styled(glyph, Style::default().fg(color)));
+            used = used.saturating_add(1);
         }
     }
+    if app.notepad.usage_tab && width > 0 {
+        let toggle_x = width.saturating_sub(1);
+        if used < toggle_x {
+            spans.push(Span::raw(" ".repeat(usize::from(toggle_x - used))));
+        }
+        spans.push(Span::styled(
+            if app.notepad.usage_collapsed {
+                "▸"
+            } else {
+                "▾"
+            },
+            Style::default().fg(palette.accent),
+        ));
+    }
     Line::from(spans)
+}
+
+pub(crate) fn usage_toggle_hit_area(app: &AppState, panel: Rect) -> Rect {
+    if !app.notepad.usage_tab || panel.width == 0 || panel.height == 0 {
+        return Rect::default();
+    }
+    Rect::new(panel.right().saturating_sub(1), panel.y, 1, 1)
 }
 
 pub(crate) fn render_notepad(app: &AppState, frame: &mut Frame, panel: Rect) {
@@ -469,6 +493,38 @@ mod tests {
             ]
         );
         // The later notes yield because the read-only tabs own the suffix.
+    }
+
+    #[test]
+    fn usage_fold_glyph_uses_a_separate_header_hit_area() {
+        let mut app = state();
+        show_all_tabs(&mut app);
+        assert!(app.notepad.select_usage_tab());
+        let panel = Rect::new(0, 10, 26, 8);
+        let toggle = usage_toggle_hit_area(&app, panel);
+        let tabs = notepad_tab_hit_areas(&app, panel);
+        let header = header_spans(&app, &app.palette, panel.width)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+
+        assert_eq!(toggle, Rect::new(25, 10, 1, 1));
+        assert!(tabs.iter().all(|(_, tab)| {
+            toggle.x < tab.x
+                || toggle.x >= tab.right()
+                || toggle.y < tab.y
+                || toggle.y >= tab.bottom()
+        }));
+        assert!(header.ends_with('▾'));
+
+        app.notepad.toggle_usage_collapsed();
+        let header = header_spans(&app, &app.palette, panel.width)
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(header.ends_with('▸'));
     }
 
     #[test]

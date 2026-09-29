@@ -85,6 +85,7 @@ pub(crate) struct AgentSectionCollapse {
 pub(crate) struct NotepadPresentationState {
     pub(crate) agent_tab: bool,
     pub(crate) usage_tab: bool,
+    pub(crate) usage_collapsed: bool,
     pub(crate) agent_collapsed: AgentSectionCollapse,
     pub(crate) agent_scroll: usize,
     pub(crate) usage_scroll: usize,
@@ -144,6 +145,8 @@ pub(crate) struct NotepadState {
     pub(crate) agent_tab: bool,
     /// The read-only per-account quota list is showing instead of a note.
     pub(crate) usage_tab: bool,
+    /// The provider rows in the read-only Usage tab are folded to one row per provider.
+    pub(crate) usage_collapsed: bool,
     /// Folded agent-tab sections, kept for the rest of the client session.
     pub(crate) agent_collapsed: AgentSectionCollapse,
     /// Scroll offset of the agent-tab body, clamped by view computation.
@@ -173,6 +176,7 @@ impl Default for NotepadState {
             save_due: None,
             agent_tab: false,
             usage_tab: true,
+            usage_collapsed: false,
             agent_collapsed: AgentSectionCollapse::default(),
             agent_scroll: 0,
             usage_scroll: 0,
@@ -184,6 +188,7 @@ impl NotepadState {
     pub(crate) fn swap_presentation(&mut self, other: &mut NotepadPresentationState) {
         std::mem::swap(&mut self.agent_tab, &mut other.agent_tab);
         std::mem::swap(&mut self.usage_tab, &mut other.usage_tab);
+        std::mem::swap(&mut self.usage_collapsed, &mut other.usage_collapsed);
         std::mem::swap(&mut self.agent_collapsed, &mut other.agent_collapsed);
         std::mem::swap(&mut self.agent_scroll, &mut other.agent_scroll);
         std::mem::swap(&mut self.usage_scroll, &mut other.usage_scroll);
@@ -429,6 +434,11 @@ impl NotepadState {
         self.focused = false;
         self.usage_scroll = 0;
         true
+    }
+
+    pub(crate) fn toggle_usage_collapsed(&mut self) {
+        self.usage_collapsed = !self.usage_collapsed;
+        self.usage_scroll = 0;
     }
 
     pub(crate) fn toggle_agent_section(&mut self, section: AgentSection) {
@@ -909,6 +919,20 @@ mod tests {
 
         assert!(!state.usage_tab);
         assert_eq!(state.active_tab_target(), Some(NotepadTabTarget::Agent));
+    }
+
+    #[test]
+    fn usage_collapse_state_round_trips_with_client_presentation() {
+        let mut state = state_with("");
+        let mut saved = NotepadPresentationState::default();
+        state.usage_collapsed = true;
+
+        state.swap_presentation(&mut saved);
+        assert!(!state.usage_collapsed);
+        assert!(saved.usage_collapsed);
+
+        state.swap_presentation(&mut saved);
+        assert!(state.usage_collapsed);
     }
 
     #[test]

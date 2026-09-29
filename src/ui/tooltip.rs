@@ -24,20 +24,28 @@ pub(crate) fn tooltip_rect(
     if anchor.width == 0 || anchor.height == 0 || area.width < 3 || area.height < 3 {
         return None;
     }
-    let width = crate::ui::text::display_width_u16(label)
-        .saturating_add(2)
-        .min(area.width)
-        .max(3);
+    let content_width = label
+        .lines()
+        .map(crate::ui::text::display_width_u16)
+        .max()
+        .unwrap_or(0);
+    let width = content_width.saturating_add(2).min(area.width).max(3);
+    let height = u16::try_from(wrap_tooltip_label(label, width.saturating_sub(2)).len())
+        .ok()?
+        .saturating_add(2);
+    if height > area.height {
+        return None;
+    }
     let x = anchor.x.max(area.x).min(area.right().saturating_sub(width));
-    if anchor.bottom().saturating_add(3) <= area.bottom() {
+    if anchor.bottom().saturating_add(height) <= area.bottom() {
         return Some((
-            Rect::new(x, anchor.bottom(), width, 3),
+            Rect::new(x, anchor.bottom(), width, height),
             TooltipPlacement::Below,
         ));
     }
-    if anchor.y >= area.y.saturating_add(3) {
+    if anchor.y >= area.y.saturating_add(height) {
         return Some((
-            Rect::new(x, anchor.y.saturating_sub(3), width, 3),
+            Rect::new(x, anchor.y.saturating_sub(height), width, height),
             TooltipPlacement::Above,
         ));
     }
@@ -53,6 +61,57 @@ fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
         && row < rect.bottom()
 }
 
+fn wrap_tooltip_label(label: &str, max_width: u16) -> Vec<String> {
+    let max_width = usize::from(max_width).max(1);
+    let mut wrapped = Vec::new();
+    for paragraph in label.lines() {
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            let word_width = crate::ui::text::display_width(word);
+            if current.is_empty() {
+                if word_width <= max_width {
+                    current.push_str(word);
+                    continue;
+                }
+            } else if crate::ui::text::display_width(&current)
+                .saturating_add(1)
+                .saturating_add(word_width)
+                <= max_width
+            {
+                current.push(' ');
+                current.push_str(word);
+                continue;
+            } else {
+                wrapped.push(std::mem::take(&mut current));
+                if word_width <= max_width {
+                    current.push_str(word);
+                    continue;
+                }
+            }
+
+            for character in word.chars() {
+                let character_width = crate::ui::text::display_width(&character.to_string());
+                if !current.is_empty()
+                    && crate::ui::text::display_width(&current).saturating_add(character_width)
+                        > max_width
+                {
+                    wrapped.push(std::mem::take(&mut current));
+                }
+                current.push(character);
+            }
+        }
+        if current.is_empty() && paragraph.is_empty() {
+            wrapped.push(String::new());
+        } else if !current.is_empty() {
+            wrapped.push(current);
+        }
+    }
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+    wrapped
+}
+
 pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<ControlId> {
     let view = &app.view;
     if app.config_diagnostic.is_some() && rect_contains(view.config_diagnostic_hit_area, col, row) {
@@ -62,6 +121,10 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
         (
             ControlId::SidebarAnimationPause,
             view.hyperspace_pause_hit_area,
+        ),
+        (
+            ControlId::NotepadUsageToggle,
+            view.notepad_usage_toggle_hit_area,
         ),
         (ControlId::DockClose, view.dock_tab_close_rect),
         (ControlId::DockAdd, view.dock_plus_rect),
@@ -165,12 +228,32 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
                     })
                 })
         })
+        .or_else(|| {
+            view.notepad_usage_hit_areas
+                .iter()
+                .enumerate()
+                .find_map(|(index, rect)| {
+                    rect_contains(*rect, col, row).then_some(ControlId::NotepadUsageRow(index))
+                })
+        })
 }
 
 fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> {
     let view = &app.view;
     let target = match control {
         ControlId::ConfigDiagnostic => return None,
+        ControlId::NotepadUsageRow(index) => (
+            *view.notepad_usage_hit_areas.get(index)?,
+            view.notepad_usage_rows.get(index)?.tooltip.clone()?,
+        ),
+        ControlId::NotepadUsageToggle => (
+            view.notepad_usage_toggle_hit_area,
+            if app.notepad.usage_collapsed {
+                "Expand usage".into()
+            } else {
+                "Collapse usage".into()
+            },
+        ),
         ControlId::SidebarStarFilter => (
             super::sidebar_header_star_filter_rect(view.sidebar_rect),
             if app.sidebar_starred_only {
@@ -369,7 +452,7 @@ pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
     let Some((area, _)) = tooltip_rect(anchor, &label, frame.area()) else {
         return;
     };
-    let label = super::text::truncate_end(&label, usize::from(area.width.saturating_sub(2)));
+    let label = wrap_tooltip_label(&label, area.width.saturating_sub(2)).join("\n");
     let paragraph = Paragraph::new(label)
         .style(
             Style::default()
@@ -398,6 +481,18 @@ mod tests {
         let (above, placement) = tooltip_rect(anchor, "Settings", area).expect("above");
         assert_eq!(placement, TooltipPlacement::Above);
         assert_eq!(above.bottom(), anchor.y);
+    }
+
+    #[test]
+    fn multiline_tooltip_geometry_accounts_for_every_line() {
+        let anchor = Rect::new(2, 2, 1, 1);
+        let label = "5h window: no data\n7d window: 71% used";
+        let (rect, placement) = tooltip_rect(anchor, label, Rect::new(0, 0, 80, 20))
+            .expect("room for both window lines");
+
+        assert_eq!(placement, TooltipPlacement::Below);
+        assert_eq!(rect.y, anchor.bottom());
+        assert_eq!(rect.height, 4);
     }
 
     #[test]
@@ -505,6 +600,55 @@ mod tests {
         // rather than explaining the wrong row.
         app.view.sidebar_hover_targets.clear();
         assert!(tooltip_target(&app, ControlId::SidebarHover(1)).is_none());
+    }
+
+    #[test]
+    fn usage_row_and_toggle_hit_areas_resolve_to_their_own_tooltips() {
+        let mut app = AppState::test_new();
+        app.provider_usage
+            .accounts
+            .push(crate::provider_usage::ProviderAccountUsage {
+                provider: crate::provider_usage::QuotaProvider::Claude,
+                profile_id: "default".into(),
+                label: "primary".into(),
+                usage: crate::provider_usage::AccountUsage::default(),
+            });
+        app.notepad.set_visible_tabs(vec!["usage".to_string()]);
+        assert!(app.notepad.usage_tab || app.notepad.select_usage_tab());
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
+
+        let header = app.view.notepad_usage_hit_areas[0];
+        assert_eq!(
+            hovered_control_at(&app, header.x, header.y),
+            Some(ControlId::NotepadUsageRow(0))
+        );
+        assert_eq!(
+            tooltip_target(&app, ControlId::NotepadUsageRow(0))
+                .expect("provider header tooltip")
+                .1,
+            "claude quota: bars show % of each window used; 5h = rolling five-hour window, 7d = weekly window"
+        );
+
+        let row = app.view.notepad_usage_hit_areas[1];
+        assert_eq!(row.width, app.view.notepad_rect.width);
+        assert_eq!(
+            hovered_control_at(&app, row.right().saturating_sub(1), row.y),
+            Some(ControlId::NotepadUsageRow(1))
+        );
+        assert!(tooltip_target(&app, ControlId::NotepadUsageRow(1))
+            .expect("account row tooltip")
+            .1
+            .starts_with("5h window: no data\n7d window: no data"));
+
+        let toggle = app.view.notepad_usage_toggle_hit_area;
+        assert_eq!(
+            hovered_control_at(&app, toggle.x, toggle.y),
+            Some(ControlId::NotepadUsageToggle)
+        );
+        assert_eq!(
+            tooltip_target(&app, ControlId::NotepadUsageToggle).map(|(_, label)| label),
+            Some("Collapse usage".to_string())
+        );
     }
 }
 

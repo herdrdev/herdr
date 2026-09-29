@@ -26,15 +26,26 @@ pub(crate) enum NotepadUsageAction {
 pub(crate) struct NotepadUsageRow {
     pub(crate) line: Line<'static>,
     pub(crate) action: NotepadUsageAction,
+    pub(crate) tooltip: Option<String>,
+}
+
+fn provider_label(provider: QuotaProvider) -> &'static str {
+    match provider {
+        QuotaProvider::Claude => "claude",
+        QuotaProvider::Codex => "codex",
+        QuotaProvider::Kimi => "opencode",
+        QuotaProvider::Agy => "antigravity",
+    }
 }
 
 fn provider_presentation(provider: QuotaProvider, app: &AppState) -> (&'static str, Color) {
-    match provider {
-        QuotaProvider::Claude => ("claude", crate::ui::icons::claude_color(&app.palette)),
-        QuotaProvider::Codex => ("codex", crate::ui::icons::codex_color(&app.palette)),
-        QuotaProvider::Kimi => ("opencode", app.palette.mauve),
-        QuotaProvider::Agy => ("antigravity", app.palette.teal),
-    }
+    let color = match provider {
+        QuotaProvider::Claude => crate::ui::icons::claude_color(&app.palette),
+        QuotaProvider::Codex => crate::ui::icons::codex_color(&app.palette),
+        QuotaProvider::Kimi => app.palette.mauve,
+        QuotaProvider::Agy => app.palette.teal,
+    };
+    (provider_label(provider), color)
 }
 
 fn account_label(account: &ProviderAccountUsage) -> String {
@@ -63,6 +74,72 @@ fn reset_text(window: Option<QuotaWindow>, now: i64) -> String {
         .and_then(|window| window.resets_at)
         .and_then(|at| crate::provider_usage::reset_label(at, now))
         .unwrap_or_else(|| "—".into())
+}
+
+fn format_local_datetime(datetime: time::PrimitiveDateTime) -> Option<String> {
+    let format = time::format_description::parse_borrowed::<1>(
+        "[weekday repr:short] [day] [month repr:short] [hour]:[minute]",
+    )
+    .ok()?;
+    datetime.format(&format).ok()
+}
+
+fn format_local_timestamp(unix_seconds: i64) -> Option<String> {
+    let datetime = crate::platform::local_datetime_at(u64::try_from(unix_seconds).ok()?)?;
+    format_local_datetime(datetime)
+}
+
+fn format_local_refresh_time(unix_seconds: i64) -> Option<String> {
+    let datetime = crate::platform::local_datetime_at(u64::try_from(unix_seconds).ok()?)?;
+    let format = time::format_description::parse_borrowed::<1>("[hour]:[minute]").ok()?;
+    datetime.format(&format).ok()
+}
+
+fn window_tooltip(name: &str, window: Option<QuotaWindow>) -> String {
+    let Some(window) = window else {
+        return format!("{name} window: no data");
+    };
+    let left = 100u8.saturating_sub(window.used_percent);
+    let mut line = format!(
+        "{name} window: {}% used · {left}% left",
+        window.used_percent
+    );
+    if let Some(reset_at) = window.resets_at.and_then(format_local_timestamp) {
+        line.push_str(" until ");
+        line.push_str(&reset_at);
+    }
+    line
+}
+
+fn account_tooltip(account: &ProviderAccountUsage) -> String {
+    let mut lines = vec![
+        window_tooltip("5h", account.usage.five_hour),
+        window_tooltip("7d", account.usage.seven_day),
+    ];
+    if account.usage.stale {
+        let stale = account
+            .usage
+            .last_refresh_unix
+            .and_then(format_local_refresh_time)
+            .map_or_else(
+                || "(stale)".to_string(),
+                |time| format!("(stale — last refresh {time})"),
+            );
+        lines.push(stale);
+    }
+    lines.join("\n")
+}
+
+fn provider_tooltip(provider: QuotaProvider) -> String {
+    let label = provider_label(provider);
+    let codex_resets = if provider == QuotaProvider::Codex {
+        "; N× 5h = five-hour resets left before the weekly reset"
+    } else {
+        ""
+    };
+    format!(
+        "{label} quota: bars show % of each window used; 5h = rolling five-hour window, 7d = weekly window{codex_resets}"
+    )
 }
 
 fn narrow_reset_text(window: Option<QuotaWindow>, now: i64) -> String {
@@ -308,25 +385,69 @@ fn account_row(
     NotepadUsageRow {
         line: Line::from(Span::styled(text, style)),
         action: NotepadUsageAction::OpenDashboard,
+        tooltip: Some(account_tooltip(account)),
     }
 }
 
 fn provider_header_row(app: &AppState, provider: QuotaProvider, width: u16) -> NotepadUsageRow {
     let (label, color) = provider_presentation(provider, app);
+    let text = format!(
+        "{} {label}",
+        crate::ui::icons::usage_label(provider, app.nerd_font)
+    );
     NotepadUsageRow {
         line: Line::from(Span::styled(
-            truncate_end(label, usize::from(width)),
+            truncate_end(&text, usize::from(width)),
             Style::default()
                 .fg(color)
                 .add_modifier(ratatui::style::Modifier::BOLD),
         )),
         action: NotepadUsageAction::None,
+        tooltip: Some(provider_tooltip(provider)),
+    }
+}
+
+fn provider_summary_row(
+    app: &AppState,
+    provider: QuotaProvider,
+    account: &ProviderAccountUsage,
+    width: u16,
+) -> NotepadUsageRow {
+    let (label, color) = provider_presentation(provider, app);
+    let prefix = format!(
+        "{} {label}",
+        crate::ui::icons::usage_label(provider, app.nerd_font)
+    );
+    let summary = format!(
+        "5h {} · 7d {}",
+        window_percent(account.usage.five_hour, true),
+        window_percent(account.usage.seven_day, true),
+    );
+    let prefix = truncate_end(&prefix, usize::from(width));
+    let prefix_width = display_width(&prefix);
+    let summary_width = usize::from(width).saturating_sub(prefix_width.saturating_add(1));
+    let summary = truncate_end(&summary, summary_width);
+    let mut spans = vec![Span::styled(
+        prefix,
+        Style::default()
+            .fg(color)
+            .add_modifier(ratatui::style::Modifier::BOLD),
+    )];
+    if !summary.is_empty() && prefix_width < usize::from(width) {
+        spans.push(Span::raw(" "));
+        spans.push(Span::raw(summary));
+    }
+    NotepadUsageRow {
+        line: Line::from(spans),
+        action: NotepadUsageAction::None,
+        tooltip: Some(provider_tooltip(provider)),
     }
 }
 
 enum UsageRowSource<'a> {
     Provider(QuotaProvider),
     Account(&'a str, &'a ProviderAccountUsage),
+    Summary(QuotaProvider, &'a ProviderAccountUsage),
 }
 
 pub(crate) fn usage_rows_window(
@@ -343,6 +464,7 @@ pub(crate) fn usage_rows_window(
                     Style::default().fg(app.palette.overlay0),
                 )),
                 action: NotepadUsageAction::None,
+                tooltip: None,
             }],
             0,
         );
@@ -362,14 +484,25 @@ pub(crate) fn usage_rows_window(
             .iter()
             .any(|account| account.provider == provider)
         {
-            sources.push(UsageRowSource::Provider(provider));
-            sources.extend(
-                narrow_labels
+            if app.notepad.usage_collapsed {
+                if let Some(account) = app
+                    .provider_usage
+                    .accounts
                     .iter()
-                    .zip(app.provider_usage.accounts.iter())
-                    .filter(|(_, account)| account.provider == provider)
-                    .map(|(label, account)| UsageRowSource::Account(label, account)),
-            );
+                    .find(|account| account.provider == provider)
+                {
+                    sources.push(UsageRowSource::Summary(provider, account));
+                }
+            } else {
+                sources.push(UsageRowSource::Provider(provider));
+                sources.extend(
+                    narrow_labels
+                        .iter()
+                        .zip(app.provider_usage.accounts.iter())
+                        .filter(|(_, account)| account.provider == provider)
+                        .map(|(label, account)| UsageRowSource::Account(label, account)),
+                );
+            }
         }
     }
     let max_scroll = sources.len().saturating_sub(visible);
@@ -384,10 +517,29 @@ pub(crate) fn usage_rows_window(
                 UsageRowSource::Account(narrow_label, account) => {
                     account_row(app, account, narrow_label, width)
                 }
+                UsageRowSource::Summary(provider, account) => {
+                    provider_summary_row(app, provider, account, width)
+                }
             })
             .collect(),
         max_scroll,
     )
+}
+
+pub(crate) fn usage_row_hit_areas(rows: &[NotepadUsageRow], body: Rect) -> Vec<Rect> {
+    rows.iter()
+        .take(usize::from(body.height))
+        .enumerate()
+        .map(|(index, _)| {
+            Rect::new(
+                body.x,
+                body.y
+                    .saturating_add(u16::try_from(index).unwrap_or(u16::MAX)),
+                body.width,
+                1,
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn render_usage_body(app: &AppState, frame: &mut Frame, body: Rect) {
@@ -443,13 +595,13 @@ mod tests {
         assert_eq!(
             text.iter().map(String::as_str).collect::<Vec<_>>(),
             [
-                "claude",
+                "\u{EC82} claude",
                 "  Claude Code  5h ········ — — · 7d ········ — —",
                 "  Claude Code/work  5h ········ — — · 7d ········ — —",
-                "codex",
+                "\u{EC81} codex",
                 "  Codex  7d ········ — —",
                 "  Codex/work  7d ········ — —",
-                "opencode",
+                "\u{F6001} opencode",
                 "  Kimi  5h ········ — — · 7d ········ — —",
             ]
         );
@@ -479,7 +631,7 @@ mod tests {
         let (rows, _) = usage_rows_window(&app, 100, 0, 20);
         let text = rows.iter().map(row_text).collect::<Vec<_>>();
 
-        assert_eq!(text[0], "antigravity");
+        assert_eq!(text[0], "\u{F6000} antigravity");
         assert!(text[1].contains("Antigravity"));
         assert!(text[1].contains("5h"));
     }
@@ -511,7 +663,7 @@ mod tests {
             .retain(|account| account.provider == QuotaProvider::Claude);
 
         let (wide, _) = usage_rows_window(&app, 80, 0, 10);
-        assert_eq!(row_text(&wide[0]), "claude");
+        assert_eq!(row_text(&wide[0]), "\u{EC82} claude");
         let text = row_text(&wide[1]);
         for expected in [
             "SHQ/scalablehq",
@@ -525,6 +677,11 @@ mod tests {
         assert_eq!(row_text(&narrow[1]), "  CSQ 5▇81/7▇92@1h/3h~");
         let (minimum, _) = usage_rows_window(&app, 18, 0, 10);
         assert_eq!(row_text(&minimum[1]), "  CSQ 5▇81/7▇92~");
+        let hit_areas = usage_row_hit_areas(&minimum, Rect::new(4, 20, 18, 10));
+        assert_eq!(hit_areas.len(), minimum.len());
+        assert!(hit_areas.iter().all(|area| area.width == 18 && area.x == 4));
+        assert_eq!(hit_areas[0].y, 20);
+        assert_eq!(hit_areas[1].y, 21);
         for (width, rows) in [(80u16, wide), (26, narrow), (18, minimum)] {
             assert!(
                 rows.iter()
@@ -696,7 +853,7 @@ mod tests {
         assert_eq!(max_scroll, 4);
         assert_eq!(
             rows.iter().map(row_text).collect::<Vec<_>>(),
-            ["opencode", "  KKI 5·—/7·—@—/—"]
+            ["\u{F6001} opencode", "  KKI 5·—/7·—@—/—"]
         );
         assert_eq!(rows[0].action, NotepadUsageAction::None);
         assert_eq!(rows[1].action, NotepadUsageAction::OpenDashboard);
@@ -706,5 +863,178 @@ mod tests {
         assert_eq!(max_scroll, 0);
         assert_eq!(row_text(&rows[0]), "no acco…");
         assert_eq!(rows[0].action, NotepadUsageAction::None);
+    }
+
+    fn tooltip_account(usage: crate::provider_usage::AccountUsage) -> ProviderAccountUsage {
+        ProviderAccountUsage {
+            provider: QuotaProvider::Claude,
+            profile_id: "default".into(),
+            label: "primary".into(),
+            usage,
+        }
+    }
+
+    #[test]
+    fn local_reset_formatter_uses_the_fixed_epoch_and_timezone() {
+        let utc =
+            time::OffsetDateTime::from_unix_timestamp(1_790_606_400).expect("fixed reset epoch");
+        let local = utc.to_offset(time::UtcOffset::from_hms(2, 0, 0).expect("fixed UTC+2"));
+        let datetime = time::PrimitiveDateTime::new(local.date(), local.time());
+
+        assert_eq!(
+            format_local_datetime(datetime).as_deref(),
+            Some("Mon 28 Sep 16:40")
+        );
+    }
+
+    #[test]
+    fn account_tooltip_formats_complete_windows_with_exact_local_resets() {
+        let account = tooltip_account(crate::provider_usage::AccountUsage {
+            five_hour: Some(QuotaWindow {
+                used_percent: 42,
+                resets_at: Some(1_790_606_400),
+            }),
+            seven_day: Some(QuotaWindow {
+                used_percent: 71,
+                resets_at: Some(1_790_606_400),
+            }),
+            ..crate::provider_usage::AccountUsage::default()
+        });
+
+        let reset = format_local_timestamp(1_790_606_400).expect("local reset time");
+        assert_eq!(
+            account_tooltip(&account),
+            format!(
+                "5h window: 42% used · 58% left until {reset}\n7d window: 71% used · 29% left until {reset}"
+            )
+        );
+    }
+
+    #[test]
+    fn account_tooltip_handles_missing_windows_and_missing_reset_times() {
+        let account = tooltip_account(crate::provider_usage::AccountUsage {
+            seven_day: Some(QuotaWindow {
+                used_percent: 71,
+                resets_at: None,
+            }),
+            ..crate::provider_usage::AccountUsage::default()
+        });
+
+        assert_eq!(
+            account_tooltip(&account),
+            "5h window: no data\n7d window: 71% used · 29% left"
+        );
+    }
+
+    #[test]
+    fn stale_account_tooltip_includes_refresh_time_only_when_available() {
+        let with_refresh = tooltip_account(crate::provider_usage::AccountUsage {
+            stale: true,
+            last_refresh_unix: Some(1_790_606_400),
+            ..crate::provider_usage::AccountUsage::default()
+        });
+        let without_refresh = tooltip_account(crate::provider_usage::AccountUsage {
+            stale: true,
+            ..crate::provider_usage::AccountUsage::default()
+        });
+
+        let refresh = format_local_refresh_time(1_790_606_400).expect("local refresh time");
+        assert!(
+            account_tooltip(&with_refresh).ends_with(&format!("(stale — last refresh {refresh})"))
+        );
+        assert!(account_tooltip(&without_refresh).ends_with("(stale)"));
+    }
+
+    #[test]
+    fn provider_header_tooltips_explain_windows_and_codex_reset_count() {
+        assert_eq!(
+            provider_tooltip(QuotaProvider::Claude),
+            "claude quota: bars show % of each window used; 5h = rolling five-hour window, 7d = weekly window"
+        );
+        assert_eq!(
+            provider_tooltip(QuotaProvider::Codex),
+            "codex quota: bars show % of each window used; 5h = rolling five-hour window, 7d = weekly window; N× 5h = five-hour resets left before the weekly reset"
+        );
+    }
+
+    #[test]
+    fn provider_headers_and_collapsed_summaries_use_each_configured_icon_fallback() {
+        let mut app = AppState::test_new();
+        let usage = crate::provider_usage::AccountUsage {
+            five_hour: Some(QuotaWindow {
+                used_percent: 42,
+                resets_at: None,
+            }),
+            seven_day: Some(QuotaWindow {
+                used_percent: 71,
+                resets_at: None,
+            }),
+            ..crate::provider_usage::AccountUsage::default()
+        };
+        let providers = [
+            QuotaProvider::Claude,
+            QuotaProvider::Codex,
+            QuotaProvider::Kimi,
+            QuotaProvider::Agy,
+        ];
+
+        for provider in providers {
+            let label = provider_label(provider);
+            app.provider_usage.accounts = vec![ProviderAccountUsage {
+                provider,
+                profile_id: "default".into(),
+                label: label.into(),
+                usage: usage.clone(),
+            }];
+            let color = match provider {
+                QuotaProvider::Claude => crate::ui::icons::claude_color(&app.palette),
+                QuotaProvider::Codex => crate::ui::icons::codex_color(&app.palette),
+                QuotaProvider::Kimi => app.palette.mauve,
+                QuotaProvider::Agy => app.palette.teal,
+            };
+            let fallback = match provider {
+                QuotaProvider::Claude => "CC",
+                QuotaProvider::Codex => "CX",
+                QuotaProvider::Kimi => "KI",
+                QuotaProvider::Agy => "AG",
+            };
+
+            for nerd_font in [true, false] {
+                let icon = crate::ui::icons::usage_label(provider, nerd_font);
+                if !nerd_font {
+                    assert_eq!(icon, fallback);
+                }
+                app.nerd_font = nerd_font;
+                app.notepad.usage_collapsed = false;
+                let (expanded, _) = usage_rows_window(&app, 80, 0, 10);
+                assert!(row_text(&expanded[0]).starts_with(&format!("{icon} {label}")));
+                assert_eq!(expanded[0].line.spans[0].style.fg, Some(color));
+
+                app.notepad.usage_collapsed = true;
+                let (collapsed, _) = usage_rows_window(&app, 80, 0, 10);
+                assert!(row_text(&collapsed[0]).starts_with(&format!("{icon} {label}")));
+                assert!(row_text(&collapsed[0]).contains("5h 42% · 7d 71%"));
+                assert_eq!(collapsed[0].line.spans[0].style.fg, Some(color));
+            }
+        }
+    }
+
+    #[test]
+    fn collapsing_usage_reduces_rendered_rows_to_one_per_provider() {
+        let mut app = AppState::test_new();
+        app.provider_usage = ProviderUsageSnapshot::with_primary_accounts(
+            AccountUsage::default(),
+            AccountUsage::default(),
+            AccountUsage::default(),
+        );
+        let (expanded, _) = usage_rows_window(&app, 100, 0, 20);
+        assert_eq!(expanded.len(), 6);
+
+        app.notepad.toggle_usage_collapsed();
+        let (collapsed, _) = usage_rows_window(&app, 100, 0, 20);
+        assert_eq!(collapsed.len(), 3);
+        assert!(collapsed
+            .iter()
+            .all(|row| row.action == NotepadUsageAction::None));
     }
 }

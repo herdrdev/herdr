@@ -356,6 +356,14 @@ impl AppState {
                     }
                     return true;
                 }
+                if rect_contains(
+                    self.view.notepad_usage_toggle_hit_area,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    self.notepad.toggle_usage_collapsed();
+                    return true;
+                }
                 // The header row outside the tabs is the panel's drag handle:
                 // pressing it starts a vertical resize rather than an edit.
                 if mouse.row == panel.y {
@@ -1080,6 +1088,27 @@ mod tests {
         assert!(state.handle_notepad_mouse(&click_at(body.x, body.y + 1)));
         assert!(state.usage_view.is_some());
         assert!(state.request_usage_scan);
+    }
+
+    #[test]
+    fn clicking_the_notepad_usage_header_chevron_toggles_collapsed_rows() {
+        let mut state = state_with_notepad();
+        state.provider_usage = crate::provider_usage::ProviderUsageSnapshot::with_primary_accounts(
+            crate::provider_usage::AccountUsage::default(),
+            crate::provider_usage::AccountUsage::default(),
+            crate::provider_usage::AccountUsage::default(),
+        );
+        state.notepad.select_usage_tab();
+        crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
+        assert_eq!(state.view.notepad_usage_rows.len(), 6);
+
+        let toggle = state.view.notepad_usage_toggle_hit_area;
+        assert_eq!(toggle.width, 1);
+        assert!(state.handle_notepad_mouse(&click_at(toggle.x, toggle.y)));
+        assert!(state.notepad.usage_collapsed);
+
+        crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
+        assert_eq!(state.view.notepad_usage_rows.len(), 3);
     }
 
     #[test]

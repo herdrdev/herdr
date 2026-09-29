@@ -531,6 +531,8 @@ pub(crate) struct AccountUsage {
     pub cost_usd: Option<f64>,
     /// Minutes remaining in the current Claude five-hour window.
     pub remaining_minutes: Option<u64>,
+    /// Unix seconds when the local provider source was last updated, when known.
+    pub last_refresh_unix: Option<i64>,
     /// The source is older than its freshness budget. Values render dimmed.
     pub stale: bool,
 }
@@ -1271,6 +1273,7 @@ fn load_claude_usage_from(
     );
     usage.account = claude_account_code(profile, config_dir);
     usage.email = claude_account_email(config_dir);
+    usage.last_refresh_unix = file_modified_unix(path);
     usage
 }
 
@@ -1334,6 +1337,17 @@ fn file_age(path: &Path, _now: Instant) -> Option<Duration> {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.elapsed().ok())
+}
+
+fn file_modified_unix(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .try_into()
+        .ok()
 }
 
 /// The Codex account behind one `CODEX_HOME`, read from the `id_token`
@@ -1415,6 +1429,7 @@ fn load_codex_usage_from(root: &Path, now_unix: Option<i64>) -> AccountUsage {
                 matches!((window.resets_at, now_unix), (Some(resets_at), Some(now)) if resets_at <= now)
             });
         if !usage.is_empty() {
+            usage.last_refresh_unix = file_modified_unix(&path);
             break;
         }
     }

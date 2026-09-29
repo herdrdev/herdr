@@ -2658,6 +2658,8 @@ pub struct ViewState {
     pub(crate) sidebar_footer_missive_hit_area: Rect,
     /// The notepad panel at the bottom of the sidebar. Empty when it is off.
     pub(crate) notepad_rect: Rect,
+    /// Clickable fold control in the active Usage-tab header.
+    pub(crate) notepad_usage_toggle_hit_area: Rect,
     /// Clickable tabs in the notepad header: note names, the Context tab and
     /// the agent tab.
     pub(crate) notepad_tab_hit_areas: Vec<(crate::notepad::NotepadTabTarget, Rect)>,
@@ -2668,6 +2670,8 @@ pub struct ViewState {
     pub(crate) notepad_agent_max_scroll: usize,
     /// Visible Usage-tab rows, materialized with their click actions.
     pub(crate) notepad_usage_rows: Vec<crate::ui::notepad_usage::NotepadUsageRow>,
+    /// Per-row hover targets derived from the same visible rows as rendering.
+    pub(crate) notepad_usage_hit_areas: Vec<Rect>,
     /// Maximum attach-local Usage-tab offset for the last computed geometry.
     pub(crate) notepad_usage_max_scroll: usize,
     /// The break-timer countdown in the sidebar footer row.
@@ -5370,6 +5374,8 @@ pub(crate) enum ControlId {
     SidebarFooter(SidebarFooterItem),
     SidebarHover(usize),
     SidebarRowHover(u16),
+    NotepadUsageRow(usize),
+    NotepadUsageToggle,
     SidebarAnimationPause,
     DockTab(usize),
     DockClose,
@@ -7774,10 +7780,12 @@ impl AppState {
                 sidebar_footer_ticket_hit_area: Rect::default(),
                 sidebar_footer_missive_hit_area: Rect::default(),
                 notepad_rect: Rect::default(),
+                notepad_usage_toggle_hit_area: Rect::default(),
                 notepad_tab_hit_areas: Vec::new(),
                 notepad_agent_rows: Vec::new(),
                 notepad_agent_max_scroll: 0,
                 notepad_usage_rows: Vec::new(),
+                notepad_usage_hit_areas: Vec::new(),
                 notepad_usage_max_scroll: 0,
                 pomodoro_hit_area: Rect::default(),
                 notification_hit_area: Rect::default(),
