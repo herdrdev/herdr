@@ -42,6 +42,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/src");
     println!("cargo:rerun-if-changed=vendor/libghostty-vt/VERSION");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_OPTIMIZE");
+    println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_LIB_DIR");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_SIMD");
     println!("cargo:rerun-if-env-changed=LIBGHOSTTY_VT_ZIG_SYSTEM_DIR");
     println!("cargo:rerun-if-env-changed=HERDR_BUILD_CHANNEL");
@@ -64,51 +65,69 @@ fn main() {
         .trim()
         .to_string();
 
-    let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
-    let mut command = Command::new(&zig);
-    command
-        .arg("build")
-        .arg("-Demit-lib-vt")
-        .arg(format!("-Doptimize={optimize}"))
-        .arg(format!("-Dsimd={simd}"))
-        .arg(format!("-Dtarget={zig_target}"))
-        .arg(format!("-Dversion-string={version_string}"))
-        .arg("-Demit-xcframework=false");
-    if target.ends_with("windows-msvc") {
-        if let Some(libc_file) = env::var_os("LIBGHOSTTY_VT_WINDOWS_LIBC") {
-            println!(
-                "cargo:rerun-if-changed={}",
-                PathBuf::from(&libc_file).display()
-            );
-            command.arg("--libc").arg(libc_file);
-        }
-    }
-    if let Ok(system_dir) = env::var("LIBGHOSTTY_VT_ZIG_SYSTEM_DIR") {
-        command.arg("--system").arg(system_dir);
-    }
-
-    let status = command
-        .current_dir(&vendored_dir)
-        .status()
-        .unwrap_or_else(|err| {
-            if err.kind() == std::io::ErrorKind::NotFound {
-                panic!(
-                    "zig executable not found (looked for {zig:?}; set the ZIG \
-                     environment variable to point at the zig binary). Building \
-                     the vendored libghostty-vt requires Zig 0.16.0: install it from \
-                     https://ziglang.org/download/, then retry the build"
+    let prebuilt_lib_dir = env::var_os("LIBGHOSTTY_VT_LIB_DIR")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from);
+    let lib_dir = if let Some(lib_dir) = prebuilt_lib_dir {
+        lib_dir
+    } else {
+        let zig = env::var("ZIG").unwrap_or_else(|_| "zig".into());
+        let mut command = Command::new(&zig);
+        command
+            .arg("build")
+            .arg("-Demit-lib-vt")
+            .arg(format!("-Doptimize={optimize}"))
+            .arg(format!("-Dsimd={simd}"))
+            .arg(format!("-Dtarget={zig_target}"))
+            .arg(format!("-Dversion-string={version_string}"))
+            .arg("-Demit-xcframework=false");
+        if target.ends_with("windows-msvc") {
+            if let Some(libc_file) = env::var_os("LIBGHOSTTY_VT_WINDOWS_LIBC") {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    PathBuf::from(&libc_file).display()
                 );
+                command.arg("--libc").arg(libc_file);
             }
-            panic!("failed to execute zig build for vendored libghostty-vt: {err}");
-        });
-    assert!(
-        status.success(),
-        "zig build for vendored libghostty-vt failed: {status}. \
-         Building Herdr requires Zig 0.16.0; check `zig version` \
-         or set ZIG to the path of a Zig 0.16.0 binary, then retry"
-    );
+        }
+        if let Ok(system_dir) = env::var("LIBGHOSTTY_VT_ZIG_SYSTEM_DIR") {
+            command.arg("--system").arg(system_dir);
+        }
 
-    let lib_dir = vendored_dir.join("zig-out/lib");
+        let status = command
+            .current_dir(&vendored_dir)
+            .status()
+            .unwrap_or_else(|err| {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    panic!(
+                        "zig executable not found (looked for {zig:?}; set the ZIG \
+                         environment variable to point at the zig binary). Building \
+                         the vendored libghostty-vt requires Zig 0.16.0: install it from \
+                         https://ziglang.org/download/, then retry the build"
+                    );
+                }
+                panic!("failed to execute zig build for vendored libghostty-vt: {err}");
+            });
+        assert!(
+            status.success(),
+            "zig build for vendored libghostty-vt failed: {status}. \
+             Building Herdr requires Zig 0.16.0; check `zig version` \
+             or set ZIG to the path of a Zig 0.16.0 binary, then retry"
+        );
+
+        vendored_dir.join("zig-out/lib")
+    };
+
+    let expected_library = if target.ends_with("windows-msvc") {
+        "ghostty-vt-static.lib"
+    } else {
+        "libghostty-vt.a"
+    };
+    assert!(
+        lib_dir.join(expected_library).is_file(),
+        "libghostty-vt library {expected_library} is missing from {}",
+        lib_dir.display()
+    );
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     if target.contains("apple-darwin") {
         let static_lib = rearchive_macos_static_lib(&lib_dir.join("libghostty-vt.a"));
