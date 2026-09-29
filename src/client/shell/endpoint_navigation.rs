@@ -165,7 +165,11 @@ impl ClientShellState {
         }
         if matches!(
             action,
-            KeybindAction::PreviousAgent | KeybindAction::NextAgent | KeybindAction::FocusAgent(_)
+            KeybindAction::PreviousAgent
+                | KeybindAction::NextAgent
+                | KeybindAction::FocusAgent(_)
+                | KeybindAction::CyclePanePrevious
+                | KeybindAction::CyclePaneNext
         ) {
             let agents = super::aggregate_navigation::online_agent_targets(
                 &self.endpoints,
@@ -173,8 +177,12 @@ impl ClientShellState {
                 self.config.agent_panel_sort,
             );
             if agents.is_empty() {
-                return true;
+                return !matches!(
+                    action,
+                    KeybindAction::CyclePanePrevious | KeybindAction::CyclePaneNext
+                );
             }
+            let pending_agent = self.pending_agent_reveal.as_ref();
             let next = match action {
                 KeybindAction::FocusAgent(index) => {
                     if index >= agents.len() {
@@ -182,27 +190,49 @@ impl ClientShellState {
                     }
                     index
                 }
-                KeybindAction::PreviousAgent | KeybindAction::NextAgent => {
-                    let focused = self
-                        .snapshot
-                        .as_deref()
-                        .and_then(|snapshot| snapshot.focused_pane_id.as_deref());
+                KeybindAction::PreviousAgent
+                | KeybindAction::NextAgent
+                | KeybindAction::CyclePanePrevious
+                | KeybindAction::CyclePaneNext => {
+                    let focused = pending_agent
+                        .map(|(endpoint_id, pane_id)| (endpoint_id, pane_id.as_str()))
+                        .or_else(|| {
+                            self.snapshot.as_deref().and_then(|snapshot| {
+                                snapshot
+                                    .focused_pane_id
+                                    .as_deref()
+                                    .map(|pane_id| (&self.active_endpoint_id, pane_id))
+                            })
+                        });
                     let current = agents.iter().position(|target| {
-                        target.endpoint_id == self.active_endpoint_id
-                            && Some(target.pane_id.as_str()) == focused
+                        focused.is_some_and(|(endpoint_id, pane_id)| {
+                            target.endpoint_id == *endpoint_id && target.pane_id == pane_id
+                        })
                     });
-                    match (current, action) {
-                        (Some(index), KeybindAction::PreviousAgent) => {
+                    let reverse = matches!(
+                        action,
+                        KeybindAction::PreviousAgent | KeybindAction::CyclePanePrevious
+                    );
+                    match (current, reverse) {
+                        (Some(index), true) => {
                             (index + agents.len() - 1) % agents.len()
                         }
-                        (Some(index), KeybindAction::NextAgent) => (index + 1) % agents.len(),
-                        (None, KeybindAction::PreviousAgent) => agents.len() - 1,
-                        _ => 0,
+                        (Some(index), false) => (index + 1) % agents.len(),
+                        (None, true) => agents.len() - 1,
+                        (None, false) => 0,
                     }
                 }
                 _ => unreachable!("endpoint agent navigation"),
             };
             let target = &agents[next];
+            if matches!(
+                action,
+                KeybindAction::CyclePanePrevious | KeybindAction::CyclePaneNext
+            ) && target.endpoint_id == self.active_endpoint_id
+                && pending_agent.is_none()
+            {
+                return false;
+            }
             if self.focus_or_activate(
                 target.endpoint_id.clone(),
                 ClientEndpointFocusTarget::Pane(target.pane_id.clone()),

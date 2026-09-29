@@ -1968,6 +1968,24 @@ pub(crate) fn all_agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
     collect_agent_panel_entries_with_runtimes(app, None)
 }
 
+fn remote_agent_as_panel_entry(remote: &std::sync::Arc<RemoteAgentPanelEntry>) -> AgentPanelEntry {
+    let mut entry = remote.entry.clone();
+    entry.identity = AgentPanelIdentity::Remote(remote.agent_ref.clone());
+    entry.remote_entry = Some(std::sync::Arc::clone(remote));
+    entry.remote_show_host_identity = remote.show_host_identity;
+    entry
+}
+
+fn all_agent_navigation_entries(app: &AppState) -> Vec<AgentPanelEntry> {
+    let mut entries = all_agent_panel_entries(app);
+    entries.extend(
+        app.remote_agent_panel_entries
+            .iter()
+            .map(remote_agent_as_panel_entry),
+    );
+    entries
+}
+
 pub(crate) fn sidebar_thread_entries(app: &AppState) -> Vec<AgentPanelEntry> {
     collect_sidebar_thread_entries_with_runtimes(app, None)
 }
@@ -1983,7 +2001,7 @@ pub(crate) fn relative_agent_navigation_entry(
     app: &AppState,
     forward: bool,
 ) -> Option<(usize, AgentPanelEntry)> {
-    let entries = all_agent_panel_entries(app);
+    let entries = all_agent_navigation_entries(app);
     if entries.is_empty() {
         return None;
     }
@@ -1993,13 +2011,26 @@ pub(crate) fn relative_agent_navigation_entry(
             .and_then(crate::workspace::Workspace::focused_pane_id)
             .map(|pane_id| (ws_idx, pane_id))
     });
-    let current_idx = entries.iter().position(|entry| {
-        focused.is_some_and(|(ws_idx, pane_id)| {
-            entry
-                .local_target()
-                .is_some_and(|target| target.ws_idx == ws_idx && target.pane_id == pane_id)
+    let current_idx = app
+        .sidebar_selected_remote_agent
+        .as_ref()
+        .and_then(|selected| {
+            entries.iter().position(|entry| {
+                matches!(
+                    &entry.identity,
+                    AgentPanelIdentity::Remote(agent_ref) if agent_ref == selected
+                )
+            })
         })
-    });
+        .or_else(|| {
+            entries.iter().position(|entry| {
+                focused.is_some_and(|(ws_idx, pane_id)| {
+                    entry
+                        .local_target()
+                        .is_some_and(|target| target.ws_idx == ws_idx && target.pane_id == pane_id)
+                })
+            })
+        });
     let next_idx = match (current_idx, forward) {
         (Some(idx), true) => (idx + 1) % entries.len(),
         (Some(0), false) => entries.len() - 1,
@@ -3399,13 +3430,7 @@ fn compact_sidebar_rows_inner(
                 remote_sidebar_entry_matches_query(remote, &remote_terms)
                     && (!app.blocked_filter || entry_has_red_dot(remote))
             })
-            .map(|remote| {
-                let mut entry = remote.entry.clone();
-                entry.identity = AgentPanelIdentity::Remote(remote.agent_ref.clone());
-                entry.remote_entry = Some(std::sync::Arc::clone(remote));
-                entry.remote_show_host_identity = remote.show_host_identity;
-                entry
-            })
+            .map(remote_agent_as_panel_entry)
             .collect::<Vec<_>>()
     } else {
         Vec::new()

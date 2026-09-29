@@ -329,6 +329,64 @@ fn local_agent_click_can_cancel_a_pending_remote_switch() {
 }
 
 #[test]
+fn pane_cycle_activates_remote_agents_in_both_directions() {
+    use crate::input::{KeybindAction, KeybindMatch};
+
+    for action in [KeybindAction::CyclePaneNext, KeybindAction::CyclePanePrevious] {
+        let (mut state, remote) = state_with_remote();
+        let mut outcome = ClientShellInput::default();
+        state.record_binding(KeybindMatch::Action(action), &mut outcome);
+
+        assert!(matches!(
+            outcome.actions.as_slice(),
+            [ClientShellAction::ActivateEndpoint {
+                endpoint_id,
+                target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+            }] if endpoint_id == &remote && pane_id == "pane_1"
+        ));
+    }
+}
+
+#[test]
+fn picker_agent_cycle_activates_remote_and_can_cycle_back_to_local() {
+    use crate::input::{KeybindAction, KeybindMatch};
+
+    let (mut state, remote) = state_with_remote();
+    let mut picker = ClientShellInput::default();
+    state.record_binding(
+        KeybindMatch::Action(KeybindAction::WorkspacePicker),
+        &mut picker,
+    );
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    let mut remote_cycle = ClientShellInput::default();
+    state.record_binding(
+        KeybindMatch::Action(KeybindAction::NextAgent),
+        &mut remote_cycle,
+    );
+    assert!(matches!(
+        remote_cycle.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if endpoint_id == &remote && pane_id == "pane_1"
+    ));
+
+    let mut local_cycle = ClientShellInput::default();
+    state.record_binding(
+        KeybindMatch::Action(KeybindAction::NextAgent),
+        &mut local_cycle,
+    );
+    assert!(matches!(
+        local_cycle.actions.as_slice(),
+        [ClientShellAction::ActivateEndpoint {
+            endpoint_id: ClientEndpointId::Local,
+            target: Some(ClientEndpointFocusTarget::Pane(pane_id)),
+        }] if pane_id == "pane_1"
+    ));
+}
+
+#[test]
 fn aggregate_agent_scroll_still_clamps_when_rows_shrink_on_activation() {
     let (mut state, remote) = state_with_scrollable_agents();
     for endpoint_id in [ClientEndpointId::Local, remote.clone()] {

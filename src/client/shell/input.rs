@@ -829,10 +829,16 @@ impl ClientShellState {
         if !self.indexed_navigation_target_exists(&binding) {
             return;
         }
-        if let KeybindMatch::Action(KeybindAction::CyclePaneNext) = binding {
-            self.cycle_pane(false, outcome);
-        } else if let KeybindMatch::Action(KeybindAction::CyclePanePrevious) = binding {
-            self.cycle_pane(true, outcome);
+        let cycle_pane_action = match &binding {
+            KeybindMatch::Action(
+                action @ (KeybindAction::CyclePaneNext | KeybindAction::CyclePanePrevious),
+            ) => Some(action.clone()),
+            _ => None,
+        };
+        if let Some(action) = cycle_pane_action {
+            if !self.handle_endpoint_navigation(action.clone(), outcome) {
+                self.cycle_pane(action == KeybindAction::CyclePanePrevious, outcome);
+            }
         } else {
             if !preserve_navigate {
                 self.mode = ClientShellMode::Terminal;

@@ -282,17 +282,15 @@ impl App {
                 }
             }
             NavigateAction::PreviousAgent => {
-                if let Some((_idx, ws_idx, pane_id)) = self.relative_agent_entry(false) {
-                    self.focus_pane_internal_via_api(ws_idx, pane_id);
+                if let Some((_idx, entry)) = self.relative_agent_entry(false) {
+                    self.focus_agent_panel_entry(entry);
                     leave_navigate_mode(&mut self.state);
-                    self.state.ensure_agent_row_visible(ws_idx, pane_id);
                 }
             }
             NavigateAction::NextAgent => {
-                if let Some((_idx, ws_idx, pane_id)) = self.relative_agent_entry(true) {
-                    self.focus_pane_internal_via_api(ws_idx, pane_id);
+                if let Some((_idx, entry)) = self.relative_agent_entry(true) {
+                    self.focus_agent_panel_entry(entry);
                     leave_navigate_mode(&mut self.state);
-                    self.state.ensure_agent_row_visible(ws_idx, pane_id);
                 }
             }
             NavigateAction::NextReviewAgent => {
@@ -1219,6 +1217,34 @@ impl App {
     }
 
     pub(crate) fn cycle_pane_via_api(&mut self, reverse: bool) {
+        let remote_agents = self
+            .state
+            .remote_agent_panel_entries
+            .iter()
+            .map(|remote| remote.agent_ref.clone())
+            .collect::<Vec<_>>();
+
+        if let Some(selected) = self.state.sidebar_selected_remote_agent.as_ref() {
+            if let Some(current) = remote_agents.iter().position(|agent| agent == selected) {
+                let next = if reverse {
+                    current.checked_sub(1)
+                } else {
+                    (current + 1 < remote_agents.len()).then_some(current + 1)
+                };
+                if let Some(next) = next {
+                    let target = remote_agents[next].clone();
+                    self.state.select_remote_agent_row(target.clone());
+                    self.open_fleet_host_from_input(&target.host, Some(&target.agent));
+                    return;
+                }
+                self.state.sidebar_selected_remote_agent = None;
+                if let Some((ws_idx, pane_id)) = self.cycle_pane_boundary_target(reverse) {
+                    self.focus_pane_internal_via_api(ws_idx, pane_id);
+                }
+                return;
+            }
+        }
+
         let Some((ws_idx, pane_id)) = self.focused_pane_target() else {
             return;
         };
@@ -1234,7 +1260,32 @@ impl App {
         } else {
             ids[(pos + 1) % ids.len()]
         };
+        let wraps = if reverse {
+            pos == 0
+        } else {
+            pos + 1 == ids.len()
+        };
+        if wraps && !remote_agents.is_empty() {
+            let target = if reverse {
+                remote_agents.last().cloned()
+            } else {
+                remote_agents.first().cloned()
+            };
+            if let Some(target) = target {
+                self.state.select_remote_agent_row(target.clone());
+                self.open_fleet_host_from_input(&target.host, Some(&target.agent));
+                return;
+            }
+        }
         self.focus_pane_internal_via_api(ws_idx, target);
+    }
+
+    fn cycle_pane_boundary_target(&self, reverse: bool) -> Option<(usize, crate::layout::PaneId)> {
+        let ws_idx = self.state.active?;
+        let tab = self.state.workspaces.get(ws_idx)?.active_tab()?;
+        let ids = tab.layout.pane_ids();
+        let pane_id = if reverse { ids.last()? } else { ids.first()? };
+        Some((ws_idx, *pane_id))
     }
 
     pub(crate) fn last_pane_via_api(&mut self) {
@@ -1350,12 +1401,24 @@ impl App {
             .map(|target| (target.ws_idx, target.pane_id))
     }
 
-    fn relative_agent_entry(&self, forward: bool) -> Option<(usize, usize, crate::layout::PaneId)> {
-        crate::ui::relative_agent_navigation_entry(&self.state, forward).and_then(|(idx, entry)| {
-            entry
-                .local_target()
-                .map(|target| (idx, target.ws_idx, target.pane_id))
-        })
+    fn relative_agent_entry(&self, forward: bool) -> Option<(usize, crate::ui::AgentPanelEntry)> {
+        crate::ui::relative_agent_navigation_entry(&self.state, forward)
+    }
+
+    fn focus_agent_panel_entry(&mut self, entry: crate::ui::AgentPanelEntry) {
+        if let Some(agent_ref) = entry
+            .remote_entry
+            .as_ref()
+            .map(|remote| remote.agent_ref.clone())
+        {
+            self.state.select_remote_agent_row(agent_ref.clone());
+            self.open_fleet_host_from_input(&agent_ref.host, Some(&agent_ref.agent));
+        } else if let Some(target) = entry.local_target() {
+            self.state.sidebar_selected_remote_agent = None;
+            self.focus_pane_internal_via_api(target.ws_idx, target.pane_id);
+            self.state
+                .ensure_agent_row_visible(target.ws_idx, target.pane_id);
+        }
     }
 
     fn pass_through_key_to_focused_pane(&mut self, key: TerminalKey) -> bool {
@@ -3826,6 +3889,27 @@ mod tests {
         app.state.active = (!app.state.workspaces.is_empty()).then_some(0);
         app.state.selected = 0;
         app
+    }
+
+    fn app_with_remote_agent() -> (App, crate::api::schema::AgentRef) {
+        let mut app = app_with_test_workspaces(&["local"]);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(crate::detect::Agent::Claude);
+        terminal.set_raw_agent_state_for_test(crate::detect::AgentState::Idle);
+        let local_entry = crate::ui::sidebar_thread_entries(&app.state)
+            .into_iter()
+            .next()
+            .expect("local agent fixture");
+        let agent_ref = crate::api::schema::AgentRef::new("ub2", "w3K:p11")
+            .expect("valid remote agent reference");
+        app.state.remote_agent_panel_entries = vec![std::sync::Arc::new(
+            crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), local_entry),
+        )];
+        (app, agent_ref)
     }
 
     #[test]
@@ -6883,6 +6967,48 @@ mod tests {
         app.execute_tui_navigate_action(NavigateAction::NextAgent, ActionContext::Prefix);
 
         assert_eq!(app.state.active, Some(1));
+    }
+
+    #[test]
+    fn agent_picker_cycles_attach_remote_agents_through_the_click_path() {
+        for action in [NavigateAction::NextAgent, NavigateAction::PreviousAgent] {
+            let (mut app, agent_ref) = app_with_remote_agent();
+            app.state.begin_workspace_picker_presentation();
+
+            app.execute_tui_navigate_action(action, ActionContext::Prefix);
+
+            assert_eq!(
+                app.state.sidebar_selected_remote_agent,
+                Some(agent_ref.clone())
+            );
+            assert_eq!(
+                app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+                Some("host launch failed"),
+                "remote navigation must use the same host activation path as a click"
+            );
+        }
+    }
+
+    #[test]
+    fn pane_cycle_attaches_remote_agent_at_local_cycle_boundary() {
+        for action in [
+            NavigateAction::CyclePaneNext,
+            NavigateAction::CyclePanePrevious,
+        ] {
+            let (mut app, agent_ref) = app_with_remote_agent();
+
+            app.execute_tui_navigate_action(action, ActionContext::Prefix);
+
+            assert_eq!(
+                app.state.sidebar_selected_remote_agent,
+                Some(agent_ref.clone())
+            );
+            assert_eq!(
+                app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+                Some("host launch failed"),
+                "pane cycling must use the same host activation path as a click"
+            );
+        }
     }
 
     #[test]

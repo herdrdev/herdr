@@ -158,6 +158,11 @@ enum PullRequestAction {
 }
 
 impl App {
+    pub(crate) fn open_fleet_host_from_input(&mut self, name: &str, focus_agent: Option<&str>) {
+        self.state.clear_home();
+        self.open_fleet_host_focused(name, focus_agent);
+    }
+
     #[cfg(test)]
     pub(super) async fn handle_key(
         &mut self,
@@ -5426,8 +5431,7 @@ impl App {
                         self.open_agent_run_log(&host, &run_id);
                     }
                     MouseAction::OpenFleetHost { name, focus_agent } => {
-                        self.state.clear_home();
-                        self.open_fleet_host_focused(&name, focus_agent.as_deref());
+                        self.open_fleet_host_from_input(&name, focus_agent.as_deref());
                     }
                     MouseAction::FocusToastTarget => {
                         self.state.clear_home();
