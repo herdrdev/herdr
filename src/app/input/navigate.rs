@@ -758,6 +758,7 @@ impl App {
     }
 
     pub(crate) fn focus_workspace_idx_via_api(&mut self, ws_idx: usize) {
+        self.state.sidebar_selected_remote_agent = None;
         let workspace_id = self.public_workspace_id(ws_idx);
         self.runtime_workspace_focus("tui.workspace.focus", workspace_id);
     }
@@ -941,6 +942,7 @@ impl App {
     }
 
     pub(crate) fn focus_tab_idx_via_api(&mut self, tab_idx: usize) {
+        self.state.sidebar_selected_remote_agent = None;
         let Some(ws_idx) = self.state.active else {
             return;
         };
@@ -1034,6 +1036,7 @@ impl App {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     ) {
+        self.state.sidebar_selected_remote_agent = None;
         let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) else {
             return;
         };
@@ -1161,6 +1164,22 @@ impl App {
         let Some((ws_idx, pane_id)) = self.focused_pane_target() else {
             return false;
         };
+        let remote_agent = self.fleet_attach_agents.get(&pane_id).cloned().or_else(|| {
+            self.remote_focus_operations
+                .agent_ref_for_proxy_pane(pane_id)
+                .cloned()
+        });
+        if let Some(agent_ref) = remote_agent {
+            if self.state.confirm_close {
+                self.state.confirm_close_workspace_id = None;
+                self.state.confirm_close_remote_agent_ref = Some(agent_ref);
+                self.state
+                    .open_client_overlay(crate::app::state::ClientOverlay::ConfirmClose);
+            } else if let Err(error) = self.remote_pane_close(agent_ref.clone()) {
+                self.show_remote_pane_lifecycle_error(&agent_ref, error);
+            }
+            return self.state.client_overlay == crate::app::state::ClientOverlay::ConfirmClose;
+        }
         let Some(pane_id) = self.public_pane_id(ws_idx, pane_id) else {
             return false;
         };
@@ -1338,7 +1357,7 @@ impl App {
         self.focus_client_on_pane();
     }
 
-    fn focused_pane_target(&self) -> Option<(usize, crate::layout::PaneId)> {
+    pub(crate) fn focused_pane_target(&self) -> Option<(usize, crate::layout::PaneId)> {
         let ws_idx = self.state.active?;
         let pane_id = self.state.workspaces.get(ws_idx)?.focused_pane_id()?;
         Some((ws_idx, pane_id))
@@ -3939,6 +3958,98 @@ mod tests {
         );
         assert_eq!(app.state.confirm_close_remote_agent_ref, Some(agent_ref));
         assert_eq!(app.state.effective_interaction_mode(), Mode::ConfirmClose);
+    }
+
+    #[test]
+    fn close_fleet_attach_pane_uses_owner_confirmation() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        let pane_id = app.state.workspaces[0]
+            .focused_pane_id()
+            .expect("focused pane");
+        app.fleet_attach_agents.insert(pane_id, agent_ref.clone());
+        app.state.confirm_close = true;
+
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Prefix);
+
+        assert_eq!(
+            app.state.client_overlay,
+            crate::app::state::ClientOverlay::ConfirmClose
+        );
+        assert_eq!(app.state.confirm_close_remote_agent_ref, Some(agent_ref));
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+    }
+
+    #[test]
+    fn close_fleet_attach_pane_without_confirmation_keeps_local_pane() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        let pane_id = app.state.workspaces[0]
+            .focused_pane_id()
+            .expect("focused pane");
+        app.fleet_attach_agents.insert(pane_id, agent_ref);
+        app.state.confirm_close = false;
+
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Prefix);
+
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+        assert_eq!(
+            app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("ub2 pane action failed")
+        );
+        assert!(app
+            .state
+            .toast
+            .as_ref()
+            .unwrap()
+            .context
+            .contains("unreachable"));
+    }
+
+    #[test]
+    fn confirming_fleet_attach_close_dispatches_owner_close() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        let pane_id = app.state.workspaces[0]
+            .focused_pane_id()
+            .expect("focused pane");
+        app.fleet_attach_agents.insert(pane_id, agent_ref.clone());
+        app.state.confirm_close = true;
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Prefix);
+
+        app.handle_confirm_close_key_via_api(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_some());
+        assert_eq!(
+            app.state.client_overlay,
+            crate::app::state::ClientOverlay::None
+        );
+        assert_eq!(
+            app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("ub2 pane action failed")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn close_plain_local_pane_stays_local_when_remote_selection_was_cleared() {
+        let (mut app, _) = app_with_remote_agent();
+        let pane_id = app.state.workspaces[0]
+            .focused_pane_id()
+            .expect("focused pane");
+        app.state.confirm_close = false;
+        app.state.sidebar_selected_remote_agent = None;
+
+        app.execute_tui_navigate_action(NavigateAction::ClosePane, ActionContext::Prefix);
+
+        assert!(app.state.workspaces[0].pane_state(pane_id).is_none());
+    }
+
+    #[test]
+    fn focusing_a_local_pane_clears_remote_close_selection() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.sidebar_selected_remote_agent = Some(agent_ref);
+
+        app.focus_pane_internal_via_api(0, pane_id);
+
+        assert!(app.state.sidebar_selected_remote_agent.is_none());
     }
 
     #[test]

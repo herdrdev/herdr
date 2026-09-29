@@ -204,6 +204,23 @@ impl ClientShellState {
                                     .map(|pane_id| (&self.active_endpoint_id, pane_id))
                             })
                         });
+                    if matches!(
+                        action,
+                        KeybindAction::CyclePanePrevious | KeybindAction::CyclePaneNext
+                    ) && pending_agent.is_none()
+                        && focused.is_some_and(|(endpoint_id, pane_id)| {
+                            endpoint_id == &self.active_endpoint_id
+                                && !agents.iter().any(|target| {
+                                    target.endpoint_id == *endpoint_id
+                                        && target.pane_id == pane_id
+                                })
+                        })
+                    {
+                        // Pane cycling includes every local pane. Let its normal
+                        // local path handle non-agent panes before considering
+                        // remote agents as the wraparound target.
+                        return false;
+                    }
                     let current = agents.iter().position(|target| {
                         focused.is_some_and(|(endpoint_id, pane_id)| {
                             target.endpoint_id == *endpoint_id && target.pane_id == pane_id

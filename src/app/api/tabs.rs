@@ -350,6 +350,9 @@ impl App {
         let replacement_cwd = replace_last_tab.then(|| workspace.identity_cwd.clone());
         let terminal_ids = self.state.terminal_ids_for_tab(ws_idx, tab_idx);
         let pane_ids = self.state.pane_ids_for_tab(ws_idx, tab_idx);
+        for pane_id in &pane_ids {
+            self.fleet_attach_agents.remove(pane_id);
+        }
         let public_pane_ids = emit_pane_closed.then(|| {
             pane_ids
                 .iter()

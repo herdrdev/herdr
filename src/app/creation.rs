@@ -391,17 +391,35 @@ impl App {
         // An attach target is one thing. Clicking its row again must return to the
         // pane already attached to it rather than dial a second ssh connection
         // and leave the operator with two views of the same agent.
-        if let Err(error) = self.open_fleet_tab_for_argv(&argv) {
+        if let Err(error) = self.open_fleet_agent_tab_for_argv(
+            &argv,
+            focus_agent.and_then(|agent| crate::api::schema::AgentRef::new(name, agent).ok()),
+        ) {
             tracing::warn!(host = %host.name, %error, "could not open fleet host");
             self.show_fleet_launch_error(error.to_string());
         }
     }
 
     fn open_fleet_tab_for_argv(&mut self, argv: &[String]) -> std::io::Result<()> {
+        self.open_fleet_agent_tab_for_argv(argv, None)
+    }
+
+    fn open_fleet_agent_tab_for_argv(
+        &mut self,
+        argv: &[String],
+        agent_ref: Option<crate::api::schema::AgentRef>,
+    ) -> std::io::Result<()> {
         if self.focus_attached_fleet_host_pane(argv) {
+            if let (Some(agent_ref), Some((_, pane_id))) = (agent_ref, self.focused_pane_target()) {
+                self.fleet_attach_agents.insert(pane_id, agent_ref);
+            }
             Ok(())
         } else {
-            self.create_fleet_host_tab(argv)
+            let pane_id = self.create_fleet_host_tab(argv)?;
+            if let Some(agent_ref) = agent_ref {
+                self.fleet_attach_agents.insert(pane_id, agent_ref);
+            }
+            Ok(())
         }
     }
 
@@ -442,7 +460,7 @@ impl App {
         true
     }
 
-    fn create_fleet_host_tab(&mut self, argv: &[String]) -> std::io::Result<()> {
+    fn create_fleet_host_tab(&mut self, argv: &[String]) -> std::io::Result<crate::layout::PaneId> {
         let (rows, cols) = self.state.estimate_pane_size();
         let scrollback_limit_bytes = self.state.pane_scrollback_limit_bytes;
         let host_terminal_theme = self.state.pane_terminal_theme();
@@ -518,7 +536,7 @@ impl App {
             self.emit_tab_created_events(ws_idx, tab_idx);
         }
         self.schedule_session_save();
-        Ok(())
+        Ok(root_pane)
     }
 
     fn show_fleet_launch_error(&mut self, context: String) {

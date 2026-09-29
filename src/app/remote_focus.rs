@@ -400,6 +400,20 @@ impl RemoteFocusOperations {
             .map(|(_, _, pane_id)| pane_id)
     }
 
+    pub(crate) fn agent_ref_for_proxy_pane(&self, pane_id: PaneId) -> Option<&AgentRef> {
+        self.operations.values().find_map(|operation| {
+            (operation
+                .proxy
+                .as_ref()
+                .is_some_and(|(proxy, _)| *proxy == pane_id)
+                && matches!(
+                    operation.state,
+                    RemoteFocusState::Connecting | RemoteFocusState::Active
+                ))
+            .then_some(&operation.agent_ref)
+        })
+    }
+
     fn proxy_by_terminal_id(&self, terminal_id: &TerminalId) -> Option<PaneId> {
         self.proxy_by_terminal
             .get(terminal_id)

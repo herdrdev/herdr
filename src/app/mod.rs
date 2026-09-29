@@ -195,6 +195,8 @@ pub struct App {
     /// Server-owned remote focus operations. This state is touched only by
     /// API requests and transport events, never by render or pane loops.
     pub(crate) remote_focus_operations: remote_focus::RemoteFocusOperations,
+    pub(crate) fleet_attach_agents:
+        std::collections::HashMap<crate::layout::PaneId, crate::api::schema::AgentRef>,
     pub(crate) remote_focus_transport: Box<dyn remote_focus::RemoteFocusTransport>,
     pub(crate) fleet_poller_config: crate::fleet::FleetPollerHandle,
     /// Server-owned group authority. Persistence is separate from client presentation state.
@@ -1591,6 +1593,7 @@ impl App {
             terminal_runtimes: restored_terminal_runtimes,
             status_log: crate::status_log::StatusLog::for_server(),
             remote_focus_operations: remote_focus::RemoteFocusOperations::default(),
+            fleet_attach_agents: std::collections::HashMap::new(),
             remote_focus_transport: Box::new(crate::remote::SshRemoteFocusTransport::new(
                 &config.remote.fleet,
             )),

@@ -348,6 +348,22 @@ fn pane_cycle_activates_remote_agents_in_both_directions() {
 }
 
 #[test]
+fn pane_cycle_from_a_non_agent_local_pane_falls_back_to_local_cycle() {
+    use crate::input::KeybindAction;
+
+    let (mut state, _) = state_with_remote();
+    let mut local = state.snapshot.as_deref().unwrap().clone();
+    local.agents.clear();
+    state.set_snapshot(Box::new(local));
+
+    for action in [KeybindAction::CyclePaneNext, KeybindAction::CyclePanePrevious] {
+        let mut outcome = ClientShellInput::default();
+        assert!(!state.handle_endpoint_navigation(action, &mut outcome));
+        assert!(outcome.actions.is_empty());
+    }
+}
+
+#[test]
 fn picker_agent_cycle_activates_remote_and_can_cycle_back_to_local() {
     use crate::input::{KeybindAction, KeybindMatch};
 

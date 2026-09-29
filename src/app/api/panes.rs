@@ -2684,6 +2684,7 @@ impl App {
             return Err(pane_not_found(id, &target.pane_id));
         };
         let workspace_id = self.public_workspace_id(ws_idx);
+        self.fleet_attach_agents.remove(&pane_id);
         let layout_update_target = self.layout_update_target_after_pane_removal(ws_idx, pane_id);
         if !exact_workspace {
             let close_tab_idx = self.state.workspaces.get(ws_idx).and_then(|workspace| {
