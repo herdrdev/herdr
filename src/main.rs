@@ -485,6 +485,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # button or keys.toggle_status_detail.
 # status_bar_expanded = false
 
+# Show `fleet:` in the status row with a dot for each other device that has
+# blocked agents or stopped reporting. Click `fleet:` to hide or show the dots.
+# fleet_status = true
+
 # Desktop tab row placement: "hidden", "top" or "bottom". Hidden is the default
 # because the sidebar already lists every tab in every space.
 # tab_bar_position = "hidden"

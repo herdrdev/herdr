@@ -437,6 +437,24 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
             let (agents, blocked) = app.agent_dot_counts();
             format!("Agents on this machine: {agents} active, {blocked} waiting on you")
         }
+        StatusSegmentKind::FleetLabel => if app.fleet_status {
+            "Fleet: devices that need you. Click to hide"
+        } else {
+            "Fleet: hidden. Click to show devices that need you"
+        }
+        .into(),
+        StatusSegmentKind::FleetDevice(idx) => {
+            match app.fleet_snapshot.devices_needing_attention().get(idx) {
+                Some(device) if device.stale => {
+                    format!("{}: not answering, agent state unknown", device.name)
+                }
+                Some(device) => format!(
+                    "{}: {} blocked, {} working. Click to open the first blocked agent",
+                    device.name, device.blocked, device.working
+                ),
+                None => "Fleet device".into(),
+            }
+        }
         StatusSegmentKind::RemoteHost => match app.view.focused_remote_host.as_deref() {
             Some(host) => format!("Remote device this pane runs on: {host}"),
             None => "Remote device this pane runs on".into(),

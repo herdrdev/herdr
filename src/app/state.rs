@@ -4444,6 +4444,8 @@ pub struct AppState {
     pub(crate) connectivity: crate::connectivity::Connectivity,
     /// Expanded status bar: percentages and reset times instead of bars alone.
     pub(crate) status_bar_expanded: bool,
+    /// Show per-device fleet dots after `fleet:` in the status row.
+    pub(crate) fleet_status: bool,
     /// Whether the disk segment was visible last frame, which is what gives the
     /// show/hide threshold its hysteresis.
     pub(crate) status_disk_visible: bool,
@@ -5408,6 +5410,10 @@ pub(crate) enum StatusSegmentKind {
     Provider(crate::provider_usage::QuotaProvider),
     Link,
     Agents,
+    /// The `fleet:` label; clicking it toggles the device dots.
+    FleetLabel,
+    /// One other device that needs attention, by fleet host name.
+    FleetDevice(usize),
     RemoteHost,
     Hostname,
     Cpu,
@@ -5416,6 +5422,20 @@ pub(crate) enum StatusSegmentKind {
 }
 
 impl AppState {
+    /// Status-row segment under a cell, from the last computed layout.
+    pub(crate) fn status_segment_kind_at(&self, col: u16, row: u16) -> Option<StatusSegmentKind> {
+        self.view
+            .status_segment_hit_areas
+            .iter()
+            .find(|(_, rect)| {
+                col >= rect.x
+                    && col < rect.x.saturating_add(rect.width)
+                    && row >= rect.y
+                    && row < rect.y.saturating_add(rect.height)
+            })
+            .map(|(kind, _)| *kind)
+    }
+
     pub(crate) fn set_hovered_control_at(&mut self, control: Option<ControlId>, now: Instant) {
         if self.hovered_control == control {
             return;
@@ -7656,6 +7676,7 @@ impl AppState {
             provider_usage: crate::provider_usage::ProviderUsageSnapshot::default(),
             connectivity: crate::connectivity::Connectivity::default(),
             status_bar_expanded: false,
+            fleet_status: true,
             status_disk_visible: false,
             full_lifecycle_hook_authority_timeout: std::time::Duration::from_secs(
                 crate::config::Config::default()

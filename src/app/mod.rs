@@ -1413,6 +1413,7 @@ impl App {
             show_agent_labels_on_pane_borders: config.ui.show_agent_labels_on_pane_borders,
             hide_tab_bar_when_single_tab: config.ui.hide_tab_bar_when_single_tab,
             status_bar_expanded: config.ui.status_bar_expanded,
+            fleet_status: config.ui.fleet_status,
             status_now_unix: crate::provider_usage::now_unix(),
             provider_usage: crate::provider_usage::ProviderUsageSnapshot::default(),
             connectivity: crate::connectivity::Connectivity::default(),
@@ -2896,6 +2897,7 @@ impl App {
                     config.ui.show_agent_labels_on_pane_borders;
                 self.state.hide_tab_bar_when_single_tab = config.ui.hide_tab_bar_when_single_tab;
                 self.state.status_bar_expanded = config.ui.status_bar_expanded;
+                self.state.fleet_status = config.ui.fleet_status;
                 let status_bar_was_enabled = self.state.status_bar_enabled;
                 self.state.status_bar_enabled = config.ui.status_bar.enabled;
                 if self.state.status_bar_enabled && !status_bar_was_enabled {

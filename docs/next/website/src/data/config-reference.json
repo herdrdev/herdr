@@ -1501,6 +1501,12 @@
           "description": "Start with the status bar expanded, showing usage percentages and reset times instead of bars alone."
         },
         {
+          "key": "ui.fleet_status",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show `fleet:` in the status row with a dot for each other device that has blocked agents or stopped answering. Click `fleet:` to hide or show the dots."
+        },
+        {
           "key": "ui.status_bar.enabled",
           "type": "boolean",
           "default": "true",

@@ -296,7 +296,51 @@ pub(crate) struct Snapshot {
     pub(crate) group_catalogs: Vec<GroupCatalog>,
 }
 
+/// One other device as the status row's `fleet:` dots see it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceAttention {
+    pub(crate) name: String,
+    pub(crate) blocked: usize,
+    pub(crate) working: usize,
+    /// The host did not answer its last poll, so its counts are unknown.
+    /// A version-skewed host still answers and is judged by its agents.
+    pub(crate) stale: bool,
+    /// First blocked agent in row order; a click on the dot opens it.
+    pub(crate) first_blocked: Option<crate::api::schema::AgentRef>,
+}
+
 impl Snapshot {
+    /// Remote devices that need the human: any blocked agent, or no answer.
+    /// Devices whose agents are all working or done are left out, so an empty
+    /// list means nothing elsewhere is waiting.
+    pub(crate) fn devices_needing_attention(&self) -> Vec<DeviceAttention> {
+        self.hosts
+            .iter()
+            .filter(|host| !host.local)
+            .filter_map(|host| {
+                // A version skew still answers with its agents; only a host
+                // that did not answer at all has unknown state.
+                let stale = host.state == HostState::Unreachable;
+                let blocked = host.entries.iter().filter(|row| row.blocked).count();
+                let working = host
+                    .entries
+                    .iter()
+                    .filter(|row| !row.blocked && row.state == "working")
+                    .count();
+                (stale || blocked > 0).then(|| DeviceAttention {
+                    name: host.name.clone(),
+                    blocked,
+                    working,
+                    stale,
+                    first_blocked: host
+                        .entries
+                        .iter()
+                        .find(|row| row.blocked)
+                        .map(|row| row.agent_ref.clone()),
+                })
+            })
+            .collect()
+    }
     pub(crate) fn preserve_live_agent_inventory_from(
         &mut self,
         current: &Snapshot,
@@ -7682,5 +7726,74 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
         new.liveness = Liveness::Unknown;
         new.state = "status_unknown".into();
         assert!(!same_observed_state(&old, &new));
+    }
+}
+
+#[cfg(test)]
+mod device_attention_tests {
+    use super::*;
+
+    fn host(name: &str, state: HostState, entries: Vec<FleetRow>) -> HostSnapshot {
+        HostSnapshot {
+            name: name.into(),
+            target: name.into(),
+            local: false,
+            session: None,
+            socket: None,
+            state,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            entries,
+        }
+    }
+
+    fn row(host: &str, name: &str, state: &str, blocked: bool) -> FleetRow {
+        let mut row = FleetRow::test_agent_row_with_state(host, name, state);
+        row.blocked = blocked;
+        row
+    }
+
+    #[test]
+    fn only_devices_with_blockers_or_no_answer_are_listed() {
+        let mut local = host(
+            "here",
+            HostState::Reachable,
+            vec![row("here", "a", "blocked", true)],
+        );
+        local.local = true;
+        let snapshot = Snapshot {
+            hosts: vec![
+                local,
+                host(
+                    "busy",
+                    HostState::Reachable,
+                    vec![row("busy", "a", "working", false)],
+                ),
+                host(
+                    "ub1",
+                    HostState::Reachable,
+                    vec![
+                        row("ub1", "w", "working", false),
+                        row("ub1", "b1", "blocked", true),
+                        row("ub1", "b2", "blocked", true),
+                    ],
+                ),
+                host("air", HostState::Unreachable, Vec::new()),
+            ],
+            ..Snapshot::default()
+        };
+        let devices = snapshot.devices_needing_attention();
+        let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["ub1", "air"]);
+        assert_eq!((devices[0].blocked, devices[0].working), (2, 1));
+        assert_eq!(
+            devices[0].first_blocked,
+            Some(snapshot.hosts[2].entries[1].agent_ref.clone())
+        );
+        assert!(!devices[0].stale);
+        assert!(devices[1].stale);
+        assert_eq!(devices[1].first_blocked, None);
     }
 }

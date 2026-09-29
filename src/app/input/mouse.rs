@@ -218,6 +218,43 @@ impl AppState {
             owner,
             InputOwner::Dock(_) | InputOwner::Sidebar | InputOwner::Pane | InputOwner::None
         );
+        // The fleet dots sit on the status row, above every other click target.
+        let status_kind = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            .then(|| self.status_segment_kind_at(mouse.column, mouse.row))
+            .flatten();
+        if let Some(kind) = status_kind {
+            match kind {
+                crate::app::state::StatusSegmentKind::FleetLabel => {
+                    // Persist like the dock strip toggle, so the choice
+                    // survives restarts and a config reload.
+                    self.fleet_status = !self.fleet_status;
+                    return Some(MouseAction::Settings(SettingsAction::SaveConfigEdit(
+                        crate::app::settings_general::ConfigEdit::Bool {
+                            section: "ui",
+                            key: "fleet_status",
+                            value: self.fleet_status,
+                        },
+                    )));
+                }
+                crate::app::state::StatusSegmentKind::FleetDevice(idx) => {
+                    let target = self
+                        .fleet_snapshot
+                        .devices_needing_attention()
+                        .into_iter()
+                        .nth(idx)
+                        .and_then(|device| device.first_blocked);
+                    if let Some(agent_ref) = target {
+                        return Some(MouseAction::OpenFleetHost {
+                            name: agent_ref.host,
+                            focus_agent: Some(agent_ref.agent),
+                        });
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         // The read-only agent tab deliberately does not take editor focus, but
         // its visible rows still own pointer input over the notepad panel.
         if (owner == InputOwner::Notepad
@@ -11579,5 +11616,101 @@ mod tests {
                 crate::app::state::ClientOverlay::RenameWorkspace
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod fleet_status_click_tests {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::layout::Rect;
+
+    use super::MouseAction;
+    use crate::app::state::StatusSegmentKind;
+    use crate::app::App;
+    use crate::config::Config;
+    use crate::workspace::Workspace;
+
+    fn app_with_blocked_device() -> App {
+        let config = Config::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let mut row =
+            crate::fleet::FleetRow::test_agent_row_with_state("ub1", "w3K:p11", "blocked");
+        row.blocked = true;
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub1".into(),
+            target: "ub1".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            entries: vec![row],
+        }];
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 160, 24));
+        app
+    }
+
+    fn click_segment(app: &mut App, kind: StatusSegmentKind) -> Option<MouseAction> {
+        let rect = app
+            .state
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, rect)| *rect)
+            .unwrap_or_else(|| panic!("{kind:?} not rendered"));
+        app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x,
+                row: rect.y,
+                modifiers: KeyModifiers::NONE,
+            },
+        )
+    }
+
+    #[test]
+    fn clicking_a_blocked_device_opens_its_first_blocked_agent() {
+        let mut app = app_with_blocked_device();
+        let expected = app.state.fleet_snapshot.hosts[0].entries[0]
+            .agent_ref
+            .clone();
+        let action = click_segment(&mut app, StatusSegmentKind::FleetDevice(0));
+        assert!(matches!(
+            action,
+            Some(MouseAction::OpenFleetHost { name, focus_agent })
+                if name == expected.host && focus_agent == Some(expected.agent.clone())
+        ));
+    }
+
+    #[test]
+    fn clicking_fleet_label_hides_every_device_dot() {
+        let mut app = app_with_blocked_device();
+        assert!(matches!(
+            click_segment(&mut app, StatusSegmentKind::FleetLabel),
+            Some(MouseAction::Settings(_))
+        ));
+        assert!(!app.state.fleet_status);
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 160, 24));
+        let kinds: Vec<_> = app
+            .state
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .map(|(k, _)| *k)
+            .collect();
+        assert!(kinds.contains(&StatusSegmentKind::FleetLabel));
+        assert!(!kinds
+            .iter()
+            .any(|k| matches!(k, StatusSegmentKind::FleetDevice(_))));
     }
 }

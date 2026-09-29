@@ -680,6 +680,22 @@ pub(crate) fn provider_style(
 
 use crate::ui::icons::Metric;
 
+/// Hollow red for one or two blocked agents, filled red from three; a device
+/// that stopped answering shows `?name` dimmed instead of any dot.
+pub(crate) fn fleet_device_text(
+    device: &crate::fleet::DeviceAttention,
+    p: &Palette,
+) -> (String, Style) {
+    if device.stale {
+        return (
+            format!(" ?{}", device.name),
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+        );
+    }
+    let dot = if device.blocked >= 3 { DOT } else { '\u{25cb}' };
+    (format!(" {dot}{}", device.name), Style::default().fg(p.red))
+}
+
 fn status_segments(
     app: &AppState,
     metrics: &crate::platform::status_metrics::StatusMetrics,
@@ -715,6 +731,36 @@ fn status_segments(
                 elide_rank: Some(rank),
                 kind: StatusSegmentKind::Provider(provider),
             });
+        }
+    }
+
+    // `fleet:` then one dot per other device that needs the human. Devices
+    // whose agents are working or done are omitted; clicking `fleet:` hides
+    // the dots entirely. Without remote hosts configured nothing is shown.
+    if app.fleet_snapshot.hosts.iter().any(|host| !host.local) {
+        out.push(Segment {
+            text: " fleet:".into(),
+            style: Style::default().fg(p.overlay1),
+            preserve_bg: false,
+            elide_rank: Some(5),
+            kind: StatusSegmentKind::FleetLabel,
+        });
+        if app.fleet_status {
+            for (idx, device) in app
+                .fleet_snapshot
+                .devices_needing_attention()
+                .iter()
+                .enumerate()
+            {
+                let (text, style) = fleet_device_text(device, p);
+                out.push(Segment {
+                    text,
+                    style,
+                    preserve_bg: false,
+                    elide_rank: Some(5),
+                    kind: StatusSegmentKind::FleetDevice(idx),
+                });
+            }
         }
     }
 
@@ -2005,8 +2051,8 @@ mod tests {
             full.iter()
                 .filter_map(|segment| segment.elide_rank)
                 .collect::<Vec<_>>(),
-            vec![3, 2, 1, 4, 4],
-            "providers elide first; the remote segment shares the device's rank"
+            vec![3, 2, 1, 5, 4, 4],
+            "providers elide first; `fleet:` outlives the device name; the remote segment shares the device's rank"
         );
 
         // Once the providers are gone the remote segment still fits; one more
@@ -2868,5 +2914,29 @@ mod metric_icons {
             texts(false, true),
             [" CPU ▄ 50 ", " MEM ▄ 50 ", " DSK ▄ 50 "]
         );
+    }
+}
+
+#[cfg(test)]
+mod fleet_device_tests {
+    use super::*;
+
+    fn device(blocked: usize, stale: bool) -> crate::fleet::DeviceAttention {
+        crate::fleet::DeviceAttention {
+            name: "ub1".into(),
+            blocked,
+            working: 0,
+            stale,
+            first_blocked: None,
+        }
+    }
+
+    #[test]
+    fn dot_is_hollow_below_three_blocked_and_filled_from_three() {
+        let p = Palette::catppuccin();
+        assert_eq!(fleet_device_text(&device(1, false), &p).0, " \u{25cb}ub1");
+        assert_eq!(fleet_device_text(&device(2, false), &p).0, " \u{25cb}ub1");
+        assert_eq!(fleet_device_text(&device(3, false), &p).0, " \u{25cf}ub1");
+        assert_eq!(fleet_device_text(&device(0, true), &p).0, " ?ub1");
     }
 }

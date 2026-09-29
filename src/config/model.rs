@@ -1882,6 +1882,10 @@ pub struct UiConfig {
     /// times. Toggled at runtime; this is only the starting state. Default: false.
     #[serde(default)]
     pub status_bar_expanded: bool,
+    /// Show `fleet:` with one dot per other device that needs you. Clicking
+    /// `fleet:` toggles it at runtime; this is only the starting state.
+    /// Default: true.
+    pub fleet_status: bool,
     /// Full-width top status row.
     pub status_bar: StatusBarConfig,
     /// Legacy indexed-Agent projection ordering. The visible sidebar remains canonical.
@@ -2332,6 +2336,7 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             status_bar_expanded: false,
+            fleet_status: true,
             status_bar: StatusBarConfig::default(),
             tab_bar_position: TabBarPositionConfig::Hidden,
             tab_bar_right: Vec::new(),
