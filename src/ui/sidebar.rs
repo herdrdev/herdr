@@ -1947,6 +1947,19 @@ pub(crate) fn sidebar_footer_refresh_hit_area(area: Rect) -> Rect {
     sidebar_footer_slot(area, 5)
 }
 
+pub(crate) fn sidebar_footer_board_hit_area(area: Rect) -> Rect {
+    let content_width = area.width.saturating_sub(1);
+    if content_width < 14 || area.height == 0 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x.saturating_add(13),
+        area.bottom().saturating_sub(1),
+        1,
+        1,
+    )
+}
+
 pub(crate) fn agent_panel_entries(app: &AppState) -> Vec<AgentPanelEntry> {
     agent_panel_entries_with_runtimes(app, None)
 }
@@ -9748,6 +9761,19 @@ pub(super) fn render_sidebar(
         crate::ui::pomodoro::sidebar_areas_hit_area(app, area),
     );
     let refresh = sidebar_footer_refresh_hit_area(area);
+    let board = sidebar_footer_board_hit_area(area);
+    if board.width > 0 {
+        let style = sidebar_footer_style(
+            app,
+            crate::app::state::SidebarFooterItem::Board,
+            app.board_view.is_some(),
+            p,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(if app.nerd_font { "▦" } else { "B" }, style)),
+            board,
+        );
+    }
     if refresh.width > 0 {
         let style = sidebar_footer_style(
             app,
@@ -29904,6 +29930,20 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             } else {
                 assert_eq!(animation.height, 6, "animation fits above the list floor");
             }
+        }
+    }
+
+    #[test]
+    fn focus_board_and_window_cycle_footer_targets_do_not_overlap() {
+        let app = AppState::test_new();
+        for width in [18, 26] {
+            let sidebar = Rect::new(0, 0, width, 20);
+            let board = sidebar_footer_board_hit_area(sidebar);
+            let cycle = crate::ui::pomodoro::window_cycle_mode_hit_area(&app, sidebar);
+            let notification = crate::ui::pomodoro::notification_hit_area(&app, sidebar);
+            assert_eq!(board.width, 1);
+            assert_eq!(board.right(), cycle.x);
+            assert!(cycle.right() <= notification.x);
         }
     }
 }

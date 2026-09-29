@@ -1818,6 +1818,7 @@ impl crate::app::state::AppState {
             // Home and the inbox both want the whole frame; opening one puts
             // the other away rather than stacking two overlays.
             self.inbox = None;
+            self.board_view = None;
             self.home = Some(self.new_home_state());
         }
         if self.home.is_some() {

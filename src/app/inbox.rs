@@ -179,6 +179,7 @@ impl crate::app::AppState {
             return;
         }
         self.clear_home();
+        self.board_view = None;
         self.inbox = Some(InboxState::default());
     }
 

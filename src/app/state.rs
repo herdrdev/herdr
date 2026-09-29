@@ -1802,6 +1802,7 @@ impl ServerInputOwner {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SurfaceInputOwner {
+    Board,
     Symphony,
     LoopRunHistory,
     AloopRunLog,
@@ -2682,6 +2683,7 @@ pub struct ViewState {
     pub(crate) hyperspace_pause_hit_area: Rect,
     /// Sidebar-footer entry for refreshing work and Git metadata.
     pub(crate) sidebar_footer_refresh_hit_area: Rect,
+    pub(crate) sidebar_footer_board_hit_area: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
     pub agent_card_areas: Vec<AgentCardArea>,
     /// Hover targets for sidebar row internals and lifecycle controls. Row-wide
@@ -4275,6 +4277,7 @@ pub(crate) struct PaneSnoozeChange {
 
 /// Renderer selected for the full terminal area before overlays are applied.
 pub(crate) enum TerminalAreaSurface<'a> {
+    Board,
     EditorPreview,
     Symphony(&'a SymphonyDetail),
     LoopRunHistory(&'a LoopRunHistoryDetail),
@@ -4326,6 +4329,10 @@ pub struct AppState {
     /// durable membership plus current pane facts and are never stored here.
     pub(crate) day_board: crate::day::DayBoard,
     pub(crate) day_stale_after: Duration,
+    /// Client presentation and a snapshot of the server-owned weekly note.
+    pub(crate) board_view: Option<crate::board::BoardView>,
+    /// Board snapshot retained while a linked terminal has focus.
+    pub(crate) board_return: Option<crate::board::BoardView>,
     /// Local row identity materialized when the sidebar projection changes.
     pub(crate) local_agent_panel_identities:
         std::collections::HashMap<PaneId, crate::ui::AgentPanelLocalIdentity>,
@@ -5337,6 +5344,7 @@ impl From<crate::config::LinearLayoutConfig> for LinearViewLayout {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarFooterItem {
+    Board,
     Settings,
     PullRequests,
     Usage,
@@ -5840,6 +5848,7 @@ impl AppState {
             return;
         }
         self.work_view = None;
+        self.board_view = None;
         self.usage_view = Some(UsageViewState::new(self.usage_snapshot.clone()));
         self.request_usage_scan = true;
         self.follow_view(SidebarGroupMode::Repo);
@@ -6382,6 +6391,7 @@ impl AppState {
             return InputOwner::Popup;
         }
         match self.terminal_area_surface() {
+            TerminalAreaSurface::Board => return InputOwner::Surface(SurfaceInputOwner::Board),
             TerminalAreaSurface::EditorPreview => {
                 return InputOwner::Surface(SurfaceInputOwner::EditorPreview)
             }
@@ -7374,6 +7384,8 @@ impl AppState {
             TerminalAreaSurface::AloopRunLog(detail)
         } else if self.usage_view.is_some() {
             TerminalAreaSurface::Usage
+        } else if self.board_view.is_some() {
+            TerminalAreaSurface::Board
         } else if self.work_view.is_some() {
             TerminalAreaSurface::Work
         } else if self.dock_collapsed && self.dock_object_preview.is_some() {
@@ -7571,6 +7583,8 @@ impl AppState {
             agent_host_name: "localhost".to_string(),
             day_board: crate::day::DayBoard::default(),
             day_stale_after: Duration::from_secs(600),
+            board_view: None,
+            board_return: None,
             local_agent_panel_identities: std::collections::HashMap::new(),
             remote_agent_panel_entries: Vec::new(),
             aloop_projection: None,
@@ -7759,6 +7773,7 @@ impl AppState {
                 hyperspace_rect: Rect::default(),
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
+                sidebar_footer_board_hit_area: Rect::default(),
                 workspace_card_areas: Vec::new(),
                 agent_card_areas: Vec::new(),
                 sidebar_hover_targets: Vec::new(),

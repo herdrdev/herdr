@@ -61,6 +61,7 @@ mod agent_state;
 mod aloop;
 mod api;
 mod app;
+mod board;
 mod build_info;
 mod checksum;
 mod cli;

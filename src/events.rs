@@ -73,6 +73,14 @@ pub struct WorktreeRemoveResult {
 pub enum AppEvent {
     /// A read-only fleet host inventory poll completed.
     FleetRefreshed { snapshot: crate::fleet::Snapshot },
+    /// Latest lines for only the remote terminals linked on the open board.
+    BoardRemoteLinesFetched {
+        note_path: std::path::PathBuf,
+        fleet_generation: u64,
+        request_id: u64,
+        complete: bool,
+        lines: Vec<(crate::board::AgentLink, String)>,
+    },
     /// A one-shot request to the host owning a remote pane completed. Fleet
     /// polling remains the only source of rendered remote lifecycle state.
     RemoteApiRequestFinished {

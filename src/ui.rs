@@ -54,6 +54,7 @@ mod tooltip;
 pub(crate) use tooltip::hovered_control_at;
 pub(crate) mod agent_picker;
 mod bar;
+pub(crate) mod board;
 pub(crate) mod text;
 pub(crate) mod ticket_actions;
 pub(crate) mod usage;
@@ -372,6 +373,7 @@ fn compute_view_internal_at(
     observed_unix_s: u64,
 ) {
     app.view_observed_at = observed_at;
+    app.refresh_board_agent_lines(terminal_runtimes, observed_unix_s);
     app.view_observed_unix_s = observed_unix_s;
     app.reconcile_sidebar_presentation();
     app.reconcile_dock_context_tabs();
@@ -417,6 +419,7 @@ fn compute_view_internal_at(
 
     let available_after_sidebar = body_area.width.saturating_sub(sidebar_w);
     let main_view_active = app.symphony_detail.is_some()
+        || app.board_view.is_some()
         || app.loop_run_history_detail.is_some()
         || app.aloop_run_detail.is_some()
         || app.usage_view.is_some()
@@ -648,6 +651,11 @@ fn compute_view_internal_at(
     } else {
         sidebar::sidebar_footer_refresh_hit_area(sidebar_area)
     };
+    let sidebar_footer_board_hit_area = if app.sidebar_collapsed {
+        Rect::default()
+    } else {
+        sidebar::sidebar_footer_board_hit_area(sidebar_area)
+    };
     let notepad_rect = sidebar::sidebar_notepad_rect(app, sidebar_area);
     let notepad_tab_hit_areas = notepad::notepad_tab_hit_areas(app, notepad_rect);
     // The agent tab's rows live on the view so a click resolves to the exact
@@ -863,6 +871,7 @@ fn compute_view_internal_at(
         hyperspace_rect,
         hyperspace_pause_hit_area,
         sidebar_footer_refresh_hit_area,
+        sidebar_footer_board_hit_area,
         workspace_card_areas,
         agent_card_areas,
         sidebar_hover_targets,
@@ -1187,6 +1196,7 @@ fn compute_mobile_view(
         hyperspace_rect: Rect::default(),
         hyperspace_pause_hit_area: Rect::default(),
         sidebar_footer_refresh_hit_area: Rect::default(),
+        sidebar_footer_board_hit_area: Rect::default(),
         workspace_card_areas: Vec::new(),
         agent_card_areas: Vec::new(),
         sidebar_hover_targets: Vec::new(),
@@ -1310,6 +1320,9 @@ fn render_with_runtime_registry_inner(
         render_tab_action_buttons(app, frame);
     }
     match app.terminal_area_surface() {
+        crate::app::state::TerminalAreaSurface::Board => {
+            board::render(app, terminal_area, frame);
+        }
         crate::app::state::TerminalAreaSurface::EditorPreview => {
             dock::editor::render_editor_preview(app, frame, terminal_area);
         }

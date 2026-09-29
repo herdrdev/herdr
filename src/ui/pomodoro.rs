@@ -22,9 +22,9 @@ use crate::app::AppState;
 use crate::pomodoro::{PomodoroPhase, PomodoroPrompt, SEND_OFF_DURATION};
 
 /// Width of `⏱ 25:00` plus a leading space.
-const INDICATOR_WIDTH: u16 = 9;
-/// Columns the footer icon strip already owns.
-const FOOTER_ICON_COLUMNS: u16 = 13;
+const INDICATOR_WIDTH: u16 = 8;
+/// Left margin, six two-cell slots, then the one-cell focus board icon.
+const FOOTER_ICON_COLUMNS: u16 = 14;
 const NOTIFICATION_WIDTH: u16 = 2;
 const CYCLE_MODE_WIDTH: u16 = 1;
 const SIDEBAR_AREAS_WIDTH: u16 = 1;
@@ -409,7 +409,7 @@ pub(crate) fn window_cycle_mode_hit_area(app: &AppState, sidebar: Rect) -> Rect 
     if notification.width == 0 {
         return Rect::default();
     }
-    // The cycle icon trails the left footer icons, after refresh.
+    // The cycle icon trails the one-cell focus board icon.
     Rect::new(
         sidebar.x + FOOTER_ICON_COLUMNS,
         notification.y,
@@ -1123,7 +1123,7 @@ mod tests {
         );
         assert_eq!(
             pomodoro_hit_area(&app, Rect::new(0, 0, 30, 20)),
-            Rect::new(20, 19, 9, 1)
+            Rect::new(21, 19, 8, 1)
         );
     }
 
@@ -1135,7 +1135,7 @@ mod tests {
         assert_eq!(notification_hit_area(&app, narrow), Rect::new(15, 19, 2, 1));
         assert_eq!(
             window_cycle_mode_hit_area(&app, narrow),
-            Rect::new(13, 19, 1, 1)
+            Rect::new(14, 19, 1, 1)
         );
 
         let almost_wide = Rect::new(0, 0, 24, 20);
@@ -1146,25 +1146,25 @@ mod tests {
         );
         assert_eq!(
             window_cycle_mode_hit_area(&app, almost_wide),
-            Rect::new(13, 19, 1, 1)
+            Rect::new(14, 19, 1, 1)
         );
 
         // The one-column cycle icon leaves the countdown room at 26 columns.
         let default_width = Rect::new(0, 0, 26, 20);
         assert_eq!(
             pomodoro_hit_area(&app, default_width),
-            Rect::new(16, 19, 9, 1)
+            Rect::new(17, 19, 8, 1)
         );
 
         let wide = Rect::new(0, 0, 27, 20);
         let bell = notification_hit_area(&app, wide);
         let timer = pomodoro_hit_area(&app, wide);
-        assert_eq!(bell, Rect::new(15, 19, 2, 1));
+        assert_eq!(bell, Rect::new(16, 19, 2, 1));
         assert_eq!(
             window_cycle_mode_hit_area(&app, wide),
-            Rect::new(13, 19, 1, 1)
+            Rect::new(14, 19, 1, 1)
         );
-        assert_eq!(timer, Rect::new(17, 19, 9, 1));
+        assert_eq!(timer, Rect::new(18, 19, 8, 1));
         assert_eq!(bell.right(), timer.x);
     }
 

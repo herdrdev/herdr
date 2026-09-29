@@ -39,6 +39,7 @@ fn modified_url_click_modifier_matches_terminal_mouse_reporting() {
     assert_eq!(modified_url_click_modifier(), KeyModifiers::CONTROL);
 }
 
+mod board;
 mod clipboard;
 mod copy_mode;
 mod dock;
@@ -213,6 +214,14 @@ impl App {
         owner: InputOwner,
     ) -> Option<super::TerminalInputTarget> {
         let key_event = key.as_key_event();
+        if self.state.board_return.is_some()
+            && key_event.code == KeyCode::Esc
+            && key_event.modifiers.is_empty()
+            && matches!(owner, InputOwner::Pane | InputOwner::Popup)
+        {
+            self.state.board_view = self.state.board_return.take();
+            return None;
+        }
         if self.handle_window_cycle_menu_key(key_event, owner) {
             return None;
         }
@@ -317,6 +326,9 @@ impl App {
             }
             InputOwner::Surface(SurfaceInputOwner::Work) => {
                 self.handle_work_view_key(key_event);
+            }
+            InputOwner::Surface(SurfaceInputOwner::Board) => {
+                self.handle_board_key(key_event);
             }
             InputOwner::Surface(SurfaceInputOwner::DockObjectPreview) => {
                 if key_event.code == KeyCode::Esc && key_event.modifiers.is_empty() {
@@ -1334,6 +1346,7 @@ impl App {
 
     fn toggle_work_projection(&mut self, projection: crate::app::state::WorkProjection) {
         self.state.clear_usage_view();
+        self.state.board_view = None;
         if self
             .state
             .work_view
@@ -4792,6 +4805,7 @@ impl App {
                 self.handle_home_text_commit(text);
                 true
             }
+            InputOwner::Surface(SurfaceInputOwner::Board) => self.board_insert_text(text),
             InputOwner::Server(ServerInputOwner::Navigator) => {
                 if !self.state.navigator.search_focused {
                     return false;
@@ -5144,6 +5158,15 @@ impl App {
                 return;
             }
             let refresh = self.state.view.sidebar_footer_refresh_hit_area;
+            let board = self.state.view.sidebar_footer_board_hit_area;
+            if mouse.column >= board.x
+                && mouse.column < board.right()
+                && mouse.row >= board.y
+                && mouse.row < board.bottom()
+            {
+                self.toggle_board_view();
+                return;
+            }
             if mouse.column >= refresh.x
                 && mouse.column < refresh.right()
                 && mouse.row >= refresh.y
@@ -5239,6 +5262,21 @@ impl App {
                 }
                 return;
             }
+        }
+
+        if self.state.board_view.is_some()
+            && matches!(
+                owner,
+                InputOwner::Surface(SurfaceInputOwner::Board)
+                    | InputOwner::Sidebar
+                    | InputOwner::Pane
+            )
+            && self
+                .state
+                .point_in_rect(self.state.view.terminal_area, mouse.column, mouse.row)
+        {
+            self.handle_board_mouse(mouse);
+            return;
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))

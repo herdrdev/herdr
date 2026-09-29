@@ -6437,13 +6437,21 @@ mod tests {
                 Some(ControlId::SidebarFooter(item))
             );
         }
+        let board = app.state.view.sidebar_footer_board_hit_area;
+        assert_eq!(board.width, 1);
+        assert_eq!(
+            board.x,
+            app.state.view.sidebar_footer_refresh_hit_area.right()
+        );
+        app.handle_mouse(mouse(MouseEventKind::Moved, board.x, board.y));
+        assert_eq!(
+            app.state.hovered_control,
+            Some(ControlId::SidebarFooter(SidebarFooterItem::Board))
+        );
         let bell = app.state.view.notification_hit_area;
         let cycle = app.state.view.window_cycle_mode_hit_area;
         assert_eq!(cycle.width, 1);
-        assert_eq!(
-            cycle.x,
-            app.state.view.sidebar_footer_refresh_hit_area.right()
-        );
+        assert_eq!(cycle.x, board.right());
         app.handle_mouse(mouse(MouseEventKind::Moved, cycle.x, cycle.y));
         assert_eq!(
             app.state.hovered_control,

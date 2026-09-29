@@ -3778,6 +3778,7 @@ impl AppState {
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
             AppEvent::PaneExitCheckpoint { .. } => Vec::new(),
             AppEvent::RemoteApiRequestFinished { .. } => Vec::new(),
+            AppEvent::BoardRemoteLinesFetched { .. } => Vec::new(),
         }
     }
 

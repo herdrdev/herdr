@@ -976,6 +976,8 @@ impl App {
                 crate::day::load(&crate::day::default_root())
             },
             day_stale_after: Duration::from_secs(config.day_board.stale_after),
+            board_view: None,
+            board_return: None,
             local_agent_panel_identities,
             remote_agent_panel_entries: Vec::new(),
             aloop_projection: None,
@@ -1147,6 +1149,7 @@ impl App {
                 hyperspace_rect: Rect::default(),
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
+                sidebar_footer_board_hit_area: Rect::default(),
                 workspace_card_areas: Vec::new(),
                 agent_card_areas: Vec::new(),
                 sidebar_hover_targets: Vec::new(),
@@ -3768,6 +3771,9 @@ impl App {
             }
             state::InputOwner::Surface(state::SurfaceInputOwner::Work) => {
                 self.handle_work_view_key(key_event);
+            }
+            state::InputOwner::Surface(state::SurfaceInputOwner::Board) => {
+                self.handle_board_key(key_event);
             }
             state::InputOwner::Surface(state::SurfaceInputOwner::DockObjectPreview) => {
                 if key_event.code == crossterm::event::KeyCode::Esc

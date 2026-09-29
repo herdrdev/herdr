@@ -1,0 +1,16 @@
+---
+title: 专注看板
+description: 在代理终端旁管理每周目标和待办事项。
+---
+
+点击侧边栏底部的 **▦** 图标打开专注看板。关闭 Nerd Font 字形时，图标会显示为 **B**；悬停可看到“Focus board”提示。再次点击或按 `Esc` 关闭看板。
+
+看板包含 **Draft**、**To Do**、**In Progress** 和 **Done** 四列。代理不会领取 Draft 中的事项。在 Draft 列点击 **+** 或按 `n`，填写标题、自由文本描述、领域和可选目标。按 `Ctrl+Enter` 保存到 Draft。按 `g` 或点击 **+ goal** 可创建 week、today 或 container 目标；每行输入一个待办，系统会将它们创建为 Draft 卡片。
+
+使用方向键选择卡片，按 `m` 后再按 `←` 或 `→` 可移动到相邻列，也可以用鼠标拖动。按 `Enter` 或点击卡片打开详情。Human 标签支持编辑和追加原文；Agent 标签包含摘要和只能追加的更新。In Progress 按关联代理中最需要关注的状态分为 blocked、working、done awaiting you。
+
+对于 To Do、In Progress 或 Done 中尚未关联代理的卡片，点击 **▶ spawn** 或按 `s` 启动代理。卡片的标题和描述会作为提示词，新的终端会关联到卡片。scalable 使用已配置的 `scalablev2` 工作目录，harness 使用 `scalable-agent-fleet`，personal 使用 Obsidian vault。关联终端显示状态点、主机和最后一行的开头。点击终端，或在详情中选中并按 `Enter` 跳转；按 `Esc` 返回看板。
+
+目标和待办按 ISO 周保存在 Obsidian vault 的 `todos/YYYY-Www.md`。优先使用 `OBSIDIAN_VAULT`，否则使用 `~/workspaces/obsidian`。目标是标题，待办是复选框，可直接在 Obsidian 中阅读和编辑。重新打开看板后会读取外部修改。只有关联的所有待办都进入 Done，目标才会勾选。如果看板打开期间周记被修改，Herdr 会拒绝用旧状态覆盖它。
+
+如果目标条无法容纳所有目标，可点击箭头或按 `[` 和 `]` 翻页。

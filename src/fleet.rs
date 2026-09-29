@@ -861,7 +861,7 @@ impl AuthorityRoute {
 }
 
 impl HostApiRoute {
-    fn from_host(host: &HostSnapshot) -> Self {
+    pub(crate) fn from_host(host: &HostSnapshot) -> Self {
         Self {
             host: host.name.clone(),
             target: host.target.clone(),
@@ -1230,6 +1230,64 @@ fn route_api_request_with_ssh_program(
     };
     name_forwarded_pane_authority(&mut value, request);
     serde_json::to_string(&value).map_err(|error| error.to_string())
+}
+
+/// Read one linked remote terminal off the UI thread. The configured fleet
+/// route supplies socket/session selection; `agent.read` is an existing JSON
+/// method, so older servers can report it unavailable without a new handshake.
+pub(crate) fn read_board_remote_line(
+    route: &HostApiRoute,
+    pane_id: &str,
+) -> Result<String, String> {
+    let request = Request {
+        id: "board:agent:read".into(),
+        method: Method::AgentRead(crate::api::schema::AgentReadParams {
+            target: pane_id.into(),
+            source: crate::api::schema::ReadSource::Recent,
+            lines: Some(2),
+            format: crate::api::schema::ReadFormat::Text,
+            strip_ansi: true,
+        }),
+    };
+    let response =
+        route_api_request_with_ssh_program(route, &request, Duration::from_secs(5), "ssh")?;
+    parse_board_remote_line(&response)
+}
+
+fn parse_board_remote_line(response: &str) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(response)
+        .map_err(|error| format!("invalid remote terminal response: {error}"))?;
+    let text = value
+        .pointer("/result/read/text")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("remote terminal unavailable")?;
+    Ok(text
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("terminal quiet")
+        .split_whitespace()
+        .take(7)
+        .collect::<Vec<_>>()
+        .join(" "))
+}
+
+#[cfg(test)]
+mod board_read_tests {
+    use super::parse_board_remote_line;
+
+    #[test]
+    fn remote_read_uses_last_nonempty_line_and_caps_words() {
+        let response = serde_json::json!({"result": {"read": {
+            "text": "old line\n\nnew one two three four five six seven eight\n"
+        }}})
+        .to_string();
+        assert_eq!(
+            parse_board_remote_line(&response).expect("read response"),
+            "new one two three four five six"
+        );
+        assert!(parse_board_remote_line(r#"{"error":{"code":"unavailable"}}"#).is_err());
+    }
 }
 
 fn name_forwarded_pane_authority(value: &mut serde_json::Value, request: &Request) {

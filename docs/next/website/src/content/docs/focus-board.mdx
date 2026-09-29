@@ -1,0 +1,16 @@
+---
+title: Focus board
+description: Organize weekly goals and to-dos beside your agents.
+---
+
+Open the focus board with the **▦** icon in the sidebar footer (**B** when Nerd Font glyphs are off). Hover for the “Focus board” tooltip. Click the icon again, or press `Esc`, to close it.
+
+The board has **Draft**, **To Do**, **In Progress**, and **Done** columns. Draft is for ideas that agents never pick up. Click **+** in Draft or press `n` there to add a to-do with a title, free-text description, area, and optional goal. Press `Ctrl+Enter` or click **Save**. Press `g` or click **+ goal** to create a goal with a week, today, or container scope; each line in its to-do field becomes a Draft card.
+
+Select cards with the arrow keys and press `m` then `←` or `→` to move them. Mouse drag also moves cards between columns. `Enter` or a click opens card detail. The Human tab holds editable raw text; the Agent tab holds a summary and append-only updates. In Progress groups cards by the worst state of their linked agents: blocked, working, then done awaiting you.
+
+On a card without an agent in To Do, In Progress, or Done, click **▶ spawn** or press `s`. Herdr opens an agent with the card title and description as its prompt, then links the new terminal. Scalable uses the configured `scalablev2` checkout, harness uses `scalable-agent-fleet`, and personal uses the Obsidian vault. Each linked terminal shows its host, status dot, and the first words of its latest line. Select it and press `Enter`, or click it, to jump to the pane; `Esc` returns to the board.
+
+Goals and to-dos live in one Markdown note per ISO week under `<Obsidian vault>/todos/YYYY-Www.md`. Herdr uses `OBSIDIAN_VAULT` when set, otherwise `~/workspaces/obsidian`. Goal headings and to-do checkboxes remain readable and editable in Obsidian. Reopen the board to read external edits. A goal checks off only when all its linked to-dos are Done. Herdr refuses to overwrite a note changed while the board was open.
+
+If the goals strip has more goals than fit, use its arrow controls or `[` and `]` to page through them.

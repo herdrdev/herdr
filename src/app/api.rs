@@ -346,7 +346,24 @@ impl App {
 
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
-            AppEvent::FleetRefreshed { snapshot } => self.install_fleet_snapshot(snapshot),
+            AppEvent::FleetRefreshed { snapshot } => {
+                let changed = self.install_fleet_snapshot(snapshot);
+                self.refresh_board_remote_lines();
+                changed
+            }
+            AppEvent::BoardRemoteLinesFetched {
+                note_path,
+                fleet_generation,
+                request_id,
+                complete,
+                lines,
+            } => self.apply_board_remote_lines(
+                &note_path,
+                fleet_generation,
+                request_id,
+                complete,
+                lines,
+            ),
             AppEvent::RemoteApiRequestFinished {
                 agent_ref,
                 response,
@@ -622,7 +639,26 @@ impl App {
         }
 
         if let AppEvent::FleetRefreshed { snapshot } = ev {
-            return Some(self.install_fleet_snapshot(snapshot));
+            let changed = self.install_fleet_snapshot(snapshot);
+            self.refresh_board_remote_lines();
+            return Some(changed);
+        }
+
+        if let AppEvent::BoardRemoteLinesFetched {
+            note_path,
+            fleet_generation,
+            request_id,
+            complete,
+            lines,
+        } = ev
+        {
+            return Some(self.apply_board_remote_lines(
+                &note_path,
+                fleet_generation,
+                request_id,
+                complete,
+                lines,
+            ));
         }
 
         if let AppEvent::RemoteApiRequestFinished {
