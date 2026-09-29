@@ -1,0 +1,155 @@
+{
+  "cases": [
+    {
+      "id": "quiet-build",
+      "agent_status": "working",
+      "tail": "Running cargo test",
+      "expected_state": "working",
+      "unchanged_seconds": 900,
+      "expect_process_info": true,
+      "available_followup": {
+        "process_state": "cargo test is alive",
+        "cpu_percent": 64,
+        "output_age_seconds": 900,
+        "last_tool_call": "exec cargo test --workspace"
+      }
+    },
+    {
+      "id": "quoted-question",
+      "agent_status": "working",
+      "tail": "Copied from an issue: ‘Should I remove the compatibility layer?’ This is quoted text only. I am continuing with the release notes.",
+      "expected_state": "working",
+      "expect_process_info": true,
+      "available_followup": {
+        "more_scrollback": "The quoted question came from pasted issue text; subsequent lines show active edits.",
+        "last_tool_call": "edit docs/release.md"
+      }
+    },
+    {
+      "id": "subprocess-yes-no",
+      "agent_status": "working",
+      "tail": "Child test process asks: Overwrite its generated snapshot? [y/n]",
+      "expected_state": "blocked",
+      "available_followup": {
+        "process_state": "test child is waiting on stdin",
+        "cpu_percent": 0,
+        "last_tool_call": "exec cargo test snapshot_update"
+      }
+    },
+    {
+      "id": "finished-idle",
+      "agent_status": "idle",
+      "tail": "Implementation is complete. I summarized the result above and am waiting for a new task.",
+      "expected_state": "done",
+      "available_followup": {
+        "last_tool_call": "final response completed",
+        "more_scrollback": "Final summary is the last assistant turn."
+      }
+    },
+    {
+      "id": "automatic-backoff",
+      "agent_status": "working",
+      "tail": "API response 429. Automatic exponential backoff is scheduled; retry in 47 seconds.",
+      "expected_state": "working",
+      "available_followup": {
+        "process_state": "agent process alive in scheduled retry wait",
+        "cpu_percent": 0,
+        "output_age_seconds": 12,
+        "last_tool_call": "GET /api/build"
+      }
+    },
+    {
+      "id": "animated-spinner",
+      "agent_status": "working",
+      "tail": "Build active: rendering dependencies ⠋",
+      "second_read": "Build active: rendering dependencies ⠙",
+      "expected_state": "working",
+      "available_followup": {
+        "process_state": "build process alive",
+        "cpu_percent": 37,
+        "output_age_seconds": 0,
+        "last_tool_call": "exec npm run build"
+      }
+    },
+    {
+      "id": "resumed-after-restart",
+      "agent_status": "working",
+      "tail": "Resumed after Herdr restart; cargo test is still active.",
+      "expected_state": "working",
+      "unchanged_seconds": 1200,
+      "expect_process_info": true,
+      "available_followup": {
+        "process_state": "cargo test process survived the Herdr restart",
+        "cpu_percent": 51,
+        "output_age_seconds": 1200,
+        "last_tool_call": "exec cargo test --workspace"
+      }
+    },
+    {
+      "id": "model-approval-dialog",
+      "agent_status": "working",
+      "tail": "The agent cannot continue until the human selects a model in Settings. Dialog: Choose a model? [Fast, Pro]",
+      "expected_state": "blocked",
+      "available_followup": {
+        "more_scrollback": "Agent opened model selection after reporting a provider error.",
+        "last_tool_call": "model selection dialog opened"
+      }
+    },
+    {
+      "id": "spinner-only-loop",
+      "agent_status": "working",
+      "tail": "⠋",
+      "second_read": "⠙",
+      "expected_state": "unknown",
+      "available_followup": {
+        "process_state": "agent process alive",
+        "cpu_percent": 0,
+        "output_age_seconds": 1800,
+        "last_tool_call": "none"
+      }
+    },
+    {
+      "id": "spinner-plus-progress",
+      "agent_status": "working",
+      "tail": "Compiling crate A ⠋",
+      "second_read": "Compiled crate A; compiling crate B ⠙",
+      "expected_state": "working",
+      "available_followup": {
+        "process_state": "cargo process alive",
+        "cpu_percent": 48,
+        "output_age_seconds": 0,
+        "last_tool_call": "cargo test"
+      }
+    },
+    {
+      "id": "new-turn-old-prompt",
+      "agent_status": "working",
+      "tail": "Do you want to allow this command? [y/n]\nNew turn started; inspecting the implementation now.",
+      "expected_state": "working",
+      "available_followup": {
+        "lifecycle_event": "user_input",
+        "turn_id": "turn-new",
+        "last_tool_call": "read src/main.rs"
+      }
+    },
+    {
+      "id": "rate-limit-exhausted",
+      "agent_status": "working",
+      "tail": "Usage limit reached. Please wait for the limit to reset or change account.",
+      "expected_state": "blocked",
+      "available_followup": {
+        "retry_deadline": null,
+        "retry_count": 5,
+        "last_tool_call": "GET /v1/completions"
+      }
+    }
+  ],
+  "worker_parent_gone": {
+    "worker_id": "worker-parent-gone",
+    "parent_session": "missing-parent-pane",
+    "alive": true,
+    "last_activity_age_seconds": 900,
+    "expected_action": "notify_failed",
+    "expected_parent_notification": false
+  }
+}

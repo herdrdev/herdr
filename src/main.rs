@@ -120,6 +120,7 @@ mod terminal_notify;
 mod terminal_theme;
 mod ui;
 mod update;
+mod watchdog;
 mod work_context;
 mod work_index;
 mod work_projection;
