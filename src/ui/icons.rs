@@ -46,6 +46,8 @@ const HERDR: &str = "\u{F6003}";
 const INBOX: &str = "\u{F6004}";
 const OPENCODE: &str = "\u{F6005}";
 pub(crate) const GITHUB: &str = "\u{F6006}";
+pub(crate) const SENTRY: &str = "\u{F6008}";
+pub(crate) const LINEAR: &str = "\u{F6009}";
 const SHELL: &str = "\u{EA85}"; // cod-terminal
 const MACHINE_UB1: &str = "\u{F01C5}"; // md-desktop_tower
 const MACHINE_UB2: &str = "\u{F048B}"; // md-server
@@ -263,10 +265,58 @@ fn resolved_space_icon<'a>(
         }
     }
 
-    match repo_name {
-        Some(name) => builtin_repo_icon(name).map_or((REPO, false), |icon| (icon, true)),
-        None => builtin_label_icon(label).map_or((SHELL, false), |icon| (icon, true)),
+    let exact = match repo_name {
+        Some(name) => builtin_repo_icon(name),
+        None => builtin_label_icon(label),
+    };
+    if let Some(icon) = exact {
+        return (icon, true);
     }
+    // The visible title wins over the repo name; both are checked.
+    if let Some(icon) = keyword_icon(label).or_else(|| repo_name.and_then(keyword_icon)) {
+        return (icon, true);
+    }
+    (if repo_name.is_some() { REPO } else { SHELL }, false)
+}
+
+const KEYWORD_ICONS: &[(&str, &str)] = &[
+    ("herdr", HERDR),
+    ("scalable", SCALABLE),
+    ("scalablev2", SCALABLE),
+    ("github", GITHUB),
+    ("gh", GITHUB),
+    ("pr", GITHUB),
+    ("inbox", INBOX),
+    ("obsidian", OBSIDIAN),
+    ("obs", OBSIDIAN),
+    ("fleet", ROBOT),
+    ("harness", HAMMER_WRENCH),
+    ("dotfiles", CONFIG),
+    ("config", CONFIG),
+    ("sentry", SENTRY),
+    ("linear", LINEAR),
+];
+
+/// Matches the earliest whole keyword without allocating, for render-path use.
+pub(crate) fn keyword_icon(title: &str) -> Option<&'static str> {
+    title
+        .split(|character: char| !character.is_alphanumeric())
+        .find_map(|word| {
+            KEYWORD_ICONS
+                .iter()
+                .find_map(|(keyword, icon)| word.eq_ignore_ascii_case(keyword).then_some(*icon))
+        })
+}
+
+pub(crate) fn keyword_icon_matches(title: &str, icon: &str) -> bool {
+    title
+        .split(|character: char| !character.is_alphanumeric())
+        .any(|word| {
+            KEYWORD_ICONS.iter().any(|(keyword, matched)| {
+                word.eq_ignore_ascii_case(keyword)
+                    && (*matched == icon || (*matched == SCALABLE && icon == SCALABLE_DARK))
+            })
+        })
 }
 
 fn builtin_repo_icon(name: &str) -> Option<&'static str> {
@@ -366,6 +416,58 @@ mod tests {
             space_icon(None, Some(Path::new("/work/herdr")), "ignored", &overrides),
             "\u{F6003}"
         );
+    }
+
+    #[test]
+    fn keyword_icons_match_whole_words_case_insensitively_in_title_order() {
+        assert_eq!(keyword_icon("a NONLINEAR repo"), None);
+        assert_eq!(keyword_icon("linearized"), None);
+        assert_eq!(keyword_icon("Linear issue for Sentry"), Some(LINEAR));
+        assert_eq!(keyword_icon("prefix/GH-42"), Some(GITHUB));
+        assert_eq!(keyword_icon("Scalable V2"), Some(SCALABLE));
+        assert_eq!(keyword_icon("SENTRY"), Some(SENTRY));
+    }
+
+    #[test]
+    fn space_keyword_icons_follow_exact_matches_and_user_overrides() {
+        let no_overrides = BTreeMap::new();
+        assert_eq!(
+            space_icon(Some("owner/linear-work"), None, "Sentry", &no_overrides),
+            SENTRY,
+            "visible title keyword precedes repo keyword"
+        );
+        assert_eq!(
+            space_icon(Some("owner/linear-work"), None, "scratch", &no_overrides),
+            LINEAR,
+            "repo keyword applies when the title has none"
+        );
+        assert_eq!(
+            space_icon(None, None, "Sentry Linear", &no_overrides),
+            SENTRY,
+            "first keyword by position wins"
+        );
+        assert_eq!(
+            space_icon(Some("owner/agent-fleet"), None, "other", &no_overrides),
+            ROBOT,
+            "exact built-in result is preserved"
+        );
+        let overrides = BTreeMap::from([("owner/linear-work".into(), "◆".into())]);
+        assert_eq!(
+            space_icon(Some("owner/linear-work"), None, "other", &overrides),
+            "◆"
+        );
+    }
+
+    #[test]
+    fn workspace_keyword_icons_retain_dark_scalable_theming() {
+        let overrides = BTreeMap::new();
+        assert_eq!(
+            space_icon(Some("owner/scalable-platform"), None, "other", &overrides),
+            SCALABLE
+        );
+        let mut palette = crate::app::state::AppState::test_new().palette;
+        palette.panel_bg = Color::Rgb(30, 30, 46);
+        assert_eq!(themed(SCALABLE, &palette), SCALABLE_DARK);
     }
 
     #[test]

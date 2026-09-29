@@ -230,15 +230,80 @@ fn tab_chrome_label_impl(
     // Same budgeting rule as the zoom marker: the glyph is paid for out of the
     // label, never out of the cell, so a pin can never widen or shove a tab.
     let label_width = max_width.saturating_sub(if zoomed { 2 } else { 0 });
-    let name = ws
-        .tab_display_projection(terminals, tab_idx)
-        .map(|projection| fit_tab_display_projection_impl(projection, label_width, nerd_font))
-        .unwrap_or_else(|| truncate_end(&(tab_idx + 1).to_string(), label_width));
+    let projection = ws.tab_display_projection(terminals, tab_idx);
+    let keyword_icon = if nerd_font && !projection_agent_icon_fits(projection.as_ref(), label_width)
+    {
+        projection
+            .as_ref()
+            .and_then(projection_keyword_icon)
+            .filter(|icon| {
+                let workspace_name = ws.display_name_from_terminals(terminals);
+                !crate::ui::icons::keyword_icon_matches(&workspace_name, icon)
+            })
+    } else {
+        None
+    };
+    let title_width = label_width.saturating_sub(if keyword_icon.is_some() { 2 } else { 0 });
+    let name = projection
+        .map(|projection| fit_tab_display_projection_impl(projection, title_width, nerd_font))
+        .unwrap_or_else(|| truncate_end(&(tab_idx + 1).to_string(), title_width));
+    let name = if let Some(icon) = keyword_icon {
+        format!("{icon} {name}")
+    } else {
+        name
+    };
     if zoomed {
         format!("{name} Z")
     } else {
         name
     }
+}
+
+fn projection_keyword_icon(
+    projection: &crate::workspace::TabDisplayProjection,
+) -> Option<&'static str> {
+    use crate::workspace::TabDisplayProjection;
+    match projection {
+        TabDisplayProjection::Manual(name) | TabDisplayProjection::Fallback(name) => {
+            crate::ui::icons::keyword_icon(name)
+        }
+        TabDisplayProjection::Derived {
+            ticket,
+            binding,
+            title,
+            ..
+        } => [ticket, binding, title]
+            .into_iter()
+            .filter_map(|part| part.as_deref())
+            .find_map(crate::ui::icons::keyword_icon),
+    }
+}
+
+fn projection_agent_icon_fits(
+    projection: Option<&crate::workspace::TabDisplayProjection>,
+    max_width: usize,
+) -> bool {
+    use crate::workspace::TabDisplayProjection;
+    let Some(TabDisplayProjection::Derived {
+        ticket,
+        binding,
+        title,
+        agent: Some(agent),
+        ..
+    }) = projection
+    else {
+        return false;
+    };
+    let component_widths = [ticket, binding, title].map(|part| part.as_deref().map(display_width));
+    let full_width = component_widths.iter().flatten().copied().sum::<usize>()
+        + component_widths.iter().flatten().count().saturating_sub(1) * display_width(" · ");
+    full_width > max_width
+        && !component_widths
+            .iter()
+            .flatten()
+            .any(|width| *width <= max_width)
+        && crate::ui::icons::agent_icon_for_name(agent)
+            .is_some_and(|icon| display_width(icon) <= max_width)
 }
 
 #[derive(Clone, Copy)]
@@ -1521,7 +1586,7 @@ mod tests {
     fn cjk_tab_labels_are_centered_by_display_width() {
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
-        ws.tabs[0].set_custom_name("提交 herdr 的反馈".into());
+        ws.tabs[0].set_custom_name("提交 notes 的反馈".into());
 
         app.workspaces = vec![ws];
         app.active = Some(0);
@@ -1632,6 +1697,33 @@ mod tests {
         ws.tabs[0].zoomed = true;
 
         assert_eq!(tab_width(&ws, &Default::default(), 0), 14);
+    }
+
+    #[test]
+    fn tab_keyword_icon_is_skipped_for_workspace_keyword_and_when_nerd_font_is_off() {
+        let mut ws = Workspace::test_new("test");
+        ws.set_custom_name("workspace for Linear".into());
+        ws.tabs[0].set_custom_name("Fix Sentry alerts".into());
+        let terminals = std::collections::HashMap::new();
+        assert_eq!(
+            tab_chrome_label_with_icons(&ws, &terminals, 0, 80, true),
+            "\u{F6008} Fix Sentry alerts"
+        );
+
+        ws.set_custom_name("Sentry workspace".into());
+        assert_eq!(
+            tab_chrome_label_with_icons(&ws, &terminals, 0, 80, true),
+            "Fix Sentry alerts"
+        );
+        assert_eq!(
+            tab_chrome_label_with_icons(&ws, &terminals, 0, 80, false),
+            "Fix Sentry alerts"
+        );
+        ws.set_custom_name("workspace".into());
+        assert_eq!(
+            tab_chrome_label_with_icons(&ws, &terminals, 0, 10, true),
+            "\u{F6008} Fix Sen…"
+        );
     }
 
     #[test]
@@ -1845,11 +1937,11 @@ mod tests {
     #[test]
     fn tab_width_uses_display_width_for_cjk_labels() {
         let mut ws = Workspace::test_new("test");
-        ws.tabs[0].set_custom_name("提交 herdr 的反馈".into());
+        ws.tabs[0].set_custom_name("提交 notes 的反馈".into());
 
         assert_eq!(
             tab_width(&ws, &Default::default(), 0),
-            display_width_u16("提交 herdr 的反馈") + 4
+            display_width_u16("提交 notes 的反馈") + 4
         );
     }
 
@@ -1857,7 +1949,7 @@ mod tests {
     fn tab_bar_renders_trailing_cjk_character() {
         let mut app = AppState::test_new();
         let mut ws = Workspace::test_new("test");
-        ws.tabs[0].set_custom_name("提交 herdr 的反馈".into());
+        ws.tabs[0].set_custom_name("提交 notes 的反馈".into());
 
         app.active = Some(0);
         app.workspaces = vec![ws];
