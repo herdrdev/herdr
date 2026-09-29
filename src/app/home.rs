@@ -1729,6 +1729,12 @@ impl crate::app::state::AppState {
         if has_terminal_modifier {
             return;
         }
+        // This hook runs only after pane bytes are successfully sent; unlike
+        // agent-specific prompt hooks, it covers every supported agent.
+        self.update_terminal_state(pane_id, |terminal| {
+            terminal.note_user_reply();
+            None
+        });
         match key.code {
             KeyCode::Char(character) => {
                 let character = key
@@ -1761,6 +1767,10 @@ impl crate::app::state::AppState {
         if text.is_empty() {
             return;
         }
+        self.update_terminal_state(pane_id, |terminal| {
+            terminal.note_user_reply();
+            None
+        });
         if text.contains(['\r', '\n']) {
             self.pending_human_drafts.remove(&pane_id);
             return;

@@ -3293,6 +3293,7 @@ impl AppState {
             closing_block,
         } = report;
         let mut accepted = false;
+        let mut auto_settle = false;
         let updates = if crate::agent_resume::is_reserved_native_state_source(&source, &agent_label)
         {
             self.update_terminal_state(pane_id, |terminal| {
@@ -3388,12 +3389,40 @@ impl AppState {
                         state: after.state,
                         presentation: after.presentation,
                     });
+                    let has_blockers = terminal
+                        .closing_gates()
+                        .iter()
+                        .any(|item| item.requires_human_input())
+                        || terminal
+                            .closing_items()
+                            .iter()
+                            .any(|item| item.requires_human_input());
+                    auto_settle = terminal.observe_auto_settle_transition(
+                        has_blockers,
+                        after.state == AgentState::Idle
+                            && terminal.closing_task_complete()
+                            && !has_blockers,
+                        mutation.session_replaced,
+                    );
                     mutation.sidebar_projection_changed |=
                         task_changed || payload_changed || agents_changed;
                 }
                 Some(mutation)
             })
         };
+        if auto_settle {
+            if let Some(ws_idx) = self
+                .workspaces
+                .iter()
+                .position(|workspace| workspace.pane_state(pane_id).is_some())
+            {
+                self.settle_pane_at(
+                    ws_idx,
+                    pane_id,
+                    crate::app::settled::unix_seconds(std::time::SystemTime::now()),
+                );
+            }
+        }
         (updates.into_iter().collect(), accepted)
     }
 
