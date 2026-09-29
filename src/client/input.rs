@@ -852,7 +852,8 @@ mod tests {
     #[test]
     fn confirmed_disambiguation_keeps_escape_prefixed_bindings_intact() {
         // Ghostty's macOS Alt+Left/Right and Alacritty Shift+Enter bindings (#4751).
-        for binding in [b"\x1bb".as_slice(), b"\x1bf", b"\x1b\r"] {
+        // iTerm2's Natural Text Editing preset also sends ESC DEL for Option+Backspace.
+        for binding in [b"\x1bb".as_slice(), b"\x1bf", b"\x1b\r", b"\x1b\x7f"] {
             let mut framer = confirmed_disambiguation_framer();
 
             assert_eq!(framer.push(binding), vec![binding.to_vec()]);
