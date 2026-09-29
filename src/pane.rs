@@ -832,6 +832,7 @@ async fn poll_full_lifecycle_hook_retirement(
                     pane_id: ports.pane_id,
                     observed_at,
                     suppress_completion: false,
+                    answers_human_gate: false,
                 })
                 .await;
         }

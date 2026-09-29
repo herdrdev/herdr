@@ -1231,6 +1231,23 @@ impl App {
         pane_id: crate::layout::PaneId,
         observed_at: Instant,
     ) {
+        self.retire_blocked_hook_authority_for_pane_with_gate_answer(pane_id, observed_at, true);
+    }
+
+    pub(crate) fn retire_blocked_hook_authority_for_automated_input(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        observed_at: Instant,
+    ) {
+        self.retire_blocked_hook_authority_for_pane_with_gate_answer(pane_id, observed_at, false);
+    }
+
+    fn retire_blocked_hook_authority_for_pane_with_gate_answer(
+        &mut self,
+        pane_id: crate::layout::PaneId,
+        observed_at: Instant,
+        answers_human_gate: bool,
+    ) {
         self.cancel_pending_stall_nudge_for_pane(pane_id);
         self.state.note_pane_activity_at(pane_id, observed_at);
         self.record_contract_false_positive_for_pane(pane_id, observed_at);
@@ -1238,6 +1255,7 @@ impl App {
             pane_id,
             observed_at,
             suppress_completion: true,
+            answers_human_gate,
         });
     }
 

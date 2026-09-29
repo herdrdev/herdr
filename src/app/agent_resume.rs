@@ -652,7 +652,7 @@ impl App {
             return false;
         }
         runtime.send_bytes_after(Bytes::from(enter), RESUME_NUDGE_SUBMIT_DELAY);
-        self.retire_blocked_hook_authority_for_pane(nudge.pane_id, now);
+        self.retire_blocked_hook_authority_for_automated_input(nudge.pane_id, now);
         tracing::info!(
             pane = nudge.pane_id.raw(),
             terminal = %terminal_id,

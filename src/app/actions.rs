@@ -3689,13 +3689,21 @@ impl AppState {
                 pane_id,
                 observed_at,
                 suppress_completion,
+                answers_human_gate,
             } => self
                 .update_terminal_state_suppressing_completion(
                     pane_id,
                     suppress_completion,
                     |terminal| {
                         if suppress_completion {
-                            terminal.retire_blocked_full_lifecycle_hook_authority_at(observed_at)
+                            if answers_human_gate {
+                                terminal
+                                    .retire_blocked_full_lifecycle_hook_authority_at(observed_at)
+                            } else {
+                                terminal.retire_blocked_hook_authority_for_automated_input_at(
+                                    observed_at,
+                                )
+                            }
                         } else {
                             terminal.retire_output_inconsistent_hook_authority_at(observed_at)
                         }

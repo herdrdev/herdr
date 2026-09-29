@@ -5311,16 +5311,10 @@ impl App {
             );
             self.start_home_ref_refresh_if_requested();
             self.start_home_github_refresh_if_requested();
-            if let Some(pane_id) = self.state.take_forwarded_pane_input() {
-                // Wheel and motion reports are not deliberate answers to a blocker.
-                if matches!(
-                    mouse.kind,
-                    MouseEventKind::Down(_) | MouseEventKind::Drag(_) | MouseEventKind::Up(_)
-                ) && !self.state.pane_is_settled_anywhere(pane_id)
-                {
-                    self.retire_blocked_hook_authority_for_pane(pane_id, std::time::Instant::now());
-                }
-            }
+            // Mouse reports can be forwarded to the terminal, but they do not
+            // answer a blocked closing gate. Only explicit human text/key input
+            // retires its authority.
+            let _ = self.state.take_forwarded_pane_input();
             if let Some(action) = action {
                 match action {
                     MouseAction::SidebarObjectMenu { index } => {
@@ -10078,7 +10072,7 @@ navigate_workspace_down = "ctrl+j"
     }
 
     #[tokio::test]
-    async fn local_forwarded_mouse_motion_keeps_hold_and_button_press_releases_it() {
+    async fn local_forwarded_mouse_motion_and_button_press_keep_hold_until_key_input() {
         let (mut app, terminal_id, mut rx) =
             terminal_app_with_mouse_reporting_blocked_hook(b"\x1b[?1003h\x1b[?1006h");
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 106, 26));
@@ -10094,6 +10088,12 @@ navigate_workspace_down = "ctrl+j"
         app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), column, row));
 
         assert!(rx.try_recv().is_ok(), "button press reaches the pane");
+        assert_blocked_hook_held(&app, &terminal_id);
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('x'), KeyModifiers::empty()))
+            .await;
+
+        assert!(rx.try_recv().is_ok(), "key press reaches the pane");
         assert_blocked_hook_retired(&app, &terminal_id);
     }
 

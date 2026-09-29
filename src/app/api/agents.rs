@@ -1214,14 +1214,15 @@ mod tests {
         });
 
         let terminal = &app.state.terminals[&terminal_id];
-        assert_eq!(terminal.raw_agent_state(), AgentState::Working);
         assert_eq!(
-            terminal.hook_authority.as_ref().unwrap().retired_at,
-            Some(turn_started_at)
+            terminal.raw_agent_state(),
+            AgentState::Blocked,
+            "a visible Working signal cannot answer a gate without pane input"
         );
+        assert_eq!(terminal.hook_authority.as_ref().unwrap().retired_at, None);
         assert_eq!(
             terminal.agent_status_watchdog_deadline(app.state.agent_stale_after),
-            turn_started_at.checked_add(crate::terminal::state::AGENT_BUSY_STALE_SILENCE)
+            None
         );
     }
 

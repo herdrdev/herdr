@@ -747,7 +747,7 @@ impl App {
             );
             return false;
         }
-        self.retire_blocked_hook_authority_for_pane(target.pane_id, now);
+        self.retire_blocked_hook_authority_for_automated_input(target.pane_id, now);
         self.pending_stall_nudge_submissions.insert(
             target.terminal_id.clone(),
             PendingStallNudgeSubmission {
