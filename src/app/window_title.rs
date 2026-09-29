@@ -14,14 +14,15 @@ use crate::config::{WindowTitlePart, WindowTitleTemplate, WindowTitleToken};
 
 impl App {
     pub(crate) fn configure_window_title(&mut self, template: &str) {
+        let chrome_host_label = self.state.chrome_host_label.clone();
         self.window_title_template =
             WindowTitleTemplate::parse(template)
                 .ok()
                 .flatten()
                 .map(|template| {
-                    // Resolve the hostname once here rather than per render.
+                    // Reuse the config-load-time host label; rendering stays pure.
                     let hostname = if template.uses(WindowTitleToken::Hostname) {
-                        crate::platform::hostname().unwrap_or_default()
+                        chrome_host_label
                     } else {
                         String::new()
                     };
@@ -125,6 +126,15 @@ mod tests {
 
         app.state.workspaces[0].tabs[0].custom_name = Some("build".into());
         assert_eq!(app.window_title().as_deref(), Some("herd/build"));
+    }
+
+    #[test]
+    fn hostname_token_uses_the_cached_chrome_label() {
+        let mut app = test_app();
+        app.state.chrome_host_label = "UB1".into();
+        app.configure_window_title("{hostname}");
+
+        assert_eq!(app.window_title().as_deref(), Some("UB1"));
     }
 
     #[test]

@@ -50,6 +50,7 @@ impl App {
         self.tab_bar_status_generation = self.tab_bar_status_generation.wrapping_add(1);
         self.tab_bar_datetimes.clear();
         self.tab_bar_commands.clear();
+        self.tab_bar_hostname_segment = None;
         self.state.tab_bar_right.clear();
         self.state.tab_bar_right_separator = sanitize_separator(separator);
 
@@ -63,10 +64,11 @@ impl App {
                     self.state.tab_bar_right.push(TabBarStatusSegment::Zoom);
                 }
                 TabBarRightEntryConfig::Hostname => {
+                    self.tab_bar_hostname_segment = Some(self.state.tab_bar_right.len());
                     self.state
                         .tab_bar_right
                         .push(TabBarStatusSegment::Text(sanitize_status_text(
-                            crate::platform::hostname().as_deref().unwrap_or_default(),
+                            &self.state.chrome_host_label,
                         )));
                 }
                 TabBarRightEntryConfig::Datetime { format } => {
@@ -238,7 +240,7 @@ fn sanitize_literal_text(value: &str) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn sanitize_status_text(value: &str) -> Option<String> {
+pub(super) fn sanitize_status_text(value: &str) -> Option<String> {
     let value: String = value
         .trim()
         .chars()
@@ -576,6 +578,18 @@ mod tests {
                 result: Ok(Some(ref output)),
             } if output == "final"
         ));
+    }
+
+    #[test]
+    fn hostname_entry_uses_the_cached_chrome_label() {
+        let mut app = test_app();
+        app.state.chrome_host_label = "UB1".into();
+        app.configure_tab_bar_status(&[TabBarRightEntryConfig::Hostname], " ");
+
+        assert_eq!(
+            app.state.tab_bar_right,
+            vec![TabBarStatusSegment::Text(Some("UB1".into()))]
+        );
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

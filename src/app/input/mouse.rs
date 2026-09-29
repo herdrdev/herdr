@@ -4246,6 +4246,9 @@ mod tests {
     #[test]
     fn clicking_a_status_row_work_link_opens_it_in_the_dock() {
         let mut app = app_for_mouse_test();
+        // Keep the chrome segment deterministic and leave room for the
+        // clickable pull-request link in this narrow status row.
+        app.state.chrome_host_label = "UB1".into();
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.selected = 0;

@@ -4326,6 +4326,8 @@ pub struct AppState {
     pub(crate) local_group_snapshot: Option<crate::groups::GroupAuthoritySnapshot>,
     /// This server's configured component in cross-host agent references.
     pub(crate) agent_host_name: String,
+    /// Uppercase local host label cached for TUI chrome presentation.
+    pub(crate) chrome_host_label: String,
     /// Server-owned day items. Columns and stale flags are derived from this
     /// durable membership plus current pane facts and are never stored here.
     pub(crate) day_board: crate::day::DayBoard,
@@ -7590,6 +7592,7 @@ impl AppState {
             fleet_snapshot: crate::fleet::Snapshot::default(),
             local_group_snapshot: None,
             agent_host_name: "localhost".to_string(),
+            chrome_host_label: "TESTHOST".to_string(),
             day_board: crate::day::DayBoard::default(),
             day_stale_after: Duration::from_secs(600),
             board_view: None,

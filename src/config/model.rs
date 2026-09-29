@@ -2015,6 +2015,35 @@ impl Default for FleetConfig {
 }
 
 impl FleetConfig {
+    pub(crate) fn chrome_host_label_for_resolved_name(&self, resolved: &str) -> String {
+        let is_configured = self.configured_self_name().is_some();
+        let name = if is_configured {
+            resolved.to_string()
+        } else {
+            resolved.split('.').next().unwrap_or_default().to_string()
+        };
+        name.to_uppercase()
+    }
+
+    fn configured_self_name(&self) -> Option<String> {
+        self.self_name
+            .clone()
+            .filter(|name| !name.trim().is_empty() && !name.contains("::"))
+            .or_else(|| {
+                self.hosts
+                    .iter()
+                    .find(|host| host.local)
+                    .map(|host| host.name.clone())
+                    .filter(|name| !name.trim().is_empty() && !name.contains("::"))
+            })
+    }
+
+    #[cfg(test)]
+    fn resolved_chrome_host_label_with_hostname(&self, hostname: Option<String>) -> String {
+        let resolved = self.resolved_self_name_with_hostname(hostname);
+        self.chrome_host_label_for_resolved_name(&resolved)
+    }
+
     pub(crate) fn resolved_self_name(&self) -> String {
         self.resolved_self_name_with_hostname(crate::platform::hostname())
     }
@@ -2031,16 +2060,7 @@ impl FleetConfig {
     }
 
     pub(crate) fn resolved_self_name_with_hostname(&self, hostname: Option<String>) -> String {
-        self.self_name
-            .clone()
-            .filter(|name| !name.trim().is_empty() && !name.contains("::"))
-            .or_else(|| {
-                self.hosts
-                    .iter()
-                    .find(|host| host.local)
-                    .map(|host| host.name.clone())
-                    .filter(|name| !name.trim().is_empty() && !name.contains("::"))
-            })
+        self.configured_self_name()
             .or(hostname)
             .filter(|name| !name.trim().is_empty() && !name.contains("::"))
             .unwrap_or_else(|| "localhost".to_string())
@@ -2755,6 +2775,29 @@ icon = "◆"
         assert_eq!(
             without_local.resolved_self_name_with_hostname(Some("workstation".into())),
             "workstation"
+        );
+    }
+
+    #[test]
+    fn chrome_host_label_uses_local_fleet_name_and_short_hostname_fallback() {
+        let fleet = FleetConfig {
+            hosts: vec![FleetHostConfig {
+                name: "ub1".into(),
+                target: "ub1".into(),
+                local: true,
+                ..FleetHostConfig::default()
+            }],
+            ..FleetConfig::default()
+        };
+        assert_eq!(
+            fleet.resolved_chrome_host_label_with_hostname(Some("ubuntu-direct".into())),
+            "UB1"
+        );
+
+        assert_eq!(
+            FleetConfig::default()
+                .resolved_chrome_host_label_with_hostname(Some("Darwins-MacBook-Pro.local".into())),
+            "DARWINS-MACBOOK-PRO"
         );
     }
 

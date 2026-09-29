@@ -388,6 +388,7 @@ pub struct App {
     pub(crate) detached_custom_command_children: Vec<std::process::Child>,
     pub(crate) detached_process_children: Vec<std::process::Child>,
     tab_bar_status_generation: u64,
+    tab_bar_hostname_segment: Option<usize>,
     tab_bar_datetimes: Vec<tab_bar_status::TabBarDatetimeRuntime>,
     tab_bar_commands: Vec<tab_bar_status::TabBarCommandRuntime>,
     next_tab_bar_datetime_refresh: Option<Instant>,
@@ -839,6 +840,10 @@ impl App {
 
         let agent_panel_sort = agent_panel_sort_from_config(config.ui.agent_panel_sort);
         let agent_host_name = config.remote.fleet.resolved_self_name();
+        let chrome_host_label = config
+            .remote
+            .fleet
+            .chrome_host_label_for_resolved_name(&agent_host_name);
         let local_agent_panel_identities =
             crate::ui::local_agent_panel_identities(&workspaces, &agent_host_name);
         let dock_default_surfaces = dock_surfaces_from_config(&config.panel);
@@ -970,6 +975,7 @@ impl App {
             fleet_snapshot: crate::fleet::Snapshot::unpolled(&config.remote.fleet.hosts),
             local_group_snapshot: None,
             agent_host_name,
+            chrome_host_label,
             day_board: if cfg!(test) {
                 crate::day::DayBoard::default()
             } else {
@@ -1727,6 +1733,7 @@ impl App {
             detached_custom_command_children: Vec::new(),
             detached_process_children: Vec::new(),
             tab_bar_status_generation: 0,
+            tab_bar_hostname_segment: None,
             tab_bar_datetimes: Vec::new(),
             tab_bar_commands: Vec::new(),
             next_tab_bar_datetime_refresh: None,
@@ -2771,6 +2778,24 @@ impl App {
                 );
             }
             let agent_host_name = config.remote.fleet.resolved_self_name();
+            self.state.chrome_host_label = config
+                .remote
+                .fleet
+                .chrome_host_label_for_resolved_name(&agent_host_name);
+            let tab_bar_host_label =
+                crate::app::tab_bar_status::sanitize_status_text(&self.state.chrome_host_label);
+            if let Some(index) = self.tab_bar_hostname_segment {
+                if let Some(state::TabBarStatusSegment::Text(value)) =
+                    self.state.tab_bar_right.get_mut(index)
+                {
+                    *value = tab_bar_host_label;
+                }
+            }
+            if let Some((template, hostname)) = self.window_title_template.as_mut() {
+                if template.uses(crate::config::WindowTitleToken::Hostname) {
+                    hostname.clone_from(&self.state.chrome_host_label);
+                }
+            }
             if self.state.agent_host_name != agent_host_name {
                 self.state.agent_host_name = agent_host_name;
                 self.refresh_remote_agent_panel_entries();

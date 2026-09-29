@@ -3229,8 +3229,8 @@ mod tests {
         );
         // AC4: fixture metrics provide deterministic segment-parity evidence.
         assert!(
-            row0.contains("testhost"),
-            "status bar missing hostname: {row0:?}"
+            row0.contains("TESTHOST"),
+            "status bar missing host label: {row0:?}"
         );
         // The branch is gone from the row by design; the device and the
         // resource columns are what the contract now guarantees.
