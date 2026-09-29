@@ -321,10 +321,12 @@ fn render_subscription_usage(
             label,
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )];
-        if label == "Claude Code" {
+        let claude_has_details = usage.cost_usd.is_some() || usage.remaining_minutes.is_some();
+        // Compact rows spend no width on an all-placeholder detail line.
+        if label == "Claude Code" && (claude_has_details || !compact) {
             header.push(Span::raw("  "));
             header.push(Span::styled(claude_details_text(usage), style));
-        } else if let Some(balance) = usage.credits {
+        } else if let (false, Some(balance)) = (label == "Claude Code", usage.credits) {
             let label_width = super::text::display_width(label);
             let available = usize::from(provider_area.width).saturating_sub(label_width + 2);
             header.push(Span::raw("  "));
@@ -339,7 +341,10 @@ fn render_subscription_usage(
             ),
         ];
         let lines = if compact {
-            let mut line = vec![header.swap_remove(0), Span::raw("  ")];
+            // Details (cost, remaining time, credits) come right after the
+            // label so the windows are what the row edge clips first.
+            let mut line = header;
+            line.push(Span::raw("  "));
             line.extend(windows);
             vec![Line::from(line)]
         } else {
@@ -1115,6 +1120,26 @@ mod tests {
             .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn compact_provider_rows_keep_claude_cost_and_credit_balance_at_80x24() {
+        let provider_usage = ProviderUsageSnapshot::with_primary_accounts(
+            AccountUsage {
+                cost_usd: Some(56.68),
+                remaining_minutes: Some(66),
+                ..AccountUsage::default()
+            },
+            AccountUsage {
+                credits: Some(1_927.95),
+                ..AccountUsage::default()
+            },
+            AccountUsage::default(),
+        );
+        let text = render_snapshot_with_provider_usage_at(80, 24, fixture(), provider_usage);
+        for expected in ["cost: $56.68 · 66m left", "credits: 1927.95"] {
+            assert!(text.contains(expected), "missing {expected:?}\n{text}");
+        }
     }
 
     #[test]
