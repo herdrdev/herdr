@@ -369,7 +369,11 @@ fn sidebar_machine_host<'a>(app: &'a AppState, entry: &'a AgentPanelEntry) -> &'
 
 /// Machine column label: the host's first three characters, lowercased and
 /// padded, so `ub1`, `ub2`, `mbpro` and `mbair` read as `ub1`, `ub2`, `mbp`, `mba`.
-fn sidebar_machine_icon(_app: &AppState, host: &str) -> String {
+/// The local machine renders blank: only other hosts need naming.
+fn sidebar_machine_icon(app: &AppState, host: &str) -> String {
+    if host == app.agent_host_name {
+        return " ".repeat(SIDEBAR_MACHINE_LABEL_WIDTH);
+    }
     let label: String = host
         .to_lowercase()
         .chars()
@@ -8802,7 +8806,9 @@ pub(crate) fn compute_sidebar_hover_targets(
                     row_y,
                     machine_icon_cell_offset(usize::from(body.width), age_width),
                     SIDEBAR_MACHINE_LABEL_WIDTH,
-                ) {
+                )
+                .filter(|_| host != app.agent_host_name.as_str())
+                {
                     targets.push(crate::app::state::SidebarHoverTarget {
                         rect,
                         label: host.clone(),
@@ -8849,7 +8855,9 @@ pub(crate) fn compute_sidebar_hover_targets(
                     row_y,
                     machine_icon_cell_offset(usize::from(body.width), widths.age),
                     SIDEBAR_MACHINE_LABEL_WIDTH,
-                ) {
+                )
+                .filter(|_| sidebar_machine_host(app, entry) != app.agent_host_name.as_str())
+                {
                     targets.push(crate::app::state::SidebarHoverTarget {
                         rect,
                         label: sidebar_machine_host(app, entry).to_string(),
@@ -8983,7 +8991,9 @@ pub(crate) fn compute_sidebar_hover_targets(
                     row_y,
                     machine_icon_cell_offset(row_width, widths.age),
                     SIDEBAR_MACHINE_LABEL_WIDTH,
-                ) {
+                )
+                .filter(|_| entry.agent_ref.host != app.agent_host_name.as_str())
+                {
                     targets.push(crate::app::state::SidebarHoverTarget {
                         rect,
                         label: entry.agent_ref.host.clone(),
@@ -11082,12 +11092,13 @@ struct NestedHeaderSpans {
 const SIDEBAR_SORT_GLYPH: &str = "⇅";
 
 fn nested_header_count_label(header: &NestedHeaderArea) -> Option<String> {
-    if header.dim {
+    // An expanded group lists its rows, so only a collapsed one needs the count.
+    if header.dim || !header.collapsed {
         None
-    } else if let Some((working, total)) = header.activity_count {
-        Some(format!(" ({working} of {total})"))
+    } else if let Some((_, total)) = header.activity_count {
+        Some(format!(" {total}"))
     } else {
-        Some(format!(" ({})", header.count))
+        Some(format!(" {}", header.count))
     }
 }
 
@@ -11341,25 +11352,13 @@ fn render_workspace_list(
         });
         let space_icon_width = space_icon.map_or(0, |icon| display_width(icon) + 1);
 
-        let (agent_count, window_count) = match header {
-            Some((_, _, _, _, Some(counts), ..)) => *counts,
-            _ => {
-                let windows = member_indices
-                    .iter()
-                    .filter_map(|member| app.workspaces.get(*member))
-                    .map(|workspace| workspace.tabs.len())
-                    .sum();
-                let agents = sidebar_thread_entries_from(app, terminal_runtimes)
-                    .into_iter()
-                    .filter(|entry| {
-                        entry.has_agent
-                            && entry
-                                .local_target()
-                                .is_some_and(|target| member_indices.contains(&target.ws_idx))
-                    })
-                    .count();
-                (agents, windows)
-            }
+        let window_count = match header {
+            Some((_, _, _, _, Some((_, windows)), ..)) => *windows,
+            _ => member_indices
+                .iter()
+                .filter_map(|member| app.workspaces.get(*member))
+                .map(|workspace| workspace.tabs.len())
+                .sum(),
         };
         let repo_header = card.repo_header;
         let expanded =
@@ -11373,13 +11372,16 @@ fn render_workspace_list(
             state_counts
         };
         let activity_count = header.and_then(|(_, _, count, ..)| *count);
-        let count_label = if let Some((working, total)) = activity_count {
-            format!(" ({working} of {total})")
+        // An expanded group lists its rows, so only a collapsed one needs the count.
+        let count_label = if expanded {
+            String::new()
+        } else if let Some((_, total)) = activity_count {
+            format!(" {total}")
         } else if state_counts.is_empty() {
             match header {
-                Some((_, _, _, _, Some((agents, windows)), ..)) => format!(" ({agents}/{windows})"),
-                Some((_, Some(count), ..)) => format!(" ({count})"),
-                _ => format!(" ({agent_count}/{window_count})"),
+                Some((_, _, _, _, Some((_, windows)), ..)) => format!(" {windows}"),
+                Some((_, Some(count), ..)) => format!(" {count}"),
+                _ => format!(" {window_count}"),
             }
         } else {
             String::new()
@@ -11417,23 +11419,10 @@ fn render_workspace_list(
             spans.push(Span::raw(" "));
         }
         spans.push(Span::styled(title, name_style));
-        if let Some((working, total)) = activity_count {
-            spans.extend([
-                Span::styled(
-                    format!(" ({working}"),
-                    Style::default().fg(p.blue).add_modifier(Modifier::DIM),
-                ),
-                Span::styled(
-                    format!(" of {total})"),
-                    Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
-                ),
-            ]);
-        } else {
-            spans.push(Span::styled(
-                count_label,
-                Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
-            ));
-        }
+        spans.push(Span::styled(
+            count_label,
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+        ));
         for count in visible_state_counts {
             spans.push(Span::raw(" "));
             spans.push(Span::styled(
@@ -15812,13 +15801,17 @@ pub(crate) mod tests {
                     assert!(dot_x < title_x, "{rendered:?}");
                     assert_eq!(buffer[(dot_x, 0)].style().fg, Some(expected_dot));
                     assert_eq!(buffer[(title_x, 0)].style().fg, Some(expected_title));
-                    let machine = if is_remote { "u" } else { "l" };
-                    let machine_x = find_symbol_x(buffer, 0, width, machine);
+                    assert!(!rendered.contains("· ub2"), "{rendered:?}");
+                    if !is_remote {
+                        // The local machine label is blank.
+                        assert!(!rendered.contains("loc"), "{rendered:?}");
+                        continue;
+                    }
+                    let machine_x = find_symbol_x(buffer, 0, width, "u");
                     assert_eq!(
                         buffer[(machine_x, 0)].style().fg,
                         Some(expected_remote_suffix)
                     );
-                    assert!(!rendered.contains("· ub2"), "{rendered:?}");
                     if width == 60 {
                         let provider_x = find_symbol_x(buffer, 0, width, "c");
                         assert_eq!(buffer[(provider_x, 0)].style().fg, Some(expected_provider));
@@ -20836,7 +20829,10 @@ rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspa
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let rendered = row_text(terminal.backend().buffer(), row, 25);
-        assert!(rendered.contains("one (0/1)"), "{rendered:?}");
+        assert!(
+            rendered.trim_end().ends_with("one                ⇅"),
+            "{rendered:?}"
+        );
         assert!(!rendered.contains("HI"), "{rendered:?}");
     }
 
@@ -21234,14 +21230,16 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             wide_with_machine.contains("sample-pr-title-uses-wid"),
             "{wide_with_machine:?}"
         );
+        // The local machine leaves its label cell blank.
+        let machine_cell = machine_icon_cell_offset(46, 5);
         assert!(
-            wide_with_machine.contains("pi loc"),
+            wide_with_machine.contains("pi ")
+                && wide_with_machine
+                    .chars()
+                    .skip(machine_cell)
+                    .take(SIDEBAR_MACHINE_LABEL_WIDTH)
+                    .all(|c| c == ' '),
             "{wide_with_machine:?}"
-        );
-        let (before_machine, _) = wide_with_machine.split_once("loc").expect("machine label");
-        assert_eq!(
-            display_width(before_machine),
-            machine_icon_cell_offset(46, 5)
         );
         assert!(wide_with_machine.ends_with("2m"), "{wide_with_machine:?}");
         assert!(
@@ -21264,13 +21262,13 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         );
         for row in [&github_depth, &repo_branch_depth] {
             assert!(row.contains("●  sa"), "{row:?}");
-            assert!(row.ends_with("pi loc   2m"), "{row:?}");
+            assert!(row.ends_with("pi       2m"), "{row:?}");
         }
         let mut ticket_entry = entry.clone();
         ticket_entry.primary_tab_label = Some("SCA-3165 · sample-linear".into());
         let nested_ticket = render_at_row_width(&ticket_entry, 27, 2);
         assert!(nested_ticket.contains("●  sam"), "{nested_ticket:?}");
-        assert!(nested_ticket.ends_with("pi loc   2m"), "{nested_ticket:?}");
+        assert!(nested_ticket.ends_with("pi       2m"), "{nested_ticket:?}");
 
         let wide = render_first_tab_row(&app, 80);
         assert!(wide.contains("sample-pr"), "{wide:?}");
@@ -25517,7 +25515,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                     .map(|(title, _)| title.trim())
                     .expect("title before Codex provider");
                 assert!(display_width(title) >= 3, "{child_text:?}");
-                assert!(child_text.contains('1'), "{child_text:?}");
+                assert!(!child_text.contains("ub1"), "{child_text:?}");
             } else {
                 assert!(
                     first_non_space(header.rect.y, header.rect.width)
@@ -25797,7 +25795,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             "agent disclosure hitbox follows the rendered repo-header chevron"
         );
         let grouped = row_text(buffer, cards[0].rect.y, cards[0].rect.width);
-        assert!(grouped.contains("main (0/3)"), "{grouped:?}");
+        assert!(grouped.contains("main 3"), "{grouped:?}");
         assert!(!grouped.contains("issue"), "{grouped:?}");
         assert!(!grouped.contains("review"), "{grouped:?}");
     }
@@ -26005,7 +26003,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             rendered.contains("Use Repository Instructions"),
             "{rendered:?}"
         );
-        assert!(rendered.contains("pi loc"), "{rendered:?}");
+        assert!(!rendered.contains("loc"), "{rendered:?}");
         assert!(!rendered.contains(">_"), "{rendered:?}");
 
         app.nerd_font = true;
@@ -26019,7 +26017,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             icon_rendered.contains("Use Repository Instructions"),
             "{icon_rendered:?}"
         );
-        assert!(icon_rendered.contains(" loc"), "{icon_rendered:?}");
+        assert!(!icon_rendered.contains("loc"), "{icon_rendered:?}");
         assert!(!icon_rendered.contains("\u{f0379}"), "{icon_rendered:?}");
         assert!(!icon_rendered.contains("\u{ea85}"), "{icon_rendered:?}");
     }
@@ -29433,8 +29431,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         );
         let subgroup_row = lines
             .iter()
-            .position(|line| line.contains("api (2)"))
-            .expect("subgroup header with its count");
+            .position(|line| line.contains("api") && !line.contains("api 2"))
+            .expect("expanded subgroup header without a count");
         assert!(
             lines[subgroup_row].contains(SIDEBAR_SORT_GLYPH),
             "the subgroup header has its own sort glyph:\n{text}"
@@ -29996,7 +29994,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .filter(|line| !line.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(snapshot.contains("1 of 3"), "{snapshot}");
+        assert!(!snapshot.contains("(1/3)"), "{snapshot}");
         assert!(
             snapshot.find("Working").unwrap_or(usize::MAX) < snapshot.find("Snoozed").unwrap_or(0),
             "{snapshot}"
@@ -30344,7 +30342,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .map(|y| row_text(rendered.backend().buffer(), y, area.width))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(snapshot.contains("1 of 2"), "{snapshot}");
+        assert!(!snapshot.contains("(1/2)"), "{snapshot}");
         assert!(snapshot.contains("↳ Approve remote work"), "{snapshot}");
         let blocked = rows
             .iter()
@@ -30886,10 +30884,13 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .get_mut(&terminal_id)
             .expect("terminal")
             .set_raw_agent_state_for_test(AgentState::Blocked);
-        let entry = sidebar_thread_entries(&app)
+        let mut entry = sidebar_thread_entries(&app)
             .into_iter()
             .next()
             .expect("tab");
+        // The local machine renders blank, so align against a named host.
+        app.agent_host_name = "self".into();
+        entry.remote_host = Some("ub1".into());
 
         for layout in [
             crate::app::state::ViewLayout::Desktop,
@@ -30944,7 +30945,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn machine_icon_uses_existing_sidebar_hover_target() {
+    fn local_machine_icon_has_no_hover_target() {
         let mut app = app_with_agents(&["working"]);
         make_agents_blocked(&mut app);
         app.agent_host_name = "ub1".into();
@@ -30952,23 +30953,12 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         app.nerd_font = false;
         let area = Rect::new(0, 0, 60, 30);
         let targets = compute_sidebar_hover_targets(&app, area);
-        let machine = targets
-            .iter()
-            .find(|target| target.label == "ub1")
-            .expect("machine tooltip");
-        let list = workspace_list_rect_for_app(&app, area);
-        let metrics = workspace_list_scroll_metrics(&app, list);
-        let body = workspace_list_body_rect(&app, list, should_show_scrollbar(metrics));
-        assert_eq!(
-            machine.rect.x,
-            body.right() - SIDEBAR_MACHINE_LABEL_WIDTH as u16 - SIDEBAR_AGE_FIELD_WIDTH as u16
-        );
-        assert_eq!(machine.rect.width, SIDEBAR_MACHINE_LABEL_WIDTH as u16);
-        assert!(machine.action.is_none());
+        // The local machine renders blank, so it carries no tooltip.
+        assert!(!targets.iter().any(|target| target.label == "ub1"));
     }
 
     #[test]
-    fn local_machine_identity_uses_resolved_self_name() {
+    fn local_machine_label_is_blank() {
         let mut app = app_with_agents(&["working"]);
         app.agent_host_name = "ub2".into();
         app.machines = vec![crate::app::machines::Machine {
@@ -30986,7 +30976,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .draw(|frame| render_compact_agent_row(&app, frame, &entry, area, 0, true, None))
             .unwrap();
         let rendered = row_text(terminal.backend().buffer(), 0, area.width);
-        assert!(rendered.contains("ub2"), "{rendered:?}");
+        assert!(!rendered.contains("ub2"), "{rendered:?}");
     }
 
     #[test]
