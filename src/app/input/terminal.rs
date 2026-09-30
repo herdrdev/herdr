@@ -253,6 +253,9 @@ impl App {
         };
 
         let settled_resumable = self.state.pane_is_settled(ws_idx, pane_id)
+            && self.state.workspaces[ws_idx]
+                .pane_state(pane_id)
+                .is_some_and(|pane| pane.settled_locked)
             && self
                 .state
                 .terminals
@@ -265,6 +268,12 @@ impl App {
                 .as_ref()
                 .is_some_and(|view| view.pane_id == pane_id)
             && self.handle_settled_view_key(&key_event)
+        {
+            return None;
+        }
+        if self.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .is_some_and(|pane| pane.settled_locked)
         {
             return None;
         }
@@ -743,6 +752,11 @@ mod tests {
             .get_mut(&pane_id)
             .unwrap()
             .settled_at = Some(10);
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .settled_locked = true;
         app.state
             .terminals
             .get_mut(&terminal_id)
@@ -2381,7 +2395,11 @@ mod tests {
         app.state.selected = 0;
         app.state.set_server_mode(Mode::Terminal);
         app.state.view.pane_infos = pane_infos;
-        assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_000));
+        assert!(app.state.settle_pane_at(
+            0,
+            pane_id,
+            crate::app::settled::unix_seconds(std::time::SystemTime::now())
+        ));
         assert!(crate::ui::sidebar_rows(&app.state).into_iter().any(|row| {
             matches!(
                 row,

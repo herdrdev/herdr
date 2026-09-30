@@ -1060,6 +1060,12 @@ impl App {
             settle_done_after: std::time::Duration::from_secs(
                 config.session.settle_done_after_minutes.saturating_mul(60),
             ),
+            settled_read_only_after: std::time::Duration::from_secs(
+                config
+                    .session
+                    .settled_read_only_after_minutes
+                    .saturating_mul(60),
+            ),
             terminals: std::collections::HashMap::new(),
             agent_states: crate::agent_state::AgentStateStore::default(),
             direct_attach_resize_locks: std::collections::HashSet::new(),
@@ -2721,6 +2727,12 @@ impl App {
                 config.session.settle_done_after_minutes.saturating_mul(60),
             );
             self.state.settle_stops_agent = config.session.settle_stops_agent;
+            self.state.settled_read_only_after = std::time::Duration::from_secs(
+                config
+                    .session
+                    .settled_read_only_after_minutes
+                    .saturating_mul(60),
+            );
             self.state.nudge_resumed_agents = config.session.nudge_resumed_agents;
             self.state
                 .resume_nudge_message
@@ -6575,6 +6587,27 @@ mod tests {
             app.state.sidebar_collapsed_mode,
             crate::config::SidebarCollapsedModeConfig::Hidden
         );
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_config_updates_settled_read_only_grace() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = temp_config_path("reload-settled-read-only-grace");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut app = test_app();
+        assert_eq!(
+            app.state.settled_read_only_after,
+            std::time::Duration::from_secs(900)
+        );
+
+        std::fs::write(&path, "[session]\nsettled_read_only_after_minutes = 0\n").unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
+        assert_eq!(app.state.settled_read_only_after, std::time::Duration::ZERO);
 
         env.remove(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());

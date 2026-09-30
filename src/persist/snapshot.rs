@@ -169,6 +169,8 @@ pub struct PaneSnapshot {
     pub quiet_since_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub settled_locked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snoozed_until: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -663,6 +665,7 @@ fn capture_tab(
                         .quiet_unix_timestamp_at(captured_at, captured_at_unix)
                 }),
                 settled_at: pane.and_then(|pane| pane.settled_at),
+                settled_locked: pane.is_some_and(|pane| pane.settled_locked),
                 snoozed_until: pane.and_then(crate::pane::PaneState::snoozed_until),
                 settled_work_key: pane.and_then(|pane| pane.settled_work_key.clone()),
                 settled_auto_label: terminal
@@ -1909,6 +1912,7 @@ mod tests {
         }))
         .expect("older pane snapshot still loads");
         assert_eq!(legacy.snoozed_until, None);
+        assert!(!legacy.settled_locked);
         let mut panes = HashMap::new();
         panes.insert(
             0,
@@ -1919,6 +1923,7 @@ mod tests {
                 detection_output_at: None,
                 quiet_since_at: None,
                 settled_at: Some(1_725_000_000),
+                settled_locked: true,
                 snoozed_until: None,
                 settled_work_key: Some("pr:https://github.com/owner/repo/pull/7:merged".into()),
                 settled_auto_label: Some("#7 Fix restore".into()),
@@ -1942,6 +1947,7 @@ mod tests {
                 detection_output_at: None,
                 quiet_since_at: None,
                 settled_at: None,
+                settled_locked: false,
                 snoozed_until: Some(1_725_000_360),
                 settled_work_key: None,
                 settled_auto_label: None,
@@ -2018,6 +2024,7 @@ mod tests {
             restored.workspaces[0].tabs[0].panes[&0].settled_at,
             Some(1_725_000_000)
         );
+        assert!(restored.workspaces[0].tabs[0].panes[&0].settled_locked);
         assert_eq!(
             restored.workspaces[0].tabs[0].panes[&1].snoozed_until,
             Some(1_725_000_360)
@@ -2887,6 +2894,7 @@ mod tests {
                 detection_output_at: None,
                 quiet_since_at: None,
                 settled_at: None,
+                settled_locked: false,
                 snoozed_until: None,
                 settled_work_key: None,
                 settled_auto_label: None,
@@ -2912,6 +2920,7 @@ mod tests {
                 detection_output_at: None,
                 quiet_since_at: None,
                 settled_at: None,
+                settled_locked: false,
                 snoozed_until: None,
                 settled_work_key: None,
                 settled_auto_label: None,

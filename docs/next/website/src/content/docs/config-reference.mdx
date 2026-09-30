@@ -38,7 +38,10 @@ another machine. When unset, Symphony keeps polling localhost.
 
 <ConfigReference />
 
-By default, `session.settle_stops_agent` stops an agent only when Herdr has a
-supported native resume plan. The Settled pane keeps its terminal contents, and
-unsettling it resumes the stored agent session. Set the option to `false` to
-keep settled agents running.
+Settled panes stay live and editable for `session.settled_read_only_after_minutes`
+(15 minutes by default), then become read-only transcripts. Set it to `0` to
+lock panes immediately. By default, `session.settle_stops_agent` stops an agent
+only when Herdr has a supported native resume plan. Unsettling a pane during its
+grace period continues the live session; after it locks, Enter resumes the stored
+agent session. Set `session.settle_stops_agent` to `false` to keep settled agents
+running after the grace period too.

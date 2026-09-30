@@ -66,6 +66,8 @@ pub struct PaneState {
     pub done_since: Option<std::time::Instant>,
     /// Unix timestamp recorded when this pane left the active work set.
     pub settled_at: Option<u64>,
+    /// Set once the settled pane's editable grace period has expired.
+    pub(crate) settled_locked: bool,
     /// Completed work trigger already consumed by this pane's latest resume.
     pub(crate) settled_work_key: Option<String>,
     /// When the linked work first read as finished for a trigger that has not
@@ -89,6 +91,7 @@ impl PaneState {
             right_click_passthrough: false,
             done_since: None,
             settled_at: None,
+            settled_locked: false,
             settled_work_key: None,
             finished_since: None,
             stall_nudges_without_human: 0,

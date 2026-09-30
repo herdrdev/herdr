@@ -3907,14 +3907,19 @@ impl AppState {
             projected_state_changed && matches!(state, AgentState::Working | AgentState::Blocked);
         let unsettled =
             entered_active_state && !pane.settle_resume_guard && pane.settled_at.take().is_some();
+        if unsettled {
+            pane.settled_locked = false;
+        }
 
         if unsettled {
+            pane.settled_locked = false;
             let workspace_id = self.workspaces[ws_idx].id.clone();
             self.pending_pane_settlement_changes
                 .push(crate::app::state::PaneSettlementChange {
                     workspace_id,
                     pane_id,
                     settled_at: None,
+                    lock_only: false,
                 });
             self.mark_session_dirty();
         }
@@ -4350,6 +4355,7 @@ impl AppState {
                     workspace_id,
                     pane_id,
                     settled_at: None,
+                    lock_only: false,
                 });
             self.mark_session_dirty();
             self.mark_sidebar_projection_changed();

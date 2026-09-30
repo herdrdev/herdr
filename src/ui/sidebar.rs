@@ -2362,6 +2362,21 @@ fn collect_agent_panel_entries_with_runtimes(
                     entry.settle_hint = pane.and_then(|pane| {
                         let tab = ws.tabs.get(detail.tab_idx)?;
                         let terminal = app.terminals.get(&pane.attached_terminal_id)?;
+                        if let Some(settled_at) = pane.settled_at {
+                            if pane.settled_locked {
+                                return Some(crate::app::settled::SettleHint::SettledLocked);
+                            }
+                            let remaining = crate::app::settled::settled_read_only_remaining(
+                                settled_at,
+                                crate::app::settled::unix_seconds(std::time::SystemTime::now()),
+                                app.settled_read_only_after,
+                            );
+                            return Some(if remaining.is_zero() {
+                                crate::app::settled::SettleHint::SettledLocked
+                            } else {
+                                crate::app::settled::SettleHint::SettledCountdown(remaining)
+                            });
+                        }
                         let quiet = crate::app::pane_is_quiet(pane, terminal);
                         let now = std::time::Instant::now();
                         let hint = crate::app::settled::settle_countdown(
@@ -8686,6 +8701,31 @@ fn agent_dot_tooltip(entry: &AgentPanelEntry) -> String {
         }
         .to_string()
     });
+    match entry.settle_hint {
+        Some(crate::app::settled::SettleHint::SettledLocked) => {
+            let label = entry
+                .state_labels
+                .get("idle")
+                .cloned()
+                .unwrap_or_else(|| "Settled".to_string());
+            return format!("{label} · read-only");
+        }
+        Some(crate::app::settled::SettleHint::SettledCountdown(remaining)) => {
+            let label = entry
+                .state_labels
+                .get("idle")
+                .cloned()
+                .unwrap_or_else(|| "Settled".to_string());
+            if remaining < std::time::Duration::from_secs(60) {
+                return format!("{label} · read-only in <1 min");
+            }
+            return format!(
+                "{label} · read-only in {} min",
+                remaining.as_secs().div_ceil(60)
+            );
+        }
+        _ => {}
+    }
     if key != "idle" {
         return label;
     }
@@ -8707,6 +8747,10 @@ fn agent_dot_tooltip(entry: &AgentPanelEntry) -> String {
         Some(crate::app::settled::SettleHint::Pinned) => {
             format!("{label} · pinned, won’t settle")
         }
+        Some(
+            crate::app::settled::SettleHint::SettledCountdown(_)
+            | crate::app::settled::SettleHint::SettledLocked,
+        ) => label,
         None => label,
     }
 }
@@ -10096,8 +10140,9 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                         buf[(x, y)].set_bg(p.active_row_bg);
                     }
                 }
-                if app.pane_is_settled(target.ws_idx, target.pane_id)
-                    || app.pane_is_snoozed(target.ws_idx, target.pane_id)
+                if !is_active
+                    && (app.pane_is_settled(target.ws_idx, target.pane_id)
+                        || app.pane_is_snoozed(target.ws_idx, target.pane_id))
                 {
                     dim_inactive_pane_row(
                         frame,
@@ -10171,8 +10216,9 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                         buf[(x, y)].set_bg(p.active_row_bg);
                     }
                 }
-                if app.pane_is_settled(target.ws_idx, target.pane_id)
-                    || app.pane_is_snoozed(target.ws_idx, target.pane_id)
+                if !is_active
+                    && (app.pane_is_settled(target.ws_idx, target.pane_id)
+                        || app.pane_is_snoozed(target.ws_idx, target.pane_id))
                 {
                     dim_inactive_pane_row(
                         frame,
@@ -11852,7 +11898,9 @@ fn render_tab_card(
         return;
     };
     let settled = app.pane_is_settled(target.ws_idx, target.pane_id);
-    if settled || app.pane_is_snoozed(target.ws_idx, target.pane_id) {
+    if (settled || app.pane_is_snoozed(target.ws_idx, target.pane_id))
+        && !app.is_active_pane(target.ws_idx, target.tab_idx, target.pane_id)
+    {
         dim_inactive_pane_row(frame, card.rect, app.palette.overlay0);
     }
     if settled {
@@ -11922,8 +11970,9 @@ fn render_agent_card(
         );
     }
     if detail.local_target().is_some_and(|target| {
-        app.pane_is_settled(target.ws_idx, target.pane_id)
-            || app.pane_is_snoozed(target.ws_idx, target.pane_id)
+        (app.pane_is_settled(target.ws_idx, target.pane_id)
+            || app.pane_is_snoozed(target.ws_idx, target.pane_id))
+            && !app.is_active_pane(target.ws_idx, target.tab_idx, target.pane_id)
     }) {
         dim_inactive_pane_row(frame, rect, app.palette.overlay0);
     }
@@ -16373,6 +16422,47 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn focused_settled_row_keeps_selected_title_and_row_styles() {
+        for locked in [false, true] {
+            let mut app = app_with_agents(&["settled-focus"]);
+            let pane_id = app.workspaces[0].tabs[0].root_pane;
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .set_manual_label("Focused settled pane".into());
+            app.active = Some(0);
+            app.workspaces[0].tabs[0].layout.focus_pane(pane_id);
+            assert!(app.settle_pane_at(0, pane_id, 1_725_000_000));
+            assert!(app.is_active_pane(0, 0, pane_id));
+            app.sidebar_selected_settled = Some(crate::app::state::PaneFocusTarget {
+                workspace_id: app.workspaces[0].id.clone(),
+                pane_id,
+            });
+            app.workspaces[0]
+                .pane_state_mut(pane_id)
+                .unwrap()
+                .settled_locked = locked;
+            expand_section_for_all_views(&mut app, SETTLED_SECTION_TITLE);
+            let area = Rect::new(0, 0, 100, 30);
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+            terminal
+                .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let y = (0..area.height)
+                .find(|y| row_text(buffer, *y, area.width).contains("Focused settled pane"))
+                .expect("settled title is rendered");
+            let x = find_symbol_x(buffer, y, area.width, "F");
+            assert_eq!(buffer[(x, y)].fg, active_sidebar_title_color(&app.palette));
+            assert!(buffer[(x, y)].modifier.contains(Modifier::BOLD));
+            assert_eq!(buffer[(x, y)].bg, app.palette.surface1);
+        }
+    }
+
+    #[test]
     fn snoozed_section_hides_sessions_until_expiry_or_attention() {
         let mut app = AppState::test_new();
         expand_section_for_all_views(&mut app, SNOOZED_SECTION_TITLE);
@@ -18799,7 +18889,7 @@ pub(crate) mod tests {
             compact_row_color(&settled, &app.palette),
             app.palette.overlay0
         );
-        assert_eq!(agent_dot_tooltip(&settled), "?");
+        assert_eq!(agent_dot_tooltip(&settled), "Settled · read-only");
     }
 
     /// Owner correction to #77: the same latched gate is not blocking while
@@ -28604,6 +28694,28 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         let shell = compact_test_entry("terminal", None);
         assert_eq!(agent_dot_tooltip(&shell), "No agent");
+    }
+
+    #[test]
+    fn settled_tooltip_shows_read_only_countdown_rounding_and_custom_label() {
+        let mut entry = compact_test_entry("task", Some(Agent::Claude));
+        entry.settle_hint = Some(crate::app::settled::SettleHint::SettledCountdown(
+            std::time::Duration::from_secs(11 * 60 + 59),
+        ));
+        assert_eq!(agent_dot_tooltip(&entry), "Settled · read-only in 12 min");
+        entry.settle_hint = Some(crate::app::settled::SettleHint::SettledCountdown(
+            std::time::Duration::from_secs(59),
+        ));
+        assert_eq!(agent_dot_tooltip(&entry), "Settled · read-only in <1 min");
+        entry
+            .state_labels
+            .insert("idle".into(), "Quiet here".into());
+        assert_eq!(
+            agent_dot_tooltip(&entry),
+            "Quiet here · read-only in <1 min"
+        );
+        entry.settle_hint = Some(crate::app::settled::SettleHint::SettledLocked);
+        assert_eq!(agent_dot_tooltip(&entry), "Quiet here · read-only");
     }
 
     #[test]

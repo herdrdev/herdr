@@ -2119,6 +2119,12 @@
           "description": "How long a Done pane has to stay quiet before auto_settle_done settles it."
         },
         {
+          "key": "session.settled_read_only_after_minutes",
+          "type": "integer",
+          "default": "15",
+          "description": "How many minutes a settled pane stays live and editable before becoming read-only. Zero locks it immediately."
+        },
+        {
           "key": "session.settle_stops_agent",
           "type": "boolean",
           "default": "true",

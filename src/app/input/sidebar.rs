@@ -2702,6 +2702,10 @@ impl super::super::App {
     }
 
     pub(crate) fn focus_settled_pane(&mut self, target: crate::app::state::PaneFocusTarget) {
+        let now = std::time::Instant::now();
+        let now_unix = crate::app::settled::unix_seconds(std::time::SystemTime::now());
+        self.state.refresh_settled_panes_at(None, now, now_unix);
+        self.flush_pane_settlement_events();
         let Some(ws_idx) = self
             .state
             .workspaces
@@ -2714,26 +2718,35 @@ impl super::super::App {
             .terminal_id(target.pane_id)
             .cloned()
         {
-            if let Some(terminal) = self.state.terminals.get(&terminal_id) {
-                if let Some(plan) = terminal.pending_agent_resume_plan.as_ref() {
-                    let transcript =
-                        terminal
-                            .persisted_agent_session
-                            .as_ref()
-                            .and_then(|session| {
-                                crate::app::settled_view::load_transcript(session, &terminal.cwd)
+            let is_locked = self.state.workspaces[ws_idx]
+                .pane_state(target.pane_id)
+                .is_some_and(|pane| pane.settled_locked);
+            if is_locked {
+                if let Some(terminal) = self.state.terminals.get(&terminal_id) {
+                    if let Some(plan) = terminal.pending_agent_resume_plan.as_ref() {
+                        let transcript =
+                            terminal
+                                .persisted_agent_session
+                                .as_ref()
+                                .and_then(|session| {
+                                    crate::app::settled_view::load_transcript(
+                                        session,
+                                        &terminal.cwd,
+                                    )
+                                });
+                        let command = crate::app::agent_resume::shell_command_from_argv(&plan.argv)
+                            .unwrap_or_default();
+                        self.state.settled_view =
+                            Some(crate::app::settled_view::SettledViewState {
+                                pane_id: target.pane_id,
+                                transcript,
+                                command,
+                                scroll: 0,
+                                search: String::new(),
+                                searching: false,
+                                editing: false,
                             });
-                    let command = crate::app::agent_resume::shell_command_from_argv(&plan.argv)
-                        .unwrap_or_default();
-                    self.state.settled_view = Some(crate::app::settled_view::SettledViewState {
-                        pane_id: target.pane_id,
-                        transcript,
-                        command,
-                        scroll: 0,
-                        search: String::new(),
-                        searching: false,
-                        editing: false,
-                    });
+                    }
                 }
             }
         }

@@ -4282,6 +4282,7 @@ pub(crate) struct PaneSettlementChange {
     pub(crate) workspace_id: String,
     pub(crate) pane_id: PaneId,
     pub(crate) settled_at: Option<u64>,
+    pub(crate) lock_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4466,6 +4467,8 @@ pub struct AppState {
     /// How long a Done pane stays quiet before `auto_settle_done` settles it
     /// (`session.settle_done_after_minutes`).
     pub(crate) settle_done_after: std::time::Duration,
+    /// Delay before a settled pane becomes read-only and its agent is stopped.
+    pub(crate) settled_read_only_after: std::time::Duration,
     pub terminals:
         std::collections::HashMap<crate::terminal::TerminalId, crate::terminal::TerminalState>,
     /// Runtime-only facts reported or observed for each pane. Session snapshots
@@ -7698,6 +7701,7 @@ impl AppState {
             settle_after: std::time::Duration::from_secs(3 * 24 * 60 * 60),
             settle_finished_after: std::time::Duration::from_secs(10 * 60),
             settle_done_after: std::time::Duration::from_secs(30 * 60),
+            settled_read_only_after: std::time::Duration::from_secs(15 * 60),
             terminals: std::collections::HashMap::new(),
             agent_states: crate::agent_state::AgentStateStore::default(),
             direct_attach_resize_locks: std::collections::HashSet::new(),

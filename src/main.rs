@@ -619,6 +619,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # auto_settle_done = true
 # How long an eligible agent pane stays quiet before auto_settle_done settles it.
 # settle_done_after_minutes = 30
+# Keep a settled pane live and editable for this many minutes before it locks.
+# settled_read_only_after_minutes = 15
 # Stop resumable agent processes when their pane settles.
 # settle_stops_agent = true
 # After a resumed agent comes back up idle, submit one prompt so it continues

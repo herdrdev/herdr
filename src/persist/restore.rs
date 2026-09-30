@@ -687,6 +687,7 @@ fn restore_tab(
                 .map(|pane| pane.group_membership.clone())
                 .unwrap_or_default();
             pane.settled_at = saved_pane.and_then(|pane| pane.settled_at);
+            pane.settled_locked = saved_pane.is_some_and(|pane| pane.settled_locked);
             pane.set_snoozed_until(saved_pane.and_then(|pane| pane.snoozed_until));
             pane.settled_work_key = saved_pane.and_then(|pane| pane.settled_work_key.clone());
             restore_pane_activity(&mut pane, saved_pane);
@@ -828,6 +829,7 @@ fn restore_tab(
                     .map(|pane| pane.group_membership.clone())
                     .unwrap_or_default();
                 pane.settled_at = saved_pane.and_then(|pane| pane.settled_at);
+                pane.settled_locked = saved_pane.is_some_and(|pane| pane.settled_locked);
                 pane.set_snoozed_until(saved_pane.and_then(|pane| pane.snoozed_until));
                 pane.settled_work_key = saved_pane.and_then(|pane| pane.settled_work_key.clone());
                 restore_pane_activity(&mut pane, saved_pane);
@@ -1226,6 +1228,7 @@ mod tests {
             detection_output_at: Some(now_unix.saturating_sub(120)),
             quiet_since_at: Some(now_unix.saturating_sub(60)),
             settled_at: None,
+            settled_locked: false,
             snoozed_until: None,
             settled_work_key: None,
             settled_auto_label: None,
@@ -1914,6 +1917,7 @@ mod tests {
                             detection_output_at: None,
                             quiet_since_at: None,
                             settled_at: None,
+                            settled_locked: false,
                             snoozed_until: Some(snoozed_until),
                             settled_work_key: None,
                             settled_auto_label: Some("#3 Restore context".into()),
@@ -2069,6 +2073,7 @@ mod tests {
                                 detection_output_at: None,
                                 quiet_since_at: None,
                                 settled_at: None,
+                                settled_locked: false,
                                 snoozed_until: None,
                                 settled_work_key: None,
                                 settled_auto_label: None,
@@ -2092,6 +2097,7 @@ mod tests {
                                 detection_output_at: None,
                                 quiet_since_at: None,
                                 settled_at: None,
+                                settled_locked: false,
                                 snoozed_until: None,
                                 settled_work_key: None,
                                 settled_auto_label: None,
@@ -2164,6 +2170,7 @@ mod tests {
                     detection_output_at: None,
                     quiet_since_at: None,
                     settled_at: None,
+                    settled_locked: false,
                     snoozed_until: None,
                     settled_work_key: None,
                     settled_auto_label: None,
@@ -2186,6 +2193,7 @@ mod tests {
             detection_output_at: None,
             quiet_since_at: None,
             settled_at: None,
+            settled_locked: false,
             snoozed_until: None,
             settled_work_key: None,
             settled_auto_label: None,
@@ -2395,6 +2403,7 @@ mod tests {
                             detection_output_at: None,
                             quiet_since_at: None,
                             settled_at: None,
+                            settled_locked: false,
                             snoozed_until: None,
                             settled_work_key: None,
                             settled_auto_label: None,
@@ -2782,6 +2791,7 @@ mod tests {
                 detection_output_at: None,
                 quiet_since_at: None,
                 settled_at: None,
+                settled_locked: false,
                 snoozed_until: None,
                 settled_work_key: None,
                 settled_auto_label: None,

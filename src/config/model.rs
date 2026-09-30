@@ -335,6 +335,9 @@ pub struct SessionConfig {
     /// How long a seen Done pane has to stay quiet before `auto_settle_done`
     /// settles it. Default: 30.
     pub settle_done_after_minutes: u64,
+    /// Keep a settled pane live and editable for this many minutes before it
+    /// becomes a read-only transcript. Zero locks it immediately. Default: 15.
+    pub settled_read_only_after_minutes: u64,
     /// Stop resumable agent processes when their pane settles.
     /// Default: true.
     pub settle_stops_agent: bool,
@@ -380,6 +383,7 @@ impl Default for SessionConfig {
             auto_settle_inactive: true,
             auto_settle_done: true,
             settle_done_after_minutes: 30,
+            settled_read_only_after_minutes: 15,
             settle_stops_agent: true,
             nudge_resumed_agents: true,
             resume_nudge_message: "continue".to_string(),
@@ -2613,6 +2617,7 @@ new_cwd = "~/Projects"
         assert!(default_config.session.settle_stops_agent);
         assert!(default_config.session.auto_settle_done);
         assert_eq!(default_config.session.settle_done_after_minutes, 30);
+        assert_eq!(default_config.session.settled_read_only_after_minutes, 15);
 
         let toml = r#"
 [session]
@@ -2625,6 +2630,7 @@ settle_finished_after_minutes = 20
 settle_stops_agent = false
 auto_settle_done = false
 settle_done_after_minutes = 45
+settled_read_only_after_minutes = 25
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(!config.session.resume_agents_on_restore);
@@ -2636,6 +2642,7 @@ settle_done_after_minutes = 45
         assert!(!config.session.settle_stops_agent);
         assert!(!config.session.auto_settle_done);
         assert_eq!(config.session.settle_done_after_minutes, 45);
+        assert_eq!(config.session.settled_read_only_after_minutes, 25);
     }
 
     #[test]
