@@ -721,7 +721,17 @@ pub(crate) enum ClientShellNotificationEffect {
     System {
         title: String,
         body: Option<String>,
+        #[cfg(windows)]
+        target: Option<ClientSystemNotificationTarget>,
     },
+}
+
+#[cfg(windows)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ClientSystemNotificationTarget {
+    pub(crate) endpoint_id: ClientEndpointId,
+    pub(crate) boot_id: String,
+    pub(crate) pane_id: String,
 }
 
 pub(super) struct ClientPendingNotification {

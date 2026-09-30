@@ -73,6 +73,105 @@ fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
+#[cfg(windows)]
+#[test]
+fn system_notification_clicks_keep_endpoint_and_boot_identity() {
+    let (mut state, remote) = state_with_remote();
+    state.config.toast_delivery = crate::config::ToastDelivery::System;
+    state.config.toast_delay_seconds = 0;
+    state.outer_focused = Some(false);
+    for endpoint_id in [ClientEndpointId::Local, remote.clone()] {
+        let (effects, _) = state.receive_notification(
+            &endpoint_id,
+            SemanticNotification {
+                kind: SemanticNotificationKind::Custom,
+                title: "test".into(),
+                body: None,
+                sound: None,
+                agent: None,
+                workspace_id: Some("ws_1".into()),
+                tab_id: Some("tab_1".into()),
+                pane_id: Some("pane_1".into()),
+                position: None,
+            },
+            std::time::Instant::now(),
+        );
+        let [ClientShellNotificationEffect::System {
+            target: Some(target),
+            ..
+        }] = effects.as_slice()
+        else {
+            panic!("system effect must retain notification target");
+        };
+        let target = target.clone();
+        assert_eq!(target.endpoint_id, endpoint_id);
+        let outcome = state.activate_system_notification(target.clone());
+        assert!(
+            !outcome.actions.is_empty(),
+            "a current target must navigate"
+        );
+        if endpoint_id == remote {
+            assert!(
+                matches!(&outcome.actions[..], [ClientShellAction::ActivateEndpoint {
+                endpoint_id: id, target: Some(ClientEndpointFocusTarget::Notification { pane_id, boot_id }),
+            }] if id == &remote && pane_id == "pane_1" && boot_id == "remote-boot")
+            );
+        }
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Reconnecting);
+        assert!(state
+            .activate_system_notification(target.clone())
+            .actions
+            .is_empty());
+        state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Online);
+        assert!(
+            !state
+                .activate_system_notification(target.clone())
+                .actions
+                .is_empty(),
+            "same-boot reconnect remains valid"
+        );
+        let endpoint = state
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap();
+        let snapshot = endpoint.snapshot.as_mut().unwrap();
+        snapshot.boot_id = "replacement-boot".into();
+        assert!(
+            state
+                .activate_system_notification(target.clone())
+                .actions
+                .is_empty(),
+            "same pane ID from another boot must not navigate"
+        );
+        let endpoint = state
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.endpoint_id == endpoint_id)
+            .unwrap();
+        let snapshot = endpoint.snapshot.as_mut().unwrap();
+        snapshot.boot_id = target.boot_id.clone();
+        snapshot.panes.clear();
+        assert!(
+            state
+                .activate_system_notification(target.clone())
+                .actions
+                .is_empty(),
+            "closed pane must not navigate"
+        );
+        if endpoint_id == remote {
+            state.set_endpoint_catalog(&[]);
+            assert!(
+                state
+                    .activate_system_notification(target)
+                    .actions
+                    .is_empty(),
+                "removed profile must not navigate"
+            );
+        }
+    }
+}
+
 #[test]
 fn machine_diagnostic_badge_reopens_notice_without_collapsing_machine() {
     let (mut state, id) = state_with_remote();

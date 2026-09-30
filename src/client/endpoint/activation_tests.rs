@@ -1370,6 +1370,98 @@ fn newer_remote_selection_cancels_deferred_local_selection() {
     assert_eq!(pending.as_ref().unwrap().target(), &endpoint());
 }
 
+#[cfg(windows)]
+#[test]
+fn notification_successor_replay_rejects_a_restarted_destination() {
+    use crate::client::shell::ClientEndpointFocusTarget;
+    use crate::client::{
+        endpoint_commands::EndpointCommands, shell_runtime::begin_endpoint_activation, ClientState,
+    };
+    for destination_boot in ["local-boot", "replacement-boot"] {
+        let (shell, mut endpoints, local_sent, remote_sent) = shell_and_registry();
+        let mut activation = PendingEndpointActivation::begin(
+            &shell,
+            &mut endpoints,
+            endpoint(),
+            None,
+            resize(),
+            70,
+            Instant::now(),
+        )
+        .unwrap();
+        activation.receive_response(
+            &ClientEndpointId::Local,
+            1,
+            "client-shell-surface:70:off",
+            &surface_success("client-shell-surface:70:off", false, 1),
+            &mut endpoints,
+        );
+        activation.supersede(
+            ClientEndpointId::Local,
+            Some(ClientEndpointFocusTarget::Notification {
+                pane_id: "pane_1".into(),
+                boot_id: "local-boot".into(),
+            }),
+            &mut endpoints,
+        );
+        let intent = activation
+            .successor
+            .take()
+            .expect("notification queued during handoff");
+        let mut state = ClientState::test_new();
+        state.shell = Some(shell);
+        let mut snapshot = test_snapshot(destination_boot, 2);
+        snapshot.panes.push(crate::protocol::ClientShellPane {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            label: None,
+            cwd: None,
+            foreground_cwd: None,
+            focused: false,
+            right_click_passthrough: false,
+        });
+        state
+            .shell
+            .as_mut()
+            .unwrap()
+            .set_snapshot(Box::new(snapshot));
+        // Model restoration completing before the retained intent is replayed.
+        endpoints.set_surface_active(&ClientEndpointId::Local, true);
+        endpoints.unfreeze_input();
+        local_sent.lock().unwrap().clear();
+        remote_sent.lock().unwrap().clear();
+        let mut pending = None;
+        let mut commands = EndpointCommands::default();
+        begin_endpoint_activation(
+            &mut state,
+            &mut endpoints,
+            &mut commands,
+            &mut pending,
+            &mut 71,
+            intent.endpoint_id,
+            intent.target,
+            true,
+            Instant::now(),
+            &mut None,
+        )
+        .unwrap();
+        if destination_boot == "replacement-boot" {
+            assert!(pending.is_none());
+            assert!(
+                local_sent.lock().unwrap().is_empty(),
+                "stale successor must emit no navigation or surface write"
+            );
+            assert!(remote_sent.lock().unwrap().is_empty());
+        } else {
+            assert!(
+                pending.is_some(),
+                "same boot remains eligible after handoff"
+            );
+        }
+    }
+}
+
 #[test]
 fn rollback_keeps_the_latest_intent_even_when_it_returns_to_the_target() {
     let (shell, mut endpoints, _local_sent, _remote_sent) = shell_and_registry();
@@ -1419,6 +1511,101 @@ fn rollback_keeps_the_latest_intent_even_when_it_returns_to_the_target() {
             target: Some(crate::client::shell::ClientEndpointFocusTarget::Pane(
                 "remote-pane".into()
             )),
+        })
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn notification_click_on_remote_source_supersedes_a_handoff() {
+    use crate::client::shell::{ClientEndpointFocusTarget, ClientSystemNotificationTarget};
+    use crate::client::{
+        endpoint_commands::EndpointCommands,
+        events::ClientLoopEvent,
+        shell_runtime::{begin_endpoint_activation, dispatch_client_shell_actions},
+        ClientState,
+    };
+    let (mut shell, mut endpoints, _, _) = shell_and_registry();
+    let remote = endpoint();
+    let mut snapshot = test_snapshot("remote-boot", 2);
+    snapshot.panes.push(crate::protocol::ClientShellPane {
+        pane_id: "pane_1".into(),
+        workspace_id: "ws_1".into(),
+        tab_id: "tab_1".into(),
+        label: None,
+        cwd: None,
+        foreground_cwd: None,
+        focused: false,
+        right_click_passthrough: false,
+    });
+    shell.set_endpoint_snapshot(&remote, Box::new(snapshot));
+    endpoints.set_surface_active(&ClientEndpointId::Local, false);
+    endpoints.set_surface_active(&remote, true);
+    assert!(endpoints.set_active(&remote));
+    assert!(shell.activate_endpoint_projection(&remote));
+    let mut pending = Some(
+        PendingEndpointActivation::begin(
+            &shell,
+            &mut endpoints,
+            ClientEndpointId::Local,
+            None,
+            resize(),
+            80,
+            Instant::now(),
+        )
+        .unwrap(),
+    );
+    assert!(
+        !endpoints.active_surface_available(),
+        "source is inactive during handoff"
+    );
+    let outcome = shell.activate_system_notification(ClientSystemNotificationTarget {
+        endpoint_id: remote.clone(),
+        boot_id: "remote-boot".into(),
+        pane_id: "pane_1".into(),
+    });
+    let mut commands = EndpointCommands::default();
+    let mut scheduled = None;
+    dispatch_client_shell_actions(
+        outcome.actions,
+        &mut commands,
+        &mut endpoints,
+        Some(&mut shell),
+        &mut Vec::new(),
+        &mut scheduled,
+    )
+    .unwrap();
+    let ClientLoopEvent::ActivateEndpoint {
+        endpoint_id,
+        target,
+        force,
+    } = scheduled.expect("click must reach the handoff manager")
+    else {
+        panic!("activation expected");
+    };
+    let mut state = ClientState::test_new();
+    state.shell = Some(shell);
+    begin_endpoint_activation(
+        &mut state,
+        &mut endpoints,
+        &mut commands,
+        &mut pending,
+        &mut 81,
+        endpoint_id,
+        target,
+        force,
+        Instant::now(),
+        &mut None,
+    )
+    .unwrap();
+    assert_eq!(
+        pending.unwrap().successor,
+        Some(EndpointActivationIntent {
+            endpoint_id: remote,
+            target: Some(ClientEndpointFocusTarget::Notification {
+                pane_id: "pane_1".into(),
+                boot_id: "remote-boot".into()
+            }),
         })
     );
 }

@@ -496,6 +496,8 @@ Choose `herdr` for an in-app toast, `terminal` for an outer-terminal notificatio
 
 On macOS, `system` tries `terminal-notifier` first and falls back to `/usr/bin/osascript` when it is unavailable or fails. The fallback appears as Script Editor in Notification Center and cannot activate the hosting terminal. Install `terminal-notifier` with `brew install terminal-notifier`. For a supported, detected terminal, it can activate the terminal app when you click the notification. Alternatively, choose `terminal` to let a supported outer terminal own the notification.
 
+On Windows, `system` notifications remain in Notification Center. Clicking one selects its originating pane in the running Herdr client and brings its terminal window forward when Windows exposes that window. A click cannot reopen a closed client or select a pane from a restarted server. Windows Terminal can bring the owning window forward, but cannot reliably select a different outer terminal tab.
+
 ## Sound
 
 Sound notifications play through the local Herdr client. Custom sounds must be mp3 files; Herdr resolves relative paths from the config file's directory.

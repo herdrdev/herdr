@@ -592,6 +592,11 @@ impl PendingEndpointActivation {
         focus: Option<crate::client::shell::ClientEndpointFocusTarget>,
         endpoints: &mut EndpointRegistry,
     ) -> Result<(), String> {
+        #[cfg(windows)]
+        if matches!(&focus, Some(crate::client::shell::ClientEndpointFocusTarget::Notification { boot_id, .. }) if boot_id != &self.target.boot_id)
+        {
+            return Ok(());
+        }
         self.focus = focus;
         if let ActivationPhase::ActivatingTarget {
             focus_request_id,
@@ -1184,6 +1189,16 @@ impl PendingEndpointActivation {
             _ => return false,
         };
         match &self.focus {
+            #[cfg(windows)]
+            Some(crate::client::shell::ClientEndpointFocusTarget::Notification {
+                pane_id, ..
+            }) => {
+                evidence.focused_pane_id.as_deref() == Some(pane_id)
+                    && surface
+                        .panes
+                        .iter()
+                        .any(|pane| pane.focused && &pane.pane_id == pane_id)
+            }
             Some(crate::client::shell::ClientEndpointFocusTarget::Pane(pane_id)) => {
                 evidence.focused_pane_id.as_deref() == Some(pane_id)
                     && surface

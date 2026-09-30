@@ -812,6 +812,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "widestring",
+ "windows",
  "windows-sys",
  "wmi",
  "zbus",

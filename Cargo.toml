@@ -65,10 +65,13 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 # UTF-16 SDDL input for interprocess security descriptors.
 widestring = "1.2"
 wmi = { version = "0.18.4", default-features = false }
+# Native Notification Center delivery for unpackaged Windows installs.
+windows = { version = "0.62.2", features = ["Data_Xml_Dom", "UI_Notifications", "Win32_System_Com"] }
 windows-sys = { version = "0.61.2", features = [
     "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Globalization",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Storage_FileSystem",
     "Win32_System_DataExchange",
@@ -78,8 +81,10 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Kernel",
     "Win32_System_Memory",
+    "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Pipes",
+    "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Input_Ime",

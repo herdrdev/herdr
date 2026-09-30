@@ -10,6 +10,14 @@ pub(super) fn focus_result_matches(
             Some(crate::client::shell::ClientEndpointFocusTarget::Pane(expected)),
             crate::api::schema::ResponseResult::PaneInfo { pane },
         ) => pane.focused && &pane.pane_id == expected,
+        #[cfg(windows)]
+        (
+            Some(crate::client::shell::ClientEndpointFocusTarget::Notification {
+                pane_id: expected,
+                ..
+            }),
+            crate::api::schema::ResponseResult::PaneInfo { pane },
+        ) => pane.focused && &pane.pane_id == expected,
         (
             Some(crate::client::shell::ClientEndpointFocusTarget::Workspace(expected)),
             crate::api::schema::ResponseResult::WorkspaceInfo { workspace },
@@ -166,6 +174,21 @@ pub(super) fn focus_request(
     focus: &crate::client::shell::ClientEndpointFocusTarget,
 ) -> std::io::Result<crate::protocol::ClientMessage> {
     let method = match focus {
+        #[cfg(windows)]
+        crate::client::shell::ClientEndpointFocusTarget::Notification {
+            pane_id,
+            boot_id: expected,
+        } => {
+            if boot_id != expected {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "notification target restarted",
+                ));
+            }
+            crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                pane_id: pane_id.clone(),
+            })
+        }
         crate::client::shell::ClientEndpointFocusTarget::Workspace(workspace_id) => {
             crate::api::schema::Method::WorkspaceFocus(crate::api::schema::WorkspaceTarget {
                 workspace_id: workspace_id.clone(),

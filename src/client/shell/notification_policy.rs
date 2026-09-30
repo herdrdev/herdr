@@ -229,15 +229,67 @@ impl ClientShellState {
                     });
                 }
                 crate::config::ToastDelivery::System if !suppress_external => {
+                    #[cfg(windows)]
+                    let target = pending.event.pane_id.as_ref().and_then(|pane_id| {
+                        self.endpoint_boot_id(&pending.endpoint_id).map(|boot_id| {
+                            ClientSystemNotificationTarget {
+                                endpoint_id: pending.endpoint_id.clone(),
+                                boot_id: boot_id.to_owned(),
+                                pane_id: pane_id.clone(),
+                            }
+                        })
+                    });
                     effects.push(ClientShellNotificationEffect::System {
                         title: pending.event.title,
                         body: pending.event.body,
+                        #[cfg(windows)]
+                        target,
                     });
                 }
                 crate::config::ToastDelivery::Terminal | crate::config::ToastDelivery::System => {}
             }
         }
         (effects, repaint)
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn notification_target_is_current(
+        &self,
+        endpoint_id: &ClientEndpointId,
+        target: &ClientEndpointFocusTarget,
+    ) -> bool {
+        let ClientEndpointFocusTarget::Notification { pane_id, boot_id } = target else {
+            return true;
+        };
+        self.endpoint_is_online(endpoint_id)
+            && self
+                .endpoints
+                .iter()
+                .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+                .and_then(|endpoint| endpoint.snapshot.as_deref())
+                .is_some_and(|snapshot| {
+                    snapshot.boot_id == *boot_id
+                        && snapshot.panes.iter().any(|pane| pane.pane_id == *pane_id)
+                })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn activate_system_notification(
+        &mut self,
+        target: ClientSystemNotificationTarget,
+    ) -> ClientShellInput {
+        let focus = ClientEndpointFocusTarget::Notification {
+            pane_id: target.pane_id,
+            boot_id: target.boot_id,
+        };
+        let mut outcome = ClientShellInput::default();
+        if self.notification_target_is_current(&target.endpoint_id, &focus) {
+            outcome.actions.push(ClientShellAction::ActivateEndpoint {
+                endpoint_id: target.endpoint_id,
+                target: Some(focus),
+            });
+        }
+        outcome
     }
 
     fn notification_target_is_active(

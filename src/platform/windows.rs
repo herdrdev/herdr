@@ -15,6 +15,11 @@ use std::{
 
 mod clipboard_image;
 mod config_backup;
+mod notifications;
+pub(crate) use notifications::{
+    foreground_desktop_notification_host, maybe_activate_desktop_notification,
+    show_actionable_desktop_notification, show_desktop_notification,
+};
 
 pub(crate) fn probe_local_server(path: &std::path::Path) -> std::io::Result<()> {
     use interprocess::os::windows::named_pipe::{pipe_mode::Bytes, DuplexPipeStream};
@@ -446,13 +451,10 @@ use windows_sys::{
                     KEYBDINPUT, KEYEVENTF_KEYUP,
                 },
             },
-            Shell::{
-                CommandLineToArgvW, ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_INFO, NIF_TIP,
-                NIIF_INFO, NIIF_NOSOUND, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
-            },
+            Shell::{CommandLineToArgvW, ShellExecuteW},
             WindowsAndMessaging::{
-                CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindowThreadProcessId,
-                LoadIconW, SendMessageTimeoutW, IDI_APPLICATION, SMTO_ABORTIFHUNG, WM_IME_CONTROL,
+                GetForegroundWindow, GetWindowThreadProcessId, SendMessageTimeoutW,
+                SMTO_ABORTIFHUNG, WM_IME_CONTROL,
             },
         },
     },
@@ -2659,112 +2661,6 @@ fn clipboard_global_bytes(format: u32, max_bytes: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-pub fn show_desktop_notification(title: &str, body: Option<&str>) -> std::io::Result<bool> {
-    let title = title.to_owned();
-    let body = body.unwrap_or(&title).to_owned();
-    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
-    std::thread::Builder::new()
-        .name("herdr-windows-notification".into())
-        .spawn(move || show_desktop_notification_on_thread(&title, &body, ready_tx))?;
-    ready_rx
-        .recv_timeout(Duration::from_secs(2))
-        .map_err(|err| match err {
-            std::sync::mpsc::RecvTimeoutError::Timeout => std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "Windows notification setup timed out",
-            ),
-            std::sync::mpsc::RecvTimeoutError::Disconnected => std::io::Error::other(
-                "Windows notification thread exited before reporting readiness",
-            ),
-        })?
-}
-
-fn show_desktop_notification_on_thread(
-    title: &str,
-    body: &str,
-    ready_tx: std::sync::mpsc::SyncSender<std::io::Result<bool>>,
-) {
-    let class_name = wide_null("STATIC");
-    let window_name = wide_null("Herdr notifications");
-    let hwnd = unsafe {
-        CreateWindowExW(
-            0,
-            class_name.as_ptr(),
-            window_name.as_ptr(),
-            0,
-            0,
-            0,
-            0,
-            0,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            std::ptr::null(),
-        )
-    };
-    if hwnd.is_null() {
-        let _ = ready_tx.send(Err(std::io::Error::last_os_error()));
-        return;
-    }
-
-    let mut notification = unsafe { std::mem::zeroed::<NOTIFYICONDATAW>() };
-    notification.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
-    notification.hWnd = hwnd;
-    notification.uID = 1;
-    notification.hIcon = unsafe { LoadIconW(null_mut(), IDI_APPLICATION) };
-    notification.uFlags = NIF_TIP;
-    if !notification.hIcon.is_null() {
-        notification.uFlags |= NIF_ICON;
-    }
-    copy_wide_truncated(&mut notification.szTip, "Herdr");
-
-    if unsafe { Shell_NotifyIconW(NIM_ADD, &notification) } == 0 {
-        let _ = ready_tx.send(Err(std::io::Error::other(
-            "failed to add Herdr notification-area icon",
-        )));
-        unsafe {
-            DestroyWindow(hwnd);
-        }
-        return;
-    }
-
-    notification.uFlags = NIF_INFO;
-    notification.dwInfoFlags = NIIF_INFO | NIIF_NOSOUND;
-    copy_wide_truncated(&mut notification.szInfoTitle, title);
-    copy_wide_truncated(&mut notification.szInfo, body);
-    if unsafe { Shell_NotifyIconW(NIM_MODIFY, &notification) } == 0 {
-        unsafe {
-            Shell_NotifyIconW(NIM_DELETE, &notification);
-            DestroyWindow(hwnd);
-        }
-        let _ = ready_tx.send(Err(std::io::Error::other(
-            "failed to show Herdr desktop notification",
-        )));
-        return;
-    }
-
-    let _ = ready_tx.send(Ok(true));
-    std::thread::sleep(Duration::from_secs(10));
-    unsafe {
-        Shell_NotifyIconW(NIM_DELETE, &notification);
-        DestroyWindow(hwnd);
-    }
-}
-
-fn copy_wide_truncated<const N: usize>(destination: &mut [u16; N], value: &str) {
-    destination.fill(0);
-    let mut offset = 0;
-    for ch in value.chars() {
-        let mut units = [0; 2];
-        let encoded = ch.encode_utf16(&mut units);
-        if offset + encoded.len() >= N {
-            break;
-        }
-        destination[offset..offset + encoded.len()].copy_from_slice(encoded);
-        offset += encoded.len();
-    }
-}
-
 fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -3544,15 +3440,6 @@ mod tests {
             )),
             None
         );
-    }
-
-    #[test]
-    fn windows_notification_text_is_null_terminated_and_unicode_safe() {
-        let mut destination = [u16::MAX; 6];
-        super::copy_wide_truncated(&mut destination, "abc😀def");
-
-        assert_eq!(String::from_utf16(&destination[..5]).unwrap(), "abc😀");
-        assert_eq!(destination[5], 0);
     }
 
     #[test]

@@ -1178,6 +1178,31 @@ async fn run_client_loop(
                 }
                 // Direct terminal attach is Unix-only; every Windows client uses ClientShell.
             }
+            #[cfg(windows)]
+            ClientLoopEvent::NotificationActivated(target) => {
+                if let Some(shell) = state.shell.as_mut() {
+                    let outcome = shell.activate_system_notification(target);
+                    if !outcome.actions.is_empty() {
+                        crate::platform::foreground_desktop_notification_host();
+                    }
+                    let frame = outcome
+                        .repaint
+                        .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+                        .flatten();
+                    if finish_client_shell_input(
+                        &mut state,
+                        outcome,
+                        frame,
+                        &mut write_stream,
+                        &mut pending_activation,
+                        &mut endpoint_commands,
+                        &mut prefix_input_source,
+                        &mut scheduled_activation,
+                    )? {
+                        return Ok(());
+                    }
+                }
+            }
             ClientLoopEvent::TerminalUnavailable(err) => {
                 info!(err = %err, "client terminal unavailable; detaching");
                 let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
@@ -1744,7 +1769,12 @@ async fn run_client_loop(
                                     .flatten();
                                 (effects, frame)
                             };
-                            handle_shell_notification_effects(effects, &state.sound_config);
+                            handle_shell_notification_effects(
+                                effects,
+                                &state.sound_config,
+                                #[cfg(windows)]
+                                &event_tx,
+                            );
                             if let Some(frame) = frame {
                                 state.present_frame(frame);
                             }
@@ -2257,7 +2287,12 @@ async fn run_client_loop(
                             .flatten();
                         (effects, outcome, frame)
                     };
-                    handle_shell_notification_effects(effects, &state.sound_config);
+                    handle_shell_notification_effects(
+                        effects,
+                        &state.sound_config,
+                        #[cfg(windows)]
+                        &event_tx,
+                    );
                     if finish_client_shell_input(
                         &mut state,
                         outcome,

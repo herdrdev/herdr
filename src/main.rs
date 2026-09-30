@@ -512,6 +512,10 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    #[cfg(windows)]
+    if let Some(result) = platform::maybe_activate_desktop_notification(&raw_args) {
+        return result;
+    }
     if let Some(outcome) = cli::maybe_run_machine(&raw_args) {
         return finish_cli(outcome);
     }

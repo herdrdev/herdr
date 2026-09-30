@@ -216,6 +216,15 @@ pub(super) fn begin_endpoint_activation(
     now: std::time::Instant,
     scheduled_activation: &mut Option<ClientLoopEvent>,
 ) -> Result<(), ClientError> {
+    #[cfg(windows)]
+    if target.as_ref().is_some_and(|target| {
+        !state
+            .shell
+            .as_ref()
+            .is_some_and(|shell| shell.notification_target_is_current(&endpoint_id, target))
+    }) {
+        return Ok(());
+    }
     state.deferred_local_activation = None;
     if endpoint_id.is_local() && !local_activation_metadata_ready(state, endpoints) {
         state.deferred_local_activation = Some(endpoint::EndpointActivationIntent {
