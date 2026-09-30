@@ -39,6 +39,7 @@ pub(crate) use input::SidebarWorkGroupKeyAction;
 mod notepad;
 pub(crate) mod pane_graphics;
 mod pane_lifecycle;
+pub(crate) use pane_lifecycle::pane_is_quiet;
 mod pane_send;
 mod popup;
 pub(crate) mod probes;

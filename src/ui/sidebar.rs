@@ -1538,6 +1538,7 @@ pub(crate) enum AgentPanelIdentity {
 pub(crate) struct AgentPanelEntry {
     pub(crate) identity: AgentPanelIdentity,
     pub(crate) last_turn_at: Option<AgentReplyTimestamp>,
+    pub(crate) settle_hint: Option<crate::app::settled::SettleHint>,
     data: std::sync::Arc<AgentPanelEntryData>,
     pub(crate) pinned: bool,
     /// Projection-only overlay. Keeping it outside shared row data lets group
@@ -1637,6 +1638,7 @@ impl AgentPanelEntry {
         Self {
             identity,
             last_turn_at: None,
+            settle_hint: None,
             data: std::sync::Arc::new(data),
             pinned: false,
             space_label_redundant: false,
@@ -2348,6 +2350,34 @@ fn collect_agent_panel_entries_with_runtimes(
                         )
                     });
                     entry.pinned = pinned;
+                    let pane = ws
+                        .tabs
+                        .get(detail.tab_idx)
+                        .and_then(|tab| tab.panes.get(&detail.pane_id));
+                    entry.settle_hint = pane.and_then(|pane| {
+                        let tab = ws.tabs.get(detail.tab_idx)?;
+                        let terminal = app.terminals.get(&pane.attached_terminal_id)?;
+                        let quiet = crate::app::pane_is_quiet(pane, terminal);
+                        let now = std::time::Instant::now();
+                        let hint = crate::app::settled::settle_countdown(
+                            app.auto_settle_done,
+                            pane.seen,
+                            app.is_active_pane(ws_idx, detail.tab_idx, detail.pane_id),
+                            tab.pinned,
+                            quiet,
+                            pane.settled_at.is_some() || pane.snoozed_until().is_some(),
+                            pane.activity.quiet_for(now),
+                            app.settle_done_after,
+                        );
+                        match hint {
+                            Some(crate::app::settled::SettleHint::Countdown(remaining))
+                                if remaining.is_zero() =>
+                            {
+                                None
+                            }
+                            other => other,
+                        }
+                    });
                     entry
                 })
         })
@@ -8631,19 +8661,41 @@ fn agent_dot_tooltip(entry: &AgentPanelEntry) -> String {
     } else {
         agent_panel_status_key(entry.state, entry.seen)
     };
-    if let Some(label) = entry.state_labels.get(key) {
-        return label.clone();
+    let label = entry.state_labels.get(key).cloned().unwrap_or_else(|| {
+        match key {
+            "usage" => "Usage limit",
+            "blocked" => "Blocked, waiting on you",
+            "working" => "Working",
+            "waiting_on_agents" => "Waiting on agents",
+            "done" => "Done, unread",
+            "idle" => "Idle",
+            _ => "?",
+        }
+        .to_string()
+    });
+    if key != "idle" {
+        return label;
     }
-    match key {
-        "usage" => "Usage limit",
-        "blocked" => "Blocked, waiting on you",
-        "working" => "Working",
-        "waiting_on_agents" => "Waiting on agents",
-        "done" => "Done, unread",
-        "idle" => "Idle",
-        _ => "?",
+    match entry.settle_hint {
+        Some(crate::app::settled::SettleHint::Countdown(remaining)) => {
+            let minutes = remaining.as_secs().div_ceil(60);
+            if remaining < std::time::Duration::from_secs(60) {
+                format!("{label} · settles in <1 min")
+            } else {
+                format!("{label} · settles in {minutes} min")
+            }
+        }
+        Some(crate::app::settled::SettleHint::Focused(after)) => {
+            format!(
+                "{label} · settles {} min after you leave",
+                after.as_secs().div_ceil(60)
+            )
+        }
+        Some(crate::app::settled::SettleHint::Pinned) => {
+            format!("{label} · pinned, won’t settle")
+        }
+        None => label,
     }
-    .to_string()
 }
 
 fn snooze_deadline_tooltip(
@@ -28473,6 +28525,37 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         let shell = compact_test_entry("terminal", None);
         assert_eq!(agent_dot_tooltip(&shell), "No agent");
+    }
+
+    #[test]
+    fn idle_tooltip_appends_settlement_hint_and_keeps_custom_label() {
+        let mut entry = compact_test_entry("task", Some(Agent::Claude));
+        entry.state = AgentState::Idle;
+        entry.settle_hint = Some(crate::app::settled::SettleHint::Countdown(
+            std::time::Duration::from_secs(3 * 60 + 59),
+        ));
+        assert_eq!(agent_dot_tooltip(&entry), "Idle · settles in 4 min");
+        entry.settle_hint = Some(crate::app::settled::SettleHint::Countdown(
+            std::time::Duration::from_secs(59),
+        ));
+        assert_eq!(agent_dot_tooltip(&entry), "Idle · settles in <1 min");
+        entry.settle_hint = Some(crate::app::settled::SettleHint::Focused(
+            std::time::Duration::from_secs(7 * 60),
+        ));
+        assert_eq!(
+            agent_dot_tooltip(&entry),
+            "Idle · settles 7 min after you leave"
+        );
+        entry.settle_hint = Some(crate::app::settled::SettleHint::Pinned);
+        assert_eq!(agent_dot_tooltip(&entry), "Idle · pinned, won’t settle");
+        entry.state_labels.insert("idle".into(), "Quiet".into());
+        assert_eq!(agent_dot_tooltip(&entry), "Quiet · pinned, won’t settle");
+        entry.state = AgentState::Idle;
+        entry.seen = false;
+        assert_eq!(agent_dot_tooltip(&entry), "Done, unread");
+        entry.seen = true;
+        entry.settle_hint = None;
+        assert_eq!(agent_dot_tooltip(&entry), "Quiet");
     }
 
     #[test]

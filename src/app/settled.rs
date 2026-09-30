@@ -12,6 +12,38 @@ use super::{
 
 pub(crate) const MAX_SNOOZE_SECONDS: u64 = 7 * 24 * 60 * 60;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SettleHint {
+    Countdown(std::time::Duration),
+    Focused(std::time::Duration),
+    Pinned,
+}
+
+/// Shared eligibility and remaining-time calculation for the settled pass and sidebar.
+pub(crate) fn settle_countdown(
+    enabled: bool,
+    seen: bool,
+    active: bool,
+    pinned: bool,
+    quiet: bool,
+    settled_or_snoozed: bool,
+    quiet_for: Option<Duration>,
+    threshold: Duration,
+) -> Option<SettleHint> {
+    if !enabled || !seen || settled_or_snoozed || !quiet {
+        return None;
+    }
+    let quiet_for = quiet_for.unwrap_or_default();
+    // Pinned wins over focus: leaving a pinned pane still never settles it.
+    if pinned {
+        return Some(SettleHint::Pinned);
+    }
+    if active {
+        return Some(SettleHint::Focused(threshold));
+    }
+    Some(SettleHint::Countdown(threshold.saturating_sub(quiet_for)))
+}
+
 /// UNIX deadlines survive restarts; converting at the scheduler boundary avoids
 /// relying on a monotonic Instant from the previous process.
 pub(crate) fn snooze_instant(deadline: u64, now_unix: u64, now: Instant) -> Instant {
@@ -458,13 +490,19 @@ impl AppState {
                     // A quiet agent has no work running and no human decision
                     // pending. Use the pane activity clock rather than the
                     // transient unread-Done clock, which focus clears.
-                    let quiet_ripe = self.auto_settle_done
-                        && pane.seen
-                        && !self.is_active_pane(ws_idx, tab_idx, *pane_id)
-                        && !tab.pinned
-                        && quiet
-                        && pane.activity.quiet_for(now).unwrap_or_default()
-                            >= self.settle_done_after;
+                    let quiet_ripe = matches!(
+                        settle_countdown(
+                            self.auto_settle_done,
+                            pane.seen,
+                            self.is_active_pane(ws_idx, tab_idx, *pane_id),
+                            tab.pinned,
+                            quiet,
+                            false,
+                            pane.activity.quiet_for(now),
+                            self.settle_done_after,
+                        ),
+                        Some(SettleHint::Countdown(remaining)) if remaining.is_zero()
+                    );
                     let holding = new_work_trigger && !finished_ripe;
                     let armed = holding.then_some(finished_since);
                     if pane.finished_since != armed || quiet_observation_changed {
@@ -811,6 +849,66 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settle_countdown_respects_all_eligibility_gates_and_rounding() {
+        let duration = Duration::from_secs;
+        let hint = |enabled, seen, active, pinned, quiet, stopped, elapsed| {
+            settle_countdown(
+                enabled,
+                seen,
+                active,
+                pinned,
+                quiet,
+                stopped,
+                elapsed,
+                duration(300),
+            )
+        };
+        assert_eq!(
+            hint(true, true, false, false, true, false, Some(duration(59))),
+            Some(SettleHint::Countdown(duration(241)))
+        );
+        assert_eq!(
+            hint(true, true, false, false, true, false, Some(duration(300))),
+            Some(SettleHint::Countdown(Duration::ZERO))
+        );
+        assert_eq!(
+            hint(true, true, true, false, true, false, Some(duration(20))),
+            Some(SettleHint::Focused(duration(300)))
+        );
+        assert_eq!(
+            hint(true, true, false, true, true, false, Some(duration(20))),
+            Some(SettleHint::Pinned)
+        );
+        assert_eq!(
+            hint(true, true, true, true, true, false, Some(duration(20))),
+            Some(SettleHint::Pinned)
+        );
+        for args in [
+            (false, true, false, false, true, false),
+            (true, false, false, false, true, false),
+            (true, true, false, false, false, false),
+            (true, true, false, false, true, true),
+        ] {
+            assert_eq!(
+                hint(
+                    args.0,
+                    args.1,
+                    args.2,
+                    args.3,
+                    args.4,
+                    args.5,
+                    Some(duration(20))
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            hint(true, true, false, false, true, false, None),
+            Some(SettleHint::Countdown(duration(300)))
+        );
+    }
     use crate::{
         detect::AgentState,
         terminal::{TerminalId, TerminalRuntime, TerminalState},
