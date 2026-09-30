@@ -43,6 +43,8 @@ impl App {
         }
 
         SessionSnapshot {
+            epoch: Some(self.state.session_epoch.clone()),
+            revision: Some(self.state.session_dirty_revision),
             version: crate::build_info::version(),
             protocol: crate::protocol::PROTOCOL_VERSION,
             focused_workspace_id,

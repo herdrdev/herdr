@@ -1159,6 +1159,7 @@ fn success_response_round_trips() {
                 detached_server_daemon: true,
                 groups_v1: true,
                 fleet_agent_events: true,
+                session_events: true,
             }),
         },
     };
@@ -1183,6 +1184,8 @@ fn session_snapshot_request_and_response_round_trip() {
         id: "req_snapshot".into(),
         result: ResponseResult::SessionSnapshot {
             snapshot: Box::new(SessionSnapshot {
+                epoch: None,
+                revision: None,
                 version: "0.1.2".into(),
                 protocol: 16,
                 focused_workspace_id: None,

@@ -1476,6 +1476,14 @@ impl App {
             host_mouse_pixels: None,
             session_dirty: false,
             session_dirty_revision: 0,
+            session_epoch: format!(
+                "{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
+            session_event_revision: 0,
             terminal_runtime_shutdowns: Vec::new(),
             confirm_close_workspace_id: None,
             confirm_close_remote_agent_ref: None,
@@ -2062,6 +2070,13 @@ impl App {
     pub(crate) fn focus_client_on_pane(&mut self) {
         self.state.focus_client_on_pane();
         self.pending_client_pane_focus = true;
+    }
+
+    /// Set the shared default focus for future attaches without changing any
+    /// currently attached client's presentation.
+    pub(crate) fn focus_shared_default_on_pane(&mut self) {
+        self.state.focus_client_on_pane();
+        self.pending_client_pane_focus = false;
     }
 
     pub(crate) fn take_pending_client_pane_focus(&mut self) -> bool {

@@ -2866,6 +2866,7 @@ mod tests {
                     detached_server_daemon: true,
                     groups_v1: true,
                     fleet_agent_events: true,
+                    session_events: true,
                 }),
             },
         };

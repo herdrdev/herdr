@@ -330,9 +330,6 @@ impl App {
             NavigateAction::ToggleTabPrio => {
                 if toggle_tab_prio(&mut self.state, context) {
                     self.schedule_session_save();
-                    if self.no_session {
-                        self.state.mark_session_dirty();
-                    }
                     if context == ActionContext::Navigate {
                         leave_navigate_mode(&mut self.state);
                     }
@@ -341,9 +338,6 @@ impl App {
             NavigateAction::TogglePrioPanel => {
                 self.state.toggle_prio_panel();
                 self.schedule_session_save();
-                if self.no_session {
-                    self.state.mark_session_dirty();
-                }
                 if context == ActionContext::Navigate {
                     leave_navigate_mode(&mut self.state);
                 }

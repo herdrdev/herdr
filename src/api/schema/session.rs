@@ -7,6 +7,10 @@ use super::workspaces::WorkspaceInfo;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub epoch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<u64>,
     pub version: String,
     pub protocol: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

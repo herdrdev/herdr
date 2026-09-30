@@ -22,6 +22,8 @@ pub struct ServerCapabilities {
     pub groups_v1: bool,
     #[serde(default)]
     pub fleet_agent_events: bool,
+    #[serde(default)]
+    pub session_events: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -5001,6 +5001,8 @@ pub struct AppState {
     pub session_dirty: bool,
     /// Monotonic revision used to avoid clearing mutations made during a save.
     pub(crate) session_dirty_revision: u64,
+    pub(crate) session_epoch: String,
+    pub(crate) session_event_revision: u64,
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
@@ -7364,7 +7366,7 @@ impl AppState {
 
     pub(crate) fn mark_session_dirty(&mut self) {
         self.session_dirty = true;
-        self.session_dirty_revision = self.session_dirty_revision.wrapping_add(1);
+        self.session_dirty_revision = self.session_dirty_revision.saturating_add(1);
     }
 
     pub(crate) fn remove_alias_shadowed_by_new_pane(&mut self, pane_id: PaneId) {
@@ -8141,6 +8143,8 @@ impl AppState {
             host_mouse_pixels: None,
             session_dirty: false,
             session_dirty_revision: 0,
+            session_epoch: format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos()),
+            session_event_revision: 0,
             terminal_runtime_shutdowns: Vec::new(),
         }
     }

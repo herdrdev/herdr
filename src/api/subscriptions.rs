@@ -117,6 +117,10 @@ pub(super) struct ActiveEventSubscription {
     last_sequence: u64,
 }
 
+pub(super) struct ActiveSessionChangedSubscription {
+    last_sequence: u64,
+}
+
 pub(super) struct ActiveFleetAgentsSubscription {
     last_sequence: u64,
     initial: bool,
@@ -129,6 +133,7 @@ pub(super) enum ActiveSubscription {
     AgentStatusChanged(Box<ActiveAgentStatusChangedSubscription>),
     ScrollChanged(ActiveScrollChangedSubscription),
     FleetAgentsChanged(ActiveFleetAgentsSubscription),
+    SessionChanged(ActiveSessionChangedSubscription),
 }
 
 impl ActiveSubscription {
@@ -201,6 +206,11 @@ impl ActiveSubscription {
                     last_sequence: event_start_sequence,
                     initial: true,
                     request_prefix: format!("{request_id}:sub:{index}"),
+                }))
+            }
+            Subscription::SessionChanged {} => {
+                Ok(Self::SessionChanged(ActiveSessionChangedSubscription {
+                    last_sequence: event_start_sequence,
                 }))
             }
             Subscription::PaneOutputMatched {
@@ -317,6 +327,11 @@ impl ActiveSubscription {
                 .ok()?
                 .into_iter()
                 .next(),
+            Self::SessionChanged(subscription) => {
+                // Each event carries a full snapshot, so the newest supersedes older events
+                // drained in the same poll.
+                subscription.poll(event_hub).ok()?.into_iter().last()
+            }
         }
     }
 
@@ -373,6 +388,7 @@ impl ActiveSubscription {
                 Ok(self.poll(api_tx, event_hub).into_iter().collect())
             }
             Self::FleetAgentsChanged(subscription) => subscription.poll_batch(api_tx, event_hub),
+            Self::SessionChanged(subscription) => subscription.poll_batch(event_hub),
         }
     }
 }
@@ -430,6 +446,41 @@ impl ActiveFleetAgentsSubscription {
     }
 }
 
+impl ActiveSessionChangedSubscription {
+    fn poll(&mut self, event_hub: &EventHub) -> Result<Vec<serde_json::Value>, ErrorBody> {
+        self.poll_batch(event_hub)
+    }
+
+    fn poll_batch(&mut self, event_hub: &EventHub) -> Result<Vec<serde_json::Value>, ErrorBody> {
+        let events = subscription_events_after(event_hub, self.last_sequence)?;
+        let mut matching = Vec::new();
+        for (sequence, event) in events {
+            self.last_sequence = sequence;
+            if let crate::api::schema::EventData::SessionChanged {
+                epoch,
+                revision,
+                snapshot,
+            } = event.data
+            {
+                matching.push(
+                    serde_json::to_value(SubscriptionEventEnvelope {
+                        event: SubscriptionEventKind::SessionChanged,
+                        data: SubscriptionEventData::SessionChanged(
+                            crate::api::schema::SessionChangedEvent {
+                                epoch,
+                                revision,
+                                snapshot,
+                            },
+                        ),
+                    })
+                    .map_err(event_encoding_error)?,
+                );
+            }
+        }
+        Ok(matching)
+    }
+}
+
 fn changes_fleet_agent_inventory(event: EventKind) -> bool {
     matches!(
         event,
@@ -458,6 +509,7 @@ fn changes_fleet_agent_inventory(event: EventKind) -> bool {
             | EventKind::PaneAgentDetected
             | EventKind::PaneAgentStatusChanged
             | EventKind::LayoutUpdated
+            | EventKind::SessionChanged
     )
 }
 
@@ -963,6 +1015,97 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn session_changed_subscription_delivers_revision_and_snapshot() {
+        let event_hub = EventHub::default();
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscription = ActiveSubscription::new(
+            Subscription::SessionChanged {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+            event_hub.current_sequence(),
+        )
+        .expect("session changed subscription");
+        event_hub.push(crate::api::schema::EventEnvelope {
+            event: EventKind::SessionChanged,
+            data: crate::api::schema::EventData::SessionChanged {
+                epoch: "epoch-1".into(),
+                revision: 7,
+                snapshot: Box::new(crate::api::schema::SessionSnapshot {
+                    epoch: Some("epoch-1".into()),
+                    revision: Some(7),
+                    version: "0.9.1".into(),
+                    protocol: 16,
+                    focused_workspace_id: None,
+                    focused_tab_id: None,
+                    focused_pane_id: None,
+                    workspaces: Vec::new(),
+                    tabs: Vec::new(),
+                    panes: Vec::new(),
+                    layouts: Vec::new(),
+                    agents: Vec::new(),
+                }),
+            },
+        });
+
+        let event = subscription
+            .poll(&api_tx, &event_hub)
+            .expect("session change event");
+
+        assert_eq!(event["event"], "session.changed");
+        assert_eq!(event["data"]["revision"], 7);
+        assert_eq!(event["data"]["epoch"], "epoch-1");
+        assert_eq!(event["data"]["snapshot"]["revision"], 7);
+    }
+
+    #[test]
+    fn session_changed_poll_returns_newest_of_queued_snapshots() {
+        let event_hub = EventHub::default();
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut subscription = ActiveSubscription::new(
+            Subscription::SessionChanged {},
+            "test",
+            0,
+            &api_tx,
+            &event_hub,
+            event_hub.current_sequence(),
+        )
+        .expect("session changed subscription");
+
+        for revision in [3, 4, 5] {
+            event_hub.push(crate::api::schema::EventEnvelope {
+                event: EventKind::SessionChanged,
+                data: crate::api::schema::EventData::SessionChanged {
+                    epoch: "epoch-1".into(),
+                    revision,
+                    snapshot: Box::new(crate::api::schema::SessionSnapshot {
+                        epoch: Some("epoch-1".into()),
+                        revision: Some(revision),
+                        version: "0.9.1".into(),
+                        protocol: 16,
+                        focused_workspace_id: None,
+                        focused_tab_id: None,
+                        focused_pane_id: None,
+                        workspaces: Vec::new(),
+                        tabs: Vec::new(),
+                        panes: Vec::new(),
+                        layouts: Vec::new(),
+                        agents: Vec::new(),
+                    }),
+                },
+            });
+        }
+
+        let event = subscription
+            .poll(&api_tx, &event_hub)
+            .expect("newest session change event");
+        assert_eq!(event["data"]["revision"], 5);
+        assert_eq!(event["data"]["snapshot"]["revision"], 5);
+        assert!(subscription.poll(&api_tx, &event_hub).is_none());
     }
 
     #[test]

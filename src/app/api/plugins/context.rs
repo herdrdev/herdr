@@ -79,6 +79,7 @@ impl App {
                     context
                 }),
             EventData::LoopRunHistoryUpdated { .. }
+            | EventData::SessionChanged { .. }
             | EventData::AuthorityCatalogsUpdated { .. } => empty_plugin_context(correlation_id),
             EventData::WorktreeRemoved {
                 workspace_id,

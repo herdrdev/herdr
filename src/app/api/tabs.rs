@@ -205,9 +205,6 @@ impl App {
         };
         if changed {
             self.schedule_session_save();
-            if self.no_session {
-                self.state.mark_session_dirty();
-            }
         }
         let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) else {
             return tab_not_found(id, requested_tab_id.as_deref().unwrap_or("active"));

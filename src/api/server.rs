@@ -78,6 +78,7 @@ fn default_capabilities() -> Option<ServerCapabilities> {
         detached_server_daemon: crate::platform::current_process_is_detached_server_daemon(),
         groups_v1: true,
         fleet_agent_events: true,
+        session_events: true,
     })
 }
 
@@ -1196,6 +1197,7 @@ mod tests {
                 detached_server_daemon: true,
                 groups_v1: true,
                 fleet_agent_events: true,
+                session_events: true,
             }),
             None,
             None,

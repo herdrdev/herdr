@@ -77,6 +77,10 @@ pub(crate) struct ClientConnection {
     pending_pomodoro_presentations: VecDeque<(u64, crate::ui::pomodoro::InputPresentation)>,
     /// Sidebar disclosure, projection escape, and scroll state for this attach.
     pub(crate) sidebar_presentation: crate::app::state::SidebarPresentationState,
+    pub(crate) active_workspace: Option<usize>,
+    pub(crate) active_workspace_id: Option<String>,
+    pub(crate) selected_pane: usize,
+    pub(crate) focus_initialized: bool,
     /// Dock layout and focus state for this attach; editor PTYs are server-owned.
     pub(crate) dock_presentation: crate::app::state::DockPresentationState,
     /// Selected notepad projection, folds, and scroll for this attach.
@@ -187,6 +191,10 @@ impl ClientConnection {
             pomodoro_presentation: crate::ui::pomodoro::InputPresentation::default(),
             pending_pomodoro_presentations: VecDeque::new(),
             sidebar_presentation: crate::app::state::SidebarPresentationState::default(),
+            active_workspace: None,
+            active_workspace_id: None,
+            selected_pane: 0,
+            focus_initialized: false,
             dock_presentation: crate::app::state::DockPresentationState::default(),
             notepad_presentation: crate::notepad::NotepadPresentationState::default(),
             loop_run_history_detail: None,

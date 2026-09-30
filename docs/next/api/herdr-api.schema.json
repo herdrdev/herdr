@@ -39,6 +39,229 @@
     },
     "event": {
       "$defs": {
+        "AgentInfo": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_ref": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/AgentRef"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Cross-host identity. Older remote servers may omit this while fleet\ninventory remains version-skew tolerant."
+            },
+            "agent_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/AgentSessionInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "agent_status": {
+              "$ref": "#/schemas/event/$defs/AgentStatus"
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decisions": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/ClosingBlockDecision"
+              },
+              "type": "array"
+            },
+            "display_agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "display_title": {
+              "description": "Exact session title resolved by the host that owns this agent.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "eta_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "focused": {
+              "type": "boolean"
+            },
+            "foreground_cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gates": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "interactive_ready": {
+              "type": "boolean"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "launch_pending": {
+              "type": "boolean"
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "reported_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "screen_detection_skipped": {
+              "type": "boolean"
+            },
+            "settled_at": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "snoozed_until": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state_change_seq": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "state_labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "terminal_title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_title_stripped": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
+            },
+            "usage_limited": {
+              "type": "boolean"
+            },
+            "wait": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "waiting_on_agents": {
+              "type": "boolean"
+            },
+            "work_context": {
+              "$ref": "#/schemas/event/$defs/PaneWorkContext",
+              "default": {
+                "missive_urls": [],
+                "pr_urls": [],
+                "preview_urls": [],
+                "ticket_ids": []
+              }
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "agent_status",
+            "workspace_id",
+            "tab_id",
+            "pane_id",
+            "focused",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "AgentRef": {
+          "description": "Cross-host identity for a pane-backed agent or windowless run.",
+          "type": "string"
+        },
         "AgentSessionInfo": {
           "properties": {
             "agent": {
@@ -219,6 +442,32 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "epoch": {
+                  "type": "string"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "snapshot": {
+                  "$ref": "#/schemas/event/$defs/SessionSnapshot"
+                },
+                "type": {
+                  "const": "session_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "epoch",
+                "revision",
+                "snapshot"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -1074,7 +1323,8 @@
             "pane_agent_detected",
             "pane_agent_status_changed",
             "authority.catalogs_updated",
-            "layout_updated"
+            "layout_updated",
+            "session_changed"
           ],
           "type": "string"
         },
@@ -1781,6 +2031,90 @@
             "review"
           ],
           "type": "string"
+        },
+        "SessionSnapshot": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/AgentInfo"
+              },
+              "type": "array"
+            },
+            "epoch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_tab_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "layouts": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/PaneLayoutSnapshot"
+              },
+              "type": "array"
+            },
+            "panes": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/PaneInfo"
+              },
+              "type": "array"
+            },
+            "protocol": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tabs": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/TabInfo"
+              },
+              "type": "array"
+            },
+            "version": {
+              "type": "string"
+            },
+            "workspaces": {
+              "items": {
+                "$ref": "#/schemas/event/$defs/WorkspaceInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "version",
+            "protocol",
+            "workspaces",
+            "tabs",
+            "panes",
+            "layouts",
+            "agents"
+          ],
+          "type": "object"
         },
         "SplitDirection": {
           "enum": [
@@ -5962,6 +6296,18 @@
                 "type"
               ],
               "type": "object"
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "session.changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
+              ],
+              "type": "object"
             }
           ]
         },
@@ -8978,6 +9324,206 @@
           ],
           "type": "object"
         },
+        "PaneInfo": {
+          "properties": {
+            "agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "agent_session": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/AgentSessionInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "agent_status": {
+              "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
+            },
+            "cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "decisions": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockDecision"
+              },
+              "type": "array"
+            },
+            "display_agent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "eta_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "focused": {
+              "type": "boolean"
+            },
+            "foreground_cwd": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "gates": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "items": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/ClosingBlockItem"
+              },
+              "type": "array"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "reported_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "restore_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "scroll": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/PaneScrollInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "settled_at": {
+              "description": "Unix seconds when the server moved this pane out of active work.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "snoozed_until": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state_labels": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "terminal_title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "terminal_title_stripped": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
+            },
+            "wait": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "waiting_on_agents": {
+              "type": "boolean"
+            },
+            "work_context": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneWorkContext",
+              "default": {
+                "missive_urls": [],
+                "pr_urls": [],
+                "preview_urls": [],
+                "ticket_ids": []
+              }
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "terminal_id",
+            "workspace_id",
+            "tab_id",
+            "focused",
+            "agent_status",
+            "revision"
+          ],
+          "type": "object"
+        },
         "PaneInputObservation": {
           "properties": {
             "token": {
@@ -8986,6 +9532,125 @@
           },
           "required": [
             "token"
+          ],
+          "type": "object"
+        },
+        "PaneLayoutPane": {
+          "properties": {
+            "focused": {
+              "type": "boolean"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "rect": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneLayoutRect"
+            }
+          },
+          "required": [
+            "pane_id",
+            "focused",
+            "rect"
+          ],
+          "type": "object"
+        },
+        "PaneLayoutRect": {
+          "properties": {
+            "height": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "width": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "x": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "y": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "x",
+            "y",
+            "width",
+            "height"
+          ],
+          "type": "object"
+        },
+        "PaneLayoutSnapshot": {
+          "properties": {
+            "area": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneLayoutRect"
+            },
+            "focused_pane_id": {
+              "type": "string"
+            },
+            "panes": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/PaneLayoutPane"
+              },
+              "type": "array"
+            },
+            "splits": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/PaneLayoutSplit"
+              },
+              "type": "array"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            },
+            "zoomed": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "zoomed",
+            "area",
+            "focused_pane_id",
+            "panes",
+            "splits"
+          ],
+          "type": "object"
+        },
+        "PaneLayoutSplit": {
+          "properties": {
+            "direction": {
+              "$ref": "#/schemas/subscription_event/$defs/SplitDirection"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ratio": {
+              "format": "float",
+              "type": "number"
+            },
+            "rect": {
+              "$ref": "#/schemas/subscription_event/$defs/PaneLayoutRect"
+            }
+          },
+          "required": [
+            "id",
+            "direction",
+            "ratio",
+            "rect"
           ],
           "type": "object"
         },
@@ -9226,6 +9891,120 @@
           ],
           "type": "string"
         },
+        "SessionChangedEvent": {
+          "properties": {
+            "epoch": {
+              "type": "string"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "snapshot": {
+              "$ref": "#/schemas/subscription_event/$defs/SessionSnapshot"
+            }
+          },
+          "required": [
+            "epoch",
+            "revision",
+            "snapshot"
+          ],
+          "type": "object"
+        },
+        "SessionSnapshot": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/AgentInfo"
+              },
+              "type": "array"
+            },
+            "epoch": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_pane_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_tab_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "focused_workspace_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "layouts": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/PaneLayoutSnapshot"
+              },
+              "type": "array"
+            },
+            "panes": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/PaneInfo"
+              },
+              "type": "array"
+            },
+            "protocol": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tabs": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/TabInfo"
+              },
+              "type": "array"
+            },
+            "version": {
+              "type": "string"
+            },
+            "workspaces": {
+              "items": {
+                "$ref": "#/schemas/subscription_event/$defs/WorkspaceInfo"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "version",
+            "protocol",
+            "workspaces",
+            "tabs",
+            "panes",
+            "layouts",
+            "agents"
+          ],
+          "type": "object"
+        },
+        "SplitDirection": {
+          "enum": [
+            "left",
+            "right",
+            "up",
+            "down"
+          ],
+          "type": "string"
+        },
         "SubscriptionEventData": {
           "anyOf": [
             {
@@ -9239,6 +10018,9 @@
             },
             {
               "$ref": "#/schemas/subscription_event/$defs/FleetAgentsChangedEvent"
+            },
+            {
+              "$ref": "#/schemas/subscription_event/$defs/SessionChangedEvent"
             }
           ]
         },
@@ -9247,9 +10029,160 @@
             "pane.output_matched",
             "pane.agent_status_changed",
             "pane.scroll_changed",
-            "fleet.agents_changed"
+            "fleet.agents_changed",
+            "session.changed"
           ],
           "type": "string"
+        },
+        "TabInfo": {
+          "properties": {
+            "agent_status": {
+              "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
+            },
+            "focused": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string"
+            },
+            "number": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pane_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "prio": {
+              "type": "boolean"
+            },
+            "starred": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "workspace_id",
+            "number",
+            "label",
+            "prio",
+            "focused",
+            "pane_count",
+            "agent_status"
+          ],
+          "type": "object"
+        },
+        "WorkspaceInfo": {
+          "properties": {
+            "active_tab_id": {
+              "type": "string"
+            },
+            "agent_status": {
+              "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
+            },
+            "focused": {
+              "type": "boolean"
+            },
+            "is_fleet": {
+              "description": "True for the workspace that owns tabs opened from the cross-host Fleet view.",
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string"
+            },
+            "number": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pane_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo_binding": {
+              "description": "Repository this workspace collects work for, if bound.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tab_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tokens": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "maxProperties": 32,
+              "propertyNames": {
+                "pattern": "^[A-Za-z0-9_-]{1,32}$"
+              },
+              "type": "object"
+            },
+            "workspace_id": {
+              "type": "string"
+            },
+            "worktree": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/WorkspaceWorktreeInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "workspace_id",
+            "number",
+            "label",
+            "focused",
+            "pane_count",
+            "tab_count",
+            "active_tab_id",
+            "agent_status"
+          ],
+          "type": "object"
+        },
+        "WorkspaceWorktreeInfo": {
+          "properties": {
+            "checkout_path": {
+              "type": "string"
+            },
+            "is_linked_worktree": {
+              "type": "boolean"
+            },
+            "repo_key": {
+              "type": "string"
+            },
+            "repo_name": {
+              "type": "string"
+            },
+            "repo_root": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "repo_key",
+            "repo_name",
+            "repo_root",
+            "checkout_path",
+            "is_linked_worktree"
+          ],
+          "type": "object"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -10075,6 +11008,32 @@
         },
         "EventData": {
           "oneOf": [
+            {
+              "properties": {
+                "epoch": {
+                  "type": "string"
+                },
+                "revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "snapshot": {
+                  "$ref": "#/schemas/success_response/$defs/SessionSnapshot"
+                },
+                "type": {
+                  "const": "session_changed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "epoch",
+                "revision",
+                "snapshot"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "type": {
@@ -10945,7 +11904,8 @@
             "pane_agent_detected",
             "pane_agent_status_changed",
             "authority.catalogs_updated",
-            "layout_updated"
+            "layout_updated",
+            "session_changed"
           ],
           "type": "string"
         },
@@ -15292,6 +16252,10 @@
             },
             "live_handoff": {
               "type": "boolean"
+            },
+            "session_events": {
+              "default": false,
+              "type": "boolean"
             }
           },
           "required": [
@@ -15306,6 +16270,12 @@
                 "$ref": "#/schemas/success_response/$defs/AgentInfo"
               },
               "type": "array"
+            },
+            "epoch": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "focused_pane_id": {
               "type": [
@@ -15341,6 +16311,14 @@
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "tabs": {
               "items": {
