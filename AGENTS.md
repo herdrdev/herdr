@@ -47,6 +47,7 @@ Keep mechanics in the skill body.
 - **Icons over words.** Where an icon can say it, use the icon instead of a text label (shelf and section headers, filters, status). Every icon-only control or header has a tooltip naming it, and a plain-text fallback when Nerd Font glyphs are off.
 - **UI work needs prototype sign-off first.** Before any Herdr UI change, publish an HTML prototype with `/tsd` and give the owner its tailnet dashboard link. Wait until the owner is fully happy with it before implementation, a worker brief, or a PR. PRs #409 (sidebar folders) and #417 (compact sections sidebar) were closed unmerged after running-build QA rejected their layouts.
 - **UI QA needs captured build evidence.** Before asking the owner to confirm a built UI change, publish a `/tsd` with captured before/after screens of the actual builds (for example `herdr pane read` of each build running in a throwaway pane) and mark exactly where the change sits on screen. A pointer to a live pane is not enough. PR #443 (top-bar host label) needed a second round because the QA ask named a pane instead of showing the change.
+- **UI QA runs against live agents.** Stage the candidate build in a throwaway named session (`herdr-throwaway-repro` skill) with at least one Claude Haiku pane and one Codex Luna pane, drive them into the states the change affects, and capture from that session. Leave it open for the owner to try. Status dots, tooltips and sidebar states depend on real agent lifecycle, so a shell-only session does not show them.
 
 ### Multiplicative performance paths
 
