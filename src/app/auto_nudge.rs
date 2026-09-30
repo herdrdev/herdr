@@ -844,6 +844,7 @@ mod tests {
                     parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
                     workers_unknown: Some(false),
                     agents: Some(0),
+                    settle_ready: None,
                 },
             ),
         });
@@ -915,6 +916,7 @@ mod tests {
                     parse_status: None,
                     workers_unknown: None,
                     agents: None,
+                    settle_ready: None,
                 },
             ),
         });

@@ -2981,6 +2981,7 @@ action = "missing"
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
 

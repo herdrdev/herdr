@@ -414,6 +414,24 @@ Waiting on you — 1 item (1), 0 blocking.
 
 
 class ClosingBlockV2Tests(unittest.TestCase):
+    def test_settle_ready_requires_both_markers_in_the_final_six_nonempty_lines(self):
+        self.assertTrue(
+            closing_block.settle_ready(
+                "Work complete\n\n**Needs you: nothing.**\n\n**Done here!**\n"
+            )
+        )
+        self.assertTrue(
+            closing_block.settle_ready("NEEDS YOU: NOTHING!!!\n\nDONE HERE.\n")
+        )
+        self.assertFalse(closing_block.settle_ready("Done here.\n"))
+        self.assertFalse(closing_block.settle_ready("Needs you: nothing.\n"))
+        self.assertFalse(
+            closing_block.settle_ready(
+                "Needs you: nothing\n" + "\n".join(f"line {n}" for n in range(6))
+                + "\nDone here\n"
+            )
+        )
+
     def test_url_first_later_label_retains_the_pending_decision(self):
         block = closing_block.parse(MOVE_AND_RESIZE_CAP)
 
@@ -445,6 +463,7 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 decisions=block.wire_decisions(),
                 completion=block.completion,
                 parse_status=block.parse_status,
+                settle_ready=True,
                 pane_id="w1:p-malformed-answer",
                 sock_path="/tmp/herdr-test.sock",
             )
@@ -452,6 +471,7 @@ class ClosingBlockV2Tests(unittest.TestCase):
         report_params = rpc.call_args_list[1].args[3]
         self.assertEqual(outcome["payload"]["parse_status"], "malformed")
         self.assertEqual(report_params["parse_status"], "malformed")
+        self.assertTrue(report_params["settle_ready"])
         self.assertEqual(
             [(item["label"], item["blocking"]) for item in report_params["items"]],
             [("Answer", True)],
@@ -2925,7 +2945,7 @@ class BundleInstallerTests(unittest.TestCase):
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 3)
+            self.assertEqual(result["files"][name]["version"], 4)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),

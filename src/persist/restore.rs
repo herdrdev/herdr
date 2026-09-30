@@ -88,6 +88,19 @@ fn restore_pane_activity(pane: &mut PaneState, saved: Option<&super::snapshot::P
     }
 }
 
+fn restore_auto_settle_state(
+    terminal: &mut TerminalState,
+    session: Option<&super::snapshot::PaneAgentSessionSnapshot>,
+) {
+    if let Some(session) = session {
+        terminal.restore_auto_settle_state(
+            &session.value,
+            session.user_replied,
+            session.auto_settle_turn_seq,
+        );
+    }
+}
+
 /// Restore workspaces from a snapshot. Each pane gets a fresh shell in its saved cwd.
 pub fn restore(
     snapshot: &SessionSnapshot,
@@ -485,6 +498,7 @@ fn unavailable_restored_terminal(
         terminal.launch_argv = pane.launch_argv.clone();
         if let Some(session) = restored_terminal_agent_session(pane.agent_session.as_ref(), false) {
             terminal.set_persisted_agent_session(session);
+            restore_auto_settle_state(&mut terminal, pane.agent_session.as_ref());
         }
         match (
             pane.agent_name.as_ref(),
@@ -638,6 +652,7 @@ fn restore_tab(
             }
             if let Some(session) = restored_agent_session {
                 terminal.set_persisted_agent_session(session);
+                restore_auto_settle_state(&mut terminal, saved_agent_session);
             }
             match (saved_agent_name, saved_managed_agent) {
                 (Some(agent_name), Some(agent)) => {
@@ -755,6 +770,7 @@ fn restore_tab(
                 }
                 if let Some(session) = restored_agent_session {
                     terminal.set_persisted_agent_session(session);
+                    restore_auto_settle_state(&mut terminal, saved_agent_session);
                 }
                 match (saved_agent_name, saved_managed_agent) {
                     (Some(agent_name), Some(agent)) if was_imported => {
@@ -1236,6 +1252,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Id,
             value: "pi-session".into(),
             blocked,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         }
     }
 
@@ -1539,6 +1557,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
 
         assert!(restore_plan_for_snapshot(&session, false).is_none());
@@ -1553,6 +1573,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("claude-session"),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         assert!(restore_plan_for_snapshot(&unsupported_path, true).is_none());
     }
@@ -1566,6 +1588,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: pi_session_path.clone(),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         let mut resumed = HashSet::new();
 
@@ -1589,6 +1613,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             pane_id: None,
@@ -1616,6 +1642,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             pane_id: None,
@@ -1646,6 +1674,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         let history = super::super::snapshot::PaneHistorySnapshot {
             pane_id: None,
@@ -1674,6 +1704,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Id,
             value: "hermes-session".into(),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
 
         let preserved = restored_terminal_agent_session(Some(&session), false)
@@ -1684,6 +1716,39 @@ mod tests {
     }
 
     #[test]
+    fn restore_rehydrates_auto_settle_reply_and_consumed_turn() {
+        let session = super::super::snapshot::PaneAgentSessionSnapshot {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            kind: crate::agent_resume::AgentSessionRefKind::Id,
+            value: "codex-session".into(),
+            blocked: None,
+            user_replied: true,
+            auto_settle_turn_seq: Some(7),
+        };
+        let mut terminal = TerminalState::new(TerminalId::alloc(), "/tmp".into());
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: session.source.clone(),
+            agent: session.agent.clone(),
+            session_ref: crate::agent_resume::AgentSessionRef::id(&session.value).unwrap(),
+        });
+
+        restore_auto_settle_state(&mut terminal, Some(&session));
+        terminal.set_closing_report_scope(
+            "herdr:codex".into(),
+            Some("codex-session".into()),
+            Some(7),
+        );
+        assert!(!terminal.observe_auto_settle_transition(true, true, false));
+        terminal.set_closing_report_scope(
+            "herdr:codex".into(),
+            Some("codex-session".into()),
+            Some(8),
+        );
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
+    }
+
+    #[test]
     fn restore_does_not_rehydrate_duplicate_agent_session_metadata() {
         let session = super::super::snapshot::PaneAgentSessionSnapshot {
             source: "herdr:pi".into(),
@@ -1691,6 +1756,8 @@ mod tests {
             kind: crate::agent_resume::AgentSessionRefKind::Path,
             value: test_session_path("pi-session.jsonl"),
             blocked: None,
+            user_replied: false,
+            auto_settle_turn_seq: None,
         };
         let mut resumed = HashSet::new();
         assert!(take_restore_plan_for_snapshot(&session, true, &mut resumed).is_some());
@@ -1726,6 +1793,8 @@ mod tests {
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "keep-my-session".into(),
                 blocked: None,
+                user_replied: false,
+                auto_settle_turn_seq: None,
             });
             let (events, _rx) = mpsc::channel(32);
             let (workspaces, terminals, runtimes) = restore(
@@ -1861,6 +1930,8 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "opencode-session".into(),
                                 blocked: None,
+                                user_replied: false,
+                                auto_settle_turn_seq: None,
                             }),
                             group_membership: Default::default(),
                             launch_argv: None,
@@ -2114,6 +2185,8 @@ mod tests {
                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                 value: "codex-session".into(),
                 blocked: None,
+                user_replied: false,
+                auto_settle_turn_seq: None,
             }),
             group_membership: Default::default(),
             launch_argv: None,
@@ -2320,6 +2393,8 @@ mod tests {
                                 kind: crate::agent_resume::AgentSessionRefKind::Id,
                                 value: "codex-session".into(),
                                 blocked: None,
+                                user_replied: false,
+                                auto_settle_turn_seq: None,
                             }),
                             group_membership: Default::default(),
                             launch_argv: None,

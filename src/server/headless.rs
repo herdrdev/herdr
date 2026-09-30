@@ -21569,7 +21569,8 @@ next_tab = ""
                             parse_status: None,
                             workers_unknown: None,
                             agents: None,
-                        },
+                            settle_ready: None,
+                        }
                     ),
                 },
                 respond_to,
@@ -21897,6 +21898,7 @@ next_tab = ""
                     parse_status: None,
                     workers_unknown: None,
                     agents: None,
+                    settle_ready: None,
                 }),
             },
             respond_to,

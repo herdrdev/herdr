@@ -1982,6 +1982,24 @@ fn report_agent_params_with_foreign_version_arrays_still_parse() {
 }
 
 #[test]
+fn report_agent_params_default_settle_ready_to_false_and_accept_true() {
+    let base = serde_json::json!({
+        "pane_id": "w1:p1",
+        "source": "herdr:claude-closing-block",
+        "agent": "claude",
+        "state": "idle",
+        "v": 2
+    });
+    let old_reporter: PaneReportAgentParams = serde_json::from_value(base.clone()).unwrap();
+    assert_eq!(old_reporter.settle_ready, None);
+
+    let mut new_report = base;
+    new_report["settle_ready"] = serde_json::Value::Bool(true);
+    let params: PaneReportAgentParams = serde_json::from_value(new_report).unwrap();
+    assert_eq!(params.settle_ready, Some(true));
+}
+
+#[test]
 fn report_agent_params_with_foreign_version_defers_typed_fields() {
     let params: PaneReportAgentParams = serde_json::from_value(serde_json::json!({
         "pane_id": "w1:p1",

@@ -1716,6 +1716,7 @@ impl App {
                     external_wait: external_wait.clone(),
                     parse_status,
                     workers_unknown,
+                    settle_ready: params.settle_ready == Some(true),
                     dependencies_authoritative,
                     session_id: params
                         .agent_session_id
@@ -3193,6 +3194,7 @@ mod tests {
             parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
             workers_unknown: Some(false),
             agents: Some(0),
+            settle_ready: None,
         }
     }
 
@@ -3600,6 +3602,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -6909,6 +6912,7 @@ mod tests {
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            settle_ready: None,
         };
 
         let response = app.handle_pane_report_agent("working-1".into(), report(1));
@@ -6998,6 +7002,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -7062,6 +7067,7 @@ mod tests {
                 parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
                 workers_unknown: Some(false),
                 agents: Some(1),
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -7896,6 +7902,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -7999,6 +8006,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -8065,6 +8073,7 @@ mod tests {
             parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
             workers_unknown: Some(false),
             agents: None,
+            settle_ready: None,
         };
 
         let _: SuccessResponse = serde_json::from_str(
@@ -8243,6 +8252,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -8296,6 +8306,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -8325,6 +8336,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -9465,6 +9477,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                settle_ready: None,
             },
         );
         let _: SuccessResponse =
@@ -10075,7 +10088,9 @@ mod tests {
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            settle_ready: None,
         };
+
         assert_eq!(
             metadata_error_code(
                 &app.handle_pane_report_agent("unknown-pane-report".into(), unknown_report,)
@@ -10235,6 +10250,7 @@ mod tests {
                 parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
                 workers_unknown: Some(false),
                 agents: Some(0),
+                settle_ready: None,
             }
         };
         let metadata = |seq: u64| PaneReportMetadataParams {

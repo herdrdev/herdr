@@ -4318,6 +4318,13 @@
                 "null"
               ]
             },
+            "settle_ready": {
+              "description": "Both closing-block settlement markers were present in the final-message tail.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
             "source": {
               "type": "string"
             },

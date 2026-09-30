@@ -943,6 +943,7 @@ fn report_status(
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            settle_ready: None,
         }),
     })?;
     ensure_api_success(&response)

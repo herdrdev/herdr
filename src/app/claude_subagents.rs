@@ -2561,6 +2561,7 @@ mod tests {
                 workers_unknown: Some(false),
                 dependencies_authoritative: true,
                 session_id: Some(SESSION_ID.into()),
+                settle_ready: false,
             })),
         });
         let pane = app.state.workspaces[0].pane_state(pane_id).unwrap();

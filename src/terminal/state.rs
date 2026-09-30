@@ -385,11 +385,10 @@ pub struct ClosingReport {
     external_wait: Option<String>,
     parse_status: Option<crate::api::schema::ClosingParseStatus>,
     workers_unknown: Option<bool>,
-    /// A needs-you report in the current agent session arms one automatic
-    /// settlement when that session later reports complete and idle.
-    auto_settle_armed: bool,
     /// A successful human input reached this agent session at least once.
     user_replied: bool,
+    user_replied_session_id: Option<String>,
+    auto_settle_consumed_turn: Option<(String, u64)>,
 }
 
 #[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -421,8 +420,9 @@ impl Default for ClosingReport {
             external_wait: None,
             parse_status: None,
             workers_unknown: None,
-            auto_settle_armed: false,
             user_replied: false,
+            user_replied_session_id: None,
+            auto_settle_consumed_turn: None,
         }
     }
 }
@@ -475,9 +475,11 @@ struct ClosingReportHandoffState {
     parse_status: Option<crate::api::schema::ClosingParseStatus>,
     workers_unknown: Option<bool>,
     #[serde(default)]
-    auto_settle_armed: bool,
-    #[serde(default)]
     user_replied: bool,
+    #[serde(default)]
+    user_replied_session_id: Option<String>,
+    #[serde(default)]
+    auto_settle_consumed_turn: Option<(String, u64)>,
 }
 
 #[cfg(unix)]
@@ -506,8 +508,9 @@ impl ClosingReportHandoffState {
             external_wait: report.external_wait.clone(),
             parse_status: report.parse_status,
             workers_unknown: report.workers_unknown,
-            auto_settle_armed: report.auto_settle_armed,
             user_replied: report.user_replied,
+            user_replied_session_id: report.user_replied_session_id.clone(),
+            auto_settle_consumed_turn: report.auto_settle_consumed_turn.clone(),
         }
     }
 
@@ -537,8 +540,9 @@ impl ClosingReportHandoffState {
             external_wait: self.external_wait,
             parse_status: self.parse_status,
             workers_unknown: self.workers_unknown,
-            auto_settle_armed: self.auto_settle_armed,
             user_replied: self.user_replied,
+            user_replied_session_id: self.user_replied_session_id,
+            auto_settle_consumed_turn: self.auto_settle_consumed_turn,
         }
     }
 }
@@ -1419,7 +1423,8 @@ impl TerminalState {
         session_id: Option<String>,
         turn_seq: Option<u64>,
     ) {
-        let scope = &mut self.closing_report.get_or_insert_default().scope;
+        let report = self.closing_report.get_or_insert_default();
+        let scope = &mut report.scope;
         scope.source = Some(source);
         scope.session_id = session_id;
         scope.turn_seq = turn_seq;
@@ -1458,33 +1463,79 @@ impl TerminalState {
         })
     }
 
-    /// Remember that this session asked for human attention, and consume that
-    /// evidence exactly once when its closing report becomes complete and idle.
-    /// The marker intentionally survives working reports and user prompts; a
-    /// replacement agent session clears it with the closing report lifecycle.
+    pub(crate) fn closing_completion_is_complete(&self) -> bool {
+        self.closing_report.as_ref().is_some_and(|report| {
+            report.completion == Some(crate::api::schema::ClosingCompletion::Complete)
+        })
+    }
+
+    pub(crate) fn auto_settle_persistence_state(&self, session_id: &str) -> (bool, Option<u64>) {
+        let Some(report) = self.closing_report.as_ref() else {
+            return (false, None);
+        };
+        let replied =
+            report.user_replied && report.user_replied_session_id.as_deref() == Some(session_id);
+        let consumed = report
+            .auto_settle_consumed_turn
+            .as_ref()
+            .filter(|(saved_session, _)| saved_session == session_id)
+            .map(|(_, seq)| *seq);
+        (replied, consumed)
+    }
+
+    /// Consume each ready closing turn once, after an actual Herdr client reply.
     pub(crate) fn observe_auto_settle_transition(
         &mut self,
-        needs_you: bool,
+        settle_ready: bool,
         complete_idle_without_blockers: bool,
         session_replaced: bool,
     ) -> bool {
         if session_replaced {
             if let Some(report) = self.closing_report.as_mut() {
-                report.auto_settle_armed = false;
                 report.user_replied = false;
+                report.user_replied_session_id = None;
+                report.auto_settle_consumed_turn = None;
             }
         }
         let report = self.closing_report.get_or_insert_default();
-        report.auto_settle_armed |= needs_you;
-        if report.auto_settle_armed && complete_idle_without_blockers {
-            report.auto_settle_armed = false;
-            return report.user_replied;
+        if !settle_ready || !complete_idle_without_blockers {
+            return false;
         }
-        false
+        let Some(turn_seq) = report.scope.turn_seq else {
+            return false;
+        };
+        let session_id = report.scope.session_id.clone().unwrap_or_default();
+        let turn = (session_id.clone(), turn_seq);
+        if report.auto_settle_consumed_turn.as_ref() == Some(&turn) {
+            return false;
+        }
+        report.auto_settle_consumed_turn = Some(turn);
+        report.user_replied && report.user_replied_session_id.as_deref() == Some(&session_id)
     }
 
     pub(crate) fn note_user_reply(&mut self) {
-        self.closing_report.get_or_insert_default().user_replied = true;
+        let Some(session_id) = self
+            .current_session_identity_for_persistence()
+            .map(|(_, _, _, value)| value)
+        else {
+            return;
+        };
+        let report = self.closing_report.get_or_insert_default();
+        report.user_replied = true;
+        report.user_replied_session_id = Some(session_id);
+    }
+
+    pub(crate) fn restore_auto_settle_state(
+        &mut self,
+        session_id: &str,
+        user_replied: bool,
+        consumed_turn_seq: Option<u64>,
+    ) {
+        let report = self.closing_report.get_or_insert_default();
+        report.user_replied = user_replied;
+        report.user_replied_session_id = user_replied.then(|| session_id.to_string());
+        report.auto_settle_consumed_turn =
+            consumed_turn_seq.map(|seq| (session_id.to_string(), seq));
     }
 
     pub(crate) fn take_retired_closing_report_completion(&mut self) -> bool {
@@ -1627,6 +1678,17 @@ impl TerminalState {
             .closing_report
             .as_ref()
             .and_then(|report| report.unanswered.clone());
+        let (user_replied, user_replied_session_id, auto_settle_consumed_turn) = self
+            .closing_report
+            .as_ref()
+            .map(|report| {
+                (
+                    report.user_replied,
+                    report.user_replied_session_id.clone(),
+                    report.auto_settle_consumed_turn.clone(),
+                )
+            })
+            .unwrap_or_default();
         let empty = ClosingReport {
             requires_legacy_session_guard,
             legacy_session_guard,
@@ -1637,6 +1699,9 @@ impl TerminalState {
                 .as_ref()
                 .map_or_else(Vec::new, |latch| latch.items.clone()),
             unanswered,
+            user_replied,
+            user_replied_session_id,
+            auto_settle_consumed_turn,
             ..ClosingReport::default()
         };
         let report_changed = self
@@ -1658,6 +1723,9 @@ impl TerminalState {
             let report = self.closing_report.get_or_insert_default();
             report.requires_legacy_session_guard = true;
             report.legacy_session_guard = None;
+            report.user_replied = false;
+            report.user_replied_session_id = None;
+            report.auto_settle_consumed_turn = None;
         }
         if !session_changed || !self.has_closing_report() {
             return false;
@@ -5867,39 +5935,62 @@ mod tests {
     }
 
     #[test]
-    fn auto_settle_requires_needs_you_and_consumes_each_transition_once() {
+    fn auto_settle_requires_ready_complete_idle_and_consumes_each_turn_once() {
         let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("session-a").unwrap(),
+        });
+        terminal.restore_auto_settle_state("session-a", true, None);
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(1));
         assert!(!terminal.observe_auto_settle_transition(false, true, false));
         assert!(!terminal.observe_auto_settle_transition(true, false, false));
-        // A successful pane input marks that the user has replied in this session.
-        terminal.note_user_reply();
-        // Working reports and a fresh prompt do not erase the same session's
-        // needs-you evidence; the next complete idle report consumes it.
-        assert!(terminal.observe_auto_settle_transition(false, true, false));
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
         assert!(!terminal.observe_auto_settle_transition(false, true, false));
-        // A later needs-you episode can arm another one-shot transition.
-        assert!(!terminal.observe_auto_settle_transition(true, false, false));
-        assert!(terminal.observe_auto_settle_transition(false, true, false));
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(2));
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
     }
 
     #[test]
     fn auto_settle_does_not_fire_until_the_user_has_replied() {
         let mut terminal = test_terminal();
-        assert!(!terminal.observe_auto_settle_transition(true, false, false));
-        assert!(!terminal.observe_auto_settle_transition(false, true, false));
-
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("session-a").unwrap(),
+        });
+        terminal.restore_auto_settle_state("session-a", false, None);
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(1));
+        assert!(!terminal.observe_auto_settle_transition(true, true, false));
         terminal.note_user_reply();
-        // A completion that preceded the reply is consumed; a fresh episode counts.
-        assert!(!terminal.observe_auto_settle_transition(false, true, false));
-        assert!(!terminal.observe_auto_settle_transition(true, false, false));
-        assert!(terminal.observe_auto_settle_transition(false, true, false));
+        assert!(!terminal.observe_auto_settle_transition(true, true, false));
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(2));
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
+    }
+
+    #[test]
+    fn user_input_without_an_agent_session_does_not_arm_auto_settle() {
+        let mut terminal = test_terminal();
+        terminal.note_user_reply();
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(1));
+        assert!(!terminal.observe_auto_settle_transition(true, true, false));
+        assert_eq!(
+            terminal.auto_settle_persistence_state("session-a"),
+            (false, Some(1))
+        );
     }
 
     #[test]
     fn new_session_clears_pending_auto_settle_evidence() {
         let mut terminal = test_terminal();
-        assert!(!terminal.observe_auto_settle_transition(true, false, false));
-        assert!(!terminal.observe_auto_settle_transition(false, true, true));
+        terminal.restore_auto_settle_state("session-a", true, None);
+        terminal.set_closing_report_scope("herdr:codex".into(), Some("session-b".into()), Some(2));
+        assert!(!terminal.observe_auto_settle_transition(true, true, true));
+        assert_eq!(
+            terminal.auto_settle_persistence_state("session-b"),
+            (false, Some(2))
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ from typing import Any
 
 from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
 
-# HERDR_INTEGRATION_VERSION=3
+# HERDR_INTEGRATION_VERSION=4
 VERSION = 2
 
 
@@ -342,6 +342,7 @@ def report(
     external_wait: str | None = None,
     parse_status: str = "ok",
     workers_unknown: bool = False,
+    settle_ready: bool = False,
     session_id: str | None = None,
     session_path: str | None = None,
     title: str | None = None,
@@ -457,6 +458,7 @@ def report(
                     "external_wait": external_wait,
                     "parse_status": parse_status,
                     "workers_unknown": workers_unknown}
+    agent_params["settle_ready"] = settle_ready is True
     if dependencies_authoritative:
         agent_params["gates"] = gate_objects
         agent_params["items"] = item_objects

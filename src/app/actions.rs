@@ -3418,9 +3418,9 @@ impl AppState {
                             .iter()
                             .any(|item| item.requires_human_input());
                     auto_settle = terminal.observe_auto_settle_transition(
-                        has_blockers,
+                        closing_block.settle_ready,
                         after.state == AgentState::Idle
-                            && terminal.closing_task_complete()
+                            && terminal.closing_completion_is_complete()
                             && !has_blockers,
                         mutation.session_replaced,
                     );
@@ -7213,6 +7213,7 @@ mod tests {
                 workers_unknown: None,
                 dependencies_authoritative: true,
                 session_id: None,
+                settle_ready: false,
             })),
         });
         assert_eq!(started.len(), 1);
@@ -7242,6 +7243,7 @@ mod tests {
                 workers_unknown: None,
                 dependencies_authoritative: true,
                 session_id: None,
+                settle_ready: false,
             })),
         });
         assert_eq!(finished.len(), 1);
@@ -7300,6 +7302,7 @@ mod tests {
                 workers_unknown: Some(false),
                 dependencies_authoritative: true,
                 session_id: Some(session.into()),
+                settle_ready: false,
             })),
         };
 

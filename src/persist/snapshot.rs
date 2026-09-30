@@ -208,6 +208,12 @@ pub struct PaneAgentSessionSnapshot {
     /// the report loses the one state that was waiting on someone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocked: Option<PaneAgentBlockedSnapshot>,
+    /// Whether the user sent input to this exact agent session through Herdr.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub user_replied: bool,
+    /// Closing turn already consumed by auto-settle for this agent session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_settle_turn_seq: Option<u64>,
 }
 
 /// The parts of a blocked hook report that outlive the process that made it.
@@ -607,6 +613,10 @@ fn capture_tab(
                         kind: session_ref.kind,
                         value: session_ref.value.clone(),
                         blocked,
+                        user_replied: terminal.auto_settle_persistence_state(&session_ref.value).0,
+                        auto_settle_turn_seq: terminal
+                            .auto_settle_persistence_state(&session_ref.value)
+                            .1,
                     });
                 }
             }
@@ -620,6 +630,12 @@ fn capture_tab(
                     value: session.session_ref.value.clone(),
                     // No live authority, so there is no report to carry.
                     blocked: None,
+                    user_replied: terminal
+                        .auto_settle_persistence_state(&session.session_ref.value)
+                        .0,
+                    auto_settle_turn_seq: terminal
+                        .auto_settle_persistence_state(&session.session_ref.value)
+                        .1,
                 })
         });
         panes.insert(
@@ -2564,6 +2580,13 @@ mod tests {
             crate::agent_resume::AgentSessionRef::path(session_path.clone()),
             Some(20),
         );
+        terminal.set_closing_report_scope(
+            "herdr:pi-closing-block".into(),
+            Some(session_path.clone()),
+            Some(20),
+        );
+        terminal.note_user_reply();
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
 
         let snapshot = capture_from_state(&state);
         let agent_session = snapshot.workspaces[0].tabs[0].panes[&root.raw()]
@@ -2578,6 +2601,11 @@ mod tests {
             crate::agent_resume::AgentSessionRefKind::Path
         );
         assert_eq!(agent_session.value, session_path);
+        assert!(agent_session.user_replied);
+        assert_eq!(agent_session.auto_settle_turn_seq, Some(20));
+        let encoded = serde_json::to_value(agent_session).unwrap();
+        assert_eq!(encoded["user_replied"], true);
+        assert_eq!(encoded["auto_settle_turn_seq"], 20);
     }
 
     /// Build a pane whose agent has reported `state` through the closing-block
@@ -2649,6 +2677,8 @@ mod tests {
                 .expect("agent session should be captured");
 
         assert_eq!(session.blocked, None);
+        assert!(!session.user_replied);
+        assert_eq!(session.auto_settle_turn_seq, None);
     }
 
     #[test]

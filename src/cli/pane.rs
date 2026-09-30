@@ -1637,6 +1637,7 @@ fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
         parse_status: None,
         workers_unknown: None,
         agents: None,
+        settle_ready: None,
     }))
 }
 
