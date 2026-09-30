@@ -3437,17 +3437,10 @@ impl AppState {
             })
         };
         if auto_settle {
-            if let Some(ws_idx) = self
-                .workspaces
-                .iter()
-                .position(|workspace| workspace.pane_state(pane_id).is_some())
-            {
-                self.settle_pane_at(
-                    ws_idx,
-                    pane_id,
-                    crate::app::settled::unix_seconds(std::time::SystemTime::now()),
-                );
-            }
+            // The closing marker consumes this turn and arms the ordinary quiet
+            // settlement window. The timed settlement pass still enforces seen,
+            // focus, pin, and quiet-time gates before stopping the agent.
+            self.note_automated_pane_activity_at(pane_id, std::time::Instant::now());
         }
         (updates.into_iter().collect(), accepted)
     }
