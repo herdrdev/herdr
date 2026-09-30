@@ -5,6 +5,8 @@ use super::{App, SESSION_SAVE_DEBOUNCE};
 const SESSION_SAVE_COMPLETION_POLL: Duration = Duration::from_millis(100);
 const SESSION_SAVE_RETRY_BASE: Duration = Duration::from_millis(250);
 const SESSION_SAVE_RETRY_MAX: Duration = Duration::from_secs(30);
+const SESSION_SAVE_STALL_WARN_AFTER: Duration = Duration::from_secs(60);
+const SESSION_SAVE_STALL_WARN_INTERVAL: Duration = Duration::from_secs(60);
 
 enum SessionSaveJob {
     Clear,
@@ -116,6 +118,7 @@ impl App {
             self.state.session_event_revision = revision;
         }
         self.reap_finished_session_save();
+        self.warn_if_session_save_stalled(Instant::now());
         if let Some(retry_at) = self.session_save_retry_deadline {
             self.session_save_deadline = Some(retry_at);
             return;
@@ -159,6 +162,8 @@ impl App {
                 if self.state.session_dirty_revision == result.revision {
                     self.state.session_dirty = false;
                     self.session_save_deadline = None;
+                    self.session_dirty_since = None;
+                    self.session_save_stall_warning_at = None;
                 }
             }
             Err(err) => {
@@ -232,8 +237,12 @@ impl App {
         }
         if !self.state.session_dirty {
             self.session_save_deadline = None;
+            self.session_dirty_since = None;
+            self.session_save_stall_warning_at = None;
             return;
         }
+
+        self.session_dirty_since.get_or_insert_with(Instant::now);
 
         self.pane_exit_checkpoint_pending = false;
         let job = self.capture_session_save_job();
@@ -310,6 +319,33 @@ impl App {
         }
         self.save_session_now();
     }
+
+    fn warn_if_session_save_stalled(&mut self, now: Instant) {
+        if self.no_session || !self.state.session_dirty {
+            self.session_dirty_since = None;
+            self.session_save_stall_warning_at = None;
+            return;
+        }
+
+        let dirty_since = *self.session_dirty_since.get_or_insert(now);
+        if now.duration_since(dirty_since) < SESSION_SAVE_STALL_WARN_AFTER
+            || self
+                .session_save_stall_warning_at
+                .is_some_and(|last| now.duration_since(last) < SESSION_SAVE_STALL_WARN_INTERVAL)
+        {
+            return;
+        }
+
+        let dirty_for = now.duration_since(dirty_since);
+        tracing::warn!(
+            dirty_for_secs = dirty_for.as_secs(),
+            revision = self.state.session_dirty_revision,
+            writer_running = self.session_save_thread.is_some(),
+            save_deadline_set = self.session_save_deadline.is_some(),
+            "session has remained dirty without a successful save"
+        );
+        self.session_save_stall_warning_at = Some(now);
+    }
 }
 
 fn session_save_retry_delay(failures: u32) -> Duration {
@@ -372,6 +408,24 @@ mod tests {
         assert_eq!(snapshot.revision, Some(revision));
         assert_eq!(snapshot.as_ref(), &app.session_snapshot());
         assert_eq!(app.state.session_event_revision, revision);
+    }
+
+    #[test]
+    fn dirty_session_warns_when_no_save_completes_for_sixty_seconds() {
+        let mut app = test_app();
+        app.no_session = false;
+        app.state.session_dirty = true;
+        let now = Instant::now();
+        app.session_dirty_since = Some(now - SESSION_SAVE_STALL_WARN_AFTER);
+
+        app.warn_if_session_save_stalled(now);
+
+        assert_eq!(app.session_save_stall_warning_at, Some(now));
+        app.warn_if_session_save_stalled(now + SESSION_SAVE_STALL_WARN_INTERVAL);
+        assert_eq!(
+            app.session_save_stall_warning_at,
+            Some(now + SESSION_SAVE_STALL_WARN_INTERVAL)
+        );
     }
 
     #[test]

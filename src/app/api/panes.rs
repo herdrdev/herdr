@@ -5029,7 +5029,18 @@ mod tests {
 
     #[tokio::test]
     async fn api_pane_close_last_pane_closes_linked_worktree_workspace() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let config_home = std::env::temp_dir().join(format!(
+            "herdr-pane-close-session-save-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&config_home);
+        env.set("XDG_CONFIG_HOME", &config_home);
+        env.remove(crate::session::SESSION_ENV_VAR);
         let mut app = app_with_linked_worktree();
+        app.no_session = false;
+        app.state.session_dirty = false;
+        app.state.session_dirty_revision = 0;
         let pane_id = app.state.workspaces[0].tabs[0].root_pane;
         let public_pane_id = app.public_pane_id(0, pane_id).unwrap();
 
@@ -5044,9 +5055,28 @@ mod tests {
         assert_eq!(success.id, "req");
         assert_eq!(app.state.request_remove_linked_worktree, None);
         assert!(app.state.workspaces.is_empty());
+        assert!(
+            app.state.session_dirty,
+            "closing the final tab must dirty persistence"
+        );
+        assert!(
+            app.session_save_deadline.is_some(),
+            "close must schedule a save"
+        );
+        std::fs::create_dir_all(crate::session::data_dir()).unwrap();
+        std::fs::write(
+            crate::session::data_dir().join("session.json"),
+            b"old session",
+        )
+        .unwrap();
+        app.save_session_now();
+        assert!(!crate::session::data_dir().join("session.json").exists());
+        assert!(!app.state.session_dirty);
         for (_terminal_id, runtime) in app.terminal_runtimes.drain() {
             runtime.shutdown();
         }
+        drop(env);
+        let _ = std::fs::remove_dir_all(config_home);
     }
 
     #[tokio::test]
