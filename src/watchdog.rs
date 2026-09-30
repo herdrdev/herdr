@@ -853,6 +853,7 @@ pub(crate) struct PaneV3Decision {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PaneV3Options {
     pub stall_secs: u64,
+    pub quiet_secs: u64,
     pub retry_window_secs: u64,
     pub op_deadline_secs: u64,
     pub stale_draft_secs: u64,
@@ -978,14 +979,47 @@ pub(crate) fn classify_pane_v3(
                 let leader = processes.iter().find(|p| p.pid == p.pgid).map(|p| p.pid);
                 let active_tool =
                     !evidence::current_tool_processes(processes, leader, age).is_empty();
+                let background_work = evidence::background_shell_count(&o.tail) > 0
+                    || evidence::background_agent_count(&o.tail) > 0
+                    || evidence::background_task_count(&o.tail) > 0;
                 let idle_or_done = matches!(o.status, AgentStatus::Idle | AgentStatus::Done);
+                let stale_hook = matches!(o.status, AgentStatus::Working | AgentStatus::Unknown);
+                let quiet_age = now.saturating_sub(m.quiet_since.unwrap_or(now));
+                let quiet_stale = age >= opt.stall_secs && quiet_age >= opt.quiet_secs;
                 let promise_already_satisfied = evidence::finished_reply(&o.tail);
                 if promise_already_satisfied {
                     class = PaneClass::FinishedIdle;
                     ev = "reply finished; promised work already satisfied".into();
-                } else if !active_tool && idle_or_done && (dead_marker || age >= opt.stall_secs) {
+                } else if !active_tool
+                    && !background_work
+                    && idle_or_done
+                    && (dead_marker || age >= opt.stall_secs)
+                {
                     class = PaneClass::Stalled;
                     ev = format!("promised work stopped: {work}");
+                } else if !active_tool
+                    && !background_work
+                    && stale_hook
+                    && (dead_marker || quiet_stale)
+                {
+                    class = PaneClass::Stalled;
+                    let status = format!("{:?}", o.status).to_ascii_lowercase();
+                    ev = format!("promised work stopped (hook status {status} is stale): {work}");
+                } else if background_work {
+                    if age >= opt.op_deadline_secs {
+                        class = PaneClass::Stalled;
+                        if stale_hook {
+                            let status = format!("{:?}", o.status).to_ascii_lowercase();
+                            ev = format!(
+                                "promised work stopped (hook status {status} is stale): {work}"
+                            );
+                        } else {
+                            ev = format!("promised work stopped: {work}");
+                        }
+                    } else {
+                        class = PaneClass::Working;
+                        ev = "promised work has active background work".into();
+                    }
                 } else if active_tool || age < opt.stall_secs {
                     class = PaneClass::Working;
                     ev = "semantic progress is within stall window".into();
@@ -1701,6 +1735,7 @@ mod tests {
     fn v3opt() -> PaneV3Options {
         PaneV3Options {
             stall_secs: 600,
+            quiet_secs: 300,
             retry_window_secs: 600,
             op_deadline_secs: 1800,
             stale_draft_secs: STALE_DRAFT_SECS,
@@ -1883,6 +1918,87 @@ mod tests {
         assert!(stale
             .evidence
             .starts_with("promised work stopped: Codex reviewers"));
+    }
+
+    #[test]
+    fn promised_stale_working_requires_dead_marker_or_both_age_windows() {
+        let dead = claude_pane(
+            "Now: wait — CI on #463\n● Background shell command didn't finish before the previous session ended",
+            "",
+            "0 shells",
+        );
+        let observation = pane_v3(AgentStatus::Working, &dead);
+        let mut memory = old_pane_memory(&observation, 1);
+        let decision = classify_pane_v3(&observation, &mut memory, 1000, v3opt());
+        assert_eq!(decision.class, PaneClass::Stalled);
+        assert!(decision.evidence.starts_with(
+            "promised work stopped (hook status working is stale): wait — CI on #463"
+        ));
+
+        let quiet_tail = claude_pane("Now: wait — CI on #463", "", "0 shells");
+        let observation = pane_v3(AgentStatus::Working, &quiet_tail);
+        let mut memory = old_pane_memory(&observation, 1);
+        memory.quiet_since = Some(1);
+        let decision = classify_pane_v3(&observation, &mut memory, 1000, v3opt());
+        assert_eq!(decision.class, PaneClass::Stalled);
+
+        let observation = pane_v3(AgentStatus::Working, &quiet_tail);
+        let mut memory = old_pane_memory(&observation, 1000 - v3opt().stall_secs + 1);
+        memory.quiet_since = Some(1);
+        assert_eq!(
+            classify_pane_v3(&observation, &mut memory, 1000, v3opt()).class,
+            PaneClass::Working
+        );
+
+        let draft_tail = claude_pane("Now: wait — CI on #463", "human's draft", "0 shells");
+        let observation = pane_v3(AgentStatus::Working, &draft_tail);
+        let decision = classify_pane_v3(&observation, &mut PaneV3Memory::default(), 1000, v3opt());
+        assert_eq!(decision.class, PaneClass::Working);
+        assert!(decision.evidence.contains("human is typing"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promised_stale_working_with_active_tool_stays_working() {
+        let active_tail = claude_pane("Now: wait — CI on #463", "", "0 shells");
+        let mut observation = pane_v3(AgentStatus::Working, &active_tail);
+        observation.process_group = Some(evidence::parse_ps_rows(
+            "100 1 100 S 00:05 0:00.01 claude\n102 100 100 R 00:40 0:00.52 cargo test",
+        ));
+        let mut memory = old_pane_memory(&observation, 1);
+        memory.quiet_since = Some(1);
+        assert_eq!(
+            classify_pane_v3(&observation, &mut memory, 1000, v3opt()).class,
+            PaneClass::Working
+        );
+    }
+
+    #[test]
+    fn promised_background_work_obeys_operation_deadline() {
+        let shell = claude_pane("Now: wait — CI on #463", "", "2 shells");
+        let observation = pane_v3(AgentStatus::Idle, &shell);
+        let now = v3opt().op_deadline_secs + 1200;
+        let mut memory = old_pane_memory(&observation, now - v3opt().op_deadline_secs + 1);
+        let decision = classify_pane_v3(&observation, &mut memory, now, v3opt());
+        assert_eq!(decision.class, PaneClass::Working);
+        assert_eq!(
+            decision.evidence,
+            "promised work has active background work"
+        );
+
+        let mut memory = old_pane_memory(&observation, now - v3opt().op_deadline_secs);
+        let decision = classify_pane_v3(&observation, &mut memory, now, v3opt());
+        assert_eq!(decision.class, PaneClass::Stalled);
+        assert!(decision.evidence.starts_with("promised work stopped:"));
+
+        let agent = claude_pane("Now: wait — CI on #463", "", "● main\n◯ fork  Watching CI");
+        let observation = pane_v3(AgentStatus::Working, &agent);
+        let mut memory = old_pane_memory(&observation, now - v3opt().op_deadline_secs);
+        let decision = classify_pane_v3(&observation, &mut memory, now, v3opt());
+        assert_eq!(decision.class, PaneClass::Stalled);
+        assert!(decision
+            .evidence
+            .starts_with("promised work stopped (hook status working is stale):"));
     }
 
     #[test]

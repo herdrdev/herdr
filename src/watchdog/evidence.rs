@@ -791,6 +791,13 @@ mod tests {
         assert_eq!(background_shell_count(&a), 1);
         assert_eq!(background_agent_count(&a), 2);
         assert_eq!(semantic_hash(&a), semantic_hash(&b));
+
+        let hint_only = claude_screen(
+            "Waiting",
+            "",
+            "-- INSERT -- ⏵⏵ bypass permissions on · ← 1 agent",
+        );
+        assert_eq!(background_agent_count(&hint_only), 0);
     }
 
     #[test]

@@ -96,6 +96,7 @@ mod nudge_delivery_tests {
             Some("reported"),
             before_hash,
             true,
+            true,
             false,
             false,
             1900,
@@ -117,6 +118,7 @@ mod nudge_delivery_tests {
             Some("reported"),
             after_hash,
             true,
+            true,
             false,
             false,
             1901,
@@ -130,6 +132,7 @@ mod nudge_delivery_tests {
                 AgentStatus::Idle,
                 Some("reported"),
                 after_hash,
+                true,
                 true,
                 false,
                 false,
@@ -145,6 +148,7 @@ mod nudge_delivery_tests {
             AgentStatus::Idle,
             Some("reported"),
             after_hash,
+            true,
             true,
             false,
             false,
@@ -168,6 +172,7 @@ mod nudge_delivery_tests {
         for (status, reported_at) in [
             (AgentStatus::Working, Some("reported")),
             (AgentStatus::Idle, Some("new-report")),
+            (AgentStatus::Blocked, Some("reported")),
         ] {
             let mut mem = PaneV3Memory {
                 hash: 10,
@@ -180,18 +185,20 @@ mod nudge_delivery_tests {
                 ..PaneV3Memory::default()
             };
             let expected = status == AgentStatus::Idle;
+            let track_quiet = expected || status == AgentStatus::Working;
             let quiet = update_promised_memory(
                 &mut mem,
                 status,
                 reported_at,
                 20,
                 expected,
+                track_quiet,
                 false,
                 false,
                 2000,
             );
             assert!(!mem.nudge_rebaseline);
-            if expected {
+            if track_quiet {
                 assert_eq!(quiet, 0);
                 assert_eq!(mem.nudge_count, 0);
             } else {
@@ -241,6 +248,7 @@ fn update_promised_memory(
     reported_at: Option<&str>,
     hash: u64,
     expected: bool,
+    track_quiet: bool,
     rebound: bool,
     nudge_echo: bool,
     now: u64,
@@ -257,10 +265,12 @@ fn update_promised_memory(
     let activity = mem.hash != 0
         && !nudge_echo
         && (mem.hash != hash || !status_unchanged || !report_unchanged);
-    if !expected {
+    if !track_quiet {
         mem.quiet_since = None;
-        mem.nudge_count = 0;
-        mem.last_nudge_at = None;
+        if !expected {
+            mem.nudge_count = 0;
+            mem.last_nudge_at = None;
+        }
     } else if submitted_nudge && status_unchanged && report_unchanged && !rebound {
         // Submission changes transcript semantics; accept that single screen change as baseline.
         mem.hash = hash;
@@ -512,6 +522,7 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
     }
     let vopt = PaneV3Options {
         stall_secs: options.stall_secs,
+        quiet_secs: options.quiet_secs,
         retry_window_secs: options.retry_window_secs.unwrap_or(options.stall_secs),
         op_deadline_secs: options
             .op_deadline_secs
@@ -523,6 +534,13 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
         let mem = memory.entry(o.pane_id.clone()).or_default();
         let expected = watchdog::evidence::expected_to_continue(&o.tail)
             && matches!(o.status, AgentStatus::Idle | AgentStatus::Done);
+        let quiet_track = expected
+            || (watchdog::evidence::promised_work(&o.tail).is_some()
+                && matches!(o.status, AgentStatus::Working | AgentStatus::Unknown)
+                && !watchdog::evidence::closing_block_open(&o.tail)
+                && watchdog::evidence::background_shell_count(&o.tail) == 0
+                && watchdog::evidence::background_agent_count(&o.tail) == 0
+                && watchdog::evidence::background_task_count(&o.tail) == 0);
         let hash = watchdog::evidence::semantic_hash(&o.tail);
         let rebound = (mem.terminal_id.is_some()
             && mem.terminal_id.as_ref() != o.terminal_id.as_ref())
@@ -537,6 +555,7 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
             o.reported_at.as_deref(),
             hash,
             expected,
+            quiet_track,
             rebound,
             nudge_echo,
             now,
@@ -554,15 +573,22 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
         })
         .collect::<Vec<_>>();
     for (i, (expected, quiet)) in promised.iter().copied().enumerate() {
+        let stale_working_promise = !expected
+            && decisions[i].class == watchdog::PaneClass::Stalled
+            && decisions[i]
+                .evidence
+                .starts_with("promised work stopped (hook status ");
         if expected {
             decisions[i].class = watchdog::PaneClass::FinishedIdle;
             decisions[i].new_state = Some(AgentStatus::Done);
             decisions[i].status = "consistent".into();
+        }
+        if expected || stale_working_promise {
             decisions[i].expected_to_continue = Some(true);
             decisions[i].quiet_secs = Some(quiet);
             decisions[i].nudge_count = Some(memory[&observations[i].pane_id].nudge_count);
             if promised_nudges_stalled(
-                expected,
+                true,
                 quiet,
                 memory[&observations[i].pane_id].nudge_count,
                 options.quiet_secs,
@@ -728,7 +754,9 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
             if d.status == "corrected"
                 && !options.dry_run
                 && !(d.class == watchdog::PaneClass::Stalled
-                    && d.evidence.starts_with("promised work stopped:"))
+                    && (d.evidence.starts_with("promised work stopped:")
+                        || d.evidence
+                            .starts_with("promised work stopped (hook status ")))
             {
                 // Revalidate identity, state and semantic tail immediately before writing.
                 if let Ok(current) = current_pane(&d.pane_id) {
@@ -775,15 +803,20 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
         }
         let mem = memory.entry(d.pane_id.clone()).or_default();
         let quiet = promised[i].1;
+        let promised_stalled = d.class == watchdog::PaneClass::Stalled
+            && (d.evidence.starts_with("promised work stopped:")
+                || d.evidence
+                    .starts_with("promised work stopped (hook status "));
+        let should_nudge = promised[i].0 || promised_stalled;
         let due = nudge_due(
-            promised[i].0,
+            should_nudge,
             quiet,
             mem.nudge_count,
             mem.last_nudge_at,
             options.quiet_secs,
             now,
         );
-        if promised[i].0 {
+        if should_nudge {
             d.expected_to_continue = Some(true);
             d.quiet_secs = Some(quiet);
             d.nudge_count = Some(mem.nudge_count);
@@ -844,6 +877,10 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
                         record_nudge_delivery(mem, now);
                         mem.nudge_rebaseline = true;
                         d.nudge_count = Some(mem.nudge_count);
+                        if promised_stalled {
+                            d.class = watchdog::PaneClass::FinishedIdle;
+                            d.new_state = None;
+                        }
                     }
                     reason => {
                         d.status = "unverified".into();
