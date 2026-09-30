@@ -6,6 +6,7 @@ pub struct EventHub {
 #[derive(Default)]
 struct EventHubState {
     next_sequence: u64,
+    evicted_through: u64,
     events: Vec<(u64, crate::api::schema::EventEnvelope)>,
 }
 
@@ -24,10 +25,21 @@ impl EventHub {
         };
         state.next_sequence += 1;
         let sequence = state.next_sequence;
+        if event.event == crate::api::schema::EventKind::SessionChanged {
+            state.events.retain(|(_, retained)| {
+                retained.event != crate::api::schema::EventKind::SessionChanged
+            });
+        }
         state.events.push((sequence, event));
         let overflow = state.events.len().saturating_sub(Self::MAX_EVENTS);
         if overflow > 0 {
-            state.events.drain(0..overflow);
+            let evicted_through = {
+                let mut evicted = state.events.drain(0..overflow);
+                evicted.next_back().map(|(sequence, _)| sequence)
+            };
+            if let Some(sequence) = evicted_through {
+                state.evicted_through = sequence;
+            }
         }
     }
 
@@ -51,11 +63,7 @@ impl EventHub {
             .inner
             .lock()
             .map_err(|_| EventHistoryError::Unavailable)?;
-        if state
-            .events
-            .first()
-            .is_some_and(|(first, _)| sequence < first.saturating_sub(1))
-        {
+        if sequence < state.evicted_through {
             return Err(EventHistoryError::Lost);
         }
         Ok(state
@@ -86,6 +94,59 @@ mod tests {
                 workspace_id: "workspace_1".into(),
             },
         }
+    }
+
+    fn session_event(revision: u64) -> EventEnvelope {
+        EventEnvelope {
+            event: EventKind::SessionChanged,
+            data: EventData::SessionChanged {
+                epoch: "epoch-1".into(),
+                revision,
+                snapshot: Box::new(crate::api::schema::SessionSnapshot {
+                    epoch: Some("epoch-1".into()),
+                    revision: Some(revision),
+                    version: "0.9.1".into(),
+                    protocol: 16,
+                    focused_workspace_id: None,
+                    focused_tab_id: None,
+                    focused_pane_id: None,
+                    workspaces: Vec::new(),
+                    tabs: Vec::new(),
+                    panes: Vec::new(),
+                    layouts: Vec::new(),
+                    agents: Vec::new(),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn history_coalesces_session_snapshots_and_retains_other_events() {
+        let hub = EventHub::default();
+        for revision in 1..=40 {
+            hub.push(event());
+            hub.push(session_event(revision));
+        }
+
+        let retained = hub.events_after_checked(0).unwrap();
+        assert_eq!(
+            retained
+                .iter()
+                .filter(|(_, event)| event.event == EventKind::SessionChanged)
+                .count(),
+            1
+        );
+        assert_eq!(
+            retained
+                .iter()
+                .filter(|(_, event)| event.event == EventKind::WorkspaceFocused)
+                .count(),
+            40
+        );
+        assert!(matches!(
+            retained.last().map(|(_, event)| &event.data),
+            Some(EventData::SessionChanged { revision: 40, .. })
+        ));
     }
 
     #[test]
