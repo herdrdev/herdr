@@ -55,6 +55,11 @@ cursor: Cursor,
 /// The saved cursor
 saved_cursor: ?SavedCursor = null,
 
+/// Origin retained through queued prompt repaints until command output.
+prompt_redraw_pin: ?*Pin = null,
+prompt_redraw_pending: bool = false,
+prompt_redraw_secondary: bool = false,
+
 /// The selection for this screen (if any). This MUST be a tracked selection
 /// otherwise the selection will become invalid. Instead of accessing this
 /// directly to set it, use the `select` function which will assert and
@@ -347,6 +352,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *Screen) void {
+    self.clearPromptRedrawPin();
     if (comptime build_options.kitty_graphics) {
         self.kitty_images.deinit(self.alloc, self);
     }
@@ -403,6 +409,7 @@ pub fn assertIntegrity(self: *const Screen) void {
 /// - Disables protection mode
 ///
 pub fn reset(self: *Screen) void {
+    self.clearPromptRedrawPin();
     // Reset our pages
     self.pages.reset();
 
@@ -802,6 +809,19 @@ pub fn cursorLeft(self: *Screen, n: size.CellCountInt) void {
 ///
 /// Precondition: The cursor is not at the top of the screen.
 pub fn cursorUp(self: *Screen, n: size.CellCountInt) void {
+    // A redrawable shell may rewind using a layout from an earlier resize.
+    // Its cleared prompt must restart at the retained origin, not in history.
+    if (!self.prompt_redraw_secondary) if (self.prompt_redraw_pin) |pin| {
+        if (!pin.garbage) {
+            if (self.pages.pointFromPin(.active, pin.*)) |pt| {
+                if (self.prompt_redraw_pending or self.cursor.y >= pt.active.y) {
+                    const y = if (self.prompt_redraw_pending) pt.active.y else @max(pt.active.y, self.cursor.y -| n);
+                    self.cursorAbsolute(self.cursor.x, @intCast(y));
+                    return;
+                }
+            }
+        }
+    };
     assert(self.cursor.y >= n);
     defer self.assertIntegrity();
 
@@ -2018,6 +2038,7 @@ pub const Resize = struct {
 
 const resize_tw = tripwire.module(enum {
     saved_cursor_pin,
+    prompt_start_pin,
     pages,
 }, resize);
 
@@ -2043,6 +2064,37 @@ pub inline fn resize(
         break :saved_cursor try self.pages.trackPin(pin);
     };
     defer if (saved_cursor_pin) |p| self.pages.untrackPin(p);
+
+    // Preserve the prompt origin across reflow; clear only after resize succeeds.
+    const prompt_start_pin: ?*Pin = prompt: {
+        if (opts.prompt_redraw != .true or
+            self.cursor.semantic_content == .output) break :prompt null;
+        if (self.prompt_redraw_pin) |pin| {
+            if (pin.garbage) break :prompt null;
+            if (!self.prompt_redraw_secondary) {
+                var cursor = self.cursor.page_pin.*;
+                cursor.x = 0;
+                var origin = pin.*;
+                origin.x = 0;
+                if (cursor.before(origin)) break :prompt null;
+            }
+            break :prompt pin;
+        }
+        var it = self.cursor.page_pin.promptIterator(.left_up, null);
+        const start = it.next() orelse break :prompt null;
+        try tw.check(.prompt_start_pin);
+        break :prompt try self.pages.trackPin(start);
+    };
+    defer if (prompt_start_pin) |p| {
+        if (self.prompt_redraw_pin != p) self.pages.untrackPin(p);
+    };
+    var prompt_cursor_rows: usize = 0;
+    if (!self.prompt_redraw_secondary) if (prompt_start_pin) |p| {
+        var it = p.rowIterator(.right_down, self.cursor.page_pin.*);
+        while (it.next() != null) prompt_cursor_rows += 1;
+        prompt_cursor_rows -|= 1;
+    };
+    const prompt_cursor_x = self.cursor.x;
 
     // A cursor style and hyperlink are partly stored in the page containing
     // the cursor. Their IDs only have meaning within that page, and the page
@@ -2131,7 +2183,8 @@ pub inline fn resize(
     // Clear any redrawable prompt after the fallible resize but before
     // restoring the cursor style and hyperlink, so cleared cells retain the
     // same default styling they had with the previous ordering.
-    self.clearPromptForRedraw(opts.prompt_redraw);
+    if (!self.prompt_redraw_secondary)
+        self.clearPromptForRedraw(opts.prompt_redraw, if (prompt_start_pin) |p| p.* else null);
 
     // Restore the cursor style.
     self.cursor.style = cursor_style;
@@ -2222,11 +2275,27 @@ pub inline fn resize(
             page.hyperlink_set.release(page.memory, cursor_hyperlink_id);
         }
     }
+    // The shell rewinds using its pre-resize physical line count. Reflow
+    // must not push the cleared prompt's cursor down and leave blank lines.
+    if (prompt_start_pin) |p| {
+        if (p.garbage) return;
+        self.prompt_redraw_pin = p;
+        self.prompt_redraw_pending = true;
+        if (self.prompt_redraw_secondary) return;
+        if (p.down(prompt_cursor_rows)) |pin| {
+            if (self.pages.pointFromPin(.active, pin)) |pt| {
+                self.cursorAbsolute(@min(prompt_cursor_x, self.pages.cols - 1), @intCast(pt.active.y));
+            }
+        }
+    }
 }
 
+/// Clear opted-in primary prompt content after a successful resize.
+/// The pre-resize origin identifies retained prompt rows after reflow.
 fn clearPromptForRedraw(
     self: *Screen,
     redraw: osc.semantic_prompt.Redraw,
+    prompt_start: ?Pin,
 ) void {
     // If our cursor is on a prompt or input line, clear it so the shell can
     // redraw it. This works with OSC 133 semantic prompts. We do this after
@@ -2255,19 +2324,8 @@ fn clearPromptForRedraw(
             },
 
             .true => {
-                const start = start: {
-                    var it = self.cursor.page_pin.promptIterator(
-                        .left_up,
-                        null,
-                    );
-                    break :start it.next() orelse {
-                        // This should never happen because promptIterator should always
-                        // find a prompt if we already verified our row is some kind of
-                        // prompt.
-                        log.warn("cursor on prompt line but promptIterator found no prompt", .{});
-                        break :prompt;
-                    };
-                };
+                const start = prompt_start orelse break :prompt;
+                if (start.garbage) break :prompt;
 
                 // Clear cells from our start down. We replace it with spaces,
                 // and do not physically erase the rows (eraseRows) because the
@@ -2278,6 +2336,8 @@ fn clearPromptForRedraw(
                     const row = pin.rowAndCell().row;
                     const cells = page.getCells(row);
                     self.clearCells(page, row, cells);
+                    row.wrap = false;
+                    row.wrap_continuation = false;
                 }
             },
         }
@@ -2838,6 +2898,7 @@ pub fn cursorSetSemanticContent(self: *Screen, t: union(enum) {
     output,
     input: enum { clear_explicit, clear_eol },
 }) void {
+    if (t == .output) self.clearPromptRedrawPin();
     const cursor = &self.cursor;
 
     switch (t) {
@@ -2864,6 +2925,36 @@ pub fn cursorSetSemanticContent(self: *Screen, t: union(enum) {
             };
         },
     }
+}
+
+/// Return to a retained prompt origin for pending or queued shell repaint.
+pub fn rewindPromptRedraw(self: *Screen, new_prompt: bool) bool {
+    if (!new_prompt and self.prompt_redraw_secondary) return false;
+    if (!new_prompt and !self.prompt_redraw_pending) return false;
+    const pin = self.prompt_redraw_pin orelse return false;
+    if (pin.garbage) return false;
+    const pt = self.pages.pointFromPin(.active, pin.*) orelse return false;
+    self.cursorAbsolute(if (new_prompt) pin.x else self.cursor.x, @intCast(pt.active.y));
+    if (new_prompt) self.prompt_redraw_pending = false;
+    return true;
+}
+
+/// A secondary prompt redraws only its own editable line, not prior input.
+pub fn startSecondaryPromptRedraw(self: *Screen) !void {
+    if (self.prompt_redraw_secondary and self.rewindPromptRedraw(true)) return;
+    const pin = try self.pages.trackPin(self.cursor.page_pin.*);
+    self.clearPromptRedrawPin();
+    self.prompt_redraw_pin = pin;
+    self.prompt_redraw_secondary = true;
+}
+
+/// Release the tracked origin and end both pending and secondary redraw state.
+/// Safe to call when no redraw origin is retained.
+pub fn clearPromptRedrawPin(self: *Screen) void {
+    if (self.prompt_redraw_pin) |pin| self.pages.untrackPin(pin);
+    self.prompt_redraw_pin = null;
+    self.prompt_redraw_pending = false;
+    self.prompt_redraw_secondary = false;
 }
 
 /// Set the selection to the given selection. If this is a tracked selection
@@ -9083,6 +9174,79 @@ test "Screen: resize more cols with cursor at prompt" {
         const expected = "ABCDE";
         try testing.expectEqualStrings(expected, contents);
     }
+}
+
+test "Screen: resize clears prompt from original start before wrapping" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var s = try init(testing.io, alloc, .{ .cols = 64, .rows = 12 });
+    defer s.deinit();
+    try s.testWriteString("history\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n");
+    s.cursorSetSemanticContent(.{ .prompt = .continuation });
+    try s.testWriteString("> ");
+    s.cursorSetSemanticContent(.{ .input = .clear_eol });
+    try s.resize(.{ .cols = 60, .rows = 12, .prompt_redraw = .true });
+    const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("history", contents);
+}
+
+test "Screen: resize consecutively before prompt repaint preserves history" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var s = try init(testing.io, alloc, .{ .cols = 52, .rows = 12 });
+    defer s.deinit();
+    const prompt = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString(prompt);
+    try s.testWriteString("\n> ");
+    s.cursorSetSemanticContent(.output);
+    try s.testWriteString("\n");
+    s.cursorSetSemanticContent(.{ .prompt = .initial });
+    try s.testWriteString(prompt);
+    try s.testWriteString("\n> ");
+    s.cursorSetSemanticContent(.{ .input = .clear_explicit });
+    try s.resize(.{ .cols = 54, .rows = 12, .prompt_redraw = .true });
+    try s.resize(.{ .cols = 56, .rows = 12, .prompt_redraw = .true });
+    const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(contents);
+    try testing.expectEqualStrings("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123\n456789\n> ", contents);
+    try testing.expectEqual(@as(size.CellCountInt, 5), s.cursor.y);
+}
+
+test "Screen: resize preserves retained rows when prompt origin is pruned" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    var control = try init(testing.io, alloc, .{ .cols = 64, .rows = 3, .max_scrollback_bytes = 1 });
+    defer control.deinit();
+    var redraw = try init(testing.io, alloc, .{ .cols = 64, .rows = 3, .max_scrollback_bytes = 1 });
+    defer redraw.deinit();
+    const count = control.pages.pages.first.?.capacity().rows - 8;
+    for ([_]*Screen{ &control, &redraw }) |s| {
+        s.cursorSetSemanticContent(.{ .prompt = .initial });
+        try s.testWriteString("prompt\n");
+        s.cursorSetSemanticContent(.{ .prompt = .continuation });
+        for (0..count) |_| try s.testWriteString("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\n");
+        s.cursorSetSemanticContent(.{ .input = .clear_eol });
+        try s.testWriteString("> ");
+    }
+    control.pages.setMaxLines(3);
+    redraw.pages.setMaxLines(3);
+    const origin = try redraw.pages.trackPin(redraw.pages.pin(.{ .screen = .{} }).?);
+    defer redraw.pages.untrackPin(origin);
+    try control.resize(.{ .cols = 4, .rows = 3 });
+    try redraw.resize(.{ .cols = 4, .rows = 3, .prompt_redraw = .true });
+    try testing.expect(origin.garbage);
+    const expected = try control.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(expected);
+    const actual = try redraw.dumpStringAlloc(alloc, .{ .screen = .{} });
+    defer alloc.free(actual);
+    try testing.expect(expected.len > 0);
+    try testing.expectEqualStrings(expected, actual);
+    try testing.expectEqual(control.cursor.x, redraw.cursor.x);
+    try testing.expectEqual(control.cursor.y, redraw.cursor.y);
 }
 
 test "Screen: resize more cols with cursor not at prompt" {

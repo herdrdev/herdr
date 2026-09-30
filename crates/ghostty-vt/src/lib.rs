@@ -1741,6 +1741,13 @@ impl Terminal {
         self.get_u16(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_ROWS)
     }
 
+    /// Read whether semantic prompt metadata places the cursor in prompt/input.
+    ///
+    /// This queries terminal state directly without constructing a screen snapshot.
+    pub fn cursor_at_prompt(&self) -> Result<bool, Error> {
+        self.get_bool(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_CURSOR_AT_PROMPT)
+    }
+
     pub fn cursor_y(&self) -> Result<u16, Error> {
         self.get_u16(ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_CURSOR_Y)
     }
@@ -4516,6 +4523,165 @@ mod tests {
             terminal.viewport_hyperlink_uri(0, 0).unwrap().as_deref(),
             Some("https://example.com")
         );
+    }
+
+    #[test]
+    fn prompt_redraw_clears_original_start_after_reflow() {
+        let mut terminal = Terminal::new(64, 12, 100_000).unwrap();
+        terminal.write(b"history\r\n");
+        let mut width: u16 = 64;
+        for cols in [60, 64, 23, 64, 60, 64] {
+            let prompt_rows = 62_u16.div_ceil(width);
+            terminal.write(b"\x1b]133;A;redraw=1\x1b\\");
+            terminal.write(b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n> ");
+            terminal.write(b"\x1b]133;B\x1b\\");
+            terminal.resize(cols, 12, 8, 16).unwrap();
+            let text = terminal
+                .read_text_screen(
+                    (0, 0),
+                    (cols - 1, terminal.total_rows().unwrap() as u32 - 1),
+                    false,
+                )
+                .unwrap();
+            assert_eq!(
+                text.trim(),
+                "history",
+                "prompt survived resize to {cols}: {text:?}"
+            );
+            assert_eq!(terminal.cursor_y().unwrap(), 1 + prompt_rows);
+            // Shell repaint rewinds by the line count it remembered before resize.
+            terminal.write(format!("\r\x1b[{prompt_rows}A").as_bytes());
+            assert_eq!(terminal.cursor_y().unwrap(), 1, "prompt origin drifted");
+            width = cols;
+        }
+    }
+
+    #[test]
+    fn prompt_redraw_rewinds_to_retained_origin_until_command_output() {
+        for rewind in ["\r", "\x1b[A", "\x1b[9A"] {
+            let mut terminal = Terminal::new(64, 12, 10_000).unwrap();
+            terminal.write(b"history\r\n\x1b]133;A;redraw=1\x07abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n> \x1b]133;B\x07");
+            terminal.resize(23, 12, 8, 16).unwrap();
+            terminal.resize(21, 12, 8, 16).unwrap();
+            terminal.write(rewind.as_bytes());
+            assert_eq!(terminal.cursor_y().unwrap(), 1);
+            terminal.write(rewind.as_bytes());
+            assert_eq!(terminal.cursor_y().unwrap(), 1);
+            assert_eq!(
+                terminal
+                    .read_text_viewport((0, 0), (20, 11), false)
+                    .unwrap()
+                    .trim(),
+                "history"
+            );
+            for _ in 0..2 {
+                terminal.write(b"\r\x1b[9A\x1b[J\x1b]133;A;redraw=1\x07abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n> \x1b]133;B\x07input");
+                let text = terminal.read_text_viewport((0, 0), (20, 11), true).unwrap();
+                assert!(text.starts_with("history\n"), "{text:?}");
+                assert_eq!(text.matches("input").count(), 1);
+            }
+            // Clearing the whole screen starts a new origin, even before repaint.
+            terminal.resize(20, 12, 8, 16).unwrap();
+            terminal.write(b"\x1b[2J\x1b[H\x1b]133;A;redraw=1\x07new");
+            assert_eq!(terminal.cursor_y().unwrap(), 0);
+            terminal.write(b"\r\n\x1b]133;C\x07\x1b[A");
+            assert_eq!(terminal.cursor_y().unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn prompt_redraw_secondary_preserves_primary_input() {
+        let mut terminal = Terminal::new(64, 12, 10_000).unwrap();
+        terminal.write(b"history\r\n\x1b]133;A;redraw=1\x07primary> \x1b]133;B\x07unfinished command\r\n\x1b]133;P;k=s;redraw=1\x07continue> \x1b]133;B\x07");
+        terminal.resize(23, 12, 8, 16).unwrap();
+        terminal.resize(21, 12, 8, 16).unwrap();
+        for _ in 0..2 {
+            terminal
+                .write(b"\r\x1b[9A\x1b[J\x1b]133;P;k=s;redraw=1\x07continue> \x1b]133;B\x07input");
+            let text = terminal.read_text_viewport((0, 0), (20, 11), true).unwrap();
+            assert!(text.contains("primary> unfinished command"), "{text:?}");
+            assert_eq!(text.matches("continue> input").count(), 1);
+        }
+        terminal.write(b"\r\n\x1b]133;P;k=s;redraw=1\x07next> \x1b]133;B\x07");
+        terminal.resize(20, 12, 8, 16).unwrap();
+        terminal.write(b"\r\x1b[9A\x1b[J\x1b]133;P;k=s;redraw=1\x07next> \x1b]133;B\x07more");
+        let text = terminal.read_text_viewport((0, 0), (19, 11), true).unwrap();
+        assert!(text.contains("continue> input"), "{text:?}");
+        assert!(text.contains("next> more"), "{text:?}");
+    }
+
+    #[test]
+    fn prompt_redraw_secondary_allows_editing_and_acceptance_during_resize() {
+        fn setup() -> Terminal {
+            let mut terminal = Terminal::new(64, 12, 10_000).unwrap();
+            terminal.write(b"history\r\n\x1b]133;A;redraw=1\x07primary> \x1b]133;B\x07command\r\n\x1b]133;P;k=s;redraw=1\x07continue> \x1b]133;B\x07value");
+            terminal
+        }
+        let mut terminal = setup();
+        terminal.write(b"\x1b[A");
+        assert_eq!(terminal.cursor_y().unwrap(), 1);
+        // Absolute movement above the origin must not make CUU move down.
+        terminal.write(b"\x1b[H\x1b[A");
+        assert_eq!(terminal.cursor_y().unwrap(), 0);
+
+        let mut terminal = setup();
+        terminal.resize(40, 12, 8, 16).unwrap();
+        terminal.write(
+            b"\r\x1b[9A\x1b[J\x1b]133;P;k=s;redraw=1\x07continue> \x1b]133;B\x07value\x1b[A",
+        );
+        assert_eq!(terminal.cursor_y().unwrap(), 1);
+
+        let mut terminal = setup();
+        terminal.write(b"\r\x1b[9A\x1b[J");
+        terminal.resize(10, 12, 8, 16).unwrap();
+        terminal.write(b"\x1b]133;P;k=s;redraw=1\x07continue> \x1b]133;B\x07value");
+        let text = terminal.read_text_viewport((0, 0), (9, 11), true).unwrap();
+        assert!(
+            text.contains("primary> command\ncontinue> value"),
+            "{text:?}"
+        );
+
+        for cols in [40, 10] {
+            let mut terminal = setup();
+            terminal.resize(cols, 12, 8, 16).unwrap();
+            terminal.write(b"\r\n\x1b]133;P;k=s;redraw=1\x07next> \x1b]133;B\x07more");
+            let text = terminal
+                .read_text_viewport((0, 0), (cols - 1, 11), true)
+                .unwrap();
+            assert!(text.contains("continue> value\nnext> more"), "{text:?}");
+        }
+
+        let mut terminal = setup();
+        // ED0 followed by ordinary input still erases at the actual cursor.
+        terminal.write(b"\x1b[A\r\x1b[Jreplacement");
+        let text = terminal.read_text_viewport((0, 0), (63, 11), true).unwrap();
+        assert_eq!(text.trim(), "history\nreplacement");
+
+        let mut terminal = Terminal::new(64, 12, 10_000).unwrap();
+        terminal.write(b"history\r\n\x1b]133;A;redraw=1\x07primary> \x1b]133;B\x07input");
+        terminal.resize(40, 12, 8, 16).unwrap();
+        terminal.write(b"\x1b]133;A;redraw=1\x07primary> \x1b]133;B\x07input\x1b[H\x1b[A");
+        assert_eq!(terminal.cursor_y().unwrap(), 0);
+        terminal.resize(30, 12, 8, 16).unwrap();
+        assert_eq!(terminal.cursor_y().unwrap(), 0);
+        let text = terminal.read_text_viewport((0, 0), (29, 11), true).unwrap();
+        assert!(text.contains("primary> input"), "{text:?}");
+    }
+
+    #[test]
+    fn prompt_redraw_requires_explicit_opt_in() {
+        for marker in ["", ";redraw=0"] {
+            let mut terminal = Terminal::new(64, 12, 100_000).unwrap();
+            terminal.write(
+                format!("history\r\n\x1b]133;A{marker}\x1b\\prompt\r\n> \x1b]133;B\x1b\\")
+                    .as_bytes(),
+            );
+            terminal.resize(23, 12, 8, 16).unwrap();
+            let text = terminal
+                .read_text_viewport((0, 0), (22, 11), false)
+                .unwrap();
+            assert_eq!(text.trim(), "history\nprompt\n>".trim());
+        }
     }
 
     #[test]

@@ -32,6 +32,7 @@ mod osc;
 mod state;
 mod terminal;
 mod xtgettcap;
+mod zsh;
 
 use self::agent_detection::{
     codex_prompt_ready, decide_detection_screen_read, decide_screen_detection_publish,
@@ -100,6 +101,8 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
     cmd.env("TERM_PROGRAM", "herdr");
+    // Fish must not repaint prompts on top of terminal-owned reflow.
+    cmd.env("fish_handle_reflow", "0");
     cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
     // Host handles refer to the outer terminal, never to this pane.
     for key in [
@@ -2251,6 +2254,9 @@ impl PaneRuntime {
         cmd.cwd(crate::platform::normalize_cwd_for_launch(&cwd));
         apply_pane_terminal_env(&mut cmd);
         apply_pane_launch_env(&mut cmd, launch_env);
+        if let Err(error) = zsh::apply(&mut cmd, &pane_shell(shell_config.default_shell)) {
+            warn!(%error, "failed to prepare zsh prompt integration");
+        }
         Self::spawn_command_builder(
             pane_id,
             rows,
@@ -4039,6 +4045,7 @@ mod tests {
             cmd.env(key, "outer-session");
         }
         cmd.env("TERM_PROGRAM", "iTerm.app");
+        cmd.env("fish_handle_reflow", "1");
         cmd.env("TERM_PROGRAM_VERSION", "outer-version");
 
         apply_pane_terminal_env(&mut cmd);
@@ -4047,6 +4054,7 @@ mod tests {
             assert!(cmd.get_env(key).is_none(), "{key} must not leak into panes");
         }
         assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("herdr")));
+        assert_eq!(cmd.get_env("fish_handle_reflow"), Some(OsStr::new("0")));
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
@@ -4057,6 +4065,7 @@ mod tests {
     fn pane_launch_env_allows_explicit_session_identity() {
         let extra = vec![
             ("CLAUDE_CODE_CHILD_SESSION".into(), "1".into()),
+            ("fish_handle_reflow".into(), "1".into()),
             ("CLAUDE_CODE_SESSION_ID".into(), "intentional-child".into()),
             ("CLAUDE_CODE_MESSAGING_TOKEN".into(), "fake-token".into()),
             ("ITERM_SESSION_ID".into(), "intentional-host".into()),

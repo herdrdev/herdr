@@ -358,6 +358,10 @@ pub const Handler = struct {
         value: Action.Value(action),
     ) !void {
         switch (action) {
+            .semantic_prompt, .set_attribute, .print, .print_slice, .print_repeat, .carriage_return, .linefeed => {},
+            else => self.terminal.flushPromptRedrawErase(),
+        }
+        switch (action) {
             .print => try self.terminal.print(value.cp),
             .print_slice => try self.terminal.printSlice(value.cps),
             .print_repeat => try self.terminal.printRepeat(value),

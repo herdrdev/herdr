@@ -1,0 +1,49 @@
+if (( _herdr_zdotdir_set )); then
+    builtin export ZDOTDIR=$_herdr_zdotdir
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r ${ZDOTDIR-$HOME}/.zshrc ]] || builtin source "${ZDOTDIR-$HOME}/.zshrc"
+builtin unset _herdr_zdotdir _herdr_zdotdir_set _HERDR_ZSH_INIT_DIR
+
+[[ -o interactive && -o rcs ]] || builtin return
+
+# Mark prompt boundaries in PS1 itself so SIGWINCH redisplay emits them too.
+_herdr_zsh_precmd() {
+    builtin local cmd_status=$?
+    builtin typeset -gi _herdr_zsh_owns_prompt=0
+    [[ -o prompt_percent ]] || builtin return
+    builtin emulate -L zsh -o no_aliases
+    if [[ $PS1 == ${_herdr_zsh_marked_ps1-} ]]; then
+        PS1=$_herdr_zsh_saved_ps1
+    fi
+    if [[ $PS2 == ${_herdr_zsh_marked_ps2-} ]]; then
+        PS2=$_herdr_zsh_saved_ps2
+    fi
+    # Respect existing shell integration rather than competing for markers.
+    [[ $PS1 != *$'\e]133;'* ]] || builtin return
+    builtin print -n -- $'\e]133;D;'$cmd_status$'\a'
+    builtin typeset -g _herdr_zsh_saved_ps1=$PS1 _herdr_zsh_saved_ps2=$PS2
+    builtin local initial=$'%{\e]133;A;redraw=1\a%}'
+    builtin local input=$'%{\e]133;B\a%}'
+    [[ $PS1 != *[^%]% && $PS1 != % ]] || PS1+=%
+    [[ $PS2 != *[^%]% && $PS2 != % ]] || PS2+=%
+    # The terminal carries prompt semantics across newlines. Keep theme
+    # expressions intact; inserting %{...%} inside ${...} changes zsh parsing.
+    PS1=$initial$PS1$input
+    PS2=$'%{\e]133;P;k=s;redraw=1\a%}'$PS2$input
+    builtin typeset -g _herdr_zsh_marked_ps1=$PS1 _herdr_zsh_marked_ps2=$PS2
+    _herdr_zsh_owns_prompt=1
+    # Themes must finish updating PS1 before the next prompt is marked.
+    precmd_functions=(${precmd_functions:#_herdr_zsh_precmd} _herdr_zsh_precmd)
+}
+_herdr_zsh_preexec() {
+    builtin emulate -L zsh -o no_aliases
+    (( _herdr_zsh_owns_prompt )) || builtin return
+    [[ $PS1 != ${_herdr_zsh_marked_ps1-} ]] || PS1=$_herdr_zsh_saved_ps1
+    [[ $PS2 != ${_herdr_zsh_marked_ps2-} ]] || PS2=$_herdr_zsh_saved_ps2
+    builtin print -n -- $'\e]133;C\a'
+}
+builtin typeset -ga precmd_functions preexec_functions
+precmd_functions=(${precmd_functions:#_herdr_zsh_precmd} _herdr_zsh_precmd)
+preexec_functions=(${preexec_functions:#_herdr_zsh_preexec} _herdr_zsh_preexec)

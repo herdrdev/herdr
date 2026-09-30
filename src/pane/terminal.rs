@@ -1735,7 +1735,8 @@ impl GhosttyPaneTerminal {
             let bottom_is_blank = ghostty_detection_text(&mut core)
                 .map(|text| text.trim().is_empty())
                 .unwrap_or(false);
-            if bottom_is_blank {
+            // A redrawable prompt may be intentionally blank until shell repaint.
+            if bottom_is_blank && !core.terminal.cursor_at_prompt().unwrap_or(false) {
                 if let Some(ansi) = replay_ansi.as_deref() {
                     core.terminal.scroll_viewport_bottom();
                     core.terminal.write(ansi.as_bytes());
@@ -5941,6 +5942,19 @@ mod tests {
                 "bottom detection should remain independent from the scrolled viewport after resize"
             );
         }
+    }
+
+    #[test]
+    fn resize_recovery_keeps_redrawable_prompt_cleared() {
+        let (tx, _rx) = mpsc::channel(4);
+        let mut terminal = crate::ghostty::Terminal::new(64, 12, 10_000).unwrap();
+        terminal.write(b"\x1b]133;A;redraw=1\x07abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\r\n> \x1b]133;B\x07");
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+        assert!(!pane.detection_text().trim().is_empty());
+        pane.resize(12, 60, 0, 0);
+        assert!(pane.detection_text().trim().is_empty());
+        pane.resize(12, 58, 0, 0);
+        assert!(pane.detection_text().trim().is_empty());
     }
 
     #[test]
