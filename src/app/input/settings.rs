@@ -372,6 +372,15 @@ fn activate_selection(state: &mut AppState) -> Option<SettingsAction> {
                         },
                     ))
                 }
+                crate::app::state::SidebarPanelSettingTarget::Animation => {
+                    Some(SettingsAction::SaveConfigEdit(
+                        crate::app::settings_general::ConfigEdit::Bool {
+                            section: "ui",
+                            key: "sidebar_animation",
+                            value: !item.visible,
+                        },
+                    ))
+                }
             }
         }
         SettingsSection::Archive => {
@@ -1403,6 +1412,68 @@ mod tests {
                 crate::app::settings_general::ConfigEdit::PomodoroSidebarVisible { visible: true }
             ))
         );
+    }
+
+    #[test]
+    fn sidebar_panels_animation_row_hides_and_shows_the_animation() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let directory = std::env::temp_dir().join(format!(
+            "herdr-sidebar-animation-setting-{}",
+            crate::config::test_unique_suffix()
+        ));
+        std::fs::create_dir_all(&directory).expect("temp dir");
+        let config_path = directory.join("config.toml");
+        std::fs::write(&config_path, "").expect("seed config");
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &config_path);
+        let config = crate::config::Config::load().config;
+        assert!(config.ui.sidebar_animation, "default stays on");
+        let mut app = crate::app::App::new(
+            &config,
+            true,
+            None,
+            tokio::sync::mpsc::unbounded_channel().1,
+            crate::api::EventHub::default(),
+        );
+        assert!(app.state.hyperspace.enabled);
+        app.state.view.hyperspace_rect = Rect::new(0, 20, 12, 4);
+        app.state.view.hyperspace_pause_hit_area = Rect::new(0, 23, 12, 1);
+
+        open_settings_at(&mut app.state, SettingsSection::SidebarPanels);
+        let index = crate::app::state::settings_sidebar_panel_items(&app.state)
+            .iter()
+            .position(|item| item.target == crate::app::state::SidebarPanelSettingTarget::Animation)
+            .expect("animation row");
+        app.state.settings.list.selected = index;
+        let action = update_settings_state(
+            &mut app.state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        )
+        .expect("animation hide action");
+        app.apply_settings_action(action);
+
+        assert!(!app.state.hyperspace.enabled);
+        assert_eq!(app.state.view.hyperspace_rect, Rect::default());
+        assert_eq!(app.state.view.hyperspace_pause_hit_area, Rect::default());
+        let written = std::fs::read_to_string(&config_path).expect("config written");
+        let parsed: toml::Value = toml::from_str(&written).expect("valid toml");
+        assert_eq!(
+            parsed.get("ui").and_then(|ui| ui.get("sidebar_animation")),
+            Some(&toml::Value::Boolean(false))
+        );
+
+        app.state.settings.list.selected = index;
+        let action = update_settings_state(
+            &mut app.state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        )
+        .expect("animation show action");
+        app.apply_settings_action(action);
+        assert!(app.state.hyperspace.enabled);
+        let written = std::fs::read_to_string(&config_path).expect("config written");
+        assert!(written.contains("sidebar_animation = true"));
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        std::fs::remove_dir_all(&directory).ok();
     }
 
     #[test]

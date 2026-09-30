@@ -2862,6 +2862,12 @@ impl App {
                 self.state
                     .hyperspace
                     .set_enabled(config.ui.sidebar_animation, Instant::now());
+                if !self.state.hyperspace.enabled {
+                    // Drop the hidden box's geometry now so its pause edge stops
+                    // taking clicks before the next view pass reflows the footer.
+                    self.state.view.hyperspace_rect = Rect::default();
+                    self.state.view.hyperspace_pause_hit_area = Rect::default();
+                }
                 self.state.mobile_width_threshold = config.ui.mobile_width_threshold;
                 // Re-clamp the live width to the new bounds. No source guard — bounds
                 // always apply, including to widths owned by Persisted or Manual.

@@ -3302,6 +3302,7 @@ pub(crate) enum SidebarPanelSettingTarget {
     NotepadTab(crate::notepad::NotepadTabTarget),
     Goals,
     Pomodoro,
+    Animation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3358,6 +3359,11 @@ pub(crate) fn settings_sidebar_panel_items(state: &AppState) -> Vec<SidebarPanel
         target: SidebarPanelSettingTarget::Pomodoro,
         label: "Pomodoro widget".to_string(),
         visible: state.pomodoro.sidebar_visible,
+    });
+    items.push(SidebarPanelSettingItem {
+        target: SidebarPanelSettingTarget::Animation,
+        label: "Animation".to_string(),
+        visible: state.hyperspace.enabled,
     });
     items
 }
