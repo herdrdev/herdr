@@ -749,7 +749,33 @@ impl TerminalState {
                 &agent_label,
                 &session_ref,
             );
-        if owner_conflicts && !foreground_takeover_allowed {
+        // A pane whose foreground process Herdr cannot see has no arbiter, and
+        // refusing the report leaves it unable to name any agent at all.
+        //
+        // The owner conflict is safe while process detection is the fallback:
+        // whoever the pane is really running wins, whatever a report claims.
+        // In a pane whose program is a supervisor -- `script`, a `tmux`, an
+        // `expect` wrapper, anything owning its own pty -- `detected_agent` is
+        // `None` for the life of the pane, and then:
+        //
+        //   * a `herdr:*` integration's own hook still reaches us from inside
+        //     that pty and takes the pane's session, but cannot set the agent
+        //     label, because a label is confirmed against `detected_agent`;
+        //   * nothing releases that session -- `recent_agent_process_exit` is
+        //     set from detection too, so the agent's exit is never observed,
+        //     and the idle-prompt cleanup cannot see a prompt inside the
+        //     supervisor's pty;
+        //   * and every later report from any other source is refused here.
+        //
+        // The result is a pane that names the first agent to race a report in
+        // and no agent ever again, with `release_agent` and
+        // `clear_agent_authority` both answering `ok` and changing nothing.
+        //
+        // With no detected agent the sitting owner's claim is exactly as
+        // unverifiable as the new one, so there is nothing to protect and the
+        // newer report is the better information.
+        let undetected_takeover_allowed = owner_conflicts && self.detected_agent.is_none();
+        if owner_conflicts && !foreground_takeover_allowed && !undetected_takeover_allowed {
             return None;
         }
         let session_ref = session_ref.map(|session_ref| {
@@ -5590,6 +5616,71 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_pane_with_no_detected_agent_can_be_renamed_by_a_report() {
+        // A pane whose program is a supervisor -- `script`, a `tmux`, an
+        // `expect` wrapper -- never has a `detected_agent`, so the agent it is
+        // really running cannot arbitrate the pane's session. An integration's
+        // hook still reaches Herdr from inside that pty and takes the session,
+        // nothing releases it (the agent's exit is never observed either), and
+        // before this every later report was refused: the pane named the first
+        // agent to race a report in and no agent ever again.
+        //
+        // With nothing detected the sitting owner's claim is exactly as
+        // unverifiable as the new one, so the newer report wins.
+        let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("claude-session").unwrap(),
+        });
+        terminal.set_detected_state(None, AgentState::Idle);
+
+        let change = terminal.set_hook_authority(
+            "supervisor".into(),
+            "grok".into(),
+            AgentState::Working,
+            None,
+            Some(31),
+        );
+
+        assert!(change.is_some(), "a report should be accepted when nothing is detected");
+        assert_eq!(terminal.effective_agent_label(), Some("grok"));
+        assert!(
+            terminal.persisted_agent_session.is_none(),
+            "the stale owner should not survive the report that replaced it"
+        );
+    }
+
+    #[test]
+    fn a_detected_agent_still_protects_its_owner_from_a_report() {
+        // The control, and the reason the relaxation is narrow: while Herdr can
+        // see what the pane is running, process detection is the arbiter and a
+        // report from another source must not be able to take the session off
+        // it. Only the absence of any detected agent opens the door.
+        let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("claude-session").unwrap(),
+        });
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+
+        let change = terminal.set_hook_authority(
+            "supervisor".into(),
+            "grok".into(),
+            AgentState::Working,
+            None,
+            Some(31),
+        );
+
+        assert!(change.is_none(), "a detected agent must keep its owner");
+        assert_eq!(
+            terminal.persisted_agent_session.as_ref().map(|s| s.source.as_str()),
+            Some("herdr:claude")
+        );
     }
 
     #[test]
