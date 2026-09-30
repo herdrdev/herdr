@@ -2561,6 +2561,7 @@ mod tests {
                 workers_unknown: Some(false),
                 dependencies_authoritative: true,
                 session_id: Some(SESSION_ID.into()),
+                last_turn_at: None,
                 settle_ready: false,
             })),
         });

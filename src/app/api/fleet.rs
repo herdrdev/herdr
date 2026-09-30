@@ -54,6 +54,7 @@ impl App {
                             agent_ref: entry.agent_ref.clone(),
                             name: entry.name.clone().unwrap_or_else(|| entry.handle.clone()),
                             title: entry.title.clone(),
+                            last_turn_at: entry.last_turn_at.clone(),
                             agent: entry.agent.clone(),
                             state: lifecycle.state_label.to_string(),
                             snoozed_until: lifecycle.snoozed_until,

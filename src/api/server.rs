@@ -1049,6 +1049,7 @@ mod tests {
             agent_session: None,
             scroll: None,
             revision: 0,
+            last_turn_at: None,
         }
     }
 
@@ -1524,6 +1525,7 @@ mod tests {
                     title: Some(format!("burst-{index}")),
                     display_agent: None,
                     state_labels: HashMap::new(),
+                    last_turn_at: None,
                 },
             });
         };

@@ -25,6 +25,7 @@ import fcntl
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from closing_block import parse, settle_ready  # noqa: E402
@@ -188,6 +189,7 @@ def main() -> int:
             session_id=session_id or None,
             title=title_from(payload, pane_id),
             seq=seq,
+            last_turn_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         ),
     )
     if outcome is not None and os.environ.get("HERDR_CLOSING_BLOCK_DEBUG"):

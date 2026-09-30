@@ -482,14 +482,33 @@ pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
     let Some((area, _)) = tooltip_rect(anchor, &label, frame.area()) else {
         return;
     };
-    let label = wrap_tooltip_label(&label, area.width.saturating_sub(2)).join("\n");
-    let paragraph = Paragraph::new(label)
-        .style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.panel_bg),
-        )
-        .block(Block::default().borders(Borders::ALL));
+    let age_tooltip = label.starts_with("Last reply ") || label.starts_with("Last status report ");
+    let lines = wrap_tooltip_label(&label, area.width.saturating_sub(2));
+    let paragraph = Paragraph::new(ratatui::text::Text::from(
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let color = if age_tooltip && index == 0 {
+                    app.palette.yellow
+                } else if age_tooltip {
+                    app.palette.overlay0
+                } else {
+                    app.palette.text
+                };
+                ratatui::text::Line::from(ratatui::text::Span::styled(
+                    line,
+                    Style::default().fg(color),
+                ))
+            })
+            .collect::<Vec<_>>(),
+    ))
+    .style(
+        Style::default()
+            .fg(app.palette.text)
+            .bg(app.palette.panel_bg),
+    )
+    .block(Block::default().borders(Borders::ALL));
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph, area);
 }

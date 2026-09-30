@@ -350,6 +350,7 @@ def report(
     sock_path: str | None = None,
     state: str | None = None,
     seq: int | None = None,
+    last_turn_at: str | None = None,
 ) -> dict:
     """Push one v2 turn-end status. Never raises; returns what it did."""
     gate_objects = [
@@ -383,6 +384,7 @@ def report(
 
     seq = seq if isinstance(seq, int) else reserve_sequence()
     reported_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    last_turn_at = last_turn_at if isinstance(last_turn_at, str) and last_turn_at else None
     completion = (
         completion if completion in {"complete", "incomplete", "missing"} else "missing"
     )
@@ -424,6 +426,8 @@ def report(
             payload["items"] = action_points
     if reported_agents is not None:
         payload["agents"] = reported_agents
+    if last_turn_at is not None:
+        payload["last_turn_at"] = last_turn_at
     if title:
         payload["title"] = title
     if state == "working" and wait and isinstance(eta_s, int) and eta_s >= 0:
@@ -454,6 +458,7 @@ def report(
     agent_params = {"pane_id": pane_id, "source": source, "agent": agent,
                     "state": state, "seq": seq, "v": VERSION,
                     "reported_at": reported_at,
+                    "last_turn_at": last_turn_at,
                     "completion": completion,
                     "external_wait": external_wait,
                     "parse_status": parse_status,

@@ -1575,6 +1575,7 @@ impl App {
             || update.previous_wait != update.wait
             || update.previous_eta_s != update.eta_s
             || update.previous_reported_at != update.reported_at
+            || update.previous_last_turn_at != update.last_turn_at
             || update.previous_presentation != update.presentation
         {
             let presentation = update.presentation.clone();
@@ -1588,6 +1589,7 @@ impl App {
                     wait: update.wait.clone(),
                     eta_s: update.eta_s,
                     reported_at: update.reported_at.clone(),
+                    last_turn_at: update.last_turn_at.clone(),
                     agent: update.agent_label.clone(),
                     title: presentation.title,
                     display_agent: presentation.display_agent,

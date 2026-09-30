@@ -2386,7 +2386,7 @@ class StopHookTranscriptTests(unittest.TestCase):
 
         hook = self._hook_module()
         with mock.patch.object(
-            hook, "last_assistant_text", return_value="Progressing."
+            hook, "last_assistant_turn", return_value=("Progressing.", None)
         ), mock.patch.object(
             hook,
             "report",
@@ -2406,6 +2406,36 @@ class StopHookTranscriptTests(unittest.TestCase):
         self.assertIsNone(kwargs["external_wait"])
         self.assertFalse(kwargs["workers_unknown"])
 
+    def test_stop_report_uses_the_assistant_transcript_timestamp(self):
+        import io
+        import json
+
+        hook = self._hook_module()
+        timestamp = "2026-09-29T12:34:56.789Z"
+        path = self._write_transcript(
+            [
+                '{"type":"user"}',
+                json.dumps({
+                    "type": "assistant",
+                    "timestamp": timestamp,
+                    "message": {"content": [{"type": "text", "text": "Done here."}]},
+                }),
+            ]
+        )
+        with mock.patch.object(
+            hook,
+            "report",
+            return_value={"payload": {}, "mirror": None, "socket": False},
+        ) as report, mock.patch.dict(
+            hook.os.environ,
+            {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p1"},
+            clear=False,
+        ), mock.patch.object(
+            hook.sys, "stdin", io.StringIO(json.dumps({"transcript_path": path}))
+        ):
+            self.assertEqual(hook.main(), 0)
+        self.assertEqual(report.call_args.kwargs["last_turn_at"], timestamp)
+
     def test_reserves_report_sequence_before_reading_the_transcript(self):
         import io
 
@@ -2418,10 +2448,10 @@ class StopHookTranscriptTests(unittest.TestCase):
 
         def read(_path):
             calls.append("read")
-            return "Done here."
+            return "Done here.", "2026-09-29T12:34:56Z"
 
         with mock.patch.object(hook, "reserve_sequence", side_effect=reserve), mock.patch.object(
-            hook, "last_assistant_text", side_effect=read
+            hook, "last_assistant_turn", side_effect=read
         ), mock.patch.object(
             hook,
             "report",

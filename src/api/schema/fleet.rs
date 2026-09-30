@@ -15,6 +15,8 @@ pub struct FleetAgentInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
     pub state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

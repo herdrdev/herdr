@@ -777,6 +777,7 @@ fn wait_matched_response(request_id: &str, event: serde_json::Value) -> String {
                     wait: data.wait,
                     eta_s: data.eta_s,
                     reported_at: data.reported_at,
+                    last_turn_at: data.last_turn_at,
                     agent: data.agent,
                     title: data.title,
                     display_agent: data.display_agent,

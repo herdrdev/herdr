@@ -21569,6 +21569,7 @@ next_tab = ""
                             parse_status: None,
                             workers_unknown: None,
                             agents: None,
+                            last_turn_at: None,
                             settle_ready: None,
                         }
                     ),
@@ -21898,6 +21899,7 @@ next_tab = ""
                     parse_status: None,
                     workers_unknown: None,
                     agents: None,
+                    last_turn_at: None,
                     settle_ready: None,
                 }),
             },

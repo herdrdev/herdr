@@ -326,6 +326,8 @@ pub struct AgentInfo {
     pub eta_s: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reported_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_turn_at: Option<String>,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub screen_detection_skipped: bool,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]

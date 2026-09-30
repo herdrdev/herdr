@@ -1630,6 +1630,7 @@ fn report_status(
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            last_turn_at: None,
             settle_ready: None,
         }),
     })?;

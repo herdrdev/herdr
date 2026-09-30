@@ -3382,6 +3382,8 @@ pub(crate) struct FleetRow {
     pub(crate) age_s: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reported_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) last_turn_at: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     gates: Vec<FleetGate>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -3424,10 +3426,16 @@ pub(crate) struct EffectiveRemoteLifecycle<'a> {
 
 impl FleetRow {
     pub(crate) fn age_seconds_at(&self, now_unix_s: u64) -> Option<u64> {
-        self.reported_at
+        self.last_turn_at
             .as_deref()
             .and_then(parse_utc_timestamp)
             .and_then(|reported_at| now_unix_s.checked_sub(reported_at))
+            .or_else(|| {
+                self.reported_at
+                    .as_deref()
+                    .and_then(parse_utc_timestamp)
+                    .and_then(|reported_at| now_unix_s.checked_sub(reported_at))
+            })
             .or(self.age_s)
     }
 
@@ -3600,10 +3608,17 @@ impl FleetRow {
         .to_string();
         let state = effective_state(&raw_state, liveness, blocked);
         let reported_at = agent.reported_at.clone();
-        let age_s = reported_at
+        let last_turn_at = agent.last_turn_at.clone();
+        let age_s = last_turn_at
             .as_deref()
             .and_then(parse_utc_timestamp)
-            .and_then(|reported| now_s.checked_sub(reported));
+            .and_then(|reported| now_s.checked_sub(reported))
+            .or_else(|| {
+                reported_at
+                    .as_deref()
+                    .and_then(parse_utc_timestamp)
+                    .and_then(|reported| now_s.checked_sub(reported))
+            });
         let gates = agent
             .gates
             .iter()
@@ -3660,6 +3675,7 @@ impl FleetRow {
             closure_blocked: blocked,
             age_s,
             reported_at,
+            last_turn_at,
             gates,
             gate_summary,
             blocked_reason: None,
@@ -3753,6 +3769,7 @@ impl FleetRow {
             native_session: None,
             agent_info: None,
             run_summary: Some(summary),
+            last_turn_at: None,
         })
     }
 
@@ -3839,6 +3856,7 @@ impl FleetRow {
             native_session: None,
             agent_info: None,
             run_summary: None,
+            last_turn_at: None,
         }
     }
 
@@ -4462,6 +4480,23 @@ mod tests {
             "revision": 1
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn fleet_agent_age_prefers_last_turn_and_falls_back_to_report_time() {
+        let mut info = agent(AgentStatus::Working, serde_json::json!([]));
+        info.reported_at = Some("2026-08-26T14:55:00Z".into());
+        info.last_turn_at = Some("2026-08-26T14:00:00Z".into());
+        let now = parse_utc_timestamp("2026-08-26T15:00:00Z").expect("valid time");
+        let row = FleetRow::from_agent("ub1", false, info, now).expect("valid fleet row");
+        assert_eq!(row.age_s, Some(3_600));
+        assert_eq!(row.age_seconds_at(now), Some(3_600));
+
+        let mut legacy = agent(AgentStatus::Working, serde_json::json!([]));
+        legacy.reported_at = Some("2026-08-26T14:55:00Z".into());
+        let row = FleetRow::from_agent("ub1", false, legacy, now).expect("legacy row");
+        assert_eq!(row.age_s, Some(300));
+        assert_eq!(row.age_seconds_at(now), Some(300));
     }
 
     fn group_catalog(

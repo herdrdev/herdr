@@ -22,6 +22,7 @@ pub struct ClosingBlockReport {
     pub settle_ready: bool,
     pub dependencies_authoritative: bool,
     pub session_id: Option<String>,
+    pub last_turn_at: Option<String>,
 }
 
 #[derive(Debug)]

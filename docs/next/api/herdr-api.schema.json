@@ -952,6 +952,12 @@
                     "null"
                   ]
                 },
+                "last_turn_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "pane_id": {
                   "type": "string"
                 },
@@ -1410,6 +1416,12 @@
               "type": "array"
             },
             "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_turn_at": {
               "type": [
                 "string",
                 "null"
@@ -4281,6 +4293,12 @@
               },
               "type": [
                 "array",
+                "null"
+              ]
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
                 "null"
               ]
             },
@@ -8608,6 +8626,12 @@
               },
               "type": "array"
             },
+            "last_turn_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "launch_pending": {
               "type": "boolean"
             },
@@ -8904,6 +8928,12 @@
               "minimum": 0,
               "type": [
                 "integer",
+                "null"
+              ]
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
                 "null"
               ]
             },
@@ -9328,6 +9358,12 @@
                 "$ref": "#/schemas/success_response/$defs/ClosingBlockItem"
               },
               "type": "array"
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "launch_pending": {
               "type": "boolean"
@@ -10772,6 +10808,12 @@
                     "null"
                   ]
                 },
+                "last_turn_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "pane_id": {
                   "type": "string"
                 },
@@ -10917,6 +10959,12 @@
             },
             "agent_ref": {
               "$ref": "#/schemas/success_response/$defs/AgentRef"
+            },
+            "last_turn_at": {
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "name": {
               "type": "string"
@@ -11886,6 +11934,12 @@
               "type": "array"
             },
             "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "last_turn_at": {
               "type": [
                 "string",
                 "null"

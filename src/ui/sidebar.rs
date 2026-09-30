@@ -386,11 +386,70 @@ fn compact_age(
     entry: &AgentPanelEntry,
     now: std::time::Instant,
 ) -> (String, Option<std::time::Instant>) {
-    let instant = entry.reported_at.or(entry.activity_at);
+    let instant = entry
+        .last_turn_at
+        .map(|timestamp| timestamp.instant)
+        .or(entry.reported_at)
+        .or(entry.activity_at);
     let age = instant
         .and_then(|instant| status_report_age_compact_label(Some(instant), now))
         .unwrap_or_else(|| "—".to_string());
     (age, instant)
+}
+
+fn reply_timestamp(value: Option<&str>, now: std::time::Instant) -> Option<AgentReplyTimestamp> {
+    let unix_seconds = crate::fleet::parse_utc_timestamp(value?)?;
+    let now_unix_seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let age = now_unix_seconds.checked_sub(unix_seconds)?;
+    Some(AgentReplyTimestamp {
+        instant: now.checked_sub(std::time::Duration::from_secs(age))?,
+        unix_seconds,
+    })
+}
+
+fn cached_reply_timestamp(
+    instant: Option<std::time::Instant>,
+    unix_seconds: Option<u64>,
+) -> Option<AgentReplyTimestamp> {
+    Some(AgentReplyTimestamp {
+        instant: instant?,
+        unix_seconds: unix_seconds?,
+    })
+}
+
+fn age_words(instant: std::time::Instant, now: std::time::Instant) -> String {
+    let minutes = now
+        .checked_duration_since(instant)
+        .unwrap_or_default()
+        .as_secs()
+        / 60;
+    if minutes >= 60 {
+        format!("{}h {}m", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes}m")
+    }
+}
+
+fn age_tooltip(
+    last_turn_at: Option<AgentReplyTimestamp>,
+    reported_at: Option<std::time::Instant>,
+    now: std::time::Instant,
+) -> String {
+    if let Some(last_turn_at) = last_turn_at {
+        let ago = age_words(last_turn_at.instant, now);
+        let clock = crate::platform::local_datetime_at(last_turn_at.unix_seconds)
+            .map(|local| format!("{:02}:{:02}", local.hour(), local.minute()))
+            .unwrap_or_else(|| "local time unavailable".to_string());
+        format!("Last reply {ago} ago\n({clock})")
+    } else {
+        let ago = reported_at
+            .map(|instant| format!("{} ago", age_words(instant, now)))
+            .unwrap_or_else(|| "time unavailable".to_string());
+        format!("Last status report {ago}\nAgent reply time unavailable")
+    }
 }
 
 fn remote_compact_age(remote: &RemoteAgentPanelEntry, now: std::time::Instant) -> String {
@@ -969,10 +1028,8 @@ fn render_remote_compact_agent_row_with_prefix(
         .add_modifier(Modifier::DIM);
     let age_style = Style::default().fg(if remote.snoozed_until.is_some() {
         p.overlay0
-    } else if remote.state == AgentState::Working {
-        p.blue
     } else {
-        p.overlay0
+        p.yellow
     });
 
     let mut x = rect.x.saturating_add(widths.prefix as u16);
@@ -1154,11 +1211,7 @@ fn render_compact_agent_row_with_prefix(
     let provider_style = Style::default()
         .fg(provider_color(entry, p))
         .add_modifier(Modifier::DIM);
-    let age_style = Style::default().fg(if entry.state == AgentState::Working {
-        p.blue
-    } else {
-        p.overlay0
-    });
+    let age_style = Style::default().fg(p.yellow);
     let mut spans = vec![
         Span::styled(prefix, row_style(compact_row_style(Style::default(), bg))),
         Span::styled(dot, row_style(dot_style)),
@@ -1480,6 +1533,7 @@ pub(crate) enum AgentPanelIdentity {
 #[allow(dead_code)]
 pub(crate) struct AgentPanelEntry {
     pub(crate) identity: AgentPanelIdentity,
+    pub(crate) last_turn_at: Option<AgentReplyTimestamp>,
     data: std::sync::Arc<AgentPanelEntryData>,
     pub(crate) pinned: bool,
     /// Projection-only overlay. Keeping it outside shared row data lets group
@@ -1498,6 +1552,12 @@ pub(crate) struct AgentPanelEntry {
     pub(crate) working_shelf: bool,
     /// Read-only membership token projected once for a canonical pane row.
     pub(crate) pod: Option<PodToken>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct AgentReplyTimestamp {
+    pub(crate) instant: std::time::Instant,
+    pub(crate) unix_seconds: u64,
 }
 
 #[derive(Clone)]
@@ -1572,6 +1632,7 @@ impl AgentPanelEntry {
     pub(crate) fn new(identity: AgentPanelIdentity, data: AgentPanelEntryData) -> Self {
         Self {
             identity,
+            last_turn_at: None,
             data: std::sync::Arc::new(data),
             pinned: false,
             space_label_redundant: false,
@@ -2276,6 +2337,12 @@ fn collect_agent_panel_entries_with_runtimes(
                             remote_host,
                         },
                     );
+                    entry.last_turn_at = terminal.and_then(|terminal| {
+                        cached_reply_timestamp(
+                            terminal.last_turn_at_instant(),
+                            terminal.last_turn_at_unix_s(),
+                        )
+                    });
                     entry.pinned = pinned;
                     entry
                 })
@@ -2426,6 +2493,8 @@ pub(crate) fn remote_agent_panel_entries_at(
                     remote_host: None,
                 },
             );
+            panel_entry.last_turn_at =
+                reply_timestamp(row.last_turn_at.as_deref(), std::time::Instant::now());
             panel_entry.pending_ask = row
                 .agent_info()
                 .and_then(|info| pending_ask_from_items(&info.gates, &info.items));
@@ -8788,6 +8857,25 @@ pub(crate) fn compute_sidebar_hover_targets(
                         row_hover: false,
                     });
                 }
+                if widths.age > 0 {
+                    if let Some(rect) = clamp_row_cells(
+                        body,
+                        row_y,
+                        usize::from(body.width).saturating_sub(widths.age),
+                        widths.age,
+                    ) {
+                        targets.push(crate::app::state::SidebarHoverTarget {
+                            rect,
+                            label: age_tooltip(
+                                entry.last_turn_at,
+                                entry.reported_at.or(entry.activity_at),
+                                app.view_observed_at,
+                            ),
+                            action: None,
+                            row_hover: false,
+                        });
+                    }
+                }
                 let title_width = usize::from(body.width).saturating_sub(fixed_width);
                 let control_pane = row_control_pane(app, entry, tab);
                 let available_width =
@@ -8902,6 +8990,25 @@ pub(crate) fn compute_sidebar_hover_targets(
                         action: None,
                         row_hover: false,
                     });
+                }
+                if widths.age > 0 && entry.snoozed_until.is_none() {
+                    if let Some(rect) = clamp_row_cells(
+                        body,
+                        row_y,
+                        row_width.saturating_sub(widths.age),
+                        widths.age,
+                    ) {
+                        targets.push(crate::app::state::SidebarHoverTarget {
+                            rect,
+                            label: age_tooltip(
+                                entry.entry.last_turn_at,
+                                entry.entry.reported_at.or(entry.entry.activity_at),
+                                app.view_observed_at,
+                            ),
+                            action: None,
+                            row_hover: false,
+                        });
+                    }
                 }
                 let title_width = row_width.saturating_sub(fixed_width);
                 let control = remote_row_control(entry);
@@ -20138,6 +20245,82 @@ row_gap = 1
     }
 
     #[test]
+    fn agent_sidebar_age_prefers_last_turn_and_tooltip_explains_fallback() {
+        let now = std::time::Instant::now();
+        let entry = AgentPanelEntry::new(
+            AgentPanelIdentity::Local(AgentPanelLocalTarget {
+                ws_idx: 0,
+                tab_idx: 0,
+                pane_id: PaneId::from_raw(1),
+            }),
+            AgentPanelEntryData {
+                primary_label: String::new(),
+                space_label: String::new(),
+                primary_tab_label: None,
+                tab_has_custom_name: false,
+                tab_label_leads_with_agent: false,
+                pane_label: None,
+                pane_label_is_agent_identity: false,
+                terminal_title: None,
+                terminal_title_stripped: None,
+                agent_label: None,
+                agent_kind_label: None,
+                agent: None,
+                foreground_process_name: None,
+                agent_context: None,
+                has_agent: true,
+                prio: false,
+                starred: false,
+                state: AgentState::Working,
+                attention_tier: None,
+                open_blockers: false,
+                completion_tier: None,
+                usage_limited: false,
+                active_subagents: None,
+                model_letter: None,
+                waiting_on_agents: false,
+                holds_shell: false,
+                gate_count: 0,
+                seen: true,
+                done_since: None,
+                stale: false,
+                reported_at: Some(now),
+                last_agent_state_change_seq: None,
+                activity_at: Some(now),
+                state_labels: Default::default(),
+                tokens: Default::default(),
+                tab_first_pane: false,
+                remote_host: None,
+            },
+        );
+        let mut entry = entry;
+        let reply_instant = now - std::time::Duration::from_secs(71 * 60);
+        let reply_unix_seconds = 1_725_000_900;
+        entry.last_turn_at = Some(AgentReplyTimestamp {
+            instant: reply_instant,
+            unix_seconds: reply_unix_seconds,
+        });
+        assert_eq!(compact_age(&entry, now).0, "1h");
+        let local = crate::platform::local_datetime_at(reply_unix_seconds).expect("local time");
+        assert_eq!(
+            age_tooltip(entry.last_turn_at, entry.reported_at, now),
+            format!(
+                "Last reply 1h 11m ago\n({:02}:{:02})",
+                local.hour(),
+                local.minute()
+            )
+        );
+        assert_eq!(
+            age_tooltip(
+                None,
+                Some(now - std::time::Duration::from_secs(4 * 60)),
+                now
+            ),
+            "Last status report 4m ago\nAgent reply time unavailable"
+        );
+    }
+
+    #[test]
     fn long_foreground_process_name_is_truncated_to_its_budget() {
         let mut app = app_with_agents(&["one"]);
         let pane_id = app.workspaces[0].tabs[0].root_pane;
@@ -28428,7 +28611,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             }),
             "unhovered rows keep lifecycle hit areas hidden"
         );
-        let hover = crate::ui::hovered_control_at(&app, row.rect.right() - 1, row.rect.y)
+        let hover = crate::ui::hovered_control_at(&app, row.rect.x + 3, row.rect.y)
             .expect("row-wide hover target");
         assert_eq!(
             hover,
@@ -29564,7 +29747,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .into_iter()
             .find(|row| row.agent_ref == entry.agent_ref)
             .expect("remote row geometry");
-        let hover = crate::ui::hovered_control_at(&app, row.rect.right() - 1, row.rect.y)
+        let hover = crate::ui::hovered_control_at(&app, row.rect.x + 3, row.rect.y)
             .expect("row-wide hover target");
         assert_eq!(
             hover,

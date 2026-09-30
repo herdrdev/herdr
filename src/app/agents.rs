@@ -474,6 +474,7 @@ impl App {
             wait: pane.wait,
             eta_s: pane.eta_s,
             reported_at: pane.reported_at,
+            last_turn_at: pane.last_turn_at,
             screen_detection_skipped: false,
             state_labels: pane.state_labels,
             tokens: pane.tokens,

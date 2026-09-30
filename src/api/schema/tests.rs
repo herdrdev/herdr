@@ -1285,6 +1285,7 @@ fn worktree_request_and_response_round_trip() {
                 agent_session: None,
                 scroll: None,
                 revision: 0,
+                last_turn_at: None,
             },
             worktree: WorktreeInfo {
                 path: "/worktrees/herdr/worktree-api".into(),
@@ -1764,6 +1765,7 @@ fn create_response_round_trips_with_root_pane() {
                 agent_session: None,
                 scroll: None,
                 revision: 0,
+                last_turn_at: None,
             },
         },
     };
@@ -2033,6 +2035,7 @@ fn report_agent_params_with_foreign_version_defers_typed_fields() {
     assert_eq!(legacy.wait, None);
     assert_eq!(legacy.eta_s, None);
     assert_eq!(legacy.reported_at, None);
+    assert_eq!(legacy.last_turn_at, None);
 }
 
 #[test]
@@ -2060,6 +2063,33 @@ fn report_agent_params_with_current_version_keep_strict_arrays() {
     .unwrap();
     assert_eq!(params.gates.as_deref().unwrap().len(), 1);
     assert_eq!(params.items.as_deref(), Some(&[][..]));
+}
+
+#[test]
+fn report_agent_params_accept_optional_last_turn_timestamp() {
+    let old: PaneReportAgentParams = serde_json::from_value(serde_json::json!({
+        "pane_id": "w1:p1",
+        "source": "herdr:claude-closing-block",
+        "agent": "claude",
+        "state": "idle",
+        "v": 2
+    }))
+    .expect("older report payloads remain valid");
+    assert_eq!(old.last_turn_at, None);
+
+    let current: PaneReportAgentParams = serde_json::from_value(serde_json::json!({
+        "pane_id": "w1:p1",
+        "source": "herdr:claude-closing-block",
+        "agent": "claude",
+        "state": "idle",
+        "v": 2,
+        "last_turn_at": "2026-09-29T12:34:56Z"
+    }))
+    .unwrap();
+    assert_eq!(
+        current.last_turn_at.as_deref(),
+        Some("2026-09-29T12:34:56Z")
+    );
 }
 
 #[test]

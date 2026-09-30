@@ -381,6 +381,9 @@ pub struct ClosingReport {
     pub(crate) closing_contract: Option<String>,
     pub(crate) closing_contract_met: Option<bool>,
     pub(crate) closing_contract_met_at: Option<Instant>,
+    pub(crate) last_turn_at: Option<String>,
+    last_turn_at_instant: Option<Instant>,
+    last_turn_at_unix_s: Option<u64>,
     completion: Option<crate::api::schema::ClosingCompletion>,
     external_wait: Option<String>,
     parse_status: Option<crate::api::schema::ClosingParseStatus>,
@@ -416,6 +419,9 @@ impl Default for ClosingReport {
             closing_contract: None,
             closing_contract_met: None,
             closing_contract_met_at: None,
+            last_turn_at: None,
+            last_turn_at_instant: None,
+            last_turn_at_unix_s: None,
             completion: None,
             external_wait: None,
             parse_status: None,
@@ -470,6 +476,10 @@ struct ClosingReportHandoffState {
     contract: Option<String>,
     contract_met: Option<bool>,
     contract_met_elapsed: Option<Duration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_turn_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_turn_at_elapsed: Option<Duration>,
     completion: Option<crate::api::schema::ClosingCompletion>,
     external_wait: Option<String>,
     parse_status: Option<crate::api::schema::ClosingParseStatus>,
@@ -504,6 +514,10 @@ impl ClosingReportHandoffState {
             contract_met_elapsed: report
                 .closing_contract_met_at
                 .map(|at| now.saturating_duration_since(at)),
+            last_turn_at: report.last_turn_at.clone(),
+            last_turn_at_elapsed: report
+                .last_turn_at_instant
+                .map(|at| now.saturating_duration_since(at)),
             completion: report.completion,
             external_wait: report.external_wait.clone(),
             parse_status: report.parse_status,
@@ -536,6 +550,14 @@ impl ClosingReportHandoffState {
             closing_contract_met_at: self
                 .contract_met_elapsed
                 .and_then(|elapsed| now.checked_sub(elapsed)),
+            last_turn_at: self.last_turn_at.clone(),
+            last_turn_at_instant: self
+                .last_turn_at_elapsed
+                .and_then(|elapsed| now.checked_sub(elapsed)),
+            last_turn_at_unix_s: self
+                .last_turn_at
+                .as_deref()
+                .and_then(crate::fleet::parse_utc_timestamp),
             completion: self.completion,
             external_wait: self.external_wait,
             parse_status: self.parse_status,
@@ -1338,6 +1360,48 @@ impl TerminalState {
         self.closing_report
             .as_ref()
             .and_then(|report| report.closing_contract_met_at)
+    }
+
+    pub(crate) fn last_turn_at(&self) -> Option<&str> {
+        self.closing_report
+            .as_ref()
+            .and_then(|report| report.last_turn_at.as_deref())
+    }
+
+    pub(crate) fn last_turn_at_instant(&self) -> Option<Instant> {
+        self.closing_report
+            .as_ref()
+            .and_then(|report| report.last_turn_at_instant)
+    }
+
+    pub(crate) fn last_turn_at_unix_s(&self) -> Option<u64> {
+        self.closing_report
+            .as_ref()
+            .and_then(|report| report.last_turn_at_unix_s)
+    }
+
+    pub(crate) fn set_last_turn_at(&mut self, last_turn_at: Option<String>) -> bool {
+        let Some(last_turn_at) = last_turn_at.filter(|value| !value.trim().is_empty()) else {
+            return false;
+        };
+        let report = self.closing_report.get_or_insert_default();
+        if report.last_turn_at.as_deref() != Some(last_turn_at.as_str()) {
+            let unix_seconds = crate::fleet::parse_utc_timestamp(&last_turn_at);
+            let elapsed = unix_seconds.and_then(|seconds| {
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs();
+                now_unix.checked_sub(seconds).map(Duration::from_secs)
+            });
+            report.last_turn_at = Some(last_turn_at);
+            report.last_turn_at_unix_s = unix_seconds;
+            report.last_turn_at_instant = elapsed.and_then(|age| Instant::now().checked_sub(age));
+            self.revision = self.revision.saturating_add(1);
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn closing_external_wait(&self) -> Option<&str> {
@@ -6601,6 +6665,7 @@ mod tests {
     fn handoff_preserves_latched_gate_without_a_followup_report() {
         let captured_at = Instant::now();
         let mut source = test_terminal();
+        source.set_last_turn_at(Some("2026-09-29T12:34:56Z".into()));
         source.apply_closing_block_payload(
             vec![crate::api::schema::ClosingBlockItem {
                 blocking: true,
@@ -6636,6 +6701,7 @@ mod tests {
         restored
             .restore_terminal_agent_handoff_state(decoded, captured_at + Duration::from_secs(1));
 
+        assert_eq!(restored.last_turn_at(), Some("2026-09-29T12:34:56Z"));
         assert_eq!(restored.closing_gates, source.closing_gates);
         assert_eq!(
             restored.closing_report.as_ref().unwrap().unanswered,

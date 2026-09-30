@@ -1920,6 +1920,7 @@ mod tests {
                 workers_unknown: None,
                 dependencies_authoritative: true,
                 session_id: None,
+                last_turn_at: None,
                 settle_ready: false,
             })),
         });
@@ -1955,6 +1956,7 @@ mod tests {
                 workers_unknown: None,
                 dependencies_authoritative: true,
                 session_id: None,
+                last_turn_at: None,
                 settle_ready: false,
             })),
         });

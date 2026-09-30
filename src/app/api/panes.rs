@@ -1722,6 +1722,7 @@ impl App {
                         .agent_session_id
                         .clone()
                         .or_else(|| legacy_session_id.clone()),
+                    last_turn_at: params.last_turn_at,
                 })
             });
         let reported_state = detect_state_from_api(params.state);
@@ -3184,6 +3185,7 @@ mod tests {
             wait: None,
             eta_s: None,
             reported_at: None,
+            last_turn_at: None,
             agent_session_id: None,
             agent_session_path: None,
             gates: Some(gates),
@@ -3602,6 +3604,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -6912,6 +6915,7 @@ mod tests {
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            last_turn_at: None,
             settle_ready: None,
         };
 
@@ -7002,6 +7006,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -7067,6 +7072,7 @@ mod tests {
                 parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
                 workers_unknown: Some(false),
                 agents: Some(1),
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -7878,6 +7884,7 @@ mod tests {
             .unwrap()
             .set_detected_state(Some(Agent::Claude), AgentState::Working);
         let reported_at = "2026-08-10T10:00:00Z".to_string();
+        let last_turn_at = "2026-08-10T09:59:50Z".to_string();
 
         let response = app.handle_pane_report_agent(
             "declared-wait".into(),
@@ -7892,6 +7899,7 @@ mod tests {
                 wait: Some("CI run 4123".into()),
                 eta_s: Some(720),
                 reported_at: Some(reported_at.clone()),
+                last_turn_at: Some(last_turn_at.clone()),
                 agent_session_id: None,
                 agent_session_path: None,
                 gates: Some(Vec::new()),
@@ -7919,6 +7927,7 @@ mod tests {
         assert_eq!(pane.wait.as_deref(), Some("CI run 4123"));
         assert_eq!(pane.eta_s, Some(720));
         assert_eq!(pane.reported_at.as_deref(), Some(reported_at.as_str()));
+        assert_eq!(pane.last_turn_at.as_deref(), Some(last_turn_at.as_str()));
         assert!(app
             .event_hub
             .events_after(0)
@@ -7930,8 +7939,9 @@ mod tests {
                     wait: Some(wait),
                     eta_s: Some(720),
                     reported_at: Some(value),
+                    last_turn_at: Some(turn_at),
                     ..
-                } if wait == "CI run 4123" && value == &reported_at
+                } if wait == "CI run 4123" && value == &reported_at && turn_at == &last_turn_at
             )));
     }
 
@@ -8006,6 +8016,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -8073,6 +8084,7 @@ mod tests {
             parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
             workers_unknown: Some(false),
             agents: None,
+            last_turn_at: None,
             settle_ready: None,
         };
 
@@ -8252,6 +8264,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -8306,6 +8319,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -8336,6 +8350,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -9477,6 +9492,7 @@ mod tests {
                 parse_status: None,
                 workers_unknown: None,
                 agents: None,
+                last_turn_at: None,
                 settle_ready: None,
             },
         );
@@ -10088,6 +10104,7 @@ mod tests {
             parse_status: None,
             workers_unknown: None,
             agents: None,
+            last_turn_at: None,
             settle_ready: None,
         };
 
@@ -10250,6 +10267,7 @@ mod tests {
                 parse_status: Some(crate::api::schema::ClosingParseStatus::Ok),
                 workers_unknown: Some(false),
                 agents: Some(0),
+                last_turn_at: None,
                 settle_ready: None,
             }
         };

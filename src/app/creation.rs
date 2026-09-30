@@ -906,6 +906,7 @@ impl App {
                 .hook_authority
                 .as_ref()
                 .and_then(|report| report.reported_at_wire.clone()),
+            last_turn_at: terminal.last_turn_at().map(str::to_string),
             state_labels: presentation.state_labels,
             tokens: terminal.metadata_tokens_for_api(),
             gates: terminal.closing_gates().to_vec(),
