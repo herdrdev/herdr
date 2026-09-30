@@ -136,12 +136,14 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
     let should_quit = Arc::new(AtomicBool::new(false));
 
     let mut imports = HashMap::new();
-    for (pane, fd) in received.manifest.panes.into_iter().zip(received.fds) {
+    let mut fds = received.fds.into_iter();
+    for pane in received.manifest.panes {
         let pane_id = pane.pane_id;
+        let master_fd = if pane.actor_closed { None } else { fds.next() };
         imports.insert(
             pane_id,
             crate::handoff_runtime::ImportedHandoffRuntime {
-                master_fd: fd,
+                master_fd,
                 state: pane,
             },
         );

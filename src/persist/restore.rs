@@ -615,6 +615,32 @@ fn restore_tab(
             })
             .unwrap_or_default();
         let imported_runtime = old_pane_id.and_then(|old_id| imported_panes.remove(&old_id));
+        #[cfg(unix)]
+        let actor_closed = imported_runtime
+            .as_ref()
+            .is_some_and(|imported| imported.master_fd.is_none());
+        #[cfg(not(unix))]
+        let actor_closed = false;
+        if actor_closed {
+            let mut terminal = unavailable_restored_terminal(
+                saved_pane,
+                cwd,
+                "Pane process exited before live handoff.".into(),
+            );
+            terminal.settled_auto_label =
+                saved_pane.and_then(|pane| pane.settled_auto_label.clone());
+            let mut pane = PaneState::new(terminal.id.clone());
+            pane.group_membership = saved_pane
+                .map(|pane| pane.group_membership.clone())
+                .unwrap_or_default();
+            pane.settled_at = saved_pane.and_then(|pane| pane.settled_at);
+            pane.set_snoozed_until(saved_pane.and_then(|pane| pane.snoozed_until));
+            pane.settled_work_key = saved_pane.and_then(|pane| pane.settled_work_key.clone());
+            restore_pane_activity(&mut pane, saved_pane);
+            panes.insert(*id, pane);
+            terminals.push(terminal);
+            continue;
+        }
         let was_imported = imported_runtime.is_some();
         #[cfg(unix)]
         let imported_agent_activity = imported_runtime

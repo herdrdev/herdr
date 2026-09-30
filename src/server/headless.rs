@@ -96,12 +96,15 @@ fn wait_for_live_handoff_response_write(
     }
 }
 
-fn live_handoff_api_response(id: String, handoff_result: io::Result<()>) -> (String, bool) {
+fn live_handoff_api_response(
+    id: String,
+    handoff_result: io::Result<Vec<api::schema::LiveHandoffSkippedPane>>,
+) -> (String, bool) {
     let (response, succeeded) = match handoff_result {
-        Ok(()) => (
+        Ok(skipped_panes) => (
             serde_json::to_string(&api::schema::SuccessResponse {
                 id,
-                result: api::schema::ResponseResult::Ok {},
+                result: api::schema::ResponseResult::LiveHandoff { skipped_panes },
             }),
             true,
         ),
@@ -120,6 +123,61 @@ fn live_handoff_api_response(id: String, handoff_result: io::Result<()>) -> (Str
         }
     };
     (response.unwrap_or_else(|_| "{}".to_string()), succeeded)
+}
+
+#[cfg(unix)]
+struct HandoffFdDuplication {
+    fds: Vec<std::os::fd::RawFd>,
+    skipped_panes: Vec<api::schema::LiveHandoffSkippedPane>,
+}
+
+#[cfg(unix)]
+#[derive(Debug)]
+struct HandoffFdDuplicationFailure {
+    error: io::Error,
+    fds: Vec<std::os::fd::RawFd>,
+}
+
+#[cfg(unix)]
+fn duplicate_live_handoff_fds(
+    entries: &mut [(
+        crate::terminal::TerminalId,
+        crate::handoff_runtime::HandoffRuntimeState,
+    )],
+    pane_by_terminal: &HashMap<
+        crate::terminal::TerminalId,
+        (u32, bool, Option<Instant>, String, String),
+    >,
+    paused_terminal_ids: &mut Vec<crate::terminal::TerminalId>,
+    mut duplicate: impl FnMut(&crate::terminal::TerminalId) -> io::Result<std::os::fd::RawFd>,
+) -> Result<HandoffFdDuplication, HandoffFdDuplicationFailure> {
+    let mut fds = Vec::new();
+    let mut skipped_panes = Vec::new();
+    for (terminal_id, state) in entries {
+        if state.actor_closed {
+            continue;
+        }
+        match duplicate(terminal_id) {
+            Ok(fd) => fds.push(fd),
+            Err(err) if err.kind() == io::ErrorKind::BrokenPipe => {
+                let Some((_, _, _, name, public_pane_id)) = pane_by_terminal.get(terminal_id)
+                else {
+                    return Err(HandoffFdDuplicationFailure { error: err, fds });
+                };
+                let skipped = api::schema::LiveHandoffSkippedPane {
+                    pane_id: public_pane_id.clone(),
+                    terminal_id: terminal_id.to_string(),
+                    name: name.clone(),
+                };
+                warn!(pane_id = %skipped.pane_id, terminal_id = %skipped.terminal_id, name = %skipped.name, "skipping pane with closed PTY actor during live handoff");
+                skipped_panes.push(skipped);
+                state.actor_closed = true;
+                paused_terminal_ids.retain(|paused| paused != terminal_id);
+            }
+            Err(err) => return Err(HandoffFdDuplicationFailure { error: err, fds }),
+        }
+    }
+    Ok(HandoffFdDuplication { fds, skipped_panes })
 }
 
 fn sound_notify_message(sound: crate::sound::Sound) -> &'static str {
@@ -1874,7 +1932,8 @@ impl HeadlessServer {
     #[cfg(unix)]
     fn collect_handoff_panes(
         &self,
-    ) -> HashMap<crate::terminal::TerminalId, (u32, bool, Option<std::time::Instant>)> {
+    ) -> HashMap<crate::terminal::TerminalId, (u32, bool, Option<std::time::Instant>, String, String)>
+    {
         let mut panes = HashMap::new();
         for workspace in &self.app.state.workspaces {
             for tab in &workspace.tabs {
@@ -1889,7 +1948,31 @@ impl HeadlessServer {
                     }
                     panes.insert(
                         pane.attached_terminal_id.clone(),
-                        (pane_id.raw(), pane.seen, pane.done_since),
+                        (
+                            pane_id.raw(),
+                            pane.seen,
+                            pane.done_since,
+                            self.app
+                                .state
+                                .terminals
+                                .get(&pane.attached_terminal_id)
+                                .and_then(|terminal| {
+                                    terminal
+                                        .manual_label
+                                        .clone()
+                                        .or_else(|| terminal.agent_name.clone())
+                                })
+                                .unwrap_or_else(|| format!("Pane {}", pane_id.raw())),
+                            workspace
+                                .public_pane_number(*pane_id)
+                                .map(|number| {
+                                    crate::workspace::public_pane_id_for_number(
+                                        &workspace.id,
+                                        number,
+                                    )
+                                })
+                                .unwrap_or_else(|| pane_id.raw().to_string()),
+                        ),
                     );
                 }
             }
@@ -1987,7 +2070,7 @@ impl HeadlessServer {
     fn perform_live_handoff(
         &mut self,
         params: crate::api::schema::ServerLiveHandoffParams,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<api::schema::LiveHandoffSkippedPane>> {
         info!("starting live handoff");
         let import_exe = params.import_exe.as_deref().map(std::path::PathBuf::from);
         let socket_path = crate::server::handoff::handoff_socket_path();
@@ -2027,15 +2110,11 @@ impl HeadlessServer {
         let _ = reject_pending_client_connections(&self.client_listener);
 
         let mut paused_terminal_ids = Vec::new();
+        let mut skipped_panes = Vec::new();
         let mut skipped_pane_ids = Vec::new();
         let pause_targets = pane_by_terminal
-            .keys()
-            .map(|terminal_id| {
-                (
-                    terminal_id.clone(),
-                    pane_by_terminal.get(terminal_id).map(|pane| pane.0),
-                )
-            })
+            .iter()
+            .map(|(terminal_id, pane)| (terminal_id.clone(), Some(pane.0)))
             .chain(
                 editor_terminals
                     .iter()
@@ -2046,10 +2125,18 @@ impl HeadlessServer {
             if let Some(runtime) = self.app.terminal_runtimes.get(&terminal_id) {
                 if let Err(err) = runtime.pause_handoff_reader(Duration::from_secs(2)) {
                     if Self::should_skip_closed_handoff_pane(&err) {
-                        if let Some(pane_id) = pane_id {
-                            warn!(pane = pane_id, terminal = %terminal_id, err = %err, "skipping pane with closed PTY actor during live handoff");
+                        if let (Some(raw_pane_id), Some((_, _, _, name, public_pane_id))) =
+                            (pane_id, pane_by_terminal.get(&terminal_id))
+                        {
+                            let skipped = api::schema::LiveHandoffSkippedPane {
+                                pane_id: public_pane_id.clone(),
+                                terminal_id: terminal_id.to_string(),
+                                name: name.clone(),
+                            };
+                            warn!(pane_id = %skipped.pane_id, terminal_id = %skipped.terminal_id, name = %skipped.name, "skipping pane with closed PTY actor during live handoff");
+                            skipped_panes.push(skipped);
                             pane_by_terminal.remove(&terminal_id);
-                            skipped_pane_ids.push(pane_id);
+                            skipped_pane_ids.push(raw_pane_id);
                             continue;
                         }
                     }
@@ -2078,12 +2165,15 @@ impl HeadlessServer {
         let mut handoff_entries = Vec::new();
         let handoff_captured_at = Instant::now();
         for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {
-            let Some((pane_id, pane_seen, pane_done_since)) =
-                pane_by_terminal.get(terminal_id).copied()
+            let Some((pane_id, pane_seen, pane_done_since, _, _)) =
+                pane_by_terminal.get(terminal_id).cloned()
             else {
                 continue;
             };
             let mut handoff_runtime = runtime.handoff_runtime_state(pane_id);
+            handoff_runtime.actor_closed = skipped_panes
+                .iter()
+                .any(|skipped| skipped.terminal_id == terminal_id.to_string());
             let terminal = self.app.state.terminals.get(terminal_id);
             handoff_runtime.agent_activity = terminal
                 .and_then(|terminal| terminal.agent_activity_handoff_state(handoff_captured_at));
@@ -2131,7 +2221,7 @@ impl HeadlessServer {
             .iter()
             .map(|(_, runtime)| runtime.clone())
             .collect();
-        let manifest = crate::server::handoff::manifest_for(
+        let mut manifest = crate::server::handoff::manifest_for(
             snapshot,
             panes,
             dock_editors,
@@ -2153,23 +2243,35 @@ impl HeadlessServer {
         let child_pid = import_child.id();
         info!(pid = child_pid, socket = %socket_path.display(), "spawned handoff import server");
 
-        let mut fds = Vec::new();
-        let duplicate_result = (|| {
-            for (terminal_id, _) in &handoff_entries {
-                let Some(runtime) = self.app.terminal_runtimes.get(terminal_id) else {
-                    continue;
-                };
-                fds.push(runtime.duplicate_handoff_fd()?);
+        let duplicated = match duplicate_live_handoff_fds(
+            &mut handoff_entries,
+            &pane_by_terminal,
+            &mut paused_terminal_ids,
+            |terminal_id| {
+                self.app.terminal_runtimes.get(terminal_id).map_or_else(
+                    || Err(io::Error::other("pane runtime disappeared during handoff")),
+                    |runtime| runtime.duplicate_handoff_fd(),
+                )
+            },
+        ) {
+            Ok(result) => result,
+            Err(failure) => {
+                for fd in failure.fds {
+                    let _ = unsafe { libc::close(fd) };
+                }
+                crate::server::handoff::cleanup_failed_import_child(&mut import_child);
+                self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
+                return Err(failure.error);
             }
-            Ok::<(), io::Error>(())
-        })();
-        if let Err(err) = duplicate_result {
-            for fd in fds {
-                let _ = unsafe { libc::close(fd) };
-            }
-            crate::server::handoff::cleanup_failed_import_child(&mut import_child);
-            self.rollback_handoff_before_commit(&socket_path, &paused_terminal_ids);
-            return Err(err);
+        };
+        let HandoffFdDuplication {
+            fds,
+            skipped_panes: newly_skipped,
+        } = duplicated;
+        skipped_panes.extend(newly_skipped);
+
+        for (pane, (_, state)) in manifest.panes.iter_mut().zip(&handoff_entries) {
+            pane.actor_closed = state.actor_closed;
         }
 
         let mut stream = match crate::server::handoff::accept_and_validate_on(
@@ -2245,6 +2347,7 @@ impl HeadlessServer {
 
         let transferred: std::collections::HashSet<_> = handoff_entries
             .iter()
+            .filter(|(_, runtime)| !runtime.actor_closed)
             .map(|(terminal_id, _)| terminal_id.clone())
             .collect();
         for (terminal_id, runtime) in self.app.terminal_runtimes.drain_for_handoff() {
@@ -2256,7 +2359,7 @@ impl HeadlessServer {
         }
         crate::server::handoff::wait_owned_ack(&mut stream);
 
-        Ok(())
+        Ok(skipped_panes)
     }
 
     fn finish_live_handoff_shutdown(&mut self) {
@@ -2333,7 +2436,7 @@ impl HeadlessServer {
     fn perform_live_handoff(
         &mut self,
         _params: crate::api::schema::ServerLiveHandoffParams,
-    ) -> io::Result<()> {
+    ) -> io::Result<Vec<api::schema::LiveHandoffSkippedPane>> {
         Err(io::Error::other("live handoff is only supported on Unix"))
     }
 
@@ -7913,12 +8016,14 @@ fn run_handoff_import_server(socket_path: &Path, token: &str) -> io::Result<()> 
 
     let dock_editors = std::mem::take(&mut received.manifest.dock_editors);
     let mut imports = HashMap::new();
-    for (pane, fd) in received.manifest.panes.drain(..).zip(received.fds) {
+    let mut fds = received.fds.into_iter();
+    for pane in received.manifest.panes.drain(..) {
         let pane_id = pane.pane_id;
+        let master_fd = if pane.actor_closed { None } else { fds.next() };
         imports.insert(
             pane_id,
             crate::handoff_runtime::ImportedHandoffRuntime {
-                master_fd: fd,
+                master_fd,
                 state: pane,
             },
         );
@@ -8098,6 +8203,92 @@ mod tests {
         assert!(output.contains("WARN"));
         assert!(output.contains("live handoff failed"));
         assert!(output.contains("replacement refused import"));
+    }
+
+    #[test]
+    fn successful_live_handoff_reports_skipped_panes() {
+        let (response, succeeded) = live_handoff_api_response(
+            "test:handoff".into(),
+            Ok(vec![api::schema::LiveHandoffSkippedPane {
+                pane_id: "p7".into(),
+                terminal_id: "t9".into(),
+                name: "worker".into(),
+            }]),
+        );
+
+        assert!(succeeded);
+        let response: serde_json::Value =
+            serde_json::from_str(&response).expect("handoff response is valid JSON");
+        assert_eq!(response["result"]["type"], "live_handoff");
+        assert_eq!(response["result"]["skipped_panes"][0]["pane_id"], "p7");
+        assert_eq!(response["result"]["skipped_panes"][0]["terminal_id"], "t9");
+        assert_eq!(response["result"]["skipped_panes"][0]["name"], "worker");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn closed_pane_actor_is_skipped_while_live_pane_fd_is_retained() {
+        let dead_terminal = crate::terminal::TerminalId::alloc();
+        let live_terminal = crate::terminal::TerminalId::alloc();
+        let runtime_state = |pane_id| {
+            serde_json::from_value(serde_json::json!({
+                "pane_id": pane_id,
+                "child_pid": 123,
+                "rows": 24,
+                "cols": 80,
+                "cell_width_px": 8,
+                "cell_height_px": 16
+            }))
+            .expect("minimal handoff runtime state loads")
+        };
+        let mut entries = vec![
+            (dead_terminal.clone(), runtime_state(7)),
+            (live_terminal.clone(), runtime_state(8)),
+        ];
+        let mut pane_metadata = HashMap::new();
+        pane_metadata.insert(
+            dead_terminal.clone(),
+            (7, false, None, "closed".to_string(), "ws:p7".to_string()),
+        );
+        pane_metadata.insert(
+            live_terminal.clone(),
+            (8, false, None, "live".to_string(), "ws:p8".to_string()),
+        );
+        let mut paused = vec![dead_terminal.clone(), live_terminal.clone()];
+
+        let duplicated =
+            duplicate_live_handoff_fds(&mut entries, &pane_metadata, &mut paused, |terminal_id| {
+                if terminal_id == &dead_terminal {
+                    Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "pty actor closed",
+                    ))
+                } else {
+                    let fd = unsafe { libc::dup(libc::STDERR_FILENO) };
+                    if fd < 0 {
+                        Err(io::Error::last_os_error())
+                    } else {
+                        Ok(fd)
+                    }
+                }
+            })
+            .expect("closed actor must not fail a handoff with a live pane");
+        let HandoffFdDuplication {
+            fds,
+            skipped_panes: skipped,
+        } = duplicated;
+
+        assert_eq!(fds.len(), 1, "only the live pane fd is retained");
+        assert_eq!(skipped.len(), 1);
+        assert_eq!(skipped[0].pane_id, "ws:p7");
+        assert_eq!(skipped[0].terminal_id, dead_terminal.to_string());
+        assert_eq!(skipped[0].name, "closed");
+        assert!(entries[0].1.actor_closed);
+        assert!(!entries[1].1.actor_closed);
+        assert_eq!(paused, vec![live_terminal]);
+        for fd in fds {
+            let _ = unsafe { libc::close(fd) };
+        }
     }
 
     #[test]

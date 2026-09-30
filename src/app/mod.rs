@@ -1927,6 +1927,13 @@ impl App {
         )>,
     ) {
         for (editor, import) in editor_imports {
+            let Some(master_fd) = import.master_fd else {
+                tracing::warn!(
+                    pane_id = editor.editor_pane_id,
+                    "dropping closed dock editor runtime during handoff restore"
+                );
+                continue;
+            };
             let agent_pane_id = self
                 .state
                 .pane_id_aliases
@@ -1943,7 +1950,7 @@ impl App {
             let editor_pane_id = crate::layout::PaneId::alloc();
             let terminal_id = crate::terminal::TerminalId::alloc();
             let import = crate::handoff_runtime::ImportedHandoffRuntime {
-                master_fd: import.master_fd,
+                master_fd: Some(master_fd),
                 state: import.state.with_pane_id(editor_pane_id),
             };
             match crate::terminal::TerminalRuntime::from_handoff_fd(
@@ -4090,7 +4097,10 @@ mod tests {
         let state = runtime.handoff_runtime_state(pane_id.raw());
         (
             runtime,
-            crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state },
+            crate::handoff_runtime::ImportedHandoffRuntime {
+                master_fd: Some(master_fd),
+                state,
+            },
         )
     }
 

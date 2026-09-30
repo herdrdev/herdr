@@ -305,7 +305,14 @@ pub(crate) fn receive(socket_path: &Path, token: &str) -> io::Result<ReceivedHan
     }
     stream.write_all(b"validated\n")?;
     stream.flush()?;
-    let fds = recv_fds(&stream, manifest.panes.len())?;
+    let fds = recv_fds(
+        &stream,
+        manifest
+            .panes
+            .iter()
+            .filter(|pane| !pane.actor_closed)
+            .count(),
+    )?;
     Ok(ReceivedHandoff {
         manifest,
         fds,

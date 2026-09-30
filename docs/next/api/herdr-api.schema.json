@@ -12534,6 +12534,25 @@
             }
           ]
         },
+        "LiveHandoffSkippedPane": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "terminal_id",
+            "name"
+          ],
+          "type": "object"
+        },
         "LoopFindingInfo": {
           "description": "One pending aloop finding (MAT-159 SCH1), as read from the producer host's\n`~/.agents/aloop/findings` store.",
           "properties": {
@@ -16301,6 +16320,24 @@
                 "type",
                 "active",
                 "projection_revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "skipped_panes": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/LiveHandoffSkippedPane"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "live_handoff",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type"
               ],
               "type": "object"
             },

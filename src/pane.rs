@@ -2571,6 +2571,7 @@ impl PaneRuntime {
         let (rows, cols, cell_width_px, cell_height_px) = self.current_size.get();
         crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
+            actor_closed: false,
             child_pid,
             tty_name: self.tty_name.clone(),
             rows,
@@ -2789,6 +2790,9 @@ impl PaneRuntime {
         render_dirty: Arc<RenderSignal>,
     ) -> std::io::Result<Self> {
         let crate::handoff_runtime::ImportedHandoffRuntime { master_fd, state } = import;
+        let Some(master_fd) = master_fd else {
+            return Err(std::io::Error::other("closed pane actor has no handoff fd"));
+        };
         let (initial_agent, initial_state) = state
             .agent_state
             .as_ref()
@@ -2796,6 +2800,7 @@ impl PaneRuntime {
             .unwrap_or((None, AgentState::Unknown));
         let crate::handoff_runtime::HandoffRuntimeState {
             pane_id,
+            actor_closed: _,
             child_pid,
             tty_name,
             rows,

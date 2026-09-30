@@ -31,6 +31,9 @@ fn default_stall_nudge_episode_active() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct HandoffRuntimeState {
     pub pane_id: u32,
+    /// The source PTY actor was already closed, so this pane has no fd to transfer.
+    #[serde(default)]
+    pub actor_closed: bool,
     pub child_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tty_name: Option<std::path::PathBuf>,
@@ -73,7 +76,7 @@ impl HandoffRuntimeState {
 #[derive(Debug)]
 pub(crate) struct ImportedHandoffRuntime {
     #[cfg(unix)]
-    pub master_fd: std::os::fd::RawFd,
+    pub master_fd: Option<std::os::fd::RawFd>,
     #[cfg(unix)]
     pub state: HandoffRuntimeState,
 }

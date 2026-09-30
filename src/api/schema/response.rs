@@ -385,7 +385,18 @@ pub enum ResponseResult {
         active: bool,
         projection_revision: u64,
     },
+    LiveHandoff {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skipped_panes: Vec<LiveHandoffSkippedPane>,
+    },
     Ok {},
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct LiveHandoffSkippedPane {
+    pub pane_id: String,
+    pub terminal_id: String,
+    pub name: String,
 }
 
 fn require_remote_focus_status_details(schema: &mut schemars::Schema) {
