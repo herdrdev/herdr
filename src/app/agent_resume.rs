@@ -784,7 +784,7 @@ fn pending_resume_retry_delay(attempt: u8) -> Duration {
     Duration::from_secs((1_u64 << shift).min(MAX_PENDING_RESUME_BACKOFF.as_secs()))
 }
 
-fn shell_command_from_argv(argv: &[String]) -> Option<String> {
+pub(crate) fn shell_command_from_argv(argv: &[String]) -> Option<String> {
     let mut parts = argv.iter();
     let first = shell_quote(parts.next()?);
     let mut command = first;

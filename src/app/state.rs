@@ -4611,6 +4611,7 @@ pub struct AppState {
     /// Attach-local TUI state; provider objects remain shared work-index facts.
     pub(crate) sidebar_unassigned_expanded_views: std::collections::HashSet<SidebarGroupMode>,
     pub(crate) sidebar_selected_settled: Option<PaneFocusTarget>,
+    pub(crate) settled_view: Option<crate::app::settled_view::SettledViewState>,
     pub(crate) sidebar_snooze: Option<SidebarSnoozeUiState>,
     pub(crate) sidebar_settled_menu_target: Option<PaneFocusTarget>,
     pub(crate) sidebar_settled_menu_selected: usize,
@@ -7780,6 +7781,7 @@ impl AppState {
             sidebar_group_sorts: std::collections::HashMap::new(),
             sidebar_unassigned_expanded_views: std::collections::HashSet::new(),
             sidebar_selected_settled: None,
+            settled_view: None,
             sidebar_snooze: None,
             sidebar_settled_menu_target: None,
             sidebar_settled_menu_selected: 0,

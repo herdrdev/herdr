@@ -355,6 +355,14 @@ pub(super) fn render_panes(
                 && !pane_is_scrolled_back(rt)
                 && app.pane_exposes_host_cursor(ws_idx, info.id);
             rt.render(frame, info.inner_rect, show_cursor);
+            if let Some(view) = app
+                .settled_view
+                .as_ref()
+                .filter(|view| view.pane_id == info.id)
+            {
+                render_settled_view(app, frame, info.inner_rect, ws_idx, info.id, view);
+                continue;
+            }
             render_pane_scrollbar(app, frame, info, rt);
 
             let should_dim = !info.is_focused && multi_pane && !terminal_active;
@@ -403,6 +411,115 @@ pub(super) fn render_panes(
     }
 
     render_pane_borders(app, ws, pane_infos, split_borders, frame);
+}
+
+fn render_settled_view(
+    app: &AppState,
+    frame: &mut Frame,
+    area: Rect,
+    ws_idx: usize,
+    pane_id: crate::layout::PaneId,
+    view: &crate::app::settled_view::SettledViewState,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    frame.render_widget(Clear, area);
+    let title = app.workspaces.get(ws_idx).map(|ws| {
+        let terminal = ws.terminal_id(pane_id).and_then(|id| app.terminals.get(id));
+        let derived = ws
+            .tabs
+            .iter()
+            .position(|tab| tab.panes.contains_key(&pane_id))
+            .and_then(|tab_idx| ws.tab_display_projection(&app.terminals, tab_idx))
+            .and_then(|projection| crate::workspace::session_title(Some(&projection), None));
+        settled_title(
+            terminal.and_then(|terminal| terminal.manual_label.as_deref()),
+            derived,
+        )
+    });
+    let title = title.as_deref().unwrap_or("Settled session");
+    let header = Line::from(vec![
+        Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" · settled ", Style::default().fg(Color::Gray)),
+        Span::styled("read-only", Style::default().fg(Color::Yellow)),
+    ]);
+    frame.render_widget(
+        Paragraph::new(header).style(Style::default().bg(Color::Rgb(32, 36, 45))),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    let content_height = area.height.saturating_sub(2);
+    if content_height > 0 {
+        let mut lines = Vec::new();
+        if let Some(transcript) = &view.transcript {
+            lines.push(Line::from(Span::styled(
+                format!(
+                    "── restored from {} · ↑/↓ PgUp/PgDn scroll · / search · nothing runs ──",
+                    transcript.source
+                ),
+                Style::default().fg(Color::DarkGray),
+            )));
+            for (speaker, body) in &transcript.turns {
+                if !view.search.is_empty()
+                    && !body.to_lowercase().contains(&view.search.to_lowercase())
+                    && !speaker.to_lowercase().contains(&view.search.to_lowercase())
+                {
+                    continue;
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("{speaker} ›"),
+                    Style::default().fg(Color::Gray),
+                )));
+                lines.extend(body.lines().map(|line| Line::from(line.to_string())));
+                lines.push(Line::from(""));
+            }
+        } else {
+            lines.push(Line::from(Span::styled(
+                "Transcript unavailable · Enter resumes the session",
+                Style::default().fg(Color::Yellow),
+            )));
+        }
+        if view.searching {
+            lines.push(Line::from(format!("/{}", view.search)));
+        }
+        let scroll = view.scroll.min(u16::MAX as usize) as u16;
+        frame.render_widget(
+            Paragraph::new(lines).scroll((scroll, 0)),
+            Rect::new(area.x, area.y + 1, area.width, content_height),
+        );
+    }
+    if area.height > 1 {
+        let suffix = if view.editing {
+            " · editing keeps it settled · Esc cancels"
+        } else {
+            " · Enter resumes · edit or Esc keeps it settled"
+        };
+        let command = Line::from(vec![
+            Span::styled(
+                format!("$ {}", view.command),
+                Style::default().fg(Color::LightGreen),
+            ),
+            Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+        ]);
+        frame.render_widget(
+            Paragraph::new(command).style(Style::default().bg(Color::Rgb(25, 28, 35))),
+            Rect::new(area.x, area.y + area.height - 1, area.width, 1),
+        );
+    }
+}
+
+fn settled_title(manual: Option<&str>, derived: Option<String>) -> String {
+    manual
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+        .or_else(|| derived.filter(|title| !title.trim().is_empty()))
+        .unwrap_or_else(|| "Settled session".into())
 }
 
 pub(crate) fn popup_pane_rects(app: &AppState, area: Rect) -> Option<(Rect, Rect)> {
@@ -1044,6 +1161,16 @@ mod tests {
             Ok(crate::pane::ProxyOutbound::SyncResize),
             "a changed proxy geometry must wake the writer"
         );
+    }
+
+    #[test]
+    fn settled_title_prefers_manual_then_derived_then_fallback() {
+        assert_eq!(
+            settled_title(Some(" manual "), Some("derived".into())),
+            "manual"
+        );
+        assert_eq!(settled_title(None, Some("derived".into())), "derived");
+        assert_eq!(settled_title(Some("  "), None), "Settled session");
     }
 
     #[test]

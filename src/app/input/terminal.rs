@@ -246,9 +246,28 @@ impl App {
         }
 
         let ws_idx = self.state.active?;
-        let ws = self.state.workspaces.get(ws_idx)?;
-        let pane_id = ws.focused_pane_id()?;
-        let terminal_id = ws.terminal_id(pane_id)?.clone();
+        let (pane_id, terminal_id) = {
+            let ws = self.state.workspaces.get(ws_idx)?;
+            let pane_id = ws.focused_pane_id()?;
+            (pane_id, ws.terminal_id(pane_id)?.clone())
+        };
+
+        let settled_resumable = self.state.pane_is_settled(ws_idx, pane_id)
+            && self
+                .state
+                .terminals
+                .get(&terminal_id)
+                .is_some_and(|terminal| terminal.pending_agent_resume_plan.is_some());
+        if settled_resumable
+            && self
+                .state
+                .settled_view
+                .as_ref()
+                .is_some_and(|view| view.pane_id == pane_id)
+            && self.handle_settled_view_key(&key_event)
+        {
+            return None;
+        }
         let rt =
             self.state
                 .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)?;
@@ -341,6 +360,134 @@ impl App {
             target: TerminalInputTarget { terminal_id },
             bytes: Bytes::from(bytes),
         })
+    }
+
+    fn handle_settled_view_key(&mut self, key: &crossterm::event::KeyEvent) -> bool {
+        use crossterm::event::{KeyCode, KeyEventKind};
+        if key.kind == KeyEventKind::Release {
+            return true;
+        }
+        let Some(view) = self.state.settled_view.as_mut() else {
+            return false;
+        };
+        if view.searching {
+            match key.code {
+                KeyCode::Esc | KeyCode::Enter => view.searching = false,
+                KeyCode::Backspace => {
+                    view.search.pop();
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        || key.modifiers == crossterm::event::KeyModifiers::SHIFT =>
+                {
+                    view.search.push(c)
+                }
+                _ => {}
+            }
+            return true;
+        }
+        if view.editing {
+            match key.code {
+                KeyCode::Enter => {
+                    let pane_id = view.pane_id;
+                    let command = view.command.clone();
+                    self.state.settled_view = None;
+                    let terminal_id = self.state.workspaces.iter().find_map(|workspace| {
+                        workspace
+                            .pane_state(pane_id)
+                            .map(|pane| pane.attached_terminal_id.clone())
+                    });
+                    if let Some(plan) = terminal_id
+                        .as_ref()
+                        .and_then(|terminal_id| self.state.terminals.get_mut(terminal_id))
+                        .and_then(|terminal| terminal.pending_agent_resume_plan.as_mut())
+                    {
+                        #[cfg(windows)]
+                        {
+                            plan.argv = vec!["cmd".into(), "/C".into(), command];
+                        }
+                        #[cfg(not(windows))]
+                        {
+                            plan.argv = vec!["/bin/sh".into(), "-lc".into(), command];
+                        }
+                    }
+                    self.resume_settled_pane_before_input(pane_id);
+                }
+                KeyCode::Esc => {
+                    let pane_id = view.pane_id;
+                    self.state.sidebar_focused = true;
+                    self.state.sidebar_selected_settled = self
+                        .state
+                        .workspaces
+                        .iter()
+                        .find(|workspace| workspace.pane_state(pane_id).is_some())
+                        .map(|workspace| crate::app::state::PaneFocusTarget {
+                            workspace_id: workspace.id.clone(),
+                            pane_id,
+                        });
+                }
+                KeyCode::Backspace => {
+                    view.command.pop();
+                }
+                KeyCode::Char(c)
+                    if key.modifiers.is_empty()
+                        || key.modifiers == crossterm::event::KeyModifiers::SHIFT =>
+                {
+                    view.command.push(c)
+                }
+                _ => {}
+            }
+            return true;
+        }
+        match key.code {
+            KeyCode::Enter => {
+                let pane_id = view.pane_id;
+                self.state.settled_view = None;
+                self.resume_settled_pane_before_input(pane_id);
+                true
+            }
+            KeyCode::Esc => {
+                let pane_id = view.pane_id;
+                self.state.sidebar_focused = true;
+                self.state.sidebar_selected_settled = self
+                    .state
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.pane_state(pane_id).is_some())
+                    .map(|workspace| crate::app::state::PaneFocusTarget {
+                        workspace_id: workspace.id.clone(),
+                        pane_id,
+                    });
+                true
+            }
+            KeyCode::Char('/') if key.modifiers.is_empty() => {
+                view.searching = true;
+                view.search.clear();
+                true
+            }
+            KeyCode::Char(c) if key.modifiers.is_empty() && !c.is_control() => {
+                view.editing = true;
+                view.command.push(c);
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                view.scroll = view.scroll.saturating_add(1);
+                true
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                view.scroll = view.scroll.saturating_sub(1);
+                true
+            }
+            KeyCode::PageUp => {
+                view.scroll = view.scroll.saturating_add(10);
+                true
+            }
+            KeyCode::PageDown => {
+                view.scroll = view.scroll.saturating_sub(10);
+                true
+            }
+            _ => true,
+        }
     }
 
     fn prepare_popup_key_forward(&mut self, key: TerminalKey) -> PreparedPopupInput {
@@ -566,7 +713,9 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    };
     use ratatui::layout::Rect;
 
     #[cfg(target_os = "linux")]
@@ -576,6 +725,69 @@ mod tests {
     use super::super::{unique_temp_path, wait_for_file};
     use super::*;
     use crate::{config::Config, events::AppEvent, workspace::Workspace};
+
+    #[test]
+    fn settled_transcript_scrolling_is_read_only_and_enter_resumes() {
+        let mut app = app_for_mouse_test();
+        if app.state.workspaces.is_empty() {
+            app.state.workspaces.push(Workspace::test_new("settled"));
+            app.state.active = Some(0);
+            app.state.ensure_test_terminals();
+        }
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .settled_at = Some(10);
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "codex".into(),
+            argv: vec!["codex".into(), "resume".into(), "session".into()],
+            dedupe_key: "session".into(),
+        });
+        app.state.settled_view = Some(crate::app::settled_view::SettledViewState {
+            pane_id,
+            transcript: None,
+            command: "codex resume session".into(),
+            scroll: 0,
+            search: String::new(),
+            searching: false,
+            editing: false,
+        });
+        let scroll_up = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        assert!(app.handle_settled_view_key(&scroll_up));
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 1);
+        assert!(app.state.pane_is_settled(0, pane_id));
+        let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        assert!(app.handle_settled_view_key(&escape));
+        assert!(app.state.pane_is_settled(0, pane_id));
+        assert!(app.state.settled_view.is_some());
+        let view = app.state.settled_view.as_mut().unwrap();
+        view.editing = true;
+        view.command = "codex resume changed-session".into();
+        let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        assert!(app.handle_settled_view_key(&enter));
+        assert!(!app.state.pane_is_settled(0, pane_id));
+        assert!(app.state.settled_view.is_none());
+        let plan = app.state.terminals[&terminal_id]
+            .pending_agent_resume_plan
+            .as_ref()
+            .unwrap();
+        #[cfg(not(windows))]
+        assert_eq!(
+            plan.argv,
+            ["/bin/sh", "-lc", "codex resume changed-session"]
+        );
+        #[cfg(windows)]
+        assert_eq!(plan.argv, ["cmd", "/C", "codex resume changed-session"]);
+    }
 
     #[cfg(unix)]
     fn app_with_spawned_workspace() -> App {

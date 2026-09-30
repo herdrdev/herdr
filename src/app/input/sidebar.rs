@@ -27,6 +27,24 @@ pub(crate) enum SidebarWorkGroupKeyAction {
     DeletePod(crate::groups::GroupRecord),
 }
 
+fn settled_sidebar_neighbor(
+    rows: &[crate::app::state::PaneFocusTarget],
+    selected: Option<&crate::app::state::PaneFocusTarget>,
+    previous: bool,
+) -> Option<crate::app::state::PaneFocusTarget> {
+    if rows.is_empty() {
+        return None;
+    }
+    let index = selected.and_then(|target| rows.iter().position(|row| row == target));
+    let next = match index {
+        Some(index) if previous => index.saturating_sub(1),
+        Some(index) => index.saturating_add(1).min(rows.len() - 1),
+        None if previous => rows.len() - 1,
+        None => 0,
+    };
+    rows.get(next).cloned()
+}
+
 fn pod_record_for_key(state: &AppState, key: &str) -> Option<crate::groups::GroupRecord> {
     state
         .local_group_snapshot
@@ -2597,18 +2615,49 @@ impl super::super::App {
             }
             return true;
         }
+        let rows = crate::ui::compute_sidebar_row_areas(&self.state, self.state.view.sidebar_rect)
+            .0
+            .into_iter()
+            .filter_map(|card| {
+                let pane_id = card.settled_pane_id?;
+                let ws = self.state.workspaces.get(card.ws_idx)?;
+                Some(crate::app::state::PaneFocusTarget {
+                    workspace_id: ws.id.clone(),
+                    pane_id,
+                })
+            })
+            .collect::<Vec<_>>();
         let Some(target) = self.state.sidebar_selected_settled.clone() else {
-            return false;
+            match key.code {
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.state.sidebar_selected_settled =
+                        settled_sidebar_neighbor(&rows, None, true)
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.state.sidebar_selected_settled =
+                        settled_sidebar_neighbor(&rows, None, false)
+                }
+                _ => return false,
+            }
+            return self.state.sidebar_selected_settled.is_some();
         };
         match key.code {
             KeyCode::Enter => {
-                if !self.state.settled_target_has_resume_plan(&target) {
-                    self.focus_settled_pane(target);
-                    return true;
-                }
+                self.focus_settled_pane(target);
+                true
+            }
+            KeyCode::Char('m') => {
                 self.state.sidebar_settled_menu_target = Some(target);
                 self.state.sidebar_settled_menu_selected = 0;
                 self.state.sidebar_settled_menu_delete_armed = false;
+                true
+            }
+            KeyCode::Up | KeyCode::Char('k') | KeyCode::Down | KeyCode::Char('j') => {
+                self.state.sidebar_selected_settled = settled_sidebar_neighbor(
+                    &rows,
+                    Some(&target),
+                    matches!(key.code, KeyCode::Up | KeyCode::Char('k')),
+                );
                 true
             }
             KeyCode::Esc => {
@@ -2661,10 +2710,45 @@ impl super::super::App {
         else {
             return;
         };
+        if let Some(terminal_id) = self.state.workspaces[ws_idx]
+            .terminal_id(target.pane_id)
+            .cloned()
+        {
+            if let Some(terminal) = self.state.terminals.get(&terminal_id) {
+                if let Some(plan) = terminal.pending_agent_resume_plan.as_ref() {
+                    let transcript =
+                        terminal
+                            .persisted_agent_session
+                            .as_ref()
+                            .and_then(|session| {
+                                crate::app::settled_view::load_transcript(session, &terminal.cwd)
+                            });
+                    let command = crate::app::agent_resume::shell_command_from_argv(&plan.argv)
+                        .unwrap_or_default();
+                    self.state.settled_view = Some(crate::app::settled_view::SettledViewState {
+                        pane_id: target.pane_id,
+                        transcript,
+                        command,
+                        scroll: 0,
+                        search: String::new(),
+                        searching: false,
+                        editing: false,
+                    });
+                }
+            }
+        }
         self.focus_pane_internal_via_api(ws_idx, target.pane_id);
     }
 
     pub(crate) fn resume_settled_pane(&mut self, target: crate::app::state::PaneFocusTarget) {
+        if self
+            .state
+            .settled_view
+            .as_ref()
+            .is_some_and(|view| view.pane_id == target.pane_id)
+        {
+            self.state.settled_view = None;
+        }
         let toast_target = crate::app::state::SidebarPaneLifecycleTarget::Local(target.clone());
         let now = std::time::Instant::now();
         let tab_panes = self
@@ -5051,16 +5135,29 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_enter_still_opens_the_settled_menu() {
+    fn keyboard_enter_focuses_settled_pane_and_m_opens_its_menu() {
         let mut app = app_for_mouse_test();
         let target = settled_target(&mut app);
+        let terminal_id = app.state.workspaces[0]
+            .terminal_id(target.pane_id)
+            .unwrap()
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .pending_agent_resume_plan = Some(crate::agent_resume::AgentResumePlan {
+            agent: "codex".into(),
+            argv: vec!["codex".into(), "resume".into(), "session".into()],
+            dedupe_key: "session".into(),
+        });
         app.state.sidebar_selected_settled = Some(target.clone());
 
         assert!(
             app.handle_sidebar_settled_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty(),))
         );
 
-        assert_eq!(app.state.sidebar_settled_menu_target, Some(target.clone()));
+        assert_eq!(app.state.sidebar_settled_menu_target, None);
         let ws_idx = app
             .state
             .workspaces
@@ -5068,6 +5165,49 @@ mod tests {
             .position(|workspace| workspace.id == target.workspace_id)
             .expect("settled target workspace");
         assert!(app.state.pane_is_settled(ws_idx, target.pane_id));
+        assert!(app.state.terminals[&terminal_id]
+            .pending_agent_resume_plan
+            .is_some());
+        assert_eq!(app.state.active, Some(ws_idx));
+        assert_eq!(
+            app.state.workspaces[ws_idx].focused_pane_id(),
+            Some(target.pane_id)
+        );
+        app.state.sidebar_selected_settled = Some(target.clone());
+        assert!(app
+            .handle_sidebar_settled_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
+        assert_eq!(app.state.sidebar_settled_menu_target, Some(target));
+    }
+
+    #[test]
+    fn settled_sidebar_keyboard_moves_into_and_through_visible_rows() {
+        let mut workspace = Workspace::test_new("settled rows");
+        let first_pane = workspace.tabs[0].root_pane;
+        let second_pane = workspace.test_split(Direction::Horizontal);
+        let rows = [first_pane, second_pane].map(|pane_id| crate::app::state::PaneFocusTarget {
+            workspace_id: workspace.id.clone(),
+            pane_id,
+        });
+        assert_eq!(
+            super::settled_sidebar_neighbor(&rows, None, false),
+            Some(rows[0].clone())
+        );
+        assert_eq!(
+            super::settled_sidebar_neighbor(&rows, None, true),
+            Some(rows[1].clone())
+        );
+        assert_eq!(
+            super::settled_sidebar_neighbor(&rows, Some(&rows[0]), false),
+            Some(rows[1].clone())
+        );
+        assert_eq!(
+            super::settled_sidebar_neighbor(&rows, Some(&rows[1]), true),
+            Some(rows[0].clone())
+        );
+        assert_eq!(
+            super::settled_sidebar_neighbor(&rows, Some(&rows[0]), true),
+            Some(rows[0].clone())
+        );
     }
 
     #[test]

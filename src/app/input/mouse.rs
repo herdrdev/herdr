@@ -3920,6 +3920,24 @@ impl AppState {
 
         if let Some(info) = self.pane_at(mouse.column, mouse.row).cloned() {
             self.focus_pane(info.id);
+            if self
+                .settled_view
+                .as_ref()
+                .is_some_and(|view| view.pane_id == info.id)
+            {
+                if let Some(view) = self.settled_view.as_mut() {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => {
+                            view.scroll = view.scroll.saturating_add(self.mouse_scroll_lines)
+                        }
+                        MouseEventKind::ScrollDown => {
+                            view.scroll = view.scroll.saturating_sub(self.mouse_scroll_lines)
+                        }
+                        _ => {}
+                    }
+                }
+                return;
+            }
             if self.forward_pane_wheel(terminal_runtimes, &info, mouse) {
                 return;
             }
