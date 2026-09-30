@@ -9,6 +9,7 @@ pub(crate) const HERDR_PANE_ID_ENV_VAR: &str = "HERDR_PANE_ID";
 pub(crate) const HERDR_TAB_ID_ENV_VAR: &str = "HERDR_TAB_ID";
 pub(crate) const HERDR_WORKSPACE_ID_ENV_VAR: &str = "HERDR_WORKSPACE_ID";
 pub(crate) const HERDR_BIN_PATH_ENV_VAR: &str = "HERDR_BIN_PATH";
+const FORCE_HYPERLINK_ENV_VAR: &str = "FORCE_HYPERLINK";
 
 pub(crate) const PI_CODING_AGENT_DIR_ENV_VAR: &str = "PI_CODING_AGENT_DIR";
 pub(crate) const OMP_CONFIG_DIR_ENV_VAR: &str = "PI_CONFIG_DIR";
@@ -28,6 +29,9 @@ pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
+    if std::env::var_os(FORCE_HYPERLINK_ENV_VAR).is_none() {
+        cmd.env(FORCE_HYPERLINK_ENV_VAR, "1");
+    }
     if let Ok(executable) = crate::platform::launch_executable() {
         cmd.env(HERDR_BIN_PATH_ENV_VAR, executable);
     }
@@ -265,6 +269,44 @@ pub(crate) fn integration_env_lock() -> IntegrationEnvLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_pane_base_env_enables_force_hyperlink_when_unset() {
+        let _lock = integration_env_lock();
+        let original = std::env::var_os(FORCE_HYPERLINK_ENV_VAR);
+        std::env::remove_var(FORCE_HYPERLINK_ENV_VAR);
+
+        let mut cmd = CommandBuilder::new("test-command");
+        apply_pane_base_env(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env(FORCE_HYPERLINK_ENV_VAR),
+            Some(std::ffi::OsStr::new("1"))
+        );
+        match original {
+            Some(value) => std::env::set_var(FORCE_HYPERLINK_ENV_VAR, value),
+            None => std::env::remove_var(FORCE_HYPERLINK_ENV_VAR),
+        }
+    }
+
+    #[test]
+    fn apply_pane_base_env_preserves_explicit_force_hyperlink_value() {
+        let _lock = integration_env_lock();
+        let original = std::env::var_os(FORCE_HYPERLINK_ENV_VAR);
+        std::env::set_var(FORCE_HYPERLINK_ENV_VAR, "0");
+
+        let mut cmd = CommandBuilder::new("test-command");
+        apply_pane_base_env(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env(FORCE_HYPERLINK_ENV_VAR),
+            Some(std::ffi::OsStr::new("0"))
+        );
+        match original {
+            Some(value) => std::env::set_var(FORCE_HYPERLINK_ENV_VAR, value),
+            None => std::env::remove_var(FORCE_HYPERLINK_ENV_VAR),
+        }
+    }
 
     #[test]
     fn opencode_state_dir_defaults_to_local_state() {
