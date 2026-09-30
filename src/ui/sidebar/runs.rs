@@ -244,6 +244,9 @@ mod tests {
             protocol: None,
             error: (state == crate::fleet::HostState::Unreachable).then(|| "timeout".to_string()),
             remote_identity: None,
+            sessions: None,
+            reachable: false,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }
     }

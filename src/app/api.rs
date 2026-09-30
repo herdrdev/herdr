@@ -300,6 +300,91 @@ impl App {
         self.commit_fleet_snapshot(snapshot)
     }
 
+    fn install_fleet_session_inventory(
+        &mut self,
+        host: crate::config::FleetHostConfig,
+        config_generation: u64,
+        session_snapshot: crate::api::schema::SessionSnapshot,
+    ) -> bool {
+        if config_generation != self.fleet_poller_config.generation() {
+            return false;
+        }
+        let mut snapshot = self.state.fleet_snapshot.clone();
+        let sections = crate::fleet::host_session_sections(&session_snapshot);
+        let session_snapshot = match serde_json::to_value(session_snapshot) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                tracing::warn!(%error, "cannot encode remote session event");
+                return false;
+            }
+        };
+        let Some(host_snapshot) = snapshot
+            .hosts
+            .iter_mut()
+            .find(|current| current.name == host.name && current.matches_config(&host))
+        else {
+            return false;
+        };
+        if host_snapshot
+            .sessions
+            .as_ref()
+            .and_then(|sessions| sessions.snapshot.as_ref())
+            .is_some_and(|current| {
+                current.get("epoch").and_then(serde_json::Value::as_str)
+                    == session_snapshot
+                        .get("epoch")
+                        .and_then(serde_json::Value::as_str)
+                    && current
+                        .get("revision")
+                        .and_then(serde_json::Value::as_u64)
+                        .zip(
+                            session_snapshot
+                                .get("revision")
+                                .and_then(serde_json::Value::as_u64),
+                        )
+                        .is_some_and(|(current, incoming)| current > incoming)
+            })
+        {
+            return false;
+        }
+        let runs = host_snapshot
+            .entries
+            .iter()
+            .filter(|entry| entry.source == crate::fleet::EvidenceSource::RunState)
+            .cloned()
+            .collect();
+        let loops = host_snapshot
+            .sessions
+            .as_ref()
+            .map(|sessions| sessions.loops.clone())
+            .unwrap_or_default();
+        host_snapshot.sessions = Some(crate::fleet::HostSessionInventory {
+            snapshot: Some(session_snapshot),
+            sections,
+            runs,
+            loops,
+        });
+        host_snapshot.reachable = true;
+        host_snapshot.error = None;
+        host_snapshot.state = if host_snapshot
+            .version
+            .as_deref()
+            .is_some_and(|version| version != crate::build_info::version())
+            || host_snapshot
+                .protocol
+                .is_some_and(|protocol| protocol != crate::protocol::PROTOCOL_VERSION)
+        {
+            crate::fleet::HostState::VersionSkew
+        } else {
+            crate::fleet::HostState::Reachable
+        };
+        host_snapshot.last_seen_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| u64::try_from(duration.as_millis()).ok());
+        self.commit_fleet_snapshot(snapshot)
+    }
+
     pub(crate) fn pane_runtime_is_suspended(&self, pane_id: crate::layout::PaneId) -> bool {
         self.find_pane(pane_id)
             .and_then(|(_, pane)| self.terminal_runtimes.get(&pane.attached_terminal_id))
@@ -388,6 +473,11 @@ impl App {
                 config_generation,
                 agents,
             } => self.install_fleet_agent_inventory(host, config_generation, agents),
+            AppEvent::FleetSessionInventoryChanged {
+                host,
+                config_generation,
+                snapshot,
+            } => self.install_fleet_session_inventory(host, config_generation, *snapshot),
             AppEvent::RemoteApiRequestFinished {
                 agent_ref,
                 response,
@@ -692,6 +782,15 @@ impl App {
         } = ev
         {
             return Some(self.install_fleet_agent_inventory(host, config_generation, agents));
+        }
+
+        if let AppEvent::FleetSessionInventoryChanged {
+            host,
+            config_generation,
+            snapshot,
+        } = ev
+        {
+            return Some(self.install_fleet_session_inventory(host, config_generation, *snapshot));
         }
 
         if let AppEvent::RemoteApiRequestFinished {
@@ -2456,6 +2555,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }
     }
@@ -2467,6 +2569,64 @@ mod tests {
             hosts,
             ..crate::fleet::Snapshot::default()
         }
+    }
+
+    #[test]
+    fn initial_session_inventory_installs_and_older_buffered_event_is_ignored() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let configured = crate::config::FleetHostConfig {
+            name: "remote".into(),
+            target: "remote".into(),
+            ..crate::config::FleetHostConfig::default()
+        };
+        app.state.fleet_snapshot = fleet_snapshot(vec![fleet_host("remote", "remote")]);
+        let make_session = |revision| {
+            serde_json::from_value(serde_json::json!({
+                "epoch": "epoch-a",
+                "revision": revision,
+                "version": "0.9.1",
+                "protocol": 1,
+                "workspaces": [{
+                    "workspace_id": "workspace-a",
+                    "number": 1,
+                    "label": "initial workspace",
+                    "focused": true,
+                    "pane_count": 1,
+                    "tab_count": 1,
+                    "active_tab_id": "tab-a",
+                    "agent_status": "idle"
+                }],
+                "tabs": [],
+                "panes": [],
+                "layouts": [],
+                "agents": []
+            }))
+            .expect("valid session snapshot")
+        };
+
+        assert!(app.install_fleet_session_inventory(configured.clone(), 0, make_session(8)));
+        let installed = app.state.fleet_snapshot.hosts[0]
+            .sessions
+            .as_ref()
+            .and_then(|sessions| sessions.snapshot.as_ref())
+            .expect("initial inventory installed");
+        assert_eq!(installed["revision"], 8);
+        assert_eq!(installed["workspaces"][0]["workspace_id"], "workspace-a");
+
+        assert!(!app.install_fleet_session_inventory(configured, 0, make_session(7)));
+        let retained = app.state.fleet_snapshot.hosts[0]
+            .sessions
+            .as_ref()
+            .and_then(|sessions| sessions.snapshot.as_ref())
+            .expect("initial inventory retained");
+        assert_eq!(retained["revision"], 8);
     }
 
     fn app_with_remote_lifecycle_entry() -> (App, crate::api::schema::AgentRef) {

@@ -445,6 +445,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries,
             }],
             ..crate::fleet::Snapshot::default()
@@ -477,6 +480,9 @@ mod tests {
                 protocol: None,
                 error: Some("timeout".to_string()),
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..crate::fleet::Snapshot::default()
@@ -500,6 +506,9 @@ mod tests {
                 protocol: None,
                 error: Some("Herdr socket unavailable".to_string()),
                 remote_identity: None,
+                sessions: None,
+                reachable: false,
+                last_seen_unix_ms: None,
                 entries: vec![crate::fleet::FleetRow::test_run_summary_row(summary(
                     "ub2",
                     "ra-active",

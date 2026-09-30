@@ -1080,6 +1080,9 @@ mod tests {
             protocol: None,
             error: Some("ssh: connection refused".to_string()),
             remote_identity: None,
+            sessions: None,
+            reachable: false,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
 
@@ -1115,6 +1118,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..crate::fleet::Snapshot::default()
@@ -1156,6 +1162,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
 
@@ -1201,6 +1210,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
         app

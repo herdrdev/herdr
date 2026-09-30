@@ -4472,6 +4472,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
         let argv = crate::fleet::agent_attach_argv_from_config(
@@ -5207,6 +5210,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![crate::fleet::FleetRow::test_agent_info_row(host, info)],
             }],
             ..crate::fleet::Snapshot::default()
@@ -5615,6 +5621,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![
                     crate::fleet::FleetRow::test_agent_info_row(
                         "remote",
@@ -5705,6 +5714,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
         let argv = crate::fleet::agent_attach_argv_from_config(
@@ -5779,6 +5791,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }];
         let fleet_terminal_ids = app.state.workspaces[1]

@@ -3456,6 +3456,7 @@ impl AppState {
         match event {
             AppEvent::FleetRefreshed { .. } => Vec::new(),
             AppEvent::FleetAgentInventoryChanged { .. } => Vec::new(),
+            AppEvent::FleetSessionInventoryChanged { .. } => Vec::new(),
             AppEvent::AuthorityAcceptanceLedgerPersisted { .. } => Vec::new(),
             AppEvent::AuthorityAcceptanceLedgerReconciled { .. } => Vec::new(),
             AppEvent::RemoteFocusTransition { .. } => Vec::new(),

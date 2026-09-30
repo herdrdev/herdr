@@ -235,6 +235,7 @@ pub(crate) fn select_hosts(
 struct HostRuntime {
     version: Option<String>,
     protocol: Option<u32>,
+    session_events: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -269,7 +270,33 @@ pub(crate) struct HostSnapshot {
     /// wire after checking that the connection tuple still matches.
     #[serde(skip)]
     pub(crate) remote_identity: Option<String>,
+    /// Optional per-host session details. Older hosts and older clients can
+    /// omit or ignore this field while retaining the fleet header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sessions: Option<HostSessionInventory>,
+    #[serde(default)]
+    pub(crate) reachable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) last_seen_unix_ms: Option<u64>,
     pub(crate) entries: Vec<FleetRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HostSessionInventory {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) snapshot: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sections: Vec<HostSessionSection>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) runs: Vec<FleetRow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) loops: Vec<crate::api::schema::LoopInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct HostSessionSection {
+    pub(crate) name: &'static str,
+    pub(crate) pane_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -1784,9 +1811,6 @@ impl Snapshot {
                 })
             });
         for host in &mut self.hosts {
-            if host.local || host.state != HostState::Unreachable {
-                continue;
-            }
             let Some(old) = previous.hosts.iter().find(|old| {
                 old.name == host.name
                     && old.target == host.target
@@ -1796,6 +1820,12 @@ impl Snapshot {
             }) else {
                 continue;
             };
+            if host.sessions.is_none() {
+                host.sessions = old.sessions.clone();
+            }
+            if host.local || host.state != HostState::Unreachable {
+                continue;
+            }
             let mut retained = old
                 .entries
                 .iter()
@@ -1811,6 +1841,8 @@ impl Snapshot {
             retained.extend(std::mem::take(&mut host.entries));
             host.entries = retained;
             host.remote_identity = None;
+            host.reachable = false;
+            host.last_seen_unix_ms = old.last_seen_unix_ms;
         }
     }
 }
@@ -1894,6 +1926,9 @@ fn poll_without_generation(fleet: &FleetConfig) -> Snapshot {
                         protocol: None,
                         error: Some(error.clone()),
                         remote_identity: None,
+                        sessions: None,
+                        reachable: false,
+                        last_seen_unix_ms: None,
                         entries: Vec::new(),
                     })
                     .collect(),
@@ -2269,9 +2304,9 @@ fn run_remote_agent_stream_worker(
     stop: Arc<AtomicBool>,
 ) {
     while !stop.load(Ordering::Acquire) && !event_tx.is_closed() {
-        match remote_host_supports_agent_events(&host, timeout) {
-            Ok(true) => {}
-            Ok(false) => {
+        let (agent_events, session_events) = match remote_host_event_capabilities(&host, timeout) {
+            Ok(capabilities) if capabilities.0 || capabilities.1 => capabilities,
+            Ok(_) => {
                 wait_for_stream_retry(&stop, Duration::from_secs(30));
                 continue;
             }
@@ -2280,10 +2315,18 @@ fn run_remote_agent_stream_worker(
                 wait_for_stream_retry(&stop, Duration::from_secs(10));
                 continue;
             }
-        }
+        };
 
-        let result =
-            run_remote_agent_stream(&host, config_generation, timeout, &poller, &event_tx, &stop);
+        let result = run_remote_agent_stream(
+            &host,
+            config_generation,
+            timeout,
+            &poller,
+            &event_tx,
+            &stop,
+            agent_events,
+            session_events,
+        );
         poller.set_agent_stream_live(&host.name, config_generation, false);
         if stop.load(Ordering::Acquire) || event_tx.is_closed() {
             break;
@@ -2296,10 +2339,10 @@ fn run_remote_agent_stream_worker(
     poller.set_agent_stream_live(&host.name, config_generation, false);
 }
 
-fn remote_host_supports_agent_events(
+fn remote_host_event_capabilities(
     host: &FleetHostConfig,
     timeout: Duration,
-) -> Result<bool, String> {
+) -> Result<(bool, bool), String> {
     let route = HostApiRoute::from_config(host);
     let request = Request {
         id: "fleet-agent-events-capability".into(),
@@ -2313,8 +2356,8 @@ fn remote_host_supports_agent_events(
         ResponseResult::Pong {
             capabilities: Some(capabilities),
             ..
-        } => Ok(capabilities.fleet_agent_events),
-        _ => Ok(false),
+        } => Ok((capabilities.fleet_agent_events, capabilities.session_events)),
+        _ => Ok((false, false)),
     }
 }
 
@@ -2325,8 +2368,11 @@ fn run_remote_agent_stream(
     poller: &FleetPollerHandle,
     event_tx: &tokio::sync::mpsc::Sender<crate::events::AppEvent>,
     stop: &AtomicBool,
+    agent_events: bool,
+    session_events: bool,
 ) -> Result<(), String> {
-    let (mut child, lines, reader) = spawn_remote_agent_stream(host, timeout)?;
+    let (mut child, lines, reader) =
+        spawn_remote_host_stream(host, timeout, agent_events, session_events)?;
     let mut started = false;
     let stream_result = 'stream: loop {
         if stop.load(Ordering::Acquire) || event_tx.is_closed() {
@@ -2336,7 +2382,29 @@ fn run_remote_agent_stream(
             Ok(Ok(line)) => match parse_remote_agent_stream_line(&line) {
                 Ok(RemoteAgentStreamMessage::Started) => {
                     started = true;
-                    poller.set_agent_stream_live(&host.name, config_generation, true);
+                    if agent_events {
+                        poller.set_agent_stream_live(&host.name, config_generation, true);
+                    }
+                    if session_events {
+                        let seed = fetch_remote_session_inventory(host, timeout)
+                            .map_err(|error| {
+                                format!("cannot fetch initial session inventory: {error}")
+                            })
+                            .and_then(|(snapshot, _)| {
+                                send_remote_session_inventory_update(
+                                    host,
+                                    config_generation,
+                                    event_tx,
+                                    snapshot,
+                                )
+                            });
+                        if let Err(error) = seed {
+                            if error == "remote fleet event receiver closed" {
+                                break 'stream Ok(());
+                            }
+                            break 'stream Err(error);
+                        }
+                    }
                 }
                 Ok(RemoteAgentStreamMessage::AgentsChanged(agents)) if started => {
                     let event = crate::events::AppEvent::FleetAgentInventoryChanged {
@@ -2357,6 +2425,22 @@ fn run_remote_agent_stream(
                 }
                 Ok(RemoteAgentStreamMessage::AgentsChanged(_)) => {
                     break Err("remote fleet stream sent inventory before its handshake".into());
+                }
+                Ok(RemoteAgentStreamMessage::SessionChanged(snapshot)) if started => {
+                    if let Err(error) = send_remote_session_inventory_update(
+                        host,
+                        config_generation,
+                        event_tx,
+                        *snapshot,
+                    ) {
+                        if error == "remote fleet event receiver closed" {
+                            break 'stream Ok(());
+                        }
+                        break 'stream Err(error);
+                    }
+                }
+                Ok(RemoteAgentStreamMessage::SessionChanged(_)) => {
+                    break Err("remote session stream sent inventory before its handshake".into());
                 }
                 Err(error) => break Err(error),
             },
@@ -2383,9 +2467,32 @@ fn run_remote_agent_stream(
     }
 }
 
+fn send_remote_session_inventory_update(
+    host: &FleetHostConfig,
+    config_generation: u64,
+    event_tx: &tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+    snapshot: crate::api::schema::SessionSnapshot,
+) -> Result<(), String> {
+    match event_tx.try_send(crate::events::AppEvent::FleetSessionInventoryChanged {
+        host: host.clone(),
+        config_generation,
+        snapshot: Box::new(snapshot),
+    }) {
+        Ok(()) => Ok(()),
+        Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+            Err("remote fleet event receiver closed".into())
+        }
+        Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!(host = %host.name, "dropped remote session update because the event queue is full");
+            Err("remote fleet event queue is full".into())
+        }
+    }
+}
+
 enum RemoteAgentStreamMessage {
     Started,
     AgentsChanged(Vec<AgentInfo>),
+    SessionChanged(Box<crate::api::schema::SessionSnapshot>),
 }
 
 fn parse_remote_agent_stream_line(line: &str) -> Result<RemoteAgentStreamMessage, String> {
@@ -2405,21 +2512,34 @@ fn parse_remote_agent_stream_line(line: &str) -> Result<RemoteAgentStreamMessage
             crate::api::schema::SubscriptionEventKind::FleetAgentsChanged,
             crate::api::schema::SubscriptionEventData::FleetAgentsChanged(event),
         ) => Ok(RemoteAgentStreamMessage::AgentsChanged(event.agents)),
+        (
+            crate::api::schema::SubscriptionEventKind::SessionChanged,
+            crate::api::schema::SubscriptionEventData::SessionChanged(event),
+        ) => Ok(RemoteAgentStreamMessage::SessionChanged(event.snapshot)),
         _ => Err("remote fleet stream returned an unexpected event".into()),
     }
 }
 
 type RemoteAgentStreamLines = std::sync::mpsc::Receiver<Result<String, std::io::Error>>;
 
-fn spawn_remote_agent_stream(
+fn spawn_remote_host_stream(
     host: &FleetHostConfig,
     timeout: Duration,
+    agent_events: bool,
+    session_events: bool,
 ) -> Result<(Child, RemoteAgentStreamLines, std::thread::JoinHandle<()>), String> {
     let route = HostApiRoute::from_config(host);
+    let mut subscriptions = Vec::new();
+    if agent_events {
+        subscriptions.push(crate::api::schema::Subscription::FleetAgentsChanged {});
+    }
+    if session_events {
+        subscriptions.push(crate::api::schema::Subscription::SessionChanged {});
+    }
     let request = Request {
-        id: "fleet-agent-events".into(),
+        id: "fleet-host-events".into(),
         method: Method::EventsSubscribe(crate::api::schema::EventsSubscribeParams {
-            subscriptions: vec![crate::api::schema::Subscription::FleetAgentsChanged {}],
+            subscriptions,
         }),
     };
     let request_json = serde_json::to_string(&request).map_err(|error| error.to_string())?;
@@ -2513,6 +2633,14 @@ fn wait_for_stream_retry(stop: &AtomicBool, duration: Duration) {
     }
 }
 
+type HostSessionEvidence = Result<
+    (
+        Option<crate::api::schema::SessionSnapshot>,
+        Vec<crate::api::schema::LoopInfo>,
+    ),
+    String,
+>;
+
 #[derive(Debug)]
 struct HostEvidence {
     host: FleetHostConfig,
@@ -2520,6 +2648,7 @@ struct HostEvidence {
     groups: Option<Result<crate::groups::GroupAuthoritySnapshot, String>>,
     runs: Vec<Result<crate::agent_runs::Observation, String>>,
     runtime: HostRuntime,
+    sessions: Option<HostSessionEvidence>,
     /// Aloops producer data, requested only from the host named by
     /// `remote.fleet.aloop_host`.
     aloop: Option<Result<crate::aloop::HostData, String>>,
@@ -2579,6 +2708,7 @@ fn collect_snapshot_with_implicit_local(
                     groups: Some(Err("group catalog reader panicked".into())),
                     runs: Vec::new(),
                     runtime: HostRuntime::default(),
+                    sessions: None,
                     aloop: None,
                 },
             })
@@ -2595,6 +2725,7 @@ fn fetch_local_run_host(host: FleetHostConfig, include_aloop: bool) -> HostEvide
         groups: None,
         runs: local_run_states(),
         runtime: HostRuntime::default(),
+        sessions: None,
         aloop: include_aloop.then(crate::aloop::read_local_host_data),
     }
 }
@@ -2695,6 +2826,16 @@ fn snapshot_from_evidence(
             HostState::Reachable
         };
         hosts.push(HostSnapshot {
+            reachable: error.is_none(),
+            last_seen_unix_ms: error
+                .is_none()
+                .then(|| {
+                    refreshed_at
+                        .duration_since(UNIX_EPOCH)
+                        .ok()
+                        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+                })
+                .flatten(),
             name: evidence.host.name,
             target: evidence.host.target,
             local: evidence.host.local,
@@ -2705,6 +2846,33 @@ fn snapshot_from_evidence(
             protocol: evidence.runtime.protocol,
             error,
             remote_identity,
+            sessions: evidence
+                .sessions
+                .and_then(Result::ok)
+                .and_then(|(snapshot, loops)| {
+                    let sections = snapshot
+                        .as_ref()
+                        .map(host_session_sections)
+                        .unwrap_or_default();
+                    let runs = entries
+                        .iter()
+                        .filter(|entry| entry.source == EvidenceSource::RunState)
+                        .cloned()
+                        .collect();
+                    let snapshot = match snapshot.map(serde_json::to_value).transpose() {
+                        Ok(snapshot) => snapshot,
+                        Err(error) => {
+                            tracing::warn!(%error, "cannot encode host session inventory");
+                            return None;
+                        }
+                    };
+                    Some(HostSessionInventory {
+                        snapshot,
+                        sections,
+                        runs,
+                        loops,
+                    })
+                }),
             entries,
         });
     }
@@ -2736,6 +2904,37 @@ fn snapshot_from_evidence(
         hosts,
         group_catalogs,
     }
+}
+
+pub(crate) fn host_session_sections(
+    snapshot: &crate::api::schema::SessionSnapshot,
+) -> Vec<HostSessionSection> {
+    let mut main = Vec::new();
+    let mut snoozed = Vec::new();
+    let mut settled = Vec::new();
+    for pane in &snapshot.panes {
+        if pane.snoozed_until.is_some() {
+            snoozed.push(pane.pane_id.clone());
+        } else if pane.settled_at.is_some() {
+            settled.push(pane.pane_id.clone());
+        } else {
+            main.push(pane.pane_id.clone());
+        }
+    }
+    vec![
+        HostSessionSection {
+            name: "main",
+            pane_ids: main,
+        },
+        HostSessionSection {
+            name: "snoozed",
+            pane_ids: snoozed,
+        },
+        HostSessionSection {
+            name: "settled",
+            pane_ids: settled,
+        },
+    ]
 }
 
 /// Fold the per-host aloop evidence into the snapshot's producer section.
@@ -2852,6 +3051,7 @@ fn fetch_local_host(host: FleetHostConfig, timeout: Duration, include_aloop: boo
         });
     let runtime = fetch_local_runtime(&client, timeout);
     let groups = fetch_group_catalog(&client, timeout);
+    let sessions = fetch_session_inventory(&client, timeout);
     let runs = local_run_states();
     let aloop = include_aloop.then(crate::aloop::read_local_host_data);
     HostEvidence {
@@ -2860,8 +3060,54 @@ fn fetch_local_host(host: FleetHostConfig, timeout: Duration, include_aloop: boo
         groups: Some(groups),
         runs,
         runtime,
+        sessions: Some(sessions.map(|(snapshot, loops)| (Some(snapshot), loops))),
         aloop,
     }
+}
+
+fn fetch_session_inventory(
+    client: &ApiClient,
+    timeout: Duration,
+) -> Result<
+    (
+        crate::api::schema::SessionSnapshot,
+        Vec<crate::api::schema::LoopInfo>,
+    ),
+    String,
+> {
+    let snapshot_request = Request {
+        id: "fleet:collect:sessions".into(),
+        method: Method::SessionSnapshot(EmptyParams::default()),
+    };
+    let snapshot = client
+        .request_value_with_timeout(&snapshot_request, timeout)
+        .map_err(|error| error.to_string())
+        .and_then(|value| {
+            crate::api::client::parse_response_value(value).map_err(|error| error.to_string())
+        })
+        .and_then(|response| match response.result {
+            ResponseResult::SessionSnapshot { snapshot } => Ok(*snapshot),
+            other => Err(format!("unexpected session snapshot response: {other:?}")),
+        })?;
+    let loops_request = Request {
+        id: "fleet:collect:loops".into(),
+        method: Method::LoopList(EmptyParams::default()),
+    };
+    let loops_result = client
+        .request_value_with_timeout(&loops_request, timeout)
+        .map_err(|error| error.to_string())
+        .and_then(|value| {
+            crate::api::client::parse_response_value(value).map_err(|error| error.to_string())
+        })
+        .and_then(|response| match response.result {
+            ResponseResult::LoopList { loops } => Ok(loops),
+            other => Err(format!("unexpected loop list response: {other:?}")),
+        });
+    let loops = loops_result.unwrap_or_else(|error| {
+        tracing::debug!(%error, "host loop inventory unavailable");
+        Vec::new()
+    });
+    Ok((snapshot, loops))
 }
 
 fn api_client_for_host(host: &FleetHostConfig) -> ApiClient {
@@ -2903,10 +3149,14 @@ fn fetch_local_runtime(client: &ApiClient, timeout: Duration) -> HostRuntime {
         .and_then(|value| crate::api::client::parse_response_value(value).ok())
         .and_then(|response| match response.result {
             ResponseResult::Pong {
-                version, protocol, ..
+                version,
+                protocol,
+                capabilities,
             } => Some(HostRuntime {
                 version: Some(version),
                 protocol: Some(protocol),
+                session_events: capabilities
+                    .is_some_and(|capabilities| capabilities.session_events),
             }),
             _ => None,
         })
@@ -3007,6 +3257,14 @@ fn fetch_remote_host(
             HostRuntime::default(),
         ),
     };
+    let sessions = if runtime.session_events {
+        Some(Ok((None, fetch_remote_loops(&host, timeout))))
+    } else {
+        Some(
+            fetch_remote_session_inventory(&host, timeout)
+                .map(|(snapshot, loops)| (Some(snapshot), loops)),
+        )
+    };
     let aloop = include_aloop.then(|| {
         run_ssh_with_timeout(
             &host.target,
@@ -3021,8 +3279,62 @@ fn fetch_remote_host(
         groups,
         runs,
         runtime,
+        sessions,
         aloop,
     }
+}
+
+fn fetch_remote_session_inventory(
+    host: &FleetHostConfig,
+    timeout: Duration,
+) -> Result<
+    (
+        crate::api::schema::SessionSnapshot,
+        Vec<crate::api::schema::LoopInfo>,
+    ),
+    String,
+> {
+    let route = HostApiRoute::from_config(host);
+    let request = Request {
+        id: "fleet:collect:sessions".into(),
+        method: Method::SessionSnapshot(EmptyParams::default()),
+    };
+    let response = route_api_request_with_ssh_program(&route, &request, timeout, "ssh")?;
+    let value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    let snapshot = match crate::api::client::parse_response_value(value)
+        .map_err(|error| error.to_string())?
+        .result
+    {
+        ResponseResult::SessionSnapshot { snapshot } => *snapshot,
+        other => return Err(format!("unexpected session snapshot response: {other:?}")),
+    };
+    let loops = fetch_remote_loops(host, timeout);
+    Ok((snapshot, loops))
+}
+
+fn fetch_remote_loops(
+    host: &FleetHostConfig,
+    timeout: Duration,
+) -> Vec<crate::api::schema::LoopInfo> {
+    let route = HostApiRoute::from_config(host);
+    let request = Request {
+        id: "fleet:collect:loops".into(),
+        method: Method::LoopList(EmptyParams::default()),
+    };
+    let loops = route_api_request_with_ssh_program(&route, &request, timeout, "ssh")
+        .map_err(|error| error.to_string())
+        .and_then(|response| serde_json::from_str(&response).map_err(|error| error.to_string()))
+        .and_then(|value| {
+            crate::api::client::parse_response_value(value).map_err(|error| error.to_string())
+        })
+        .and_then(|response| match response.result {
+            ResponseResult::LoopList { loops } => Ok(loops),
+            other => Err(format!("unexpected loop list response: {other:?}")),
+        });
+    loops.unwrap_or_else(|error| {
+        tracing::debug!(host = %host.name, %error, "remote loop inventory unavailable");
+        Vec::new()
+    })
 }
 
 fn remote_aloop_read_script(socket: Option<&str>, session: Option<&str>) -> String {
@@ -3285,6 +3597,11 @@ fn parse_host_runtime(bytes: &[u8]) -> HostRuntime {
             .get("protocol")
             .and_then(serde_json::Value::as_u64)
             .and_then(|protocol| u32::try_from(protocol).ok()),
+        session_events: value
+            .get("capabilities")
+            .and_then(|capabilities| capabilities.get("session_events"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -4419,6 +4736,7 @@ mod tests {
                 groups: Some(Err("group catalog unavailable in fake reader".into())),
                 runs: Vec::new(),
                 runtime: self.runtime.clone(),
+                sessions: None,
                 aloop: None,
             }
         }
@@ -4436,6 +4754,7 @@ mod tests {
                 groups: Some(Err("group catalog unavailable in fake reader".into())),
                 runs: Vec::new(),
                 runtime: self.runtime.clone(),
+                sessions: None,
                 aloop: None,
             }
         }
@@ -5429,6 +5748,21 @@ mod tests {
         run.raw_state = "active".into();
         run.liveness = Liveness::Live;
         run.closure_liveness = Liveness::Live;
+        let inventory = HostSessionInventory {
+            snapshot: Some(serde_json::json!({
+                "epoch": "epoch-a",
+                "revision": 7,
+                "workspaces": [{"workspace_id": "w-stable"}],
+                "tabs": [{"tab_id": "t-stable"}],
+                "panes": [{"pane_id": "p-stable"}]
+            })),
+            sections: vec![HostSessionSection {
+                name: "main",
+                pane_ids: vec!["p-stable".into()],
+            }],
+            runs: Vec::new(),
+            loops: Vec::new(),
+        };
         let previous = Snapshot {
             hosts: vec![HostSnapshot {
                 name: "remote".into(),
@@ -5441,6 +5775,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: Some(inventory.clone()),
+                reachable: true,
+                last_seen_unix_ms: Some(120_000),
                 entries: vec![row, run],
             }],
             ..Snapshot::default()
@@ -5458,6 +5795,9 @@ mod tests {
                 protocol: None,
                 error: Some("offline".into()),
                 remote_identity: None,
+                sessions: None,
+                reachable: false,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..Snapshot::default()
@@ -5466,12 +5806,43 @@ mod tests {
         let mut first = unreachable(130_000);
         first.retain_unreachable_inventory_from(&previous);
         assert_eq!(first.hosts[0].entries[0].age_s, Some(30));
+        assert!(!first.hosts[0].reachable);
+        assert_eq!(first.hosts[0].last_seen_unix_ms, Some(120_000));
+        assert_eq!(first.hosts[0].sessions, Some(inventory));
         let retained_run = &first.hosts[0].entries[1];
         assert_eq!(retained_run.state, "stale");
         assert_eq!(retained_run.liveness, Liveness::Unknown);
         assert_eq!(
             retained_run.run_summary().expect("retained run").state,
             crate::agent_runs::DisplayState::Stale
+        );
+        let old_host = host("legacy", false);
+        let old_host = HostSnapshot {
+            name: old_host.name,
+            target: old_host.target,
+            local: old_host.local,
+            session: old_host.session,
+            socket: old_host.socket,
+            state: HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
+            entries: Vec::new(),
+        };
+        let serialized = serde_json::to_value(&old_host).expect("legacy host JSON");
+        assert!(serialized.get("sessions").is_none());
+        assert_eq!(serialized["reachable"], true);
+        let offline = HostSnapshot {
+            reachable: false,
+            ..old_host
+        };
+        assert_eq!(
+            serde_json::to_value(offline).expect("offline host JSON")["reachable"],
+            false
         );
         let projection = crate::agent_runs::project(&first);
         assert_eq!(projection.active_count, 0);
@@ -5483,6 +5854,44 @@ mod tests {
         let mut second = unreachable(160_000);
         second.retain_unreachable_inventory_from(&first);
         assert_eq!(second.hosts[0].entries[0].age_s, Some(60));
+    }
+
+    #[test]
+    fn event_capable_host_keeps_polled_loops_before_first_session_event() {
+        let configured = host("remote", false);
+        let snapshot = snapshot_from_evidence(
+            std::slice::from_ref(&configured),
+            &FleetConfig::default(),
+            vec![HostEvidence {
+                host: configured.clone(),
+                agents: Ok(Vec::new()),
+                groups: None,
+                runs: Vec::new(),
+                runtime: HostRuntime {
+                    session_events: true,
+                    ..HostRuntime::default()
+                },
+                sessions: Some(Ok((
+                    None,
+                    vec![crate::api::schema::LoopInfo {
+                        loop_id: "loop-stable".into(),
+                        title: "nightly".into(),
+                        state: "active".into(),
+                        fields: Default::default(),
+                        recent_runs: Vec::new(),
+                    }],
+                ))),
+                aloop: None,
+            }],
+            SystemTime::UNIX_EPOCH,
+        );
+
+        let inventory = snapshot.hosts[0]
+            .sessions
+            .as_ref()
+            .expect("host inventory before the first event");
+        assert!(inventory.snapshot.is_none());
+        assert_eq!(inventory.loops[0].loop_id, "loop-stable");
     }
 
     #[test]
@@ -5510,6 +5919,9 @@ mod tests {
                 protocol: None,
                 error: Some("offline".into()),
                 remote_identity: None,
+                sessions: None,
+                reachable: false,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..Snapshot::default()
@@ -5535,6 +5947,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![pane],
             }],
             ..Snapshot::default()
@@ -5557,6 +5972,9 @@ mod tests {
                 protocol: None,
                 error: Some("offline".into()),
                 remote_identity: None,
+                sessions: None,
+                reachable: false,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..Snapshot::default()
@@ -5910,6 +6328,7 @@ mod tests {
             HostRuntime {
                 version: Some("0.0.0-test".to_string()),
                 protocol: Some(crate::protocol::PROTOCOL_VERSION),
+                session_events: false,
             },
         );
         let version_snapshot =
@@ -5925,6 +6344,7 @@ mod tests {
             HostRuntime {
                 version: Some(crate::build_info::version().to_string()),
                 protocol: Some(crate::protocol::PROTOCOL_VERSION + 1),
+                session_events: false,
             },
         );
         let protocol_snapshot =
@@ -5940,6 +6360,7 @@ mod tests {
             HostRuntime {
                 version: Some(crate::build_info::version().to_string()),
                 protocol: Some(crate::protocol::PROTOCOL_VERSION),
+                session_events: false,
             },
         );
         let snapshot = collect_snapshot_with(&reader, &hosts, &FleetConfig::default());
@@ -5956,6 +6377,7 @@ mod tests {
             HostRuntime {
                 version: Some(crate::build_info::version().to_string()),
                 protocol: Some(crate::protocol::PROTOCOL_VERSION),
+                session_events: false,
             },
         );
 
@@ -5985,6 +6407,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         };
 
@@ -6012,6 +6437,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         };
         let snapshot = Snapshot {
@@ -6068,6 +6496,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         };
 
@@ -6087,6 +6518,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         };
         assert_eq!(
@@ -6327,6 +6761,7 @@ mod tests {
                 groups: Some(Err("group catalog unavailable in run fixture".into())),
                 runs: runs.into_iter().map(Ok).collect(),
                 runtime: HostRuntime::default(),
+                sessions: None,
                 aloop: None,
             }],
             UNIX_EPOCH + Duration::from_secs(1_758_099_600), // 2025-09-17T09:00:00Z
@@ -6435,6 +6870,7 @@ mod tests {
                 groups: Some(Err("group catalog unavailable in run fixture".into())),
                 runs: vec![rejected],
                 runtime: HostRuntime::default(),
+                sessions: None,
                 aloop: None,
             }],
             SystemTime::UNIX_EPOCH,
@@ -6907,6 +7343,9 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
                     protocol: None,
                     error: None,
                     remote_identity: None,
+                    sessions: None,
+                    reachable: false,
+                    last_seen_unix_ms: None,
                     entries: vec![row],
                 }],
                 ..Snapshot::default()
@@ -7427,6 +7866,9 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..Snapshot::default()
@@ -7481,6 +7923,84 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
             agents[0].display_title.as_deref(),
             Some("exact owner title")
         );
+    }
+
+    #[test]
+    fn remote_session_event_stream_parses_revisioned_inventory() {
+        let line = serde_json::json!({
+            "event": "session.changed",
+            "data": {
+                "epoch": "host-epoch",
+                "revision": 9,
+                "snapshot": {
+                    "epoch": "host-epoch",
+                    "revision": 9,
+                    "version": "0.9.1",
+                    "protocol": 1,
+                    "workspaces": [],
+                    "tabs": [],
+                    "panes": [],
+                    "layouts": [],
+                    "agents": []
+                }
+            }
+        })
+        .to_string();
+        let RemoteAgentStreamMessage::SessionChanged(snapshot) =
+            parse_remote_agent_stream_line(&line).expect("parse session event")
+        else {
+            panic!("expected session inventory event");
+        };
+        assert_eq!(snapshot.revision, Some(9));
+    }
+
+    #[test]
+    fn event_capable_host_seeds_inventory_before_session_changed_events() {
+        let host = FleetHostConfig {
+            name: "remote".into(),
+            target: "remote".into(),
+            ..FleetHostConfig::default()
+        };
+        let snapshot: crate::api::schema::SessionSnapshot =
+            serde_json::from_value(serde_json::json!({
+                "epoch": "epoch-a",
+                "revision": 4,
+                "version": "0.9.1",
+                "protocol": 1,
+                "workspaces": [{
+                    "workspace_id": "workspace-a",
+                    "number": 1,
+                    "label": "initial workspace",
+                    "focused": true,
+                    "pane_count": 1,
+                    "tab_count": 1,
+                    "active_tab_id": "tab-a",
+                    "agent_status": "idle"
+                }],
+                "tabs": [],
+                "panes": [],
+                "layouts": [],
+                "agents": []
+            }))
+            .expect("valid initial session inventory");
+        let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(1);
+
+        send_remote_session_inventory_update(&host, 7, &event_tx, snapshot)
+            .expect("enqueue initial inventory");
+        let crate::events::AppEvent::FleetSessionInventoryChanged {
+            host: event_host,
+            config_generation,
+            snapshot,
+        } = event_rx.try_recv().expect("initial inventory event")
+        else {
+            panic!("expected initial session inventory");
+        };
+
+        assert_eq!(event_host.name, "remote");
+        assert_eq!(config_generation, 7);
+        assert_eq!(snapshot.revision, Some(4));
+        assert_eq!(snapshot.workspaces[0].workspace_id, "workspace-a");
+        assert!(event_rx.try_recv().is_err());
     }
 
     #[test]
@@ -7593,6 +8113,7 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
                 groups: Some(Err("group catalog unavailable".to_string())),
                 runs: Vec::new(),
                 runtime: HostRuntime::default(),
+                sessions: None,
                 aloop: Some(Ok(crate::aloop::HostData::default())),
             }],
             SystemTime::UNIX_EPOCH,
@@ -7780,6 +8301,9 @@ mod device_attention_tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: state != HostState::Unreachable,
+            last_seen_unix_ms: None,
             entries,
         }
     }

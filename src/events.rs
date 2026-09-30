@@ -81,6 +81,12 @@ pub enum AppEvent {
         config_generation: u64,
         agents: Vec<crate::api::schema::AgentInfo>,
     },
+    /// A host published a revisioned session inventory through session.changed.
+    FleetSessionInventoryChanged {
+        host: crate::config::FleetHostConfig,
+        config_generation: u64,
+        snapshot: Box<crate::api::schema::SessionSnapshot>,
+    },
     /// Latest lines for only the remote terminals linked on the open board.
     BoardRemoteLinesFetched {
         note_path: std::path::PathBuf,

@@ -1283,6 +1283,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![crate::fleet::FleetRow::test_agent_row(
                     &source.host,
                     &source.agent,
@@ -1859,6 +1862,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![crate::fleet::FleetRow::test_run_row(
                     "buildbox", "w1:p3", false,
                 )],

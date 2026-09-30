@@ -5030,6 +5030,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..crate::fleet::Snapshot::default()
@@ -11809,6 +11812,9 @@ mod fleet_status_click_tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: vec![row],
         }];
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 160, 24));

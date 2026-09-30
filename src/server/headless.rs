@@ -11143,6 +11143,9 @@ next_tab = ""
                 protocol: None,
                 error: None,
                 remote_identity: Some(agent_ref.host.clone()),
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: Vec::new(),
             }],
             ..Default::default()
@@ -11349,6 +11352,9 @@ next_tab = ""
                     protocol: None,
                     error: None,
                     remote_identity: Some(remote_context.host),
+                    sessions: None,
+                    reachable: true,
+                    last_seen_unix_ms: None,
                     entries: Vec::new(),
                 }],
                 ..Default::default()

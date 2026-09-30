@@ -1035,6 +1035,19 @@ fn live_handoff_preserves_accepted_group_history() {
                         "memberships": []
                     }
                 }),
+                Some("session.snapshot") => serde_json::json!({
+                    "type": "session_snapshot",
+                    "snapshot": {
+                        "version": support::expected_version(),
+                        "protocol": support::CURRENT_PROTOCOL,
+                        "workspaces": [],
+                        "tabs": [],
+                        "panes": [],
+                        "layouts": [],
+                        "agents": []
+                    }
+                }),
+                Some("loop.list") => serde_json::json!({"type": "loop_list", "loops": []}),
                 method => panic!("unexpected authority fixture method: {method:?}"),
             };
             writeln!(

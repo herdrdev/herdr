@@ -863,6 +863,9 @@ mod tests {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: vec![crate::fleet::FleetRow::test_agent_info_row("remote", info)],
             }],
             ..crate::fleet::Snapshot::default()
@@ -1060,6 +1063,9 @@ mod tests {
                     protocol: None,
                     error: None,
                     remote_identity: None,
+                    sessions: None,
+                    reachable: true,
+                    last_seen_unix_ms: None,
                     entries: vec![crate::fleet::FleetRow::test_agent_info_row(
                         "remote",
                         remote_agent,

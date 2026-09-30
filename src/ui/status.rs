@@ -1885,6 +1885,9 @@ mod tests {
             protocol: None,
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }
     }

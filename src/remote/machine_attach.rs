@@ -4819,19 +4819,52 @@ mod tests {
 
     #[test]
     fn parse_remote_server_status_json_reads_running_server() {
+        let version = crate::build_info::version().to_string();
+        let json = serde_json::json!({
+            "status": "running",
+            "running": true,
+            "version": version,
+            "protocol": crate::protocol::PROTOCOL_VERSION,
+            "capabilities": {
+                "live_handoff": true,
+                "detached_server_daemon": true,
+                "endpoint_protocol_generation": crate::remote::ENDPOINT_PROTOCOL_GENERATION,
+                "surface_interest": true,
+                "health_check": true
+            }
+        });
+        let status =
+            parse_remote_server_status_json(&json.to_string()).expect("parse server status");
         assert_eq!(
-            parse_remote_server_status_json(
-                r#"{"status":"running","running":true,"version":"0.6.0","protocol":8,"capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}"#
-            )
-            .unwrap(),
+            status,
             RemoteServerStatus::Running {
-                version: Some("0.6.0".into()),
+                version: Some(crate::build_info::version().to_string()),
                 endpoint_protocol_generation: Some(1),
                 surface_interest: true,
                 health_check: true,
                 live_handoff: true,
                 detached_server_daemon: true
             }
+        );
+        let RemoteServerStatus::Running {
+            endpoint_protocol_generation,
+            detached_server_daemon,
+            surface_interest,
+            health_check,
+            ..
+        } = status
+        else {
+            panic!("expected running server status");
+        };
+        assert_eq!(
+            super::super::machine_restart_policy::remote_server_restart_reason(
+                endpoint_protocol_generation,
+                detached_server_daemon,
+                true,
+                surface_interest,
+                health_check,
+            ),
+            None
         );
     }
 

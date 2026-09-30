@@ -240,6 +240,9 @@ struct ServerCapabilitiesJson {
     detached_server_daemon: bool,
     groups_v1: bool,
     session_events: bool,
+    endpoint_protocol_generation: u32,
+    surface_interest: bool,
+    health_check: bool,
 }
 
 #[derive(Serialize)]
@@ -276,6 +279,9 @@ fn server_status_json(server: &ServerRuntimeStatus) -> ServerStatusJson {
                     detached_server_daemon: capabilities.detached_server_daemon,
                     groups_v1: capabilities.groups_v1,
                     session_events: capabilities.session_events,
+                    endpoint_protocol_generation: crate::remote::ENDPOINT_PROTOCOL_GENERATION,
+                    surface_interest: true,
+                    health_check: true,
                 }),
             compatible: protocol.map(|value| value == crate::protocol::PROTOCOL_VERSION),
             socket: super::target::socket_label(),
@@ -364,5 +370,11 @@ mod tests {
         let json = serde_json::to_value(server_status_json(&status)).expect("status JSON");
 
         assert_eq!(json["capabilities"]["session_events"], true);
+        assert_eq!(
+            json["capabilities"]["endpoint_protocol_generation"],
+            crate::remote::ENDPOINT_PROTOCOL_GENERATION
+        );
+        assert_eq!(json["capabilities"]["surface_interest"], true);
+        assert_eq!(json["capabilities"]["health_check"], true);
     }
 }

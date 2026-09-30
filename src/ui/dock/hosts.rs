@@ -298,6 +298,9 @@ mod tests {
             protocol: Some(crate::protocol::PROTOCOL_VERSION),
             error: None,
             remote_identity: None,
+            sessions: None,
+            reachable: false,
+            last_seen_unix_ms: None,
             entries: Vec::new(),
         }
     }

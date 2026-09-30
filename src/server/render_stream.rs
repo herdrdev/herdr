@@ -764,6 +764,9 @@ mod render_scale_benchmark {
                 protocol: None,
                 error: None,
                 remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
                 entries: (0..remote_count)
                     .map(|index| {
                         crate::fleet::FleetRow::test_agent_row(
