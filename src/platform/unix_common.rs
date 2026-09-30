@@ -634,3 +634,91 @@ mod shared_ssh_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+/// Shell startup code must reside below directories other users cannot replace.
+pub(crate) fn prepare_shell_integration_directory(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    /// Validate ancestor ownership and replacement permissions recursively.
+    /// Trusted ancestor aliases and root-owned sticky directories are allowed;
+    /// the private leaf must be an owned directory and is tightened to mode 0700.
+    fn ensure(path: &Path, private: bool) -> std::io::Result<()> {
+        let uid = unsafe { libc::geteuid() };
+        if let Some(parent) = path.parent().filter(|parent| *parent != path) {
+            if !parent.as_os_str().is_empty() {
+                ensure(parent, false)?;
+            }
+        }
+        match std::fs::DirBuilder::new().mode(0o700).create(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let metadata = std::fs::symlink_metadata(path)?;
+        // Follow trusted aliases (including macOS /var), after validating the
+        // original parent. An attacker-owned link must never hide its owner.
+        if !private && metadata.is_symlink() && (metadata.uid() == uid || metadata.uid() == 0) {
+            return ensure(&std::fs::canonicalize(path)?, false);
+        }
+        let trusted_temp = metadata.uid() == 0 && metadata.mode() & 0o1000 != 0;
+        if !metadata.is_dir()
+            || (metadata.uid() != uid && metadata.uid() != 0)
+            || (metadata.mode() & 0o022 != 0 && !trusted_temp)
+            || (private && metadata.uid() != uid)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unsafe shell integration directory",
+            ));
+        }
+        if private && metadata.mode() & 0o777 != 0o700 {
+            // Upgrade our older readable directories, never adopt writable ones.
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing shell integration parent"))?;
+    ensure(parent, true)?;
+    ensure(path, true)
+}
+
+#[cfg(test)]
+mod shell_integration_tests {
+    use super::*;
+    use std::os::unix::fs::{symlink, MetadataExt, PermissionsExt};
+
+    #[test]
+    fn shell_integration_rejects_writable_directories_and_symlinks() {
+        let root = std::env::temp_dir().join(format!("herdr-shell-private-{}", std::process::id()));
+        let path = root.join("shell-integration").join("zsh-test");
+        prepare_shell_integration_directory(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().mode() & 0o777, 0o700);
+        std::fs::set_permissions(
+            path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        assert_eq!(
+            prepare_shell_integration_directory(&path)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::set_permissions(
+            path.parent().unwrap(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        std::fs::remove_dir(&path).unwrap();
+        symlink(&root, &path).unwrap();
+        assert_eq!(
+            prepare_shell_integration_directory(&path)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

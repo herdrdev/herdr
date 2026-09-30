@@ -1,0 +1,13 @@
+# Restore the real startup directory before loading the user's environment.
+if [[ -n ${_HERDR_ZSH_ZDOTDIR+x} ]]; then
+    builtin export ZDOTDIR=$_HERDR_ZSH_ZDOTDIR
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r ${ZDOTDIR-$HOME}/.zshenv ]] || builtin source "${ZDOTDIR-$HOME}/.zshenv"
+if [[ -o interactive && -o rcs ]]; then
+    builtin typeset -g _herdr_zdotdir=${ZDOTDIR-}
+    builtin typeset -gi _herdr_zdotdir_set=${+ZDOTDIR}
+    builtin export ZDOTDIR=$_HERDR_ZSH_INIT_DIR
+fi
+builtin unset _HERDR_ZSH_ZDOTDIR

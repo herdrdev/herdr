@@ -1,5 +1,13 @@
 use std::path::Path;
 
+#[cfg(not(unix))]
+pub(crate) fn prepare_shell_integration_directory(_path: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "zsh startup integration requires Unix",
+    ))
+}
+
 #[cfg(not(windows))]
 pub(crate) fn create_private_state_file(path: &Path) -> std::io::Result<std::fs::File> {
     super::create_remote_ssh_config_file(path)

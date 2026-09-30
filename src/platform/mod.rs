@@ -331,10 +331,13 @@ mod unix_common;
 pub(crate) mod unix_image_files;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio,
+    prepare_shell_integration_directory, RemoteBridgeWake,
 };
 
 mod client_state;
+#[cfg(not(unix))]
+pub(crate) use client_state::prepare_shell_integration_directory;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
 
 #[cfg(not(unix))]
