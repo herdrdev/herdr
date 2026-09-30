@@ -78,14 +78,41 @@ pub(crate) fn spawn_handoff_import(
     let exe = if let Some(import_exe) = import_exe {
         import_exe
     } else {
-        fallback_exe = std::env::current_exe().map_err(|err| {
+        let current_exe = std::env::current_exe().map_err(|err| {
             io::Error::new(
                 err.kind(),
                 format!("failed to determine herdr executable path: {err}"),
             )
         })?;
+        fallback_exe = resolve_deleted_executable_path(current_exe);
         &fallback_exe
     };
+    spawn_handoff_import_with_exe(exe, socket_path, token)
+}
+
+#[cfg(unix)]
+fn resolve_deleted_executable_path(path: PathBuf) -> PathBuf {
+    const DELETED_SUFFIX: &str = " (deleted)";
+    let Some(unlinked_path) = path
+        .to_str()
+        .and_then(|path| path.strip_suffix(DELETED_SUFFIX))
+    else {
+        return path;
+    };
+    let unlinked_path = PathBuf::from(unlinked_path);
+    if unlinked_path.is_file() {
+        unlinked_path
+    } else {
+        path
+    }
+}
+
+#[cfg(unix)]
+fn spawn_handoff_import_with_exe(exe: &Path, socket_path: &Path, token: &str) -> io::Result<Child> {
+    let stderr = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(crate::session::data_dir().join("herdr-handoff-import.log"))?;
     let mut command = Command::new(exe);
     command
         .arg("server")
@@ -94,7 +121,8 @@ pub(crate) fn spawn_handoff_import(
         .arg(token)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        // Preserve startup failures before the importing server initializes logging.
+        .stderr(std::process::Stdio::from(stderr));
     if crate::session::explicit_session_requested() {
         // The import child no longer has the original `--session` argument, so
         // stale socket overrides must not mask the inherited HERDR_SESSION.
@@ -487,6 +515,24 @@ pub(crate) fn log_import_result(panes: usize) {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleted_current_executable_uses_existing_unlinked_path() {
+        let path = std::env::temp_dir().join(format!("herdr-handoff-exe-{}", std::process::id()));
+        std::fs::write(&path, b"executable").expect("create executable fixture");
+        let deleted = PathBuf::from(format!("{} (deleted)", path.display()));
+
+        assert_eq!(resolve_deleted_executable_path(deleted), path);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleted_current_executable_keeps_unavailable_path() {
+        let path = std::env::temp_dir().join(format!("herdr-missing-exe-{}", std::process::id()));
+        let deleted = PathBuf::from(format!("{} (deleted)", path.display()));
+
+        assert_eq!(resolve_deleted_executable_path(deleted.clone()), deleted);
+    }
 
     fn empty_snapshot() -> crate::persist::SessionSnapshot {
         crate::persist::SessionSnapshot {
