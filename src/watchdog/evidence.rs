@@ -511,6 +511,12 @@ pub(crate) fn parse_ps_rows(text: &str) -> Vec<ProcSample> {
             let pgid = f.next()?.parse().ok()?;
             let state = f.next()?.chars().next()?;
             let elapsed_secs = duration(f.next()?)? / 1000;
+            // procps can wrap etime for a just-started process into an impossible duration.
+            let elapsed_secs = if elapsed_secs > u32::MAX as u64 {
+                0
+            } else {
+                elapsed_secs
+            };
             let cpu_ms = duration(f.next()?)?;
             let name = f.collect::<Vec<_>>().join(" ");
             (!name.is_empty()).then_some(ProcSample {
@@ -666,6 +672,8 @@ mod tests {
         );
         assert_eq!(p[0].elapsed_secs, 93784);
         assert_eq!(p[1].cpu_ms, 520);
+        let wrapped = parse_ps_rows("303 1 303 R 441077234-00:18:40 00:00.01 worker");
+        assert_eq!(wrapped[0].elapsed_secs, 0);
     }
 
     #[test]
