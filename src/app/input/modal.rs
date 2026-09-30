@@ -1765,6 +1765,15 @@ impl App {
             .and_then(|idx| self.state.context_menu_items(&menu).get(idx).copied());
         let (menu_x, menu_y) = (menu.x, menu.y);
         match (menu.kind, item) {
+            (
+                ContextMenuKind::RemoteAgent { agent_ref },
+                Some(crate::app::state::UNSETTLE_ITEM),
+            ) => {
+                self.unsettle_sidebar_pane(crate::app::state::SidebarPaneLifecycleTarget::Remote(
+                    agent_ref,
+                ));
+                self.state.close_client_overlay();
+            }
             (ContextMenuKind::GitWorkspace { ws_idx, .. }, Some("New worktree")) => {
                 self.state.request_new_linked_worktree = Some(ws_idx);
                 self.state.close_client_overlay();
@@ -1921,6 +1930,19 @@ impl App {
                     },
                     "tui.context-menu.settle",
                 );
+                self.state.close_client_overlay();
+            }
+            (
+                ContextMenuKind::Tab {
+                    ws_idx,
+                    settle_pane_id: Some(pane_id),
+                    ..
+                },
+                Some(crate::app::state::UNSETTLE_ITEM),
+            ) => {
+                if let Some(target) = self.local_sidebar_pane_lifecycle_target(ws_idx, pane_id) {
+                    self.unsettle_sidebar_pane(target);
+                }
                 self.state.close_client_overlay();
             }
             (
@@ -3495,6 +3517,36 @@ mod tests {
         assert!(app.state.pane_is_settled(0, pane_id));
         assert!(!app.state.pane_is_settled(0, sibling_pane));
         assert_eq!(app.state.server_mode(), Mode::Terminal);
+    }
+
+    #[test]
+    fn api_sidebar_context_menu_unsettles_the_exact_pane() {
+        let mut app = app_with_test_workspaces(&["main"]);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.ensure_test_terminals();
+        app.state.settle_pane_at(0, pane_id, 1_725_000_000);
+        let (workspace_id, tab_id) = context_tab_ids(&app.state, 0, 0);
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                workspace_id,
+                tab_id,
+                ws_idx: 0,
+                tab_idx: 0,
+                starred: false,
+                has_subgroup: false,
+                settle_pane_id: Some(pane_id),
+                snooze_target: None,
+            },
+            x: 0,
+            y: 0,
+            selected: ContextMenuAction::Unsettle,
+        };
+        assert!(app
+            .state
+            .context_menu_actions(&menu)
+            .contains(&ContextMenuAction::Unsettle));
+        app.apply_context_menu_action_via_api(menu, ContextMenuAction::Unsettle);
+        assert!(!app.state.pane_is_settled(0, pane_id));
     }
 
     #[test]

@@ -63,6 +63,7 @@ pub(crate) enum MobileSwitcherTarget {
     },
     Snooze(crate::app::state::SidebarPaneLifecycleTarget),
     Settle(crate::app::state::SidebarPaneLifecycleTarget),
+    Unsettle(crate::app::state::SidebarPaneLifecycleTarget),
     NestedHeader(String),
     RemoteAgent(crate::api::schema::AgentRef),
     AgentRun {
@@ -179,6 +180,9 @@ fn mobile_switcher_target_for_row(
             }
             crate::app::state::SidebarHoverAction::Settle { target } => {
                 MobileSwitcherTarget::Settle(target)
+            }
+            crate::app::state::SidebarHoverAction::Unsettle { target } => {
+                MobileSwitcherTarget::Unsettle(target)
             }
         });
     }
@@ -2684,7 +2688,9 @@ mod tests {
             if width == 18 {
                 assert!(!targets.iter().any(|target| matches!(
                     target,
-                    MobileSwitcherTarget::Snooze(..) | MobileSwitcherTarget::Settle(..)
+                    MobileSwitcherTarget::Snooze(..)
+                        | MobileSwitcherTarget::Settle(..)
+                        | MobileSwitcherTarget::Unsettle(..)
                 )));
                 assert!(!rendered.contains('✓'), "{rendered:?}");
             } else {

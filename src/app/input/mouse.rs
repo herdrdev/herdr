@@ -53,6 +53,7 @@ pub(super) enum MouseAction {
         row: u16,
     },
     SettlePane(crate::app::state::SidebarPaneLifecycleTarget),
+    UnsettlePane(crate::app::state::SidebarPaneLifecycleTarget),
     SidebarNewMenu {
         action: crate::app::state::SidebarNewMenuAction,
     },
@@ -790,6 +791,9 @@ impl AppState {
                     }
                     crate::app::state::SidebarHoverAction::Settle { target } => {
                         MouseAction::SettlePane(target)
+                    }
+                    crate::app::state::SidebarHoverAction::Unsettle { target } => {
+                        MouseAction::UnsettlePane(target)
                     }
                 });
             }
@@ -2047,6 +2051,20 @@ impl AppState {
                 {
                     return None;
                 }
+                if let Some(agent_ref) = crate::ui::remote_agent_row_at(self, mouse.row) {
+                    if self.remote_agent_panel_entries.iter().any(|entry| {
+                        entry.agent_ref == agent_ref && entry.host_fresh && entry.settled
+                    }) {
+                        self.context_menu = Some(ContextMenuState {
+                            kind: ContextMenuKind::RemoteAgent { agent_ref },
+                            x: mouse.column,
+                            y: mouse.row,
+                            selected: ContextMenuAction::Unsettle,
+                        });
+                        self.open_client_overlay(ClientOverlay::ContextMenu);
+                    }
+                    return None;
+                }
                 // Session rows sit inside the same sidebar rect as workspace
                 // header rows but `workspace_at_row` never matches them, so
                 // without this branch a right-click on a session did nothing.
@@ -2056,8 +2074,7 @@ impl AppState {
                 }) {
                     let settle_pane_id = self
                         .sidebar_local_pane_at(mouse.row)
-                        .map(|(_, _, pane_id)| pane_id)
-                        .filter(|pane_id| !self.pane_is_settled(ws_idx, *pane_id));
+                        .map(|(_, _, pane_id)| pane_id);
                     let snooze_target = settle_pane_id;
                     let settle_pane_id =
                         settle_pane_id.filter(|pane_id| !self.pane_is_snoozed(ws_idx, *pane_id));
@@ -2877,6 +2894,10 @@ impl AppState {
                 self.close_workspace_picker();
                 return MobileMouseResult::Action(MouseAction::SettlePane(target));
             }
+            Some(crate::ui::MobileSwitcherTarget::Unsettle(target)) => {
+                self.close_workspace_picker();
+                return MobileMouseResult::Action(MouseAction::UnsettlePane(target));
+            }
             Some(crate::ui::MobileSwitcherTarget::NestedHeader(key)) => {
                 self.toggle_sidebar_group(&key);
             }
@@ -2955,6 +2976,7 @@ impl AppState {
                 tab_id,
                 ..
             } => (workspace_id, Some(tab_id)),
+            ContextMenuKind::RemoteAgent { .. } => return Some((0, None)),
         };
         let ws_idx = self
             .workspaces
@@ -2994,11 +3016,20 @@ impl AppState {
                 *cached_ws = ws_idx;
                 *cached_tab = tab_idx;
             }
+            ContextMenuKind::RemoteAgent { .. } => {}
         }
         true
     }
 
     pub(crate) fn context_menu_actions(&self, menu: &ContextMenuState) -> Vec<ContextMenuAction> {
+        if let ContextMenuKind::RemoteAgent { agent_ref } = &menu.kind {
+            return self
+                .remote_agent_panel_entries
+                .iter()
+                .find(|entry| entry.agent_ref == *agent_ref && entry.host_fresh && entry.settled)
+                .map(|_| vec![ContextMenuAction::Unsettle])
+                .unwrap_or_default();
+        }
         let Some((ws_idx, tab_idx)) = self.context_menu_target_indices(menu) else {
             return Vec::new();
         };
@@ -3042,7 +3073,22 @@ impl AppState {
                 }),
             _ => true,
         };
-        live_menu.actions_for_pane_state(snoozed, settleable, snoozeable)
+        let mut actions = live_menu.actions_for_pane_state(snoozed, settleable, snoozeable);
+        if let ContextMenuKind::Tab {
+            settle_pane_id: Some(pane_id),
+            ..
+        } = &menu.kind
+        {
+            if self.pane_is_settled(ws_idx, *pane_id) {
+                actions.retain(|action| *action != ContextMenuAction::Settle);
+                let insert_at = actions
+                    .iter()
+                    .position(|action| *action == ContextMenuAction::CloseTab)
+                    .unwrap_or(actions.len());
+                actions.insert(insert_at, ContextMenuAction::Unsettle);
+            }
+        }
+        actions
     }
 
     pub(crate) fn context_menu_items(&self, menu: &ContextMenuState) -> Vec<&'static str> {
@@ -6856,16 +6902,119 @@ mod tests {
             ),
         );
 
-        let items = app
+        let menu = app
             .state
             .context_menu
             .as_ref()
-            .expect("settled session menu")
-            .items();
+            .expect("settled session menu");
+        let items = app.state.context_menu_items(menu);
         assert!(
             !items.contains(&crate::app::state::SETTLE_ITEM),
             "{items:?}"
         );
+        assert!(
+            items.contains(&crate::app::state::UNSETTLE_ITEM),
+            "{items:?}"
+        );
+        assert_eq!(
+            app.state.workspaces[0].tabs[0].panes[&pane_id].settled_at,
+            Some(1_725_000_000),
+            "opening the context menu must preserve settlement"
+        );
+    }
+
+    #[test]
+    fn settled_local_row_hover_control_dispatches_unsettle() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Terminal);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_000));
+        app.state.collapsed_sidebar_groups.remove("repo:Settled");
+        app.state.sidebar_width = 60;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let control = app
+            .state
+            .view
+            .sidebar_hover_targets
+            .iter()
+            .find(|target| {
+                matches!(
+                    target.action.as_ref(),
+                    Some(crate::app::state::SidebarHoverAction::Unsettle {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                    }) if pane.pane_id == pane_id
+                )
+            })
+            .expect("settled local row Unsettle control")
+            .rect;
+
+        let action = app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                control.x,
+                control.y,
+            ),
+        );
+        assert!(matches!(
+            action,
+            Some(MouseAction::UnsettlePane(
+                crate::app::state::SidebarPaneLifecycleTarget::Local(pane)
+            )) if pane.pane_id == pane_id
+        ));
+    }
+
+    #[test]
+    fn settled_remote_row_hover_control_dispatches_unsettle() {
+        let mut app = app_for_mouse_test();
+        let (remote, entry) = crate::ui::sidebar::tests::remote_control_fixture(
+            crate::fleet::HostState::Reachable,
+            crate::api::schema::AgentStatus::Done,
+            false,
+            true,
+            false,
+        );
+        app.state.remote_agent_panel_entries = remote.remote_agent_panel_entries;
+        app.state.sidebar_selected_remote_agent = Some(entry.agent_ref.clone());
+        app.state.collapsed_sidebar_groups.remove("repo:Fleet");
+        app.state.sidebar_width = 60;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let control = app
+            .state
+            .view
+            .sidebar_hover_targets
+            .iter()
+            .find(|target| {
+                matches!(
+                    target.action.as_ref(),
+                    Some(crate::app::state::SidebarHoverAction::Unsettle {
+                        target: crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref),
+                    }) if agent_ref == &entry.agent_ref
+                )
+            })
+            .expect("settled remote row Unsettle control")
+            .rect;
+
+        let action = app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                control.x,
+                control.y,
+            ),
+        );
+        assert!(matches!(
+            action,
+            Some(MouseAction::UnsettlePane(
+                crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref)
+            )) if agent_ref == entry.agent_ref
+        ));
     }
 
     #[test]

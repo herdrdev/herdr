@@ -251,8 +251,6 @@ const SIDEBAR_MIN_NESTED_PREFIX_WIDTH: usize = 3;
 const SIDEBAR_TITLE_TARGET_WIDTH: usize = 16;
 const SIDEBAR_SNOOZE_CONTROL_WIDTH: usize = 3;
 const SIDEBAR_SETTLE_CONTROL_WIDTH: usize = 2;
-const SIDEBAR_SELECTED_CONTROLS_WIDTH: usize =
-    SIDEBAR_SNOOZE_CONTROL_WIDTH + SIDEBAR_SETTLE_CONTROL_WIDTH;
 const SIDEBAR_SELECTED_MIN_TITLE_WIDTH: usize = 4;
 const SIDEBAR_MIN_CONTROLS_ROW_WIDTH: u16 = 19;
 
@@ -1058,15 +1056,31 @@ fn render_remote_compact_agent_row_with_prefix(
     );
     x = x.saturating_add(title_text_width as u16);
     if controls_width > 0 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(" ◷ ", row_style(Style::default().fg(p.mauve)))),
-            Rect::new(x, rect.y, SIDEBAR_SNOOZE_CONTROL_WIDTH as u16, rect.height),
-        );
-        x = x.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16);
-        if control.as_ref().is_some_and(|control| control.show_settle) {
+        let settled_control = control
+            .as_ref()
+            .is_some_and(|control| control.show_unsettle);
+        if !settled_control {
+            frame.render_widget(
+                Paragraph::new(Span::styled(" ◷ ", row_style(Style::default().fg(p.mauve)))),
+                Rect::new(x, rect.y, SIDEBAR_SNOOZE_CONTROL_WIDTH as u16, rect.height),
+            );
+            x = x.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16);
+        }
+        if control
+            .as_ref()
+            .is_some_and(|control| control.show_settle || control.show_unsettle)
+        {
+            let glyph = if control
+                .as_ref()
+                .is_some_and(|control| control.show_unsettle)
+            {
+                " ↶"
+            } else {
+                " ✓"
+            };
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    " ✓",
+                    glyph,
                     row_style(Style::default().fg(p.overlay0)),
                 )),
                 Rect::new(x, rect.y, SIDEBAR_SETTLE_CONTROL_WIDTH as u16, rect.height),
@@ -1172,6 +1186,9 @@ fn render_compact_agent_row_with_prefix(
         title_width,
         rect.width,
     );
+    let visible_control_pane = (controls_width > 0)
+        .then_some(control_pane.as_ref())
+        .flatten();
     let snoozed = control_pane.as_ref().is_some_and(|control| control.snoozed);
     // The star sits inside the title field, right after the name, so it reads as
     // part of the session's label rather than as another right-hand column.
@@ -1230,14 +1247,18 @@ fn render_compact_agent_row_with_prefix(
     spans.extend([
         Span::styled(title_pad, row_style(title_style)),
         Span::styled(
-            if controls_width > 0 { " ◷ " } else { "" },
+            if visible_control_pane.is_some_and(|control| control.show_snooze) {
+                " ◷ "
+            } else {
+                ""
+            },
             row_style(Style::default().fg(p.mauve)),
         ),
         Span::styled(
-            if controls_width == SIDEBAR_SELECTED_CONTROLS_WIDTH && !snoozed {
-                " ✓"
-            } else {
-                ""
+            match visible_control_pane {
+                Some(control) if control.show_unsettle => " ↶",
+                Some(control) if control.show_settle && !snoozed => " ✓",
+                _ => "",
             },
             row_style(Style::default().fg(p.overlay0)),
         ),
@@ -1304,7 +1325,9 @@ fn sidebar_row_is_hovered(app: &AppState, row_y: u16) -> bool {
 struct SidebarRowControl {
     target: crate::app::state::SidebarPaneLifecycleTarget,
     snoozed: bool,
+    show_snooze: bool,
     show_settle: bool,
+    show_unsettle: bool,
 }
 
 fn row_control_pane(
@@ -1314,7 +1337,8 @@ fn row_control_pane(
 ) -> Option<SidebarRowControl> {
     let target = entry.local_target()?;
     let pane_id = selected_local_row_pane(app, entry, tab).unwrap_or(target.pane_id);
-    if !app.pane_can_snooze(target.ws_idx, pane_id) {
+    let settled = app.pane_is_settled(target.ws_idx, pane_id);
+    if !settled && !app.pane_can_snooze(target.ws_idx, pane_id) {
         return None;
     }
     let snoozed = app.pane_is_snoozed(target.ws_idx, pane_id);
@@ -1326,19 +1350,23 @@ fn row_control_pane(
             },
         ),
         snoozed,
-        show_settle: !snoozed,
+        show_snooze: !settled,
+        show_settle: !snoozed && !settled,
+        show_unsettle: settled,
     })
 }
 
 fn remote_row_control(entry: &RemoteAgentPanelEntry) -> Option<SidebarRowControl> {
-    if !entry.host_fresh || entry.settled || entry_needs_human_attention(entry) {
+    if !entry.host_fresh || entry_needs_human_attention(entry) {
         return None;
     }
     let snoozed = entry.snoozed_until.is_some();
     Some(SidebarRowControl {
         target: crate::app::state::SidebarPaneLifecycleTarget::Remote(entry.agent_ref.clone()),
         snoozed,
-        show_settle: !snoozed,
+        show_snooze: !entry.settled,
+        show_settle: !snoozed && !entry.settled,
+        show_unsettle: entry.settled,
     })
 }
 
@@ -1350,13 +1378,15 @@ fn selected_row_controls_width(
     control_pane
         .filter(|_| row_width >= SIDEBAR_MIN_CONTROLS_ROW_WIDTH)
         .filter(|control| {
-            let controls_width = SIDEBAR_SNOOZE_CONTROL_WIDTH
-                + usize::from(control.show_settle) * SIDEBAR_SETTLE_CONTROL_WIDTH;
+            let controls_width = usize::from(control.show_snooze) * SIDEBAR_SNOOZE_CONTROL_WIDTH
+                + usize::from(control.show_settle || control.show_unsettle)
+                    * SIDEBAR_SETTLE_CONTROL_WIDTH;
             title_width >= SIDEBAR_SELECTED_MIN_TITLE_WIDTH + controls_width
         })
         .map_or(0, |control| {
-            SIDEBAR_SNOOZE_CONTROL_WIDTH
-                + usize::from(control.show_settle) * SIDEBAR_SETTLE_CONTROL_WIDTH
+            usize::from(control.show_snooze) * SIDEBAR_SNOOZE_CONTROL_WIDTH
+                + usize::from(control.show_settle || control.show_unsettle)
+                    * SIDEBAR_SETTLE_CONTROL_WIDTH
         })
 }
 
@@ -1399,7 +1429,11 @@ pub(crate) fn selected_row_control_at(
         return None;
     }
     let control = control_pane?;
-    if column < start.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16) {
+    if control.show_unsettle {
+        Some(crate::app::state::SidebarHoverAction::Unsettle {
+            target: control.target,
+        })
+    } else if column < start.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16) {
         Some(crate::app::state::SidebarHoverAction::Snooze {
             target: control.target,
         })
@@ -1453,7 +1487,11 @@ pub(crate) fn selected_remote_row_control_at(
         return None;
     }
     let control = control?;
-    if column < start.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16) {
+    if control.show_unsettle {
+        Some(crate::app::state::SidebarHoverAction::Unsettle {
+            target: control.target,
+        })
+    } else if column < start.saturating_add(SIDEBAR_SNOOZE_CONTROL_WIDTH as u16) {
         Some(crate::app::state::SidebarHoverAction::Snooze {
             target: control.target,
         })
@@ -9011,20 +9049,30 @@ pub(crate) fn compute_sidebar_hover_targets(
                             {
                                 targets.push(crate::app::state::SidebarHoverTarget {
                                     rect,
-                                    label: snooze_control_tooltip(
-                                        app,
-                                        target.ws_idx,
-                                        match &control.target {
-                                            crate::app::state::SidebarPaneLifecycleTarget::Local(
-                                                pane,
-                                            ) => pane.pane_id,
-                                            crate::app::state::SidebarPaneLifecycleTarget::Remote(
-                                                _,
-                                            ) => target.pane_id,
-                                        },
-                                    ),
-                                    action: Some(crate::app::state::SidebarHoverAction::Snooze {
-                                        target: control.target.clone(),
+                                    label: if control.show_unsettle {
+                                        "Unsettle".into()
+                                    } else {
+                                        snooze_control_tooltip(
+                                            app,
+                                            target.ws_idx,
+                                            match &control.target {
+                                                crate::app::state::SidebarPaneLifecycleTarget::Local(
+                                                    pane,
+                                                ) => pane.pane_id,
+                                                crate::app::state::SidebarPaneLifecycleTarget::Remote(
+                                                    _,
+                                                ) => target.pane_id,
+                                            },
+                                        )
+                                    },
+                                    action: Some(if control.show_unsettle {
+                                        crate::app::state::SidebarHoverAction::Unsettle {
+                                            target: control.target.clone(),
+                                        }
+                                    } else {
+                                        crate::app::state::SidebarHoverAction::Snooze {
+                                            target: control.target.clone(),
+                                        }
                                     }),
                                     row_hover: false,
                                 });
@@ -9151,9 +9199,19 @@ pub(crate) fn compute_sidebar_hover_targets(
                             {
                                 targets.push(crate::app::state::SidebarHoverTarget {
                                     rect,
-                                    label: remote_snooze_control_tooltip(entry),
-                                    action: Some(crate::app::state::SidebarHoverAction::Snooze {
-                                        target: control.target.clone(),
+                                    label: if control.show_unsettle {
+                                        "Unsettle".into()
+                                    } else {
+                                        remote_snooze_control_tooltip(entry)
+                                    },
+                                    action: Some(if control.show_unsettle {
+                                        crate::app::state::SidebarHoverAction::Unsettle {
+                                            target: control.target.clone(),
+                                        }
+                                    } else {
+                                        crate::app::state::SidebarHoverAction::Snooze {
+                                            target: control.target.clone(),
+                                        }
                                     }),
                                     row_hover: false,
                                 });
@@ -13393,11 +13451,12 @@ pub(super) fn render_sidebar_pod_picker(app: &AppState, frame: &mut Frame) {
     super::dropdown::render_menu(&app.palette, frame, &layout, &rows, picker.filter.selected);
 }
 
-pub(crate) const SETTLED_MENU_LABELS: [&str; 4] = [
+pub(crate) const SETTLED_MENU_LABELS: [&str; 5] = [
     "↺ Resume thread",
     "✎ New thread in same repo",
     "⎇ New thread, new worktree",
     "🗑 Delete",
+    "↶ Unsettle",
 ];
 
 pub(crate) fn sidebar_snooze_menu_layout(
@@ -13495,7 +13554,7 @@ pub(super) fn render_sidebar_snooze_menu(app: &AppState, frame: &mut Frame) {
 
 /// The delete row's label, which asks once before it closes the pane while
 /// `ui.confirm_close` is on.
-pub(crate) fn settled_menu_labels(app: &AppState) -> [&'static str; 4] {
+pub(crate) fn settled_menu_labels(app: &AppState) -> [&'static str; 5] {
     let mut labels = SETTLED_MENU_LABELS;
     if app
         .sidebar_settled_menu_target
@@ -29861,6 +29920,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let action_kind = |action: crate::app::state::SidebarHoverAction| match action {
             crate::app::state::SidebarHoverAction::Snooze { .. } => "snooze",
             crate::app::state::SidebarHoverAction::Settle { .. } => "settle",
+            crate::app::state::SidebarHoverAction::Unsettle { .. } => "unsettle",
         };
         let local_actions = (rect.x..rect.right())
             .filter_map(|column| {
@@ -29890,7 +29950,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             (0..rect.width)
                 .filter_map(|x| {
                     let symbol = terminal.backend().buffer()[(x, 0)].symbol();
-                    matches!(symbol, "◷" | "✓").then_some((x, symbol.to_string()))
+                    matches!(symbol, "◷" | "✓" | "↶").then_some((x, symbol.to_string()))
                 })
                 .collect::<Vec<_>>()
         };
@@ -29935,7 +29995,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             true,
             false,
         );
-        assert_eq!(action_count(&settled, &settled_entry), 0);
+        assert_eq!(action_count(&settled, &settled_entry), 2);
+        assert!((0..60).any(|column| matches!(
+            selected_remote_row_control_at(&settled, &settled_entry, rect, 0, false, column),
+            Some(crate::app::state::SidebarHoverAction::Unsettle { .. })
+        )));
         let (attention, attention_entry) = remote_control_fixture(
             crate::fleet::HostState::Reachable,
             crate::api::schema::AgentStatus::Blocked,

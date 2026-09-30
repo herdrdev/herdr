@@ -5398,6 +5398,7 @@ impl App {
                         row,
                     } => self.open_sidebar_snooze_menu(target, column, row),
                     MouseAction::SettlePane(target) => self.settle_sidebar_pane(target),
+                    MouseAction::UnsettlePane(target) => self.unsettle_sidebar_pane(target),
                     MouseAction::SidebarNewMenu { action } => {
                         if action == crate::app::state::SidebarNewMenuAction::NewSpace {
                             self.begin_tui_workspace_create("tui.mouse.workspace.create");

@@ -10,6 +10,7 @@ use super::ScrollbarClickTarget;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SettledMenuAction {
+    Unsettle(crate::app::state::PaneFocusTarget),
     Resume(crate::app::state::PaneFocusTarget),
     FocusLive(crate::app::state::PaneFocusTarget),
     NewThread {
@@ -580,6 +581,7 @@ impl AppState {
                 workspace: crate::app::home::HomeWorkspace::NewWorktree,
             }),
             3 => Some(SettledMenuAction::Delete(target)),
+            4 => Some(SettledMenuAction::Unsettle(target)),
             _ => None,
         }
     }
@@ -2676,6 +2678,9 @@ impl super::super::App {
             return;
         };
         match action {
+            SettledMenuAction::Unsettle(target) => self.unsettle_sidebar_pane(
+                crate::app::state::SidebarPaneLifecycleTarget::Local(target),
+            ),
             SettledMenuAction::Resume(target) => self.resume_settled_pane(target),
             SettledMenuAction::FocusLive(target) => self.focus_settled_pane(target),
             SettledMenuAction::NewThread {
@@ -2822,6 +2827,30 @@ impl super::super::App {
                 }
             }
         }
+    }
+
+    pub(crate) fn unsettle_sidebar_pane(
+        &mut self,
+        target: crate::app::state::SidebarPaneLifecycleTarget,
+    ) {
+        match &target {
+            crate::app::state::SidebarPaneLifecycleTarget::Local(_) => {
+                if let Some(pane_id) = self.sidebar_pane_lifecycle_public_id(&target) {
+                    let response = self.runtime_pane_unsettle("tui.sidebar.unsettle", pane_id);
+                    if !self.show_local_pane_lifecycle_error("unsettle", &response) {
+                        self.show_sidebar_shelf_toast(&target, "Active");
+                    }
+                }
+            }
+            crate::app::state::SidebarPaneLifecycleTarget::Remote(agent_ref) => {
+                if let Err(error) = self.remote_pane_unsettle(agent_ref.clone()) {
+                    self.show_remote_pane_lifecycle_error(agent_ref, error);
+                } else {
+                    self.show_sidebar_shelf_toast(&target, "Active");
+                }
+            }
+        }
+        self.flush_pane_settlement_events();
     }
 
     pub(crate) fn settle_local_pane_or_tab(
@@ -4986,6 +5015,12 @@ mod tests {
     fn settled_menu_items_yield_resume_delete_and_home_dispatch_plans() {
         let mut app = app_for_mouse_test();
         let target = settled_target(&mut app);
+
+        app.state.sidebar_settled_menu_target = Some(target.clone());
+        assert_eq!(
+            app.state.select_settled_menu_action(4),
+            Some(super::SettledMenuAction::Unsettle(target.clone()))
+        );
 
         app.state.sidebar_settled_menu_target = Some(target.clone());
         assert_eq!(
