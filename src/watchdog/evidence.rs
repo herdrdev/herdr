@@ -67,8 +67,17 @@ static NEEDS_YOU_NOTHING: LazyLock<Regex> = LazyLock::new(|| {
 static CLOSING_MARKER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^\s*\*{0,2}(?:needs you\b|now:)\*{0,2}").expect("static regex")
 });
-static WAITING_ON_YOU: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\*{0,2}now:\*{0,2}\s*waiting on you\b").expect("static regex")
+// Keep this list explicit: only clear human waits in the Now: work field should
+// override promised-work classification. CI/build waits remain work in progress.
+static NOW_HUMAN_WAIT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(?:waiting on you\b|waiting at .{1,120}\bgate\b|waiting for (?:your|human|matthias's) (?:review|approval|sign[ -]?off|reply|decision)\b|awaiting (?:your |human )?(?:approval|review)\b)",
+    )
+    .expect("static regex")
+});
+static REPLY_SILENCE_HOLDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\breply\b.*(?:\d+)?[a-z]\s*/\s*(?:\d+)?[a-z]\b.*\bsilence holds\b")
+        .expect("static regex")
 });
 static COMPOSER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*[❯›>]\s*(.*)$").expect("static regex"));
@@ -98,7 +107,10 @@ pub(crate) fn composer_is_empty(text: &str) -> bool {
     composer_index(&lines)
         .and_then(|i| COMPOSER_PROMPT.captures(lines[i]))
         .and_then(|c| c.get(1))
-        .is_some_and(|s| s.as_str().trim().is_empty())
+        .is_some_and(|s| {
+            let contents = s.as_str().trim();
+            contents.is_empty() || contents.eq_ignore_ascii_case("Ask Codex to do anything")
+        })
 }
 
 pub(crate) fn composer_text(text: &str) -> Option<String> {
@@ -107,7 +119,7 @@ pub(crate) fn composer_text(text: &str) -> Option<String> {
         .and_then(|i| COMPOSER_PROMPT.captures(lines[i]))
         .and_then(|c| c.get(1))
         .map(|s| s.as_str().trim().to_owned())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("Ask Codex to do anything"))
 }
 
 pub(crate) fn promised_work(text: &str) -> Option<String> {
@@ -241,15 +253,11 @@ fn closing_block_state(text: &str) -> bool {
             block = Some(vec![line]);
             continue;
         }
-        if WAITING_ON_YOU.is_match(line) && block.is_none() {
+        if NOW_HUMAN_WAIT.is_match(line) && block.is_none() {
             latest = true;
             continue;
         }
-        if line
-            .trim()
-            .eq_ignore_ascii_case("Reply 1a / 1b. Silence holds.")
-            && block.is_none()
-        {
+        if REPLY_SILENCE_HOLDS.is_match(line) && block.is_none() {
             latest = true;
             continue;
         }
@@ -268,11 +276,8 @@ fn closing_block_state(text: &str) -> bool {
 }
 
 fn closing_block_lines_waiting(lines: &[&str]) -> bool {
-    if lines.iter().any(|line| WAITING_ON_YOU.is_match(line))
-        || lines.iter().any(|line| {
-            line.trim()
-                .eq_ignore_ascii_case("Reply 1a / 1b. Silence holds.")
-        })
+    if lines.iter().any(|line| NOW_HUMAN_WAIT.is_match(line))
+        || lines.iter().any(|line| REPLY_SILENCE_HOLDS.is_match(line))
     {
         return true;
     }
@@ -760,6 +765,63 @@ mod tests {
             "",
             "0 shells"
         )));
+    }
+
+    #[test]
+    fn inline_reply_choices_keep_the_latest_human_gate_open() {
+        for line in [
+            "a) Approve. b) Hold. Reply 1a / 1b. Silence holds.",
+            "Reply 1a / 1b / 1c. Silence holds.",
+            "Reply a / b. Silence holds.",
+        ] {
+            let block = format!(
+                "**Needs you (1)**\n1. **Approve** — review this change\n{line}\nNow: waiting at the /hcode review gate.\nMore status from later turns"
+            );
+            assert!(
+                closing_block_waiting(&claude_screen(&block, "", "0 shells")),
+                "{line}"
+            );
+        }
+
+        let old_gate = "**Needs you (1)**\n1. Approve release\nReply a / b. Silence holds.";
+        assert!(!closing_block_waiting(&claude_screen(
+            &format!("{old_gate}\n**Needs you: nothing.**\nNow: reviewing"),
+            "",
+            "0 shells"
+        )));
+    }
+
+    #[test]
+    fn codex_composer_placeholder_is_empty_input() {
+        let screen = claude_screen(
+            "Now: waiting at the /hcode review gate.",
+            "Ask Codex to do anything",
+            "0 shells",
+        );
+        assert!(composer_is_empty(&screen));
+        assert!(composer_text(&screen).is_none());
+    }
+
+    #[test]
+    fn now_human_wait_phrases_are_narrowly_recognized() {
+        for line in [
+            "Now: waiting on you to approve",
+            "Now: waiting at the /hcode review gate.",
+            "Now: waiting for your review",
+            "Now: waiting for human approval",
+            "Now: waiting for Matthias's sign-off",
+            "Now: waiting for your reply",
+            "Now: waiting for human decision",
+            "Now: awaiting approval",
+            "Now: awaiting review",
+        ] {
+            assert!(closing_block_open(line), "{line}");
+        }
+
+        for line in ["Now: waiting on CI", "Now: waiting for the build"] {
+            assert!(!closing_block_open(line), "{line}");
+            assert!(promised_work(line).is_some(), "{line}");
+        }
     }
 
     #[test]
