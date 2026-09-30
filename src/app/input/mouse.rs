@@ -479,7 +479,12 @@ impl AppState {
         // press that focuses a pane revokes it again when the resulting action
         // runs `release_dock_focus_to_pane`.
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            if self.sidebar_claims_pointer(mouse.column, mouse.row) {
+            // The global menu is a server popup drawn over the sidebar; its
+            // presses must not hand the keyboard to the sidebar, or
+            // `input_owner` hides the menu and any modal it opens.
+            if self.effective_interaction_mode() != Mode::GlobalMenu
+                && self.sidebar_claims_pointer(mouse.column, mouse.row)
+            {
                 self.focus_client_on_sidebar();
             } else {
                 self.sidebar_focused = false;

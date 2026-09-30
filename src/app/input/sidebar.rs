@@ -5103,6 +5103,84 @@ mod tests {
     }
 
     #[test]
+    fn launcher_global_menu_owns_input_renders_and_releases_settings() {
+        use crate::app::state::{InputOwner, ServerInputOwner};
+        let mut app = app_for_mouse_test();
+        let area = Rect::new(0, 0, 106, 30);
+        crate::ui::compute_view(&mut app.state, area);
+        let rect = app.state.global_launcher_rect();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x,
+            rect.y,
+        ));
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), rect.x, rect.y));
+        assert_eq!(app.state.server_mode(), Mode::GlobalMenu);
+        assert_eq!(
+            app.state.input_owner(),
+            InputOwner::Server(ServerInputOwner::GlobalMenu)
+        );
+
+        let backend = ratatui::backend::TestBackend::new(area.width, area.height);
+        let mut terminal = ratatui::Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|frame| crate::ui::render(&app.state, frame))
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let menu = app.state.global_menu_rect();
+        let text: String = (menu.y..menu.bottom())
+            .flat_map(|y| (menu.x..menu.right()).map(move |x| (x, y)))
+            .map(|(x, y)| buffer[(x, y)].symbol().to_string())
+            .collect();
+        for label in app.state.global_menu_labels() {
+            assert!(text.contains(label), "menu should draw {label:?}: {text}");
+        }
+        for (idx, label) in app.state.global_menu_labels().iter().enumerate() {
+            let row = menu.y + 1 + idx as u16;
+            assert!(
+                app.state.global_menu_item_at(menu.x + 1, row).is_some(),
+                "row for {label:?} resolves an action"
+            );
+        }
+
+        crate::app::input::handle_global_menu_key(
+            &mut app.state,
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+        assert!(!matches!(app.state.server_mode(), Mode::GlobalMenu));
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x,
+            rect.y,
+        ));
+        assert_eq!(app.state.server_mode(), Mode::GlobalMenu);
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 90, 20));
+        assert!(!matches!(app.state.server_mode(), Mode::GlobalMenu));
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x,
+            rect.y,
+        ));
+        let settings_row = app.state.global_menu_rect().y + 1;
+        let menu_x = app.state.global_menu_rect().x + 1;
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            menu_x,
+            settings_row,
+        ));
+        assert_eq!(app.state.server_mode(), Mode::Settings);
+        assert_eq!(
+            app.state.input_owner(),
+            InputOwner::Server(ServerInputOwner::Settings)
+        );
+    }
+
+    #[test]
     fn clicking_sidebar_mode_header_opens_and_selects_dropdown() {
         let mut app = app_for_mouse_test();
         let anchor = app.state.sidebar_group_mode_anchor_rect();

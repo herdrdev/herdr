@@ -97,6 +97,11 @@ pub(super) fn global_menu_actions(state: &AppState) -> Vec<GlobalMenuAction> {
 
 pub(super) fn open_global_menu(state: &mut AppState) {
     state.global_menu = MenuListState::new(0);
+    // The launcher sits in the sidebar header, so the click that opens the
+    // menu also focuses the sidebar. `input_owner` answers `Sidebar` ahead of
+    // server modes, which left the menu undrawn and `Mode::GlobalMenu` stuck,
+    // blocking Settings until restart.
+    state.release_sidebar_focus_to_surface();
     state.set_server_mode(Mode::GlobalMenu);
 }
 
