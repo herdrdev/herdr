@@ -5,6 +5,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::scrollbar::{render_pane_scrollbar, should_show_scrollbar};
 #[cfg(test)]
@@ -464,20 +465,12 @@ fn render_settled_view(
                 ),
                 Style::default().fg(Color::DarkGray),
             )));
-            for (speaker, body) in &transcript.turns {
-                if !view.search.is_empty()
-                    && !body.to_lowercase().contains(&view.search.to_lowercase())
-                    && !speaker.to_lowercase().contains(&view.search.to_lowercase())
-                {
-                    continue;
-                }
-                lines.push(Line::from(Span::styled(
-                    format!("{speaker} ›"),
-                    Style::default().fg(Color::Gray),
-                )));
-                lines.extend(body.lines().map(|line| Line::from(line.to_string())));
-                lines.push(Line::from(""));
-            }
+            lines.extend(transcript_lines(
+                &transcript.turns,
+                &view.search,
+                area.width,
+                &app.palette,
+            ));
         } else {
             lines.push(Line::from(Span::styled(
                 "Transcript unavailable · Enter resumes the session",
@@ -510,6 +503,124 @@ fn render_settled_view(
             Paragraph::new(command).style(Style::default().bg(Color::Rgb(25, 28, 35))),
             Rect::new(area.x, area.y + area.height - 1, area.width, 1),
         );
+    }
+}
+
+fn transcript_lines(
+    turns: &[(String, String)],
+    search: &str,
+    width: u16,
+    palette: &crate::app::state::Palette,
+) -> Vec<Line<'static>> {
+    let needle = search.to_lowercase();
+    let mut lines = Vec::new();
+    for (speaker, body) in turns {
+        if !needle.is_empty()
+            && !body.to_lowercase().contains(&needle)
+            && !speaker.to_lowercase().contains(&needle)
+        {
+            continue;
+        }
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        if speaker != "you" {
+            // Agent turns render their markdown the way the live agent does:
+            // emphasis without its asterisks, and lists without blank rows.
+            let mut rendered = crate::ui::markdown::body_lines(
+                palette,
+                Some(&compact_list_gaps(body)),
+                width.saturating_sub(2) as usize,
+                "  ",
+            );
+            if let Some(span) = rendered.first_mut().and_then(|line| line.spans.first_mut()) {
+                if let Some(rest) = span.content.strip_prefix("  ") {
+                    span.content = format!("● {rest}").into();
+                }
+            }
+            lines.extend(rendered);
+            continue;
+        }
+        let mut first = true;
+        for physical in body.split('\n') {
+            for_each_wrapped_line(physical, width.saturating_sub(2) as usize, |fragment| {
+                let prefix = if first { "› " } else { "  " };
+                first = false;
+                let mut row = format!("{prefix}{fragment}");
+                let padding = width.saturating_sub(2 + fragment.width() as u16) as usize;
+                row.extend(std::iter::repeat_n(' ', padding));
+                lines.push(
+                    Line::from(row).style(Style::default().fg(palette.text).bg(palette.surface0)),
+                );
+            });
+        }
+    }
+    lines
+}
+
+/// Drop blank rows between consecutive list items, which agents emit as
+/// loose markdown lists but render tightly.
+fn compact_list_gaps(body: &str) -> String {
+    let rows: Vec<&str> = body.lines().collect();
+    let mut kept = Vec::with_capacity(rows.len());
+    for (index, row) in rows.iter().enumerate() {
+        if row.trim().is_empty() {
+            let previous = rows[..index]
+                .iter()
+                .rev()
+                .find(|row| !row.trim().is_empty());
+            let next = rows[index + 1..].iter().find(|row| !row.trim().is_empty());
+            if previous.is_some_and(|row| is_list_item(row))
+                && next.is_some_and(|row| is_list_item(row))
+            {
+                continue;
+            }
+        }
+        kept.push(*row);
+    }
+    kept.join("\n")
+}
+
+fn is_list_item(row: &str) -> bool {
+    let trimmed = row.trim_start();
+    if ["- ", "* ", "+ "]
+        .iter()
+        .any(|marker| trimmed.starts_with(marker))
+    {
+        return true;
+    }
+    let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+    (1..=3).contains(&digits)
+        && (trimmed[digits..].starts_with(". ") || trimmed[digits..].starts_with(") "))
+}
+
+fn for_each_wrapped_line(mut text: &str, width: usize, mut emit: impl FnMut(&str)) {
+    if text.is_empty() {
+        emit("");
+        return;
+    }
+    while !text.is_empty() {
+        let mut used = 0;
+        let mut end = 0;
+        let mut last_space = None;
+        for (index, ch) in text.char_indices() {
+            let char_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + char_width > width && end > 0 {
+                break;
+            }
+            used += char_width;
+            end = index + ch.len_utf8();
+            if ch == ' ' && index > 0 {
+                last_space = Some(index);
+            }
+        }
+        if end == text.len() {
+            emit(text);
+            break;
+        }
+        let split = last_space.unwrap_or(end);
+        emit(&text[..split]);
+        text = text[split..].trim_start_matches(' ');
     }
 }
 
@@ -1171,6 +1282,98 @@ mod tests {
         );
         assert_eq!(settled_title(None, Some("derived".into())), "derived");
         assert_eq!(settled_title(Some("  "), None), "Settled session");
+    }
+
+    #[test]
+    fn settled_transcript_wraps_with_conversation_markers_and_turn_spacing() {
+        let palette = crate::app::state::Palette::catppuccin();
+        let turns = vec![
+            ("you".into(), "Explain the billing API migration.".into()),
+            (
+                "claude".into(),
+                "A billing API migration needs versioned requests and a clear transition plan.\nKeep old clients working.".into(),
+            ),
+        ];
+        let lines = transcript_lines(&turns, "", 60, &palette);
+        let rows: Vec<_> = lines.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>(),
+            [
+                "› Explain the billing API migration.",
+                "",
+                "● A billing API migration needs versioned requests and a",
+                "  clear transition plan.",
+                "  Keep old clients working.",
+            ]
+        );
+        assert_eq!(UnicodeWidthStr::width(rows[0].as_str()), 60);
+        assert_eq!(lines[0].style.bg, Some(palette.surface0));
+        assert_eq!(lines[0].style.fg, Some(palette.text));
+        assert!(lines[2].style.bg.is_none());
+    }
+
+    #[test]
+    fn settled_transcript_filters_turns_and_preserves_body_blank_lines() {
+        let palette = crate::app::state::Palette::catppuccin();
+        let turns = vec![
+            ("you".into(), "First".into()),
+            ("codex".into(), "Alpha\n\nBeta".into()),
+            ("claude".into(), "Hidden".into()),
+        ];
+        let lines = transcript_lines(&turns, "CoDeX", 20, &palette);
+        assert_eq!(
+            lines.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            ["● Alpha", "", "  Beta"]
+        );
+        assert_eq!(transcript_lines(&turns, "absent", 20, &palette).len(), 0);
+    }
+
+    #[test]
+    fn settled_transcript_renders_agent_markdown_like_the_live_agent() {
+        let palette = crate::app::state::Palette::catppuccin();
+        let turns = vec![(
+            "claude".into(),
+            "1. First item\n\n2. Second item\n\nClosing with **bold** text.".into(),
+        )];
+        let lines = transcript_lines(&turns, "", 40, &palette);
+        let rows: Vec<_> = lines.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            rows,
+            [
+                "● 1. First item",
+                "  2. Second item",
+                "",
+                "  Closing with bold text."
+            ]
+        );
+        let bold = lines[3]
+            .spans
+            .iter()
+            .find(|span| span.content == "bold")
+            .expect("bold span");
+        assert!(bold.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn compact_list_gaps_keeps_gaps_around_prose() {
+        assert_eq!(compact_list_gaps("- a\n\n- b"), "- a\n- b");
+        assert_eq!(compact_list_gaps("para\n\n- a"), "para\n\n- a");
+        assert_eq!(
+            compact_list_gaps("1) a\n\n12. b\n\ntext"),
+            "1) a\n12. b\n\ntext"
+        );
+    }
+
+    #[test]
+    fn settled_transcript_wraps_wide_characters_by_display_width() {
+        let palette = crate::app::state::Palette::catppuccin();
+        let turns = vec![("you".into(), "你好世界好".into())];
+        let lines = transcript_lines(&turns, "", 8, &palette);
+        let rows: Vec<_> = lines.iter().map(ToString::to_string).collect();
+        assert_eq!(rows, ["› 你好世", "  界好  "]);
+        assert!(rows
+            .iter()
+            .all(|row| UnicodeWidthStr::width(row.as_str()) == 8));
     }
 
     #[test]
