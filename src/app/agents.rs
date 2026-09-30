@@ -427,6 +427,7 @@ impl App {
         let ws = self.state.workspaces.get(ws_idx)?;
         let pane_state = ws.pane_state(pane_id)?;
         let terminal = self.state.terminals.get(&pane_state.attached_terminal_id)?;
+        let agent_projection = pane_state.agent_projection(terminal);
         if !terminal.is_agent_terminal() {
             return None;
         }
@@ -471,6 +472,7 @@ impl App {
             agent_status: pane.agent_status,
             usage_limited: terminal.usage_limited,
             waiting_on_agents: pane.waiting_on_agents,
+            working_while_blocked: agent_projection.working_while_blocked,
             wait: pane.wait,
             eta_s: pane.eta_s,
             reported_at: pane.reported_at,

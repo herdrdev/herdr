@@ -274,6 +274,7 @@ fn compact_row_dot(entry: &AgentPanelEntry) -> &'static str {
         entry.has_agent,
         entry.state == AgentState::Working && entry_has_gate(entry),
         entry.usage_limited,
+        entry.working_while_blocked,
     )
 }
 
@@ -291,12 +292,14 @@ pub(crate) fn compact_dot_for_state(
     has_agent: bool,
     _gate: bool,
     _usage_limited: bool,
+    working_while_blocked: bool,
 ) -> &'static str {
     if !has_agent {
         return "·";
     }
     match state {
         AgentState::Working => "●",
+        AgentState::Blocked if working_while_blocked => "●",
         AgentState::Blocked => "○",
         AgentState::Idle if has_agent => "○",
         // Unknown agent state: a solid grey dot, not an empty one.
@@ -1615,6 +1618,7 @@ pub(crate) struct AgentPanelEntryData {
     /// after the agent icon. Local panes only; remote rows carry `None`.
     pub model_letter: Option<&'static str>,
     pub waiting_on_agents: bool,
+    pub working_while_blocked: bool,
     pub holds_shell: bool,
     pub gate_count: usize,
     pub seen: bool,
@@ -2329,6 +2333,7 @@ fn collect_agent_panel_entries_with_runtimes(
                             active_subagents,
                             model_letter,
                             waiting_on_agents: detail.waiting_on_agents,
+                            working_while_blocked: detail.working_while_blocked,
                             seen: detail.seen,
                             done_since: detail.done_since,
                             stale: detail.stale,
@@ -2513,6 +2518,7 @@ pub(crate) fn remote_agent_panel_entries_at(
                     active_subagents: None,
                     model_letter: None,
                     waiting_on_agents: lifecycle.waiting_on_agents,
+                    working_while_blocked: lifecycle.working_while_blocked,
                     holds_shell: false,
                     gate_count,
                     seen: lifecycle.seen,
@@ -2720,6 +2726,7 @@ fn aggregate_tab_entries(
                         (current, candidate) => current.or(candidate),
                     };
                     tab_entry.holds_shell |= entry.holds_shell;
+                    tab_entry.working_while_blocked |= entry.working_while_blocked;
                     // Like a mixed provider, a machine name only labels a tab
                     // whose panes all sit on that machine.
                     if tab_entry.remote_host != entry.remote_host {
@@ -2755,6 +2762,7 @@ fn aggregate_tab_entries(
                         Some(entry_attention_tier(tab_entry).max(entry_attention_tier(entry)));
                     tab_entry.usage_limited |= entry.usage_limited;
                     tab_entry.waiting_on_agents |= entry.waiting_on_agents;
+                    tab_entry.working_while_blocked |= entry.working_while_blocked;
                 },
             )
             .or_insert_with(|| {
@@ -8668,6 +8676,7 @@ fn agent_dot_tooltip(entry: &AgentPanelEntry) -> String {
     let label = entry.state_labels.get(key).cloned().unwrap_or_else(|| {
         match key {
             "usage" => "Usage limit",
+            "blocked" if entry.working_while_blocked => "Blocked, waiting on you · still working",
             "blocked" => "Blocked, waiting on you",
             "working" => "Working",
             "waiting_on_agents" => "Waiting on agents",
@@ -9434,7 +9443,7 @@ fn render_symphony_job(
     let title_width = width.saturating_sub(fixed_width);
     let title = pad_right(&truncate_end(&job.name, title_width), title_width);
     let dot = pad_right(
-        compact_dot_for_state(state, true, true, false, false),
+        compact_dot_for_state(state, true, true, false, false, false),
         SIDEBAR_DOT_FIELD_WIDTH,
     );
     let status = pad_left(&status, widths.provider);
@@ -9965,7 +9974,8 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                             .is_some_and(|terminal| terminal.agent_lifecycle_context().is_some())
                     })
                 });
-                let icon = compact_dot_for_state(agg_state, agg_seen, has_agent, false, false);
+                let icon =
+                    compact_dot_for_state(agg_state, agg_seen, has_agent, false, false, false);
                 let icon_color = if has_agent {
                     match attention_tier {
                         AttentionTier::Blocked => p.red,
@@ -17906,6 +17916,67 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn blocked_working_dot_is_filled_red_and_names_both_facts() {
+        let palette = Palette::one_dark();
+        let mut entry = aggregation_entry(AgentState::Blocked, true, None, "blocked");
+        entry.state_labels.remove("blocked");
+
+        assert_eq!(compact_row_dot(&entry), "○");
+        assert_eq!(compact_row_color(&entry, &palette), palette.red);
+        assert_eq!(agent_dot_tooltip(&entry), "Blocked, waiting on you");
+
+        entry.working_while_blocked = true;
+        assert_eq!(compact_row_dot(&entry), "●");
+        assert_eq!(compact_row_color(&entry, &palette), palette.red);
+        assert_eq!(
+            agent_dot_tooltip(&entry),
+            "Blocked, waiting on you · still working"
+        );
+
+        let working = aggregation_entry(AgentState::Working, true, None, "working");
+        assert_eq!(compact_row_dot(&working), "●");
+        let waiting = {
+            let mut entry = working;
+            entry.waiting_on_agents = true;
+            entry
+        };
+        assert_eq!(compact_row_dot(&waiting), "◌");
+    }
+
+    #[test]
+    fn blocked_working_projection_requires_a_fresh_blocked_agent() {
+        use crate::api::schema::AgentStatus;
+
+        let blocked = remote_agent_info("blocked", "blocked", AgentStatus::Blocked, false, false);
+        let mut blocked = blocked;
+        blocked.working_while_blocked = true;
+        assert!(blocked.agent_projection().working_while_blocked);
+
+        let stale = remote_agent_info("stale", "stale", AgentStatus::Stale, false, false);
+        let mut stale = stale;
+        stale.working_while_blocked = true;
+        assert!(!stale.agent_projection().working_while_blocked);
+
+        let mut idle = remote_agent_info("idle", "idle", AgentStatus::Idle, false, false);
+        idle.working_while_blocked = true;
+        assert!(!idle.agent_projection().working_while_blocked);
+    }
+
+    #[test]
+    fn blocked_working_evidence_aggregates_across_tab_panes() {
+        let blocked_idle = aggregation_entry(AgentState::Blocked, true, None, "blocked");
+        let mut blocked_working = blocked_idle.clone();
+        blocked_working.working_while_blocked = true;
+
+        let aggregated = aggregate_tab_entries(&[blocked_idle.clone(), blocked_working])
+            .remove(&SidebarEntryKey::Local(0, 0))
+            .expect("aggregated tab entry");
+
+        assert!(aggregated.working_while_blocked);
+        assert_eq!(compact_row_dot(&aggregated), "●");
+    }
+
+    #[test]
     fn waiting_on_agents_has_a_distinct_glyph_and_blocked_still_outranks_it() {
         let palette = Palette::one_dark();
         let mut entry = aggregation_entry(AgentState::Working, true, None, "working");
@@ -17978,6 +18049,7 @@ pub(crate) mod tests {
                 active_subagents: None,
                 model_letter: None,
                 waiting_on_agents: false,
+                working_while_blocked: false,
                 holds_shell: false,
                 gate_count: 0,
                 seen,
@@ -20333,6 +20405,7 @@ row_gap = 1
                 active_subagents: None,
                 model_letter: None,
                 waiting_on_agents: false,
+                working_while_blocked: false,
                 holds_shell: false,
                 gate_count: 0,
                 seen: true,
@@ -28484,7 +28557,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn agent_dot_unknown_state_is_a_solid_grey_dot_with_question_tooltip() {
         assert_eq!(
-            compact_dot_for_state(AgentState::Unknown, false, true, false, false),
+            compact_dot_for_state(AgentState::Unknown, false, true, false, false, false),
             "●"
         );
         assert_eq!(
@@ -28492,7 +28565,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             Palette::catppuccin().overlay0
         );
         assert_eq!(
-            compact_dot_for_state(AgentState::Unknown, false, false, false, false),
+            compact_dot_for_state(AgentState::Unknown, false, false, false, false, false),
             "·"
         );
     }

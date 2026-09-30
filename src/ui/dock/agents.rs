@@ -205,7 +205,7 @@ fn status_class(state: AgentState, app: &AppState) -> (&'static str, &'static st
         AgentState::Unknown => "unknown",
     };
     (
-        crate::ui::sidebar::compact_dot_for_state(state, false, true, false, false),
+        crate::ui::sidebar::compact_dot_for_state(state, false, true, false, false, false),
         label,
         crate::ui::status::state_label_color(state, false, &app.palette),
     )
@@ -439,7 +439,7 @@ mod tests {
             let (glyph, actual_label, color) = status_class(state, &app);
             assert_eq!(
                 glyph,
-                crate::ui::sidebar::compact_dot_for_state(state, false, true, false, false)
+                crate::ui::sidebar::compact_dot_for_state(state, false, true, false, false, false)
             );
             assert_eq!(actual_label, label);
             assert_eq!(

@@ -243,6 +243,10 @@
                 "ticket_ids": []
               }
             },
+            "working_while_blocked": {
+              "description": "A blocked agent still has runtime evidence of active work or an external wait.",
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": "string"
             }
@@ -9087,6 +9091,10 @@
                 "ticket_ids": []
               }
             },
+            "working_while_blocked": {
+              "description": "A blocked agent still has runtime evidence of active work or an external wait.",
+              "type": "boolean"
+            },
             "workspace_id": {
               "type": "string"
             }
@@ -10406,6 +10414,10 @@
                 "preview_urls": [],
                 "ticket_ids": []
               }
+            },
+            "working_while_blocked": {
+              "description": "A blocked agent still has runtime evidence of active work or an external wait.",
+              "type": "boolean"
             },
             "workspace_id": {
               "type": "string"

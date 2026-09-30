@@ -320,6 +320,9 @@ pub struct AgentInfo {
     pub usage_limited: bool,
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub waiting_on_agents: bool,
+    /// A blocked agent still has runtime evidence of active work or an external wait.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub working_while_blocked: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -374,6 +377,7 @@ pub(crate) struct AgentInfoProjection {
     pub(crate) usage_limited: bool,
     pub(crate) settled: bool,
     pub(crate) waiting_on_agents: bool,
+    pub(crate) working_while_blocked: bool,
 }
 
 impl AgentInfoProjection {
@@ -397,6 +401,7 @@ impl AgentInfo {
                 usage_limited: false,
                 settled: true,
                 waiting_on_agents: false,
+                working_while_blocked: false,
             };
         }
         let (state, seen, stale) = match self.agent_status {
@@ -429,6 +434,9 @@ impl AgentInfo {
             waiting_on_agents: self.waiting_on_agents
                 && !stale
                 && state != crate::detect::AgentState::Blocked,
+            working_while_blocked: self.working_while_blocked
+                && !stale
+                && state == crate::detect::AgentState::Blocked,
         }
     }
 }

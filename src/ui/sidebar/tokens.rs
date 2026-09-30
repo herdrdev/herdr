@@ -253,6 +253,7 @@ mod tests {
                 active_subagents: None,
                 model_letter: None,
                 waiting_on_agents: false,
+                working_while_blocked: false,
                 holds_shell: false,
                 gate_count: 0,
                 seen: true,

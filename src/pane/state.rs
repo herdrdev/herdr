@@ -12,6 +12,7 @@ pub(crate) struct PaneAgentProjection {
     pub gate_count: usize,
     pub usage_limited: bool,
     pub waiting_on_agents: bool,
+    pub working_while_blocked: bool,
 }
 
 impl PaneAgentProjection {
@@ -123,6 +124,7 @@ impl PaneState {
                 gate_count: 0,
                 usage_limited: false,
                 waiting_on_agents: false,
+                working_while_blocked: false,
             };
         }
         let blocking_item_count = terminal
@@ -149,13 +151,62 @@ impl PaneState {
             gate_count: terminal.closing_gates().len() + blocking_item_count,
             usage_limited: terminal.usage_limited,
             waiting_on_agents: terminal.waiting_on_agents(),
+            working_while_blocked: working_while_blocked(
+                state,
+                terminal.supervisor_stale,
+                terminal.declares_running_subagents(),
+                terminal.closing_external_wait().is_some(),
+            ),
         }
     }
+}
+
+fn working_while_blocked(
+    state: AgentState,
+    stale: bool,
+    raw_waiting_on_agents: bool,
+    external_wait: bool,
+) -> bool {
+    state == AgentState::Blocked && !stale && (raw_waiting_on_agents || external_wait)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn working_while_blocked_requires_fresh_blocked_state_and_runtime_evidence() {
+        assert!(working_while_blocked(
+            AgentState::Blocked,
+            false,
+            true,
+            false
+        ));
+        assert!(working_while_blocked(
+            AgentState::Blocked,
+            false,
+            false,
+            true
+        ));
+        assert!(!working_while_blocked(
+            AgentState::Blocked,
+            true,
+            true,
+            false
+        ));
+        assert!(!working_while_blocked(
+            AgentState::Working,
+            false,
+            true,
+            false
+        ));
+        assert!(!working_while_blocked(
+            AgentState::Blocked,
+            false,
+            false,
+            false
+        ));
+    }
 
     fn projection(state: AgentState, attention_tier: AttentionTier) -> PaneAgentProjection {
         PaneAgentProjection {
@@ -167,6 +218,7 @@ mod tests {
             gate_count: usize::from(attention_tier == AttentionTier::Blocked),
             usage_limited: false,
             waiting_on_agents: false,
+            working_while_blocked: false,
         }
     }
 
