@@ -288,6 +288,47 @@ pub(crate) fn keyword_icon_matches(title: &str, icon: &str) -> bool {
         })
 }
 
+/// Returns the leading private-use glyph, allowing a tab pin before the label.
+/// Fleet brand prefixes and Nerd Font labels both use private-use codepoints.
+pub(crate) fn leading_label_icon(label: &str) -> Option<char> {
+    let mut chars = label.chars().peekable();
+    while chars
+        .peek()
+        .is_some_and(|character| character.is_whitespace())
+    {
+        chars.next();
+    }
+    if chars.peek() == Some(&'*') {
+        chars.next();
+        while chars
+            .peek()
+            .is_some_and(|character| character.is_whitespace())
+        {
+            chars.next();
+        }
+    }
+    chars
+        .find(|character| !character.is_whitespace())
+        .filter(|character| matches!(*character as u32, 0xE000..=0xF8FF | 0xF0000..=0x10FFFF))
+}
+
+pub(crate) fn badge_icon_for_label<'a>(label: &str, icon: &'a str) -> Option<&'a str> {
+    leading_label_icon(label).is_none().then_some(icon)
+}
+
+pub(crate) fn child_badge_icon<'a>(
+    parent_label: &str,
+    parent_icon: &str,
+    child_icon: &'a str,
+) -> Option<&'a str> {
+    let parent_glyph = leading_label_icon(parent_label);
+    let child_glyph = child_icon.chars().next();
+    (parent_glyph != child_glyph
+        && !keyword_icon_matches(parent_label, child_icon)
+        && (parent_glyph.is_some() || parent_icon != child_icon))
+        .then_some(child_icon)
+}
+
 fn builtin_repo_icon(name: &str) -> Option<&'static str> {
     if matches_any(name, &["inbox", "agent-inbox"]) {
         Some(INBOX)
@@ -395,6 +436,31 @@ mod tests {
         assert_eq!(keyword_icon("prefix/GH-42"), Some(GITHUB));
         assert_eq!(keyword_icon("Scalable V2"), Some(SCALABLE));
         assert_eq!(keyword_icon("SENTRY"), Some(SENTRY));
+    }
+
+    #[test]
+    fn label_glyphs_replace_badges_and_only_matching_child_icons_are_suppressed() {
+        let brand = '\u{F6002}';
+        let brand_label = format!("  * {brand} Scalable");
+        assert_eq!(leading_label_icon(&brand_label), Some(brand));
+        assert_eq!(badge_icon_for_label(&brand_label, SCALABLE), None);
+        assert_eq!(
+            badge_icon_for_label("plain workspace", SCALABLE),
+            Some(SCALABLE)
+        );
+        assert_eq!(leading_label_icon("* \u{E6BB} inbox"), Some('\u{E6BB}'));
+        assert_eq!(leading_label_icon("plain"), None);
+
+        assert_eq!(child_badge_icon(&brand_label, SCALABLE, SCALABLE), None);
+        assert_eq!(child_badge_icon(&brand_label, SCALABLE, INBOX), Some(INBOX));
+        assert_eq!(
+            child_badge_icon("Scalable workspace", SCALABLE, SCALABLE),
+            None
+        );
+        assert_eq!(
+            child_badge_icon("Other workspace", SCALABLE, INBOX),
+            Some(INBOX)
+        );
     }
 
     #[test]

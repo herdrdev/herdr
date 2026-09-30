@@ -236,9 +236,24 @@ fn tab_chrome_label_impl(
         projection
             .as_ref()
             .and_then(projection_keyword_icon)
+            .filter(|_| {
+                projection
+                    .as_ref()
+                    .and_then(|projection| match projection {
+                        crate::workspace::TabDisplayProjection::Manual(name)
+                        | crate::workspace::TabDisplayProjection::Fallback(name) => {
+                            crate::ui::icons::leading_label_icon(name)
+                        }
+                        crate::workspace::TabDisplayProjection::Derived { title, .. } => title
+                            .as_deref()
+                            .and_then(crate::ui::icons::leading_label_icon),
+                    })
+                    .is_none()
+            })
             .filter(|icon| {
                 let workspace_name = ws.display_name_from_terminals(terminals);
-                !crate::ui::icons::keyword_icon_matches(&workspace_name, icon)
+                let parent_icon = crate::ui::icons::keyword_icon(&workspace_name).unwrap_or("");
+                crate::ui::icons::child_badge_icon(&workspace_name, parent_icon, icon).is_some()
             })
     } else {
         None

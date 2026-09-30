@@ -5358,7 +5358,11 @@ fn needs_you_space_icon(
         &app.space_icons,
     );
     if app.nerd_font {
-        icon.map(|icon| crate::ui::icons::themed(icon, &app.palette).to_string())
+        if let Some(icon) = crate::ui::icons::leading_label_icon(name) {
+            return icon.to_string();
+        }
+        icon.and_then(|icon| crate::ui::icons::badge_icon_for_label(name, icon))
+            .map(|icon| crate::ui::icons::themed(icon, &app.palette).to_string())
             .unwrap_or_else(|| space_abbreviation(name))
     } else {
         space_abbreviation(name)
@@ -11402,6 +11406,8 @@ fn render_workspace_list(
             );
             crate::ui::icons::themed(icon, &app.palette)
         });
+        let space_icon =
+            space_icon.filter(|_| crate::ui::icons::leading_label_icon(&display_label).is_none());
         let space_icon_width = space_icon.map_or(0, |icon| display_width(icon) + 1);
 
         let window_count = match header {
