@@ -29,6 +29,12 @@ Follow the compact [agent workflow](.github/agent-workflow.md) for objective
 overrides, reversible actions, repository preflight, verification, and quiet PR
 monitoring.
 
+## Skill descriptions
+
+Treat each `SKILL.md` `description:` as a retrieval filter agents search to decide whether to load the skill, not as a summary.
+Lead with `Use when …` trigger words a caller would use; add `Not for …` near-misses.
+Keep mechanics in the skill body.
+
 ### Principles
 
 - **State is separated from runtime.** `AppState` is pure data, testable without PTYs or async. `PaneState` is separate from `PaneRuntime`. Workspace logic doesn't need real terminals.

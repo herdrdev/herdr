@@ -1,6 +1,6 @@
 ---
 name: herdr
-description: "Control Herdr, a terminal multiplexer for coding agents. Use only when the user explicitly mentions Herdr or asks to use Herdr to inspect or control panes, tabs, workspaces, commands, or another agent. Do not use merely because a task could benefit from a background terminal, delegation, or parallel work. Requires HERDR_ENV=1."
+description: "Use when the user says “Herdr” or “herdr CLI,” or asks to inspect or control Herdr panes, tabs, workspaces, commands, agents, or saved machines. Not for stalled-agent progress checks triggered by `/status` (herdr-status), or generic terminal and background-agent work outside Herdr."
 ---
 
 # Herdr

@@ -1,6 +1,6 @@
 ---
 name: status
-description: "Re-verify and recover work when Herdr sends /status to a stalled agent."
+description: "Use when Herdr sends `/status`, an agent is stalled, or you need to verify whether active work is progressing or finished. Not for inspecting or controlling Herdr panes, tabs, workspaces, or agents; use the herdr skill."
 ---
 
 # Status
