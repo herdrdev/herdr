@@ -27,6 +27,54 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _local_server_pids(sock: Path, binary: Path, pgid: int | None = None) -> list[str]:
+    """Find only this harness's server process, including on systems without /proc."""
+    socket_marker = f"HERDR_SOCKET_PATH={sock}"
+    binary_path = str(binary)
+    if sys.platform.startswith("linux"):
+        leaked = []
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                env = (entry / "environ").read_bytes().split(b"\0")
+                argv = (entry / "cmdline").read_bytes().split(b"\0")
+            except OSError:
+                continue
+            if (os.fsencode(socket_marker) in env
+                    and os.fsencode(binary_path) in argv and b"server" in argv):
+                leaked.append(entry.name)
+        return leaked
+
+    if sys.platform == "darwin":
+        result = subprocess.run(["ps", "-E", "-ww", "-o", "pid=,command="],
+                                text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, check=False)
+        if result.returncode:
+            raise RuntimeError(f"could not inspect local processes with ps: {result.stderr[-500:]}")
+        leaked = []
+        for line in result.stdout.splitlines():
+            fields = line.strip().split(None, 1)
+            if len(fields) != 2:
+                continue
+            pid, details = fields
+            if (socket_marker in details and binary_path in details
+                    and re.search(r"(?:^|\s)server(?:\s|$)", details)):
+                leaked.append(pid)
+        return leaked
+
+    # The server runs in its own session, making its process group harness-specific.
+    if pgid is None:
+        return []
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return []
+    except PermissionError:
+        pass
+    return [f"process group {pgid}"]
+
+
 class Harness:
     def __init__(self, args: argparse.Namespace):
         self.args = args
@@ -94,7 +142,7 @@ class Harness:
             return
         if not self.args.peer or not self.args.peer_binary:
             raise RuntimeError("p-cross-host requires --peer and --peer-binary")
-        self.peer_root = f"/tmp/wdl.{os.getpid()}"
+        self.peer_root = f"/tmp/{self.root.name}"
         peer = self.args.peer
         binary = str(self.args.peer_binary)
         xdg_cfg = f"{self.peer_root}/cfg"
@@ -104,11 +152,12 @@ class Harness:
         root_q, cfg_q, state_q, sock_q = map(shlex.quote,
             (self.peer_root, xdg_cfg, xdg_state, sock))
         binary_q = shlex.quote(binary)
+        pidfile_q = shlex.quote(f"{self.peer_root}/server.pid")
         script = (f"mkdir -p {cfg_q}/{app} {state_q}; "
                   f"printf '%s\\n' 'allow_nested = true' > {cfg_q}/{app}/config.toml; "
-                  f"nohup env -i PATH=/usr/bin:/bin XDG_CONFIG_HOME={cfg_q} "
+                  f"setsid nohup env -i PATH=/usr/bin:/bin XDG_CONFIG_HOME={cfg_q} "
                   f"XDG_STATE_HOME={state_q} HERDR_SOCKET_PATH={sock_q} {binary_q} server "
-                  f"</dev/null >/dev/null 2>&1 & "
+                  f"</dev/null >/dev/null 2>&1 & echo $! > {pidfile_q}; "
                   f"i=0; while [ $i -lt 100 ] && [ ! -S {sock_q} ]; do sleep .1; i=$((i+1)); done; "
                   f"[ -S {sock_q} ] || exit 3; "
                   f"env -i PATH=/usr/bin:/bin XDG_CONFIG_HOME={cfg_q} XDG_STATE_HOME={state_q} "
@@ -157,18 +206,41 @@ class Harness:
     def cleanup_peer(self) -> None:
         if not self.peer_root or not self.args.peer or not self.args.peer_binary:
             return
-        app = "herdr-dev" if "debug" in str(self.args.peer_binary) else "herdr"
-        cfg = f"{self.peer_root}/cfg"
-        state = f"{self.peer_root}/state"
         sock = f"{self.peer_root}/s.sock"
-        env = (f"env -i PATH=/usr/bin:/bin XDG_CONFIG_HOME={shlex.quote(cfg)} "
-               f"XDG_STATE_HOME={shlex.quote(state)} HERDR_SOCKET_PATH={shlex.quote(sock)} ")
-        binary = shlex.quote(str(self.args.peer_binary))
-        cmd = (env + binary + " server stop >/dev/null 2>&1 || true; "
+        inspect_and_stop = "\n".join((
+            "import os, signal, sys, time",
+            "sock = os.fsencode('HERDR_SOCKET_PATH=' + sys.argv[1])",
+            "binary = os.fsencode(sys.argv[2])",
+            "def match(pid):",
+            "    try:",
+            "        env = open(f'/proc/{pid}/environ', 'rb').read().split(b'\\0')",
+            "        argv = open(f'/proc/{pid}/cmdline', 'rb').read().split(b'\\0')",
+            "        return sock in env and binary in argv and b'server' in argv",
+            "    except OSError:",
+            "        return False",
+            "pids = [int(p) for p in os.listdir('/proc') if p.isdigit() and match(p)]",
+            "print('peer cleanup matched exact server pids:', pids)",
+            "for pid in pids:",
+            "    os.kill(pid, signal.SIGTERM)",
+            "time.sleep(0.5)",
+            "left = [int(p) for p in os.listdir('/proc') if p.isdigit() and match(p)]",
+            "for pid in left:",
+            "    os.kill(pid, signal.SIGKILL)",
+            "time.sleep(0.1)",
+            "left = [int(p) for p in os.listdir('/proc') if p.isdigit() and match(p)]",
+            "print('remaining exact peer servers:', left)",
+            "raise SystemExit(bool(left))",
+        ))
+        cmd = (f"python3 -c {shlex.quote(inspect_and_stop)} {shlex.quote(sock)} "
+               f"{shlex.quote(str(self.args.peer_binary))} && "
                f"rm -rf {shlex.quote(self.peer_root)}")
-        subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
-                        self.args.peer, "sh", "-lc", cmd], stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=20, check=False)
+        result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+                                 self.args.peer, cmd], stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, timeout=20, check=False)
+        if result.stdout.strip():
+            print(result.stdout.strip())
+        if result.returncode:
+            raise RuntimeError(f"peer server cleanup failed ({result.returncode}): {result.stderr[-500:]}")
 
     def cli(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         result = subprocess.run([str(self.args.binary), *args], cwd=self.root, env=self.env,
@@ -254,11 +326,13 @@ class Harness:
             memory = {}
         entry = memory.setdefault(key, {})
         aged = int(time.time()) - seconds
-        for field in ("since", "retry_since", "op_since"):
+        for field in ("since", "retry_since", "op_since", "quiet_since", "last_nudge_at"):
             if field in entry:
                 entry[field] = aged
         if "since" not in entry:
             entry["since"] = aged
+        if "draft_since" in entry:
+            entry["draft_since"] = aged
         if session is not None:
             entry["agent_session"] = session
         path.write_text(json.dumps(memory) + "\n", encoding="utf-8")
@@ -285,35 +359,61 @@ class Harness:
         path.write_text(json.dumps(memory) + "\n", encoding="utf-8")
 
     def cleanup(self) -> None:
-        self.cleanup_peer()
-        for proc in reversed(self.started):
-            if proc.poll() is None:
-                if os.name == "posix" and proc.pid != os.getpid():
+        cleanup_handlers = {sig: signal.signal(sig, signal.SIG_IGN)
+                            for sig in (signal.SIGINT, signal.SIGTERM)}
+        peer_error: Exception | None = None
+        try:
+            self.cleanup_peer()
+        except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
+            peer_error = exc
+        try:
+            for proc in reversed(self.started):
+                if proc.poll() is None:
+                    if os.name == "posix" and proc.pid != os.getpid():
+                        try:
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        except ProcessLookupError:
+                            pass
+                    else:
+                        proc.terminate()
                     try:
-                        os.killpg(proc.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                else:
-                    proc.terminate()
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait()
+            if self.server and self.server.poll() is None:
+                # Ask the isolated server to shut down its own pane runtimes first.
                 try:
-                    proc.wait(timeout=3)
+                    self.cli("server", "stop", check=False)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                try:
+                    self.server.wait(timeout=8)
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-        if self.server and self.server.poll() is None:
-            # Ask the isolated server to shut down its own pane runtimes first.
-            self.cli("server", "stop", check=False)
-            try:
-                self.server.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                # The dedicated process group contains only this harness server
-                # and its descendants (never a user's existing Herdr session).
+                    pass
+            if self.server:
+                # This process group belongs to the harness; the parent can exit
+                # before a detached child does.
                 try:
                     os.killpg(self.server.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
+                time.sleep(.2)
+                try:
+                    os.killpg(self.server.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 self.server.wait()
-        shutil.rmtree(self.root, ignore_errors=True)
+            leaked = _local_server_pids(self.sock, self.args.binary,
+                                        self.server.pid if self.server else None)
+            if leaked:
+                raise RuntimeError(f"local harness server still running for {self.sock}: {leaked}")
+        finally:
+            shutil.rmtree(self.root, ignore_errors=True)
+            for sig, handler in cleanup_handlers.items():
+                signal.signal(sig, handler)
+        if peer_error:
+            raise RuntimeError(f"harness teardown failed: {peer_error}") from peer_error
 
     def incident_rearm_check(self) -> dict[str, Any]:
         parent_pane = self.workspace("incident-parent", _script("Parent remains available"),
@@ -413,6 +513,34 @@ def _script(text: str, repeat: bool = False) -> str:
     return _fixture_command(code)
 
 
+def _promised_draft_agent(root: Path, account: str) -> str:
+    script = root / "fake_agent.sh"
+    script.write_text('''#!/bin/sh
+draft=cont
+draw() {
+  printf '\\033[2J\\033[H'
+  printf '\\033]0;Codex\\007'
+  printf '%s\\n' \\
+    "Now: Codex reviewers — reviewing PR 1656; the config-folder worker starts after it merges" \\
+    "⎿ Stop says: /review completed — invoke /retro to capture lessons." \\
+    "__ACCOUNT_LINE__"
+  if [ -n "${turn1:-}" ]; then printf '%s\\n' "$turn1" "$turn2"; fi
+  printf '%s\\n' '────────────────────────' "❯ $draft" \\
+    '────────────────────────' \\
+    '░░░░░░ 92% 78k tokens │ 2h 24m ago │ -- INSERT -- · 1 feedback draft'
+}
+draw
+while IFS= read -r submitted; do
+  turn1="❯ $draft"
+  turn2="cont$submitted"
+  draft=
+  draw
+done
+'''.replace("__ACCOUNT_LINE__", account), encoding="utf-8")
+    script.chmod(0o755)
+    return "clear; exec /bin/sh " + shlex.quote(str(script))
+
+
 def setup_quiet(h: Harness, ident: str) -> str:
     code = "import subprocess,time; print('Running cargo test', flush=True); " \
            "subprocess.Popen(['sleep','3600']); time.sleep(3600)"
@@ -437,6 +565,26 @@ def setup_progress(h: Harness, ident: str) -> str:
 def setup_summary(h: Harness, ident: str) -> str:
     return h.workspace(ident, _script("Build completed successfully"),
                        ("Build completed successfully",))
+
+
+def setup_promised_draft(h: Harness, ident: str) -> str:
+    account = ("You hit your usage limit" if "usage_limit" in ident else
+               "Please sign in" if "logged_out" in ident else
+               "● Background shell command didn't finish before the previous session ended")
+    screen = ("Now: Codex reviewers — reviewing PR 1656; the config-folder worker starts after it merges\n"
+              "⎿ Stop says: /review completed — invoke /retro to capture lessons.\n"
+              f"{account}\n"
+              "────────────────────────\n❯ cont\n────────────────────────\n"
+              "░░░░░░ 92% 78k tokens │ 2h 24m ago │ -- INSERT -- · 1 feedback draft")
+    ready = tuple(screen.splitlines())
+    pane_id = h.workspace(ident, _promised_draft_agent(h.root, account), ready)
+    return pane_id
+
+
+def setup_done_here(h: Harness, ident: str) -> str:
+    screen = ("Needs you: nothing.\nDone here.\n────────────────────────\n❯ \n"
+              "────────────────────────\n0 shells")
+    return h.workspace(ident, _script(screen), ("Needs you: nothing.", "Done here."))
 
 
 def setup_retry(h: Harness, ident: str) -> str:
@@ -513,8 +661,9 @@ def setup_worker(h: Harness, ident: str) -> dict[str, str]:
                 "i+=1; open(p,'a').write(f'progress {i}\\n'); time.sleep(1)\n")
         process_code = code
     elif ident == "b-spinner-only":
-        code = ("import time; p=" + repr(str(trace)) + "; glyph='◐◓◑◒'; i=0\nwhile True:\n "
-                "open(p,'a').write(glyph[i%4]+' (12s)\\n'); i+=1; time.sleep(1)\n")
+        # Keep the worker alive, but don't refresh trace mtime after setup ages it.
+        code = ("import time; p=" + repr(str(trace)) + "; open(p,'a').write('◐ (12s)\\n'); "
+                "time.sleep(3600)\n")
         process_code = code
     elif ident in ("b-quiet-build", "b-subprocess-yn"):
         process_code = "import subprocess,time; subprocess.Popen(['sleep','3600']); time.sleep(3600)"
@@ -565,6 +714,13 @@ CASES: list[tuple[str, str, Callable[[Harness, str], Any], str]] = [
     ("a-quoted-question", "A", setup_quote, "working"),
     ("a-subprocess-yn", "A", setup_prompt, "waiting_tool_input"),
     ("a-finished-idle", "A", setup_summary, "finished_idle"),
+    ("stale_draft_promised_work_stalled", "A", setup_promised_draft, "finished_idle"),
+    ("promised_quiet_nudged", "A", setup_promised_draft, "finished_idle"),
+    ("promised_quiet_repeats_then_blocked", "A", setup_promised_draft, "stalled"),
+    ("promised_usage_limit_not_nudged", "A", setup_promised_draft, "stalled"),
+    ("promised_logged_out_not_nudged", "A", setup_promised_draft, "stalled"),
+    ("fresh_draft_typing", "A", setup_promised_draft, "working"),
+    ("done_here_negative_control", "A", setup_done_here, "finished_idle"),
     ("a-retry-backoff", "A", setup_retry, "waiting_retry"),
     ("a-retry-renewed", "A", setup_retry, "stalled"),
     ("a-account-limit", "A", setup_account, "waiting_human"),
@@ -638,6 +794,11 @@ def self_test(args: argparse.Namespace) -> int:
 
 
 def main() -> int:
+    def interrupt(signum: int, _frame: Any) -> None:
+        raise KeyboardInterrupt(f"received signal {signum}; cleaning up harness")
+
+    previous_handlers = {sig: signal.signal(sig, interrupt)
+                         for sig in (signal.SIGINT, signal.SIGTERM)}
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, help="herdr executable to test")
     parser.add_argument("--host-label", default=platform.node().split(".")[0])
@@ -645,7 +806,7 @@ def main() -> int:
     parser.add_argument("--peer")
     parser.add_argument("--peer-binary", type=Path)
     parser.add_argument("--confirm-secs", type=int, default=5)
-    parser.add_argument("--only", help="comma-separated case ids")
+    parser.add_argument("--only", action="append", help="case id to run (repeatable; comma-separated also accepted)")
     parser.add_argument("--gemini-bin", help="pass through to the pane watchdog")
     parser.add_argument("--self-test", action="store_true", help="exercise fixture setup/teardown only")
     args = parser.parse_args()
@@ -658,10 +819,15 @@ def main() -> int:
         parser.error("--confirm-secs must be nonnegative")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.self_test:
-        return self_test(args)
+        try:
+            return self_test(args)
+        finally:
+            for sig, handler in previous_handlers.items():
+                signal.signal(sig, handler)
     # Filter is validated before touching the server. CASES is the audited
     # source of ids and expected classes for every matrix entry.
-    selected = {part.strip() for part in args.only.split(",")} if args.only else None
+    selected = ({part.strip() for value in args.only for part in value.split(",")}
+                if args.only else None)
     known = {case[0] for case in CASES}
     if selected and selected - known:
         parser.error("unknown --only case(s): " + ", ".join(sorted(selected - known)))
@@ -689,29 +855,47 @@ def main() -> int:
             if family == "A":
                 pane_id = harness.panes[ident]
                 session_id = "session-" + ident
-                harness.call("pane.report_agent_session", {"pane_id": pane_id,
-                    "source": "watchdog-harness", "agent": "codex",
-                    "agent_session_id": session_id})
-                status = "idle" if ident == "a-finished-idle" else (
+                session_source = ("herdr:codex" if ident in (
+                    "stale_draft_promised_work_stalled", "promised_quiet_nudged")
+                    else "watchdog-harness")
+                status_source = "watchdog-harness"
+                status = "idle" if (ident == "a-finished-idle"
+                                     or ident == "stale_draft_promised_work_stalled"
+                                     or ident.startswith("promised_")) else (
                     "blocked" if ident == "a-approval-hook" else "working")
-                report: dict[str, Any] = {"pane_id": pane_id, "source": "watchdog-harness",
+                report: dict[str, Any] = {"pane_id": pane_id, "source": status_source,
                     "agent": "codex", "state": status}
                 if ident.startswith("a-retry"):
                     report.update(wait="retry", eta_s=120,
                                   reported_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
                 harness.call("pane.report_agent", report)
+                harness.call("pane.report_agent_session", {"pane_id": pane_id,
+                    "source": session_source, "agent": "codex",
+                    "agent_session_id": session_id})
                 state = harness.root / f"pane-{ident}.json"
                 log = harness.root / f"pane-{ident}.jsonl"
                 cmd_options = ["--dry-run", "--stall-secs", "600", "--confirm-secs",
                                str(args.confirm_secs), "--state-file", str(state),
                                "--status-log", str(log)]
+                if ident == "stale_draft_promised_work_stalled":
+                    cmd_options.remove("--dry-run")
+                    cmd_options += ["--stale-draft-secs", "2", "--quiet-secs", "2"]
+                if ident.startswith("promised_"):
+                    cmd_options.remove("--dry-run")
+                    cmd_options += ["--quiet-secs", "2"]
                 if args.gemini_bin:
                     cmd_options += ["--gemini-bin", args.gemini_bin]
                 else:
                     cmd_options.append("--no-model")
-                harness.run_watchdog("A", cmd_options)
-                age = 900 if ident in ("a-quiet-build", "a-silent-stall", "a-spinner-only",
+                harness.run_watchdog("A", cmd_options,
+                                     dry=ident not in ("stale_draft_promised_work_stalled",
+                                                       "promised_quiet_nudged"))
+                age = 1800 if ident == "stale_draft_promised_work_stalled" else 900 if ident in ("a-quiet-build", "a-silent-stall", "a-spinner-only",
                                        "a-spinner-progress", "a-resumed") else 0
+                if ident.startswith("promised_"):
+                    # These cases exercise promised-work policy. Keep the
+                    # composer draft, but age it past the human-typing guard.
+                    age = 1800
                 if ident == "a-retry-renewed":
                     age = 1200
                 elif ident == "a-prose-question":
@@ -719,11 +903,21 @@ def main() -> int:
                 if age:
                     harness.age_memory(state, pane_id, age,
                                        session="old-session" if ident == "a-resumed" else None)
-                payload = harness.run_watchdog("A", cmd_options)
+                if ident == "promised_quiet_repeats_then_blocked":
+                    data = json.loads(state.read_text())
+                    data[pane_id]["nudge_count"] = 3
+                    state.write_text(json.dumps(data))
+                    harness.age_memory(state, pane_id, 1800)
+                payload = harness.run_watchdog("A", cmd_options,
+                                               dry=ident not in ("stale_draft_promised_work_stalled",
+                                                                 "promised_quiet_nudged"))
                 decisions = payload.get("decisions", [])
                 decision = next((d for d in decisions if d.get("pane_id") == pane_id), {})
                 actual = decision.get("class", "missing")
                 evidence = decision.get("evidence", payload.get("_stderr_tail"))
+                if ident == "stale_draft_promised_work_stalled":
+                    actual = decision.get("class", "missing")
+                    evidence = f"{evidence}; action={decision.get('action')} delivered={decision.get('delivered')}"
             elif family in ("B", "P"):
                 opts = ["--stall-minutes", "1", "--runs-dir",
                         str(result["runs"]), "--history-days", "3650", "--all",
@@ -752,22 +946,55 @@ def main() -> int:
                 payload = {"_wall_time_ms": 0, "_model_latency_ms": None}
             calls = (payload.get("summary") or {}).get("model_calls", 0)
             calls_expected = 1 if ident == "a-prose-question" and args.gemini_bin else 0
+            case_match = actual == expected and calls == calls_expected
+            if ident == "stale_draft_promised_work_stalled":
+                pane_text = (harness.call("pane.read", {"pane_id": pane_id,
+                    "source": "detection", "lines": 40, "format": "text"})
+                    .get("read", {}).get("text", ""))
+                case_match = (actual == expected and decision.get("action") == "nudge"
+                              and decision.get("delivered") is True
+                              and decision.get("status") == "nudged"
+                              and ("❯ \n" in pane_text or "❯\n" in pane_text)
+                              and pane_text.count("cont — resume: continue your open work to its done criterion") == 1
+                              and "cont — resume: continue your open work to its done criterion"
+                              in str(decision.get("action_text", "")))
+                if not case_match:
+                    evidence = f"{evidence}; decision={decision}; pane={pane_text!r}"
+            elif ident in ("fresh_draft_typing", "done_here_negative_control"):
+                case_match = (actual == expected and decision.get("action") is None)
+            elif ident == "promised_quiet_nudged":
+                case_match = (actual == expected and decision.get("action") == "nudge"
+                              and decision.get("delivered") is True
+                              and decision.get("nudge_count") == 1)
+                if not case_match:
+                    evidence = f"{evidence}; decision={decision}"
+            elif ident == "promised_quiet_repeats_then_blocked":
+                case_match = (actual == expected and decision.get("action") is None
+                              and "did not resume after 3 nudges" in str(decision.get("evidence")))
+            elif ident in ("promised_usage_limit_not_nudged", "promised_logged_out_not_nudged"):
+                reason = "usage limit" if ident.endswith("usage_limit_not_nudged") else "logged out"
+                case_match = (actual == expected and decision.get("action") is None
+                              and f"blocked: {reason}" in str(decision.get("evidence")))
             rows.append({"id": ident, "watchdog": family, "expected": expected,
                          "actual": actual, "model_calls": calls,
-                         "match": actual == expected and calls == calls_expected,
+                         "match": case_match,
                          "evidence": evidence, "wall_time_ms": payload.get("_wall_time_ms"),
                          "model_latency_ms": payload.get("_model_latency_ms")})
-        incident = harness.incident_rearm_check()
-        incident["match"] = (incident["first_action"] == "logged"
+        incident = (harness.incident_rearm_check() if selected is None else
+                    {"skipped": True, "match": True})
+        # The raw incident result has no match field; evaluate its observations.
+        incident["match"] = incident.get("match", True) and (incident.get("skipped", False) or (
+            incident["first_action"] == "logged"
             and incident["second_action"] == "already_logged"
             and incident["records_after_second"] == 1
             and incident["recovery_class"] == "working"
             and incident["rearmed_action"] == "logged"
-            and incident["records_after_rearm"] == 2)
+            and incident["records_after_rearm"] == 2))
         digest = hashlib.sha256(args.binary.read_bytes()).hexdigest()
         source = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.strip()
         doc = {"host": args.host_label, "binary_sha256": digest, "source_sha": source,
+               "source": source,
                "cases": rows, "incident_rearm": incident}
         (args.out / "matrix.json").write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
         lines = ["# Watchdog live matrix", "", f"Host: `{args.host_label}`  ",
@@ -780,6 +1007,8 @@ def main() -> int:
         return 0 if rows and all(r["match"] for r in rows) and incident["match"] else 1
     finally:
         harness.cleanup()
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

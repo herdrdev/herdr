@@ -13,8 +13,9 @@ use serde_json::Value;
 
 use crate::{
     api::schema::{
-        AgentStatus, Method, PaneAgentState, PaneListParams, PaneProcessInfoParams, PaneReadParams,
-        PaneReportAgentParams, ReadFormat, ReadSource, Request,
+        AgentSessionInfo, AgentStatus, Method, PaneAgentState, PaneListParams,
+        PaneProcessInfoParams, PaneReadParams, PaneReportAgentParams, PaneSendTextCondition,
+        PaneSendTextIfParams, ReadFormat, ReadSource, Request,
     },
     watchdog::{
         self, PaneV3Decision, PaneV3MemoryMap, PaneV3Observation, PaneV3Options, WATCHDOG_SOURCE,
@@ -22,6 +23,258 @@ use crate::{
 };
 
 mod workers;
+
+#[cfg(test)]
+mod nudge_delivery_tests {
+    use super::{
+        nudge_due, nudge_retry_text, nudge_text, promised_nudges_stalled, record_nudge_delivery,
+        update_promised_memory,
+    };
+    use crate::{api::schema::AgentStatus, watchdog::PaneV3Memory};
+
+    #[test]
+    fn nudge_appends_only_the_suffix_to_an_existing_draft() {
+        assert_eq!(
+            nudge_text(Some("cont"), "resume work"),
+            (" — resume work\r".into(), "cont — resume work".into())
+        );
+        assert_eq!(
+            nudge_text(None, "resume work"),
+            ("resume work\r".into(), "resume work".into())
+        );
+    }
+
+    #[test]
+    fn a_still_composed_nudge_retries_enter_without_retyping() {
+        let pane =
+            "submitted context\n────────────────\n❯ cont — resume: continue work\n────────────────";
+        assert_eq!(
+            nudge_retry_text(pane, "cont — resume: continue work"),
+            Some("\r")
+        );
+        assert_eq!(
+            nudge_retry_text(pane, "cont — resume: continue work")
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            nudge_retry_text("❯ \n", "cont — resume: continue work"),
+            None
+        );
+    }
+
+    #[test]
+    fn promised_work_nudges_at_30_35_and_40_minutes_then_blocks_at_45() {
+        assert!(nudge_due(true, 1800, 0, None, 1800, 1800));
+        assert!(nudge_due(true, 2100, 1, Some(1800), 1800, 2100));
+        assert!(nudge_due(true, 2400, 2, Some(2100), 1800, 2400));
+        assert!(!nudge_due(true, 2699, 3, Some(2400), 1800, 2699));
+        assert!(!nudge_due(true, 900, 0, None, 1800, 900));
+    }
+
+    #[test]
+    fn submitted_nudge_rebaselines_once_and_preserves_repeat_schedule() {
+        let before_nudge = "Now: Keep working until tests pass.\n────\n❯ cont\n────";
+        let after_nudge = "Now: Keep working until tests pass.\ncont — resume: continue your open work to its done criterion\n────\n❯ \n────";
+        let before_hash = crate::watchdog::evidence::semantic_hash(before_nudge);
+        let after_hash = crate::watchdog::evidence::semantic_hash(after_nudge);
+        assert_ne!(before_hash, after_hash);
+        assert!(crate::watchdog::evidence::composer_is_empty(after_nudge));
+        assert_eq!(crate::watchdog::evidence::composer_text(after_nudge), None);
+        let mut mem = PaneV3Memory {
+            hash: before_hash,
+            since: 1,
+            quiet_since: Some(100),
+            last_status: Some(AgentStatus::Idle),
+            last_reported_at: Some("reported".into()),
+            ..PaneV3Memory::default()
+        };
+        let quiet = update_promised_memory(
+            &mut mem,
+            AgentStatus::Idle,
+            Some("reported"),
+            before_hash,
+            true,
+            false,
+            false,
+            1900,
+        );
+        assert_eq!(quiet, 1800);
+        assert!(nudge_due(
+            true,
+            quiet,
+            mem.nudge_count,
+            mem.last_nudge_at,
+            1800,
+            1900
+        ));
+        record_nudge_delivery(&mut mem, 1900);
+
+        let quiet = update_promised_memory(
+            &mut mem,
+            AgentStatus::Idle,
+            Some("reported"),
+            after_hash,
+            true,
+            false,
+            false,
+            1901,
+        );
+        assert_eq!(quiet, 1801);
+        assert_eq!(mem.nudge_count, 1);
+        assert!(!mem.nudge_rebaseline);
+        for (now, expected_count) in [(2199, 1), (2200, 2), (2499, 2), (2500, 3)] {
+            let quiet = update_promised_memory(
+                &mut mem,
+                AgentStatus::Idle,
+                Some("reported"),
+                after_hash,
+                true,
+                false,
+                false,
+                now,
+            );
+            if nudge_due(true, quiet, mem.nudge_count, mem.last_nudge_at, 1800, now) {
+                record_nudge_delivery(&mut mem, now);
+            }
+            assert_eq!(mem.nudge_count, expected_count);
+        }
+        let quiet = update_promised_memory(
+            &mut mem,
+            AgentStatus::Idle,
+            Some("reported"),
+            after_hash,
+            true,
+            false,
+            false,
+            2800,
+        );
+        assert_eq!(quiet, 2700);
+        assert_eq!(mem.nudge_count, 3);
+        assert!(!nudge_due(
+            true,
+            quiet,
+            mem.nudge_count,
+            mem.last_nudge_at,
+            1800,
+            2800
+        ));
+        assert!(promised_nudges_stalled(true, quiet, mem.nudge_count, 1800));
+    }
+
+    #[test]
+    fn status_or_report_change_after_delivery_resets_promised_clock() {
+        for (status, reported_at) in [
+            (AgentStatus::Working, Some("reported")),
+            (AgentStatus::Idle, Some("new-report")),
+        ] {
+            let mut mem = PaneV3Memory {
+                hash: 10,
+                quiet_since: Some(100),
+                nudge_count: 1,
+                last_nudge_at: Some(1900),
+                last_status: Some(AgentStatus::Idle),
+                last_reported_at: Some("reported".into()),
+                nudge_rebaseline: true,
+                ..PaneV3Memory::default()
+            };
+            let expected = status == AgentStatus::Idle;
+            let quiet = update_promised_memory(
+                &mut mem,
+                status,
+                reported_at,
+                20,
+                expected,
+                false,
+                false,
+                2000,
+            );
+            assert!(!mem.nudge_rebaseline);
+            if expected {
+                assert_eq!(quiet, 0);
+                assert_eq!(mem.nudge_count, 0);
+            } else {
+                assert_eq!(mem.quiet_since, None);
+                assert_eq!(mem.nudge_count, 0);
+            }
+        }
+    }
+}
+
+fn nudge_text(draft: Option<&str>, action: &str) -> (String, String) {
+    let expected = draft.map_or_else(|| action.to_owned(), |s| format!("{s} — {action}"));
+    let sent = draft.map_or_else(|| action.to_owned(), |_| format!(" — {action}"));
+    (format!("{sent}\r"), expected)
+}
+
+fn nudge_due(
+    expected: bool,
+    quiet: u64,
+    count: u8,
+    last: Option<u64>,
+    threshold: u64,
+    now: u64,
+) -> bool {
+    expected
+        && count < 3
+        && if count == 0 {
+            quiet >= threshold
+        } else {
+            last.is_some_and(|at| now.saturating_sub(at) >= 300)
+        }
+}
+
+fn promised_nudges_stalled(expected: bool, quiet: u64, count: u8, threshold: u64) -> bool {
+    expected && count >= 3 && quiet >= threshold.saturating_add(900)
+}
+
+fn record_nudge_delivery(mem: &mut crate::watchdog::PaneV3Memory, now: u64) {
+    mem.nudge_count = mem.nudge_count.saturating_add(1);
+    mem.last_nudge_at = Some(now);
+    mem.nudge_rebaseline = true;
+}
+
+fn update_promised_memory(
+    mem: &mut crate::watchdog::PaneV3Memory,
+    status: AgentStatus,
+    reported_at: Option<&str>,
+    hash: u64,
+    expected: bool,
+    rebound: bool,
+    nudge_echo: bool,
+    now: u64,
+) -> u64 {
+    if rebound {
+        mem.quiet_since = Some(now);
+        mem.nudge_count = 0;
+        mem.last_nudge_at = None;
+    }
+    let submitted_nudge = mem.nudge_rebaseline;
+    mem.nudge_rebaseline = false;
+    let status_unchanged = mem.last_status.is_none_or(|previous| previous == status);
+    let report_unchanged = mem.last_reported_at.as_deref() == reported_at;
+    let activity = mem.hash != 0
+        && !nudge_echo
+        && (mem.hash != hash || !status_unchanged || !report_unchanged);
+    if !expected {
+        mem.quiet_since = None;
+        mem.nudge_count = 0;
+        mem.last_nudge_at = None;
+    } else if submitted_nudge && status_unchanged && report_unchanged && !rebound {
+        // Submission changes transcript semantics; accept that single screen change as baseline.
+        mem.hash = hash;
+        mem.quiet_since.get_or_insert(now);
+    } else if activity && !rebound {
+        mem.quiet_since = Some(now);
+        mem.nudge_count = 0;
+        mem.last_nudge_at = None;
+    } else {
+        mem.quiet_since.get_or_insert(now);
+    }
+    mem.last_reported_at = reported_at.map(str::to_owned);
+    now.saturating_sub(mem.quiet_since.unwrap_or(now))
+}
 
 const DEFAULT_INTERVAL_SECS: u64 = 30;
 const DEFAULT_STALL_SECS: u64 = 600;
@@ -41,6 +294,8 @@ struct WatchdogOptions {
     confirm_secs: u64,
     retry_window_secs: Option<u64>,
     op_deadline_secs: Option<u64>,
+    stale_draft_secs: u64,
+    quiet_secs: u64,
     model_timeout_secs: u64,
     lines: u32,
     no_model: bool,
@@ -112,6 +367,8 @@ fn parse_options(args: &[String]) -> Result<WatchdogOptions, String> {
         confirm_secs: 20,
         retry_window_secs: None,
         op_deadline_secs: None,
+        stale_draft_secs: watchdog::STALE_DRAFT_SECS,
+        quiet_secs: 1800,
         model_timeout_secs: 45,
         lines: DEFAULT_LINES,
         no_model: false,
@@ -147,6 +404,10 @@ fn parse_options(args: &[String]) -> Result<WatchdogOptions, String> {
                 options.op_deadline_secs =
                     Some(parse_value(args, &mut index, "--op-deadline-secs")?)
             }
+            "--stale-draft-secs" => {
+                options.stale_draft_secs = parse_value(args, &mut index, "--stale-draft-secs")?
+            }
+            "--quiet-secs" => options.quiet_secs = parse_value(args, &mut index, "--quiet-secs")?,
             "--model-timeout-secs" => {
                 options.model_timeout_secs = parse_value(args, &mut index, "--model-timeout-secs")?
             }
@@ -255,13 +516,69 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
         op_deadline_secs: options
             .op_deadline_secs
             .unwrap_or(options.stall_secs.saturating_mul(3)),
+        stale_draft_secs: options.stale_draft_secs,
     };
+    let mut promised = Vec::with_capacity(observations.len());
+    for o in &observations {
+        let mem = memory.entry(o.pane_id.clone()).or_default();
+        let expected = watchdog::evidence::expected_to_continue(&o.tail)
+            && matches!(o.status, AgentStatus::Idle | AgentStatus::Done);
+        let hash = watchdog::evidence::semantic_hash(&o.tail);
+        let rebound = (mem.terminal_id.is_some()
+            && mem.terminal_id.as_ref() != o.terminal_id.as_ref())
+            || (mem.agent_session.is_some()
+                && mem.agent_session.as_ref() != o.agent_session.as_ref());
+        let nudge_echo = mem.nudge_count > 0
+            && watchdog::evidence::composer_text(&o.tail)
+                .is_some_and(|draft| draft.contains("resume: continue your open work"));
+        let quiet = update_promised_memory(
+            mem,
+            o.status,
+            o.reported_at.as_deref(),
+            hash,
+            expected,
+            rebound,
+            nudge_echo,
+            now,
+        );
+        // A nudge still in the composer is our own draft, not submitted activity.
+        if nudge_echo && expected {
+            mem.quiet_since.get_or_insert(now);
+        }
+        promised.push((expected, quiet));
+    }
     let mut decisions = observations
         .iter()
         .map(|o| {
             watchdog::classify_pane_v3(o, memory.entry(o.pane_id.clone()).or_default(), now, vopt)
         })
         .collect::<Vec<_>>();
+    for (i, (expected, quiet)) in promised.iter().copied().enumerate() {
+        if expected {
+            decisions[i].class = watchdog::PaneClass::FinishedIdle;
+            decisions[i].new_state = Some(AgentStatus::Done);
+            decisions[i].status = "consistent".into();
+            decisions[i].expected_to_continue = Some(true);
+            decisions[i].quiet_secs = Some(quiet);
+            decisions[i].nudge_count = Some(memory[&observations[i].pane_id].nudge_count);
+            if promised_nudges_stalled(
+                expected,
+                quiet,
+                memory[&observations[i].pane_id].nudge_count,
+                options.quiet_secs,
+            ) {
+                decisions[i].class = watchdog::PaneClass::Stalled;
+                decisions[i].evidence = "did not resume after 3 nudges".into();
+                decisions[i].new_state = Some(AgentStatus::Blocked);
+                decisions[i].status = if observations[i].status == AgentStatus::Blocked {
+                    "consistent"
+                } else {
+                    "corrected"
+                }
+                .into();
+            }
+        }
+    }
     let confirm_ids = decisions
         .iter()
         .enumerate()
@@ -408,7 +725,11 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
             .into();
         }
         if let Some(new) = d.new_state {
-            if d.status == "corrected" && !options.dry_run {
+            if d.status == "corrected"
+                && !options.dry_run
+                && !(d.class == watchdog::PaneClass::Stalled
+                    && d.evidence.starts_with("promised work stopped:"))
+            {
                 // Revalidate identity, state and semantic tail immediately before writing.
                 if let Ok(current) = current_pane(&d.pane_id) {
                     let tail = read_tail(&d.pane_id, options.lines).ok();
@@ -452,6 +773,86 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
                 }
             }
         }
+        let mem = memory.entry(d.pane_id.clone()).or_default();
+        let quiet = promised[i].1;
+        let due = nudge_due(
+            promised[i].0,
+            quiet,
+            mem.nudge_count,
+            mem.last_nudge_at,
+            options.quiet_secs,
+            now,
+        );
+        if promised[i].0 {
+            d.expected_to_continue = Some(true);
+            d.quiet_secs = Some(quiet);
+            d.nudge_count = Some(mem.nudge_count);
+        }
+        if due {
+            let flash = flash_check(
+                &options.gemini_bin,
+                options.no_model,
+                &observations[i].tail,
+                options.model_timeout_secs,
+            );
+            if matches!(flash.as_str(), "logged_out" | "usage_limit") {
+                d.class = watchdog::PaneClass::Stalled;
+                d.evidence = format!(
+                    "blocked: {}",
+                    if flash == "logged_out" {
+                        "logged out"
+                    } else {
+                        "usage limit"
+                    }
+                );
+                d.new_state = Some(AgentStatus::Blocked);
+                d.status = "corrected".into();
+                if !options.dry_run {
+                    if let Err(error) =
+                        report_status(&d.pane_id, &d.agent, AgentStatus::Blocked, &d.evidence)
+                            .and_then(|_| {
+                                watchdog::append_status_correction(
+                                    &options.status_log,
+                                    &d.pane_id,
+                                    &d.agent,
+                                    d.old_state,
+                                    AgentStatus::Blocked,
+                                    &d.evidence,
+                                )
+                            })
+                    {
+                        d.write_error = Some(error.to_string());
+                    }
+                }
+            } else if options.dry_run {
+                d.action = Some("nudge".into());
+                d.status = "would_nudge".into();
+            } else {
+                let draft = watchdog::evidence::composer_text(&observations[i].tail);
+                let action = "resume: continue your open work to its done criterion";
+                let (text, expected) = nudge_text(draft.as_deref(), action);
+                d.action = Some("nudge".into());
+                d.action_text = Some(expected);
+                d.delivered = Some(false);
+                d.reason = Some("pane_lookup_failed".into());
+                let delivery = deliver_nudge(d, &text);
+                match delivery.as_str() {
+                    "sent" => {
+                        d.delivered = Some(true);
+                        d.reason = None;
+                        d.status = "nudged".into();
+                        record_nudge_delivery(mem, now);
+                        mem.nudge_rebaseline = true;
+                        d.nudge_count = Some(mem.nudge_count);
+                    }
+                    reason => {
+                        d.status = "unverified".into();
+                        d.reason = Some(reason.into());
+                    }
+                }
+                append_nudge_event(&options.status_log, d)?;
+            }
+        }
         mark_dry_run_decision(d, options.dry_run);
         let _ = i;
     }
@@ -462,6 +863,246 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
     } else {
         0
     })
+}
+
+fn wait_for_nudge_submission(pane_id: &str, nudge: &str) -> bool {
+    for attempt in 0..3 {
+        if attempt > 0 {
+            thread::sleep(Duration::from_millis(500));
+        }
+        let Ok(read) = read_detection_observation(pane_id) else {
+            continue;
+        };
+        if nudge_retry_text(&read.text, nudge).is_none() {
+            return true;
+        }
+        if attempt == 2 {
+            // Submit the already-present text; never resend its body.
+            if let (Some(observation), Some(agent_ref), Some(agent_session)) = (
+                read.observation.clone(),
+                read.agent_ref.clone(),
+                read.agent_session.clone(),
+            ) {
+                let params = PaneSendTextIfParams {
+                    pane_id: pane_id.to_owned(),
+                    text: "\r".into(),
+                    workspace_id: read.workspace_id,
+                    terminal_id: read.terminal_id,
+                    agent_ref,
+                    agent_session,
+                    condition: PaneSendTextCondition::DetectionSnapshotUnchanged,
+                    observation_token: observation,
+                };
+                let _ = super::send_request(&Request {
+                    id: next_request_id("watchdog-nudge-enter"),
+                    method: Method::PaneSendTextIf(params),
+                });
+                // Bounded final confirmation; total wait remains under five seconds.
+                for _ in 0..2 {
+                    thread::sleep(Duration::from_millis(500));
+                    if let Ok(after) = read_detection_observation(pane_id) {
+                        if nudge_retry_text(&after.text, nudge).is_none() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn deliver_nudge(d: &PaneV3Decision, text: &str) -> String {
+    let current = match current_pane(&d.pane_id) {
+        Ok(p) => p,
+        Err(_) => return "pane_lookup_failed".into(),
+    };
+    let read = match read_detection_observation(&d.pane_id) {
+        Ok(r) => r,
+        Err(_) => return "read_failed".into(),
+    };
+    let observed = PaneV3Observation {
+        pane_id: d.pane_id.clone(),
+        agent: d.agent.clone(),
+        terminal_id: current.terminal_id,
+        agent_session: current.agent_session.map(|s| s.value),
+        status: current.agent_status,
+        wait: current.wait,
+        eta_s: current.eta_s,
+        reported_at: current.reported_at,
+        tail: read.text.clone(),
+        transcript_waiting: false,
+        process_group: None,
+        read_error: None,
+    };
+    let Some(observation) = read.observation else {
+        return "no_observation".into();
+    };
+    let Some(agent_ref) = read.agent_ref else {
+        return "no_agent_ref".into();
+    };
+    let Some(agent_session) = read.agent_session else {
+        return "no_agent_session".into();
+    };
+    if !watchdog::pane_v3_observation_is_current(d, &observed) {
+        return "observation_changed".into();
+    }
+    let params = PaneSendTextIfParams {
+        pane_id: d.pane_id.clone(),
+        text: text.into(),
+        workspace_id: read.workspace_id,
+        terminal_id: read.terminal_id,
+        agent_ref,
+        agent_session,
+        condition: PaneSendTextCondition::DetectionSnapshotUnchanged,
+        observation_token: observation,
+    };
+    let response = match super::send_request(&Request {
+        id: next_request_id("watchdog-nudge"),
+        method: Method::PaneSendTextIf(params),
+    }) {
+        Ok(r) => r,
+        Err(_) => return "send_failed".into(),
+    };
+    let outcome = response["result"]["outcome"].as_str().unwrap_or("unknown");
+    if outcome != "sent" {
+        return format!("send_outcome:{outcome}");
+    }
+    if wait_for_nudge_submission(&d.pane_id, d.action_text.as_deref().unwrap_or_default()) {
+        "sent".into()
+    } else {
+        "nudge left in composer".into()
+    }
+}
+
+fn flash_check(bin: &Path, no_model: bool, tail: &str, timeout_secs: u64) -> String {
+    if no_model {
+        return flash_fallback(tail);
+    }
+    let prompt = format!("Classify this pane tail for whether it is safe to nudge. Return exactly one: ok_to_nudge, logged_out, usage_limit, crashed, other.\n{tail}");
+    let (Ok(home), Ok(policy)) = (ModelHome::new(), ModelPolicyFile::new()) else {
+        return "other".into();
+    };
+    let output = Command::new(bin)
+        .args([
+            "-m",
+            STAGE2_MODEL_ID,
+            "-p",
+            &prompt,
+            "-o",
+            "text",
+            "--approval-mode",
+            "default",
+            "--skip-trust",
+            "-e",
+            "none",
+            "--allowed-mcp-server-names",
+            "none",
+            "--policy",
+        ])
+        .arg(policy.path())
+        .env("GEMINI_CLI_HOME", &home.0)
+        .current_dir(&home.0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            let start = Instant::now();
+            loop {
+                if child.try_wait()?.is_some() {
+                    break;
+                }
+                if start.elapsed() >= Duration::from_secs(timeout_secs) {
+                    let _ = child.kill();
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "flash check timeout",
+                    ));
+                }
+                thread::sleep(Duration::from_millis(100));
+            }
+            let mut output = String::new();
+            if let Some(mut stdout) = child.stdout.take() {
+                let _ = stdout.read_to_string(&mut output);
+            }
+            Ok(output)
+        })
+        .unwrap_or_default();
+    match output.trim().to_ascii_lowercase().as_str() {
+        "logged_out" => "logged_out".into(),
+        "usage_limit" => "usage_limit".into(),
+        "ok_to_nudge" => "ok_to_nudge".into(),
+        _ => "other".into(),
+    }
+}
+
+fn flash_fallback(tail: &str) -> String {
+    let lower = tail.to_ascii_lowercase();
+    if [
+        "usage limit",
+        "rate limit",
+        "credit balance",
+        "quota exceeded",
+    ]
+    .iter()
+    .any(|s| lower.contains(s))
+    {
+        "usage_limit".into()
+    } else if [
+        "log in",
+        "login",
+        "sign in",
+        "logged out",
+        "authentication failed",
+        "403",
+    ]
+    .iter()
+    .any(|s| lower.contains(s))
+    {
+        "logged_out".into()
+    } else {
+        "ok_to_nudge".into()
+    }
+}
+
+#[cfg(test)]
+mod flash_tests {
+    use super::flash_fallback;
+    #[test]
+    fn flash_fallback_blocks_account_and_quota_screens() {
+        assert_eq!(flash_fallback("usage limit reached"), "usage_limit");
+        assert_eq!(flash_fallback("Please sign in"), "logged_out");
+        assert_eq!(flash_fallback("ordinary work"), "ok_to_nudge");
+    }
+}
+
+fn nudge_retry_text(pane_text: &str, nudge: &str) -> Option<&'static str> {
+    watchdog::evidence::composer_text(pane_text)
+        .is_some_and(|text| text.contains(nudge))
+        .then_some("\r")
+}
+
+fn append_nudge_event(path: &Path, decision: &PaneV3Decision) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    serde_json::to_writer(
+        &mut file,
+        &serde_json::json!({
+            "timestamp": unix_seconds()?, "source": WATCHDOG_SOURCE,
+            "pane_id": decision.pane_id, "action": decision.action,
+            "text": decision.action_text, "delivered": decision.delivered,
+            "reason": decision.reason,
+            "evidence": decision.evidence,
+        }),
+    )
+    .map_err(io::Error::other)?;
+    file.write_all(b"\n")
 }
 
 fn mark_dry_run_decision(decision: &mut PaneV3Decision, dry_run: bool) {
@@ -488,6 +1129,52 @@ fn read_tail(pane_id: &str, lines: u32) -> Result<String, String> {
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| "pane.read response did not contain result.read.text".into())
+}
+
+#[derive(Deserialize)]
+struct DetectionRead {
+    text: String,
+    workspace_id: String,
+    terminal_id: String,
+    agent_ref: Option<crate::api::schema::AgentRef>,
+    agent_session: Option<AgentSessionInfo>,
+    input_observation: Option<crate::api::schema::PaneInputObservation>,
+}
+
+struct DetectionObservation {
+    text: String,
+    workspace_id: String,
+    terminal_id: String,
+    agent_ref: Option<crate::api::schema::AgentRef>,
+    agent_session: Option<AgentSessionInfo>,
+    observation: Option<String>,
+}
+
+fn read_detection_observation(pane_id: &str) -> Result<DetectionObservation, String> {
+    let response = super::send_request(&Request {
+        id: next_request_id("pane-read-nudge"),
+        method: Method::PaneRead(PaneReadParams {
+            pane_id: pane_id.to_string(),
+            source: ReadSource::Detection,
+            lines: None,
+            format: ReadFormat::Text,
+            strip_ansi: true,
+            intent: Default::default(),
+        }),
+    })
+    .map_err(|e| e.to_string())?;
+    ensure_api_success(&response).map_err(|e| e.to_string())?;
+    let read: DetectionRead = serde_json::from_value(response["result"]["read"].clone())
+        .map_err(io::Error::other)
+        .map_err(|e| e.to_string())?;
+    Ok(DetectionObservation {
+        text: read.text,
+        workspace_id: read.workspace_id,
+        terminal_id: read.terminal_id,
+        agent_ref: read.agent_ref,
+        agent_session: read.agent_session,
+        observation: read.input_observation.map(|o| o.token),
+    })
 }
 
 fn claude_transcript_waiting(session: &str) -> Option<bool> {
@@ -1076,6 +1763,13 @@ mod tests {
             evidence: "waiting".into(),
             samples: vec![],
             write_error: None,
+            action: None,
+            action_text: None,
+            delivered: None,
+            reason: None,
+            expected_to_continue: None,
+            quiet_secs: None,
+            nudge_count: None,
             observed_terminal_id: None,
             observed_agent_session: None,
             observed_hash: 0,

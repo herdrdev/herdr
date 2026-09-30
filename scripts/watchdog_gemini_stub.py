@@ -36,6 +36,15 @@ def main() -> int:
     if mode == "timeout":
         time.sleep(120)
         return 0
+    if "Classify this pane tail for whether it is safe to nudge" in args.prompt:
+        tail = args.prompt.lower()
+        if any(term in tail for term in ("usage limit", "rate limit", "credit balance", "quota exceeded")):
+            print("usage_limit")
+        elif any(term in tail for term in ("log in", "login", "sign in", "logged out", "authentication failed", "403")):
+            print("logged_out")
+        else:
+            print("ok_to_nudge")
+        return 0
     status_to_class = {"working": "working", "blocked": "waiting_human", "done": "finished_idle"}
     expected = {
         case["id"]: status_to_class.get(case["expected_state"], "unknown")

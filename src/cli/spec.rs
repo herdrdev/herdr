@@ -265,6 +265,18 @@ pub(super) fn watchdog_command() -> Command {
                 .help("Seconds without pane output before a working agent is blocked"),
         )
         .arg(
+            option("stale-draft-secs", "N")
+                .default_value("300")
+                .value_parser(clap::value_parser!(u64))
+                .help("Harness override: unchanged composer drafts age out after this many seconds (default: 300)"),
+        )
+        .arg(
+            option("quiet-secs", "N")
+                .default_value("1800")
+                .value_parser(clap::value_parser!(u64))
+                .help("Seconds of quiet promised work before the first reminder"),
+        )
+        .arg(
             option("confirm-secs", "N")
                 .default_value("20")
                 .value_parser(clap::value_parser!(u64))
