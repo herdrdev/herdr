@@ -81,6 +81,19 @@ struct PendingAgentResumeCandidate {
     cols: u16,
 }
 
+fn persisted_session_matches_resume_key(
+    terminal: &crate::terminal::TerminalState,
+    key: &str,
+) -> bool {
+    terminal
+        .persisted_agent_session
+        .as_ref()
+        .is_some_and(|session| {
+            crate::agent_resume::plan(&session.source, &session.agent, &session.session_ref)
+                .is_some_and(|plan| plan.dedupe_key == key)
+        })
+}
+
 impl App {
     pub(crate) fn has_pending_agent_resumes(&self) -> bool {
         self.state
@@ -342,6 +355,20 @@ impl App {
         allow_empty_theme: bool,
         now: Instant,
     ) -> bool {
+        let duplicate_session = self.state.terminals.iter().any(|(other_id, terminal)| {
+            other_id != &terminal_id
+                && self.terminal_runtimes.get(other_id).is_some()
+                && persisted_session_matches_resume_key(terminal, &plan.dedupe_key)
+        });
+        if duplicate_session {
+            tracing::warn!(
+                pane = pane_id.raw(),
+                terminal = %terminal_id,
+                session = %plan.dedupe_key,
+                "skipping agent resume because another live pane already runs this session"
+            );
+            return false;
+        }
         if self.state.host_terminal_theme.is_empty() && !allow_empty_theme {
             return false;
         }
@@ -651,6 +678,9 @@ impl App {
             );
             return false;
         }
+        if let Some(terminal) = self.state.terminals.get_mut(terminal_id) {
+            terminal.clear_auto_settle_user_reply();
+        }
         runtime.send_bytes_after(Bytes::from(enter), RESUME_NUDGE_SUBMIT_DELAY);
         self.retire_blocked_hook_authority_for_automated_input(nudge.pane_id, now);
         tracing::info!(
@@ -795,6 +825,37 @@ mod tests {
             api_rx,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_live_pane_with_the_same_session_key_blocks_a_duplicate_resume() {
+        let mut app = test_app();
+        let workspace = crate::workspace::Workspace::test_new("duplicate-session");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("same-session").unwrap(),
+        });
+        let plan = crate::agent_resume::plan(
+            "herdr:claude",
+            "claude",
+            &crate::agent_resume::AgentSessionRef::id("same-session").unwrap(),
+        )
+        .unwrap();
+        assert!(persisted_session_matches_resume_key(
+            terminal,
+            &plan.dedupe_key
+        ));
+        assert!(!persisted_session_matches_resume_key(
+            terminal,
+            "different-session"
+        ));
     }
 
     #[cfg(unix)]

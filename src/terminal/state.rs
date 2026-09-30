@@ -1589,6 +1589,15 @@ impl TerminalState {
         report.user_replied_session_id = Some(session_id);
     }
 
+    /// Automated nudges may produce a closing turn, but they do not authorize
+    /// auto-settlement. Require a fresh successful client input afterward.
+    pub(crate) fn clear_auto_settle_user_reply(&mut self) {
+        if let Some(report) = self.closing_report.as_mut() {
+            report.user_replied = false;
+            report.user_replied_session_id = None;
+        }
+    }
+
     pub(crate) fn restore_auto_settle_state(
         &mut self,
         session_id: &str,
@@ -6013,6 +6022,23 @@ mod tests {
         assert!(terminal.observe_auto_settle_transition(true, true, false));
         assert!(!terminal.observe_auto_settle_transition(false, true, false));
         terminal.set_closing_report_scope("herdr:codex".into(), Some("session-a".into()), Some(2));
+        assert!(terminal.observe_auto_settle_transition(true, true, false));
+    }
+
+    #[test]
+    fn automated_nudge_clears_auto_settle_reply_until_new_human_input() {
+        let mut terminal = test_terminal();
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:claude".into(),
+            agent: "claude".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("session-a").unwrap(),
+        });
+        terminal.note_user_reply();
+        terminal.clear_auto_settle_user_reply();
+        terminal.set_closing_report_scope("herdr:claude".into(), Some("session-a".into()), Some(1));
+        assert!(!terminal.observe_auto_settle_transition(true, true, false));
+        terminal.note_user_reply();
+        terminal.set_closing_report_scope("herdr:claude".into(), Some("session-a".into()), Some(2));
         assert!(terminal.observe_auto_settle_transition(true, true, false));
     }
 

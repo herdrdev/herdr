@@ -747,6 +747,9 @@ impl App {
             );
             return false;
         }
+        if let Some(terminal) = self.state.terminals.get_mut(&target.terminal_id) {
+            terminal.clear_auto_settle_user_reply();
+        }
         self.retire_blocked_hook_authority_for_automated_input(target.pane_id, now);
         self.pending_stall_nudge_submissions.insert(
             target.terminal_id.clone(),
@@ -1633,7 +1636,7 @@ mod tests {
             .set_active_subagents(Some(1));
 
         let input_at = now + Duration::from_secs(10 * 60);
-        app.state.note_pane_activity_at(pane_id, input_at);
+        app.state.note_human_pane_activity_at(pane_id, input_at);
         assert_eq!(
             app.state.next_agent_watchdog_deadline(),
             now.checked_add(app.state.agent_subagent_stale_after),

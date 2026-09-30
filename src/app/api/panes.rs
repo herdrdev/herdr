@@ -263,7 +263,7 @@ impl App {
             );
         } else {
             self.state
-                .note_pane_activity_at(pane_id, std::time::Instant::now());
+                .note_human_pane_activity_at(pane_id, std::time::Instant::now());
         }
         self.flush_pane_settlement_events();
         let Some(pane) = self.pane_info(ws_idx, pane_id) else {
@@ -3830,7 +3830,7 @@ mod tests {
 
         assert!(app
             .state
-            .note_pane_activity_at(pane_id, std::time::Instant::now()));
+            .note_human_pane_activity_at(pane_id, std::time::Instant::now()));
         let response = app.handle_pane_snooze_at(
             "snooze".into(),
             PaneSnoozeParams {

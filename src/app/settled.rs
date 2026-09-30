@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashSet,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 
 use crate::layout::PaneId;
 
@@ -343,11 +346,12 @@ impl AppState {
         true
     }
 
-    pub(crate) fn note_pane_activity_at(&mut self, pane_id: PaneId, now: Instant) -> bool {
+    pub(crate) fn note_human_pane_activity_at(&mut self, pane_id: PaneId, now: Instant) -> bool {
         let Some((ws_idx, pane)) = self.pane_state_mut(pane_id) else {
             return false;
         };
         pane.activity.note(now);
+        pane.settle_resume_guard = false;
         let changed = pane.settled_at.take().is_some();
         self.mark_session_dirty();
         if changed {
@@ -362,6 +366,13 @@ impl AppState {
             self.mark_sidebar_projection_changed();
         }
         changed
+    }
+
+    pub(crate) fn note_automated_pane_activity_at(&mut self, pane_id: PaneId, now: Instant) {
+        if let Some((_, pane)) = self.pane_state_mut(pane_id) {
+            pane.activity.note(now);
+            self.mark_session_dirty();
+        }
     }
 
     pub(crate) fn observe_pane_detection_snapshot_at(
@@ -514,6 +525,14 @@ impl App {
         if changes.is_empty() {
             return false;
         }
+        let mut seen = HashSet::new();
+        let changes = changes
+            .into_iter()
+            .rev()
+            .filter(|change| seen.insert((change.workspace_id.clone(), change.pane_id)))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev();
         for change in changes {
             let Some(ws_idx) = self
                 .state
@@ -712,6 +731,14 @@ impl App {
                                 terminal.set_manual_label(label.clone());
                                 terminal.settled_auto_label = Some(label);
                             }
+                        }
+                        if let Some(pane) = self
+                            .state
+                            .workspaces
+                            .get_mut(ws_idx)
+                            .and_then(|workspace| workspace.pane_state_mut(change.pane_id))
+                        {
+                            pane.settle_resume_guard = true;
                         }
                         if let Some(runtime) = self.terminal_runtimes.get_mut(&terminal_id) {
                             runtime.suspend_processes();
@@ -1115,7 +1142,7 @@ mod tests {
             1
         );
         assert!(state.pane_is_settled(0, pane_id));
-        assert!(state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(state.note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(!state.pane_is_settled(0, pane_id));
         assert_eq!(
             state.refresh_settled_panes_at(
@@ -1577,7 +1604,7 @@ mod tests {
         if screen_state.is_none() {
             terminal.set_raw_agent_state_for_test(AgentState::Idle);
         }
-        state.note_pane_activity_at(pane_id, quiet_since);
+        state.note_human_pane_activity_at(pane_id, quiet_since);
         state.auto_settle_inactive = false;
         state.auto_settle_finished = false;
         state.settle_done_after = Duration::from_secs(30 * 60);
@@ -1704,7 +1731,7 @@ mod tests {
         state.auto_settle_inactive = false;
         state.auto_settle_finished = false;
         state.settle_done_after = Duration::from_secs(30 * 60);
-        state.note_pane_activity_at(pane_id, now);
+        state.note_human_pane_activity_at(pane_id, now);
 
         state.active = Some(0);
         state.focus_pane_in_workspace(0, pane_id);
@@ -2401,8 +2428,28 @@ mod tests {
         let (mut state, pane_id) = state_with_context(Default::default());
         assert!(state.settle_pane_at(0, pane_id, 1_725_000_002));
 
-        assert!(state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(state.note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(!state.pane_is_settled(0, pane_id));
+    }
+
+    #[test]
+    fn automated_activity_preserves_settlement_and_resume_guard() {
+        let (mut state, pane_id) = state_with_context(Default::default());
+        assert!(state.settle_pane_at(0, pane_id, 1_725_000_002));
+        state.workspaces[0]
+            .pane_state_mut(pane_id)
+            .expect("test pane")
+            .settle_resume_guard = true;
+
+        state.note_automated_pane_activity_at(pane_id, Instant::now());
+
+        assert!(state.pane_is_settled(0, pane_id));
+        assert!(
+            state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .settle_resume_guard
+        );
     }
 
     #[test]
@@ -2411,7 +2458,7 @@ mod tests {
         state.session_dirty = false;
         state.session_dirty_revision = 0;
 
-        assert!(!state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(!state.note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(state.session_dirty);
         assert_eq!(state.session_dirty_revision, 1);
     }
@@ -2438,6 +2485,35 @@ mod tests {
                 .expect("active agent transition");
 
             assert!(!state.pane_is_settled(0, pane_id), "{next_state:?}");
+        }
+    }
+
+    #[test]
+    fn resume_startup_transition_does_not_unsettle_suspended_pane() {
+        for next_state in [AgentState::Working, AgentState::Blocked] {
+            let (mut state, pane_id) = state_with_context(Default::default());
+            assert!(state.settle_pane_at(0, pane_id, 1_725_000_002));
+            state.workspaces[0]
+                .pane_state_mut(pane_id)
+                .unwrap()
+                .settle_resume_guard = true;
+
+            state
+                .update_terminal_state(pane_id, |terminal| {
+                    Some(terminal.set_detected_state_with_screen_signals_at(
+                        Some(crate::detect::Agent::Claude),
+                        next_state,
+                        next_state == AgentState::Blocked,
+                        false,
+                        next_state == AgentState::Working,
+                        false,
+                        false,
+                        Instant::now(),
+                    ))
+                })
+                .expect("active agent transition");
+
+            assert!(state.pane_is_settled(0, pane_id), "{next_state:?}");
         }
     }
 
@@ -2522,6 +2598,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn settle_then_unsettle_in_one_batch_never_suspends_runtime() {
+        let (mut app, pane_id, terminal_id, _rx) =
+            app_with_runtime(&crate::config::Config::default(), Default::default());
+        set_persisted_session(&mut app, &terminal_id, "herdr:claude");
+
+        assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_015));
+        assert!(app
+            .state
+            .note_human_pane_activity_at(pane_id, Instant::now()));
+        assert!(app.flush_pane_settlement_events());
+
+        assert!(!app.state.pane_is_settled(0, pane_id));
+        assert!(app
+            .terminal_runtimes
+            .get(&terminal_id)
+            .is_some_and(|runtime| !runtime.is_suspended()));
+        assert!(app.state.terminals[&terminal_id]
+            .pending_agent_resume_plan
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn automated_input_retirement_preserves_settled_guard() {
+        let (mut app, pane_id, _terminal_id, _rx) =
+            app_with_runtime(&crate::config::Config::default(), Default::default());
+        assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_016));
+        app.state.workspaces[0]
+            .pane_state_mut(pane_id)
+            .expect("test pane")
+            .settle_resume_guard = true;
+
+        app.retire_blocked_hook_authority_for_automated_input(pane_id, Instant::now());
+
+        assert!(app.state.pane_is_settled(0, pane_id));
+        assert!(
+            app.state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .settle_resume_guard
+        );
+    }
+
+    #[tokio::test]
     async fn settling_unresumable_pane_keeps_runtime_live() {
         let (mut app, pane_id, terminal_id, _rx) =
             app_with_runtime(&crate::config::Config::default(), Default::default());
@@ -2582,7 +2701,9 @@ mod tests {
             dedupe_key: "settled-resume-test".into(),
         });
 
-        assert!(app.state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(app
+            .state
+            .note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(app.flush_pane_settlement_events());
 
         let runtime = app
@@ -2610,7 +2731,9 @@ mod tests {
         app.state.default_shell = "/__herdr_missing_settled_shell__".into();
         app.state.shell_mode = crate::config::ShellModeConfig::Login;
 
-        assert!(app.state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(app
+            .state
+            .note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(app.flush_pane_settlement_events());
 
         assert!(app.terminal_runtimes.get(&terminal_id).is_none());
@@ -2651,7 +2774,9 @@ mod tests {
         );
 
         drop(app.terminal_runtimes.remove(&terminal_id));
-        assert!(app.state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(app
+            .state
+            .note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(app.flush_pane_settlement_events());
         assert!(app.state.terminals[&terminal_id].manual_label.is_none());
 
@@ -2662,7 +2787,9 @@ mod tests {
             .get_mut(&terminal_id)
             .unwrap()
             .set_manual_label("Human label".into());
-        assert!(app.state.note_pane_activity_at(pane_id, Instant::now()));
+        assert!(app
+            .state
+            .note_human_pane_activity_at(pane_id, Instant::now()));
         assert!(app.flush_pane_settlement_events());
         assert_eq!(
             app.state.terminals[&terminal_id].manual_label.as_deref(),
@@ -2816,7 +2943,7 @@ mod tests {
             1
         );
         assert!(app.flush_pane_settlement_events());
-        assert!(app.state.note_pane_activity_at(pane_id, now));
+        assert!(app.state.note_human_pane_activity_at(pane_id, now));
         assert!(app.flush_pane_settlement_events());
 
         let events = event_hub.events_after(0);

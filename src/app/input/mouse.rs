@@ -1496,7 +1496,7 @@ impl AppState {
                     self.release_surface_focus_to_pane();
 
                     if !self.pane_is_settled_anywhere(info.id) {
-                        self.note_pane_activity_at(info.id, std::time::Instant::now());
+                        self.note_human_pane_activity_at(info.id, std::time::Instant::now());
                     }
 
                     if self.forward_pane_mouse_button(terminal_runtimes, &info, mouse) {

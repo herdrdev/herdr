@@ -550,7 +550,8 @@ impl crate::app::App {
                     )
                 });
             if process_changed {
-                self.state.note_pane_activity_at(observation.pane_id, now);
+                self.state
+                    .note_automated_pane_activity_at(observation.pane_id, now);
             }
             if let Some(update) = update {
                 self.emit_pane_state_update(&update);
@@ -1129,9 +1130,18 @@ mod tests {
     }
 
     #[test]
-    fn foreground_process_change_clears_settled_pane() {
-        let (mut app, pane_id, _) = app_with_test_pane("settled-foreground");
+    fn foreground_process_changes_leave_settled_guarded_pane_untouched() {
+        let (mut app, pane_id, terminal_id) = app_with_test_pane("settled-foreground");
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("test pane terminal")
+            .set_foreground_process(Some("claude".into()), true, Instant::now());
         assert!(app.state.settle_pane_at(0, pane_id, 1_725_000_000));
+        app.state.workspaces[0]
+            .pane_state_mut(pane_id)
+            .expect("test pane")
+            .settle_resume_guard = true;
         app.last_foreground_process_refresh_generation = 1;
 
         assert!(app.handle_foreground_processes_refreshed(
@@ -1139,13 +1149,34 @@ mod tests {
             vec![ForegroundProcessObservation {
                 pane_id,
                 shell_pid: None,
-                process_name: Some("cargo".into()),
-                process_active: true,
+                process_name: None,
+                process_active: false,
                 agent_model: None,
             }],
         ));
 
-        assert!(!app.state.pane_is_settled(0, pane_id));
+        assert!(app.state.pane_is_settled(0, pane_id));
+        assert!(
+            app.state.workspaces[0]
+                .pane_state(pane_id)
+                .unwrap()
+                .settle_resume_guard
+        );
+
+        app.last_foreground_process_refresh_generation = 2;
+        assert!(app.handle_foreground_processes_refreshed(
+            2,
+            vec![ForegroundProcessObservation {
+                pane_id,
+                shell_pid: None,
+                process_name: Some("claude".into()),
+                process_active: true,
+                agent_model: None,
+            }],
+        ));
+        let pane = app.state.workspaces[0].pane_state(pane_id).unwrap();
+        assert!(pane.settled_at.is_some());
+        assert!(pane.settle_resume_guard);
     }
 
     #[test]

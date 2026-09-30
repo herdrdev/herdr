@@ -2687,11 +2687,11 @@ impl super::super::App {
         let resumed = if let Some(pane_ids) = tab_panes {
             let mut changed = false;
             for pane_id in pane_ids {
-                changed |= self.state.note_pane_activity_at(pane_id, now);
+                changed |= self.state.note_human_pane_activity_at(pane_id, now);
             }
             changed
         } else {
-            self.state.note_pane_activity_at(target.pane_id, now)
+            self.state.note_human_pane_activity_at(target.pane_id, now)
         };
         self.focus_settled_pane(target);
         self.flush_pane_settlement_events();
@@ -2804,7 +2804,7 @@ impl super::super::App {
             return;
         }
         self.state
-            .note_pane_activity_at(pane_id, std::time::Instant::now());
+            .note_human_pane_activity_at(pane_id, std::time::Instant::now());
         self.flush_pane_settlement_events();
     }
 }

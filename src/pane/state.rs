@@ -73,6 +73,8 @@ pub struct PaneState {
     pub(crate) finished_since: Option<std::time::Instant>,
     /// Runtime-only nudge count, carried across server handoff and reset by human input.
     pub(crate) stall_nudges_without_human: u32,
+    /// Ignore agent startup transitions after settlement until client input.
+    pub(crate) settle_resume_guard: bool,
     pub(crate) activity: Box<crate::activity_age::PaneActivity>,
 }
 
@@ -89,6 +91,7 @@ impl PaneState {
             settled_work_key: None,
             finished_since: None,
             stall_nudges_without_human: 0,
+            settle_resume_guard: false,
             activity: Box::new(crate::activity_age::PaneActivity::new(
                 std::time::Instant::now(),
             )),

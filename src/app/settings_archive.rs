@@ -69,7 +69,7 @@ impl super::App {
             return false;
         };
         self.state
-            .note_pane_activity_at(target.pane_id, std::time::Instant::now());
+            .note_human_pane_activity_at(target.pane_id, std::time::Instant::now());
         self.focus_pane_internal_via_api(ws_idx, target.pane_id);
         self.flush_pane_settlement_events();
         true
