@@ -145,6 +145,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_CONFIG_DIR_ENV_VAR);
     std::env::remove_var(GROK_HOME_ENV_VAR);
+    std::env::remove_var(VIBE_HOME_ENV_VAR);
 }
 
 fn kimi_hook_command(hook_path: &Path, action: &str) -> String {
@@ -4755,4 +4756,248 @@ fn grok_dir_honors_grok_home_after_config_dir_seam() {
     std::env::remove_var(GROK_HOME_ENV_VAR);
     clear_integration_path_env();
     let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_install_errors_when_config_dir_missing() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join(".vibe");
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+
+    let err = install_vibe().unwrap_err();
+    assert!(err.to_string().contains("install mistral vibe first"));
+    assert!(!vibe_home.exists(), "install must not create the vibe home");
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_install_writes_hook_and_registers_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join(".vibe");
+    fs::create_dir_all(&vibe_home).unwrap();
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+
+    let installed = install_vibe().unwrap();
+    let hook_path = vibe_home.join("herdr").join(VIBE_HOOK_INSTALL_NAME);
+    assert_eq!(installed.hook_path, hook_path);
+    assert!(hook_path.is_file());
+    let script = fs::read_to_string(&hook_path).unwrap();
+    assert!(script.contains("HERDR_INTEGRATION_ID=vibe"));
+    assert!(parse_integration_version(&script)
+        .is_some_and(|version| { version >= super::VIBE_INTEGRATION_VERSION }));
+
+    assert_eq!(installed.hooks_path, vibe_home.join("hooks.toml"));
+    let content = fs::read_to_string(vibe_home.join("hooks.toml")).unwrap();
+    let parsed: toml::Value = toml::from_str(&content).unwrap();
+    let hooks = parsed
+        .get("hooks")
+        .and_then(toml::Value::as_array)
+        .expect("registered hooks");
+    assert_eq!(hooks.len(), super::VIBE_HOOK_EVENTS.len());
+    let definitions = super::vibe_config::hook_definitions(&hook_path);
+    for definition in &definitions {
+        assert!(
+            hooks.iter().any(|hook| {
+                hook.get("name").and_then(toml::Value::as_str) == Some(definition.name)
+                    && hook.get("type").and_then(toml::Value::as_str) == Some(definition.hook_type)
+                    && hook.get("command").and_then(toml::Value::as_str)
+                        == Some(definition.command.as_str())
+            }),
+            "missing vibe hook entry for {}",
+            definition.name
+        );
+    }
+    // The idle hook is the only post_agent entry and must not carry a matcher.
+    let idle = hooks
+        .iter()
+        .find(|hook| {
+            hook.get("name").and_then(toml::Value::as_str) == Some("herdr-agent-state-idle")
+        })
+        .unwrap();
+    assert_eq!(idle.get("match"), None);
+
+    let vibe = experimental_vibe_integration_status().expect("vibe integration status");
+    assert_eq!(vibe.state, IntegrationStatusKind::Current);
+    assert_eq!(
+        vibe.installed_version,
+        Some(super::VIBE_INTEGRATION_VERSION)
+    );
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_status_reports_outdated_when_hooks_missing_or_drifted() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join(".vibe");
+    fs::create_dir_all(&vibe_home).unwrap();
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+    install_vibe().unwrap();
+    let hooks_path = vibe_home.join("hooks.toml");
+
+    let vibe_state = || {
+        experimental_vibe_integration_status()
+            .expect("vibe integration status")
+            .state
+    };
+
+    // Vibe never invokes the hook without a hooks.toml registration, so a
+    // missing config is a nonfunctional install.
+    fs::remove_file(&hooks_path).unwrap();
+    assert_eq!(vibe_state(), IntegrationStatusKind::Outdated);
+
+    install_vibe().unwrap();
+    assert_eq!(vibe_state(), IntegrationStatusKind::Current);
+
+    // A registration that no longer invokes the hook script is nonfunctional.
+    let content = fs::read_to_string(&hooks_path).unwrap();
+    fs::write(
+        &hooks_path,
+        content.replace("command = \"bash", "command = \"echo"),
+    )
+    .unwrap();
+    assert_eq!(vibe_state(), IntegrationStatusKind::Outdated);
+
+    // A corrupt config Vibe cannot parse never delivers the hook either.
+    fs::write(&hooks_path, "not toml\n").unwrap();
+    assert_eq!(vibe_state(), IntegrationStatusKind::Outdated);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_reinstall_replaces_stale_entries_without_touching_user_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join(".vibe");
+    fs::create_dir_all(&vibe_home).unwrap();
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+    let hooks_path = vibe_home.join("hooks.toml");
+    fs::write(
+        &hooks_path,
+        concat!(
+            "# Keep this comment.\n",
+            "[[hooks]]\n",
+            "name = \"lint\"\n",
+            "type = \"post_agent\"\n",
+            "command = \"eslint --quiet .\"\n",
+            "\n",
+            "[[hooks]]\n",
+            "name = \"herdr-agent-state-working\"\n",
+            "type = \"pre_tool\"\n",
+            "command = \"echo stale\"\n",
+        ),
+    )
+    .unwrap();
+
+    install_vibe().unwrap();
+
+    let content = fs::read_to_string(&hooks_path).unwrap();
+    assert!(content.contains("# Keep this comment."));
+    assert!(content.contains("eslint --quiet ."));
+    assert!(!content.contains("echo stale"));
+    let parsed: toml::Value = toml::from_str(&content).unwrap();
+    let hooks = parsed.get("hooks").and_then(toml::Value::as_array).unwrap();
+    assert_eq!(hooks.len(), super::VIBE_HOOK_EVENTS.len() + 1);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_uninstall_removes_hook_and_entries_but_keeps_user_hooks() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join(".vibe");
+    fs::create_dir_all(&vibe_home).unwrap();
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+    install_vibe().unwrap();
+    let hooks_path = vibe_home.join("hooks.toml");
+    fs::write(
+        &hooks_path,
+        format!(
+            "{}\n[[hooks]]\nname = \"lint\"\ntype = \"post_agent\"\ncommand = \"eslint --quiet .\"\n",
+            fs::read_to_string(&hooks_path).unwrap()
+        ),
+    )
+    .unwrap();
+
+    let removed = uninstall_vibe().unwrap();
+    assert!(removed.removed_hook_file);
+    assert_eq!(removed.removed_hooks, super::VIBE_HOOK_EVENTS.len());
+    assert!(!vibe_home.join("herdr").exists());
+
+    let content = fs::read_to_string(&hooks_path).unwrap();
+    assert!(content.contains("eslint --quiet ."));
+    assert!(!content.contains("herdr-agent-state"));
+    let parsed: toml::Value = toml::from_str(&content).unwrap();
+    let hooks = parsed.get("hooks").and_then(toml::Value::as_array).unwrap();
+    assert_eq!(hooks.len(), 1);
+
+    // Uninstalling again is a no-op that reports nothing to remove.
+    let removed = uninstall_vibe().unwrap();
+    assert!(!removed.removed_hook_file);
+    assert_eq!(removed.removed_hooks, 0);
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_dir_honors_vibe_home() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let vibe_home = base.join("vibe-home");
+    fs::create_dir_all(&vibe_home).unwrap();
+    std::env::set_var(VIBE_HOME_ENV_VAR, &vibe_home);
+
+    // The Vibe CLI resolves user-level hooks.toml from $VIBE_HOME, so the
+    // integration must install there too.
+    let installed = install_vibe().unwrap();
+    assert_eq!(installed.hooks_path, vibe_home.join("hooks.toml"));
+
+    clear_integration_path_env();
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn vibe_hooks_exclude_ask_user_question_from_working_matcher() {
+    let definitions = super::vibe_config::hook_definitions(Path::new(
+        "/home/user/.vibe/herdr/herdr-agent-state.sh",
+    ));
+    let working = definitions
+        .iter()
+        .find(|definition| definition.name == "herdr-agent-state-working")
+        .expect("working hook");
+    // Vibe evaluates `re:` matchers with Python's `re` module (a
+    // case-insensitive fullmatch), so this negative-lookahead matcher covers
+    // every tool name except ask_user_question. The Rust regex crate cannot
+    // express look-around, so pin the exact matcher instead of re-matching it.
+    assert_eq!(working.matcher, Some("re:^(?!ask_user_question$).*"));
+
+    let blocked = definitions
+        .iter()
+        .find(|definition| definition.name == "herdr-agent-state-blocked")
+        .expect("blocked hook");
+    assert_eq!(blocked.matcher, Some("ask_user_question"));
+
+    // The remaining entries run on every tool call and after every turn.
+    let tool_working = definitions
+        .iter()
+        .find(|definition| definition.name == "herdr-agent-state-tool-working")
+        .expect("post_tool hook");
+    assert_eq!(tool_working.matcher, None);
+    let idle = definitions
+        .iter()
+        .find(|definition| definition.name == "herdr-agent-state-idle")
+        .expect("idle hook");
+    assert_eq!(idle.matcher, None);
+    assert_eq!(idle.hook_type, "post_agent");
 }

@@ -30,6 +30,7 @@ herdr integration install letta
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install vibe
 ```
 
 ## 卸载集成
@@ -53,6 +54,7 @@ herdr integration uninstall letta
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall vibe
 ```
 
 Herdr 对 Linux/macOS 上的集成配置和所有平台的新文件使用原子保存；Windows 上的现有文件先备份再原地更新，以保留权限。如果 Windows 提示存在备份，请在重试前关闭智能体并检查配置：未完成的 `.herdr-backup.pending` 只能在确认配置正确后删除，不能用于恢复；完整 `.herdr-backup` 的内容可在需要时写回现有文件（若文件已丢失，先设置其预期权限），确认配置正确后再删除备份。
@@ -330,6 +332,20 @@ herdr integration install grok
 Herdr 默认使用 `~/.grok`,设置了 `GROK_HOME` 时使用后者。Grok 配置目录必须已经存在。Grok 会合并该目录中的所有 `hooks/*.json` 文件,因此安装会写入独立的 `hooks/herdr.json`,其中包含 Herdr 的 `SessionStart` 条目,并同时写入 `hooks/herdr-agent-state.sh`（Windows 上为 `hooks/herdr-agent-state.ps1`）;它不会修改其他钩子文件。卸载只会删除这两个由 Herdr 管理的文件。
 
 Grok 发出会话启动事件后,Herdr 可以用上报的会话 id 通过 `grok --resume <id>` 恢复窗格。
+
+## Mistral Vibe
+
+安装 Mistral Vibe 钩子:
+
+```bash
+herdr integration install vibe
+```
+
+Mistral Vibe 从用户级 `hooks.toml` 运行 shell 钩子,提供 `pre_tool`、`post_tool` 和 `post_agent` 三种事件。Herdr 注册一个在 `ask_user_question` 工具等待回答时报告 `blocked` 的 `pre_tool` 钩子、报告 `working` 的 `pre_tool` 与 `post_tool` 钩子,以及报告 `idle` 的 `post_agent` 钩子。每个事件负载都携带 Vibe 会话 id,因此每次报告也会记录会话以便原生恢复。Vibe 没有权限请求事件,因此工具审批提示会显示为 `working`。
+
+Herdr 默认使用 `~/.vibe`,设置了 `VIBE_HOME` 时则使用该目录。Vibe 主目录必须已经存在。安装会写入 `herdr/herdr-agent-state.sh`(Windows 上是 `herdr/herdr-agent-state.ps1`),并向 `hooks.toml` 追加 Herdr 名下的条目;该文件中的用户钩子、注释和格式都会保留。卸载只删除 Herdr 名下的条目和托管目录。
+
+Herdr 使用 `vibe --resume <id>` 恢复已保存的 Mistral Vibe 会话。
 
 ## 自定义状态标签
 

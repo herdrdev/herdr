@@ -30,6 +30,7 @@ herdr integration install letta
 herdr integration install cursor
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install vibe
 ```
 
 ## インテグレーションをアンインストールする
@@ -53,6 +54,7 @@ herdr integration uninstall letta
 herdr integration uninstall cursor
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall vibe
 ```
 
 Herdr は Linux/macOS の統合設定と全プラットフォームの新規ファイルをアトミックに保存し、Windows の既存ファイルは権限を維持するため、バックアップ後に同じファイルを更新します。Windows でバックアップが通知された場合は、再試行前にエージェントを終了して設定を確認し、未完了の `.herdr-backup.pending` は復旧元に使わず設定が正しいことを確認してから削除するか、必要なら完成済みの `.herdr-backup` の内容を既存ファイルに書き戻し（ファイルがない場合は先に意図した権限を設定）、設定が正しいことを確認してからバックアップを削除してください。
@@ -330,6 +332,20 @@ herdr integration install grok
 Herdr はデフォルトで `~/.grok` を使い、`GROK_HOME` が設定されていればそちらを使います。Grok の設定ディレクトリはあらかじめ存在している必要があります。Grok はそのディレクトリ内のすべての `hooks/*.json` ファイルを統合するため、インストールは Herdr の `SessionStart` エントリだけを含む `hooks/herdr.json` と `hooks/herdr-agent-state.sh`（Windows では `hooks/herdr-agent-state.ps1`）を書き込み、ほかのフックファイルには触れません。アンインストールは Herdr 所有のこの 2 ファイルだけを削除します。
 
 Grok がセッション開始イベントを発行した後、Herdr は報告されたセッション id を使って `grok --resume <id>` でペインを resume できます。
+
+## Mistral Vibe
+
+Mistral Vibe フックをインストールします:
+
+```bash
+herdr integration install vibe
+```
+
+Mistral Vibe はユーザーレベルの `hooks.toml` からシェルフックを実行し、`pre_tool`、`post_tool`、`post_agent` の 3 つのイベントがあります。Herdr は `ask_user_question` ツールが回答を待っているときに `blocked` を報告する `pre_tool` フック、`working` を報告する `pre_tool` と `post_tool` フック、`idle` を報告する `post_agent` フックを登録します。すべてのイベントペイロには Vibe のセッション id が含まれるため、各報告はネイティブ resume 用のセッションも記録します。Vibe には権限要求イベントがないため、ツール承認プロンプトは `working` として報告されます。
+
+Herdr はデフォルトで `~/.vibe` を使い、`VIBE_HOME` が設定されていればそちらを使います。Vibe のホームディレクトリはあらかからず存在している必要があります。インストールは `herdr/herdr-agent-state.sh`（Windows では `herdr/herdr-agent-state.ps1`）を書き込み、Herdr 名義のエントリを `hooks.toml` に追加します。このファイル内のユーザーフック、コメント、書式は保持されます。アンインストールは Herdr 名義のエントリと管理対象ディレクトリだけを削除します。
+
+Herdr は保存された Mistral Vibe セッションを `vibe --resume <id>` で resume します。
 
 ## カスタムステータスラベル
 

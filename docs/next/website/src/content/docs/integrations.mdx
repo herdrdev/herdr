@@ -1,6 +1,6 @@
 ---
 title: Integrations
-description: Install Herdr integrations for Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Letta Code, Cursor Agent CLI, MastraCode, Antigravity CLI, and Grok CLI.
+description: Install Herdr integrations for Pi, OMP, Claude Code, Codex, GitHub Copilot CLI, Devin CLI, Droid, Kimi Code CLI, OpenCode, Kilo Code CLI, Hermes Agent, Qoder CLI, Qwen Code, Letta Code, Cursor Agent CLI, MastraCode, Antigravity CLI, Grok CLI, and Mistral Vibe.
 ---
 
 Herdr detects the agents it supports automatically. Install an agent's integration so Herdr can resume the same session after a server restart. Some integrations also report the agent's state directly. See [Agents](/docs/agents/) for which agents Herdr supports and which support Herdr themselves.
@@ -28,6 +28,7 @@ herdr integration install cursor
 herdr integration install mastracode
 herdr integration install antigravity-cli
 herdr integration install grok
+herdr integration install vibe
 ```
 
 ## Uninstall integrations
@@ -51,6 +52,7 @@ herdr integration uninstall cursor
 herdr integration uninstall mastracode
 herdr integration uninstall antigravity-cli
 herdr integration uninstall grok
+herdr integration uninstall vibe
 ```
 
 Herdr saves integration configs atomically on Linux/macOS and for new files; existing Windows files keep their permissions through a backup-first, in-place update. If Windows reports a backup, close the agent and inspect the config before retrying: discard—not restore—an unfinished `.herdr-backup.pending` only after verifying the config, or restore completed `.herdr-backup` contents into the existing file if needed (if missing, establish its intended permissions first), then verify the config and remove the backup.
@@ -59,9 +61,9 @@ Herdr saves integration configs atomically on Linux/macOS and for new files; exi
 
 Every integration tells Herdr which session the agent is in, so Herdr can resume it after a server restart. Turn this off with `[session] resume_agents_on_restore = false`.
 
-The Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, and MastraCode integrations also report the agent's state. While they report, Herdr uses them instead of reading the screen. Codex reports turn state when run with `--no-daemon`; screen detection still handles its visible blockers. Other integrations leave state to screen detection.
+The Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, MastraCode, and Mistral Vibe integrations also report the agent's state. While they report, Herdr uses them instead of reading the screen. Codex reports turn state when run with `--no-daemon`; screen detection still handles its visible blockers. Other integrations leave state to screen detection.
 
-Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Qwen Code version `1`, Letta Code version `1`, Cursor Agent CLI version `1`, Grok CLI version `2`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `5`, MastraCode version `1`, or Antigravity CLI version `1`. Check installed versions with `herdr integration status`.
+Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Qwen Code version `1`, Letta Code version `1`, Cursor Agent CLI version `1`, Grok CLI version `2`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `5`, MastraCode version `1`, Antigravity CLI version `1`, or Mistral Vibe version `1`. Check installed versions with `herdr integration status`.
 
 ## Integrate your own agent
 
@@ -328,6 +330,20 @@ The hook reports session identity through Grok's `SessionStart` hook while Grok 
 Herdr uses `~/.grok` by default, or `GROK_HOME` when set. The Grok config directory must already exist. Grok merges every `hooks/*.json` file in that directory, so install writes a self-contained `hooks/herdr.json` with the Herdr `SessionStart` entry next to `hooks/herdr-agent-state.sh` (`hooks/herdr-agent-state.ps1` on Windows), and never edits other hook files. Uninstall removes exactly those two Herdr-owned files.
 
 After Grok emits a session start event, Herdr can use the reported session id to resume the pane with `grok --resume <id>`.
+
+## Mistral Vibe
+
+Install the Mistral Vibe hooks:
+
+```bash
+herdr integration install vibe
+```
+
+Mistral Vibe runs shell hooks from its user-level `hooks.toml` with three events: `pre_tool`, `post_tool`, and `post_agent`. Herdr registers a quiet `pre_tool` hook that reports `blocked` when the `ask_user_question` tool is waiting for an answer, `pre_tool` and `post_tool` hooks that report `working`, and a `post_agent` hook that reports `idle`. Every event payload carries the Vibe session id, so each report also records the session for native restore. Vibe has no permission-request event, so tool-approval prompts report as `working`.
+
+Herdr uses `~/.vibe` by default, or `VIBE_HOME` when set. The Vibe home directory must already exist. Install writes `herdr/herdr-agent-state.sh` (`herdr/herdr-agent-state.ps1` on Windows) and appends Herdr-named entries to `hooks.toml`; user hooks, comments, and formatting in that file are preserved. Uninstall removes only the Herdr-named entries and the managed directory.
+
+Herdr resumes stored Mistral Vibe sessions with `vibe --resume <id>`.
 
 ## Custom status labels
 

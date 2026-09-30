@@ -287,6 +287,9 @@ pub fn plan(source: &str, agent: &str, session_ref: &AgentSessionRef) -> Option<
         ("herdr:grok", "grok", AgentSessionRefKind::Id) => {
             vec!["grok".into(), "--resume".into(), session_ref.value.clone()]
         }
+        ("herdr:vibe", "vibe", AgentSessionRefKind::Id) => {
+            vec!["vibe".into(), "--resume".into(), session_ref.value.clone()]
+        }
         ("herdr:letta", "letta", AgentSessionRefKind::Id) => {
             if let Some(agent_id) = session_ref.value.strip_prefix("default:") {
                 if agent_id.is_empty() {
@@ -345,6 +348,7 @@ pub(crate) fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:antigravity_cli", "agy")
             | ("herdr:grok", "grok")
             | ("herdr:letta", "letta")
+            | ("herdr:vibe", "vibe")
     )
 }
 
@@ -413,6 +417,7 @@ mod tests {
             "herdr:opencode",
             "opencode"
         ));
+        assert!(!is_reserved_native_state_source("herdr:vibe", "vibe"));
     }
 
     #[test]
@@ -630,6 +635,16 @@ mod tests {
             .unwrap()
             .argv,
             vec!["grok", "--resume", "grok-session"]
+        );
+        assert_eq!(
+            plan(
+                "herdr:vibe",
+                "vibe",
+                &AgentSessionRef::id("vibe-session").unwrap()
+            )
+            .unwrap()
+            .argv,
+            vec!["vibe", "--resume", "vibe-session"]
         );
         assert_eq!(
             plan(

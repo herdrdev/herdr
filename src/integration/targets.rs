@@ -24,6 +24,7 @@ use super::env::{
     antigravity_cli_dir, claude_dir, codex_dir, copilot_dir, cursor_dir, devin_dir, droid_dir,
     grok_dir, hermes_dir, hermes_plugin_dir, kilo_dir, kimi_dir, letta_dir, mastracode_dir,
     omp_extension_dir, opencode_dir, opencode_state_dir, pi_extension_dir, qodercli_dir, qwen_dir,
+    vibe_dir,
 };
 use super::file_ops::{
     make_executable, remove_dir_all_if_exists, remove_file_if_exists, remove_legacy_bash_hook_file,
@@ -42,6 +43,7 @@ use super::types::{
     LettaUninstallResult, MastracodeInstallPaths, MastracodeUninstallResult, OmpInstallPaths,
     OmpUninstallResult, OpenCodeInstallPaths, OpenCodeUninstallResult, PiUninstallResult,
     QodercliInstallPaths, QodercliUninstallResult, QwenInstallPaths, QwenUninstallResult,
+    VibeInstallPaths, VibeUninstallResult,
 };
 use super::{
     ANTIGRAVITY_CLI_HOOK_ASSET, ANTIGRAVITY_CLI_HOOK_BLOCK_NAME, ANTIGRAVITY_CLI_HOOK_EVENTS,
@@ -61,7 +63,8 @@ use super::{
     OPENCODE_PLUGIN_INSTALL_NAME, OPENCODE_TUI_PLUGIN_ASSET, OPENCODE_TUI_PLUGIN_INSTALL_NAME,
     OPENCODE_TUI_PLUGIN_SPEC, PI_EXTENSION_ASSET, PI_EXTENSION_INSTALL_NAME, QODERCLI_HOOK_ASSET,
     QODERCLI_HOOK_EVENTS, QODERCLI_HOOK_INSTALL_NAME, QODERCLI_REMOVED_LIFECYCLE_HOOK_EVENTS,
-    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME,
+    QWEN_HOOK_ASSET, QWEN_HOOK_EVENTS, QWEN_HOOK_INSTALL_NAME, VIBE_HOOK_ASSET,
+    VIBE_HOOK_INSTALL_NAME,
 };
 
 fn ensure_extension_dir(dir: &Path, agent: &str) -> io::Result<()> {
@@ -1787,5 +1790,59 @@ pub(crate) fn uninstall_grok() -> io::Result<GrokUninstallResult> {
         config_path,
         removed_hook_file,
         removed_config_file,
+    })
+}
+
+/// Herdr owns the `herdr/` directory inside the vibe home outright. The vibe
+/// CLI only reads its documented paths, so the directory stays inert to it and
+/// the hook script lives beside nothing else.
+pub(crate) fn vibe_hook_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("herdr")
+}
+
+pub(crate) fn install_vibe() -> io::Result<VibeInstallPaths> {
+    let dir = vibe_dir()?;
+    if !dir.is_dir() {
+        return Err(io::Error::other(format!(
+            "vibe config directory not found at {}. install mistral vibe first",
+            dir.display()
+        )));
+    }
+
+    let herdr_dir = vibe_hook_dir(&dir);
+    fs::create_dir_all(&herdr_dir)?;
+
+    let hook_path = herdr_dir.join(VIBE_HOOK_INSTALL_NAME);
+    fs::write(&hook_path, VIBE_HOOK_ASSET)?;
+    make_executable(&hook_path)?;
+
+    // Vibe has no hook-directory merge, so the hook entries are registered
+    // by name inside the user-level hooks.toml.
+    let definitions = super::vibe_config::hook_definitions(&hook_path);
+    let hooks_path = super::vibe_config::add_hooks(&dir, &definitions)?;
+
+    Ok(VibeInstallPaths {
+        hook_path,
+        hooks_path,
+    })
+}
+
+pub(crate) fn uninstall_vibe() -> io::Result<VibeUninstallResult> {
+    let dir = vibe_dir()?;
+    let herdr_dir = vibe_hook_dir(&dir);
+    let hook_path = herdr_dir.join(VIBE_HOOK_INSTALL_NAME);
+
+    let definitions = super::vibe_config::hook_definitions(&hook_path);
+    let (hooks_path, removed_hooks) = super::vibe_config::remove_hooks(&dir, &definitions)?;
+
+    // herdr owns the hook directory outright, so removal takes the whole
+    // directory rather than leaving an empty one behind.
+    let removed_hook_file = remove_dir_all_if_exists(&herdr_dir)?;
+
+    Ok(VibeUninstallResult {
+        hook_path,
+        hooks_path,
+        removed_hook_file,
+        removed_hooks,
     })
 }

@@ -413,6 +413,18 @@ fn grok_hook_config_is_valid(hook_path: &Path) -> bool {
         .is_some_and(|config| config == super::targets::grok_hook_config(hook_path))
 }
 
+/// Whether the Herdr-owned Vibe hook entries exactly match the installed
+/// integration. Vibe only invokes the hook when `hooks.toml` registers it, so
+/// a current hook script with missing or rewritten entries is a nonfunctional
+/// install and must report as outdated.
+fn vibe_hook_config_is_valid(hook_path: &Path) -> bool {
+    let Some(config_dir) = hook_path.parent().and_then(Path::parent) else {
+        return false;
+    };
+    let definitions = super::vibe_config::hook_definitions(hook_path);
+    super::vibe_config::hooks_are_configured(config_dir, &definitions)
+}
+
 fn opencode_tui_integration_is_valid(plugin_path: &Path, expected_version: u32) -> bool {
     let Some(config_dir) = plugin_path.parent().and_then(Path::parent) else {
         return false;
@@ -512,6 +524,33 @@ pub(crate) fn experimental_letta_integration_status() -> Option<super::Experimen
         state,
         installed_version,
         expected_version: super::LETTA_INTEGRATION_VERSION,
+    })
+}
+
+/// Like Letta, Mistral Vibe is intentionally kept out of the frozen client
+/// endpoint `IntegrationTarget` enum so published generation-1 clients never
+/// receive an unknown variant. It is installable and reportable as an
+/// experimental CLI-only target until the agent registry replaces the
+/// enum-keyed registry.
+pub(crate) fn experimental_vibe_integration_status() -> Option<super::ExperimentalIntegrationStatus>
+{
+    let herdr_dir = vibe_dir().ok()?.join("herdr");
+    let path = herdr_dir.join(super::VIBE_HOOK_INSTALL_NAME);
+    let (mut state, installed_version) =
+        integration_state_for_path(&path, super::VIBE_INTEGRATION_VERSION);
+    // Vibe only invokes the hook when hooks.toml registers it, so a current
+    // hook script with missing or broken entries is a nonfunctional install.
+    if state == super::IntegrationStatusKind::Current
+        && !vibe_hook_config_is_valid(&herdr_dir.join(super::VIBE_HOOK_INSTALL_NAME))
+    {
+        state = super::IntegrationStatusKind::Outdated;
+    }
+    Some(super::ExperimentalIntegrationStatus {
+        label: "vibe",
+        path,
+        state,
+        installed_version,
+        expected_version: super::VIBE_INTEGRATION_VERSION,
     })
 }
 

@@ -46,7 +46,13 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         println!("{target}: {state} ({})", status.path.display());
     }
 
-    if let Some(status) = crate::integration::experimental_letta_integration_status() {
+    for status in [
+        crate::integration::experimental_letta_integration_status(),
+        crate::integration::experimental_vibe_integration_status(),
+    ]
+    .into_iter()
+    .flatten()
+    {
         let state = describe_integration_state(
             status.state,
             status.installed_version,
@@ -93,6 +99,7 @@ fn integration_install(args: &[String]) -> std::io::Result<i32> {
     let installed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::install_target(target),
         IntegrationCommandTarget::Letta => crate::integration::install_experimental_letta(),
+        IntegrationCommandTarget::Vibe => crate::integration::install_experimental_vibe(),
     };
     match installed {
         Ok(messages) => {
@@ -114,6 +121,7 @@ fn integration_uninstall(args: &[String]) -> std::io::Result<i32> {
     let removed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::uninstall_target(target),
         IntegrationCommandTarget::Letta => crate::integration::uninstall_experimental_letta(),
+        IntegrationCommandTarget::Vibe => crate::integration::uninstall_experimental_vibe(),
     };
     match removed {
         Ok(messages) => {
@@ -133,12 +141,14 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
-/// Integration target accepted by the CLI. Letta is deliberately kept out of
-/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
-/// experimental CLI-only target until the agent registry replaces it.
+/// Integration target accepted by the CLI. Letta and Mistral Vibe are
+/// deliberately kept out of the frozen client endpoint `IntegrationTarget`
+/// enum and are handled as experimental CLI-only targets until the agent
+/// registry replaces it.
 enum IntegrationCommandTarget {
     Builtin(IntegrationTarget),
     Letta,
+    Vibe,
 }
 
 fn parse_integration_target(
@@ -147,13 +157,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|vibe>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok|vibe>"
         );
         return Ok(None);
     }
@@ -179,10 +189,11 @@ fn parse_integration_target(
             IntegrationCommandTarget::Builtin(IntegrationTarget::AntigravityCli)
         }
         "grok" => IntegrationCommandTarget::Builtin(IntegrationTarget::Grok),
+        "vibe" | "mistral-vibe" => IntegrationCommandTarget::Vibe,
         _ => {
             eprintln!("unknown integration target: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
+                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok, vibe"
             );
             return Ok(None);
         }
@@ -211,6 +222,7 @@ fn print_integration_help() {
     eprintln!("  herdr integration install mastracode");
     eprintln!("  herdr integration install antigravity-cli");
     eprintln!("  herdr integration install grok");
+    eprintln!("  herdr integration install vibe");
     eprintln!("  herdr integration uninstall pi");
     eprintln!("  herdr integration uninstall omp");
     eprintln!("  herdr integration uninstall claude");
@@ -229,5 +241,6 @@ fn print_integration_help() {
     eprintln!("  herdr integration uninstall mastracode");
     eprintln!("  herdr integration uninstall antigravity-cli");
     eprintln!("  herdr integration uninstall grok");
+    eprintln!("  herdr integration uninstall vibe");
     eprintln!("  herdr integration status [--outdated-only]");
 }

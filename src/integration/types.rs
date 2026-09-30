@@ -125,6 +125,20 @@ pub(crate) struct GrokUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct VibeInstallPaths {
+    pub hook_path: PathBuf,
+    pub hooks_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct VibeUninstallResult {
+    pub hook_path: PathBuf,
+    pub hooks_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub removed_hooks: usize,
+}
+
+#[derive(Debug)]
 pub(crate) struct QodercliUninstallResult {
     pub hook_path: PathBuf,
     pub settings_path: PathBuf,

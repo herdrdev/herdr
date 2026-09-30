@@ -10,9 +10,11 @@ mod registry;
 mod targets;
 mod types;
 mod version;
+mod vibe_config;
 
 pub(crate) use actions::{
-    install_experimental_letta, install_target, uninstall_experimental_letta, uninstall_target,
+    install_experimental_letta, install_experimental_vibe, install_target,
+    uninstall_experimental_letta, uninstall_experimental_vibe, uninstall_target,
 };
 #[cfg(test)]
 pub(crate) use env::integration_env_lock;
@@ -20,8 +22,9 @@ pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
 };
 pub(crate) use registry::{
-    experimental_letta_integration_status, installed_integration_statuses,
-    integration_recommendations, integration_target_label, print_outdated_update_notice,
+    experimental_letta_integration_status, experimental_vibe_integration_status,
+    installed_integration_statuses, integration_recommendations, integration_target_label,
+    print_outdated_update_notice,
 };
 pub(crate) use types::{
     ExperimentalIntegrationStatus, IntegrationRecommendation, IntegrationStatus,
@@ -31,7 +34,7 @@ pub(crate) use types::{
 /// CLI labels for experimental integrations that are intentionally not part of
 /// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
 /// agent registry provides first-class target registration.
-pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
+pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta", "vibe"];
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");
@@ -320,6 +323,44 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 2;
+const VIBE_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "herdr-agent-state.ps1"
+} else {
+    "herdr-agent-state.sh"
+};
+const VIBE_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/vibe/herdr-agent-state.ps1")
+} else {
+    include_str!("assets/vibe/herdr-agent-state.sh")
+};
+const VIBE_INTEGRATION_VERSION: u32 = 1;
+const VIBE_HOOK_TIMEOUT_SEC: f64 = 10.0;
+/// `(hook entry name, hook type, tool matcher, reported action)` registered in
+/// the Vibe CLI's user-level `hooks.toml`. Vibe has no session-start or
+/// permission events, so `ask_user_question` is the only blocked signal and
+/// `post_agent` is the idle signal; every payload carries `session_id`, which
+/// the hook script forwards with each state report.
+const VIBE_HOOK_EVENTS: [(&str, &str, Option<&str>, &str); 4] = [
+    (
+        "herdr-agent-state-blocked",
+        "pre_tool",
+        Some("ask_user_question"),
+        "blocked",
+    ),
+    (
+        "herdr-agent-state-working",
+        "pre_tool",
+        Some("re:^(?!ask_user_question$).*"),
+        "working",
+    ),
+    (
+        "herdr-agent-state-tool-working",
+        "post_tool",
+        None,
+        "working",
+    ),
+    ("herdr-agent-state-idle", "post_agent", None, "idle"),
+];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

@@ -24,6 +24,9 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// The Mistral Vibe CLI's own config-home override; all user-level config,
+/// including `hooks.toml`, is resolved from it.
+pub(crate) const VIBE_HOME_ENV_VAR: &str = "VIBE_HOME";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -204,6 +207,12 @@ pub(crate) fn grok_dir() -> io::Result<PathBuf> {
     // The grok CLI honors GROK_HOME as its config home (config.toml,
     // auth.json, hooks/); mirror it so hook installs land where grok looks.
     config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
+}
+
+pub(crate) fn vibe_dir() -> io::Result<PathBuf> {
+    // The Vibe CLI resolves all user-level config from VIBE_HOME, falling
+    // back to ~/.vibe; mirror it so hook installs land where vibe looks.
+    config_dir_from_env_or_home(VIBE_HOME_ENV_VAR, &[".vibe"])
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {
