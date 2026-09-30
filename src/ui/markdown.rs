@@ -44,6 +44,26 @@ pub(crate) fn body_lines(
     width: usize,
     indent: &str,
 ) -> Vec<Line<'static>> {
+    body_lines_with_list_style(palette, body, width, indent, false)
+}
+
+/// Settled transcripts use Claude's literal markers and hanging list rows.
+pub(crate) fn transcript_body_lines(
+    palette: &Palette,
+    body: Option<&str>,
+    width: usize,
+    indent: &str,
+) -> Vec<Line<'static>> {
+    body_lines_with_list_style(palette, body, width, indent, true)
+}
+
+fn body_lines_with_list_style(
+    palette: &Palette,
+    body: Option<&str>,
+    width: usize,
+    indent: &str,
+    hanging_lists: bool,
+) -> Vec<Line<'static>> {
     let dash = || {
         vec![Line::from(Span::styled(
             format!("{indent}—"),
@@ -70,7 +90,7 @@ pub(crate) fn body_lines(
             continue;
         }
 
-        let (block, prefix, content) = classify(source_line);
+        let (block, prefix, content) = classify(source_line, hanging_lists);
         if content.trim().is_empty() && prefix.is_empty() {
             if lines.last().is_some_and(|line| line.width() > indent.len()) {
                 lines.push(Line::default());
@@ -79,6 +99,12 @@ pub(crate) fn body_lines(
         }
 
         let mut words = Vec::new();
+        let hanging_width =
+            if hanging_lists && (!prefix.is_empty()) && (prefix == "-" || prefix.ends_with('.')) {
+                prefix.len() + 1
+            } else {
+                0
+            };
         if !prefix.is_empty() {
             words.push(Word {
                 width: display_width(&prefix),
@@ -87,10 +113,20 @@ pub(crate) fn body_lines(
             });
         }
         words.extend(parse_words(content, block));
-        let words = split_wide_words(words, width);
+        let line_width = width.saturating_sub(hanging_width);
+        let words = split_wide_words(words, line_width);
 
-        for line in wrap_words(&words, width) {
-            lines.push(styled_line(palette, block, indent, line));
+        for (row_index, line) in wrap_words(&words, line_width).into_iter().enumerate() {
+            if row_index > 0 && hanging_width > 0 {
+                lines.push(styled_line(
+                    palette,
+                    block,
+                    &format!("{indent}{}", " ".repeat(hanging_width)),
+                    line,
+                ));
+            } else {
+                lines.push(styled_line(palette, block, indent, line));
+            }
         }
     }
 
@@ -105,7 +141,7 @@ pub(crate) fn body_lines(
 
 /// Split a source line into its block role, a literal prefix that must lead the
 /// first wrapped row, and the inline-markdown remainder.
-fn classify(source: &str) -> (Block, String, &str) {
+fn classify(source: &str, literal_lists: bool) -> (Block, String, &str) {
     let trimmed = source.trim();
     let heading = trimmed.trim_start_matches('#');
     if heading.len() != trimmed.len() {
@@ -123,7 +159,11 @@ fn classify(source: &str) -> (Block, String, &str) {
                     return (Block::Body, box_mark.to_string(), item);
                 }
             }
-            return (Block::Body, "•".to_string(), rest);
+            return (
+                Block::Body,
+                if literal_lists { "-" } else { "•" }.to_string(),
+                rest,
+            );
         }
     }
     if let Some(rest) = trimmed.strip_prefix("> ") {

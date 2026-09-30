@@ -376,6 +376,19 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return true;
         }
+        let geometry = self
+            .state
+            .settled_view
+            .as_ref()
+            .and_then(|view| {
+                self.state
+                    .view
+                    .pane_infos
+                    .iter()
+                    .find(|info| info.id == view.pane_id)
+            })
+            .map(|info| info.inner_rect);
+        let palette = &self.state.palette;
         let Some(view) = self.state.settled_view.as_mut() else {
             return false;
         };
@@ -392,6 +405,14 @@ impl App {
                     view.search.push(c)
                 }
                 _ => {}
+            }
+            if let Some(rect) = geometry {
+                view.scroll = view.scroll.min(crate::ui::settled_max_scroll(
+                    view,
+                    rect.width,
+                    rect.height,
+                    palette,
+                ));
             }
             return true;
         }
@@ -448,6 +469,14 @@ impl App {
             }
             return true;
         }
+        if let Some(rect) = geometry {
+            view.scroll = view.scroll.min(crate::ui::settled_max_scroll(
+                view,
+                rect.width,
+                rect.height,
+                palette,
+            ));
+        }
         match key.code {
             KeyCode::Enter => {
                 let pane_id = view.pane_id;
@@ -480,7 +509,17 @@ impl App {
                 true
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                view.scroll = view.scroll.saturating_add(1);
+                if let Some(rect) = geometry {
+                    view.scroll = view
+                        .scroll
+                        .saturating_add(1)
+                        .min(crate::ui::settled_max_scroll(
+                            view,
+                            rect.width,
+                            rect.height,
+                            palette,
+                        ));
+                }
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -488,7 +527,17 @@ impl App {
                 true
             }
             KeyCode::PageUp => {
-                view.scroll = view.scroll.saturating_add(10);
+                if let Some(rect) = geometry {
+                    view.scroll =
+                        view.scroll
+                            .saturating_add(10)
+                            .min(crate::ui::settled_max_scroll(
+                                view,
+                                rect.width,
+                                rect.height,
+                                palette,
+                            ));
+                }
                 true
             }
             KeyCode::PageDown => {
@@ -766,9 +815,20 @@ mod tests {
             argv: vec!["codex".into(), "resume".into(), "session".into()],
             dedupe_key: "session".into(),
         });
+        app.state.view.pane_infos = vec![crate::layout::PaneInfo {
+            id: pane_id,
+            rect: Rect::new(0, 0, 20, 6),
+            inner_rect: Rect::new(0, 0, 20, 6),
+            scrollbar_rect: None,
+            borders: ratatui::widgets::Borders::NONE,
+            is_focused: true,
+        }];
         app.state.settled_view = Some(crate::app::settled_view::SettledViewState {
             pane_id,
-            transcript: None,
+            transcript: Some(crate::app::settled_view::SettledTranscript {
+                source: "test".into(),
+                turns: vec![("you".into(), "first\nsecond\nthird\nfourth".into())],
+            }),
             command: "codex resume session".into(),
             scroll: 0,
             search: String::new(),
@@ -778,6 +838,31 @@ mod tests {
         let scroll_up = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
         assert!(app.handle_settled_view_key(&scroll_up));
         assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 1);
+        for _ in 0..20 {
+            assert!(app.handle_settled_view_key(&scroll_up));
+        }
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 2);
+        assert!(app.handle_settled_view_key(&KeyEvent::new(KeyCode::Down, KeyModifiers::empty())));
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 1);
+        assert!(
+            app.handle_settled_view_key(&KeyEvent::new(KeyCode::PageDown, KeyModifiers::empty()))
+        );
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 0);
+        app.state.handle_terminal_wheel(
+            &app.terminal_runtimes,
+            mouse(MouseEventKind::ScrollUp, 1, 1),
+        );
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 2);
+        app.state.handle_terminal_wheel(
+            &app.terminal_runtimes,
+            mouse(MouseEventKind::ScrollUp, 1, 1),
+        );
+        assert_eq!(app.state.settled_view.as_ref().unwrap().scroll, 2);
+        app.state.handle_terminal_wheel(
+            &app.terminal_runtimes,
+            mouse(MouseEventKind::ScrollDown, 1, 1),
+        );
+        assert!(app.state.settled_view.as_ref().unwrap().scroll < 2);
         assert!(app.state.pane_is_settled(0, pane_id));
         let escape = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         assert!(app.handle_settled_view_key(&escape));

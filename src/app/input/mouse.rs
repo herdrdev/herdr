@@ -3926,9 +3926,19 @@ impl AppState {
                 .is_some_and(|view| view.pane_id == info.id)
             {
                 if let Some(view) = self.settled_view.as_mut() {
+                    let max_scroll = crate::ui::settled_max_scroll(
+                        view,
+                        info.inner_rect.width,
+                        info.inner_rect.height,
+                        &self.palette,
+                    );
+                    view.scroll = view.scroll.min(max_scroll);
                     match mouse.kind {
                         MouseEventKind::ScrollUp => {
-                            view.scroll = view.scroll.saturating_add(self.mouse_scroll_lines)
+                            view.scroll = view
+                                .scroll
+                                .saturating_add(self.mouse_scroll_lines)
+                                .min(max_scroll)
                         }
                         MouseEventKind::ScrollDown => {
                             view.scroll = view.scroll.saturating_sub(self.mouse_scroll_lines)

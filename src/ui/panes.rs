@@ -426,45 +426,96 @@ fn render_settled_view(
         return;
     }
     frame.render_widget(Clear, area);
+    let terminal = app
+        .workspaces
+        .get(ws_idx)
+        .and_then(|ws| ws.terminal_id(pane_id).and_then(|id| app.terminals.get(id)));
     let title = app.workspaces.get(ws_idx).map(|ws| {
-        let terminal = ws.terminal_id(pane_id).and_then(|id| app.terminals.get(id));
         let derived = ws
             .tabs
             .iter()
             .position(|tab| tab.panes.contains_key(&pane_id))
             .and_then(|tab_idx| ws.tab_display_projection(&app.terminals, tab_idx))
             .and_then(|projection| crate::workspace::session_title(Some(&projection), None));
-        settled_title(
-            terminal.and_then(|terminal| terminal.manual_label.as_deref()),
-            derived,
-        )
+        settled_title(terminal.and_then(|t| t.manual_label.as_deref()), derived)
     });
-    let title = title.as_deref().unwrap_or("Settled session");
+    let agent = view
+        .transcript
+        .as_ref()
+        .and_then(|transcript| {
+            transcript
+                .turns
+                .iter()
+                .find(|(speaker, _)| speaker != "you")
+        })
+        .map(|(speaker, _)| speaker.as_str())
+        .unwrap_or_else(|| {
+            if view.command.to_ascii_lowercase().contains("codex") {
+                "codex"
+            } else {
+                "claude"
+            }
+        });
+    let name = if agent == "codex" {
+        "Codex"
+    } else {
+        "Claude Code"
+    };
+    let secondary = settled_secondary(&app.palette);
     let header = Line::from(vec![
         Span::styled(
-            title.to_string(),
+            name,
             Style::default()
-                .fg(Color::White)
+                .fg(app.palette.text)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(" · settled ", Style::default().fg(Color::Gray)),
-        Span::styled("read-only", Style::default().fg(Color::Yellow)),
+        Span::styled(" · settled transcript  ", Style::default().fg(secondary)),
+        Span::styled(
+            "read-only",
+            Style::default()
+                .fg(Color::Rgb(17, 17, 27))
+                .bg(app.palette.yellow),
+        ),
     ]);
     frame.render_widget(
-        Paragraph::new(header).style(Style::default().bg(Color::Rgb(32, 36, 45))),
+        Paragraph::new(header),
         Rect::new(area.x, area.y, area.width, 1),
     );
-    let content_height = area.height.saturating_sub(2);
+    if area.height > 1 {
+        let cwd = terminal
+            .map(|t| t.cwd.display().to_string())
+            .unwrap_or_default();
+        let model = terminal
+            .and_then(|t| t.agent_model.as_deref())
+            .map(|m| format!("{m} · "))
+            .unwrap_or_default();
+        let label = title
+            .filter(|title| title != name && title != "Settled session")
+            .map(|title| format!(" · {title}"))
+            .unwrap_or_default();
+        frame.render_widget(
+            Paragraph::new(format!("{model}{cwd}{label}")).style(Style::default().fg(secondary)),
+            Rect::new(area.x, area.y + 1, area.width, 1),
+        );
+    }
+    if area.height > 2 {
+        let source = view
+            .transcript
+            .as_ref()
+            .map(|t| t.source.as_str())
+            .unwrap_or("unavailable");
+        frame.render_widget(
+            Paragraph::new(format!(
+                "restored from {source} · nothing runs · ↑/↓ PgUp/PgDn scroll · / search"
+            ))
+            .style(Style::default().fg(secondary)),
+            Rect::new(area.x, area.y + 2, area.width, 1),
+        );
+    }
+    let content_height = area.height.saturating_sub(4);
     if content_height > 0 {
         let mut lines = Vec::new();
         if let Some(transcript) = &view.transcript {
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "── restored from {} · ↑/↓ PgUp/PgDn scroll · / search · nothing runs ──",
-                    transcript.source
-                ),
-                Style::default().fg(Color::DarkGray),
-            )));
             lines.extend(transcript_lines(
                 &transcript.turns,
                 &view.search,
@@ -474,16 +525,23 @@ fn render_settled_view(
         } else {
             lines.push(Line::from(Span::styled(
                 "Transcript unavailable · Enter resumes the session",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(secondary),
             )));
         }
         if view.searching {
             lines.push(Line::from(format!("/{}", view.search)));
         }
-        let scroll = view.scroll.min(u16::MAX as usize) as u16;
+        let max_scroll = lines.len().saturating_sub(content_height as usize);
+        let first_row = max_scroll.saturating_sub(view.scroll.min(max_scroll));
         frame.render_widget(
-            Paragraph::new(lines).scroll((scroll, 0)),
-            Rect::new(area.x, area.y + 1, area.width, content_height),
+            Paragraph::new(
+                lines
+                    .into_iter()
+                    .skip(first_row)
+                    .take(content_height as usize)
+                    .collect::<Vec<_>>(),
+            ),
+            Rect::new(area.x, area.y + 3, area.width, content_height),
         );
     }
     if area.height > 1 {
@@ -495,15 +553,65 @@ fn render_settled_view(
         let command = Line::from(vec![
             Span::styled(
                 format!("$ {}", view.command),
-                Style::default().fg(Color::LightGreen),
+                Style::default().fg(app.palette.text),
             ),
-            Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+            Span::styled(suffix, Style::default().fg(secondary)),
         ]);
         frame.render_widget(
-            Paragraph::new(command).style(Style::default().bg(Color::Rgb(25, 28, 35))),
+            Paragraph::new(command),
             Rect::new(area.x, area.y + area.height - 1, area.width, 1),
         );
     }
+}
+
+fn settled_secondary(palette: &Palette) -> Color {
+    // Terminal colours are theme-defined; use the primary text colour there.
+    if palette.text == Color::Reset {
+        Color::Reset
+    } else if settled_contrast(palette.subtext0, palette.panel_bg).is_some_and(|ratio| ratio >= 4.5)
+    {
+        palette.subtext0
+    } else {
+        palette.text
+    }
+}
+
+fn settled_contrast(a: Color, b: Color) -> Option<f64> {
+    fn luminance(color: Color) -> Option<f64> {
+        let Color::Rgb(r, g, b) = color else {
+            return None;
+        };
+        let channel = |value: u8| {
+            let s = f64::from(value) / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        Some(0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b))
+    }
+    let (a, b) = (luminance(a)?, luminance(b)?);
+    Some((a.max(b) + 0.05) / (a.min(b) + 0.05))
+}
+
+pub(crate) fn settled_max_scroll(
+    view: &crate::app::settled_view::SettledViewState,
+    width: u16,
+    height: u16,
+    palette: &Palette,
+) -> usize {
+    let visible = height.saturating_sub(4) as usize;
+    if visible == 0 {
+        return 0;
+    }
+    let rows = view
+        .transcript
+        .as_ref()
+        .map(|transcript| transcript_lines(&transcript.turns, &view.search, width, palette).len())
+        .unwrap_or(1)
+        + usize::from(view.searching);
+    rows.saturating_sub(visible)
 }
 
 fn transcript_lines(
@@ -514,6 +622,16 @@ fn transcript_lines(
 ) -> Vec<Line<'static>> {
     let needle = search.to_lowercase();
     let mut lines = Vec::new();
+    let prompt_colour = settled_secondary(palette);
+    let band = if palette.text == Color::Reset {
+        Color::Reset
+    } else if settled_contrast(palette.text, palette.surface1).is_some_and(|ratio| ratio >= 4.5) {
+        palette.surface1
+    } else if settled_contrast(palette.text, palette.surface0).is_some_and(|ratio| ratio >= 4.5) {
+        palette.surface0
+    } else {
+        palette.panel_bg
+    };
     for (speaker, body) in turns {
         if !needle.is_empty()
             && !body.to_lowercase().contains(&needle)
@@ -527,12 +645,19 @@ fn transcript_lines(
         if speaker != "you" {
             // Agent turns render their markdown the way the live agent does:
             // emphasis without its asterisks, and lists without blank rows.
-            let mut rendered = crate::ui::markdown::body_lines(
+            let mut rendered = crate::ui::markdown::transcript_body_lines(
                 palette,
                 Some(&compact_list_gaps(body)),
                 width.saturating_sub(2) as usize,
                 "  ",
             );
+            for line in &mut rendered {
+                for span in &mut line.spans {
+                    if span.style.fg == Some(palette.mauve) {
+                        span.style.fg = Some(palette.peach);
+                    }
+                }
+            }
             if let Some(span) = rendered.first_mut().and_then(|line| line.spans.first_mut()) {
                 if let Some(rest) = span.content.strip_prefix("  ") {
                     span.content = format!("● {rest}").into();
@@ -544,14 +669,20 @@ fn transcript_lines(
         let mut first = true;
         for physical in body.split('\n') {
             for_each_wrapped_line(physical, width.saturating_sub(2) as usize, |fragment| {
-                let prefix = if first { "› " } else { "  " };
+                let prefix = if first { "❯ " } else { "  " };
                 first = false;
                 let mut row = format!("{prefix}{fragment}");
                 let padding = width.saturating_sub(2 + fragment.width() as u16) as usize;
                 row.extend(std::iter::repeat_n(' ', padding));
-                lines.push(
-                    Line::from(row).style(Style::default().fg(palette.text).bg(palette.surface0)),
-                );
+                let mut line = Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(prompt_colour)),
+                    Span::styled(
+                        row[prefix.len()..].to_string(),
+                        Style::default().fg(palette.text),
+                    ),
+                ]);
+                line.style = Style::default().bg(band);
+                lines.push(line);
             });
         }
     }
@@ -1299,7 +1430,7 @@ mod tests {
         assert_eq!(
             rows.iter().map(|row| row.trim_end()).collect::<Vec<_>>(),
             [
-                "› Explain the billing API migration.",
+                "❯ Explain the billing API migration.",
                 "",
                 "● A billing API migration needs versioned requests and a",
                 "  clear transition plan.",
@@ -1307,8 +1438,9 @@ mod tests {
             ]
         );
         assert_eq!(UnicodeWidthStr::width(rows[0].as_str()), 60);
-        assert_eq!(lines[0].style.bg, Some(palette.surface0));
-        assert_eq!(lines[0].style.fg, Some(palette.text));
+        assert_eq!(lines[0].style.bg, Some(palette.surface1));
+        assert_eq!(lines[0].spans[0].style.fg, Some(palette.subtext0));
+        assert_eq!(lines[0].spans[1].style.fg, Some(palette.text));
         assert!(lines[2].style.bg.is_none());
     }
 
@@ -1355,6 +1487,22 @@ mod tests {
     }
 
     #[test]
+    fn settled_lists_keep_literal_markers_and_hanging_indent() {
+        let palette = Palette::catppuccin();
+        let turns = vec![(
+            "claude".into(),
+            "- A list item with enough words to wrap\n1. One more item".into(),
+        )];
+        let rows: Vec<_> = transcript_lines(&turns, "", 18, &palette)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(rows[0].starts_with("● - A list"));
+        assert!(rows[1].starts_with("    "));
+        assert!(rows.iter().any(|row| row.starts_with("  1. One")));
+    }
+
+    #[test]
     fn compact_list_gaps_keeps_gaps_around_prose() {
         assert_eq!(compact_list_gaps("- a\n\n- b"), "- a\n- b");
         assert_eq!(compact_list_gaps("para\n\n- a"), "para\n\n- a");
@@ -1370,10 +1518,138 @@ mod tests {
         let turns = vec![("you".into(), "你好世界好".into())];
         let lines = transcript_lines(&turns, "", 8, &palette);
         let rows: Vec<_> = lines.iter().map(ToString::to_string).collect();
-        assert_eq!(rows, ["› 你好世", "  界好  "]);
+        assert_eq!(rows, ["❯ 你好世", "  界好  "]);
         assert!(rows
             .iter()
             .all(|row| UnicodeWidthStr::width(row.as_str()) == 8));
+    }
+
+    #[test]
+    fn settled_transcript_colours_meet_text_contrast() {
+        fn luminance(color: Color) -> f64 {
+            let Color::Rgb(r, g, b) = color else {
+                panic!("RGB palette required");
+            };
+            let channel = |value: u8| {
+                let s = f64::from(value) / 255.0;
+                if s <= 0.04045 {
+                    s / 12.92
+                } else {
+                    ((s + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+        }
+        fn ratio(a: Color, b: Color) -> f64 {
+            let (light, dark) = (luminance(a), luminance(b));
+            (light.max(dark) + 0.05) / (light.min(dark) + 0.05)
+        }
+        for palette in [Palette::catppuccin(), Palette::catppuccin_latte()] {
+            let turns = vec![("you".into(), "text".into())];
+            let lines = transcript_lines(&turns, "", 20, &palette);
+            assert!(ratio(settled_secondary(&palette), palette.panel_bg) >= 4.5);
+            assert!(ratio(palette.text, lines[0].style.bg.expect("band")) >= 4.5);
+            assert!(ratio(Color::Rgb(17, 17, 27), palette.yellow) >= 4.5);
+        }
+        // A terminal theme owns both default foreground and background; keep
+        // those paired rather than guessing whether its background is light.
+        let terminal = Palette::terminal();
+        assert_eq!(settled_secondary(&terminal), Color::Reset);
+        assert_eq!(
+            transcript_lines(&[("you".into(), "text".into())], "", 20, &terminal)[0]
+                .style
+                .bg,
+            Some(Color::Reset)
+        );
+    }
+
+    #[test]
+    fn settled_scroll_range_uses_wrapped_and_filtered_rows() {
+        let view = crate::app::settled_view::SettledViewState {
+            pane_id: crate::layout::PaneId::alloc(),
+            transcript: Some(crate::app::settled_view::SettledTranscript {
+                source: "test".into(),
+                turns: vec![
+                    ("you".into(), "one two three four five".into()),
+                    ("claude".into(), "needle".into()),
+                ],
+            }),
+            command: String::new(),
+            scroll: 0,
+            search: String::new(),
+            searching: false,
+            editing: false,
+        };
+        let palette = Palette::catppuccin();
+        assert_eq!(settled_max_scroll(&view, 10, 6, &palette), 4);
+        assert_eq!(settled_max_scroll(&view, 40, 20, &palette), 0);
+        let filtered = crate::app::settled_view::SettledViewState {
+            search: "needle".into(),
+            ..view
+        };
+        assert_eq!(settled_max_scroll(&filtered, 10, 6, &palette), 0);
+    }
+
+    #[test]
+    fn settled_header_names_agent_and_keeps_resume_command() {
+        let app = AppState::test_new();
+        let view = crate::app::settled_view::SettledViewState {
+            pane_id: crate::layout::PaneId::alloc(),
+            transcript: Some(crate::app::settled_view::SettledTranscript {
+                source: "session.jsonl".into(),
+                turns: vec![("codex".into(), "done".into())],
+            }),
+            command: "codex resume session".into(),
+            scroll: 0,
+            search: String::new(),
+            searching: false,
+            editing: false,
+        };
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 8))
+            .expect("test backend");
+        terminal
+            .draw(|frame| {
+                render_settled_view(&app, frame, Rect::new(0, 0, 80, 8), 0, view.pane_id, &view)
+            })
+            .expect("render settled view");
+        let buffer = terminal.backend().buffer();
+        let row = |y| {
+            (0..80)
+                .map(|x| buffer.cell((x, y)).expect("cell").symbol().to_string())
+                .collect::<String>()
+        };
+        assert!(row(0).contains("Codex · settled transcript  read-only"));
+        assert!(row(2).contains("restored from session.jsonl · nothing runs"));
+        assert!(row(7).contains("$ codex resume session"));
+    }
+
+    #[test]
+    fn settled_view_opens_on_latest_turn() {
+        let app = AppState::test_new();
+        let view = crate::app::settled_view::SettledViewState {
+            pane_id: crate::layout::PaneId::alloc(),
+            transcript: Some(crate::app::settled_view::SettledTranscript {
+                source: "test".into(),
+                turns: vec![("you".into(), "one\ntwo\nthree\nfour\nfive\nlatest".into())],
+            }),
+            command: String::new(),
+            scroll: 0,
+            search: String::new(),
+            searching: false,
+            editing: false,
+        };
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(20, 8))
+            .expect("test backend");
+        terminal
+            .draw(|frame| {
+                render_settled_view(&app, frame, Rect::new(0, 0, 20, 8), 0, view.pane_id, &view)
+            })
+            .expect("render settled view");
+        let buffer = terminal.backend().buffer();
+        let last_content_row = (0..20)
+            .map(|x| buffer.cell((x, 6)).expect("cell").symbol().to_string())
+            .collect::<String>();
+        assert!(last_content_row.contains("latest"));
     }
 
     #[test]

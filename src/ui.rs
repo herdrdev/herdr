@@ -33,6 +33,7 @@ pub(crate) mod notepad_agent;
 pub(crate) mod notepad_usage;
 mod onboarding;
 mod panes;
+pub(crate) use panes::settled_max_scroll;
 pub(crate) mod pomodoro;
 pub(crate) mod pr_actions;
 mod release_notes;
