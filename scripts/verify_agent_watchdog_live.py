@@ -319,7 +319,8 @@ class Harness:
                                      "result": payload}, sort_keys=True) + "\n")
         return payload
 
-    def age_memory(self, path: Path, key: str, seconds: int, *, session: str | None = None) -> None:
+    def age_memory(self, path: Path, key: str, seconds: int, *, session: str | None = None,
+                   last_nudge_age: int | None = None) -> None:
         try:
             memory = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -333,6 +334,8 @@ class Harness:
             entry["since"] = aged
         if "draft_since" in entry:
             entry["draft_since"] = aged
+        if last_nudge_age is not None and "last_nudge_at" in entry:
+            entry["last_nudge_at"] = int(time.time()) - last_nudge_age
         if session is not None:
             entry["agent_session"] = session
         path.write_text(json.dumps(memory) + "\n", encoding="utf-8")
@@ -476,6 +479,12 @@ def _last_json(text: str) -> Any:
         except json.JSONDecodeError:
             continue
     return None
+
+
+def decision_has_nudge(payload: dict[str, Any], pane_id: str) -> bool:
+    decision = next((item for item in payload.get("decisions", [])
+                     if item.get("pane_id") == pane_id), {})
+    return decision.get("action") == "nudge"
 
 
 def _find_value(value: Any, key: str) -> Any:
@@ -637,6 +646,26 @@ def setup_done_here(h: Harness, ident: str) -> str:
     return h.workspace(ident, _script(screen), ("Needs you: nothing.", "Done here."))
 
 
+def setup_done_here_suffix(h: Harness, ident: str) -> str:
+    screen = ("It will make a round 2 prototype, open it on your Mac, and update the checklist and the data format before asking for your go-ahead.\n"
+              "Needs you: nothing.\n"
+              "Now: Done here — round 2 arrives in the Translation Text Editing tab.\n"
+              "────────────────────────\n❯ \n────────────────────────\n"
+              "░░░░░░ 87% 127k ⚓28.8k │ ~/Repos/scalablev2 │ Opus·med @scalable.so │ 29m ago")
+    return h.workspace(ident, _script(screen), ("Needs you: nothing.", "Done here —"))
+
+
+def setup_undelivered_promise(h: Harness, ident: str) -> str:
+    screen = ("Now: I will update the checklist after the next render is ready\n"
+              "⎿ The next deliverable is the refreshed checklist and data format.\n"
+              "────────────────────────\n❯ cont\n────────────────────────\n"
+              "░░░░░░ 92% 78k tokens │ 2h 24m ago │ -- INSERT -- · 0 shells")
+    code = f"import time; print({json.dumps(screen)}, flush=True); time.sleep(3600)"
+    command = "clear; exec python3 -u -c " + shlex.quote(code)
+    return h.workspace(ident, command,
+                       ("Now: I will update the checklist after the next render is ready",))
+
+
 def setup_retry(h: Harness, ident: str) -> str:
     return h.workspace(ident, _script("API 429; retry in 120 seconds"),
                        ("API 429; retry in 120 seconds",))
@@ -778,6 +807,8 @@ CASES: list[tuple[str, str, Callable[[Harness, str], Any], str]] = [
     ("promised_background_agent_past_deadline_not_nudged", "A", setup_promised_background, "stalled"),
     ("fresh_draft_typing", "A", setup_promised_draft, "working"),
     ("done_here_negative_control", "A", setup_done_here, "finished_idle"),
+    ("done_here_with_suffix_not_nudged", "A", setup_done_here_suffix, "finished_idle"),
+    ("undelivered_nudge_backs_off", "A", setup_undelivered_promise, "stalled"),
     ("a-retry-backoff", "A", setup_retry, "waiting_retry"),
     ("a-retry-renewed", "A", setup_retry, "stalled"),
     ("a-account-limit", "A", setup_account, "waiting_human"),
@@ -921,6 +952,8 @@ def main() -> int:
                 status_source = "watchdog-harness"
                 status = "idle" if (ident == "a-finished-idle"
                                      or ident == "stale_draft_promised_work_stalled"
+                                     or ident == "done_here_with_suffix_not_nudged"
+                                     or ident == "undelivered_nudge_backs_off"
                                      or (ident.startswith("promised_")
                                          and not ident.startswith("promised_stale_working_")
                                          and not ident.startswith("promised_background_"))) else (
@@ -931,9 +964,10 @@ def main() -> int:
                     report.update(wait="retry", eta_s=120,
                                   reported_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
                 harness.call("pane.report_agent", report)
-                harness.call("pane.report_agent_session", {"pane_id": pane_id,
-                    "source": session_source, "agent": "codex",
-                    "agent_session_id": session_id})
+                if ident != "undelivered_nudge_backs_off":
+                    harness.call("pane.report_agent_session", {"pane_id": pane_id,
+                        "source": session_source, "agent": "codex",
+                        "agent_session_id": session_id})
                 state = harness.root / f"pane-{ident}.json"
                 log = harness.root / f"pane-{ident}.jsonl"
                 cmd_options = ["--dry-run", "--stall-secs", "600", "--confirm-secs",
@@ -945,6 +979,11 @@ def main() -> int:
                 if ident.startswith("promised_"):
                     cmd_options.remove("--dry-run")
                     cmd_options += ["--quiet-secs", "2"]
+                elif ident == "undelivered_nudge_backs_off":
+                    cmd_options.remove("--dry-run")
+                    # Keep other fixtures on this shared harness server quiet
+                    # while memory aging advances this pane's repeat clock.
+                    cmd_options += ["--quiet-secs", "1800"]
                 if args.gemini_bin:
                     cmd_options += ["--gemini-bin", args.gemini_bin]
                 else:
@@ -959,6 +998,8 @@ def main() -> int:
                 if ident.startswith("promised_"):
                     # These cases exercise promised-work policy. Keep the
                     # composer draft, but age it past the human-typing guard.
+                    age = 1800
+                if ident == "undelivered_nudge_backs_off":
                     age = 1800
                 if ident == "a-retry-renewed":
                     age = 1200
@@ -976,7 +1017,35 @@ def main() -> int:
                                                dry=ident not in ("stale_draft_promised_work_stalled",
                                                                  "promised_quiet_nudged",
                                                                  "promised_stale_working_nudged",
-                                                                 "promised_stale_working_dead_marker_nudged"))
+                                                                 "promised_stale_working_dead_marker_nudged",
+                                                                 "undelivered_nudge_backs_off"))
+                if ident == "undelivered_nudge_backs_off":
+                    # Advance the repeat clock in saved memory between scans;
+                    # no wall-clock sleeps are needed to cover 20 scan steps.
+                    virtual_attempts = [0] if decision_has_nudge(payload, pane_id) else []
+                    last_attempt_step = virtual_attempts[-1] if virtual_attempts else 0
+                    for step in range(60, 1201, 60):
+                        harness.age_memory(state, pane_id, 1800,
+                                           last_nudge_age=step - last_attempt_step)
+                        payload = harness.run_watchdog("A", cmd_options, dry=False)
+                        if decision_has_nudge(payload, pane_id):
+                            virtual_attempts.append(step)
+                            last_attempt_step = step
+                    action_rows = [json.loads(line) for line in log.read_text().splitlines()
+                                   if line.strip()]
+                    nudges = [row for row in action_rows if row.get("action") == "nudge"]
+                    decision = next((d for d in payload.get("decisions", [])
+                                     if d.get("pane_id") == pane_id), {})
+                    actual = decision.get("class", "missing")
+                    evidence = (f"attempts={len(nudges)} reasons="
+                                f"{[row.get('reason') for row in nudges]}; "
+                                f"virtual_attempt_scan_secs={virtual_attempts}")
+                    case_match = (len(nudges) <= 3 and len(nudges) == 3
+                                  and all(row.get("delivered") is False for row in nudges)
+                                  and all(row.get("reason") == "no_agent_session" for row in nudges)
+                                  and all(b - a >= 300 for a, b in zip(virtual_attempts,
+                                                                        virtual_attempts[1:]))
+                                  and actual == "stalled")
                 decisions = payload.get("decisions", [])
                 decision = next((d for d in decisions if d.get("pane_id") == pane_id), {})
                 actual = decision.get("class", "missing")
@@ -1028,6 +1097,33 @@ def main() -> int:
                     evidence = f"{evidence}; decision={decision}; pane={pane_text!r}"
             elif ident in ("fresh_draft_typing", "done_here_negative_control"):
                 case_match = (actual == expected and decision.get("action") is None)
+            elif ident == "done_here_with_suffix_not_nudged":
+                case_match = (actual == expected and decision.get("action") is None
+                              and not log.exists())
+            elif ident == "undelivered_nudge_backs_off":
+                action_rows = [json.loads(line) for line in log.read_text().splitlines()
+                               if line.strip()]
+                nudges = [row for row in action_rows
+                          if row.get("action") == "nudge" and row.get("pane_id") == pane_id]
+                blocked_events = [row for row in action_rows
+                                  if row.get("pane_id") == pane_id
+                                  and row.get("new_state") == "blocked"
+                                  and str(row.get("evidence", "")).startswith(
+                                      "did not resume after 3 nudge attempts")]
+                case_match = (actual == expected and len(nudges) == 3
+                              and all(row.get("delivered") is False for row in nudges)
+                              and all(row.get("reason") == "no_agent_ref" for row in nudges)
+                              and len(blocked_events) == 1
+                              and len(virtual_attempts) == 3
+                              and all(b - a >= 300 for a, b in zip(virtual_attempts,
+                                                                    virtual_attempts[1:])))
+                evidence = (f"attempts={len(nudges)} reasons="
+                            f"{[row.get('reason') for row in nudges]}; "
+                            f"virtual_attempt_scan_secs={virtual_attempts}; "
+                            f"blocked_log_rows={blocked_events}; "
+                            f"attempt_log={nudges}; "
+                            f"memory={json.loads(state.read_text()).get(pane_id)}; "
+                            f"decision={decision}")
             elif ident in ("promised_quiet_nudged", "promised_stale_working_nudged",
                            "promised_stale_working_dead_marker_nudged"):
                 case_match = (actual == expected and decision.get("action") == "nudge"

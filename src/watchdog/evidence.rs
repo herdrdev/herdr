@@ -71,7 +71,7 @@ static CLOSING_MARKER: LazyLock<Regex> = LazyLock::new(|| {
 // override promised-work classification. CI/build waits remain work in progress.
 static NOW_HUMAN_WAIT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(?:waiting on you\b|waiting at .{1,120}\bgate\b|waiting for (?:your|human|matthias's) (?:review|approval|sign[ -]?off|reply|decision)\b|awaiting (?:your |human )?(?:approval|review)\b)",
+        r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(?:waiting on you\b|waiting on qa and github access\b|waiting for the pending (?:approve or hold )?decision\b|waiting at .{1,120}\bgate\b|waiting for (?:your|human|matthias's) (?:review|approval|sign[ -]?off|reply|decision)\b|awaiting (?:your |human )?(?:approval|review)\b)",
     )
     .expect("static regex")
 });
@@ -83,8 +83,23 @@ static COMPOSER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*[❯›>]\s*(.*)$").expect("static regex"));
 static USER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*❯\s+\S").expect("static regex"));
-static DONE_HERE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^done here\.?$").expect("static regex"));
+static DONE_HERE: LazyLock<Regex> = LazyLock::new(|| {
+    // Terminal Now: values may carry a human-readable suffix. Require
+    // whitespace before dash separators so names like `done-here-check`
+    // remain ordinary promised work.
+    Regex::new(
+        r"(?i)^\s*\*{0,2}(?:done here|done)\*{0,2}(?:\s*$|\.\s*\*{0,2}\s*$|\s+[—–-]\s*.*|[:;,].*)",
+    )
+    .expect("static regex")
+});
+static NOW_TERMINAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)^\s*\*{0,2}waiting on you\*{0,2}(?:\s*$|\.\s*\*{0,2}\s*$|\s+[—–-]\s*.*|[:;,].*)",
+    )
+    .expect("static regex")
+});
+static NOW_LINE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(.*)$").expect("static regex"));
 
 fn divider(line: &str) -> bool {
     let s = line.trim();
@@ -127,13 +142,11 @@ pub(crate) fn promised_work(text: &str) -> Option<String> {
     let mut now = None;
     for line in reply.lines() {
         let trimmed = line.trim();
-        if let Some(value) = trimmed
-            .strip_prefix("Now:")
-            .or_else(|| trimmed.strip_prefix("**Now:**"))
-        {
-            let value = value.trim().trim_matches('*').trim();
+        if let Some(captures) = NOW_LINE.captures(trimmed) {
+            let value = captures[1].trim().trim_matches('*').trim();
             if value.is_empty()
-                || value.eq_ignore_ascii_case("waiting on you")
+                || DONE_HERE.is_match(value)
+                || NOW_TERMINAL.is_match(value)
                 || is_done_now_status(value)
                 || value.to_ascii_lowercase().starts_with("needs you")
             {
@@ -176,12 +189,11 @@ pub(crate) fn expected_to_continue(text: &str) -> bool {
         .rev()
         .find_map(|line| {
             let trimmed = line.trim();
-            let now = trimmed
-                .strip_prefix("Now:")
-                .or_else(|| trimmed.strip_prefix("**Now:**"))?;
-            let work = now.trim().trim_matches('*').trim();
+            let captures = NOW_LINE.captures(trimmed)?;
+            let work = captures[1].trim().trim_matches('*').trim();
             Some(
                 !work.is_empty()
+                    && !DONE_HERE.is_match(work)
                     && !is_done_now_status(work)
                     && !work.to_ascii_lowercase().starts_with("waiting on you")
                     && !work.to_ascii_lowercase().starts_with("stopped —")
@@ -306,8 +318,12 @@ pub(crate) fn finished_reply(text: &str) -> bool {
     }
     let reply = reply_text(text);
     let last = reply.lines().rev().find(|line| !line.trim().is_empty());
-    last.is_some_and(|line| DONE_HERE.is_match(line.trim()))
-        && !reply.lines().rev().skip(1).take(2).any(spinner_line)
+    last.is_some_and(|line| {
+        DONE_HERE.is_match(line.trim())
+            || NOW_LINE
+                .captures(line.trim())
+                .is_some_and(|captures| DONE_HERE.is_match(captures[1].trim().trim_matches('*')))
+    }) && !reply.lines().rev().skip(1).take(2).any(spinner_line)
 }
 
 fn spinner_line(line: &str) -> bool {
@@ -744,9 +760,40 @@ mod tests {
         assert!(waiting(
             "**Needs you (2)**\n1. Approve release\n2. Decide on rollout"
         ));
+        assert!(waiting(
+            "Now: waiting for the pending approve or hold decision."
+        ));
+        assert!(waiting("Now: Waiting on QA and GitHub access."));
         assert!(waiting("**Review notes**\nReply 1a / 1b. Silence holds."));
         assert!(!waiting("**Needs you: nothing.**"));
         assert!(!closing_block_waiting("Now: waiting on you"));
+    }
+
+    #[test]
+    fn done_and_waiting_now_values_are_terminal_with_narrow_suffixes() {
+        for line in [
+            "Now: Done here — round 2 arrives in the Translation Text Editing tab.",
+            "**Now:** Done here.",
+            "Now: Done here: PR merged",
+            "Now: waiting on you — review the result",
+        ] {
+            assert_eq!(promised_work(line), None, "{line}");
+            assert!(!expected_to_continue(line), "{line}");
+            if line.to_ascii_lowercase().contains("done") {
+                assert!(
+                    finished_reply(&claude_screen(line, "", "0 shells")),
+                    "{line}"
+                );
+            }
+        }
+
+        for line in [
+            "Now: Codex — finishing X",
+            "Now: done-here-check worker — running",
+        ] {
+            assert!(promised_work(line).is_some(), "{line}");
+            assert!(expected_to_continue(line), "{line}");
+        }
     }
 
     #[test]

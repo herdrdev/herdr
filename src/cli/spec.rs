@@ -250,6 +250,12 @@ fn day_command() -> Command {
 pub(super) fn watchdog_command() -> Command {
     Command::new("watchdog")
         .about("Verify coding-agent status and inspect worker progress")
+        .arg(
+            clap::Arg::new("replay")
+                .long("replay")
+                .value_name("JSONL")
+                .hide(true),
+        )
         .arg(flag("once").help("Scan once, then exit"))
         .arg(flag("dry-run").help("Print decisions without writing status corrections"))
         .arg(

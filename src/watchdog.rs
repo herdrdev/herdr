@@ -19,6 +19,7 @@ pub(crate) mod workers;
 
 pub(crate) const WATCHDOG_SOURCE: &str = "watchdog";
 pub(crate) const STALE_DRAFT_SECS: u64 = 300;
+pub(crate) const MAX_NUDGE_ATTEMPTS_PER_EPISODE: u8 = 3;
 #[cfg(test)]
 const PROMPT_WINDOW_LINES: usize = 12;
 #[cfg(test)]
@@ -779,6 +780,8 @@ pub(crate) struct PaneV3Memory {
     #[serde(default)]
     pub last_nudge_at: Option<u64>,
     #[serde(default)]
+    pub nudge_attempts_at: Vec<u64>,
+    #[serde(default)]
     pub last_reported_at: Option<String>,
     #[serde(default)]
     pub nudge_rebaseline: bool,
@@ -987,7 +990,13 @@ pub(crate) fn classify_pane_v3(
                 let quiet_age = now.saturating_sub(m.quiet_since.unwrap_or(now));
                 let quiet_stale = age >= opt.stall_secs && quiet_age >= opt.quiet_secs;
                 let promise_already_satisfied = evidence::finished_reply(&o.tail);
-                if promise_already_satisfied {
+                if o.status == AgentStatus::Blocked
+                    && m.nudge_count >= MAX_NUDGE_ATTEMPTS_PER_EPISODE
+                    && !promise_already_satisfied
+                {
+                    class = PaneClass::Stalled;
+                    ev = "did not resume after 3 nudge attempts".into();
+                } else if promise_already_satisfied {
                     class = PaneClass::FinishedIdle;
                     ev = "reply finished; promised work already satisfied".into();
                 } else if !active_tool
@@ -1886,6 +1895,21 @@ mod tests {
                 classify_pane_v3(&observation, &mut PaneV3Memory::default(), 1000, v3opt());
             assert_eq!(decision.class, PaneClass::Working, "{line}: {decision:?}");
         }
+    }
+
+    #[test]
+    fn blocked_status_after_three_nudge_attempts_stays_stalled() {
+        let tail = claude_pane("Now: Codex reviewers — finishing review", "", "0 shells");
+        let observation = pane_v3(AgentStatus::Blocked, &tail);
+        let mut memory = PaneV3Memory {
+            nudge_count: MAX_NUDGE_ATTEMPTS_PER_EPISODE,
+            ..PaneV3Memory::default()
+        };
+        let decision = classify_pane_v3(&observation, &mut memory, 1000, v3opt());
+        assert_eq!(decision.class, PaneClass::Stalled);
+        assert!(decision
+            .evidence
+            .contains("did not resume after 3 nudge attempts"));
     }
 
     #[test]
