@@ -335,6 +335,21 @@ fn wait_for_api(socket_path: &Path, timeout: Duration) {
     );
 }
 
+fn wait_for_api_shutdown(socket_path: &Path, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match try_request(
+            socket_path,
+            serde_json::json!({"id":"test:shutdown-ping","method":"ping","params":{}}),
+        ) {
+            Err(err) if err.retryable => return,
+            Err(err) => panic!("api shutdown check failed: {}", err.message),
+            Ok(_) => thread::sleep(Duration::from_millis(25)),
+        }
+    }
+    panic!("api did not shut down at {}", socket_path.display());
+}
+
 fn write_plugin_manifest(root: &Path, plugin_id: &str) {
     fs::create_dir_all(root).unwrap();
     fs::write(
@@ -1414,6 +1429,7 @@ fn live_handoff_preserves_latched_gate_and_done_label() {
         "blocked",
         Duration::from_secs(5),
     );
+    assert_eq!(before["result"]["pane"]["agent_status"], "blocked");
     assert_eq!(
         before["result"]["pane"]["gates"].as_array().unwrap().len(),
         1
@@ -1486,6 +1502,42 @@ fn live_handoff_preserves_latched_gate_and_done_label() {
         after["result"]["pane"]["gates"].as_array().unwrap().len(),
         1
     );
+    assert_eq!(after["result"]["pane"]["agent_status"], "blocked");
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:agent:empty-after-handoff",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": source,
+                "agent": "codex",
+                "state": "idle",
+                "seq": 2,
+                "v": 2,
+                "completion": "incomplete",
+                "parse_status": "ok",
+                "workers_unknown": false,
+                "gates": [],
+                "items": [],
+                "decisions": []
+            }
+        }),
+    ));
+    let after_empty_report = wait_for_pane_agent_status(
+        &api_socket,
+        "test:pane:after-empty-report",
+        &pane_id,
+        "blocked",
+        Duration::from_secs(5),
+    );
+    assert_eq!(
+        after_empty_report["result"]["pane"]["gates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     assert_ok(request(
         &api_socket,
         serde_json::json!({
@@ -1520,6 +1572,124 @@ fn live_handoff_preserves_latched_gate_and_done_label() {
         &api_socket,
         serde_json::json!({"id":"test:stop","method":"server.stop","params":{}}),
     );
+    cleanup_test_base(&base);
+}
+
+#[test]
+fn cold_restart_preserves_blocked_closing_gate_without_agent_session_id() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+
+    fs::create_dir_all(&base).unwrap();
+    let first = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    register_runtime_dir(&runtime_dir);
+
+    let created = request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:cold:workspace",
+            "method": "workspace.create",
+            "params": {"cwd": "/tmp", "focus": true}
+        }),
+    );
+    let pane_id = created["result"]["root_pane"]["pane_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:cold:blocked",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:codex-closing-block",
+                "agent": "codex",
+                "state": "blocked",
+                "seq": 1,
+                "v": 2,
+                "completion": "incomplete",
+                "parse_status": "ok",
+                "workers_unknown": false,
+                "gates": [{"n": 1, "label": "Gate", "text": "Choose the release path"}],
+                "items": [],
+                "decisions": []
+            }
+        }),
+    ));
+    wait_for_pane_agent_status(
+        &api_socket,
+        "test:cold:before",
+        &pane_id,
+        "blocked",
+        Duration::from_secs(5),
+    );
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"test:cold:stop","method":"server.stop","params":{}}),
+    ));
+    wait_for_api_shutdown(&api_socket, Duration::from_secs(5));
+    drop(first);
+
+    let restarted = spawn_server(&config_home, &runtime_dir, &api_socket);
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let after = wait_for_pane_agent_status(
+        &api_socket,
+        "test:cold:after",
+        &pane_id,
+        "blocked",
+        Duration::from_secs(10),
+    );
+    assert_eq!(
+        after["result"]["pane"]["gates"].as_array().unwrap().len(),
+        1
+    );
+
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({
+            "id": "test:cold:empty-report",
+            "method": "pane.report_agent",
+            "params": {
+                "pane_id": pane_id,
+                "source": "herdr:codex-closing-block",
+                "agent": "codex",
+                "state": "idle",
+                "seq": 2,
+                "v": 2,
+                "completion": "incomplete",
+                "parse_status": "ok",
+                "workers_unknown": false,
+                "gates": [],
+                "items": [],
+                "decisions": []
+            }
+        }),
+    ));
+    let after_empty_report = wait_for_pane_agent_status(
+        &api_socket,
+        "test:cold:after-empty-report",
+        &pane_id,
+        "blocked",
+        Duration::from_secs(5),
+    );
+    assert_eq!(
+        after_empty_report["result"]["pane"]["gates"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let _ = request(
+        &api_socket,
+        serde_json::json!({"id":"test:cold:stop-again","method":"server.stop","params":{}}),
+    );
+    drop(restarted);
     cleanup_test_base(&base);
 }
 

@@ -459,9 +459,8 @@ impl std::ops::DerefMut for TerminalState {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct ClosingReportHandoffState {
+pub(crate) struct ClosingReportHandoffState {
     version: u8,
     scope_source: Option<String>,
     scope_session_id: Option<String>,
@@ -498,9 +497,8 @@ struct ClosingReportHandoffState {
     auto_settle_consumed_turn: Option<(String, u64)>,
 }
 
-#[cfg(unix)]
 impl ClosingReportHandoffState {
-    fn capture(report: &ClosingReport, now: Instant) -> Self {
+    pub(crate) fn capture(report: &ClosingReport, now: Instant) -> Self {
         Self {
             version: report.version,
             scope_source: report.scope.source.clone(),
@@ -534,7 +532,7 @@ impl ClosingReportHandoffState {
         }
     }
 
-    fn restore(self, now: Instant) -> ClosingReport {
+    pub(crate) fn restore(self, now: Instant) -> ClosingReport {
         ClosingReport {
             version: self.version,
             scope: ClosingReportScope {
@@ -901,6 +899,24 @@ fn normalize_declared_wait(
 }
 
 impl TerminalState {
+    pub(crate) fn closing_report_persistence_state(
+        &self,
+        now: Instant,
+    ) -> Option<ClosingReportHandoffState> {
+        self.closing_report
+            .as_ref()
+            .filter(|report| *report != &ClosingReport::default())
+            .map(|report| ClosingReportHandoffState::capture(report, now))
+    }
+
+    pub(crate) fn restore_closing_report_persistence_state(
+        &mut self,
+        state: ClosingReportHandoffState,
+        now: Instant,
+    ) {
+        self.closing_report = Some(state.restore(now));
+    }
+
     pub fn new(id: TerminalId, cwd: PathBuf) -> Self {
         Self {
             id,
@@ -11624,6 +11640,67 @@ mod tests {
 
         assert_eq!(terminal.state, AgentState::Blocked);
         assert_eq!(terminal.closing_gates, vec![gate]);
+    }
+
+    #[test]
+    fn persisted_closing_report_keeps_the_human_latch_until_answered() {
+        let now = Instant::now();
+        let gate = test_closing_item(1, "Gate", "Choose the release path");
+        let mut source = test_terminal();
+        source.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        source.set_hook_authority_at(
+            "herdr:claude-closing-block".into(),
+            "claude".into(),
+            AgentState::Blocked,
+            None,
+            None,
+            Some(1),
+            now,
+        );
+        source.apply_closing_block_payload(vec![gate.clone()], Vec::new(), Vec::new());
+
+        let encoded = serde_json::to_vec(
+            &source
+                .closing_report_persistence_state(now)
+                .expect("blocked closing report should be persisted"),
+        )
+        .expect("closing report should serialize");
+        let saved: ClosingReportHandoffState =
+            serde_json::from_slice(&encoded).expect("saved report should deserialize");
+        let mut restored = test_terminal();
+        restored.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        restored.restore_closing_report_persistence_state(saved, now + Duration::from_secs(1));
+        restored.set_hook_authority_at(
+            "herdr:claude-closing-block".into(),
+            "claude".into(),
+            AgentState::Blocked,
+            None,
+            None,
+            Some(2),
+            now + Duration::from_secs(1),
+        );
+        restored.apply_closing_block_payload(Vec::new(), Vec::new(), Vec::new());
+
+        assert_eq!(restored.closing_gates, vec![gate.clone()]);
+        assert_eq!(restored.sidebar_projection(false).0, AgentState::Blocked);
+
+        restored
+            .retire_blocked_full_lifecycle_hook_authority_at(now + Duration::from_secs(2))
+            .expect("human input should answer the restored gate");
+        restored.set_hook_authority_at(
+            "herdr:claude-closing-block".into(),
+            "claude".into(),
+            AgentState::Idle,
+            None,
+            None,
+            Some(3),
+            now + Duration::from_secs(3),
+        );
+        restored.apply_closing_block_payload(Vec::new(), Vec::new(), Vec::new());
+        restored.recompute_effective_state_from_current_at(now + Duration::from_secs(3));
+
+        assert!(restored.closing_gates.is_empty());
+        assert_ne!(restored.sidebar_projection(false).0, AgentState::Blocked);
     }
 
     #[test]
