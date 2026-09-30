@@ -1200,6 +1200,7 @@ impl App {
         [
             deadline,
             crate::ui::pomodoro::animation_deadline_at(&self.state, self.state.screen_rect(), now),
+            self.planning_lock_render_deadline(now),
         ]
         .into_iter()
         .flatten()
@@ -1212,7 +1213,27 @@ impl App {
         needs_render: bool,
         include_client_refresh: bool,
     ) -> Option<Instant> {
-        self.next_loop_deadline_with_resize_poll(now, needs_render, false, include_client_refresh)
+        [
+            self.next_loop_deadline_with_resize_poll(
+                now,
+                needs_render,
+                false,
+                include_client_refresh,
+            ),
+            self.planning_lock_render_deadline(now),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    fn planning_lock_render_deadline(&self, now: Instant) -> Option<Instant> {
+        let unix_now = crate::app::settled::unix_seconds(std::time::SystemTime::now());
+        self.state
+            .planning_lock
+            .snapshot(unix_now)?
+            .unlock_until_unix_s?;
+        Some(now + std::time::Duration::from_secs(1))
     }
 
     fn next_loop_deadline_with_resize_poll(

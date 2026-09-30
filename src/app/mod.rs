@@ -1172,6 +1172,7 @@ impl App {
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
                 sidebar_footer_board_hit_area: Rect::default(),
+                sidebar_footer_planning_lock_hit_area: Rect::default(),
                 workspace_card_areas: Vec::new(),
                 agent_card_areas: Vec::new(),
                 sidebar_hover_targets: Vec::new(),
@@ -1354,6 +1355,13 @@ impl App {
             ),
             goals: crate::goals::GoalsPanelState::from_config(&config.goals_panel),
             pomodoro: crate::pomodoro::PomodoroState::from_config(&config.pomodoro, Instant::now()),
+            planning_lock: if cfg!(test) {
+                crate::planning_lock::PlanningLock::default()
+            } else {
+                let path = crate::config::config_dir().join(crate::planning_lock::CONFIG_FILE_NAME);
+                crate::planning_lock::PlanningLock::load(&path)
+            },
+            planning_lock_dialog: None,
             hyperspace: crate::hyperspace::HyperspaceState::new(
                 config.ui.sidebar_animation,
                 Instant::now(),

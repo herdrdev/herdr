@@ -2158,16 +2158,38 @@ pub(crate) fn sidebar_footer_missive_hit_area(area: Rect) -> Rect {
 }
 
 pub(crate) fn sidebar_footer_refresh_hit_area(area: Rect) -> Rect {
-    sidebar_footer_slot(area, 5)
+    let content_width = area.width.saturating_sub(1);
+    if content_width < 12 || area.height == 0 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x.saturating_add(11),
+        area.bottom().saturating_sub(1),
+        1,
+        1,
+    )
 }
 
-pub(crate) fn sidebar_footer_board_hit_area(area: Rect) -> Rect {
+pub(crate) fn sidebar_footer_planning_lock_hit_area(area: Rect) -> Rect {
     let content_width = area.width.saturating_sub(1);
     if content_width < 14 || area.height == 0 {
         return Rect::default();
     }
     Rect::new(
         area.x.saturating_add(13),
+        area.bottom().saturating_sub(1),
+        1,
+        1,
+    )
+}
+
+pub(crate) fn sidebar_footer_board_hit_area(area: Rect) -> Rect {
+    let content_width = area.width.saturating_sub(1);
+    if content_width < 13 || area.height == 0 {
+        return Rect::default();
+    }
+    Rect::new(
+        area.x.saturating_add(12),
         area.bottom().saturating_sub(1),
         1,
         1,
@@ -10619,6 +10641,20 @@ pub(super) fn render_sidebar(
             board,
         );
     }
+    let planning_lock = sidebar_footer_planning_lock_hit_area(area);
+    if planning_lock.width > 0 {
+        let active = app.planning_lock.configured();
+        let style = sidebar_footer_style(
+            app,
+            crate::app::state::SidebarFooterItem::PlanningLock,
+            active,
+            p,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(if app.nerd_font { "" } else { "L" }, style)),
+            planning_lock,
+        );
+    }
     if refresh.width > 0 {
         let style = sidebar_footer_style(
             app,
@@ -10626,7 +10662,7 @@ pub(super) fn render_sidebar(
             app.sidebar_refreshing,
             p,
         );
-        frame.render_widget(Paragraph::new(Span::styled("⟳ ", style)), refresh);
+        frame.render_widget(Paragraph::new(Span::styled("⟳", style)), refresh);
     }
     render_sidebar_areas_menu(app, frame);
     render_window_cycle_mode_menu(app, frame);
@@ -31719,15 +31755,18 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         }
     }
     #[test]
-    fn focus_board_and_window_cycle_footer_targets_do_not_overlap() {
+    fn focus_board_lock_and_window_cycle_footer_targets_do_not_overlap() {
         let app = AppState::test_new();
         for width in [18, 26] {
             let sidebar = Rect::new(0, 0, width, 20);
             let board = sidebar_footer_board_hit_area(sidebar);
+            let lock = sidebar_footer_planning_lock_hit_area(sidebar);
             let cycle = crate::ui::pomodoro::window_cycle_mode_hit_area(&app, sidebar);
             let notification = crate::ui::pomodoro::notification_hit_area(&app, sidebar);
             assert_eq!(board.width, 1);
-            assert_eq!(board.right(), cycle.x);
+            assert_eq!(lock.width, 1);
+            assert_eq!(board.right(), lock.x);
+            assert_eq!(lock.right(), cycle.x);
             assert!(cycle.right() <= notification.x);
         }
     }

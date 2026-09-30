@@ -2692,6 +2692,7 @@ pub struct ViewState {
     /// Sidebar-footer entry for refreshing work and Git metadata.
     pub(crate) sidebar_footer_refresh_hit_area: Rect,
     pub(crate) sidebar_footer_board_hit_area: Rect,
+    pub(crate) sidebar_footer_planning_lock_hit_area: Rect,
     pub workspace_card_areas: Vec<WorkspaceCardArea>,
     pub agent_card_areas: Vec<AgentCardArea>,
     /// Hover targets for sidebar row internals and lifecycle controls. Row-wide
@@ -4853,6 +4854,11 @@ pub struct AppState {
     pub(crate) goals: crate::goals::GoalsPanelState,
     /// The break reminder shown next to it.
     pub(crate) pomodoro: crate::pomodoro::PomodoroState,
+    /// Authoritative server lock policy. Password material is excluded from
+    /// persisted session snapshots and API projections.
+    pub(crate) planning_lock: crate::planning_lock::PlanningLock,
+    /// Local flow for setting up, unlocking, or managing the planning lock.
+    pub(crate) planning_lock_dialog: Option<crate::planning_lock::Dialog>,
     /// The idle star field pinned under both of them.
     pub(crate) hyperspace: crate::hyperspace::HyperspaceState,
     pub mobile_width_threshold: u16,
@@ -5159,6 +5165,29 @@ impl ClientInputOwnerState {
 }
 
 impl AppState {
+    pub(crate) fn planning_lock_tab_projection(&self) -> Vec<(String, String)> {
+        let mut tabs = Vec::new();
+        for workspace in &self.workspaces {
+            for (tab_idx, tab) in workspace.tabs.iter().enumerate() {
+                let Some(tab_number) = workspace.public_tab_number(tab_idx) else {
+                    continue;
+                };
+                let id = crate::workspace::public_tab_id_for_number(&workspace.id, tab_number);
+                let name = tab
+                    .custom_name
+                    .clone()
+                    .unwrap_or_else(|| format!("Tab {}", tab_idx + 1));
+                let label = format!(
+                    "{} · {}",
+                    workspace.custom_name.as_deref().unwrap_or("Workspace"),
+                    name
+                );
+                tabs.push((id, label));
+            }
+        }
+        tabs
+    }
+
     pub(crate) fn client_presentation_policy(&self) -> ClientPresentationPolicy<'_> {
         ClientPresentationPolicy::from_app(self)
     }
@@ -5384,6 +5413,7 @@ impl From<crate::config::LinearLayoutConfig> for LinearViewLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SidebarFooterItem {
     Board,
+    PlanningLock,
     Settings,
     AskSubtitles,
     PullRequests,
@@ -7848,6 +7878,7 @@ impl AppState {
                 hyperspace_pause_hit_area: Rect::default(),
                 sidebar_footer_refresh_hit_area: Rect::default(),
                 sidebar_footer_board_hit_area: Rect::default(),
+                sidebar_footer_planning_lock_hit_area: Rect::default(),
                 workspace_card_areas: Vec::new(),
                 agent_card_areas: Vec::new(),
                 sidebar_hover_targets: Vec::new(),
@@ -8035,6 +8066,8 @@ impl AppState {
             ),
             goals: crate::goals::GoalsPanelState::default(),
             pomodoro: crate::pomodoro::PomodoroState::default(),
+            planning_lock: crate::planning_lock::PlanningLock::default(),
+            planning_lock_dialog: None,
             // Off in fixtures, the way the break timer is: a decorative panel
             // must not silently move every existing sidebar layout assertion.
             // Tests that care about it set `hyperspace.enabled = true`.

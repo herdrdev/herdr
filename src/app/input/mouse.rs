@@ -6593,7 +6593,11 @@ mod tests {
             app.state.view.sidebar_footer_missive_hit_area,
             app.state.view.sidebar_footer_refresh_hit_area,
         ];
-        assert!(areas.iter().all(|area| area.width == 2 && area.height == 1));
+        assert!(areas[..5]
+            .iter()
+            .all(|area| area.width == 2 && area.height == 1));
+        assert_eq!(areas[5].width, 1);
+        assert_eq!(areas[5].height, 1);
         assert!(areas.windows(2).all(|pair| pair[0].right() == pair[1].x));
         for (area, item) in areas.iter().zip([
             SidebarFooterItem::Settings,
@@ -6620,10 +6624,18 @@ mod tests {
             app.state.hovered_control,
             Some(ControlId::SidebarFooter(SidebarFooterItem::Board))
         );
+        let lock = app.state.view.sidebar_footer_planning_lock_hit_area;
+        assert_eq!(lock.width, 1);
+        assert_eq!(lock.x, board.right());
+        app.handle_mouse(mouse(MouseEventKind::Moved, lock.x, lock.y));
+        assert_eq!(
+            app.state.hovered_control,
+            Some(ControlId::SidebarFooter(SidebarFooterItem::PlanningLock))
+        );
         let bell = app.state.view.notification_hit_area;
         let cycle = app.state.view.window_cycle_mode_hit_area;
         assert_eq!(cycle.width, 1);
-        assert_eq!(cycle.x, board.right());
+        assert_eq!(cycle.x, lock.right());
         app.handle_mouse(mouse(MouseEventKind::Moved, cycle.x, cycle.y));
         assert_eq!(
             app.state.hovered_control,
@@ -10922,11 +10934,7 @@ mod tests {
             crate::ui::compute_view(&mut app.state, Rect::new(0, 0, width, 24));
             let hit = app.state.view.sidebar_footer_work_hit_area;
             assert_eq!(hit.height, 1, "footer must render at {width} columns");
-            app.handle_mouse(mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                hit.x + 1,
-                hit.y,
-            ));
+            app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), hit.x, hit.y));
 
             assert!(
                 app.state.work_view.is_some(),
@@ -11056,7 +11064,11 @@ mod tests {
             app.state.view.sidebar_footer_missive_hit_area,
             app.state.view.sidebar_footer_refresh_hit_area,
         ];
-        assert!(areas.iter().all(|area| area.width == 2 && area.height == 1));
+        assert!(areas[..5]
+            .iter()
+            .all(|area| area.width == 2 && area.height == 1));
+        assert_eq!(areas[5].width, 1);
+        assert_eq!(areas[5].height, 1);
         assert!(areas.windows(2).all(|pair| pair[0].right() == pair[1].x));
 
         let bell = app.state.view.notification_hit_area;
@@ -11106,11 +11118,7 @@ mod tests {
                 "ticket footer must render at {width} columns"
             );
             assert_eq!(hit.x, usage.right(), "ticket entry follows Usage");
-            app.handle_mouse(mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                hit.x + 1,
-                hit.y,
-            ));
+            app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), hit.x, hit.y));
 
             assert!(app.state.work_view.as_ref().is_some_and(|view| {
                 view.projection == crate::app::state::WorkProjection::Tickets
@@ -11158,19 +11166,11 @@ mod tests {
             let hit = app.state.view.sidebar_footer_refresh_hit_area;
             assert_eq!(hit.height, 1, "refresh footer renders at {width} columns");
             assert_eq!(hit.x, missive.right(), "refresh follows Missive");
-            app.handle_mouse(mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                hit.x + 1,
-                hit.y,
-            ));
+            app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), hit.x, hit.y));
             assert!(app.state.sidebar_refreshing);
             assert!(app.state.sidebar_refresh_requested);
 
-            app.handle_mouse(mouse(
-                MouseEventKind::Down(MouseButton::Left),
-                hit.x + 1,
-                hit.y,
-            ));
+            app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), hit.x, hit.y));
             assert!(
                 app.state.sidebar_refresh_requested,
                 "second click is ignored"

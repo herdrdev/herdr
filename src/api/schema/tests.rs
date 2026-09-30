@@ -1191,6 +1191,7 @@ fn session_snapshot_request_and_response_round_trip() {
                 focused_workspace_id: None,
                 focused_tab_id: None,
                 focused_pane_id: None,
+                planning_lock: None,
                 workspaces: Vec::new(),
                 tabs: Vec::new(),
                 panes: Vec::new(),

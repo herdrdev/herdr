@@ -2788,6 +2788,31 @@ impl HeadlessServer {
             .cloned()
     }
 
+    fn planning_lock_allows_terminal(&self, terminal_id: &str) -> bool {
+        let now = crate::app::settled::unix_seconds(std::time::SystemTime::now());
+        if !self.app.state.planning_lock.is_locked(now) {
+            return true;
+        }
+        let Some(terminal_id) = self.terminal_id_by_string(terminal_id) else {
+            return false;
+        };
+        let Some(pane_id) = self.app.state.pane_id_for_terminal(&terminal_id) else {
+            return false;
+        };
+        self.app
+            .state
+            .workspaces
+            .iter()
+            .enumerate()
+            .find_map(|(workspace_idx, workspace)| {
+                let tab_idx = workspace.find_tab_index_for_pane(pane_id)?;
+                self.app.public_tab_id(workspace_idx, tab_idx)
+            })
+            .is_some_and(|tab_id| {
+                self.app.state.planning_lock.discussion_tab_id() == Some(tab_id.as_str())
+            })
+    }
+
     fn runtime_for_terminal_id_string(
         &self,
         terminal_id: &str,
@@ -2807,6 +2832,9 @@ impl HeadlessServer {
         data: Vec<u8>,
         reset_scroll: bool,
     ) -> Option<Result<(), String>> {
+        if !self.planning_lock_allows_terminal(terminal_id) {
+            return Some(Err("planning lock blocks this terminal session".to_owned()));
+        }
         self.app.begin_contract_false_positive_input_burst();
         let terminal_id = self.terminal_id_by_string(terminal_id)?;
         let data = Bytes::from(data);
@@ -2870,6 +2898,12 @@ impl HeadlessServer {
                 code: "connection_lost".to_owned(),
                 message: "controlled terminal no longer exists; delivery is unknown".to_owned(),
             })?;
+        if !self.planning_lock_allows_terminal(&lease.context.terminal_id) {
+            return Err(crate::api::schema::ErrorBody {
+                code: "planning_lock_active".to_owned(),
+                message: "planning lock blocks input to this terminal session".to_owned(),
+            });
+        }
         if self.app.terminal_runtimes.get(&real_terminal_id).is_none() {
             return Err(crate::api::schema::ErrorBody {
                 code: "connection_lost".to_owned(),
@@ -4503,6 +4537,19 @@ impl HeadlessServer {
                     reason: Some(
                         "terminal attach failed: connection is not pending terminal attach"
                             .to_owned(),
+                    ),
+                },
+            );
+            self.remove_client_and_resize_if_needed(client_id);
+            return false;
+        }
+
+        if !self.planning_lock_allows_terminal(&terminal_id) {
+            self.send_to_client(
+                client_id,
+                ServerMessage::ServerShutdown {
+                    reason: Some(
+                        "planning lock blocks attaching to this terminal session".to_owned(),
                     ),
                 },
             );
@@ -10738,6 +10785,34 @@ next_tab = ""
             reason,
             Some("terminal attach failed: terminal term_missing not found".to_owned())
         );
+    }
+
+    #[test]
+    fn planning_lock_rejects_direct_attach_outside_the_discussion_tab() {
+        with_terminal_session_test_server(|server, _terminal_id, terminal_id, _public_pane_id| {
+            let mut lock = crate::planning_lock::PlanningLock::default();
+            lock.configure("a planning password longer than twenty four", "other-tab")
+                .expect("configure lock");
+            server.app.state.planning_lock = lock;
+            let control_rx = connect_pending_terminal_client_with_control_rx(server, 19);
+
+            assert!(
+                !server.handle_server_event(ServerEvent::ClientAttachTerminal {
+                    client_id: 19,
+                    terminal_id: terminal_id.clone(),
+                    takeover: false,
+                })
+            );
+            assert!(!server.clients.contains_key(&19));
+            assert_eq!(
+                read_server_shutdown_reason(control_rx.recv().expect("shutdown message")),
+                Some("planning lock blocks attaching to this terminal session".to_owned())
+            );
+            assert!(server
+                .forward_terminal_attach_bytes(&terminal_id, b"blocked".to_vec(), true)
+                .expect("terminal still exists")
+                .is_err());
+        });
     }
 
     fn with_terminal_session_test_server(

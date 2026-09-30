@@ -1,0 +1,16 @@
+---
+title: Planning lock
+description: Use the planning lock to limit Herdr to one discussion session and temporarily pause agent commands.
+---
+
+Planning lock limits the active Herdr session to one discussion tab and blocks agent commands while locked. Set a password of at least 24 characters. The password is stored as an Argon2 hash in the server's private configuration directory.
+
+## Shared state
+
+The lock configuration and unlock deadline are owned by the Herdr server runtime. Every client attached to that same runtime receives the safe lock snapshot through the session snapshot and session change event stream. Password hashes never enter those responses. Unlock deadlines use Unix time, so clients on different machines display the same countdown and relock at the same time.
+
+This synchronization applies to clients attached to one shared Herdr runtime. Separate Herdr servers do not replicate lock state.
+
+## Recovery
+
+If the password is forgotten, stop the Herdr server and delete `planning-lock.json` from that server's Herdr configuration directory, then restart it. The lock will be reset. Deleting this file removes the password hash and the configured discussion tab.

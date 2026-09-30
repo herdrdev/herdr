@@ -50,6 +50,12 @@ impl App {
             focused_workspace_id,
             focused_tab_id,
             focused_pane_id,
+            planning_lock: self
+                .state
+                .planning_lock
+                .snapshot(crate::app::settled::unix_seconds(
+                    std::time::SystemTime::now(),
+                )),
             workspaces,
             tabs,
             panes: self.collect_panes_for_workspace(None).unwrap_or_default(),
@@ -110,5 +116,28 @@ mod tests {
             snapshot.focused_pane_id.as_deref(),
             Some(snapshot.panes[0].pane_id.as_str())
         );
+    }
+
+    #[test]
+    fn attached_clients_receive_the_same_safe_planning_lock_snapshot() {
+        let mut app = app_with_two_tabs();
+        let tab_id = app.session_snapshot().tabs[0].tab_id.clone();
+        let password = "a planning password longer than twenty four";
+        app.state
+            .planning_lock
+            .configure(password, &tab_id)
+            .expect("configure planning lock");
+
+        // Each attached client bootstraps from the same server-owned snapshot.
+        let first_client = app.session_snapshot();
+        let second_client = app.session_snapshot();
+        assert_eq!(first_client.planning_lock, second_client.planning_lock);
+        assert!(first_client
+            .planning_lock
+            .as_ref()
+            .is_some_and(|lock| lock.locked));
+        assert!(!serde_json::to_string(&first_client)
+            .expect("serialize client snapshot")
+            .contains(password));
     }
 }

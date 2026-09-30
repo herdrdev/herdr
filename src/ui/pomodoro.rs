@@ -23,7 +23,7 @@ use crate::pomodoro::{PomodoroPhase, PomodoroPrompt, SEND_OFF_DURATION};
 
 /// Width of `⏱ 25:00` plus a leading space.
 const INDICATOR_WIDTH: u16 = 8;
-/// Left margin, six two-cell slots, then the one-cell focus board icon.
+/// Left margin, six two-cell slots, then one-cell board and lock icons.
 const FOOTER_ICON_COLUMNS: u16 = 14;
 const NOTIFICATION_WIDTH: u16 = 2;
 const CYCLE_MODE_WIDTH: u16 = 1;

@@ -30,6 +30,79 @@ const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 const WINDOWS_POWERSHELL_AGENT_EXIT_RESPAWN_GRACE: Duration = Duration::from_secs(2);
 
+fn is_agent_command(method: &crate::api::schema::Method) -> bool {
+    use crate::api::schema::Method;
+    matches!(
+        method,
+        Method::AgentList(_)
+            | Method::AgentGet(_)
+            | Method::AgentState(_)
+            | Method::AgentReport(_)
+            | Method::AgentRead(_)
+            | Method::AgentExplain(_)
+            | Method::AgentSendKeys(_)
+            | Method::AgentRename(_)
+            | Method::AgentViewSet(_)
+            | Method::AgentViewClear(_)
+            | Method::AgentFocus(_)
+            | Method::AgentFocusStatus(_)
+            | Method::AgentStart(_)
+            | Method::AgentPrompt(_)
+            | Method::AgentWait(_)
+            | Method::PaneSendText(_)
+            | Method::PaneSendTextIf(_)
+            | Method::PaneSendKeys(_)
+            | Method::PaneSendInput(_)
+            | Method::PaneRead(_)
+            | Method::PaneWaitForOutput(_)
+            | Method::PaneReportAgent(_)
+            | Method::PaneReportAgentSession(_)
+            | Method::PaneClearAgentAuthority(_)
+            | Method::PaneReleaseAgent(_)
+    )
+}
+
+impl App {
+    fn agent_request_targets_discussion(&self, method: &crate::api::schema::Method) -> bool {
+        use crate::api::schema::Method;
+        let target = match method {
+            Method::AgentGet(params) | Method::AgentExplain(params) => Some(params.target.as_str()),
+            Method::AgentState(params) => Some(params.target.as_str()),
+            Method::AgentReport(params) => Some(params.target.as_str()),
+            Method::AgentRead(params) => Some(params.target.as_str()),
+            Method::AgentSendKeys(params) => Some(params.target.as_str()),
+            Method::AgentWait(params) => Some(params.target.as_str()),
+            Method::AgentRename(params) => Some(params.target.as_str()),
+            Method::AgentPrompt(params) => Some(params.target.as_str()),
+            Method::AgentFocus(params) => params
+                .target
+                .as_deref()
+                .or_else(|| params.agent_ref.as_ref().map(|agent| agent.agent.as_str())),
+            Method::AgentStart(params) => Some(params.pane_id.as_str()),
+            Method::PaneSendText(params) => Some(params.pane_id.as_str()),
+            Method::PaneSendTextIf(params) => Some(params.pane_id.as_str()),
+            Method::PaneSendKeys(params) => Some(params.pane_id.as_str()),
+            Method::PaneSendInput(params) => Some(params.pane_id.as_str()),
+            Method::PaneRead(params) => Some(params.pane_id.as_str()),
+            Method::PaneWaitForOutput(params) => Some(params.pane_id.as_str()),
+            Method::PaneReportAgent(params) => Some(params.pane_id.as_str()),
+            Method::PaneReportAgentSession(params) => Some(params.pane_id.as_str()),
+            Method::PaneClearAgentAuthority(params) => Some(params.pane_id.as_str()),
+            Method::PaneReleaseAgent(params) => Some(params.pane_id.as_str()),
+            _ => None,
+        };
+        let Some(target) = target else {
+            return false;
+        };
+        let Ok(target) = self.resolve_terminal_target(target) else {
+            return false;
+        };
+        self.public_tab_id(target.ws_idx, target.tab_idx)
+            .as_deref()
+            .is_some_and(|tab| self.state.planning_lock.discussion_tab_id() == Some(tab))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeExitAction {
     RespawnShell,
@@ -2029,6 +2102,22 @@ impl App {
             ErrorBody, ErrorResponse, Method, ResponseResult, SuccessResponse,
         };
 
+        if self
+            .state
+            .planning_lock
+            .is_locked(crate::app::settled::unix_seconds(
+                std::time::SystemTime::now(),
+            ))
+            && is_agent_command(&request.method)
+            && !self.agent_request_targets_discussion(&request.method)
+        {
+            return responses::encode_error(
+                request.id,
+                "planning_lock_active",
+                "agent commands are blocked while planning lock is active",
+            );
+        }
+
         let response = match request.method {
             Method::ServerStop(_) => {
                 self.state.should_quit = true;
@@ -2542,6 +2631,71 @@ pub(super) mod test_support {
 mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
+
+    #[test]
+    fn agent_list_is_rejected_while_planning_lock_is_active() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state
+            .planning_lock
+            .configure("a planning password longer than twenty four", "tab-1")
+            .expect("configure lock");
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "planning-lock-agent-list".into(),
+            method: crate::api::schema::Method::AgentList(
+                crate::api::schema::EmptyParams::default(),
+            ),
+        });
+        let response: crate::api::schema::ErrorResponse =
+            serde_json::from_str(&response).expect("blocked response");
+        assert_eq!(response.error.code, "planning_lock_active");
+    }
+
+    #[test]
+    fn pane_targeted_agent_commands_are_allowed_only_in_discussion_tab() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = crate::workspace::Workspace::test_new("planning-lock");
+        workspace.test_add_tab(None);
+        let discussion_pane = workspace.tabs[0].layout.focused();
+        let other_pane = workspace.tabs[1].layout.focused();
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let discussion_tab = app.public_tab_id(0, 0).expect("discussion tab ID");
+        app.state
+            .planning_lock
+            .configure(
+                "a planning password longer than twenty four",
+                &discussion_tab,
+            )
+            .expect("configure lock");
+        let discussion_pane = app
+            .public_pane_id(0, discussion_pane)
+            .expect("discussion pane ID");
+        let other_pane = app.public_pane_id(0, other_pane).expect("other pane ID");
+
+        let request = |pane_id: String| {
+            crate::api::schema::Method::PaneSendText(crate::api::schema::PaneSendTextParams {
+                pane_id,
+                text: "agent command".into(),
+            })
+        };
+        assert!(app.agent_request_targets_discussion(&request(discussion_pane)));
+        assert!(!app.agent_request_targets_discussion(&request(other_pane)));
+    }
 
     fn fleet_host(name: &str, target: &str) -> crate::fleet::HostSnapshot {
         crate::fleet::HostSnapshot {

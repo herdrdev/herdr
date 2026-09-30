@@ -1,5 +1,7 @@
 //! Input handling — translates crossterm key/mouse events into state mutations.
 
+mod planning_lock;
+
 use bytes::Bytes;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tracing::warn;
@@ -219,6 +221,9 @@ impl App {
         owner: InputOwner,
     ) -> Option<super::TerminalInputTarget> {
         let key_event = key.as_key_event();
+        if self.handle_planning_lock_key(key_event) {
+            return None;
+        }
         if self.state.board_return.is_some()
             && key_event.code == KeyCode::Esc
             && key_event.modifiers.is_empty()
@@ -4610,6 +4615,9 @@ impl App {
         owner: InputOwner,
         text: String,
     ) {
+        if self.handle_planning_lock_text(&text, false) {
+            return;
+        }
         if text.is_empty() {
             return;
         }
@@ -4673,6 +4681,9 @@ impl App {
     }
 
     pub(super) async fn handle_paste_for_input_owner(&mut self, owner: InputOwner, text: String) {
+        if self.handle_planning_lock_text(&text, true) {
+            return;
+        }
         if owner == InputOwner::Popup {
             if let Some(runtime) = self.popup_runtime() {
                 let _ = runtime.send_paste(text).await;
@@ -4965,6 +4976,21 @@ impl App {
         presentation: crate::ui::pomodoro::InputPresentation,
         owner: InputOwner,
     ) {
+        let lock_now = crate::app::settled::unix_seconds(std::time::SystemTime::now());
+        let lock_is_locked = self.state.planning_lock.is_locked(lock_now);
+        if self.state.planning_lock_dialog.is_some()
+            || (lock_is_locked
+                && !self
+                    .state
+                    .active
+                    .and_then(|workspace_idx| {
+                        let workspace = self.state.workspaces.get(workspace_idx)?;
+                        self.public_tab_id(workspace_idx, workspace.active_tab_index())
+                    })
+                    .is_some_and(|tab| self.state.planning_lock.permits_tab(&tab, lock_now)))
+        {
+            return;
+        }
         // A due break reminder is the topmost modal and must decide the click
         // before hover, pane focus, or any underlying control can react.
         if owner == InputOwner::Pomodoro {
@@ -5124,6 +5150,15 @@ impl App {
             let settings = self.state.view.sidebar_footer_settings_hit_area;
             if self.state.point_in_rect(settings, mouse.column, mouse.row) {
                 settings::open_settings(&mut self.state);
+                return;
+            }
+            let planning_lock = self.state.view.sidebar_footer_planning_lock_hit_area;
+            if mouse.column >= planning_lock.x
+                && mouse.column < planning_lock.right()
+                && mouse.row >= planning_lock.y
+                && mouse.row < planning_lock.bottom()
+            {
+                self.open_planning_lock_menu();
                 return;
             }
             let ask_subtitles = self.state.view.sidebar_footer_ask_subtitles_hit_area;

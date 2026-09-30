@@ -22,6 +22,7 @@ include = [
 ]
 
 [dependencies]
+argon2 = "0.5"
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

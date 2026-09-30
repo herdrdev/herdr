@@ -2080,6 +2080,17 @@
               },
               "type": "array"
             },
+            "planning_lock": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/Snapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Server-owned planning lock state. The password hash never crosses the\nJSON API or session event stream."
+            },
             "protocol": {
               "format": "uint32",
               "minimum": 0,
@@ -2117,6 +2128,30 @@
             "panes",
             "layouts",
             "agents"
+          ],
+          "type": "object"
+        },
+        "Snapshot": {
+          "description": "Safe projection sent to attached clients. Password material stays in the\nserver's private lock file and is never part of an API snapshot.",
+          "properties": {
+            "discussion_tab_id": {
+              "type": "string"
+            },
+            "locked": {
+              "type": "boolean"
+            },
+            "unlock_until_unix_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "locked",
+            "discussion_tab_id"
           ],
           "type": "object"
         },
@@ -9964,6 +9999,17 @@
               },
               "type": "array"
             },
+            "planning_lock": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/subscription_event/$defs/Snapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Server-owned planning lock state. The password hash never crosses the\nJSON API or session event stream."
+            },
             "protocol": {
               "format": "uint32",
               "minimum": 0,
@@ -10001,6 +10047,30 @@
             "panes",
             "layouts",
             "agents"
+          ],
+          "type": "object"
+        },
+        "Snapshot": {
+          "description": "Safe projection sent to attached clients. Password material stays in the\nserver's private lock file and is never part of an API snapshot.",
+          "properties": {
+            "discussion_tab_id": {
+              "type": "string"
+            },
+            "locked": {
+              "type": "boolean"
+            },
+            "unlock_until_unix_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "locked",
+            "discussion_tab_id"
           ],
           "type": "object"
         },
@@ -16319,6 +16389,17 @@
               },
               "type": "array"
             },
+            "planning_lock": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/Snapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Server-owned planning lock state. The password hash never crosses the\nJSON API or session event stream."
+            },
             "protocol": {
               "format": "uint32",
               "minimum": 0,
@@ -16356,6 +16437,30 @@
             "panes",
             "layouts",
             "agents"
+          ],
+          "type": "object"
+        },
+        "Snapshot": {
+          "description": "Safe projection sent to attached clients. Password material stays in the\nserver's private lock file and is never part of an API snapshot.",
+          "properties": {
+            "discussion_tab_id": {
+              "type": "string"
+            },
+            "locked": {
+              "type": "boolean"
+            },
+            "unlock_until_unix_s": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "locked",
+            "discussion_tab_id"
           ],
           "type": "object"
         },

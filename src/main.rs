@@ -92,6 +92,7 @@ mod notepad;
 mod pane;
 mod pane_graphics_files;
 mod persist;
+mod planning_lock;
 mod platform;
 mod plugin_command;
 mod plugin_paths;

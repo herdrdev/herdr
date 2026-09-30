@@ -34,6 +34,7 @@ pub(crate) mod notepad_usage;
 mod onboarding;
 mod panes;
 pub(crate) use panes::settled_max_scroll;
+mod planning_lock;
 pub(crate) mod pomodoro;
 pub(crate) mod pr_actions;
 mod release_notes;
@@ -659,6 +660,11 @@ fn compute_view_internal_at(
     } else {
         sidebar::sidebar_footer_board_hit_area(sidebar_area)
     };
+    let sidebar_footer_planning_lock_hit_area = if app.sidebar_collapsed {
+        Rect::default()
+    } else {
+        sidebar::sidebar_footer_planning_lock_hit_area(sidebar_area)
+    };
     let notepad_rect = sidebar::sidebar_notepad_rect(app, sidebar_area);
     let notepad_tab_hit_areas = notepad::notepad_tab_hit_areas(app, notepad_rect);
     let notepad_usage_toggle_hit_area = notepad::usage_toggle_hit_area(app, notepad_rect);
@@ -882,6 +888,7 @@ fn compute_view_internal_at(
         hyperspace_pause_hit_area,
         sidebar_footer_refresh_hit_area,
         sidebar_footer_board_hit_area,
+        sidebar_footer_planning_lock_hit_area,
         workspace_card_areas,
         agent_card_areas,
         sidebar_hover_targets,
@@ -1210,6 +1217,7 @@ fn compute_mobile_view(
         hyperspace_pause_hit_area: Rect::default(),
         sidebar_footer_refresh_hit_area: Rect::default(),
         sidebar_footer_board_hit_area: Rect::default(),
+        sidebar_footer_planning_lock_hit_area: Rect::default(),
         workspace_card_areas: Vec::new(),
         agent_card_areas: Vec::new(),
         sidebar_hover_targets: Vec::new(),
@@ -1515,6 +1523,7 @@ fn render_with_runtime_registry_inner(
     // Last, and over everything: a due break reminder outranks whatever the
     // operator was looking at, which is the point of it.
     pomodoro::render_overlay(app, frame, frame.area());
+    planning_lock::render(app, frame, frame.area());
 }
 
 fn render_navigation_chrome(
