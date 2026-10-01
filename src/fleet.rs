@@ -55,6 +55,78 @@ pub(crate) fn run_fleet_command(args: &[String]) -> std::io::Result<i32> {
     }
 }
 
+#[cfg(test)]
+mod device_attention_tests {
+    use super::*;
+
+    fn host(name: &str, state: HostState, entries: Vec<FleetRow>) -> HostSnapshot {
+        HostSnapshot {
+            name: name.into(),
+            target: name.into(),
+            local: false,
+            session: None,
+            socket: None,
+            state,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            sessions: None,
+            reachable: state != HostState::Unreachable,
+            last_seen_unix_ms: None,
+            entries,
+        }
+    }
+
+    fn row(host: &str, name: &str, state: &str, blocked: bool) -> FleetRow {
+        let mut row = FleetRow::test_agent_row_with_state(host, name, state);
+        row.blocked = blocked;
+        row
+    }
+
+    #[test]
+    fn only_devices_with_blockers_or_no_answer_are_listed() {
+        let mut local = host(
+            "here",
+            HostState::Reachable,
+            vec![row("here", "a", "blocked", true)],
+        );
+        local.local = true;
+        let snapshot = Snapshot {
+            hosts: vec![
+                local,
+                host(
+                    "busy",
+                    HostState::Reachable,
+                    vec![row("busy", "a", "working", false)],
+                ),
+                host(
+                    "ub1",
+                    HostState::Reachable,
+                    vec![
+                        row("ub1", "w", "working", false),
+                        row("ub1", "b1", "blocked", true),
+                        row("ub1", "b2", "blocked", true),
+                    ],
+                ),
+                host("air", HostState::Unreachable, Vec::new()),
+            ],
+            ..Snapshot::default()
+        };
+        let devices = snapshot.devices_needing_attention();
+        let names: Vec<_> = devices.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["ub1", "air"]);
+        assert_eq!((devices[0].blocked, devices[0].working), (2, 1));
+        assert_eq!(
+            devices[0].first_blocked,
+            Some(snapshot.hosts[2].entries[1].agent_ref.clone())
+        );
+        assert!(!devices[0].stale);
+        assert!(devices[1].stale);
+        assert_eq!(devices[1].first_blocked, None);
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct StatusOptions {
     hosts: Option<HashSet<String>>,
@@ -323,7 +395,44 @@ pub(crate) struct Snapshot {
     pub(crate) group_catalogs: Vec<GroupCatalog>,
 }
 
+/// Remote devices that need attention in the status row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeviceAttention {
+    pub(crate) name: String,
+    pub(crate) blocked: usize,
+    pub(crate) working: usize,
+    pub(crate) stale: bool,
+    pub(crate) first_blocked: Option<crate::api::schema::AgentRef>,
+}
+
 impl Snapshot {
+    pub(crate) fn devices_needing_attention(&self) -> Vec<DeviceAttention> {
+        self.hosts
+            .iter()
+            .filter(|host| !host.local)
+            .filter_map(|host| {
+                let stale = host.state == HostState::Unreachable;
+                let blocked = host.entries.iter().filter(|row| row.blocked).count();
+                let working = host
+                    .entries
+                    .iter()
+                    .filter(|row| !row.blocked && row.state == "working")
+                    .count();
+                (stale || blocked > 0).then(|| DeviceAttention {
+                    name: host.name.clone(),
+                    blocked,
+                    working,
+                    stale,
+                    first_blocked: host
+                        .entries
+                        .iter()
+                        .find(|row| row.blocked)
+                        .map(|row| row.agent_ref.clone()),
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn preserve_live_agent_inventory_from(
         &mut self,
         current: &Snapshot,

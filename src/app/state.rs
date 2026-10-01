@@ -5469,6 +5469,8 @@ pub(crate) enum StatusSegmentKind {
     FleetLabel,
     /// One other device that needs attention, by fleet host name.
     FleetDevice(usize),
+    /// Availability indicator for a configured fleet host.
+    FleetHost(usize),
     /// Set a machine and best available launch profile for the next Home run.
     FleetUseMachine(usize),
     RemoteHost,

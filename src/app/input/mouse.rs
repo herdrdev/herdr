@@ -242,6 +242,17 @@ impl AppState {
                     )));
                 }
                 crate::app::state::StatusSegmentKind::FleetDevice(idx) => {
+                    let device = self
+                        .fleet_snapshot
+                        .devices_needing_attention()
+                        .into_iter()
+                        .nth(idx)?;
+                    return Some(MouseAction::OpenFleetHost {
+                        name: device.name,
+                        focus_agent: device.first_blocked.map(|agent| agent.agent),
+                    });
+                }
+                crate::app::state::StatusSegmentKind::FleetHost(idx) => {
                     let machine = self
                         .machines
                         .iter()

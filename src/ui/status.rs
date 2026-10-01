@@ -110,6 +110,39 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     }
 }
 
+#[cfg(test)]
+mod fleet_device_tests {
+    use super::*;
+
+    fn device(blocked: usize, stale: bool) -> crate::fleet::DeviceAttention {
+        crate::fleet::DeviceAttention {
+            name: "ub1".into(),
+            blocked,
+            working: 0,
+            stale,
+            first_blocked: None,
+        }
+    }
+
+    #[test]
+    fn dots_show_blocker_count_threshold_and_unreachable_state() {
+        let palette = Palette::catppuccin();
+        assert_eq!(
+            fleet_device_text(&device(1, false), &palette).0,
+            " \u{25cb}ub1"
+        );
+        assert_eq!(
+            fleet_device_text(&device(2, false), &palette).0,
+            " \u{25cb}ub1"
+        );
+        assert_eq!(
+            fleet_device_text(&device(3, false), &palette).0,
+            " \u{25cf}ub1"
+        );
+        assert_eq!(fleet_device_text(&device(0, true), &palette).0, " ?ub1");
+    }
+}
+
 /// The focused repository and thread, rendered in the status row's otherwise
 /// empty middle. It starts at the sidebar's right edge so the title lines up
 /// with the column the pane itself occupies below, and it yields to both the
@@ -650,6 +683,20 @@ pub(crate) fn provider_style(
 
 use crate::ui::icons::Metric;
 
+pub(crate) fn fleet_device_text(
+    device: &crate::fleet::DeviceAttention,
+    p: &Palette,
+) -> (String, Style) {
+    if device.stale {
+        return (
+            format!(" ?{}", device.name),
+            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+        );
+    }
+    let dot = if device.blocked >= 3 { DOT } else { '\u{25cb}' };
+    (format!(" {dot}{}", device.name), Style::default().fg(p.red))
+}
+
 fn status_segments(
     app: &AppState,
     metrics: &crate::platform::status_metrics::StatusMetrics,
@@ -668,7 +715,14 @@ fn status_segments(
 
     // Fleet availability is a compact, explorable host list. The local config
     // is the inventory, so configured machines remain visible without a poll.
-    if app.machines.iter().any(|machine| !machine.is_local()) {
+    let has_configured_hosts = app.machines.iter().any(|machine| !machine.is_local());
+    let has_remote_snapshot = app.fleet_snapshot.hosts.iter().any(|host| !host.local);
+    let attention_devices = if has_remote_snapshot {
+        app.fleet_snapshot.devices_needing_attention()
+    } else {
+        Vec::new()
+    };
+    if has_configured_hosts || !attention_devices.is_empty() {
         out.push(Segment {
             text: format!(" {}", if app.nerd_font { "\u{F013B}" } else { "⧉" }),
             style: Style::default().fg(p.overlay1),
@@ -677,6 +731,16 @@ fn status_segments(
             kind: StatusSegmentKind::FleetLabel,
         });
         if app.fleet_status {
+            for (idx, device) in attention_devices.iter().enumerate() {
+                let (text, style) = fleet_device_text(device, p);
+                out.push(Segment {
+                    text,
+                    style,
+                    preserve_bg: false,
+                    elide_rank: Some(5),
+                    kind: StatusSegmentKind::FleetDevice(idx),
+                });
+            }
             for (idx, host) in app
                 .machines
                 .iter()
@@ -701,7 +765,7 @@ fn status_segments(
                     style: Style::default().fg(color),
                     preserve_bg: false,
                     elide_rank: Some(5),
-                    kind: StatusSegmentKind::FleetDevice(idx),
+                    kind: StatusSegmentKind::FleetHost(idx),
                 });
                 out.push(Segment {
                     text: (if app.nerd_font { "\u{F0A9}" } else { ">" }).to_string(),
@@ -1789,7 +1853,7 @@ mod tests {
         );
         let host = segments
             .iter()
-            .find(|segment| segment.kind == StatusSegmentKind::FleetDevice(0))
+            .find(|segment| segment.kind == StatusSegmentKind::FleetHost(0))
             .expect("configured host segment");
         assert_eq!(host.text, "  ·wor  ");
         assert_eq!(host.style.fg, Some(app.palette.overlay0));

@@ -456,6 +456,24 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
         }
         .into(),
         StatusSegmentKind::FleetDevice(idx) => {
+            let Some(device) = app
+                .fleet_snapshot
+                .devices_needing_attention()
+                .into_iter()
+                .nth(idx)
+            else {
+                return "Fleet device needing attention".into();
+            };
+            if device.stale {
+                format!("{} · unreachable", device.name)
+            } else {
+                format!(
+                    "{} · {} blockers · {} working",
+                    device.name, device.blocked, device.working
+                )
+            }
+        }
+        StatusSegmentKind::FleetHost(idx) => {
             let Some(machine) = app
                 .machines
                 .iter()
@@ -896,7 +914,7 @@ mod status_segments {
             }]);
         app.next_home_profile = Some("codex".into());
 
-        let tooltip = status_segment_tooltip(&app, StatusSegmentKind::FleetDevice(0));
+        let tooltip = status_segment_tooltip(&app, StatusSegmentKind::FleetHost(0));
 
         assert!(tooltip.contains("Antigravity"), "{tooltip}");
         assert!(tooltip.contains("Codex (current)"), "{tooltip}");
