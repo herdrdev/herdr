@@ -76,13 +76,25 @@ def _local_server_pids(sock: Path, binary: Path, pgid: int | None = None) -> lis
 
 
 class Harness:
-    def __init__(self, args: argparse.Namespace):
+    def __init__(self, args: argparse.Namespace, real_agent: bool = False):
         self.args = args
         self.root = Path(tempfile.mkdtemp(prefix="wdl.", dir="/tmp"))
         self.cfg = self.root / "cfg"
         self.state = self.root / "state"
         self.sock = self.root / "s.sock"
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
+        self.real_agent = real_agent
+        if real_agent:
+            login_path = subprocess.run([os.environ.get("SHELL", "/bin/bash"), "-lc",
+                                         "printf %s \"$PATH\""], text=True,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        check=False).stdout
+            self.env = {key: os.environ[key] for key in (
+                            "HOME", "USER", "LANG", "CODEX_HOME", "CLAUDE_CONFIG_DIR")
+                        if key in os.environ}
+            self.env["PATH"] = login_path or os.environ.get("PATH", "")
+            self.env["HERDR_ENV"] = "1"
+        else:
+            self.env = {k: v for k, v in os.environ.items() if not k.startswith("HERDR_")}
         self.env.update(XDG_CONFIG_HOME=str(self.cfg), XDG_STATE_HOME=str(self.state))
         self.server: subprocess.Popen[str] | None = None
         self.started: list[subprocess.Popen[Any]] = []
@@ -91,6 +103,10 @@ class Harness:
         self.peer_root: str | None = None
         self.peer_session: str | None = None
         self.probe_wrapper: Path | None = None
+        self.notify_markers: dict[str, Path] = {}
+        self.socket_probe_passed: set[str] = set()
+        self.real_agent_cwds: dict[str, Path] = {}
+        self.real_agent_hook_args: dict[str, list[str]] = {}
 
     def start(self) -> None:
         app = "herdr-dev" if "debug" in str(self.args.binary) else "herdr"
@@ -242,27 +258,191 @@ class Harness:
         if result.returncode:
             raise RuntimeError(f"peer server cleanup failed ({result.returncode}): {result.stderr[-500:]}")
 
-    def cli(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    def cli(self, *args: str, check: bool = True,
+            timeout: int = 45) -> subprocess.CompletedProcess[str]:
         result = subprocess.run([str(self.args.binary), *args], cwd=self.root, env=self.env,
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                timeout=45, check=False)
+                                timeout=timeout, check=False)
         if check and result.returncode:
             raise RuntimeError(f"herdr {' '.join(args)} exited {result.returncode}: "
                                f"{result.stdout[-800:]} {result.stderr[-800:]}")
         return result
 
-    def workspace(self, label: str, command: str, ready_lines: tuple[str, ...]) -> str:
-        result = self.cli("workspace", "create", "--cwd", str(self.root), "--label", label)
+    def workspace(self, label: str, command: str, ready_lines: tuple[str, ...],
+                  report_fixture_agent: bool = True, cwd_override: Path | None = None) -> str:
+        cwd = cwd_override or (ROOT if self.real_agent else self.root)
+        result = self.cli("workspace", "create", "--cwd", str(cwd), "--label", label)
         payload = _last_json(result.stdout)
         pane = _find_value(payload, "pane_id")
         if not pane:
             raise RuntimeError(f"workspace create omitted pane_id: {result.stdout[-500:]}")
         self.panes[label] = str(pane)
-        self.cli("pane", "run", str(pane), command)
-        self.wait_for_pane_stable(str(pane), ready_lines)
-        self.call("pane.report_agent", {"pane_id": str(pane), "source": "watchdog-harness",
-                                        "agent": "codex", "state": "working"})
+        if command:
+            self.cli("pane", "run", str(pane), command)
+            self.wait_for_pane_stable(str(pane), ready_lines)
+        if report_fixture_agent:
+            self.call("pane.report_agent", {"pane_id": str(pane), "source": "watchdog-harness",
+                                            "agent": "codex", "state": "working"})
         return str(pane)
+
+    def real_agent_screen(self, pane_id: str) -> str:
+        response = self.call("pane.read", {"pane_id": pane_id, "source": "detection",
+            "lines": 60, "format": "text"})
+        return (response.get("read") or {}).get("text", "")
+
+    def real_agent_dialog(self, screen: str) -> str | None:
+        """Name known blocking startup dialogs before any prompt is submitted."""
+        lowered = screen.lower()
+        dialogs = (
+            ("codex_update_available", "update available"),
+            ("codex_hooks_need_review", "hooks need review"),
+            ("codex_folder_trust", "do you trust the contents of this directory"),
+            ("claude_folder_trust", "trust this folder?"),
+            ("claude_folder_safety_check", "quick safety check:"),
+            ("agent_login_required", "login required"),
+            ("agent_sign_in_required", "sign in to"),
+        )
+        return next((name for name, marker in dialogs if marker in lowered), None)
+
+    def prepare_real_agent_prompt(self, pane_id: str) -> None:
+        dialog = self.real_agent_dialog(self.real_agent_screen(pane_id))
+        if dialog:
+            raise RuntimeError(f"blocking_dialog:{dialog}")
+
+    def trust_codex_hooks_for_probe(self, pane_id: str) -> None:
+        """Choose Trust all and wait for Codex's isolated pane to clear dialogs."""
+        deadline = time.monotonic() + 15
+        sent_trust = False
+        while time.monotonic() < deadline:
+            screen = self.real_agent_screen(pane_id)
+            dialog = self.real_agent_dialog(screen)
+            if dialog == "codex_hooks_need_review":
+                if not re.search(r"(?m)^\s*2[.)]?\s+Trust all\b", screen, re.IGNORECASE):
+                    raise RuntimeError("codex_hooks_dialog_missing_trust_all_option")
+                self.cli("pane", "send-keys", pane_id, "2", "enter")
+                sent_trust = True
+            elif dialog:
+                raise RuntimeError(f"blocking_dialog:{dialog}")
+            else:
+                return
+            time.sleep(.2)
+        if sent_trust:
+            raise RuntimeError("blocking_dialog:codex_hooks_dialog_did_not_clear")
+
+    def configure_real_agent_hooks(self, agent: str, ident: str,
+                                   cwd: Path) -> list[str]:
+        """Configure probe-scoped session/status reporting without editing home configs."""
+        hook_source = ROOT / "src/integration/assets" / agent / "herdr-agent-state.sh"
+        hook_dir = self.root / f"{agent}-hooks-{ident}"
+        hook_dir.mkdir()
+        hook = hook_dir / "herdr-agent-state.sh"
+        shutil.copy2(hook_source, hook)
+        hook.chmod(0o700)
+        command = shlex.quote(str(hook)) + " session"
+        if agent == "claude":
+            closing_block_dir = hook_dir / "closing-block"
+            closing_block_dir.mkdir()
+            for name in ("closing_block.py", "herdr_status.py", "herdr-closing-block.py"):
+                shutil.copy2(ROOT / "src/integration/assets/closing-block" / name,
+                             closing_block_dir / name)
+            closing_hook = shlex.quote(str(closing_block_dir / "herdr-closing-block.py"))
+            config_dir = cwd / ".claude"
+            config_dir.mkdir()
+            settings = {"hooks": {
+                "SessionStart": [{
+                    "matcher": "^(startup|resume|clear|compact|fork)$",
+                    "hooks": [{"type": "command", "command": command}],
+                }],
+                "Stop": [{"hooks": [{"type": "command",
+                                      "command": "python3 " + closing_hook}]}],
+            }}
+            (config_dir / "settings.json").write_text(
+                json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+            return ["--setting-sources", "project"]
+
+        closing_block_dir = hook_dir / "closing-block"
+        closing_block_dir.mkdir()
+        for name in ("closing_block.py", "herdr_status.py", "herdr-codex-notify.py"):
+            shutil.copy2(ROOT / "src/integration/assets/closing-block" / name,
+                         closing_block_dir / name)
+        notify_marker = hook_dir / "notify-called"
+        notify_wrapper = hook_dir / "codex-notify-probe.py"
+        notify_wrapper.write_text(
+            "import os, sys\n"
+            f"open({str(notify_marker)!r}, 'a', encoding='utf-8').write('called\\n')\n"
+            f"os.execv(sys.executable, [sys.executable, {str(closing_block_dir / 'herdr-codex-notify.py')!r}, *sys.argv[1:]])\n",
+            encoding="utf-8")
+        self.notify_markers[ident] = notify_marker
+        notify = ["python3", str(notify_wrapper)]
+        return ["-c", "notify=" + json.dumps(notify)]
+
+    def real_agent_setup_evidence(self, ident: str, error: Exception) -> str:
+        """Capture the isolated pane screen when real-agent setup fails."""
+        label = "real-" + ident
+        pane = self.panes.get(label)
+        if not pane:
+            return str(error)
+        agents = self.cli("agent", "list", check=False)
+        agent_payload = _last_json(agents.stdout)
+        agent_rows = ((agent_payload or {}).get("result") or {}).get("agents", [])
+        pane_agent = next((item for item in agent_rows
+                           if isinstance(item, dict) and item.get("pane_id") == pane), {})
+        agent_session = pane_agent.get("agent_session") or {}
+        hook_observation = {
+            "pane_status": pane_agent.get("agent_status"),
+            "session_source": agent_session.get("source"),
+            "session_reported": bool(agent_session.get("value")),
+            "socket_route_verified": ident in self.socket_probe_passed,
+            "codex_notify_called": self.notify_markers.get(ident, Path()).is_file()
+                if agent_session.get("source") == "herdr:codex" else None,
+        }
+        explain = self.cli("agent", "explain", pane, "--json", check=False)
+        explain_payload = _last_json(explain.stdout) or {}
+        matched_rule = explain_payload.get("matched_rule") or {}
+        hook_observation.update({
+            "screen_state": explain_payload.get("screen_state"),
+            "arbitration": explain_payload.get("arbitration"),
+            "matched_rule": matched_rule.get("id"),
+            "visible_idle": explain_payload.get("visible_idle"),
+            "visible_working": explain_payload.get("visible_working"),
+        })
+        screen = self.cli("pane", "read", pane, "--source", "detection", "--lines", "60",
+                          "--format", "text", check=False)
+        process = self.cli("pane", "process-info", "--pane", pane, check=False)
+        body = (f"setup_error: {error}\npane: {pane}\nhook_observation: "
+                f"{json.dumps(hook_observation, sort_keys=True)}\n\n"
+                f"process_info:\n{process.stdout}{process.stderr}\n"
+                f"pane_read:\n{screen.stdout}{screen.stderr}")
+        evidence_dir = self.args.out / "real-agent-setup-errors"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        evidence_path = evidence_dir / f"{ident}.txt"
+        evidence_path.write_text(body, encoding="utf-8")
+        return f"{body}\nevidence_file: {evidence_path}"
+
+    def accept_real_agent_folder_trust(self, pane_id: str) -> bool:
+        """Accept the CLI trust gate only inside this probe's temporary cwd."""
+        screen = self.cli("pane", "read", pane_id, "--source", "detection", "--lines", "50",
+                          "--format", "text", check=False)
+        text = screen.stdout
+        if "Trust this folder?" in text and "1. Trust and continue" in text:
+            keys = ["enter"]
+        elif ("Quick safety check: Is this a project you created or one you trust?" in text
+              and "Yes, I trust this folder" in text):
+            keys = ["down", "enter"]
+        else:
+            return False
+        self.cli("pane", "send-keys", pane_id, *keys)
+        return True
+
+    def real_agent_process_running(self, pane_id: str, agent: str) -> bool:
+        result = self.cli("pane", "process-info", "--pane", pane_id, check=False)
+        payload = _last_json(result.stdout)
+        if not isinstance(payload, dict):
+            return False
+        info = _find_value(payload, "process_info")
+        processes = info.get("foreground_processes", []) if isinstance(info, dict) else []
+        return any(isinstance(item, dict) and item.get("name", "").lower() == agent
+                   for item in processes)
 
     def wait_for_pane_stable(self, pane_id: str, ready_lines: tuple[str, ...]) -> None:
         deadline = time.monotonic() + 20
@@ -318,6 +498,253 @@ class Harness:
                                      "model_latency_ms": payload["_model_latency_ms"],
                                      "result": payload}, sort_keys=True) + "\n")
         return payload
+
+    def run_real_agent_case(self, agent: str, ident: str, footer: str) -> dict[str, Any]:
+        """Exercise watchdog behavior in a real interactive agent pane."""
+        executable = shutil.which(agent)
+        if not executable:
+            return {"id": ident, "watchdog": "real-agents", "expected": "pass",
+                    "actual": "skipped", "match": None,
+                    "evidence": f"skipped: {agent} executable is unavailable"}
+        # Keep both agents in empty temporary directories. Codex project trust
+        # and repo-local instructions must not affect the acceptance probe.
+        cwd_override = self.real_agent_cwds[ident]
+        hook_args = self.real_agent_hook_args[ident]
+        pane = self.workspace("real-" + ident, "", (), report_fixture_agent=False,
+                              cwd_override=cwd_override)
+        socket_probe = (
+            "import os; print('watchdog socket probe=' + "
+            "('ok' if os.environ.get('HERDR_SOCKET_PATH') == " + repr(str(self.sock))
+            + " and not os.environ.get('HERDR_CLIENT_SOCKET_PATH') else 'bad'), flush=True)"
+        )
+        self.cli("pane", "run", pane, "python3 -c " + shlex.quote(socket_probe))
+        self.wait_for_pane_stable(pane, ("watchdog socket probe=ok",))
+        if "watchdog socket probe=ok" not in self.real_agent_screen(pane):
+            raise RuntimeError("real-agent shell did not retain the isolated API socket override")
+        self.socket_probe_passed.add(ident)
+        agent_name = "wd-" + hashlib.sha256(ident.encode()).hexdigest()[:12]
+        start_args = ["agent", "start", agent_name, "--kind", agent,
+                      "--timeout", "30000",
+                      "--pane", pane]
+        if agent == "claude":
+            start_args += ["--", "--model", "sonnet", "--tools", "",
+                           *hook_args]
+        else:
+            start_args += ["--", "--model", "gpt-6-luna", "-c",
+                           "model_reasoning_effort=low", "-c", "check_for_update_on_startup=false",
+                           "--disable", "multi_agent", "--disable", "multi_agent_v2",
+                           "--sandbox", "read-only", *hook_args]
+        interactive_env = self.env.copy()
+        interactive_env["HERDR_INTERACTIVE"] = "1"
+        startup_deadline = time.monotonic() + 15
+        started: subprocess.CompletedProcess[str]
+        while True:
+            started = subprocess.run([str(self.args.binary), *start_args], cwd=self.root,
+                                     env=interactive_env, text=True, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, timeout=40, check=False)
+            if started.returncode and self.accept_real_agent_folder_trust(pane):
+                if time.monotonic() < startup_deadline:
+                    time.sleep(.5)
+                    continue
+            if started.returncode and self.real_agent_process_running(pane, agent):
+                # A retry after a startup-state transition can see the already
+                # launched process and return agent_name_taken. Reuse the pane
+                # process we just started instead of treating it as setup loss.
+                started.returncode = 0
+                break
+            if started.returncode == 0 or "agent_pane_busy" not in (started.stdout + started.stderr):
+                break
+            if time.monotonic() >= startup_deadline:
+                break
+            time.sleep(.5)
+        if started.returncode:
+            detail = (started.stdout + started.stderr)[-1200:]
+            process = self.cli("pane", "process-info", "--pane", pane, check=False)
+            detail += "\nprocess-info=" + (process.stdout + process.stderr)[-1000:]
+            pane_state = self.call("pane.read", {"pane_id": pane, "source": "detection",
+                "lines": 40, "format": "text"})
+            screen = (pane_state.get("read") or {}).get("text", "")
+            detail += "\npane-screen=" + screen[-1400:]
+            if "prompt-bar.sh" in detail:
+                return {"id": ident, "watchdog": "real-agents", "expected": "pass",
+                        "actual": "skipped", "match": None,
+                        "evidence": "skipped: host shell startup hook kept the isolated pane "
+                                   "from reaching an available prompt"}
+            if "readonly database" in detail.lower() or "read-only database" in detail.lower():
+                return {"id": ident, "watchdog": "real-agents", "expected": "pass",
+                        "actual": "skipped", "match": None,
+                        "evidence": "skipped: Codex subscription profile state database is "
+                                   "read-only in this execution environment"}
+            if any(token in detail.lower() for token in ("not logged", "not authenticated",
+                                                         "login required", "log in to",
+                                                         "authentication failed", "sign in")):
+                return {"id": ident, "watchdog": "real-agents", "expected": "pass",
+                        "actual": "skipped", "match": None,
+                        "evidence": f"skipped: {agent} subscription auth unavailable: {detail}"}
+            dialog = self.real_agent_dialog(screen)
+            if dialog:
+                raise RuntimeError(f"blocking_dialog:{dialog}: agent start failed: {detail}")
+            raise RuntimeError(f"agent start failed: {detail}")
+        if agent == "codex":
+            self.trust_codex_hooks_for_probe(pane)
+        interim_footer = "Now: idle"
+        interim_block = "**Needs you: nothing.**\n**Now:** idle\nDone here."
+        prompt = ("This is a watchdog acceptance probe. Reply with the exact word READY. "
+                  "Then end your reply with exactly this closing block on its own final lines:\n\n"
+                  + interim_block + "\nDo not add text after it.")
+        self.prepare_real_agent_prompt(pane)
+        response = self.cli("agent", "prompt", pane, prompt, "--wait",
+                            "--timeout", "30000", timeout=40)
+        if response.returncode:
+            raise RuntimeError("initial real-agent prompt failed: " + response.stderr[-900:])
+        time.sleep(1)
+        if ident.endswith("waiting_on_you"):
+            closing_block = (
+                "**Needs you (1)**\n"
+                "1. **Decide** — Continue the acceptance probe?\n"
+                "   1a) Continue.\n"
+                "   1b) Stop.\n"
+                "Reply 1a / 1b. Silence holds.\n"
+                "**Now:** " + footer.removeprefix("Now: ")
+            )
+            expected_status = "blocked"
+            final_marker = "Now: waiting on you"
+        elif ident.endswith("done_here"):
+            closing_block = "**Needs you: nothing.**\n**Now:** idle\nDone here."
+            expected_status = "idle"
+            final_marker = "Done here."
+        else:
+            closing_block = "**Needs you: nothing.**\n" + footer
+            expected_status = ("working" if ident.endswith("vendor_callback")
+                               else ("idle" if agent == "claude" else "unknown"))
+            final_marker = footer
+        final_prompt = ("Reply with the exact word READY, then end this turn with exactly "
+                        "this closing block on its own final lines:\n\n" + closing_block
+                        + "\nDo not add text after it.")
+        self.prepare_real_agent_prompt(pane)
+        if ident.endswith("waiting_on_you"):
+            # First let the model finish, then inspect its actual pane output.
+            # Waiting for the blocked hook here would hide a malformed reply
+            # behind a timeout and leave no chance to repair the setup.
+            response = self.cli("agent", "prompt", pane, final_prompt, "--wait",
+                                "--timeout", "30000", timeout=40, check=False)
+            def observe_closing_setup() -> tuple[bool, dict[str, Any], str]:
+                agents_result = self.cli("agent", "list", check=False)
+                agents_payload = _last_json(agents_result.stdout)
+                rows = ((agents_payload or {}).get("result") or {}).get("agents", [])
+                row = next((item for item in rows if isinstance(item, dict)
+                            and item.get("pane_id") == pane), {})
+                parsed, fields = _closing_setup_signal(row)
+                screen_result = self.call("pane.read", {"pane_id": pane,
+                    "source": "detection", "lines": 40, "format": "text"})
+                tail = (screen_result.get("read") or {}).get("text", "")[-1200:]
+                return parsed, fields, tail
+
+            parsed, structured_fields, pane_tail = observe_closing_setup()
+            if not parsed:
+                retry_prompt = (
+                    "The closing-block parser has not reported a parsed blocking item yet. "
+                    "Reply READY and finish with this closing block:\n\n" + closing_block)
+                self.prepare_real_agent_prompt(pane)
+                response = self.cli("agent", "prompt", pane, retry_prompt, "--wait", "--until",
+                                    expected_status, "--timeout", "30000", timeout=40,
+                                    check=False)
+                parsed, structured_fields, pane_tail = observe_closing_setup()
+            if not parsed:
+                raise RuntimeError("real agent closing-block parser did not report a parsed "
+                    "blocking item after one retry; structured fields: "
+                    + json.dumps(structured_fields, sort_keys=True)
+                    + "; pane tail: " + pane_tail)
+        else:
+            response = self.cli("agent", "prompt", pane, final_prompt, "--wait", "--until",
+                                expected_status, "--timeout", "30000", timeout=40)
+            if response.returncode:
+                raise RuntimeError("closing-block real-agent prompt failed: " + response.stderr[-900:])
+        settled = self.cli("agent", "wait", pane, "--until", expected_status,
+                           "--timeout", "30000", timeout=40, check=False)
+        if settled.returncode:
+            raise RuntimeError(f"real agent hook did not report {expected_status} before stall clock: "
+                               + settled.stderr[-900:])
+        agent_list = self.cli("agent", "list", check=False)
+        agent_payload = _last_json(agent_list.stdout)
+        agent_rows = ((agent_payload or {}).get("result") or {}).get("agents", [])
+        pane_agent = next((item for item in agent_rows
+                           if isinstance(item, dict) and item.get("pane_id") == pane), {})
+        agent_session = pane_agent.get("agent_session") or {}
+        session_source = agent_session.get("source")
+        if session_source != "herdr:" + agent or not agent_session.get("value"):
+            raise RuntimeError(f"real {agent} SessionStart hook did not report through the "
+                               f"isolated server: source={session_source!r}")
+        hook_status = pane_agent.get("agent_status")
+        if hook_status != expected_status:
+            raise RuntimeError(f"real {agent} status hook reported {hook_status!r}; "
+                               f"expected {expected_status!r}")
+        screen_result = self.call("pane.read", {"pane_id": pane, "source": "detection",
+            "lines": 40, "format": "text"})
+        screen_text = (screen_result.get("read") or {}).get("text", "")
+        if not ident.endswith("waiting_on_you") and (
+                final_marker not in screen_text or interim_footer not in screen_text):
+            raise RuntimeError(f"real agent did not change from {interim_footer!r} to "
+                               f"{final_marker!r}: {screen_text[-1200:]}")
+        # Remove any agent-created composer draft before taking the watchdog baseline.
+        self.cli("pane", "send-keys", pane, "ctrl+u")
+        pane_before = self.real_agent_screen(pane)
+        state = self.root / f"{ident}.json"
+        log = self.root / f"{ident}.jsonl"
+        options = ["--stall-secs", str(self.args.real_stall_secs),
+            "--quiet-secs", str(self.args.real_quiet_secs), "--state-file", str(state),
+            "--status-log", str(log), "--confirm-secs", "0", "--no-model"]
+        self.run_watchdog("A", options, dry=False)
+        time.sleep(self.args.real_stall_secs + self.args.real_quiet_secs + 1)
+        payload = self.run_watchdog("A", options, dry=False)
+        pane_after = self.real_agent_screen(pane)
+        logged_rows = ([json.loads(line) for line in log.read_text().splitlines() if line.strip()]
+                       if log.exists() else [])
+        decision = next((item for item in payload.get("decisions", [])
+                         if item.get("pane_id") == pane), {})
+        actual = decision.get("class", "missing")
+        status = decision.get("status")
+        evidence = decision.get("evidence", "")
+        # This was the fixed prompt used by the removed watchdog send path.
+        watchdog_text = "resume: continue your open work to its done criterion"
+        no_input_fields = all(key not in decision for key in
+                              ("action", "action_text", "delivered", "reason", "attempt"))
+        no_attempt_rows = all(not any(key in row for key in
+                              ("action", "action_text", "delivered", "reason", "attempt"))
+                              for row in logged_rows)
+        pane_untouched_by_watchdog = watchdog_text not in pane_before + pane_after
+        if ident.endswith("promised_idle"):
+            classification_ok = (actual in ("stalled", "finished_idle")
+                                 and "promised work stopped" in str(evidence)
+                                 and status in ("corrected", "consistent"))
+        elif ident.endswith("waiting_on_you"):
+            classification_ok = actual == "waiting_human" and status in ("corrected", "consistent")
+        elif ident.endswith("done_here"):
+            classification_ok = (actual == "finished_idle"
+                                 and decision.get("new_state", "done") in ("done", None)
+                                 and status in ("corrected", "consistent"))
+        else:
+            # Vendor-specific callback screens are intentionally recorded as observed.
+            classification_ok = bool(actual != "missing" and status is not None)
+        matched = (classification_ok and no_input_fields and no_attempt_rows
+                   and pane_untouched_by_watchdog)
+        observation = {"class": actual, "status": status, "new_state": decision.get("new_state"),
+                      "evidence": evidence, "hook_session_source": session_source,
+                      "hook_status": hook_status,
+                      "socket_route_verified": ident in self.socket_probe_passed,
+                      "codex_notify_called": self.notify_markers.get(ident, Path()).is_file()
+                          if agent == "codex" else None,
+                      "no_nudge_fields": no_input_fields,
+                      "no_attempt_rows": no_attempt_rows,
+                      "pane_has_no_watchdog_text": pane_untouched_by_watchdog,
+                      "pane_tail": pane_after[-1800:]}
+        expected = ("stalled/finished_idle with promised work stopped" if ident.endswith("promised_idle")
+                    else "waiting_human" if ident.endswith("waiting_on_you")
+                    else "idle/done" if ident.endswith("done_here")
+                    else "record main classification as observed")
+        return {"id": ident, "watchdog": "real-agents", "expected": expected,
+                "actual": actual, "match": matched,
+                "evidence": json.dumps(observation, sort_keys=True)}
 
     def age_memory(self, path: Path, key: str, seconds: int, *, session: str | None = None) -> None:
         try:
@@ -476,6 +903,19 @@ def _last_json(text: str) -> Any:
         except json.JSONDecodeError:
             continue
     return None
+
+
+def _closing_setup_signal(agent_row: dict[str, Any]) -> tuple[bool, dict[str, Any]]:
+    """Check the parser's structured report for a blocking closing item."""
+    tokens = agent_row.get("tokens")
+    tokens = tokens if isinstance(tokens, dict) else {}
+    fields = {key: tokens.get(key) for key in
+              ("closing_parse", "closing_blocking", "closing_wait")}
+    try:
+        blocking_count = int(tokens.get("closing_blocking", 0))
+    except (TypeError, ValueError):
+        blocking_count = 0
+    return tokens.get("closing_parse") == "ok" and blocking_count >= 1, fields
 
 
 def _find_value(value: Any, key: str) -> Any:
@@ -816,6 +1256,18 @@ CASES: list[tuple[str, str, Callable[[Harness, str], Any], str]] = [
 ]
 
 
+REAL_AGENT_CASES = [
+    (f"real_{agent}_{suffix}", agent, footer)
+    for agent in ("claude", "codex")
+    for suffix, footer in (
+        ("promised_idle", "Now: preparing the acceptance response"),
+        ("waiting_on_you", "Now: waiting on you"),
+        ("done_here", "Done here."),
+        ("vendor_callback", "Now: wait — the vendor's callback"),
+    )
+]
+
+
 def self_test(args: argparse.Namespace) -> int:
     h = Harness(args)
     try:
@@ -870,6 +1322,10 @@ def main() -> int:
     parser.add_argument("--peer")
     parser.add_argument("--peer-binary", type=Path)
     parser.add_argument("--confirm-secs", type=int, default=5)
+    parser.add_argument("--real-agents", action="store_true",
+                        help="run the real Claude/Codex classification group")
+    parser.add_argument("--real-stall-secs", type=int, default=2)
+    parser.add_argument("--real-quiet-secs", type=int, default=2)
     parser.add_argument("--only", action="append", help="case id to run (repeatable; comma-separated also accepted)")
     parser.add_argument("--gemini-bin", help="pass through to the pane watchdog")
     parser.add_argument("--self-test", action="store_true", help="exercise fixture setup/teardown only")
@@ -881,6 +1337,8 @@ def main() -> int:
         parser.error(f"binary not found: {args.binary}")
     if args.confirm_secs < 0:
         parser.error("--confirm-secs must be nonnegative")
+    if args.real_stall_secs < 1 or args.real_quiet_secs < 1:
+        parser.error("--real-stall-secs and --real-quiet-secs must be positive")
     args.out.mkdir(parents=True, exist_ok=True)
     if args.self_test:
         try:
@@ -893,8 +1351,12 @@ def main() -> int:
     selected = ({part.strip() for value in args.only for part in value.split(",")}
                 if args.only else None)
     known = {case[0] for case in CASES}
+    known.update(case[0] for case in REAL_AGENT_CASES)
     if selected and selected - known:
         parser.error("unknown --only case(s): " + ", ".join(sorted(selected - known)))
+    real_selected = selected.intersection(case[0] for case in REAL_AGENT_CASES) if selected else set()
+    if real_selected and not args.real_agents:
+        parser.error("real-agent --only cases require --real-agents")
     if args.gemini_bin:
         located = shutil.which(args.gemini_bin)
         gemini_path = Path(located or args.gemini_bin).resolve()
@@ -904,8 +1366,54 @@ def main() -> int:
     harness = Harness(args)
     rows: list[dict[str, Any]] = []
     try:
-        harness.start()
+        run_fixtures = selected is None or bool(selected.intersection(case[0] for case in CASES))
+        if run_fixtures:
+            harness.start()
+        if args.real_agents:
+            agent_skips: dict[str, str] = {}
+            for ident, agent, footer in REAL_AGENT_CASES:
+                if selected is not None and ident not in selected:
+                    continue
+                if agent in agent_skips:
+                    rows.append({"id": ident, "watchdog": "real-agents", "expected": "pass",
+                                 "actual": "skipped", "match": None,
+                                 "evidence": "skipped: " + agent_skips[agent]})
+                    continue
+                real_harness = Harness(args, real_agent=True)
+                try:
+                    if shutil.which(agent):
+                        probe_cwd = real_harness.root / f"{agent}-cwd-{ident}"
+                        probe_cwd.mkdir()
+                        hook_args = real_harness.configure_real_agent_hooks(agent, ident, probe_cwd)
+                        real_harness.real_agent_cwds[ident] = probe_cwd
+                        real_harness.real_agent_hook_args[ident] = hook_args
+                    real_harness.start()
+                    row = real_harness.run_real_agent_case(agent, ident, footer)
+                    rows.append(row)
+                    if row["actual"] == "skipped":
+                        agent_skips[agent] = str(row.get("evidence", "agent unavailable")).removeprefix(
+                            "skipped: ")
+                except Exception as exc:
+                    evidence = real_harness.real_agent_setup_evidence(ident, exc)
+                    if agent == "claude" and any(marker in evidence.lower() for marker in
+                            ("erofs", "read-only file system", "read-only filesystem")):
+                        reason = ("Claude SessionStart hook requires writing under the read-only "
+                                  "home directory")
+                        agent_skips[agent] = reason
+                        rows.append({"id": ident, "watchdog": "real-agents", "expected": "pass",
+                                     "actual": "skipped", "match": None,
+                                     "evidence": "skipped: " + reason})
+                    else:
+                        rows.append({"id": ident, "watchdog": "real-agents",
+                                     "expected": "real-agent classification", "actual": "setup_error",
+                                     "setup_error": str(exc), "model_calls": 0, "match": False,
+                                     "evidence": evidence, "wall_time_ms": None,
+                                     "model_latency_ms": None})
+                finally:
+                    real_harness.cleanup()
         for ident, family, setup, expected in CASES:
+            if not run_fixtures:
+                break
             if selected is not None and ident not in selected:
                 continue
             try:
@@ -1009,7 +1517,7 @@ def main() -> int:
                          "match": case_match,
                          "evidence": evidence, "wall_time_ms": payload.get("_wall_time_ms"),
                          "model_latency_ms": payload.get("_model_latency_ms")})
-        incident = (harness.incident_rearm_check() if selected is None else
+        incident = (harness.incident_rearm_check() if selected is None and run_fixtures else
                     {"skipped": True, "match": True})
         # The raw incident result has no match field; evaluate its observations.
         incident["match"] = incident.get("match", True) and (incident.get("skipped", False) or (
@@ -1031,9 +1539,12 @@ def main() -> int:
                  "| Case | Watchdog | Expected | Actual | Match |", "|---|---|---|---|---|"]
         lines.extend(f"| {r['id']} | {r['watchdog']} | {r['expected']} | {r['actual']} | {'yes' if r['match'] else 'no'} |" for r in rows)
         (args.out / "matrix.md").write_text("\n".join(lines) + "\n")
-        print(f"MATRIX {args.out / 'matrix.md'} matched={sum(r['match'] for r in rows)}/{len(rows)} "
+        print(f"MATRIX {args.out / 'matrix.md'} matched={sum(r['match'] is True for r in rows)}/{len(rows)} "
               f"incident_rearm={'pass' if incident['match'] else 'fail'}")
-        return 0 if rows and all(r["match"] for r in rows) and incident["match"] else 1
+        valid = all(r["match"] is True for r in rows if r["watchdog"] != "real-agents")
+        valid = valid and all(r["match"] is True or r["actual"] == "skipped"
+                              for r in rows if r["watchdog"] == "real-agents")
+        return 0 if rows and valid and incident["match"] else 1
     finally:
         harness.cleanup()
         for sig, handler in previous_handlers.items():

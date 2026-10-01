@@ -414,6 +414,24 @@ Waiting on you — 1 item (1), 0 blocking.
 
 
 class ClosingBlockV2Tests(unittest.TestCase):
+    def test_numbered_needs_you_decision_maps_to_blocked(self):
+        text = (
+            "**Needs you (1)**\n"
+            "1. **Decide** — Continue the acceptance probe?\n"
+            "   1a) Continue.\n"
+            "   1b) Stop.\n"
+            "Reply 1a / 1b. Silence holds.\n"
+            "**Now:** waiting on Matthias"
+        )
+
+        block = closing_block.parse(text)
+
+        self.assertEqual(block.blocking, 1)
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.wire_items()[0]["label"], "Decide")
+        self.assertTrue(block.wire_items()[0]["blocking"])
+
     def test_settle_ready_requires_both_markers_in_the_final_six_nonempty_lines(self):
         self.assertTrue(
             closing_block.settle_ready(
