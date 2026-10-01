@@ -2362,6 +2362,12 @@
           "type": "string",
           "default": "ub2",
           "description": "Fleet host that produces Aloops findings and run records. When it matches `self_name`, Herdr reads the local store instead of using SSH."
+        },
+        {
+          "key": "remote.fleet.inbox_host",
+          "type": "string",
+          "default": "remote.fleet.aloop_host",
+          "description": "Fleet host that runs `agent-inbox healthcheck --json` for the Inbox sidebar section."
         }
       ]
     },

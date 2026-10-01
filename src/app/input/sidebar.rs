@@ -731,6 +731,14 @@ impl AppState {
         let Some(selected) = self.sidebar_selected_work_group.clone() else {
             return SidebarWorkGroupKeyAction::Ignored;
         };
+        if (selected == "inbox"
+            || selected == format!("section:{}", crate::ui::sidebar::INBOX_SECTION_TITLE))
+            && key.code == KeyCode::Enter
+            && key.modifiers.is_empty()
+        {
+            self.toggle_sidebar_group(crate::ui::sidebar::INBOX_SECTION_TITLE);
+            return SidebarWorkGroupKeyAction::Consumed;
+        }
         if selected == crate::ui::sidebar::PODS_SECTION_TITLE {
             if key.code == KeyCode::Enter && key.modifiers.is_empty() {
                 self.toggle_sidebar_group(crate::ui::sidebar::PODS_SECTION_TITLE);
@@ -1259,6 +1267,7 @@ impl AppState {
                 | crate::ui::SidebarRow::AloopCleanRun { .. }
                 | crate::ui::SidebarRow::AloopUnreachable { .. }
                 | crate::ui::SidebarRow::AloopEmpty
+                | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
                 | crate::ui::SidebarRow::AgentRun { .. } => None,
@@ -1303,6 +1312,7 @@ impl AppState {
                 | crate::ui::SidebarRow::AloopCleanRun { .. }
                 | crate::ui::SidebarRow::AloopUnreachable { .. }
                 | crate::ui::SidebarRow::AloopEmpty
+                | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
                 | crate::ui::SidebarRow::AgentRun { .. } => None,
@@ -3439,6 +3449,7 @@ mod tests {
                 | crate::ui::SidebarRow::AloopCleanRun { key, .. } => format!("aloop:row:{key}"),
                 crate::ui::SidebarRow::AloopUnreachable { .. } => "aloop:unreachable".to_string(),
                 crate::ui::SidebarRow::AloopEmpty => "aloop:empty".to_string(),
+                crate::ui::SidebarRow::Inbox(_) => "inbox".to_string(),
             })
             .collect()
     }

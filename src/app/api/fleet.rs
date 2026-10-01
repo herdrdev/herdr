@@ -132,6 +132,7 @@ mod tests {
         );
         app.state.fleet_snapshot = crate::fleet::Snapshot {
             aloop: None,
+            inbox: None,
             polled: true,
             refreshed_at: None,
             refreshed_at_unix_ms: Some(42),
@@ -188,6 +189,7 @@ mod tests {
         );
         app.state.fleet_snapshot = crate::fleet::Snapshot {
             aloop: None,
+            inbox: None,
             polled: true,
             refreshed_at: None,
             refreshed_at_unix_ms: Some(42),

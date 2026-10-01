@@ -241,6 +241,7 @@ fn mobile_switcher_target_for_row(
         | SidebarRow::AloopCleanRun { .. }
         | SidebarRow::AloopUnreachable { .. }
         | SidebarRow::AloopEmpty
+        | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { summary: None, .. } => return None,
     })
 }
@@ -281,6 +282,7 @@ fn mobile_sidebar_row_height(app: &AppState, row: &SidebarRow) -> usize {
         | SidebarRow::AloopCleanRun { .. }
         | SidebarRow::AloopUnreachable { .. }
         | SidebarRow::AloopEmpty
+        | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { .. } => 1,
         SidebarRow::NeedsYou { subtitle, .. } => 1 + usize::from(subtitle.is_some()),
     }
@@ -416,6 +418,13 @@ pub(crate) fn mobile_switcher_target_at(
         if doc_row >= cursor && doc_row < cursor + row_height {
             if let SidebarRow::SectionHeader { title, .. } = entry {
                 return Some(MobileSwitcherTarget::Section(title));
+            } else if matches!(
+                entry,
+                SidebarRow::Inbox(crate::ui::sidebar::inbox::InboxLine::Header { .. })
+            ) {
+                return Some(MobileSwitcherTarget::Section(
+                    crate::ui::sidebar::INBOX_SECTION_TITLE,
+                ));
             }
             return mobile_switcher_target_for_row(app, content, col, doc_row, cursor, entry);
         }
@@ -1418,6 +1427,114 @@ fn render_mobile_switcher_content(
                     Line::from(Span::styled(label, Style::default().fg(p.overlay0))),
                 );
             }
+            SidebarRow::Inbox(line) => {
+                let snapshot = app.fleet_snapshot.inbox.as_ref();
+                let (label, style) = match line {
+                    crate::ui::sidebar::inbox::InboxLine::Header { collapsed } => {
+                        let enabled = snapshot.is_some_and(|value| value.data.inbox_enabled);
+                        let new = snapshot.map_or(0, |value| {
+                            value
+                                .data
+                                .sources
+                                .iter()
+                                .map(|source| source.undelivered)
+                                .sum()
+                        });
+                        (
+                            format!(
+                                "{} inbox {}  {new} new",
+                                if *collapsed { "▸" } else { "▾" },
+                                if enabled { "● on" } else { "○ OFF" }
+                            ),
+                            Style::default().fg(p.text),
+                        )
+                    }
+                    crate::ui::sidebar::inbox::InboxLine::Switch => {
+                        let enabled = snapshot.is_some_and(|value| value.data.inbox_enabled);
+                        (
+                            format!(
+                                "  {}  timer {}",
+                                if enabled { "● on" } else { "○ OFF" },
+                                snapshot.map_or("unknown", |value| value.data.timer_state.as_str())
+                            ),
+                            Style::default().fg(p.overlay0),
+                        )
+                    }
+                    crate::ui::sidebar::inbox::InboxLine::Columns => (
+                        "  src      last    cur  new".into(),
+                        Style::default().fg(p.overlay0),
+                    ),
+                    crate::ui::sidebar::inbox::InboxLine::Source(index) => {
+                        let Some(source) =
+                            snapshot.and_then(|value| value.data.sources.get(*index))
+                        else {
+                            continue;
+                        };
+                        let style = if source.error.is_some() {
+                            Style::default().fg(p.red)
+                        } else if source.enabled {
+                            Style::default().fg(p.green)
+                        } else {
+                            Style::default().fg(p.overlay0)
+                        };
+                        let dot = if source.error.is_some() {
+                            "✗"
+                        } else if source.enabled {
+                            "●"
+                        } else {
+                            "○"
+                        };
+                        let last = source
+                            .last_intake_time
+                            .as_deref()
+                            .and_then(crate::fleet::parse_utc_timestamp)
+                            .map(|at| {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                let elapsed = now.saturating_sub(at);
+                                if elapsed >= 86_400 {
+                                    format!("{}d", elapsed / 86_400)
+                                } else if elapsed >= 3_600 {
+                                    format!("{}h", elapsed / 3_600)
+                                } else {
+                                    format!("{}m", elapsed / 60)
+                                }
+                            })
+                            .unwrap_or_else(|| {
+                                if source.name == "whisper" {
+                                    "?".into()
+                                } else {
+                                    "never".into()
+                                }
+                            });
+                        let label = format!(
+                            "  {dot} {:<8} {} {} {}",
+                            source.name,
+                            last,
+                            source
+                                .cursor_age_s
+                                .map(|seconds| format!("{}m", seconds / 60))
+                                .unwrap_or_else(|| "?".into()),
+                            source.undelivered
+                        );
+                        (label, style)
+                    }
+                    crate::ui::sidebar::inbox::InboxLine::Fault(_) => {
+                        ("  ✗ healthcheck failed".into(), Style::default().fg(p.red))
+                    }
+                };
+                render_one_line_item(
+                    frame,
+                    viewport,
+                    content,
+                    doc_y,
+                    app.mobile_switcher_scroll,
+                    p.panel_bg,
+                    Line::from(Span::styled(label, style)),
+                );
+            }
         }
         doc_y += mobile_sidebar_row_height(app, row);
     }
@@ -1997,6 +2114,37 @@ fn draw_horizontal_rule(frame: &mut Frame, area: Rect, p: &Palette) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mobile_inbox_healthcheck_fault_hides_raw_error_detail() {
+        let detail = "connection refused at 127.0.0.1:8765";
+        let mut app = AppState::test_new();
+        app.fleet_snapshot.polled = true;
+        app.fleet_snapshot.inbox = Some(std::sync::Arc::new(
+            crate::inbox::ProducerSnapshot::unreachable("ub2".into(), detail.into()),
+        ));
+        app.collapsed_sidebar_groups.remove("repo:Inbox");
+
+        let area = Rect::new(0, 0, 60, 20);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(area.width, area.height))
+                .expect("mobile terminal");
+        terminal
+            .draw(|frame| {
+                render_mobile_switcher_content(&app, &TerminalRuntimeRegistry::new(), frame, area)
+            })
+            .expect("mobile render");
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+
+        assert!(text.contains("healthcheck failed"));
+        assert!(!text.contains(detail));
+    }
 
     #[test]
     fn mobile_header_aggregates_the_workspace_in_one_pane_pass() {

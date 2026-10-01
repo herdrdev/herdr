@@ -38,6 +38,8 @@ period and `remote.fleet.timeout_ms` as the deadline for each configured host.
 Set `remote.fleet.hosts[].session` to open that host's named Herdr session.
 Set `remote.fleet.symphony_host` to a configured host name when Temporal runs on
 another machine. When unset, Symphony keeps polling localhost.
+The Inbox sidebar section reads `agent-inbox healthcheck --json` from
+`remote.fleet.inbox_host`; when unset, it uses `remote.fleet.aloop_host`.
 
 <ConfigReference />
 

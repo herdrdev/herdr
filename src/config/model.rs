@@ -2014,6 +2014,8 @@ pub struct FleetConfig {
     /// it names this machine (`self_name`); then the local store is read.
     /// Default: "ub2".
     pub aloop_host: Option<String>,
+    /// Host that produces agent-inbox health data. Defaults to `aloop_host`.
+    pub inbox_host: Option<String>,
     /// Configured local and SSH hosts. Empty by default.
     pub hosts: Vec<FleetHostConfig>,
 }
@@ -2027,6 +2029,7 @@ impl Default for FleetConfig {
             heartbeat_stale_ms: 30 * 60 * 1_000,
             symphony_host: None,
             aloop_host: Some("ub2".to_string()),
+            inbox_host: None,
             hosts: Vec::new(),
         }
     }
@@ -2075,6 +2078,15 @@ impl FleetConfig {
             .filter(|name| !name.is_empty())
             .unwrap_or("ub2")
             .to_string()
+    }
+
+    pub(crate) fn resolved_inbox_host(&self) -> String {
+        self.inbox_host
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| self.resolved_aloop_host())
     }
 
     pub(crate) fn resolved_self_name_with_hostname(&self, hostname: Option<String>) -> String {
@@ -2729,6 +2741,7 @@ default_surfaces = ["home", "pull_request", "hosts", "keys", "note"]
         assert!(defaults.hosts.is_empty());
         // MAT-159 SCH2: the aloop producer host defaults to ub2.
         assert_eq!(defaults.resolved_aloop_host(), "ub2");
+        assert_eq!(defaults.resolved_inbox_host(), "ub2");
 
         let config: Config = toml::from_str(
             r#"
@@ -2737,6 +2750,7 @@ self_name = "laptop"
 refresh_interval_ms = 30000
 symphony_host = "workbox"
 aloop_host = "buildbox"
+inbox_host = "inboxbox"
 
 [[remote.fleet.hosts]]
 name = "workbox"
@@ -2754,6 +2768,7 @@ icon = "◆"
         );
         assert_eq!(config.remote.fleet.aloop_host.as_deref(), Some("buildbox"));
         assert_eq!(config.remote.fleet.resolved_aloop_host(), "buildbox");
+        assert_eq!(config.remote.fleet.resolved_inbox_host(), "inboxbox");
         assert_eq!(
             config.remote.fleet.hosts[0].session.as_deref(),
             Some("agents")
@@ -2762,6 +2777,10 @@ icon = "◆"
 
         let blank: FleetConfig = toml::from_str("aloop_host = \"  \"").expect("blank aloop host");
         assert_eq!(blank.resolved_aloop_host(), "ub2");
+        assert_eq!(blank.resolved_inbox_host(), "ub2");
+        let inherited: FleetConfig =
+            toml::from_str("aloop_host = \"producer\"").expect("inherited inbox host");
+        assert_eq!(inherited.resolved_inbox_host(), "producer");
     }
 
     #[test]

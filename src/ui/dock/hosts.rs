@@ -323,6 +323,7 @@ mod tests {
         unreachable.error = Some("ssh: connection refused".to_string());
         app.fleet_snapshot = crate::fleet::Snapshot {
             aloop: None,
+            inbox: None,
             polled: true,
             refreshed_at: Some(SystemTime::UNIX_EPOCH),
             refreshed_at_unix_ms: Some(0),

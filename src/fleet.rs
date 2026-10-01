@@ -387,6 +387,8 @@ pub(crate) struct Snapshot {
     /// `remote.fleet.aloop_host`. Process-local evidence, not wire data.
     #[serde(skip)]
     pub(crate) aloop: Option<crate::aloop::ProducerSnapshot>,
+    #[serde(skip)]
+    pub(crate) inbox: Option<Arc<crate::inbox::ProducerSnapshot>>,
     pub(crate) configured_hosts: Vec<String>,
     pub(crate) hosts: Vec<HostSnapshot>,
     /// Complete owner catalogs observed by the periodic fleet poll. Admission
@@ -1712,6 +1714,10 @@ impl Snapshot {
                 .aloop
                 .clone()
                 .filter(|aloop| aloop.host == fleet.resolved_aloop_host()),
+            inbox: self
+                .inbox
+                .clone()
+                .filter(|inbox| inbox.host == fleet.resolved_inbox_host()),
             configured_hosts: fleet.hosts.iter().map(|host| host.name.clone()).collect(),
             hosts,
             group_catalogs,
@@ -1972,6 +1978,10 @@ fn poll_without_generation(fleet: &FleetConfig) -> Snapshot {
                     polling_fleet.resolved_aloop_host(),
                     error.clone(),
                 )),
+                inbox: Some(Arc::new(crate::inbox::ProducerSnapshot::unreachable(
+                    polling_fleet.resolved_inbox_host(),
+                    error.clone(),
+                ))),
                 configured_hosts: polling_fleet
                     .hosts
                     .iter()
@@ -2717,6 +2727,7 @@ struct HostEvidence {
     /// Aloops producer data, requested only from the host named by
     /// `remote.fleet.aloop_host`.
     aloop: Option<Result<crate::aloop::HostData, String>>,
+    inbox: Option<Result<crate::inbox::Healthcheck, String>>,
 }
 
 pub(crate) fn collect_rows(hosts: &[FleetHostConfig], fleet: &FleetConfig) -> Vec<FleetRow> {
@@ -2743,6 +2754,7 @@ fn collect_snapshot_with_implicit_local(
 ) -> Snapshot {
     let timeout = Duration::from_millis(fleet.timeout_ms);
     let aloop_host = fleet.resolved_aloop_host();
+    let producer_host = fleet.resolved_inbox_host();
     let evidence = std::thread::scope(|scope| {
         let handles = hosts
             .iter()
@@ -2750,12 +2762,12 @@ fn collect_snapshot_with_implicit_local(
             .map(|host| {
                 let fallback = host.clone();
                 let runs_only = host.local && implicit_local_name.as_deref() == Some(&host.name);
-                let include_aloop = host.name == aloop_host;
+                let include_aloop = host.name == aloop_host || host.name == producer_host;
                 (
                     fallback,
                     scope.spawn(move || {
                         if runs_only {
-                            fetch_local_run_host(host, include_aloop)
+                            fetch_local_run_host(host, include_aloop, timeout)
                         } else {
                             fetch_host_with(reader, host, timeout, include_aloop)
                         }
@@ -2775,6 +2787,7 @@ fn collect_snapshot_with_implicit_local(
                     runtime: HostRuntime::default(),
                     sessions: None,
                     aloop: None,
+                    inbox: None,
                 },
             })
             .collect::<Vec<_>>()
@@ -2783,7 +2796,11 @@ fn collect_snapshot_with_implicit_local(
     snapshot_from_evidence(hosts, fleet, evidence, SystemTime::now())
 }
 
-fn fetch_local_run_host(host: FleetHostConfig, include_aloop: bool) -> HostEvidence {
+fn fetch_local_run_host(
+    host: FleetHostConfig,
+    include_aloop: bool,
+    timeout: Duration,
+) -> HostEvidence {
     HostEvidence {
         host,
         agents: Ok(Vec::new()),
@@ -2792,6 +2809,7 @@ fn fetch_local_run_host(host: FleetHostConfig, include_aloop: bool) -> HostEvide
         runtime: HostRuntime::default(),
         sessions: None,
         aloop: include_aloop.then(crate::aloop::read_local_host_data),
+        inbox: include_aloop.then(|| read_local_inbox(timeout)),
     }
 }
 
@@ -2814,6 +2832,16 @@ fn snapshot_from_evidence(
             let evidence = &evidence[index];
             evidence
                 .aloop
+                .as_ref()
+                .map(|result| result.as_ref().map_err(Clone::clone).cloned())
+        });
+    let inbox_host = fleet.resolved_inbox_host();
+    let inbox_evidence = evidence
+        .iter()
+        .position(|evidence| evidence.host.name == inbox_host)
+        .and_then(|index| {
+            evidence[index]
+                .inbox
                 .as_ref()
                 .map(|result| result.as_ref().map_err(Clone::clone).cloned())
         });
@@ -2962,6 +2990,7 @@ fn snapshot_from_evidence(
             .and_then(|duration| u64::try_from(duration.as_millis()).ok()),
         config_generation: 0,
         aloop: aloop_snapshot_from_evidence(fleet, aloop_evidence),
+        inbox: inbox_snapshot_from_evidence(fleet, inbox_evidence, refreshed_at),
         configured_hosts: configured_hosts
             .iter()
             .map(|host| host.name.clone())
@@ -3026,6 +3055,52 @@ fn aloop_snapshot_from_evidence(
             })
         }
         None => Some(crate::aloop::ProducerSnapshot::unconfigured(aloop_host)),
+    }
+}
+
+fn inbox_snapshot_from_evidence(
+    fleet: &FleetConfig,
+    evidence: Option<Result<crate::inbox::Healthcheck, String>>,
+    refreshed_at: SystemTime,
+) -> Option<Arc<crate::inbox::ProducerSnapshot>> {
+    let host = fleet.resolved_inbox_host();
+    Some(Arc::new(match evidence {
+        Some(Ok(data)) => crate::inbox::ProducerSnapshot::read(host, data, refreshed_at),
+        Some(Err(error)) => crate::inbox::ProducerSnapshot::unreachable(host, error),
+        None if host == fleet.resolved_self_name() => {
+            match read_local_inbox(Duration::from_millis(fleet.timeout_ms)) {
+                Ok(data) => crate::inbox::ProducerSnapshot::read(host, data, refreshed_at),
+                Err(error) => crate::inbox::ProducerSnapshot::unreachable(host, error),
+            }
+        }
+        None => crate::inbox::ProducerSnapshot::unconfigured(host),
+    }))
+}
+
+fn read_local_inbox(timeout: Duration) -> Result<crate::inbox::Healthcheck, String> {
+    let mut child = std::process::Command::new("agent-inbox")
+        .args(["healthcheck", "--json"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("agent-inbox healthcheck failed: {error}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            let output = child
+                .wait_with_output()
+                .map_err(|error| error.to_string())?;
+            if !status.success() {
+                return Err("agent-inbox healthcheck failed".to_string());
+            }
+            return crate::inbox::parse_healthcheck(&output.stdout);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("agent-inbox healthcheck timed out".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -3119,6 +3194,7 @@ fn fetch_local_host(host: FleetHostConfig, timeout: Duration, include_aloop: boo
     let sessions = fetch_session_inventory(&client, timeout);
     let runs = local_run_states();
     let aloop = include_aloop.then(crate::aloop::read_local_host_data);
+    let inbox = include_aloop.then(|| read_local_inbox(timeout));
     HostEvidence {
         host,
         agents,
@@ -3127,6 +3203,7 @@ fn fetch_local_host(host: FleetHostConfig, timeout: Duration, include_aloop: boo
         runtime,
         sessions: Some(sessions.map(|(snapshot, loops)| (Some(snapshot), loops))),
         aloop,
+        inbox,
     }
 }
 
@@ -3338,6 +3415,10 @@ fn fetch_remote_host(
         )
         .and_then(|output| parse_remote_aloop_output(&output))
     });
+    let inbox = include_aloop.then(|| {
+        run_ssh_with_timeout(&host.target, "agent-inbox healthcheck --json", timeout)
+            .and_then(|output| crate::inbox::parse_healthcheck(&output))
+    });
     HostEvidence {
         host,
         agents,
@@ -3346,6 +3427,7 @@ fn fetch_remote_host(
         runtime,
         sessions,
         aloop,
+        inbox,
     }
 }
 
@@ -4815,6 +4897,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 sessions: None,
                 aloop: None,
+                inbox: None,
             }
         }
 
@@ -4833,6 +4916,7 @@ mod tests {
                 runtime: self.runtime.clone(),
                 sessions: None,
                 aloop: None,
+                inbox: None,
             }
         }
     }
@@ -5959,6 +6043,7 @@ mod tests {
                     }],
                 ))),
                 aloop: None,
+                inbox: None,
             }],
             SystemTime::UNIX_EPOCH,
         );
@@ -6840,6 +6925,7 @@ mod tests {
                 runtime: HostRuntime::default(),
                 sessions: None,
                 aloop: None,
+                inbox: None,
             }],
             UNIX_EPOCH + Duration::from_secs(1_758_099_600), // 2025-09-17T09:00:00Z
         )
@@ -6949,6 +7035,7 @@ mod tests {
                 runtime: HostRuntime::default(),
                 sessions: None,
                 aloop: None,
+                inbox: None,
             }],
             SystemTime::UNIX_EPOCH,
         );
@@ -8192,6 +8279,7 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
                 runtime: HostRuntime::default(),
                 sessions: None,
                 aloop: Some(Ok(crate::aloop::HostData::default())),
+                inbox: None,
             }],
             SystemTime::UNIX_EPOCH,
         );

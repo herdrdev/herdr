@@ -1,5 +1,6 @@
 pub(crate) mod aloops;
 pub(crate) mod devices;
+pub(crate) mod inbox;
 mod runs;
 #[cfg(test)]
 mod tokens;
@@ -3311,6 +3312,7 @@ pub(crate) enum SidebarRow {
     },
     /// The producer answered and no finding is pending (AC6).
     AloopEmpty,
+    Inbox(inbox::InboxLine),
 }
 
 pub(crate) const SNOOZED_SECTION_TITLE: &str = "Snoozed";
@@ -3329,6 +3331,7 @@ pub(crate) const RUNS_SECTION_TITLE: &str = "Runs";
 /// Aloops findings and runs from the producer host (MAT-159). The count is
 /// the number of pending findings.
 pub(crate) const ALOOPS_SECTION_TITLE: &str = "Aloops";
+pub(crate) const INBOX_SECTION_TITLE: &str = "Inbox";
 
 pub(crate) const NO_REPO_YET_SECTION_TITLE: &str = "No repo yet";
 pub(crate) const UNASSIGNED_PRS_SECTION_TITLE: &str = "Unassigned PRs";
@@ -3349,7 +3352,7 @@ pub(crate) fn sidebar_area_is_visible(app: &AppState, area: crate::config::Sideb
     !app.sidebar_sections_layout || app.sidebar_areas.is_visible(area)
 }
 
-const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 8] = [
+const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 9] = [
     WORKING_SECTION_TITLE,
     NEEDS_YOU_SECTION_TITLE,
     SNOOZED_SECTION_TITLE,
@@ -3357,6 +3360,7 @@ const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 8] = [
     FLEET_SECTION_TITLE,
     RUNS_SECTION_TITLE,
     ALOOPS_SECTION_TITLE,
+    INBOX_SECTION_TITLE,
     SYMPHONY_SECTION_TITLE,
 ];
 
@@ -5471,6 +5475,7 @@ fn append_ordered_sidebar_blocks(
                 if sidebar_area_is_visible(app, crate::config::SidebarArea::Aloops) {
                     aloops::append_rows(app, &mut block_rows);
                 }
+                inbox::append_rows(app, &mut block_rows);
                 if sidebar_area_is_visible(app, crate::config::SidebarArea::Symphony) {
                     append_symphony_rows(app, &mut block_rows);
                 }
@@ -7883,6 +7888,7 @@ fn sidebar_row_height(app: &AppState, row: &SidebarRow, body_height: u16) -> u16
         | SidebarRow::AloopCleanRun { .. }
         | SidebarRow::AloopUnreachable { .. }
         | SidebarRow::AloopEmpty
+        | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { .. } => 1,
     }
 }
@@ -7955,7 +7961,8 @@ fn sidebar_row_gap(app: &AppState, rows: &[SidebarRow], row_idx: usize) -> u16 {
             | SidebarRow::AloopCleanRuns { .. }
             | SidebarRow::AloopCleanRun { .. }
             | SidebarRow::AloopUnreachable { .. }
-            | SidebarRow::AloopEmpty,
+            | SidebarRow::AloopEmpty
+            | SidebarRow::Inbox(_),
             _,
         )
         | (
@@ -7967,7 +7974,8 @@ fn sidebar_row_gap(app: &AppState, rows: &[SidebarRow], row_idx: usize) -> u16 {
             | SidebarRow::AloopCleanRuns { .. }
             | SidebarRow::AloopCleanRun { .. }
             | SidebarRow::AloopUnreachable { .. }
-            | SidebarRow::AloopEmpty,
+            | SidebarRow::AloopEmpty
+            | SidebarRow::Inbox(_),
         ) => 0,
         // Strip rows hug each other and the divider that closes the strip.
         (SidebarRow::NeedsYou { .. } | SidebarRow::NeedsYouMore { .. }, _)
@@ -8049,6 +8057,7 @@ pub(crate) fn sidebar_row_belongs_to_workspace(row: &SidebarRow, ws_idx: usize) 
         | SidebarRow::AloopCleanRun { .. }
         | SidebarRow::AloopUnreachable { .. }
         | SidebarRow::AloopEmpty
+        | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { .. } => false,
     }
 }
@@ -8204,6 +8213,7 @@ pub(crate) fn compute_sidebar_row_areas(
             | SidebarRow::AloopCleanRun { .. }
             | SidebarRow::AloopUnreachable { .. }
             | SidebarRow::AloopEmpty
+            | SidebarRow::Inbox(_)
             | SidebarRow::AgentRun { .. } => {}
         }
         row_y = row_y
@@ -8938,6 +8948,27 @@ pub(crate) fn compute_sidebar_hover_targets(
                 } else {
                     "The watchdog checks working agents for stale status.".into()
                 },
+                false,
+            ),
+            SidebarRow::Inbox(inbox::InboxLine::Source(index)) => {
+                let label = inbox::hover_detail(
+                    app,
+                    &inbox::InboxLine::Source(*index),
+                    std::time::SystemTime::now(),
+                );
+                let Some(label) = label else { continue };
+                (label, false)
+            }
+            SidebarRow::Inbox(line @ inbox::InboxLine::Header { .. }) => {
+                let Some(label) = inbox::hover_detail(app, line, std::time::SystemTime::now())
+                else {
+                    continue;
+                };
+                (label, false)
+            }
+            SidebarRow::Inbox(line @ inbox::InboxLine::Fault(label)) => (
+                inbox::hover_detail(app, line, std::time::SystemTime::now())
+                    .unwrap_or_else(|| label.clone()),
                 false,
             ),
             _ => continue,
@@ -9945,6 +9976,11 @@ pub(crate) fn compute_sidebar_section_header_areas(
                 title,
                 rect: Rect::new(body.x, y, body.width, height),
             });
+        } else if matches!(row, SidebarRow::Inbox(inbox::InboxLine::Header { .. })) {
+            out.push(SectionHeaderArea {
+                title: INBOX_SECTION_TITLE,
+                rect: Rect::new(body.x, y, body.width, height),
+            });
         }
         y = y
             .saturating_add(height)
@@ -10453,6 +10489,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
             | SidebarRow::AloopCleanRun { .. }
             | SidebarRow::AloopUnreachable { .. }
             | SidebarRow::AloopEmpty
+            | SidebarRow::Inbox(_)
             | SidebarRow::AgentRun { .. } => {}
             // The rail keeps the strip's one fact: something needs you.
             SidebarRow::NeedsYou { blocked, .. } => {
@@ -11859,6 +11896,9 @@ fn render_workspace_list(
     }
     for area in aloops::areas(app, sidebar_area) {
         aloops::render(app, frame, &area, symphony_now);
+    }
+    for area in inbox::areas(app, sidebar_area) {
+        inbox::render(app, frame, &area, symphony_now);
     }
     for card in tab_cards {
         render_tab_card(app, frame, &card, narrow_prefix, &row_entries);
@@ -18199,7 +18239,8 @@ pub(crate) mod tests {
                 | SidebarRow::AloopCleanRuns { .. }
                 | SidebarRow::AloopCleanRun { .. }
                 | SidebarRow::AloopUnreachable { .. }
-                | SidebarRow::AloopEmpty => None,
+                | SidebarRow::AloopEmpty
+                | SidebarRow::Inbox(_) => None,
             })
             .collect()
     }
@@ -19631,6 +19672,7 @@ pub(crate) mod tests {
                 | SidebarRow::AloopCleanRun { .. }
                 | SidebarRow::AloopUnreachable { .. }
                 | SidebarRow::AloopEmpty
+                | SidebarRow::Inbox(_)
                 | SidebarRow::AgentRun { .. } => None,
             })
             .collect::<Vec<_>>();
@@ -19694,6 +19736,7 @@ pub(crate) mod tests {
                     | SidebarRow::AloopCleanRun { .. }
                     | SidebarRow::AloopUnreachable { .. }
                     | SidebarRow::AloopEmpty => ("aloop", 0, None, None),
+                    SidebarRow::Inbox(_) => ("inbox", 0, None, None),
                 })
                 .collect::<Vec<_>>()
         };
@@ -21957,7 +22000,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 | SidebarRow::AloopCleanRuns { .. }
                 | SidebarRow::AloopCleanRun { .. }
                 | SidebarRow::AloopUnreachable { .. }
-                | SidebarRow::AloopEmpty => None,
+                | SidebarRow::AloopEmpty
+                | SidebarRow::Inbox(_) => None,
             })
             .collect()
     }
@@ -29216,7 +29260,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 | SidebarRow::AloopCleanRuns { .. }
                 | SidebarRow::AloopCleanRun { .. }
                 | SidebarRow::AloopUnreachable { .. }
-                | SidebarRow::AloopEmpty => None,
+                | SidebarRow::AloopEmpty
+                | SidebarRow::Inbox(_) => None,
             })
             .collect()
     }
@@ -31400,6 +31445,41 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             "v"
         );
         assert!(sidebar_header_mode_label(&app).starts_with("GitHub"));
+    }
+
+    #[test]
+    fn inbox_fault_row_hover_target_carries_the_producer_error() {
+        let mut app = AppState::test_new();
+        app.fleet_snapshot.polled = true;
+        app.fleet_snapshot.inbox = Some(std::sync::Arc::new(crate::inbox::ProducerSnapshot {
+            host: "ub2".into(),
+            state: crate::inbox::ProducerState::Unreachable("connection refused".into()),
+            data: crate::inbox::Healthcheck::default(),
+            refreshed_at: Some(std::time::SystemTime::now()),
+        }));
+        app.toggle_sidebar_group(INBOX_SECTION_TITLE);
+
+        let rows = sidebar_rows(&app);
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row, SidebarRow::Inbox(inbox::InboxLine::Fault(_)))),
+            "inbox fault row missing"
+        );
+
+        let area = Rect::new(0, 0, 60, 40);
+        let fault_rect = inbox::areas(&app, area)
+            .into_iter()
+            .find(|row| matches!(row.line, inbox::InboxLine::Fault(_)))
+            .expect("visible inbox fault row")
+            .rect;
+        let targets = compute_sidebar_hover_targets(&app, area);
+        assert!(
+            targets
+                .iter()
+                .any(|target| target.rect == fault_rect
+                    && target.label.contains("connection refused")),
+            "fault row hover target should carry producer error; targets: {targets:?}"
+        );
     }
 
     #[test]

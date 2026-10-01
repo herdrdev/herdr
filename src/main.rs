@@ -79,6 +79,7 @@ mod goals;
 mod groups;
 mod handoff_runtime;
 mod hyperspace;
+mod inbox;
 mod input;
 mod integration;
 mod ipc;
@@ -667,6 +668,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # timeout_ms = 5000
 # heartbeat_stale_ms = 1800000
 # symphony_host = "server" # optional fleet host running Temporal; default is local
+# aloop_host = "ub2"      # producer for the Aloops and, by default, Inbox sections
+# inbox_host = "ub2"       # optional Inbox healthcheck host; defaults to aloop_host
 # [[remote.fleet.hosts]]
 # name = "local"
 # local = true
