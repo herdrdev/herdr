@@ -26,10 +26,13 @@ use starfield::Level;
 
 /// The box, in cells. Terminal cells are about twice as tall as they are wide,
 /// so two columns per row is what actually looks square on screen.
+#[cfg(test)]
 const BOX_COLS: u16 = 12;
+#[cfg(test)]
 const BOX_ROWS: u16 = 6;
 
 /// Rows the current-layout workspace list keeps before the animation may claim any.
+#[cfg(test)]
 const MIN_LIST_ROWS_BESIDE_ANIMATION: u16 = 6;
 
 /// Shown while the field is moving: clicking it stops the animation.
@@ -49,6 +52,7 @@ fn button_glyph(app: &AppState) -> &'static str {
 /// that cannot be its full size is not a square, so it is not drawn at all.
 /// Zero whenever it is off, the sidebar is collapsed or too narrow, or the list
 /// would fall below its layout's minimum row count.
+#[cfg(test)]
 pub(crate) fn animation_height(app: &AppState, content: Rect) -> u16 {
     if !app.hyperspace.enabled || app.sidebar_collapsed || content.width < BOX_COLS {
         return 0;
@@ -67,6 +71,7 @@ pub(crate) fn animation_height(app: &AppState, content: Rect) -> u16 {
 
 /// The box itself, in the bottom-left corner of the content area. The reserved
 /// rows span the sidebar's width; the box only takes the left of them.
+#[cfg(test)]
 pub(crate) fn animation_box_rect(app: &AppState, content: Rect) -> Rect {
     let height = animation_height(app, content);
     if height == 0 {
@@ -100,6 +105,7 @@ fn level_color(level: Level, palette: &Palette) -> ratatui::style::Color {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn render_animation(app: &AppState, frame: &mut Frame, boxed: Rect) {
     let hovered = matches!(
         app.hovered_control,
@@ -392,41 +398,18 @@ mod render_tests {
         }
     }
 
-    /// The panel is only shipped if it reaches the real sidebar, under the
-    /// notepad and above the footer icons.
     #[test]
-    fn the_box_reaches_the_bottom_left_of_the_real_sidebar() {
+    fn removed_sidebar_animation_has_no_render_area() {
         const WIDTH: u16 = 120;
         const HEIGHT: u16 = 40;
         let mut app = enabled();
         crate::ui::compute_view(&mut app, Rect::new(0, 0, WIDTH, HEIGHT));
-        let boxed = app.view.hyperspace_rect;
-        assert!(boxed.height > 0, "a full-height sidebar holds the box");
-        assert_eq!(boxed.x, app.view.sidebar_rect.x, "left edge");
-        assert_eq!(
-            boxed.bottom(),
-            app.view.sidebar_rect.bottom() - 1,
-            "the footer icon row keeps the last row"
-        );
-        assert!(
-            boxed.width < app.view.sidebar_rect.width,
-            "it must not span the sidebar"
-        );
-
-        let mut terminal = Terminal::new(TestBackend::new(WIDTH, HEIGHT)).expect("test terminal");
-        terminal
-            .draw(|frame| crate::ui::render(&app, frame))
-            .expect("render");
-        let buffer = terminal.backend().buffer();
-        let top: String = (boxed.x..boxed.right())
-            .map(|x| buffer[(x, boxed.y)].symbol())
-            .collect();
-        assert!(top.starts_with('┌') && top.ends_with('┐'), "{top:?}");
+        assert_eq!(app.view.hyperspace_rect, Rect::default());
+        assert_eq!(app.view.hyperspace_pause_hit_area, Rect::default());
     }
 
-    /// Switching it off has to give the rows back, not just stop drawing.
     #[test]
-    fn turning_it_off_returns_the_rows_to_the_workspace_list() {
+    fn animation_setting_does_not_change_workspace_list_geometry() {
         const WIDTH: u16 = 120;
         const HEIGHT: u16 = 40;
         let mut app = enabled();
@@ -439,6 +422,6 @@ mod render_tests {
 
         assert_eq!(app.view.hyperspace_rect, Rect::default());
         assert_eq!(app.view.hyperspace_pause_hit_area, Rect::default());
-        assert_eq!(without.height, with.height + BOX_ROWS);
+        assert_eq!(without, with);
     }
 }

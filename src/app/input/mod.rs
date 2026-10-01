@@ -1314,9 +1314,6 @@ impl App {
             StatusButtonAction::Dock => {
                 self.state.dock_collapsed = !self.state.dock_collapsed;
             }
-            StatusButtonAction::StatusDetail => {
-                self.state.status_bar_expanded = !self.state.status_bar_expanded;
-            }
         }
     }
 

@@ -2299,7 +2299,7 @@ fn window_navigation_order(state: &AppState) -> Vec<WindowCycleTarget> {
             crate::ui::SidebarRow::RemoteAgent { entry, .. } => Some(entry.agent_ref.clone()),
             _ => None,
         });
-        // Collapsed fleet rows still cycle unless skip-collapsed is on.
+        // Fleet agents live in normal sidebar groups and remain visible there.
         let hidden = state
             .remote_agent_panel_entries
             .iter()
@@ -4553,7 +4553,7 @@ mod tests {
     }
 
     #[test]
-    fn fleet_workspace_ac9_skip_collapsed_section_excludes_fleet_from_both_cycles() {
+    fn legacy_fleet_collapse_does_not_hide_remote_agents_from_cycles() {
         let mut state = AppState::test_new();
         state.workspaces = vec![Workspace::test_new("local")];
         state.ensure_test_terminals();
@@ -4566,12 +4566,12 @@ mod tests {
         state.collapsed_sidebar_groups.insert("repo:Fleet".into());
 
         let window_targets = window_navigation_order(&state);
-        assert!(!window_targets.contains(&WindowCycleTarget::Remote(agent_ref.clone())));
+        assert!(window_targets.contains(&WindowCycleTarget::Remote(agent_ref.clone())));
         let blocked_targets = blocked_pane_cycle(&state)
             .into_iter()
             .map(|(target, _)| target)
             .collect::<Vec<_>>();
-        assert!(!blocked_targets.contains(&BlockedPaneTarget::Remote(agent_ref)));
+        assert!(blocked_targets.contains(&BlockedPaneTarget::Remote(agent_ref)));
     }
 
     #[test]
@@ -5658,7 +5658,7 @@ mod tests {
     }
 
     #[test]
-    fn next_blocked_window_reaches_remote_needs_you_row_when_fleet_is_collapsed() {
+    fn next_blocked_window_reaches_remote_row_after_device_group_removal() {
         let mut state = AppState::test_new();
         state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         let remote = remote_blocker("ub2", "blocked-pane");
@@ -5673,7 +5673,7 @@ mod tests {
                 target: crate::ui::sidebar::NeedsYouTarget::Remote(target), ..
             } if *target == agent_ref
         )));
-        assert!(!rows.iter().any(|row| matches!(
+        assert!(rows.iter().any(|row| matches!(
             row,
             crate::ui::SidebarRow::RemoteAgent { entry, .. }
                 if entry.agent_ref == agent_ref

@@ -2786,8 +2786,6 @@ pub(crate) enum StatusButtonAction {
     BlockedFilter,
     Attention,
     Dock,
-    /// Expand or collapse the usage detail in the status row.
-    StatusDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4412,6 +4410,10 @@ pub struct AppState {
     /// reload. Shared session fact rather than presentation state: it decides
     /// what a dispatch actually runs.
     pub(crate) launch_profiles: Vec<crate::app::launch_profiles::LaunchProfile>,
+    /// Defaults selected from the fleet host picker for the next Home launch.
+    /// These are client-local preferences and do not alter an active agent.
+    pub(crate) next_home_machine: Option<String>,
+    pub(crate) next_home_profile: Option<String>,
     /// Checkout groups resolved from `[[projects]]`, scanned once at config
     /// time. Never rescanned from the render path: the scan reads directories.
     pub(crate) projects: Vec<crate::app::projects::Project>,
@@ -5451,19 +5453,23 @@ pub(crate) enum ControlId {
     TopBarGitMenu,
     TopBarPaneBelow,
     TopBarPaneRight,
+    StatusButton(usize),
     StatusSegment(StatusSegmentKind),
 }
 
 /// One right-aligned status-row segment, named for its hover explanation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatusSegmentKind {
-    Provider(crate::provider_usage::QuotaProvider),
+    /// Simple/extended status detail toggle at the start of the right group.
+    StatusDetail,
     Link,
     Agents,
     /// The `fleet:` label; clicking it toggles the device dots.
     FleetLabel,
     /// One other device that needs attention, by fleet host name.
     FleetDevice(usize),
+    /// Set a machine and best available launch profile for the next Home run.
+    FleetUseMachine(usize),
     RemoteHost,
     Hostname,
     Cpu,
@@ -7703,6 +7709,8 @@ impl AppState {
             home_agent_choices: Vec::new(),
             home_catalog: crate::app::home_catalog::HomeCatalog::fallback(),
             launch_profiles: crate::app::launch_profiles::resolve(&[]),
+            next_home_machine: None,
+            next_home_profile: None,
             projects: Vec::new(),
             machines: crate::app::machines::resolve(&crate::config::FleetConfig::default()),
             home_ref_cache: std::collections::HashMap::new(),

@@ -205,6 +205,14 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
         .into_iter()
         .find_map(|(control, rect)| rect_contains(rect, col, row).then_some(control))
         .or_else(|| {
+            view.status_buttons
+                .iter()
+                .enumerate()
+                .find_map(|(index, button)| {
+                    rect_contains(button.rect, col, row).then_some(ControlId::StatusButton(index))
+                })
+        })
+        .or_else(|| {
             view.status_segment_hit_areas
                 .iter()
                 .find_map(|(kind, rect)| {
@@ -394,51 +402,43 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
                 .find_map(|(candidate, rect)| (*candidate == kind).then_some(*rect))?,
             status_segment_tooltip(app, kind),
         ),
+        ControlId::StatusButton(index) => {
+            let button = view.status_buttons.get(index)?;
+            (
+                button.rect,
+                match button.action {
+                    crate::app::state::StatusButtonAction::Home => {
+                        "Home: overview of all workspaces"
+                    }
+                    crate::app::state::StatusButtonAction::Work => {
+                        "Work view: branches and pull requests"
+                    }
+                    crate::app::state::StatusButtonAction::BlockedFilter => {
+                        "Filter to blocked agents"
+                    }
+                    crate::app::state::StatusButtonAction::Attention => "Agents needing you",
+                    crate::app::state::StatusButtonAction::Dock => "Toggle dock panel",
+                }
+                .into(),
+            )
+        }
     };
     Some(target)
 }
 
 /// Names a status-row segment and where its value comes from.
 pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) -> String {
-    use crate::provider_usage::QuotaProvider;
     let metrics = app
         .status_metrics
         .as_ref()
         .map(|snapshot| &snapshot.metrics);
     match kind {
-        StatusSegmentKind::Provider(provider) => {
-            let name = match provider {
-                QuotaProvider::Claude => "Claude",
-                QuotaProvider::Codex => "Codex",
-                QuotaProvider::Kimi => "Kimi",
-                QuotaProvider::Agy => "Antigravity",
-            };
-            let usage = app.provider_usage.primary_usage(provider);
-            let peak = [usage.five_hour, usage.seven_day]
-                .into_iter()
-                .flatten()
-                .max_by_key(|window| window.used_percent);
-            let mut text = match peak {
-                Some(window) => format!("{name} quota: {}% of window used", window.used_percent),
-                None => format!("{name} quota: no usage reported"),
-            };
-            if let Some(email) = usage.email.as_deref() {
-                text.push_str(" \u{b7} ");
-                text.push_str(email);
-            }
-            if let Some(local) = peak
-                .and_then(|window| window.resets_at)
-                .and_then(|resets_at| u64::try_from(resets_at).ok())
-                .and_then(crate::platform::local_datetime_at)
-            {
-                text.push_str(&format!(
-                    " \u{b7} resets {:02}:{:02}",
-                    local.hour(),
-                    local.minute()
-                ));
-            }
-            text
+        StatusSegmentKind::StatusDetail => if app.status_bar_expanded {
+            "Extended status details"
+        } else {
+            "Simple status details"
         }
+        .into(),
         StatusSegmentKind::Link => if app.connectivity.is_online() {
             "Link: internet reachable"
         } else {
@@ -450,21 +450,68 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
             format!("Agents on this machine: {agents} active, {blocked} waiting on you")
         }
         StatusSegmentKind::FleetLabel => if app.fleet_status {
-            "Fleet: devices that need you. Click to hide"
+            "Fleet hosts"
         } else {
-            "Fleet: hidden. Click to show devices that need you"
+            "Fleet hosts are hidden. Click to show them"
         }
         .into(),
         StatusSegmentKind::FleetDevice(idx) => {
-            match app.fleet_snapshot.devices_needing_attention().get(idx) {
-                Some(device) if device.stale => {
-                    format!("{}: not answering, agent state unknown", device.name)
-                }
-                Some(device) => format!(
-                    "{}: {} blocked, {} working. Click to open the first blocked agent",
-                    device.name, device.blocked, device.working
+            let Some(machine) = app
+                .machines
+                .iter()
+                .filter(|machine| !machine.is_local())
+                .nth(idx)
+            else {
+                return "Fleet host".into();
+            };
+            let host = app
+                .fleet_snapshot
+                .hosts
+                .iter()
+                .find(|host| host.name == machine.name);
+            let status = match host.map(|host| host.state) {
+                Some(crate::fleet::HostState::Reachable) => format!(
+                    "online · {} agents",
+                    host.map_or(0, |host| host.entries.len())
                 ),
-                None => "Fleet device".into(),
+                Some(crate::fleet::HostState::Unreachable) => "offline".into(),
+                Some(crate::fleet::HostState::VersionSkew) => "version skew".into(),
+                None => "status unknown".into(),
+            };
+            let current = current_home_quota_source(app);
+            let providers = [
+                (crate::app::launch_profiles::QuotaSource::Agy, "Antigravity"),
+                (crate::app::launch_profiles::QuotaSource::Codex, "Codex"),
+                (crate::app::launch_profiles::QuotaSource::Kimi, "OpenCode"),
+            ]
+            .into_iter()
+            .map(|(provider, label)| {
+                if current == Some(provider) {
+                    format!("● {label} (current)")
+                } else {
+                    format!("○ {label}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" · ");
+            format!("{} · {status}\nProviders: {providers}", machine.name)
+        }
+        StatusSegmentKind::FleetUseMachine(idx) => {
+            let machine = app
+                .machines
+                .iter()
+                .filter(|machine| !machine.is_local())
+                .nth(idx);
+            match machine {
+                Some(machine) if best_home_profile(app).is_some() => format!(
+                    "Use {} and its best available model for the next Home launch",
+                    machine.name
+                ),
+                Some(machine) => format!(
+                    "{} · no configured provider currently reports remaining usage",
+                    machine.name
+                ),
+                None => "Set the next Home launch machine and model".into(),
             }
         }
         StatusSegmentKind::RemoteHost => match app.view.focused_remote_host.as_deref() {
@@ -479,6 +526,28 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
         StatusSegmentKind::Memory => "Memory used of installed total".into(),
         StatusSegmentKind::Disk => "Disk usage on / (shown above 80%)".into(),
     }
+}
+
+fn current_home_quota_source(app: &AppState) -> Option<crate::app::launch_profiles::QuotaSource> {
+    let profile_id = app
+        .home
+        .as_ref()
+        .map(|home| home.profile().id.as_str())
+        .or(app.next_home_profile.as_deref());
+    profile_id
+        .and_then(|id| app.launch_profiles.iter().find(|profile| profile.id == id))
+        .and_then(|profile| profile.quota)
+}
+
+fn best_home_profile(app: &AppState) -> Option<&crate::app::launch_profiles::LaunchProfile> {
+    app.launch_profiles.iter().find(|profile| {
+        profile.quota.is_some_and(|quota| {
+            quota
+                .usage(&app.provider_usage)
+                .peak_percent()
+                .is_some_and(|used| used < 100)
+        })
+    })
 }
 
 pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
@@ -700,6 +769,11 @@ mod tests {
         app.notepad.set_visible_tabs(vec!["usage".to_string()]);
         assert!(app.notepad.usage_tab || app.notepad.select_usage_tab());
         crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
+        assert_eq!(app.view.notepad_usage_hit_areas.len(), 1);
+        app.notepad
+            .usage_expanded_providers
+            .insert(crate::provider_usage::QuotaProvider::Claude);
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
 
         let header = app.view.notepad_usage_hit_areas[0];
         assert_eq!(
@@ -731,7 +805,7 @@ mod tests {
         );
         assert_eq!(
             tooltip_target(&app, ControlId::NotepadUsageToggle).map(|(_, label)| label),
-            Some("Collapse usage".to_string())
+            Some("Expand usage".to_string())
         );
     }
 }
@@ -740,16 +814,15 @@ mod tests {
 mod status_segments {
     use super::*;
     use crate::app::state::StatusSegmentKind;
-    use crate::provider_usage::QuotaProvider;
     use ratatui::layout::Rect;
 
     const ALL: [StatusSegmentKind; 11] = [
-        StatusSegmentKind::Provider(QuotaProvider::Claude),
-        StatusSegmentKind::Provider(QuotaProvider::Codex),
-        StatusSegmentKind::Provider(QuotaProvider::Kimi),
-        StatusSegmentKind::Provider(QuotaProvider::Agy),
+        StatusSegmentKind::StatusDetail,
         StatusSegmentKind::Link,
         StatusSegmentKind::Agents,
+        StatusSegmentKind::FleetLabel,
+        StatusSegmentKind::FleetDevice(0),
+        StatusSegmentKind::FleetUseMachine(0),
         StatusSegmentKind::RemoteHost,
         StatusSegmentKind::Hostname,
         StatusSegmentKind::Cpu,
@@ -779,36 +852,6 @@ mod status_segments {
     }
 
     #[test]
-    fn provider_quota_names_the_account_email_and_local_reset_time() {
-        let mut app = AppState::test_new();
-        let resets_at = 1_790_000_000;
-        {
-            let usage = app.provider_usage.primary_usage_mut(QuotaProvider::Claude);
-            usage.email = Some("team@x.so".into());
-            usage.five_hour = Some(crate::provider_usage::QuotaWindow {
-                used_percent: 42,
-                resets_at: Some(resets_at),
-            });
-        }
-        let local = crate::platform::local_datetime_at(resets_at as u64).expect("local time");
-        let expected_reset = format!("resets {:02}:{:02}", local.hour(), local.minute());
-        let label =
-            status_segment_tooltip(&app, StatusSegmentKind::Provider(QuotaProvider::Claude));
-        assert!(label.contains("42%"), "{label}");
-        assert!(label.contains("team@x.so"), "{label}");
-        assert!(label.contains(&expected_reset), "{label}");
-
-        // Unknown email is omitted, not rendered as a placeholder.
-        app.provider_usage
-            .primary_usage_mut(QuotaProvider::Claude)
-            .email = None;
-        let label =
-            status_segment_tooltip(&app, StatusSegmentKind::Provider(QuotaProvider::Claude));
-        assert!(!label.contains('@'), "{label}");
-        assert!(label.contains(&expected_reset), "{label}");
-    }
-
-    #[test]
     fn a_segment_that_elided_explains_nothing() {
         let app = AppState::test_new();
         assert!(tooltip_target(&app, ControlId::StatusSegment(StatusSegmentKind::Cpu)).is_none());
@@ -831,5 +874,33 @@ mod status_segments {
             areas.last().expect("segments").1.right(),
             area.width - reserved
         );
+    }
+
+    #[test]
+    fn configured_machine_tooltip_lists_providers_and_marks_current_profile() {
+        let mut app = AppState::test_new();
+        app.machines.push(crate::app::machines::Machine {
+            name: "workbox".into(),
+            icon: None,
+            target: Some("workbox".into()),
+            socket: None,
+        });
+        app.launch_profiles =
+            crate::app::launch_profiles::resolve(&[crate::config::LaunchProfileConfig {
+                id: "codex".into(),
+                label: "Codex".into(),
+                agent: "codex".into(),
+                command: Vec::new(),
+                env: Default::default(),
+                usage: Some("codex".into()),
+            }]);
+        app.next_home_profile = Some("codex".into());
+
+        let tooltip = status_segment_tooltip(&app, StatusSegmentKind::FleetDevice(0));
+
+        assert!(tooltip.contains("Antigravity"), "{tooltip}");
+        assert!(tooltip.contains("Codex (current)"), "{tooltip}");
+        assert!(tooltip.contains("OpenCode"), "{tooltip}");
+        assert!(tooltip.contains("status unknown"), "{tooltip}");
     }
 }

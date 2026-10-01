@@ -8189,8 +8189,6 @@ mod tests {
     use crate::protocol::{CellData, CursorState};
     use unicode_width::UnicodeWidthStr;
 
-    #[path = "../idle_render_tests.rs"]
-    mod idle_render_tests;
     #[path = "pane_graphics.rs"]
     mod pane_graphics_tests;
 
@@ -13554,11 +13552,8 @@ next_tab = ""
         );
     }
 
-    /// The animation ships through the server loop, not `App::run`, so this is
-    /// the path that has to advance it. It shipped ticking only in `App::run`,
-    /// which is why the field stood still in front of every real client.
     #[test]
-    fn an_attached_headless_server_advances_the_sidebar_animation() {
+    fn an_attached_headless_server_does_not_advance_the_removed_sidebar_animation() {
         let mut server = test_headless_server();
         server.app.state.hyperspace.enabled = true;
         let (writer, _control_rx, _render_rx) = test_client_writer();
@@ -13578,21 +13573,19 @@ next_tab = ""
             &mut server.app.state,
             ratatui::layout::Rect::new(0, 0, 120, 40),
         );
-        assert!(
-            server.app.state.view.hyperspace_rect.height > 0,
-            "the panel has to be on screen for the tick to mean anything"
+        assert_eq!(
+            server.app.state.view.hyperspace_rect,
+            ratatui::layout::Rect::default(),
+            "the removed sidebar panel has no render area"
         );
 
         let before = server.app.state.hyperspace.step();
         let now = Instant::now() + crate::hyperspace::FRAME_INTERVAL * 2;
-        assert!(
-            server.handle_scheduled_tasks_headless(now, false),
-            "advancing the field is a render-worthy change"
-        );
-        assert_ne!(
+        server.handle_scheduled_tasks_headless(now, false);
+        assert_eq!(
             server.app.state.hyperspace.step(),
             before,
-            "the star field has to move"
+            "an off-screen panel has no render-worthy animation ticks"
         );
     }
 

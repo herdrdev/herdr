@@ -225,6 +225,10 @@ impl AppState {
             .flatten();
         if let Some(kind) = status_kind {
             match kind {
+                crate::app::state::StatusSegmentKind::StatusDetail => {
+                    self.status_bar_expanded = !self.status_bar_expanded;
+                    return None;
+                }
                 crate::app::state::StatusSegmentKind::FleetLabel => {
                     // Persist like the dock strip toggle, so the choice
                     // survives restarts and a config reload.
@@ -238,18 +242,35 @@ impl AppState {
                     )));
                 }
                 crate::app::state::StatusSegmentKind::FleetDevice(idx) => {
-                    let target = self
+                    let machine = self
+                        .machines
+                        .iter()
+                        .filter(|machine| !machine.is_local())
+                        .nth(idx)?;
+                    let host = self
                         .fleet_snapshot
-                        .devices_needing_attention()
-                        .into_iter()
-                        .nth(idx)
-                        .and_then(|device| device.first_blocked);
-                    if let Some(agent_ref) = target {
-                        return Some(MouseAction::OpenFleetHost {
-                            name: agent_ref.host,
-                            focus_agent: Some(agent_ref.agent),
-                        });
-                    }
+                        .hosts
+                        .iter()
+                        .find(|host| host.name == machine.name)?;
+                    let focus_agent = host
+                        .entries
+                        .iter()
+                        .find(|entry| entry.blocked)
+                        .map(|entry| entry.agent_ref.agent.clone());
+                    return Some(MouseAction::OpenFleetHost {
+                        name: host.name.clone(),
+                        focus_agent,
+                    });
+                }
+                crate::app::state::StatusSegmentKind::FleetUseMachine(idx) => {
+                    let machine = self
+                        .machines
+                        .iter()
+                        .filter(|machine| !machine.is_local())
+                        .nth(idx)?
+                        .name
+                        .clone();
+                    self.set_next_home_target(&machine);
                     return None;
                 }
                 _ => {}
@@ -4467,7 +4488,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_sidebar_animation_button_toggles_its_pause() {
+    fn sidebar_no_longer_exposes_an_animation_pause_button() {
         let mut app = app_for_mouse_test();
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
@@ -4475,11 +4496,7 @@ mod tests {
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
 
         let button = app.state.view.hyperspace_pause_hit_area;
-        assert!(button.width > 0, "the panel offers a pause button");
-        assert_eq!(
-            button.x, app.state.view.sidebar_rect.x,
-            "the button sits in the sidebar's left column"
-        );
+        assert_eq!(button.width, 0);
         assert!(!app.state.hyperspace.paused());
 
         app.handle_mouse(mouse(
@@ -4487,17 +4504,14 @@ mod tests {
             button.x,
             button.y,
         ));
-        assert!(app.state.hyperspace.paused(), "one click stops the field");
+        assert!(!app.state.hyperspace.paused());
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             button.x,
             button.y,
         ));
-        assert!(
-            !app.state.hyperspace.paused(),
-            "a second click starts it again"
-        );
+        assert!(!app.state.hyperspace.paused());
     }
 
     #[test]
@@ -4509,7 +4523,7 @@ mod tests {
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
 
         let button = app.state.view.hyperspace_pause_hit_area;
-        assert!(button.width > 0);
+        assert_eq!(button.width, 0);
         // The footer icon row is one row below the panel, and it owns its own
         // clicks; a near miss must not toggle the animation.
         app.handle_mouse(mouse(
@@ -6993,7 +7007,7 @@ mod tests {
         );
         app.state.remote_agent_panel_entries = remote.remote_agent_panel_entries;
         app.state.sidebar_selected_remote_agent = Some(entry.agent_ref.clone());
-        app.state.collapsed_sidebar_groups.remove("repo:Fleet");
+        app.state.collapsed_sidebar_groups.remove("repo:Settled");
         app.state.sidebar_width = 60;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
         let control = app
@@ -11977,6 +11991,12 @@ mod fleet_status_click_tests {
         let config = Config::default();
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.machines = vec![crate::app::machines::Machine {
+            name: "ub1".into(),
+            icon: None,
+            target: Some("ub1".into()),
+            socket: None,
+        }];
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.ensure_test_terminals();
@@ -12058,5 +12078,34 @@ mod fleet_status_click_tests {
         assert!(!kinds
             .iter()
             .any(|k| matches!(k, StatusSegmentKind::FleetDevice(_))));
+    }
+
+    #[test]
+    fn clicking_machine_action_sets_only_the_next_home_target() {
+        let mut app = app_with_blocked_device();
+        let profile = crate::app::launch_profiles::resolve(&[crate::config::LaunchProfileConfig {
+            id: "codex".into(),
+            label: "Codex best".into(),
+            agent: "codex".into(),
+            command: vec![],
+            env: Default::default(),
+            usage: Some("codex".into()),
+        }]);
+        app.state.launch_profiles = profile;
+        app.state
+            .provider_usage
+            .primary_usage_mut(crate::provider_usage::QuotaProvider::Codex)
+            .five_hour = Some(crate::provider_usage::QuotaWindow {
+            used_percent: 32,
+            resets_at: None,
+        });
+
+        assert!(click_segment(&mut app, StatusSegmentKind::FleetUseMachine(0)).is_none());
+        assert_eq!(app.state.next_home_machine.as_deref(), Some("ub1"));
+        assert_eq!(app.state.next_home_profile.as_deref(), Some("codex"));
+        assert!(
+            app.state.home.is_none(),
+            "the action does not switch agents"
+        );
     }
 }

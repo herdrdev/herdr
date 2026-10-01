@@ -86,6 +86,8 @@ pub(crate) struct NotepadPresentationState {
     pub(crate) agent_tab: bool,
     pub(crate) usage_tab: bool,
     pub(crate) usage_collapsed: bool,
+    pub(crate) usage_expanded_providers:
+        std::collections::BTreeSet<crate::provider_usage::QuotaProvider>,
     pub(crate) agent_collapsed: AgentSectionCollapse,
     pub(crate) agent_scroll: usize,
     pub(crate) usage_scroll: usize,
@@ -147,6 +149,8 @@ pub(crate) struct NotepadState {
     pub(crate) usage_tab: bool,
     /// The provider rows in the read-only Usage tab are folded to one row per provider.
     pub(crate) usage_collapsed: bool,
+    pub(crate) usage_expanded_providers:
+        std::collections::BTreeSet<crate::provider_usage::QuotaProvider>,
     /// Folded agent-tab sections, kept for the rest of the client session.
     pub(crate) agent_collapsed: AgentSectionCollapse,
     /// Scroll offset of the agent-tab body, clamped by view computation.
@@ -176,7 +180,8 @@ impl Default for NotepadState {
             save_due: None,
             agent_tab: false,
             usage_tab: true,
-            usage_collapsed: false,
+            usage_collapsed: true,
+            usage_expanded_providers: std::collections::BTreeSet::new(),
             agent_collapsed: AgentSectionCollapse::default(),
             agent_scroll: 0,
             usage_scroll: 0,
@@ -189,6 +194,10 @@ impl NotepadState {
         std::mem::swap(&mut self.agent_tab, &mut other.agent_tab);
         std::mem::swap(&mut self.usage_tab, &mut other.usage_tab);
         std::mem::swap(&mut self.usage_collapsed, &mut other.usage_collapsed);
+        std::mem::swap(
+            &mut self.usage_expanded_providers,
+            &mut other.usage_expanded_providers,
+        );
         std::mem::swap(&mut self.agent_collapsed, &mut other.agent_collapsed);
         std::mem::swap(&mut self.agent_scroll, &mut other.agent_scroll);
         std::mem::swap(&mut self.usage_scroll, &mut other.usage_scroll);
@@ -438,6 +447,26 @@ impl NotepadState {
 
     pub(crate) fn toggle_usage_collapsed(&mut self) {
         self.usage_collapsed = !self.usage_collapsed;
+        self.usage_scroll = 0;
+    }
+
+    pub(crate) fn toggle_usage_provider(&mut self, provider: crate::provider_usage::QuotaProvider) {
+        if !self.usage_collapsed {
+            self.usage_collapsed = true;
+            self.usage_expanded_providers.clear();
+            for candidate in [
+                crate::provider_usage::QuotaProvider::Claude,
+                crate::provider_usage::QuotaProvider::Codex,
+                crate::provider_usage::QuotaProvider::Kimi,
+                crate::provider_usage::QuotaProvider::Agy,
+            ] {
+                if candidate != provider {
+                    self.usage_expanded_providers.insert(candidate);
+                }
+            }
+        } else if !self.usage_expanded_providers.remove(&provider) {
+            self.usage_expanded_providers.insert(provider);
+        }
         self.usage_scroll = 0;
     }
 

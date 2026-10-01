@@ -516,7 +516,7 @@ mod tests {
                 || toggle.y < tab.y
                 || toggle.y >= tab.bottom()
         }));
-        assert!(header.ends_with('▾'));
+        assert!(header.ends_with('▸'));
 
         app.notepad.toggle_usage_collapsed();
         let header = header_spans(&app, &app.palette, panel.width)
@@ -524,7 +524,7 @@ mod tests {
             .iter()
             .map(|span| span.content.as_ref())
             .collect::<String>();
-        assert!(header.ends_with('▸'));
+        assert!(header.ends_with('▾'));
     }
 
     #[test]

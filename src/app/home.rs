@@ -1858,7 +1858,44 @@ impl crate::app::state::AppState {
         home.set_profiles(self.launch_profiles.clone());
         home.set_projects(self.projects.clone());
         home.set_machines(self.machines.clone());
+        if let Some(profile) = self.next_home_profile.as_deref() {
+            home.set_profile(profile);
+        }
+        if let Some(machine) = self.next_home_machine.as_deref() {
+            home.set_machine(machine);
+        }
         home
+    }
+
+    /// Use the first configured launch profile that has a quota window left
+    /// for the next Home dispatch on this machine. Profile order is the local
+    /// config's ranking; this changes only future Home launches.
+    pub(crate) fn set_next_home_target(&mut self, machine: &str) -> bool {
+        if !self
+            .machines
+            .iter()
+            .any(|candidate| candidate.name == machine)
+        {
+            return false;
+        }
+        let profile = self.launch_profiles.iter().find(|profile| {
+            profile.quota.is_some_and(|quota| {
+                quota
+                    .usage(&self.provider_usage)
+                    .peak_percent()
+                    .is_some_and(|used| used < 100)
+            })
+        });
+        let Some(profile_id) = profile.map(|profile| profile.id.clone()) else {
+            return false;
+        };
+        self.next_home_machine = Some(machine.to_string());
+        self.next_home_profile = Some(profile_id.clone());
+        if let Some(home) = self.home.as_mut() {
+            home.set_machine(machine);
+            home.set_profile(&profile_id);
+        }
+        true
     }
 
     fn home_target_for_directory(&self, directory: &Path) -> HomeTarget {
@@ -2906,6 +2943,51 @@ impl crate::app::App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn machine_action_selects_the_best_profile_with_remaining_usage_for_future_home() {
+        let mut app = crate::app::AppState::test_new();
+        app.machines.push(crate::app::machines::Machine {
+            name: "ub1".into(),
+            icon: None,
+            target: Some("ub1".into()),
+            socket: None,
+        });
+        app.launch_profiles = crate::app::launch_profiles::resolve(&[
+            crate::config::LaunchProfileConfig {
+                id: "exhausted".into(),
+                label: "Exhausted".into(),
+                agent: "agy".into(),
+                command: Vec::new(),
+                env: Default::default(),
+                usage: Some("agy".into()),
+            },
+            crate::config::LaunchProfileConfig {
+                id: "available".into(),
+                label: "Available".into(),
+                agent: "codex".into(),
+                command: Vec::new(),
+                env: Default::default(),
+                usage: Some("codex".into()),
+            },
+        ]);
+        app.provider_usage
+            .primary_usage_mut(crate::provider_usage::QuotaProvider::Codex)
+            .seven_day = Some(crate::provider_usage::QuotaWindow {
+            used_percent: 61,
+            resets_at: None,
+        });
+
+        assert!(app.set_next_home_target("ub1"));
+        assert_eq!(app.next_home_machine.as_deref(), Some("ub1"));
+        assert_eq!(app.next_home_profile.as_deref(), Some("codex"));
+        let home = app.new_home_state();
+        assert_eq!(
+            home.machine().map(|machine| machine.name.as_str()),
+            Some("ub1")
+        );
+        assert_eq!(home.profile().id, "codex");
+    }
     use crate::layout::PaneId;
     use crate::terminal::TerminalId;
 
