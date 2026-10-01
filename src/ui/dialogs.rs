@@ -51,16 +51,27 @@ fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect, 
     // The text stops one column short of the field so the clamped caret always
     // lands on a blank cell: a host terminal inverts the cell under its cursor,
     // and an IME composes there.
+    let available = input_rect.width.saturating_sub(2);
+    let caret_byte = if input == app.name_input {
+        app.name_input_caret.min(input.len())
+    } else {
+        input.len()
+    };
+    let before = &input[..input.floor_char_boundary(caret_byte)];
+    let caret_column = display_width_u16(before);
+    let scroll = caret_column.saturating_sub(available);
     let text_rect = Rect {
         width: input_rect.width.saturating_sub(1),
         ..input_rect
     };
     frame.render_widget(
-        Paragraph::new(format!(" {input}")).style(
-            Style::default()
-                .fg(app.palette.text)
-                .bg(app.palette.surface0),
-        ),
+        Paragraph::new(format!(" {input}"))
+            .scroll((0, scroll))
+            .style(
+                Style::default()
+                    .fg(app.palette.text)
+                    .bg(app.palette.surface0),
+            ),
         text_rect,
     );
 
@@ -70,7 +81,7 @@ fn render_name_input_field(app: &AppState, frame: &mut Frame, input_rect: Rect, 
     let caret_x = input_rect
         .x
         .saturating_add(1)
-        .saturating_add(display_width_u16(input))
+        .saturating_add(caret_column.saturating_sub(scroll))
         .min(input_rect.right().saturating_sub(1));
     frame.set_cursor_position((caret_x, input_rect.y));
 }
@@ -1039,6 +1050,7 @@ mod tests {
         let mut app = AppState::test_new();
         app.open_client_overlay(overlay);
         app.name_input = name.into();
+        app.name_input_caret = name.len();
 
         let mut terminal = Terminal::new(TestBackend::new(RENAME_AREA.width, RENAME_AREA.height))
             .expect("test terminal");
@@ -1056,6 +1068,7 @@ mod tests {
     fn worktree_overlay_caret(branch: &str) -> Position {
         let mut app = AppState::test_new();
         app.name_input = branch.into();
+        app.name_input_caret = branch.len();
         app.worktree_create = Some(WorktreeCreateState {
             source_workspace_id: "source".into(),
             source_checkout_path: "/repo/herdr".into(),
@@ -1169,6 +1182,26 @@ mod tests {
     }
 
     #[test]
+    fn rename_overlay_renders_caret_at_unicode_boundary() {
+        let mut app = AppState::test_new();
+        app.open_client_overlay(crate::app::state::ClientOverlay::RenameWorkspace);
+        app.name_input = "a界z".into();
+        app.name_input_caret = "a界".len();
+        let mut terminal = Terminal::new(TestBackend::new(RENAME_AREA.width, RENAME_AREA.height))
+            .expect("test terminal");
+        terminal
+            .draw(|frame| render_rename_overlay(&app, frame, RENAME_AREA))
+            .expect("render");
+        assert_eq!(
+            terminal.get_cursor_position().expect("cursor"),
+            Position::new(
+                rename_input_rect(RENAME_AREA).x + 4,
+                rename_input_rect(RENAME_AREA).y
+            )
+        );
+    }
+
+    #[test]
     fn rename_overlay_caret_stays_inside_the_input_when_the_name_overflows() {
         let input = rename_input_rect(RENAME_AREA);
         let last_column = input.right() - 1;
@@ -1209,6 +1242,7 @@ mod tests {
         app.open_client_overlay(crate::app::state::ClientOverlay::RenameWorkspace);
         app.rename_target = Some(crate::app::state::RenameTarget::Workspace { workspace_id });
         app.name_input = "ab".into();
+        app.name_input_caret = app.name_input.len();
 
         // The widget tests above stop at the ratatui frame. This one goes through
         // the server's cursor resolution, which is where the bug lived: the frame

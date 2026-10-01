@@ -996,6 +996,7 @@ mod render_scale_benchmark {
             tab_id,
         });
         app.name_input = "ab".into();
+        app.name_input_caret = app.name_input.len();
 
         let (buffer, cursor) = render_virtual(&mut app, AREA, true);
         let cursor = cursor.expect("rename caret");

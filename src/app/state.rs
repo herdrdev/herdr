@@ -1861,6 +1861,7 @@ pub(crate) struct ClientOverlayState {
     pub(crate) confirm_close_workspace_id: Option<String>,
     pub(crate) confirm_close_remote_agent_ref: Option<crate::api::schema::AgentRef>,
     pub(crate) name_input: String,
+    pub(crate) name_input_caret: usize,
     pub(crate) name_input_replace_on_type: bool,
     pub(crate) creating_new_tab: bool,
     pub(crate) pending_workspace_create_cwd: Option<std::path::PathBuf>,
@@ -4636,6 +4637,7 @@ pub struct AppState {
     pub(crate) pending_pane_snooze_changes: Vec<PaneSnoozeChange>,
     pub request_complete_onboarding: bool,
     pub name_input: String,
+    pub name_input_caret: usize,
     pub name_input_replace_on_type: bool,
     /// Label the rename-tab modal was prefilled with, so an unedited Enter stays a
     /// no-op even when the live derived label changes while the modal is open.
@@ -6405,6 +6407,10 @@ impl AppState {
         std::mem::swap(&mut self.agent_picker, &mut other.overlay.agent_picker);
         std::mem::swap(&mut self.name_input, &mut other.overlay.name_input);
         std::mem::swap(
+            &mut self.name_input_caret,
+            &mut other.overlay.name_input_caret,
+        );
+        std::mem::swap(
             &mut self.name_input_replace_on_type,
             &mut other.overlay.name_input_replace_on_type,
         );
@@ -6614,6 +6620,7 @@ impl AppState {
             self.rename_pane_target = None;
             self.rename_tab_prefill = None;
             self.name_input.clear();
+            self.name_input_caret = 0;
             self.name_input_replace_on_type = false;
             self.close_client_overlay();
         }
@@ -7849,6 +7856,7 @@ impl AppState {
             pending_pane_snooze_changes: Vec::new(),
             request_complete_onboarding: false,
             name_input: String::new(),
+            name_input_caret: 0,
             name_input_replace_on_type: false,
             rename_tab_prefill: None,
             release_notes: None,

@@ -491,6 +491,7 @@ impl App {
         {
             self.state.worktree_create = None;
             self.state.name_input.clear();
+            self.state.name_input_caret = 0;
             self.state.name_input_replace_on_type = false;
             self.state.close_client_overlay();
         }

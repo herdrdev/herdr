@@ -195,6 +195,7 @@ impl App {
         );
         self.state.selected = ws_idx;
         self.state.name_input = branch.clone();
+        self.state.name_input_caret = self.state.name_input.len();
         self.state.name_input_replace_on_type = true;
         self.state.worktree_create = Some(WorktreeCreateState {
             source_workspace_id,
@@ -251,6 +252,7 @@ impl App {
         );
 
         self.state.name_input = branch.clone();
+        self.state.name_input_caret = self.state.name_input.len();
         self.state.name_input_replace_on_type = false;
         self.state.worktree_create = Some(WorktreeCreateState {
             source_workspace_id,
@@ -358,12 +360,47 @@ impl App {
                 self.close_worktree_create_dialog();
             }
             KeyCode::Enter => self.submit_worktree_create_via_api(),
+            KeyCode::Left => {
+                if let Some((idx, _)) = self.state.name_input
+                    [..self.state.name_input_caret.min(self.state.name_input.len())]
+                    .char_indices()
+                    .next_back()
+                {
+                    self.state.name_input_caret = idx;
+                }
+            }
+            KeyCode::Right => {
+                let at = self.state.name_input_caret.min(self.state.name_input.len());
+                if let Some(ch) = self.state.name_input[at..].chars().next() {
+                    self.state.name_input_caret = at + ch.len_utf8();
+                }
+            }
+            KeyCode::Home => self.state.name_input_caret = 0,
+            KeyCode::End => self.state.name_input_caret = self.state.name_input.len(),
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.state.name_input_caret = 0
+            }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.state.name_input_caret = self.state.name_input.len()
+            }
+            KeyCode::Delete => {
+                let at = self.state.name_input_caret.min(self.state.name_input.len());
+                if let Some(ch) = self.state.name_input[at..].chars().next() {
+                    self.state.name_input.drain(at..at + ch.len_utf8());
+                    self.sync_worktree_branch_from_input();
+                }
+            }
             KeyCode::Backspace => {
                 if self.state.name_input_replace_on_type {
                     self.state.name_input.clear();
+                    self.state.name_input_caret = 0;
                     self.state.name_input_replace_on_type = false;
                 } else {
-                    self.state.name_input.pop();
+                    let at = self.state.name_input_caret.min(self.state.name_input.len());
+                    if let Some((idx, _)) = self.state.name_input[..at].char_indices().next_back() {
+                        self.state.name_input.drain(idx..at);
+                        self.state.name_input_caret = idx;
+                    }
                 }
                 self.sync_worktree_branch_from_input();
             }
@@ -377,9 +414,12 @@ impl App {
     pub(crate) fn insert_worktree_create_text(&mut self, text: &str) {
         if self.state.name_input_replace_on_type {
             self.state.name_input.clear();
+            self.state.name_input_caret = 0;
             self.state.name_input_replace_on_type = false;
         }
-        self.state.name_input.push_str(text);
+        let caret = self.state.name_input_caret.min(self.state.name_input.len());
+        self.state.name_input.insert_str(caret, text);
+        self.state.name_input_caret = caret + text.len();
         self.sync_worktree_branch_from_input();
     }
 
@@ -588,6 +628,7 @@ impl App {
     fn close_worktree_create_dialog(&mut self) {
         self.state.worktree_create = None;
         self.state.name_input.clear();
+        self.state.name_input_caret = 0;
         self.state.name_input_replace_on_type = false;
         self.state.close_client_overlay();
     }
@@ -622,6 +663,7 @@ impl App {
 
         create.branch = branch.clone();
         self.state.name_input = branch.clone();
+        self.state.name_input_caret = self.state.name_input.len();
         create.checkout_path = crate::worktree::default_checkout_path(
             &self.state.worktree_directory,
             &create.repo_name,
@@ -686,6 +728,7 @@ impl App {
 
         create.branch = branch.clone();
         self.state.name_input = branch.clone();
+        self.state.name_input_caret = self.state.name_input.len();
         create.checkout_path = crate::worktree::default_checkout_path(
             &self.state.worktree_directory,
             &create.repo_name,
@@ -916,6 +959,7 @@ impl App {
                 let source_repo_root = create.source_repo_root.clone();
                 self.state.worktree_create = None;
                 self.state.name_input.clear();
+                self.state.name_input_caret = 0;
                 self.state.name_input_replace_on_type = false;
                 let source_membership = source_existing_membership.unwrap_or(
                     crate::workspace::WorktreeSpaceMembership {
@@ -1014,6 +1058,7 @@ impl App {
 
         let create = self.state.worktree_create.take();
         self.state.name_input.clear();
+        self.state.name_input_caret = 0;
         self.state.name_input_replace_on_type = false;
         let pending = self
             .state

@@ -2704,6 +2704,7 @@ impl AppState {
                         {
                             self.worktree_create = None;
                             self.name_input.clear();
+                            self.name_input_caret = 0;
                             self.name_input_replace_on_type = false;
                             leave_modal(self);
                         }

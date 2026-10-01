@@ -1125,6 +1125,7 @@ impl App {
             collapsed_space_keys,
             request_complete_onboarding: false,
             name_input: String::new(),
+            name_input_caret: 0,
             name_input_replace_on_type: false,
             rename_tab_prefill: None,
             release_notes: None,
