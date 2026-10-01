@@ -123,6 +123,52 @@ impl App {
     pub(crate) fn refresh_remote_agent_panel_entries(&mut self) {
         self.state.remote_agent_panel_entries =
             crate::ui::remote_agent_panel_entries(&self.state.fleet_snapshot, self.state.nerd_font);
+        self.state.remote_agent_device_groups =
+            Some(crate::ui::sidebar::remote_agent_device_groups(&self.state));
+        let activity_entries = self
+            .state
+            .remote_agent_panel_entries
+            .iter()
+            .map(crate::ui::sidebar::remote_agent_as_panel_entry)
+            .collect::<Vec<_>>();
+        self.state.remote_device_activity = Some(crate::ui::sidebar::sidebar_remote_activity(
+            &self.state,
+            &activity_entries,
+        ));
+        let run_projection = crate::agent_runs::project(&self.state.fleet_snapshot);
+        self.state.agent_runs_active_count = Some(run_projection.active_count);
+        self.state.agent_run_device_groups = Some(
+            crate::ui::sidebar::devices::group_items(
+                &self.state.agent_host_name,
+                run_projection.hosts.into_iter().map(|host| {
+                    let local = host.name == self.state.agent_host_name;
+                    let reachable =
+                        crate::ui::sidebar::devices::host_reachable(&self.state, &host.name);
+                    (host.name.clone(), local, reachable, host)
+                }),
+            )
+            .into(),
+        );
+        self.state.remote_loop_device_groups = Some(crate::ui::sidebar::devices::group_items(
+            &self.state.agent_host_name,
+            self.state
+                .fleet_snapshot
+                .hosts
+                .iter()
+                .filter_map(|host| {
+                    let local = host.name == self.state.agent_host_name;
+                    let reachable = host.reachable;
+                    let inventory = host.sessions.as_ref()?;
+                    Some(
+                        inventory
+                            .loops
+                            .iter()
+                            .cloned()
+                            .map(move |item| (host.name.clone(), local, reachable, item)),
+                    )
+                })
+                .flatten(),
+        ));
         self.state.aloop_projection =
             crate::aloop::project(&self.state.fleet_snapshot).map(std::sync::Arc::new);
         if self
@@ -351,6 +397,28 @@ impl App {
         self.authority_mutation_router.observe_snapshot(&snapshot);
         self.remote_focus_transport
             .observe_fleet_snapshot(&snapshot);
+        const DEVICE_SECTIONS: [&str; 5] = ["main", "snoozed", "settled", "runs", "loops"];
+        for host in snapshot.hosts.iter().filter(|host| {
+            !host.local
+                && !host.reachable
+                && self
+                    .state
+                    .fleet_snapshot
+                    .hosts
+                    .iter()
+                    .find(|previous| previous.name == host.name)
+                    .is_none_or(|previous| previous.reachable)
+        }) {
+            for section in DEVICE_SECTIONS {
+                let key = crate::ui::sidebar::devices::group_key(section, &host.name);
+                crate::ui::sidebar::devices::reset_offline_expansions(
+                    &mut self.state.collapsed_sidebar_groups,
+                    section,
+                    &host.name,
+                );
+                self.state.collapsed_sidebar_groups.insert(key);
+            }
+        }
         let catalogs_changed = self.state.fleet_snapshot.group_catalogs != snapshot.group_catalogs;
         let changed = self.state.fleet_snapshot != snapshot;
         self.state.fleet_snapshot = snapshot;

@@ -329,6 +329,7 @@ impl App {
         if let Some(agent_ref) =
             focus_agent.and_then(|agent| crate::api::schema::AgentRef::new(name, agent).ok())
         {
+            let shared_mode = self.state.server_mode();
             let state = &self.state;
             let proxy_pane =
                 self.remote_focus_operations
@@ -341,10 +342,24 @@ impl App {
             if let Some(pane_id) = proxy_pane {
                 if let Some((ws_idx, _)) = self.find_pane(pane_id) {
                     self.state.focus_pane_in_workspace(ws_idx, pane_id);
+                    self.state
+                        .restore_server_mode_preserving_client_focus(shared_mode);
                     self.focus_client_on_pane();
+                    self.state.sidebar_selected_remote_agent = Some(agent_ref);
                     return;
                 }
             }
+            let start = self.start_remote_focus_operation(agent_ref.clone());
+            self.state
+                .restore_server_mode_preserving_client_focus(shared_mode);
+            match start {
+                Ok(_) => {
+                    self.focus_client_on_pane();
+                    self.state.sidebar_selected_remote_agent = Some(agent_ref);
+                }
+                Err(error) => self.show_fleet_launch_error(error.message),
+            }
+            return;
         }
         let Some(configured_host) = self.fleet_poller_config.host(name) else {
             self.show_fleet_launch_error(

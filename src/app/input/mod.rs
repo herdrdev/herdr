@@ -6990,10 +6990,14 @@ sidebar_visible = true
             ..Default::default()
         };
         app.state.view.sidebar_rect = ratatui::layout::Rect::new(0, 0, 30, 40);
-        // The section and the clean-run fold are both closed on a fresh state,
-        // so a click test has to open them the way the operator does.
+        // The section, remote device group, and clean-run fold are closed on a
+        // fresh state, so the click fixture opens them explicitly.
         app.state
             .toggle_sidebar_group(crate::ui::sidebar::ALOOPS_SECTION_TITLE);
+        let device_key = crate::ui::sidebar::devices::group_key("loops", "ub2");
+        app.state
+            .collapsed_sidebar_groups
+            .insert(format!("expanded:{device_key}"));
         app.state.toggle_sidebar_group("aloop-clean:nightly");
         app.state.focus_client_on_sidebar();
         app

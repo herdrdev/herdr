@@ -26,33 +26,51 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
     if !app.fleet_snapshot.polled {
         return;
     }
-    let mut projection = crate::agent_runs::project(&app.fleet_snapshot);
-    if app.sidebar_work_filter.machine_scope == crate::app::state::SidebarMachineScope::ThisMachine
-    {
-        projection
-            .hosts
-            .retain(|host| host.name == app.agent_host_name);
-        projection.active_count = projection.hosts.iter().map(|host| host.active_count).sum();
-    }
-    if projection.hosts.is_empty() {
+    let cached = app
+        .agent_runs_active_count
+        .zip(app.agent_run_device_groups.as_deref());
+    let fallback_projection = cached
+        .is_none()
+        .then(|| crate::agent_runs::project(&app.fleet_snapshot));
+    let fallback_groups = fallback_projection.as_ref().map(|projection| {
+        super::devices::group_items(
+            &app.agent_host_name,
+            projection.hosts.iter().cloned().map(|host| {
+                let local = host.name == app.agent_host_name;
+                let reachable = super::devices::host_reachable(app, &host.name);
+                (host.name.clone(), local, reachable, host)
+            }),
+        )
+    });
+    let active_count = cached
+        .map(|(active_count, _)| active_count)
+        .or_else(|| {
+            fallback_projection
+                .as_ref()
+                .map(|projection| projection.active_count)
+        })
+        .unwrap_or_default();
+    let groups = cached
+        .map(|(_, groups)| groups)
+        .or(fallback_groups.as_deref())
+        .unwrap_or_default();
+    if groups.is_empty() {
         return;
     }
-    let host_tokens =
-        short_fleet_host_names(projection.hosts.iter().map(|host| host.name.as_str()));
+    let show_device_headers = groups.len() > 1 || !groups[0].local;
+    let host_tokens = short_fleet_host_names(groups.iter().map(|group| group.host.as_str()));
     let collapsed = section_is_collapsed(app, RUNS_SECTION_TITLE);
     rows.push(SidebarRow::SectionHeader {
         title: RUNS_SECTION_TITLE,
-        count: projection.active_count,
-        host_counts: projection
-            .hosts
+        count: active_count,
+        host_counts: groups
             .iter()
-            .filter(|host| host.active_count > 0)
-            .map(|host| SidebarHostCount {
+            .map(|group| SidebarHostCount {
                 host: host_tokens
-                    .get(&host.name)
+                    .get(&group.host)
                     .cloned()
                     .expect("host token for Runs host"),
-                count: host.active_count,
+                count: group.items.iter().map(|host| host.active_count).sum(),
             })
             .collect(),
         collapsed,
@@ -60,38 +78,51 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
     if collapsed {
         return;
     }
-    for host in projection.hosts {
-        let key = format!("runs:host:{}", host.name);
-        let collapsed = section_is_collapsed(app, &key);
-        rows.push(SidebarRow::NestedHeader {
-            key,
-            action_key: None,
-            sort_key: None,
-            sort_mode: crate::app::state::SidebarSortMode::Default,
-            title: host_tokens
-                .get(&host.name)
-                .cloned()
-                .expect("host token for Runs host"),
-            count: host.active_count,
-            activity_count: None,
-            collapsed,
-            dim: false,
-            status: None,
-            spawn: false,
-        });
+    for group in groups {
+        let Some(host) = group.items.first() else {
+            continue;
+        };
+        let reachable = group.reachable;
+        let key = super::devices::group_key("runs", &host.name);
+        let collapsed = show_device_headers
+            && super::devices::group_is_collapsed(app, "runs", &host.name, group.local, reachable);
+        if show_device_headers {
+            rows.push(SidebarRow::NestedHeader {
+                key,
+                action_key: None,
+                sort_key: None,
+                sort_mode: crate::app::state::SidebarSortMode::Default,
+                title: if group.local {
+                    format!("{} · this device", host.name)
+                } else {
+                    host.name.clone()
+                },
+                count: host.active_count,
+                activity_count: None,
+                collapsed,
+                dim: !reachable,
+                status: None,
+                spawn: false,
+            });
+        }
         if collapsed {
             continue;
         }
         if host.runs.is_empty() {
             rows.push(SidebarRow::AgentRun {
-                host: host.name,
+                host: host.name.clone(),
                 summary: None,
             });
         } else {
-            rows.extend(host.runs.into_iter().map(|summary| SidebarRow::AgentRun {
-                host: host.name.clone(),
-                summary: Some(summary),
-            }));
+            rows.extend(
+                host.runs
+                    .iter()
+                    .cloned()
+                    .map(|summary| SidebarRow::AgentRun {
+                        host: host.name.clone(),
+                        summary: Some(summary),
+                    }),
+            );
         }
     }
 }
@@ -138,6 +169,9 @@ pub(super) fn target_at(app: &AppState, row: u16) -> Option<(String, String)> {
         .into_iter()
         .find(|area| row >= area.rect.y && row < area.rect.bottom())
         .and_then(|area| {
+            if !super::devices::host_reachable(app, &area.host) {
+                return None;
+            }
             area.summary
                 .map(|summary| (area.host, summary.run_id.clone()))
         })
@@ -189,6 +223,17 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::t
     } else {
         summary.run_id.as_str()
     };
+    let offline = !super::devices::host_reachable(app, &area.host);
+    let text_color = if offline {
+        app.palette.overlay0
+    } else {
+        app.palette.subtext0
+    };
+    let row_modifier = if offline {
+        Modifier::DIM
+    } else {
+        Modifier::empty()
+    };
     let width = usize::from(area.rect.width);
     let widths = compact_row_widths(title, &status, width, ROW_DEPTH * 3 + 1);
     let fixed = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
@@ -206,11 +251,17 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::t
                     compact_dot_for_state(state, true, true, false, false, false),
                     SIDEBAR_DOT_FIELD_WIDTH,
                 ),
-                Style::default().fg(state_label_color(state, true, &app.palette)),
+                Style::default()
+                    .fg(if offline {
+                        app.palette.overlay0
+                    } else {
+                        state_label_color(state, true, &app.palette)
+                    })
+                    .add_modifier(row_modifier),
             ),
             Span::styled(
                 pad_right(&truncate_end(title, title_width), title_width),
-                Style::default().fg(app.palette.subtext0),
+                Style::default().fg(text_color).add_modifier(row_modifier),
             ),
             Span::styled(
                 pad_left(&status, widths.provider),
@@ -245,7 +296,7 @@ mod tests {
             error: (state == crate::fleet::HostState::Unreachable).then(|| "timeout".to_string()),
             remote_identity: None,
             sessions: None,
-            reachable: false,
+            reachable: state == crate::fleet::HostState::Reachable,
             last_seen_unix_ms: None,
             entries: Vec::new(),
         }
@@ -257,6 +308,9 @@ mod tests {
         app.collapsed_sidebar_groups.remove("repo:Runs");
         app.fleet_snapshot.polled = true;
         app.fleet_snapshot.hosts = vec![host(crate::fleet::HostState::Reachable)];
+        let device_key = super::super::devices::group_key("runs", "ub2");
+        app.collapsed_sidebar_groups
+            .insert(format!("expanded:{device_key}"));
 
         let rows = super::super::sidebar_rows(&app);
         assert!(rows.iter().any(|row| matches!(
@@ -267,6 +321,103 @@ mod tests {
         assert!(rows
             .iter()
             .any(|row| matches!(row, SidebarRow::AgentRun { summary: None, .. })));
+    }
+
+    #[test]
+    fn runs_for_only_this_device_have_no_device_header() {
+        let mut app = AppState::test_new();
+        app.agent_host_name = "ub2".into();
+        app.collapsed_sidebar_groups.remove("repo:Runs");
+        app.fleet_snapshot = crate::fleet::Snapshot {
+            polled: true,
+            hosts: vec![crate::fleet::HostSnapshot {
+                name: "ub2".into(),
+                target: "ub2".into(),
+                local: true,
+                session: None,
+                socket: None,
+                state: crate::fleet::HostState::Reachable,
+                version: None,
+                protocol: None,
+                error: None,
+                remote_identity: None,
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
+                entries: vec![crate::fleet::FleetRow::test_run_summary_row(
+                    crate::agent_runs::Summary {
+                        host: "ub2".into(),
+                        run_id: "ra-local".into(),
+                        label: "local run".into(),
+                        task: "task".into(),
+                        phase: "verify".into(),
+                        started_at: "2026-09-17T08:00:00Z".into(),
+                        started_at_unix_s: 1_779_000_000,
+                        heartbeat_age_s: Some(1),
+                        state: crate::agent_runs::DisplayState::Active,
+                    },
+                )],
+            }],
+            ..Default::default()
+        };
+
+        let rows = super::super::sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::AgentRun { host, summary: Some(_) } if host == "ub2"
+        )));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::NestedHeader { key, .. } if key.starts_with("device:runs/")
+        )));
+    }
+
+    #[test]
+    fn repeated_run_row_projections_borrow_the_cached_groups() {
+        let summary = Arc::new(crate::agent_runs::Summary {
+            host: "ub2".into(),
+            run_id: "ra-cached".into(),
+            label: "cached run".into(),
+            task: "task".into(),
+            phase: "verify".into(),
+            started_at: "2026-09-17T08:00:00Z".into(),
+            started_at_unix_s: 1_779_000_000,
+            heartbeat_age_s: Some(1),
+            state: crate::agent_runs::DisplayState::Active,
+        });
+        let cached_groups: Arc<[_]> = vec![super::super::devices::DeviceGroup {
+            host: "ub2".into(),
+            local: true,
+            reachable: true,
+            items: vec![crate::agent_runs::HostProjection {
+                name: "ub2".into(),
+                active_count: 1,
+                runs: vec![Arc::clone(&summary)],
+            }],
+        }]
+        .into();
+        let mut app = AppState::test_new();
+        app.fleet_snapshot.polled = true;
+        app.agent_runs_active_count = Some(1);
+        app.agent_run_device_groups = Some(Arc::clone(&cached_groups));
+        app.collapsed_sidebar_groups.remove("repo:Runs");
+
+        let mut first = Vec::new();
+        append_rows(&app, &mut first);
+        let mut second = Vec::new();
+        append_rows(&app, &mut second);
+
+        for rows in [&first, &second] {
+            assert!(rows.iter().any(|row| matches!(
+                row,
+                SidebarRow::AgentRun { summary: Some(projected), .. }
+                    if Arc::ptr_eq(projected, &summary)
+            )));
+        }
+        assert!(Arc::ptr_eq(
+            app.agent_run_device_groups.as_ref().expect("cached groups"),
+            &cached_groups
+        ));
     }
 
     #[test]

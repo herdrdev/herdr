@@ -40,6 +40,27 @@ const ZOOM_INDICATOR: &str = "ZOOM";
 const MIN_TAB_STRIP_WIDTH: u16 =
     MIN_TAB_WIDTH + NEW_TAB_WIDTH + TAB_SCROLL_BUTTON_WIDTH.saturating_mul(2);
 
+#[cfg(test)]
+fn active_session_machine_label(app: &AppState) -> Option<String> {
+    let workspace = app.workspaces.get(app.active?)?;
+    let session = workspace.active_tab_display_name_from(&app.terminals)?;
+    let machine = app
+        .view
+        .focused_remote_host
+        .as_deref()
+        .unwrap_or(&app.agent_host_name);
+    Some(format!("{session} · {machine}"))
+}
+
+fn active_session_machine_suffix(app: &AppState) -> Option<String> {
+    let machine = app
+        .view
+        .focused_remote_host
+        .as_deref()
+        .unwrap_or(&app.agent_host_name);
+    Some(format!(" · {machine}"))
+}
+
 pub(crate) fn visible_user_actions(app: &AppState) -> Vec<(usize, String)> {
     let repo = app.focused_repo_slug();
     app.keybinds
@@ -1247,13 +1268,31 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
             Style::default().fg(p.overlay1).bg(p.surface0)
         };
         let width = rect.width as usize;
-        let name = tab_chrome_label_with_icons(
-            ws,
-            &app.terminals,
-            idx,
-            width.saturating_sub(1),
-            app.nerd_font,
-        );
+        let base_width = width.saturating_sub(1);
+        let session_suffix = if active {
+            active_session_machine_suffix(app)
+        } else {
+            None
+        };
+        let plain_name =
+            tab_chrome_label_with_icons(ws, &app.terminals, idx, base_width, app.nerd_font);
+        let suffix_width = session_suffix.as_deref().map(display_width).unwrap_or(0);
+        let mut name = if display_width(&plain_name).saturating_add(suffix_width) <= base_width {
+            let mut label = tab_chrome_label_with_icons(
+                ws,
+                &app.terminals,
+                idx,
+                base_width.saturating_sub(suffix_width),
+                app.nerd_font,
+            );
+            if let Some(suffix) = session_suffix {
+                label.push_str(&suffix);
+            }
+            label
+        } else {
+            plain_name
+        };
+        name = truncate_end(&name, base_width);
         let pin = if tab.pinned {
             PIN_GLYPH_ON
         } else {
@@ -1368,6 +1407,22 @@ mod tests {
             pane_toggles: true,
             nerd_font: false,
         }
+    }
+
+    #[test]
+    fn top_bar_session_label_names_the_focused_machine() {
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("session");
+        workspace.tabs[0].custom_name = Some("remote session".into());
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        app.agent_host_name = "ub2".into();
+        app.view.focused_remote_host = Some("ub1".into());
+
+        assert_eq!(
+            active_session_machine_label(&app).as_deref(),
+            Some("remote session · ub1")
+        );
     }
 
     use super::*;

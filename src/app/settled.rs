@@ -282,6 +282,8 @@ impl AppState {
             now_unix,
             self.nerd_font,
         );
+        self.remote_agent_device_groups =
+            Some(crate::ui::sidebar::remote_agent_device_groups(self));
         true
     }
     fn settle_owned_candidates(

@@ -4535,7 +4535,7 @@ mod tests {
     }
 
     #[test]
-    fn releasing_a_fleet_row_attaches_to_its_host_once() {
+    fn releasing_a_remote_row_opens_focus_on_this_client() {
         let mut app = app_for_mouse_test();
         app.fleet_poller_config.replace(crate::config::FleetConfig {
             hosts: vec![crate::config::FleetHostConfig {
@@ -4558,18 +4558,31 @@ mod tests {
             crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), entry),
         )];
         app.state.collapsed_sidebar_groups.remove("repo:Fleet");
+        app.state
+            .collapsed_sidebar_groups
+            .insert("expanded:device:main/ub2".into());
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 24));
         let row =
             crate::ui::compute_remote_agent_row_areas(&app.state, app.state.view.sidebar_rect)
                 .into_iter()
                 .next()
-                .expect("the fleet row owns a hit area");
+                .expect("the remote row owns a hit area");
+        assert_eq!(
+            crate::ui::remote_agent_row_at(&app.state, row.rect.y),
+            Some(agent_ref.clone())
+        );
+        let shared_mode_before = app.state.server_mode();
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             row.rect.x + 2,
             row.rect.y,
         ));
+        assert_eq!(
+            app.state.sidebar_selected_remote_agent.as_ref(),
+            Some(&agent_ref),
+            "press selects remote row"
+        );
         assert!(app.state.toast.is_none(), "press alone must not attach");
         app.handle_mouse(mouse(
             MouseEventKind::Up(MouseButton::Left),
@@ -4580,42 +4593,15 @@ mod tests {
         assert_eq!(
             app.state.sidebar_selected_remote_agent.as_ref(),
             Some(&agent_ref),
-            "the click picks the fleet row"
+            "the click picks the remote row"
         );
-        // No fleet inventory is polled in this fixture, so the attach stops at
-        // its own guard -- which is exactly the proof the click reached it.
-        let toast = app.state.toast.clone().expect("completed click attaches");
-        assert_eq!(toast.title, "host launch failed");
-        assert!(
-            toast.context.contains("fleet inventory"),
-            "{}",
-            toast.context
+        assert_eq!(app.remote_focus_operations.len(), 1);
+        assert_eq!(app.state.server_mode(), shared_mode_before);
+        assert_eq!(
+            app.state.client_focus_intent,
+            crate::app::state::ClientFocusIntent::Pane
         );
-        let local_pane = app.state.workspaces[0].tabs[0].root_pane;
-        assert!(app.handle_sidebar_session_action_key(KeyEvent::new(
-            KeyCode::Char('z'),
-            KeyModifiers::empty(),
-        )));
-        assert!(app.state.sidebar_snooze.as_ref().is_some_and(|menu| {
-            matches!(
-                &menu.target,
-                crate::app::state::SidebarPaneLifecycleTarget::Remote(target)
-                    if target == &agent_ref
-            )
-        }));
-        app.state.sidebar_snooze = None;
-        assert!(app.handle_sidebar_session_action_key(KeyEvent::new(
-            KeyCode::Char('s'),
-            KeyModifiers::empty(),
-        )));
-        let refusal = app
-            .state
-            .toast
-            .as_ref()
-            .expect("settle revalidates the remote owner");
-        assert_eq!(refusal.title, "ub2 pane action failed");
-        assert!(refusal.context.contains("owner ub2 is unreachable"));
-        assert!(!app.state.pane_is_settled(0, local_pane));
+        assert!(app.state.toast.is_none());
     }
 
     #[test]
@@ -7008,6 +6994,11 @@ mod tests {
         app.state.remote_agent_panel_entries = remote.remote_agent_panel_entries;
         app.state.sidebar_selected_remote_agent = Some(entry.agent_ref.clone());
         app.state.collapsed_sidebar_groups.remove("repo:Settled");
+        let settled_device =
+            crate::ui::sidebar::devices::group_key("settled", &entry.agent_ref.host);
+        app.state
+            .collapsed_sidebar_groups
+            .insert(format!("expanded:{settled_device}"));
         app.state.sidebar_width = 60;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
         let control = app

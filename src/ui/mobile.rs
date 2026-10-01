@@ -234,6 +234,7 @@ fn mobile_switcher_target_for_row(
         | SidebarRow::SymphonyJob { .. }
         | SidebarRow::SymphonyEmpty
         | SidebarRow::AloopLoop { .. }
+        | SidebarRow::AloopRemoteLoop { .. }
         | SidebarRow::AloopRunLine { .. }
         | SidebarRow::AloopFinding { .. }
         | SidebarRow::AloopCleanRuns { .. }
@@ -273,6 +274,7 @@ fn mobile_sidebar_row_height(app: &AppState, row: &SidebarRow) -> usize {
         | SidebarRow::PodHeader { .. }
         | SidebarRow::PodMember { .. }
         | SidebarRow::AloopLoop { .. }
+        | SidebarRow::AloopRemoteLoop { .. }
         | SidebarRow::AloopRunLine { .. }
         | SidebarRow::AloopFinding { .. }
         | SidebarRow::AloopCleanRuns { .. }
@@ -1225,6 +1227,31 @@ fn render_mobile_switcher_content(
                     Line::from(Span::styled(
                         format!("   {} {name}", if *collapsed { "▸" } else { "▾" }),
                         Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+                    )),
+                );
+            }
+            SidebarRow::AloopRemoteLoop {
+                title,
+                state,
+                reachable,
+                host,
+                ..
+            } => {
+                let style = if *reachable {
+                    Style::default().fg(p.overlay0)
+                } else {
+                    Style::default().fg(p.overlay0).add_modifier(Modifier::DIM)
+                };
+                render_one_line_item(
+                    frame,
+                    viewport,
+                    content,
+                    doc_y,
+                    app.mobile_switcher_scroll,
+                    p.panel_bg,
+                    Line::from(Span::styled(
+                        format!("     {title} · {state} · {host}"),
+                        style,
                     )),
                 );
             }
@@ -2903,7 +2930,6 @@ mod tests {
     fn mobile_expanded_remote_working_row_is_dim_without_a_dot() {
         let mut app = AppState::test_new();
         app.sidebar_sections_layout = true;
-        app.sidebar_work_filter.machine_scope = crate::app::state::SidebarMachineScope::AllMachines;
         app.view.layout = crate::app::state::ViewLayout::Mobile;
         let mut entry = agent_entry(Some("remote worker"), Some("pi"));
         entry.state = AgentState::Working;

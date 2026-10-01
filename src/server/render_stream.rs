@@ -769,25 +769,36 @@ mod render_scale_benchmark {
                 last_seen_unix_ms: None,
                 entries: (0..remote_count)
                     .map(|index| {
-                        crate::fleet::FleetRow::test_agent_row(
-                            "bench-remote",
-                            &format!("remote-{index}"),
-                        )
+                        let name = format!("remote-{index}");
+                        let agent = serde_json::from_value(serde_json::json!({
+                            "terminal_id": format!("terminal-{name}"),
+                            "name": name,
+                            "agent": "codex",
+                            "agent_status": "idle",
+                            "usage_limited": false,
+                            "workspace_id": "workspace",
+                            "tab_id": format!("tab-{index}"),
+                            "pane_id": format!("pane-{index}"),
+                            "focused": false,
+                            "revision": 1
+                        }))
+                        .expect("valid remote benchmark agent");
+                        crate::fleet::FleetRow::test_agent_info_row("bench-remote", agent)
                     })
                     .collect(),
             }],
             ..crate::fleet::Snapshot::default()
         };
         app.remote_agent_panel_entries = crate::ui::remote_agent_panel_entries(&snapshot, false);
+        app.remote_agent_device_groups = Some(crate::ui::sidebar::remote_agent_device_groups(&app));
+        app.sidebar_sections_layout = true;
         app.collapsed_sidebar_groups.remove("repo:Fleet");
         assert_eq!(app.remote_agent_panel_entries.len(), remote_count);
-        assert_eq!(
-            crate::ui::sidebar_rows(&app)
-                .iter()
-                .filter(|row| matches!(row, crate::ui::SidebarRow::RemoteAgent { .. }))
-                .count(),
-            remote_count
-        );
+        assert!(crate::ui::sidebar_rows(&app).iter().any(|row| matches!(
+            row,
+            crate::ui::SidebarRow::NestedHeader { key, count, .. }
+                if key.starts_with("device:main/") && *count == remote_count
+        )));
         app
     }
 

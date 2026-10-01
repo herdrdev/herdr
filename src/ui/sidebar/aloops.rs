@@ -46,6 +46,7 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
         return;
     }
     let Some(projection) = app.aloop_projection() else {
+        append_remote_inventory_rows(app, rows);
         return;
     };
     let collapsed = section_is_collapsed(app, ALOOPS_SECTION_TITLE);
@@ -60,11 +61,40 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
     if collapsed {
         return;
     }
+    let local = projection.host == app.agent_host_name;
+    let show_device_header = !local;
+    let device_collapsed = super::devices::group_is_collapsed(
+        app,
+        "loops",
+        &projection.host,
+        local,
+        projection.reachable,
+    );
+    if show_device_header {
+        rows.push(SidebarRow::NestedHeader {
+            key: super::devices::group_key("loops", &projection.host),
+            action_key: None,
+            sort_key: None,
+            sort_mode: crate::app::state::SidebarSortMode::Default,
+            title: super::devices::device_title(app, &projection.host, local),
+            count: projection.pending_count,
+            activity_count: None,
+            collapsed: device_collapsed,
+            dim: !projection.reachable,
+            status: None,
+            spawn: false,
+        });
+        if device_collapsed {
+            append_remote_inventory_rows(app, rows);
+            return;
+        }
+    }
     if !projection.reachable {
         rows.push(SidebarRow::AloopUnreachable {
             host: projection.host.clone(),
             error: projection.error.clone(),
         });
+        append_remote_inventory_rows(app, rows);
         return;
     }
     if projection.pending_count == 0 {
@@ -141,6 +171,46 @@ pub(super) fn append_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
             }
         }
     }
+    append_remote_inventory_rows(app, rows);
+}
+
+fn append_remote_inventory_rows(app: &AppState, rows: &mut Vec<SidebarRow>) {
+    let Some(groups) = app.remote_loop_device_groups.as_ref() else {
+        return;
+    };
+    for group in groups
+        .iter()
+        .filter(|group| !group.local && !group.items.is_empty())
+    {
+        let collapsed =
+            super::devices::group_is_collapsed(app, "loops", &group.host, false, group.reachable);
+        rows.push(SidebarRow::NestedHeader {
+            key: super::devices::group_key("loops", &group.host),
+            action_key: None,
+            sort_key: None,
+            sort_mode: crate::app::state::SidebarSortMode::Default,
+            title: super::devices::device_title(app, &group.host, false),
+            count: group.items.len(),
+            activity_count: None,
+            collapsed,
+            dim: !group.reachable,
+            status: None,
+            spawn: false,
+        });
+        if collapsed {
+            continue;
+        }
+        for loop_info in &group.items {
+            rows.push(SidebarRow::AloopRemoteLoop {
+                key: format!("device:loops/{}/{}", group.host, loop_info.loop_id),
+                title: loop_info.title.clone(),
+                state: loop_info.state.clone(),
+                host: group.host.clone(),
+                reachable: group.reachable,
+                recent_runs: loop_info.recent_runs.len(),
+            });
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -168,6 +238,7 @@ pub(super) fn areas(app: &AppState, area: Rect) -> Vec<Area> {
         if matches!(
             row,
             SidebarRow::AloopLoop { .. }
+                | SidebarRow::AloopRemoteLoop { .. }
                 | SidebarRow::AloopRunLine { .. }
                 | SidebarRow::AloopFinding { .. }
                 | SidebarRow::AloopCleanRuns { .. }
@@ -305,6 +376,22 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::t
                 Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
             ));
             Paragraph::new(Line::from(spans)).style(selected_style(app, key))
+        }
+        SidebarRow::AloopRemoteLoop {
+            key,
+            title,
+            state,
+            host,
+            reachable,
+            recent_runs,
+        } => {
+            let text = format!("    {title} · {state} · {recent_runs} runs · on {host}");
+            let mut style = Style::default().fg(p.subtext0);
+            if !reachable {
+                style = style.add_modifier(Modifier::DIM);
+            }
+            Paragraph::new(Line::from(Span::styled(truncate_end(&text, width), style)))
+                .style(selected_style(app, key))
         }
         SidebarRow::AloopRunLine {
             key,
@@ -450,6 +537,11 @@ mod tests {
     fn app_with_producer(producer: ProducerSnapshot) -> AppState {
         let mut app = AppState::test_new();
         app.collapsed_sidebar_groups.remove("repo:Aloops");
+        if producer.host != app.agent_host_name {
+            let key = super::super::devices::group_key("loops", &producer.host);
+            app.collapsed_sidebar_groups
+                .insert(format!("expanded:{key}"));
+        }
         app.fleet_snapshot = crate::fleet::Snapshot {
             polled: true,
             aloop: Some(producer),
@@ -465,6 +557,7 @@ mod tests {
                 matches!(
                     row,
                     SidebarRow::AloopLoop { .. }
+                        | SidebarRow::AloopRemoteLoop { .. }
                         | SidebarRow::AloopRunLine { .. }
                         | SidebarRow::AloopFinding { .. }
                         | SidebarRow::AloopCleanRuns { .. }
@@ -535,6 +628,43 @@ mod tests {
             SidebarRow::AloopUnreachable { host, error }
                 if host == "ub2" && error.as_deref() == Some("ssh failed")
         ));
+    }
+
+    #[test]
+    fn remote_inventory_loops_collapse_offline_and_never_gain_local_actions() {
+        let mut app = app_with_producer(ProducerSnapshot::unreachable(
+            "local".to_string(),
+            "offline".to_string(),
+        ));
+        let loop_info = crate::api::schema::LoopInfo {
+            loop_id: "loop-1".to_string(),
+            title: "db cleanup".to_string(),
+            state: "running".to_string(),
+            fields: Default::default(),
+            recent_runs: Vec::new(),
+        };
+        app.remote_loop_device_groups = Some(crate::ui::sidebar::devices::group_items(
+            &app.agent_host_name,
+            [("ub1".to_string(), false, false, loop_info)],
+        ));
+        let group_key = crate::ui::sidebar::devices::group_key("loops", "ub1");
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::NestedHeader { key, collapsed: true, dim: true, .. } if key == &group_key
+        )));
+        assert!(!rows
+            .iter()
+            .any(|row| matches!(row, SidebarRow::AloopRemoteLoop { .. })));
+
+        app.collapsed_sidebar_groups
+            .insert(format!("expanded:{group_key}"));
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
+        let remote_row = areas(&app, app.view.sidebar_rect)
+            .into_iter()
+            .find(|area| matches!(area.row, SidebarRow::AloopRemoteLoop { .. }))
+            .expect("expanded inventory shows its last-known loop");
+        assert!(target_at(&app, remote_row.rect.x, remote_row.rect.y).is_none());
     }
 
     #[test]
