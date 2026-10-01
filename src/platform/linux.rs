@@ -1342,14 +1342,38 @@ pub fn read_clipboard_text() -> Option<String> {
     None
 }
 
-pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
-    Command::new("xdg-open")
+fn open_url_router_enabled(
+    open_url_enable: Option<&std::ffi::OsStr>,
+    config_file_exists: bool,
+) -> bool {
+    open_url_enable == Some(std::ffi::OsStr::new("1")) || config_file_exists
+}
+
+fn open_url_command(url: &str, route_to_mac: bool) -> Command {
+    let mut command = Command::new(if route_to_mac { "open-url" } else { "xdg-open" });
+    command
         .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(Some)
+        .stderr(Stdio::null());
+    command
+}
+
+pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
+    let config_file_exists = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .is_some_and(|home| home.join(".config/open-url/enabled").is_file());
+    let route_to_mac = open_url_router_enabled(
+        std::env::var_os("OPEN_URL_ENABLE").as_deref(),
+        config_file_exists,
+    );
+    match open_url_command(url, route_to_mac).spawn() {
+        Ok(child) => Ok(Some(child)),
+        Err(error) if route_to_mac && error.kind() == std::io::ErrorKind::NotFound => {
+            open_url_command(url, false).spawn().map(Some)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
@@ -1708,6 +1732,37 @@ fn process_session_id(pid: u32) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_link_uses_open_url_only_when_routing_is_enabled() {
+        assert!(!open_url_router_enabled(None, false));
+        assert!(!open_url_router_enabled(
+            Some(std::ffi::OsStr::new("0")),
+            false
+        ));
+        assert!(open_url_router_enabled(
+            Some(std::ffi::OsStr::new("1")),
+            false
+        ));
+        assert!(open_url_router_enabled(None, true));
+    }
+
+    #[test]
+    fn pane_link_opener_passes_markdown_target_as_one_argument() {
+        let url = "https://example.test/a_(b)?q=markdown-link";
+        let command = open_url_command(url, true);
+        assert_eq!(command.get_program(), "open-url");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![std::ffi::OsStr::new(url)]
+        );
+    }
+
+    #[test]
+    fn pane_link_falls_back_to_local_opener_when_routing_is_not_enabled() {
+        let command = open_url_command("https://example.test/path", false);
+        assert_eq!(command.get_program(), "xdg-open");
+    }
 
     #[test]
     fn host_terminal_write_watch_reports_by_path_pty_write() {

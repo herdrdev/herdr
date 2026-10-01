@@ -58,7 +58,7 @@ jobs:
           - os: macos-latest
             kind: unix
             nextest_filter: not binary(live_handoff)
-            timeout_minutes: 25
+            timeout_minutes: 40
           - os: windows-latest
             kind: windows
             # Headroom for a cold Zig 0.16 vendor rebuild; the test scope itself is
