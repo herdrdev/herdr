@@ -31,6 +31,18 @@
       ]
     },
     {
+      "id": "planning_lock",
+      "title": "Planning lock",
+      "keys": [
+        {
+          "key": "planning_lock.authority",
+          "type": "string",
+          "default": "unset",
+          "description": "SSH target of the Herdr server that owns planning-lock state. Followers poll it every five seconds and retain the last known state while it is unreachable."
+        }
+      ]
+    },
+    {
       "id": "theme",
       "title": "Theme",
       "keys": [

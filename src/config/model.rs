@@ -441,6 +441,7 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    pub planning_lock: PlanningLockConfig,
     pub agent_detection: AgentDetectionConfig,
     pub work_index: WorkIndexConfig,
     pub day_board: DayBoardConfig,
@@ -456,6 +457,13 @@ pub struct Config {
     pub actions: Vec<ActionConfig>,
     pub launch_profiles: Vec<LaunchProfileConfig>,
     pub projects: Vec<ProjectConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PlanningLockConfig {
+    /// SSH target of the Herdr server that owns planning-lock state.
+    pub authority: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

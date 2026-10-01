@@ -21,6 +21,9 @@ listed per key here; see
 `remote.fleet.self_name` identifies this server in `host::agent` references and
 defaults to the local fleet host name, then the system hostname.
 
+Set `planning_lock.authority` on a follower to the SSH target of the server that
+owns planning-lock state. See [Planning lock](/docs/planning-lock/#shared-state).
+
 `[[launch_profiles]]` is a user-defined array of tables and is therefore not
 listed per key here. Each launch profile names one way to start an agent from
 the Home composer, including its agent type, command, environment, and optional

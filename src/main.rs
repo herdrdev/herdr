@@ -93,6 +93,7 @@ mod pane;
 mod pane_graphics_files;
 mod persist;
 mod planning_lock;
+mod planning_lock_sync;
 mod platform;
 mod plugin_command;
 mod plugin_paths;

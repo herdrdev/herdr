@@ -1,4 +1,5 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::time::{Duration, Instant};
 
 use crate::planning_lock::{Dialog, DialogFlow, PlanningLock, UNLOCK_MINUTES};
 
@@ -104,6 +105,10 @@ impl App {
                 .is_some_and(|tab| self.state.planning_lock.permits_tab(&tab, now));
         }
 
+        if !matches!(key.code, KeyCode::Char(_)) {
+            self.planning_lock_key_burst.clear();
+        }
+
         let tabs = self.planning_lock_tabs();
         let Some(mut dialog) = self.state.planning_lock_dialog.take() else {
             return true;
@@ -112,8 +117,24 @@ impl App {
         match key.code {
             KeyCode::Esc if !locked => keep_dialog = false,
             KeyCode::Esc => {
-                dialog.input.clear();
-                dialog.error = None;
+                keep_dialog = false;
+                if let Some(discussion_tab) = self.state.planning_lock.discussion_tab_id() {
+                    if let Some((workspace_idx, tab_idx)) =
+                        self.state.workspaces.iter().enumerate().find_map(
+                            |(workspace_idx, workspace)| {
+                                workspace.tabs.iter().enumerate().find_map(|(tab_idx, _)| {
+                                    (self.public_tab_id(workspace_idx, tab_idx).as_deref()
+                                        == Some(discussion_tab))
+                                    .then_some((workspace_idx, tab_idx))
+                                })
+                            },
+                        )
+                    {
+                        self.state.active = Some(workspace_idx);
+                        self.state.workspaces[workspace_idx].switch_tab(tab_idx);
+                        self.state.selected = workspace_idx;
+                    }
+                }
             }
             KeyCode::Backspace => {
                 dialog.input.pop();
@@ -154,6 +175,17 @@ impl App {
             {
                 dialog.input.push(ch);
                 dialog.error = None;
+                let now = Instant::now();
+                self.planning_lock_key_burst
+                    .retain(|at| now.saturating_duration_since(*at) <= Duration::from_millis(10));
+                self.planning_lock_key_burst.push_back(now);
+                if self.planning_lock_key_burst.len() >= 3 {
+                    for _ in 0..3 {
+                        dialog.input.pop();
+                    }
+                    dialog.error = Some("Paste is disabled — type it".into());
+                    self.planning_lock_key_burst.clear();
+                }
             }
             KeyCode::Enter => {
                 let flow = dialog.flow;
@@ -257,7 +289,7 @@ impl App {
                     }
                 }
             }
-            _ => {}
+            _ => self.planning_lock_key_burst.clear(),
         }
         if keep_dialog {
             self.state.planning_lock_dialog = Some(dialog);
@@ -334,5 +366,46 @@ mod tests {
             .planning_lock_dialog
             .as_ref()
             .is_some_and(|dialog| dialog.error.as_deref() == Some("incorrect password")));
+    }
+
+    #[test]
+    fn unlock_dialog_rejects_a_three_key_burst_as_paste() {
+        let mut app = app();
+        app.state.planning_lock_dialog = Some(Dialog::new(DialogFlow::UnlockPassword));
+        for character in ['a', 'b', 'c'] {
+            app.handle_planning_lock_key(KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::empty(),
+            ));
+        }
+        let dialog = app
+            .state
+            .planning_lock_dialog
+            .as_ref()
+            .expect("dialog remains open");
+        assert!(dialog.input.is_empty());
+        assert_eq!(dialog.error.as_deref(), Some("Paste is disabled — type it"));
+    }
+
+    #[test]
+    fn escape_closes_the_locked_dialog() {
+        let mut app = app();
+        let mut workspace = crate::workspace::Workspace::test_new("planning-lock");
+        workspace.test_add_tab(None);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        let discussion_tab = app.public_tab_id(0, 0).expect("discussion tab");
+        app.state.workspaces[0].switch_tab(1);
+        app.state
+            .planning_lock
+            .configure(
+                "a planning password longer than twenty four",
+                &discussion_tab,
+            )
+            .expect("configure lock");
+        app.state.planning_lock_dialog = Some(Dialog::new(DialogFlow::UnlockPassword));
+        assert!(app.handle_planning_lock_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty())));
+        assert!(app.state.planning_lock_dialog.is_none());
+        assert_eq!(app.state.workspaces[0].active_tab_index(), 0);
     }
 }

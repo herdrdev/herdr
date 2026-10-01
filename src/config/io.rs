@@ -23,6 +23,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "notepad",
     "onboarding",
     "panel",
+    "planning_lock",
     "pomodoro",
     "projects",
     "remote",

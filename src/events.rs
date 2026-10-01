@@ -73,8 +73,12 @@ pub struct WorktreeRemoveResult {
 /// An event from a background task to the main loop.
 #[derive(Debug)]
 pub enum AppEvent {
+    PlanningLockRemoteSnapshot(Option<crate::planning_lock::Snapshot>),
+    PlanningLockFileChanged(crate::planning_lock::PlanningLock),
     /// A read-only fleet host inventory poll completed.
-    FleetRefreshed { snapshot: crate::fleet::Snapshot },
+    FleetRefreshed {
+        snapshot: crate::fleet::Snapshot,
+    },
     /// A remote owner pushed its current agent inventory over the host event stream.
     FleetAgentInventoryChanged {
         host: crate::config::FleetHostConfig,
@@ -131,9 +135,13 @@ pub enum AppEvent {
     /// A PTY user-write gate was poisoned. Remote control must be disabled,
     /// but the pane and its child process remain alive.
     #[cfg(unix)]
-    RemoteControlGatePoisoned { pane_id: PaneId },
+    RemoteControlGatePoisoned {
+        pane_id: PaneId,
+    },
     /// A read-only Symphony Temporal workflow poll completed.
-    SymphonyWorkflowsRefreshed { snapshot: crate::symphony::Snapshot },
+    SymphonyWorkflowsRefreshed {
+        snapshot: crate::symphony::Snapshot,
+    },
     /// The focused repository's scratchpad file changed on disk; reload it.
     ScratchpadChanged,
     /// A note in the notepad directory changed on disk; rescan and reload.
@@ -159,7 +167,9 @@ pub enum AppEvent {
         result: Result<Box<crate::provider_usage::UsageSnapshot>, String>,
     },
     /// A bounded background reachability probe completed.
-    ConnectivityProbed { reachable: bool },
+    ConnectivityProbed {
+        reachable: bool,
+    },
     /// The local Codex CLI returned an updated account-aware model catalog.
     HomeCatalogRefreshed {
         catalog: crate::app::home_catalog::HomeProviderCatalog,
@@ -190,9 +200,13 @@ pub enum AppEvent {
         result: Result<(), String>,
     },
     /// A pane's child process exited.
-    PaneDied { pane_id: PaneId },
+    PaneDied {
+        pane_id: PaneId,
+    },
     /// The pane exit must checkpoint the session before normal removal.
-    PaneExitCheckpoint { pane_id: PaneId },
+    PaneExitCheckpoint {
+        pane_id: PaneId,
+    },
     /// Process detection identified an agent before its screen state was confirmed.
     AgentProcessDetected {
         pane_id: PaneId,
@@ -306,10 +320,15 @@ pub enum AppEvent {
     },
     /// A pane child emitted one or more executable BEL characters.
     /// The host-facing process forwards them to its outer terminal.
-    TerminalBell { pane_id: PaneId, count: u16 },
+    TerminalBell {
+        pane_id: PaneId,
+        count: u16,
+    },
     /// A pane child emitted a valid OSC 52 clipboard write. The main loop
     /// re-emits it through herdr's own clipboard writer.
-    ClipboardWrite { content: Vec<u8> },
+    ClipboardWrite {
+        content: Vec<u8>,
+    },
     /// Prefix-mode ASCII input-source request, emitted on entering/leaving the ASCII input
     /// realm. `client_id` binds queued server-mode transitions to the client that produced
     /// them; monolithic events leave it empty and apply the switch in-process.

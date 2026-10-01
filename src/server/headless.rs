@@ -2916,6 +2916,30 @@ impl HeadlessServer {
             })
     }
 
+    fn detach_terminal_clients_blocked_by_planning_lock(&mut self) {
+        let now = crate::app::settled::unix_seconds(std::time::SystemTime::now());
+        if !self.app.state.planning_lock.is_locked(now) {
+            return;
+        }
+        let blocked = self
+            .clients
+            .iter()
+            .filter_map(|(client_id, client)| match &client.mode {
+                ClientConnectionMode::TerminalAttach { terminal_id, .. }
+                | ClientConnectionMode::TerminalObserve { terminal_id }
+                    if !self.planning_lock_allows_terminal(terminal_id) =>
+                {
+                    Some(*client_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for client_id in blocked {
+            self.send_terminal_stream_detach_shutdown(client_id);
+            self.remove_client_and_resize_if_needed(client_id);
+        }
+    }
+
     fn runtime_for_terminal_id_string(
         &self,
         terminal_id: &str,
@@ -3941,6 +3965,19 @@ impl HeadlessServer {
             return self.handle_client_owned_worktree_event(client_id, ev);
         }
         match &ev {
+            AppEvent::PlanningLockFileChanged(lock) => {
+                self.app.state.planning_lock = lock.clone();
+                self.app.state.mark_session_dirty();
+                true
+            }
+            AppEvent::PlanningLockRemoteSnapshot(snapshot) => {
+                self.app
+                    .state
+                    .planning_lock
+                    .apply_remote_snapshot(snapshot.clone());
+                self.app.state.mark_session_dirty();
+                true
+            }
             AppEvent::FleetRefreshed { .. } | AppEvent::FleetAgentInventoryChanged { .. } => {
                 let changed = self.app.handle_internal_event_with_render_impact(ev);
                 let remote_entries = &self.app.state.remote_agent_panel_entries;
@@ -6802,6 +6839,7 @@ impl HeadlessServer {
     }
 
     fn render_and_stream(&mut self) {
+        self.detach_terminal_clients_blocked_by_planning_lock();
         let full_started = crate::render_prof::timer();
         let render_targets = render_targets(&self.clients, self.foreground_client_id);
 
@@ -11003,6 +11041,32 @@ next_tab = ""
                 .forward_terminal_attach_bytes(&terminal_id, b"blocked".to_vec(), true)
                 .expect("terminal still exists")
                 .is_err());
+        });
+    }
+
+    #[test]
+    fn planning_lock_detaches_existing_terminal_clients_outside_discussion_tab() {
+        with_terminal_session_test_server(|server, _terminal_id, terminal_id, _public_pane_id| {
+            let control_rx = connect_pending_terminal_client_with_control_rx(server, 20);
+            assert!(
+                server.handle_server_event(ServerEvent::ClientAttachTerminal {
+                    client_id: 20,
+                    terminal_id,
+                    takeover: false,
+                })
+            );
+            let mut lock = crate::planning_lock::PlanningLock::default();
+            lock.configure("a planning password longer than twenty four", "other-tab")
+                .expect("configure lock");
+            server.app.state.planning_lock = lock;
+
+            server.detach_terminal_clients_blocked_by_planning_lock();
+
+            assert!(!server.clients.contains_key(&20));
+            assert_eq!(
+                read_server_shutdown_reason(control_rx.recv().expect("shutdown message")),
+                Some("detached".to_owned())
+            );
         });
     }
 

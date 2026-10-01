@@ -80,6 +80,7 @@ pub struct Snapshot {
 pub struct PlanningLock {
     config: Option<Config>,
     corrupt: bool,
+    remote_snapshot: Option<Option<Snapshot>>,
 }
 
 impl std::fmt::Debug for PlanningLock {
@@ -87,6 +88,7 @@ impl std::fmt::Debug for PlanningLock {
         f.debug_struct("PlanningLock")
             .field("configured", &self.config.is_some())
             .field("corrupt", &self.corrupt)
+            .field("remote_managed", &self.remote_snapshot.is_some())
             .finish()
     }
 }
@@ -129,6 +131,7 @@ impl PlanningLock {
                 Self {
                     config: None,
                     corrupt: true,
+                    remote_snapshot: None,
                 }
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
@@ -137,6 +140,7 @@ impl PlanningLock {
                 Self {
                     config: None,
                     corrupt: true,
+                    remote_snapshot: None,
                 }
             }
         }
@@ -202,6 +206,7 @@ impl PlanningLock {
         serde_json::from_slice(bytes).map(|config| Self {
             config: Some(config),
             corrupt: false,
+            remote_snapshot: None,
         })
     }
 
@@ -213,6 +218,14 @@ impl PlanningLock {
     }
 
     pub fn snapshot(&self, now_unix_s: u64) -> Option<Snapshot> {
+        if let Some(snapshot) = &self.remote_snapshot {
+            return snapshot.clone().map(|mut snapshot| {
+                snapshot.locked |= snapshot
+                    .unlock_until_unix_s
+                    .is_none_or(|deadline| now_unix_s >= deadline);
+                snapshot
+            });
+        }
         if self.corrupt {
             return Some(Snapshot {
                 locked: true,
@@ -229,6 +242,19 @@ impl PlanningLock {
             discussion_tab_id: config.discussion_tab_id.clone(),
             unlock_until_unix_s,
         })
+    }
+
+    pub fn apply_remote_snapshot(&mut self, snapshot: Option<Snapshot>) {
+        self.remote_snapshot = Some(snapshot);
+        self.corrupt = false;
+    }
+
+    pub fn fail_closed_remote(&mut self) {
+        self.apply_remote_snapshot(Some(Snapshot {
+            locked: true,
+            discussion_tab_id: String::new(),
+            unlock_until_unix_s: None,
+        }));
     }
 
     pub fn is_locked(&self, now_unix_s: u64) -> bool {

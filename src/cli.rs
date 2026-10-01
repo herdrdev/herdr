@@ -210,6 +210,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "plugin" => plugin::run_plugin_command(&args[2..])?,
         "integration" => integration::run_integration_command(&args[2..])?,
         "session" => run_session_command(&args[2..])?,
+        "planning-lock" => crate::planning_lock_sync::run_cli(&args[2..])?,
         _ => return Ok(CommandOutcome::NotCli),
     };
 

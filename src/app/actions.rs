@@ -3447,6 +3447,9 @@ impl AppState {
 
     pub fn handle_app_event(&mut self, event: AppEvent) -> Vec<PaneStateUpdate> {
         match event {
+            AppEvent::PlanningLockRemoteSnapshot(_) | AppEvent::PlanningLockFileChanged(_) => {
+                Vec::new()
+            }
             AppEvent::FleetRefreshed { .. } => Vec::new(),
             AppEvent::FleetAgentInventoryChanged { .. } => Vec::new(),
             AppEvent::FleetSessionInventoryChanged { .. } => Vec::new(),

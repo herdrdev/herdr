@@ -9,7 +9,14 @@ Planning lock limits the active Herdr session to one discussion tab and blocks a
 
 The lock configuration and unlock deadline are owned by the Herdr server runtime. Every client attached to that same runtime receives the safe lock snapshot through the session snapshot and session change event stream. Password hashes never enter those responses. Unlock deadlines use Unix time, so clients on different machines display the same countdown and relock at the same time.
 
-This synchronization applies to clients attached to one shared Herdr runtime. Separate Herdr servers do not replicate lock state.
+This synchronization applies to clients attached to one shared Herdr runtime. Separate Herdr servers can follow an authority over SSH. Configure each follower in its Herdr config file:
+
+```toml
+[planning_lock]
+authority = "ubuntu@ubuntu-direct"
+```
+
+The authority must be reachable through the follower's existing OpenSSH setup and have `herdr` on its remote command path. Followers poll `herdr planning-lock status --json` every five seconds. They keep the last received state during an outage; a follower with no initial response remains locked. Use `herdr planning-lock status --json` on the authority to inspect its published state. `herdr planning-lock unlock --minutes 10` and `herdr planning-lock off` read the password from standard input and forward it to the authority over SSH, where it is verified. Passwords are never command-line arguments.
 
 ## Recovery
 

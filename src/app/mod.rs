@@ -197,6 +197,7 @@ pub struct App {
     /// Server-owned remote focus operations. This state is touched only by
     /// API requests and transport events, never by render or pane loops.
     pub(crate) remote_focus_operations: remote_focus::RemoteFocusOperations,
+    pub(crate) planning_lock_key_burst: std::collections::VecDeque<Instant>,
     pub(crate) fleet_attach_agents:
         std::collections::HashMap<crate::layout::PaneId, crate::api::schema::AgentRef>,
     pub(crate) remote_focus_transport: Box<dyn remote_focus::RemoteFocusTransport>,
@@ -1621,6 +1622,7 @@ impl App {
             terminal_runtimes: restored_terminal_runtimes,
             status_log: crate::status_log::StatusLog::for_server(),
             remote_focus_operations: remote_focus::RemoteFocusOperations::default(),
+            planning_lock_key_burst: std::collections::VecDeque::new(),
             fleet_attach_agents: std::collections::HashMap::new(),
             remote_focus_transport: Box::new(crate::remote::SshRemoteFocusTransport::new(
                 &config.remote.fleet,
@@ -1802,6 +1804,13 @@ impl App {
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app.rebuild_group_membership_projection();
+        if let Some(authority) = config.planning_lock.authority.clone() {
+            app.state.planning_lock.fail_closed_remote();
+            crate::planning_lock_sync::start_polling(authority, app.event_tx.clone());
+        } else {
+            let path = crate::config::config_dir().join(crate::planning_lock::CONFIG_FILE_NAME);
+            crate::planning_lock_sync::watch_authority_file(path, app.event_tx.clone());
+        }
         app
     }
 

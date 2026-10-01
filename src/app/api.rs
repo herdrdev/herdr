@@ -30,42 +30,30 @@ const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
 const WINDOWS_POWERSHELL_AGENT_EXIT_RESPAWN_GRACE: Duration = Duration::from_secs(2);
 
-fn is_agent_command(method: &crate::api::schema::Method) -> bool {
-    use crate::api::schema::Method;
-    matches!(
-        method,
-        Method::AgentList(_)
-            | Method::AgentGet(_)
-            | Method::AgentState(_)
-            | Method::AgentReport(_)
-            | Method::AgentRead(_)
-            | Method::AgentExplain(_)
-            | Method::AgentSendKeys(_)
-            | Method::AgentRename(_)
-            | Method::AgentViewSet(_)
-            | Method::AgentViewClear(_)
-            | Method::AgentFocus(_)
-            | Method::AgentFocusStatus(_)
-            | Method::AgentStart(_)
-            | Method::AgentPrompt(_)
-            | Method::AgentWait(_)
-            | Method::PaneSendText(_)
-            | Method::PaneSendTextIf(_)
-            | Method::PaneSendKeys(_)
-            | Method::PaneSendInput(_)
-            | Method::PaneRead(_)
-            | Method::PaneWaitForOutput(_)
-            | Method::PaneReportAgent(_)
-            | Method::PaneReportAgentSession(_)
-            | Method::PaneClearAgentAuthority(_)
-            | Method::PaneReleaseAgent(_)
-    )
-}
-
 impl App {
+    fn planning_lock_api_allows(method: &crate::api::schema::Method) -> bool {
+        use crate::api::schema::Method;
+        matches!(
+            method,
+            Method::Ping(_)
+                | Method::SessionSnapshot(_)
+                | Method::WorkspaceFocus(_)
+                | Method::TabFocus(_)
+                | Method::PaneFocus(_)
+                | Method::PaneFocusDirection(_)
+                | Method::AgentFocus(_)
+                | Method::AgentFocusStatus(_)
+                | Method::PluginPaneFocus(_)
+        )
+    }
+
     fn agent_request_targets_discussion(&self, method: &crate::api::schema::Method) -> bool {
         use crate::api::schema::Method;
         let target = match method {
+            Method::TabGet(params) => {
+                return self.state.planning_lock.discussion_tab_id()
+                    == Some(params.tab_id.as_str());
+            }
             Method::AgentGet(params) | Method::AgentExplain(params) => Some(params.target.as_str()),
             Method::AgentState(params) => Some(params.target.as_str()),
             Method::AgentReport(params) => Some(params.target.as_str()),
@@ -89,6 +77,28 @@ impl App {
             Method::PaneReportAgentSession(params) => Some(params.pane_id.as_str()),
             Method::PaneClearAgentAuthority(params) => Some(params.pane_id.as_str()),
             Method::PaneReleaseAgent(params) => Some(params.pane_id.as_str()),
+            Method::PaneGet(params)
+            | Method::PaneSettle(params)
+            | Method::PaneUnsettle(params)
+            | Method::PaneUnsnooze(params)
+            | Method::PaneFocus(params)
+            | Method::PaneGraphicsInfo(params)
+            | Method::PaneClose(params) => Some(params.pane_id.as_str()),
+            Method::PaneInputSet(params) => Some(params.pane_id.as_str()),
+            Method::PaneRename(params) => Some(params.pane_id.as_str()),
+            Method::PaneGroupSet(params) => Some(params.pane_id.as_str()),
+            Method::PaneWorkContextSet(params) => Some(params.pane_id.as_str()),
+            Method::PaneSnooze(params) => Some(params.pane_id.as_str()),
+            Method::PaneSplit(params) | Method::PaneSplitCompanion(params) => {
+                params.target_pane_id.as_deref()
+            }
+            Method::PaneMove(params) => Some(params.pane_id.as_str()),
+            Method::PaneZoom(params) => params.pane_id.as_deref(),
+            Method::PaneLayout(params) => params.pane_id.as_deref(),
+            Method::PaneProcessInfo(params) => params.pane_id.as_deref(),
+            Method::PaneResize(params) => params.pane_id.as_deref(),
+            Method::PaneGraphicsSet(params) => Some(params.pane_id.as_str()),
+            Method::PaneGraphicsClear(params) => Some(params.pane_id.as_str()),
             _ => None,
         };
         let Some(target) = target else {
@@ -523,6 +533,16 @@ impl App {
 
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
+            AppEvent::PlanningLockFileChanged(lock) => {
+                self.state.planning_lock = lock;
+                self.state.mark_session_dirty();
+                true
+            }
+            AppEvent::PlanningLockRemoteSnapshot(snapshot) => {
+                self.state.planning_lock.apply_remote_snapshot(snapshot);
+                self.state.mark_session_dirty();
+                true
+            }
             AppEvent::FleetRefreshed { snapshot } => {
                 let changed = self.install_fleet_snapshot(snapshot);
                 self.refresh_board_remote_lines();
@@ -2108,7 +2128,7 @@ impl App {
             .is_locked(crate::app::settled::unix_seconds(
                 std::time::SystemTime::now(),
             ))
-            && is_agent_command(&request.method)
+            && !Self::planning_lock_api_allows(&request.method)
             && !self.agent_request_targets_discussion(&request.method)
         {
             return responses::encode_error(
@@ -2655,6 +2675,28 @@ mod tests {
         let response: crate::api::schema::ErrorResponse =
             serde_json::from_str(&response).expect("blocked response");
         assert_eq!(response.error.code, "planning_lock_active");
+    }
+
+    #[test]
+    fn planning_lock_api_allowlist_is_narrow_and_explicit() {
+        use crate::api::schema::{EmptyParams, Method};
+        assert!(App::planning_lock_api_allows(&Method::Ping(
+            crate::api::schema::PingParams {},
+        )));
+        assert!(App::planning_lock_api_allows(&Method::SessionSnapshot(
+            EmptyParams::default(),
+        )));
+        assert!(App::planning_lock_api_allows(&Method::PaneFocus(
+            crate::api::schema::PaneTarget {
+                pane_id: "pane".into(),
+            },
+        )));
+        assert!(!App::planning_lock_api_allows(&Method::ThemeStatus(
+            EmptyParams::default(),
+        )));
+        assert!(!App::planning_lock_api_allows(&Method::ServerStop(
+            EmptyParams::default(),
+        )));
     }
 
     #[test]
