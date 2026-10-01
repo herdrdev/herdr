@@ -1,0 +1,60 @@
+id = "freebuff"
+version = "2026.10.01.1"
+min_engine_version = 1
+updated_at = "2026-10-01T00:00:00Z"
+
+# Freebuff (freebuff.com) is a terminal-native coding agent. First-pass
+# screen detection: generic permission/choice prompts block, the interactive
+# prompt line idles, and OSC-title or PTY activity carries working state.
+# Rules are intentionally conservative — refine against real UI strings.
+
+[[rules]]
+id = "permission_prompt"
+state = "blocked"
+priority = 900
+region = "after_last_prompt_marker"
+visible_blocker = true
+any = [
+  { contains = ["allow command?"] },
+  { contains = ["allow tool?"] },
+  { contains = ["(y/n)"] },
+  { contains = ["(yes/no)"] },
+  { contains = ["yes (y)"] },
+  { contains = ["[y/n]"] },
+]
+
+[[rules]]
+id = "plan_approval"
+state = "blocked"
+priority = 880
+region = "after_last_prompt_marker"
+visible_blocker = true
+any = [
+  { contains = ["approve plan"] },
+  { contains = ["edit plan"] },
+]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 700
+region = "osc_title"
+visible_working = true
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "screen_working_fallback"
+state = "working"
+priority = 600
+region = "before_current_prompt_marker"
+visible_working = true
+any = [{ contains = ["esc to interrupt"] }, { contains = [" to interrupt)"] }]
+regex = ['[0-9]+s\s*\z']
+
+[[rules]]
+id = "prompt_idle"
+state = "idle"
+priority = 100
+region = "after_last_prompt_marker"
+visible_idle = true
+regex = ['\S']

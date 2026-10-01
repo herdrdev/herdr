@@ -33,6 +33,10 @@ id = "droid"
 path = "droid.toml"
 
 [[agents]]
+id = "freebuff"
+path = "freebuff.toml"
+
+[[agents]]
 id = "gemini"
 path = "gemini.toml"
 
