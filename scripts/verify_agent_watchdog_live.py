@@ -319,23 +319,20 @@ class Harness:
                                      "result": payload}, sort_keys=True) + "\n")
         return payload
 
-    def age_memory(self, path: Path, key: str, seconds: int, *, session: str | None = None,
-                   last_nudge_age: int | None = None) -> None:
+    def age_memory(self, path: Path, key: str, seconds: int, *, session: str | None = None) -> None:
         try:
             memory = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             memory = {}
         entry = memory.setdefault(key, {})
         aged = int(time.time()) - seconds
-        for field in ("since", "retry_since", "op_since", "quiet_since", "last_nudge_at"):
+        for field in ("since", "retry_since", "op_since", "quiet_since"):
             if field in entry:
                 entry[field] = aged
         if "since" not in entry:
             entry["since"] = aged
         if "draft_since" in entry:
             entry["draft_since"] = aged
-        if last_nudge_age is not None and "last_nudge_at" in entry:
-            entry["last_nudge_at"] = int(time.time()) - last_nudge_age
         if session is not None:
             entry["agent_session"] = session
         path.write_text(json.dumps(memory) + "\n", encoding="utf-8")
@@ -481,12 +478,6 @@ def _last_json(text: str) -> Any:
     return None
 
 
-def decision_has_nudge(payload: dict[str, Any], pane_id: str) -> bool:
-    decision = next((item for item in payload.get("decisions", [])
-                     if item.get("pane_id") == pane_id), {})
-    return decision.get("action") == "nudge"
-
-
 def _find_value(value: Any, key: str) -> Any:
     if isinstance(value, dict):
         if key in value and value[key]:
@@ -582,8 +573,8 @@ def setup_summary(h: Harness, ident: str) -> str:
 def setup_promised_draft(h: Harness, ident: str) -> str:
     account = ("You hit your usage limit" if "usage_limit" in ident else
                "Please sign in" if "logged_out" in ident else
-               "" if ident in ("promised_stale_working_nudged",
-                             "promised_stale_working_active_tool_not_nudged") else
+               "" if ident in ("promised_stale_working_stalled",
+                             "promised_stale_working_active_tool") else
                "● Background shell command didn't finish before the previous session ended")
     screen = ("Now: Codex reviewers — reviewing PR 1656; the config-folder worker starts after it merges\n"
               "⎿ Stop says: /review completed — invoke /retro to capture lessons.\n"
@@ -592,7 +583,7 @@ def setup_promised_draft(h: Harness, ident: str) -> str:
               "░░░░░░ 92% 78k tokens │ 2h 24m ago │ -- INSERT -- · 1 feedback draft")
     ready = tuple(screen.splitlines())
     pane_id = h.workspace(ident, _promised_draft_agent(
-        h.root, account, ident == "promised_stale_working_active_tool_not_nudged"), ready)
+        h.root, account, ident == "promised_stale_working_active_tool"), ready)
     return pane_id
 
 
@@ -653,17 +644,6 @@ def setup_done_here_suffix(h: Harness, ident: str) -> str:
               "────────────────────────\n❯ \n────────────────────────\n"
               "░░░░░░ 87% 127k ⚓28.8k │ ~/Repos/scalablev2 │ Opus·med @scalable.so │ 29m ago")
     return h.workspace(ident, _script(screen), ("Needs you: nothing.", "Done here —"))
-
-
-def setup_undelivered_promise(h: Harness, ident: str) -> str:
-    screen = ("Now: I will update the checklist after the next render is ready\n"
-              "⎿ The next deliverable is the refreshed checklist and data format.\n"
-              "────────────────────────\n❯ cont\n────────────────────────\n"
-              "░░░░░░ 92% 78k tokens │ 2h 24m ago │ -- INSERT -- · 0 shells")
-    code = f"import time; print({json.dumps(screen)}, flush=True); time.sleep(3600)"
-    command = "clear; exec python3 -u -c " + shlex.quote(code)
-    return h.workspace(ident, command,
-                       ("Now: I will update the checklist after the next render is ready",))
 
 
 def setup_retry(h: Harness, ident: str) -> str:
@@ -793,22 +773,18 @@ CASES: list[tuple[str, str, Callable[[Harness, str], Any], str]] = [
     ("a-quoted-question", "A", setup_quote, "working"),
     ("a-subprocess-yn", "A", setup_prompt, "waiting_tool_input"),
     ("a-finished-idle", "A", setup_summary, "finished_idle"),
-    ("stale_draft_promised_work_stalled", "A", setup_promised_draft, "finished_idle"),
-    ("promised_quiet_nudged", "A", setup_promised_draft, "finished_idle"),
-    ("promised_stale_working_nudged", "A", setup_promised_draft, "finished_idle"),
-    ("promised_stale_working_active_tool_not_nudged", "A", setup_promised_draft, "working"),
-    ("promised_stale_working_dead_marker_nudged", "A", setup_promised_draft, "finished_idle"),
-    ("promised_quiet_repeats_then_blocked", "A", setup_promised_draft, "stalled"),
-    ("promised_usage_limit_not_nudged", "A", setup_promised_draft, "stalled"),
-    ("promised_logged_out_not_nudged", "A", setup_promised_draft, "stalled"),
-    ("gate_inline_reply_not_nudged", "A", setup_gate_inline_reply, "waiting_human"),
-    ("gate_now_waiting_review_not_nudged", "A", setup_gate_now_waiting_review, "waiting_human"),
-    ("promised_background_shell_past_deadline_not_nudged", "A", setup_promised_background, "stalled"),
-    ("promised_background_agent_past_deadline_not_nudged", "A", setup_promised_background, "stalled"),
+    ("stale_draft_promised_work_stalled", "A", setup_promised_draft, "stalled"),
+    ("promised_quiet_idle_stalled", "A", setup_promised_draft, "stalled"),
+    ("promised_stale_working_stalled", "A", setup_promised_draft, "stalled"),
+    ("promised_stale_working_active_tool", "A", setup_promised_draft, "working"),
+    ("promised_stale_working_dead_marker_stalled", "A", setup_promised_draft, "stalled"),
+    ("gate_inline_reply", "A", setup_gate_inline_reply, "waiting_human"),
+    ("gate_now_waiting_review", "A", setup_gate_now_waiting_review, "waiting_human"),
+    ("promised_background_shell_past_deadline", "A", setup_promised_background, "stalled"),
+    ("promised_background_agent_past_deadline", "A", setup_promised_background, "stalled"),
     ("fresh_draft_typing", "A", setup_promised_draft, "working"),
     ("done_here_negative_control", "A", setup_done_here, "finished_idle"),
-    ("done_here_with_suffix_not_nudged", "A", setup_done_here_suffix, "finished_idle"),
-    ("undelivered_nudge_backs_off", "A", setup_undelivered_promise, "stalled"),
+    ("done_here_with_suffix", "A", setup_done_here_suffix, "finished_idle"),
     ("a-retry-backoff", "A", setup_retry, "waiting_retry"),
     ("a-retry-renewed", "A", setup_retry, "stalled"),
     ("a-account-limit", "A", setup_account, "waiting_human"),
@@ -943,116 +919,62 @@ def main() -> int:
             if family == "A":
                 pane_id = harness.panes[ident]
                 session_id = "session-" + ident
-                session_source = ("herdr:codex" if ident in (
-                    "stale_draft_promised_work_stalled", "promised_quiet_nudged",
-                    "promised_stale_working_nudged",
-                    "promised_stale_working_active_tool_not_nudged",
-                    "promised_stale_working_dead_marker_nudged")
-                    else "watchdog-harness")
-                status_source = "watchdog-harness"
-                status = "idle" if (ident == "a-finished-idle"
-                                     or ident == "stale_draft_promised_work_stalled"
-                                     or ident == "done_here_with_suffix_not_nudged"
-                                     or ident == "undelivered_nudge_backs_off"
-                                     or (ident.startswith("promised_")
-                                         and not ident.startswith("promised_stale_working_")
-                                         and not ident.startswith("promised_background_"))) else (
-                    "blocked" if ident == "a-approval-hook" else "working")
-                report: dict[str, Any] = {"pane_id": pane_id, "source": status_source,
-                    "agent": "codex", "state": status}
-                if ident.startswith("a-retry"):
-                    report.update(wait="retry", eta_s=120,
-                                  reported_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-                harness.call("pane.report_agent", report)
-                if ident != "undelivered_nudge_backs_off":
-                    harness.call("pane.report_agent_session", {"pane_id": pane_id,
-                        "source": session_source, "agent": "codex",
-                        "agent_session_id": session_id})
+                promise_cases = {
+                    "stale_draft_promised_work_stalled",
+                    "promised_quiet_idle_stalled",
+                    "promised_stale_working_stalled",
+                    "promised_stale_working_active_tool",
+                    "promised_stale_working_dead_marker_stalled",
+                }
+                session_source = "herdr:codex" if ident in promise_cases else "watchdog-harness"
+                status = "idle" if ident in {
+                    "a-finished-idle", "stale_draft_promised_work_stalled",
+                    "promised_quiet_idle_stalled", "done_here_with_suffix",
+                } else ("blocked" if ident == "a-approval-hook" else "working")
+                harness.call("pane.report_agent", {"pane_id": pane_id,
+                    "source": "watchdog-harness", "agent": "codex", "state": status})
+                harness.call("pane.report_agent_session", {"pane_id": pane_id,
+                    "source": session_source, "agent": "codex", "agent_session_id": session_id})
                 state = harness.root / f"pane-{ident}.json"
                 log = harness.root / f"pane-{ident}.jsonl"
-                cmd_options = ["--dry-run", "--stall-secs", "600", "--confirm-secs",
+                cmd_options = ["--stall-secs", "600", "--confirm-secs",
                                str(args.confirm_secs), "--state-file", str(state),
                                "--status-log", str(log)]
                 if ident == "stale_draft_promised_work_stalled":
-                    cmd_options.remove("--dry-run")
                     cmd_options += ["--stale-draft-secs", "2", "--quiet-secs", "2"]
-                if ident.startswith("promised_"):
-                    cmd_options.remove("--dry-run")
+                elif ident in promise_cases:
                     cmd_options += ["--quiet-secs", "2"]
-                elif ident == "undelivered_nudge_backs_off":
-                    cmd_options.remove("--dry-run")
-                    # Keep other fixtures on this shared harness server quiet
-                    # while memory aging advances this pane's repeat clock.
-                    cmd_options += ["--quiet-secs", "1800"]
                 if args.gemini_bin:
                     cmd_options += ["--gemini-bin", args.gemini_bin]
                 else:
                     cmd_options.append("--no-model")
-                harness.run_watchdog("A", cmd_options,
-                                     dry=ident not in ("stale_draft_promised_work_stalled",
-                                                       "promised_quiet_nudged",
-                                                       "promised_stale_working_nudged",
-                                                       "promised_stale_working_dead_marker_nudged"))
-                age = 1800 if ident == "stale_draft_promised_work_stalled" else 900 if ident in ("a-quiet-build", "a-silent-stall", "a-spinner-only",
-                                       "a-spinner-progress", "a-resumed") else 0
-                if ident.startswith("promised_"):
-                    # These cases exercise promised-work policy. Keep the
-                    # composer draft, but age it past the human-typing guard.
-                    age = 1800
-                if ident == "undelivered_nudge_backs_off":
-                    age = 1800
-                if ident == "a-retry-renewed":
-                    age = 1200
-                elif ident == "a-prose-question":
-                    age = 90
+                harness.run_watchdog("A", cmd_options, dry=True)
+                age = (1800 if ident in promise_cases else
+                       1200 if ident == "a-retry-renewed" else
+                       90 if ident == "a-prose-question" else
+                       900 if ident in ("a-quiet-build", "a-silent-stall", "a-spinner-only",
+                                       "a-spinner-progress", "a-resumed") else 0)
                 if age:
                     harness.age_memory(state, pane_id, age,
                                        session="old-session" if ident == "a-resumed" else None)
-                if ident == "promised_quiet_repeats_then_blocked":
-                    data = json.loads(state.read_text())
-                    data[pane_id]["nudge_count"] = 3
-                    state.write_text(json.dumps(data))
-                    harness.age_memory(state, pane_id, 1800)
                 payload = harness.run_watchdog("A", cmd_options,
-                                               dry=ident not in ("stale_draft_promised_work_stalled",
-                                                                 "promised_quiet_nudged",
-                                                                 "promised_stale_working_nudged",
-                                                                 "promised_stale_working_dead_marker_nudged",
-                                                                 "undelivered_nudge_backs_off"))
-                if ident == "undelivered_nudge_backs_off":
-                    # Advance the repeat clock in saved memory between scans;
-                    # no wall-clock sleeps are needed to cover 20 scan steps.
-                    virtual_attempts = [0] if decision_has_nudge(payload, pane_id) else []
-                    last_attempt_step = virtual_attempts[-1] if virtual_attempts else 0
-                    for step in range(60, 1201, 60):
-                        harness.age_memory(state, pane_id, 1800,
-                                           last_nudge_age=step - last_attempt_step)
-                        payload = harness.run_watchdog("A", cmd_options, dry=False)
-                        if decision_has_nudge(payload, pane_id):
-                            virtual_attempts.append(step)
-                            last_attempt_step = step
-                    action_rows = [json.loads(line) for line in log.read_text().splitlines()
-                                   if line.strip()]
-                    nudges = [row for row in action_rows if row.get("action") == "nudge"]
-                    decision = next((d for d in payload.get("decisions", [])
-                                     if d.get("pane_id") == pane_id), {})
-                    actual = decision.get("class", "missing")
-                    evidence = (f"attempts={len(nudges)} reasons="
-                                f"{[row.get('reason') for row in nudges]}; "
-                                f"virtual_attempt_scan_secs={virtual_attempts}")
-                    case_match = (len(nudges) <= 3 and len(nudges) == 3
-                                  and all(row.get("delivered") is False for row in nudges)
-                                  and all(row.get("reason") == "no_agent_session" for row in nudges)
-                                  and all(b - a >= 300 for a, b in zip(virtual_attempts,
-                                                                        virtual_attempts[1:]))
-                                  and actual == "stalled")
-                decisions = payload.get("decisions", [])
-                decision = next((d for d in decisions if d.get("pane_id") == pane_id), {})
+                    dry=ident not in {"stale_draft_promised_work_stalled", *promise_cases})
+                decision = next((d for d in payload.get("decisions", [])
+                                 if d.get("pane_id") == pane_id), {})
                 actual = decision.get("class", "missing")
                 evidence = decision.get("evidence", payload.get("_stderr_tail"))
                 if ident == "stale_draft_promised_work_stalled":
-                    actual = decision.get("class", "missing")
-                    evidence = f"{evidence}; action={decision.get('action')} delivered={decision.get('delivered')}"
+                    case_match = (actual == expected
+                                  and decision.get("status") == "corrected"
+                                  and decision.get("new_state") == "blocked"
+                                  and decision.get("action") is None
+                                  and decision.get("delivered") is None)
+                elif ident in ("fresh_draft_typing", "done_here_negative_control",
+                               "done_here_with_suffix"):
+                    case_match = (actual == expected and decision.get("action") is None
+                                  and decision.get("delivered") is None)
+                else:
+                    case_match = actual == expected
             elif family in ("B", "P"):
                 opts = ["--stall-minutes", "1", "--runs-dir",
                         str(result["runs"]), "--history-days", "3650", "--all",
@@ -1082,73 +1004,6 @@ def main() -> int:
             calls = (payload.get("summary") or {}).get("model_calls", 0)
             calls_expected = 1 if ident == "a-prose-question" and args.gemini_bin else 0
             case_match = actual == expected and calls == calls_expected
-            if ident == "stale_draft_promised_work_stalled":
-                pane_text = (harness.call("pane.read", {"pane_id": pane_id,
-                    "source": "detection", "lines": 40, "format": "text"})
-                    .get("read", {}).get("text", ""))
-                case_match = (actual == expected and decision.get("action") == "nudge"
-                              and decision.get("delivered") is True
-                              and decision.get("status") == "nudged"
-                              and ("❯ \n" in pane_text or "❯\n" in pane_text)
-                              and pane_text.count("cont — resume: continue your open work to its done criterion") == 1
-                              and "cont — resume: continue your open work to its done criterion"
-                              in str(decision.get("action_text", "")))
-                if not case_match:
-                    evidence = f"{evidence}; decision={decision}; pane={pane_text!r}"
-            elif ident in ("fresh_draft_typing", "done_here_negative_control"):
-                case_match = (actual == expected and decision.get("action") is None)
-            elif ident == "done_here_with_suffix_not_nudged":
-                case_match = (actual == expected and decision.get("action") is None
-                              and not log.exists())
-            elif ident == "undelivered_nudge_backs_off":
-                action_rows = [json.loads(line) for line in log.read_text().splitlines()
-                               if line.strip()]
-                nudges = [row for row in action_rows
-                          if row.get("action") == "nudge" and row.get("pane_id") == pane_id]
-                blocked_events = [row for row in action_rows
-                                  if row.get("pane_id") == pane_id
-                                  and row.get("new_state") == "blocked"
-                                  and str(row.get("evidence", "")).startswith(
-                                      "did not resume after 3 nudge attempts")]
-                case_match = (actual == expected and len(nudges) == 3
-                              and all(row.get("delivered") is False for row in nudges)
-                              and all(row.get("reason") == "no_agent_ref" for row in nudges)
-                              and len(blocked_events) == 1
-                              and len(virtual_attempts) == 3
-                              and all(b - a >= 300 for a, b in zip(virtual_attempts,
-                                                                    virtual_attempts[1:])))
-                evidence = (f"attempts={len(nudges)} reasons="
-                            f"{[row.get('reason') for row in nudges]}; "
-                            f"virtual_attempt_scan_secs={virtual_attempts}; "
-                            f"blocked_log_rows={blocked_events}; "
-                            f"attempt_log={nudges}; "
-                            f"memory={json.loads(state.read_text()).get(pane_id)}; "
-                            f"decision={decision}")
-            elif ident in ("promised_quiet_nudged", "promised_stale_working_nudged",
-                           "promised_stale_working_dead_marker_nudged"):
-                case_match = (actual == expected and decision.get("action") == "nudge"
-                              and decision.get("delivered") is True
-                              and decision.get("nudge_count") == 1)
-                if not case_match:
-                    evidence = f"{evidence}; decision={decision}"
-            elif ident == "promised_stale_working_active_tool_not_nudged":
-                case_match = (actual == expected and decision.get("action") is None)
-            elif ident in ("gate_inline_reply_not_nudged",
-                           "gate_now_waiting_review_not_nudged",
-                           "promised_background_shell_past_deadline_not_nudged",
-                           "promised_background_agent_past_deadline_not_nudged"):
-                case_match = (actual == expected
-                              and (decision.get("action") is None
-                                   or decision.get("delivered") is False))
-                if not case_match:
-                    evidence = f"{evidence}; decision={decision}"
-            elif ident == "promised_quiet_repeats_then_blocked":
-                case_match = (actual == expected and decision.get("action") is None
-                              and "did not resume after 3 nudges" in str(decision.get("evidence")))
-            elif ident in ("promised_usage_limit_not_nudged", "promised_logged_out_not_nudged"):
-                reason = "usage limit" if ident.endswith("usage_limit_not_nudged") else "logged out"
-                case_match = (actual == expected and decision.get("action") is None
-                              and f"blocked: {reason}" in str(decision.get("evidence")))
             rows.append({"id": ident, "watchdog": family, "expected": expected,
                          "actual": actual, "model_calls": calls,
                          "match": case_match,

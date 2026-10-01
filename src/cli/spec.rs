@@ -280,7 +280,7 @@ pub(super) fn watchdog_command() -> Command {
             option("quiet-secs", "N")
                 .default_value("1800")
                 .value_parser(clap::value_parser!(u64))
-                .help("Seconds of quiet promised work before the first reminder"),
+                .help("Quiet period required before promised work is classified as stalled"),
         )
         .arg(
             option("confirm-secs", "N")

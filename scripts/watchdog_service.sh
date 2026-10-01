@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run `herdr watchdog` as a per-user service: a systemd --user unit on Linux, a LaunchAgent on macOS.
-# Defaults: every 60 s, model calls off (--with-model opts in to Gemini). --dry-run-nudges logs without sending.
+# Defaults: every 60 s, model calls off (--with-model opts in to Gemini).
 # Logs: ~/.local/state/herdr/watchdog.log (Linux) or ~/Library/Logs/herdr-watchdog.log (macOS);
 # status records: ~/.local/state/herdr/watchdog-status.log. Stop and remove: scripts/watchdog_service.sh uninstall.
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/watchdog_service.sh install [--herdr-bin PATH] [--interval-secs N] [--with-model] [--dry-run-nudges] [--print]
+  scripts/watchdog_service.sh install [--herdr-bin PATH] [--interval-secs N] [--with-model] [--dry-run] [--print]
   scripts/watchdog_service.sh uninstall
   scripts/watchdog_service.sh status
 EOF
@@ -123,7 +123,7 @@ case $command_name in
         --herdr-bin) (($# >= 2)) || fail "--herdr-bin requires a path"; herdr_bin=$2; shift 2 ;;
         --interval-secs) (($# >= 2)) || fail "--interval-secs requires a value"; interval=$2; shift 2 ;;
         --with-model) model=yes; shift ;;
-        --dry-run-nudges) dry=yes; shift ;;
+        --dry-run) dry=yes; shift ;;
         --print) print=yes; shift ;;
         *) fail "unknown install option: $1" ;;
       esac

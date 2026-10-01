@@ -52,7 +52,7 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertRegex(default, r"(?m)^StandardError=append:/\S+/watchdog\.log$")
         self.assertIn("watchdog.log", default)
         self.assertIn("watchdog-status.log", default)
-        selected = self.render("linux", "--with-model", "--dry-run-nudges")
+        selected = self.render("linux", "--with-model", "--dry-run")
         self.assertNotIn("--no-model", selected)
         self.assertIn("--dry-run", selected)
 
@@ -68,7 +68,7 @@ class WatchdogServiceTests(unittest.TestCase):
         self.assertIn("watchdog-status.log", default)
         self.assertEqual(plist["KeepAlive"], {"SuccessfulExit": False})
         self.assertEqual(plist["StandardOutPath"], str(self.home / "Library/Logs/herdr-watchdog.log"))
-        selected = self.render("darwin", "--with-model", "--dry-run-nudges")
+        selected = self.render("darwin", "--with-model", "--dry-run")
         self.assertNotIn("--no-model", selected)
         self.assertIn("<string>--dry-run</string>", selected)
 

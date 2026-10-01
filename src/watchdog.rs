@@ -19,7 +19,6 @@ pub(crate) mod workers;
 
 pub(crate) const WATCHDOG_SOURCE: &str = "watchdog";
 pub(crate) const STALE_DRAFT_SECS: u64 = 300;
-pub(crate) const MAX_NUDGE_ATTEMPTS_PER_EPISODE: u8 = 3;
 #[cfg(test)]
 const PROMPT_WINDOW_LINES: usize = 12;
 #[cfg(test)]
@@ -772,19 +771,9 @@ pub(crate) struct PaneV3Memory {
     #[serde(default)]
     pub draft_since: Option<u64>,
     #[serde(default)]
-    pub nudged_stall: bool,
-    #[serde(default)]
     pub quiet_since: Option<u64>,
     #[serde(default)]
-    pub nudge_count: u8,
-    #[serde(default)]
-    pub last_nudge_at: Option<u64>,
-    #[serde(default)]
-    pub nudge_attempts_at: Vec<u64>,
-    #[serde(default)]
     pub last_reported_at: Option<String>,
-    #[serde(default)]
-    pub nudge_rebaseline: bool,
 }
 pub(crate) type PaneV3MemoryMap = HashMap<String, PaneV3Memory>;
 
@@ -832,19 +821,9 @@ pub(crate) struct PaneV3Decision {
     pub samples: Vec<serde_json::Value>,
     pub write_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub action: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub action_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delivered: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_to_continue: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quiet_secs: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nudge_count: Option<u8>,
     #[serde(skip)]
     pub observed_terminal_id: Option<String>,
     #[serde(skip)]
@@ -895,7 +874,6 @@ pub(crate) fn classify_pane_v3(
     } else if new_turn {
         m.since = now;
         m.retry_since = None;
-        m.nudged_stall = false;
         ev = "new turn".into();
     } else if m.hash != hash {
         m.since = now;
@@ -990,13 +968,7 @@ pub(crate) fn classify_pane_v3(
                 let quiet_age = now.saturating_sub(m.quiet_since.unwrap_or(now));
                 let quiet_stale = age >= opt.stall_secs && quiet_age >= opt.quiet_secs;
                 let promise_already_satisfied = evidence::finished_reply(&o.tail);
-                if o.status == AgentStatus::Blocked
-                    && m.nudge_count >= MAX_NUDGE_ATTEMPTS_PER_EPISODE
-                    && !promise_already_satisfied
-                {
-                    class = PaneClass::Stalled;
-                    ev = "did not resume after 3 nudge attempts".into();
-                } else if promise_already_satisfied {
+                if promise_already_satisfied {
                     class = PaneClass::FinishedIdle;
                     ev = "reply finished; promised work already satisfied".into();
                 } else if !active_tool
@@ -1151,13 +1123,8 @@ pub(crate) fn classify_pane_v3(
         evidence: ev,
         samples,
         write_error: None,
-        action: None,
-        action_text: None,
-        delivered: None,
-        reason: None,
         expected_to_continue: None,
         quiet_secs: None,
-        nudge_count: None,
         observed_terminal_id: o.terminal_id.clone(),
         observed_agent_session: o.agent_session.clone(),
         observed_hash: hash,
@@ -1895,21 +1862,6 @@ mod tests {
                 classify_pane_v3(&observation, &mut PaneV3Memory::default(), 1000, v3opt());
             assert_eq!(decision.class, PaneClass::Working, "{line}: {decision:?}");
         }
-    }
-
-    #[test]
-    fn blocked_status_after_three_nudge_attempts_stays_stalled() {
-        let tail = claude_pane("Now: Codex reviewers — finishing review", "", "0 shells");
-        let observation = pane_v3(AgentStatus::Blocked, &tail);
-        let mut memory = PaneV3Memory {
-            nudge_count: MAX_NUDGE_ATTEMPTS_PER_EPISODE,
-            ..PaneV3Memory::default()
-        };
-        let decision = classify_pane_v3(&observation, &mut memory, 1000, v3opt());
-        assert_eq!(decision.class, PaneClass::Stalled);
-        assert!(decision
-            .evidence
-            .contains("did not resume after 3 nudge attempts"));
     }
 
     #[test]
