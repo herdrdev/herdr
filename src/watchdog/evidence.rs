@@ -81,6 +81,10 @@ static REPLY_SILENCE_HOLDS: LazyLock<Regex> = LazyLock::new(|| {
 });
 static COMPOSER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*[❯›>]\s*(.*)$").expect("static regex"));
+static CLAUDE_EFFORT_HINT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^\s*(?:low|medium|high|max|xhigh)\s*·\s*/effort\s*$").expect("static regex")
+});
+const SEMANTIC_SUFFIX_LINES: usize = 12;
 static USER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*❯\s+\S").expect("static regex"));
 static DONE_HERE: LazyLock<Regex> = LazyLock::new(|| {
@@ -379,13 +383,38 @@ pub(crate) fn normalize_line(line: &str) -> String {
 }
 pub(crate) fn semantic_lines(text: &str) -> Vec<String> {
     let lines = text.lines().collect::<Vec<_>>();
-    let content = composer_index(&lines).map_or(text.to_owned(), |i| lines[..i - 1].join("\n"));
+    let content = composer_index(&lines).map_or(text.to_owned(), |i| {
+        let end = i.saturating_sub(1);
+        let mut hint = end;
+        while hint > 0 {
+            let above = hint - 1;
+            if lines[above].trim().is_empty() {
+                hint = above;
+            } else {
+                if CLAUDE_EFFORT_HINT.is_match(lines[above]) {
+                    hint = above;
+                } else {
+                    hint = end;
+                }
+                break;
+            }
+        }
+        let mut content = lines[..end].to_vec();
+        if hint < end && !lines[hint].trim().is_empty() {
+            content.remove(hint);
+        }
+        content.join("\n")
+    });
     let v: Vec<_> = content
         .lines()
         .map(normalize_line)
         .filter(|s| !s.is_empty())
         .collect();
-    v[v.len().saturating_sub(40)..].to_vec()
+    // A fixed transcript suffix prevents rows entering/leaving the top edge of
+    // a short terminal screen (including welcome chrome) from shifting the
+    // semantic window. Twelve lines retain recent conversational context while
+    // still detecting any newly emitted line at the bottom.
+    v[v.len().saturating_sub(SEMANTIC_SUFFIX_LINES)..].to_vec()
 }
 pub(crate) fn semantic_hash(text: &str) -> u64 {
     stable_hash(&semantic_lines(text).join("\n"))
@@ -746,6 +775,32 @@ mod tests {
             "3m ago │ 🖥8.1 │ 141.2k ↻5d09h@20:00 │ 6h:91%",
         );
         assert_eq!(semantic_hash(&a), semantic_hash(&b));
+    }
+
+    #[test]
+    fn semantic_hash_ignores_effort_hint_in_composer_status_row() {
+        let transcript = "Now: preparing the acceptance response\nCrunched for done PM";
+        let without_hint = claude_screen(transcript, "", "0 shells");
+        for hint in ["medium · /effort", "    medium · /effort"] {
+            let with_hint = format!(
+                "{transcript}\n{hint}\n────────────────────────\n❯ \n────────────────────────\n0 shells"
+            );
+            assert_eq!(semantic_hash(&without_hint), semantic_hash(&with_hint));
+            assert_eq!(semantic_lines(&with_hint), semantic_lines(&without_hint));
+        }
+
+        let with_blank = format!(
+            "{transcript}\nmedium · /effort\n\n────────────────────────\n❯ \n────────────────────────\n0 shells"
+        );
+        assert_eq!(semantic_hash(&without_hint), semantic_hash(&with_blank));
+        assert_eq!(semantic_lines(&with_blank), semantic_lines(&without_hint));
+    }
+
+    #[test]
+    fn effort_text_in_transcript_is_not_dropped() {
+        let transcript = "We should discuss /effort after the release";
+        let screen = claude_screen(transcript, "", "0 shells");
+        assert!(semantic_lines(&screen).contains(&transcript.to_owned()));
     }
 
     #[test]
