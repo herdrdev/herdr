@@ -285,9 +285,9 @@ fn compact_row_dot_text(entry: &AgentPanelEntry) -> String {
 
 pub(crate) fn compact_dot_for_state(
     state: AgentState,
-    // Seen no longer selects a shape: done-unread and idle-seen are both `○`,
-    // separated by colour via state_label_color.
-    _seen: bool,
+    // Done-unread gets its own shape (`◉`); teal vs green alone was too
+    // close to tell apart from idle-seen `○`.
+    seen: bool,
     has_agent: bool,
     _gate: bool,
     _usage_limited: bool,
@@ -300,7 +300,8 @@ pub(crate) fn compact_dot_for_state(
         AgentState::Working => "●",
         AgentState::Blocked if working_while_blocked => "●",
         AgentState::Blocked => "○",
-        AgentState::Idle if has_agent => "○",
+        AgentState::Idle if !seen => "◉",
+        AgentState::Idle => "○",
         // Unknown agent state: a solid grey dot, not an empty one.
         _ => "●",
     }
@@ -16224,7 +16225,7 @@ pub(crate) mod tests {
                     Color::Rgb(243, 139, 168),
                 ),
                 (
-                    "○".into(),
+                    "◉".into(),
                     "done title".into(),
                     "pi".into(),
                     Some("2m".into()),
@@ -17989,7 +17990,7 @@ pub(crate) mod tests {
         let mut entry = aggregation_entry(AgentState::Idle, false, None, "done");
 
         let done_unread = compact_row_color(&entry, &palette);
-        assert_eq!(compact_row_dot(&entry), "\u{25cb}");
+        assert_eq!(compact_row_dot(&entry), "\u{25c9}");
 
         entry.completion_tier = Some(CompletionTier::ContractSatisfied);
         assert_eq!(
@@ -18004,8 +18005,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             compact_row_dot(&entry),
-            "\u{25cb}",
-            "the shape stays hollow: colour carries the tier, not a fourth glyph"
+            "\u{25c9}",
+            "still unread done: same shape, colour carries the tier"
         );
 
         entry.open_blockers = true;
@@ -18698,26 +18699,9 @@ pub(crate) mod tests {
             .map(|row| row_text(terminal.backend().buffer(), row, area.width - 1))
             .collect::<Vec<_>>();
 
-        // Two shapes only: blocked and done-unread are both `○`, and the palette
-        // separates them. Asserting the glyph alone would no longer distinguish them.
+        // Done-unread has its own `◉` so it reads apart from blocked and idle `○`.
         assert!(text.iter().any(|line| line.contains('○')), "{text:?}");
-        assert!(
-            !text.iter().any(|line| line.contains('◆')),
-            "done-unread must not reintroduce a third dot shape: {text:?}"
-        );
-
-        let buffer = terminal.backend().buffer();
-        let dot_colors = (0..area.height)
-            .filter_map(|row| {
-                (0..area.width - 1)
-                    .find(|x| buffer[(*x, row)].symbol() == "○")
-                    .map(|x| buffer[(x, row)].style().fg)
-            })
-            .collect::<std::collections::HashSet<_>>();
-        assert!(
-            dot_colors.len() >= 2,
-            "blocked and done-unread share a shape, so they must differ by colour: {dot_colors:?}"
-        );
+        assert!(text.iter().any(|line| line.contains('◉')), "{text:?}");
     }
 
     #[test]
@@ -20188,7 +20172,7 @@ row_gap = 1
         idle.draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let idle_text = row_text(idle.backend().buffer(), tab_row, 49);
-        assert!(idle_text.contains("○"), "{idle_text:?}");
+        assert!(idle_text.contains("◉"), "{idle_text:?}");
         assert!(idle_text.ends_with("5m"), "{idle_text:?}");
         assert!(!idle_text.contains(" · one"), "{idle_text:?}");
     }
