@@ -201,8 +201,11 @@ pub(crate) fn request_from_turn_start(
 }
 
 pub(crate) fn calculate_work_title(prompt: &str) -> Option<String> {
+    // URLs stay in the prompt for work-context extraction, but their host and
+    // path segments are never the objective, so drop them before picking words.
     let sanitized = sanitize_prompt(prompt);
-    let words = meaningful_objective_words(&sanitized)?;
+    let without_urls = url_regex().replace_all(&sanitized, " ");
+    let words = meaningful_objective_words(&without_urls)?;
     let mut title_words = Vec::new();
     for word in words.into_iter().take(WORK_TITLE_MAX_WORDS) {
         let word = title_case_word(&word);
@@ -526,6 +529,11 @@ fn ansi_regex() -> &'static Regex {
         Regex::new(r"(?:\x1B\][^\x07]*(?:\x07|\x1B\\))|(?:\x1B\[[0-?]*[ -/]*[@-~])")
             .expect("static ANSI regex")
     })
+}
+
+fn url_regex() -> &'static Regex {
+    static URL: OnceLock<Regex> = OnceLock::new();
+    URL.get_or_init(|| Regex::new(r"(?i)\b[a-z][a-z0-9+.-]*://\S+").expect("url regex"))
 }
 
 fn secret_regex() -> &'static Regex {
@@ -907,6 +915,17 @@ mod tests {
             .as_deref(),
             Some("Agent Title Herdr")
         );
+    }
+
+    #[test]
+    fn leading_url_does_not_become_the_title() {
+        let title = calculate_work_title(
+            "https://mail.missiveapp.com/#team_unassigned/abc/conversations/def Fix the A+ error copy",
+        )
+        .expect("title");
+        assert!(!title.to_lowercase().contains("https"), "{title}");
+        assert!(!title.to_lowercase().contains("missiveapp"), "{title}");
+        assert!(title.contains("Error"), "{title}");
     }
 
     #[test]
