@@ -1006,7 +1006,17 @@ impl App {
         else {
             return;
         };
-        if self.state.workspaces[ws_idx].tabs.len() == 1 {
+        self.close_tab_at_via_api(ws_idx, tab_idx);
+    }
+
+    pub(crate) fn close_tab_at_via_api(&mut self, ws_idx: usize, tab_idx: usize) {
+        let Some(workspace) = self.state.workspaces.get(ws_idx) else {
+            return;
+        };
+        if tab_idx >= workspace.tabs.len() {
+            return;
+        }
+        if workspace.tabs.len() == 1 {
             self.state.selected = ws_idx;
             if self.state.confirm_close {
                 super::modal::open_confirm_close(&mut self.state);

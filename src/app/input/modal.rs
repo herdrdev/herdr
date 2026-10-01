@@ -1951,9 +1951,7 @@ impl App {
                 },
                 Some("Close"),
             ) => {
-                self.focus_workspace_idx_via_api(ws_idx);
-                self.focus_tab_idx_via_api(tab_idx);
-                self.close_active_tab_via_api();
+                self.close_tab_at_via_api(ws_idx, tab_idx);
                 if self.state.client_overlay != ClientOverlay::ConfirmClose {
                     self.state.close_client_overlay();
                 }
@@ -3429,6 +3427,41 @@ mod tests {
         assert!(!app.event_hub.events_after(0).iter().any(|(_, event)| {
             matches!(event.event, crate::api::schema::EventKind::WorkspaceClosed)
         }));
+    }
+
+    #[tokio::test]
+    async fn api_context_menu_close_inactive_tab_does_not_confirm_for_single_tab_active_workspace()
+    {
+        let mut app = app_with_test_workspaces(&["target", "active"]);
+        app.state.workspaces[0].test_add_tab(Some("second"));
+        app.state.active = Some(1);
+        app.state.selected = 1;
+        app.state.confirm_close = true;
+        app.state
+            .open_client_overlay(crate::app::state::ClientOverlay::ContextMenu);
+        let (workspace_id, tab_id) = context_tab_ids(&app.state, 0, 0);
+        let menu = ContextMenuState {
+            kind: ContextMenuKind::Tab {
+                workspace_id,
+                tab_id,
+                ws_idx: 0,
+                tab_idx: 0,
+                starred: false,
+                has_subgroup: false,
+                settle_pane_id: None,
+                snooze_target: None,
+            },
+            x: 0,
+            y: 0,
+            selected: ContextMenuAction::CloseTab,
+        };
+
+        app.apply_context_menu_action_via_api(menu, ContextMenuAction::CloseTab);
+
+        assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
+        assert_eq!(app.state.active, Some(1));
+        assert_eq!(app.state.workspaces[0].tabs.len(), 1);
+        assert_eq!(app.state.workspaces[1].tabs.len(), 1);
     }
 
     #[test]
