@@ -20861,8 +20861,8 @@ next_tab = ""
         let cycle = server.app.state.view.window_cycle_mode_hit_area;
         assert_eq!(checklist.width, 1);
         assert_eq!(checklist.y, bell.y);
-        assert_eq!(checklist.x, 16);
-        assert!(checklist.right() < bell.x);
+        assert_eq!(checklist.x, 20);
+        assert!(checklist.right() <= bell.x);
         assert!(cycle.right() <= checklist.x);
 
         let (writer, _control_rx, _render_rx) = test_client_writer();

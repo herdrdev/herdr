@@ -530,7 +530,7 @@ impl Default for SidebarAreasConfig {
             symphony: true,
             notes: true,
             pomodoro: true,
-            hosts: true,
+            hosts: false,
         }
     }
 }
@@ -565,6 +565,7 @@ mod tests {
         assert_eq!(config.layout, SidebarLayoutConfig::Current);
         assert_eq!(config.header, SidebarHeaderConfig::Plain);
         assert_eq!(config.areas, SidebarAreasConfig::default());
+        assert!(!config.areas.hosts);
         assert_eq!(
             config.agents.rows,
             vec![vec![

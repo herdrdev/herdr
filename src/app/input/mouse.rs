@@ -6610,7 +6610,7 @@ mod tests {
         assert!(areas[..5]
             .iter()
             .all(|area| area.width == 2 && area.height == 1));
-        assert_eq!(areas[5].width, 1);
+        assert_eq!(areas[5].width, 2);
         assert_eq!(areas[5].height, 1);
         assert!(areas.windows(2).all(|pair| pair[0].right() == pair[1].x));
         for (area, item) in areas.iter().zip([
@@ -6628,7 +6628,7 @@ mod tests {
             );
         }
         let board = app.state.view.sidebar_footer_board_hit_area;
-        assert_eq!(board.width, 1);
+        assert_eq!(board.width, 2);
         assert_eq!(
             board.x,
             app.state.view.sidebar_footer_refresh_hit_area.right()
@@ -6639,7 +6639,7 @@ mod tests {
             Some(ControlId::SidebarFooter(SidebarFooterItem::Board))
         );
         let lock = app.state.view.sidebar_footer_planning_lock_hit_area;
-        assert_eq!(lock.width, 1);
+        assert_eq!(lock.width, 2);
         assert_eq!(lock.x, board.right());
         app.handle_mouse(mouse(MouseEventKind::Moved, lock.x, lock.y));
         assert_eq!(
@@ -11024,7 +11024,7 @@ mod tests {
         app.state.sidebar_show_ask_subtitles = true;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 80, 24));
         let toggle = app.state.view.sidebar_footer_ask_subtitles_hit_area;
-        assert_eq!(toggle.width, 1);
+        assert_eq!(toggle.width, 2);
         assert_eq!(toggle.height, 1);
         assert!(app.state.sidebar_show_ask_subtitles);
 
@@ -11081,7 +11081,7 @@ mod tests {
         assert!(areas[..5]
             .iter()
             .all(|area| area.width == 2 && area.height == 1));
-        assert_eq!(areas[5].width, 1);
+        assert_eq!(areas[5].width, 2);
         assert_eq!(areas[5].height, 1);
         assert!(areas.windows(2).all(|pair| pair[0].right() == pair[1].x));
 

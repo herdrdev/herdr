@@ -2028,7 +2028,7 @@ fn expanded_sidebar_content_for_app(app: &AppState, area: Rect) -> Rect {
 
 fn sidebar_footer_slot(area: Rect, index: u16) -> Rect {
     let content_width = area.width.saturating_sub(1);
-    let x_offset = 1 + index.saturating_mul(2);
+    let x_offset = 2 + index.saturating_mul(2);
     if content_width < x_offset.saturating_add(2) || area.height == 0 {
         return Rect::default();
     }
@@ -2155,7 +2155,7 @@ pub(crate) fn sidebar_footer_ask_subtitles_hit_area(app: &AppState, area: Rect) 
     if app.sidebar_collapsed || area.width < 18 || area.height == 0 {
         return Rect::default();
     }
-    Rect::new(area.x, area.bottom().saturating_sub(1), 1, 1)
+    Rect::new(area.x, area.bottom().saturating_sub(1), 2, 1)
 }
 
 pub(crate) fn sidebar_footer_work_hit_area(area: Rect) -> Rect {
@@ -2176,39 +2176,39 @@ pub(crate) fn sidebar_footer_missive_hit_area(area: Rect) -> Rect {
 
 pub(crate) fn sidebar_footer_refresh_hit_area(area: Rect) -> Rect {
     let content_width = area.width.saturating_sub(1);
-    if content_width < 12 || area.height == 0 {
+    if content_width < 14 || area.height == 0 {
         return Rect::default();
     }
     Rect::new(
-        area.x.saturating_add(11),
+        area.x.saturating_add(12),
         area.bottom().saturating_sub(1),
-        1,
+        2,
         1,
     )
 }
 
 pub(crate) fn sidebar_footer_planning_lock_hit_area(area: Rect) -> Rect {
     let content_width = area.width.saturating_sub(1);
-    if content_width < 14 || area.height == 0 {
+    if content_width < 18 || area.height == 0 {
         return Rect::default();
     }
     Rect::new(
-        area.x.saturating_add(13),
+        area.x.saturating_add(16),
         area.bottom().saturating_sub(1),
-        1,
+        2,
         1,
     )
 }
 
 pub(crate) fn sidebar_footer_board_hit_area(area: Rect) -> Rect {
     let content_width = area.width.saturating_sub(1);
-    if content_width < 13 || area.height == 0 {
+    if content_width < 16 || area.height == 0 {
         return Rect::default();
     }
     Rect::new(
-        area.x.saturating_add(12),
+        area.x.saturating_add(14),
         area.bottom().saturating_sub(1),
-        1,
+        2,
         1,
     )
 }
@@ -15628,7 +15628,7 @@ pub(crate) mod tests {
             .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .expect("render footer");
         let footer = row_text(terminal.backend().buffer(), area.bottom() - 1, area.width);
-        assert!(footer.contains("⚙ ⑂ ▥ ◎ ✉ ⟳"), "{footer:?}");
+        assert!(footer.contains("⚙ ⑂ ▥ ◎ ✉ ⟳ ▦"), "{footer:?}");
     }
 
     #[test]
@@ -30348,7 +30348,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         for width in [18, 42] {
             let area = Rect::new(0, 0, width, 20);
             let slot = sidebar_footer_ask_subtitles_hit_area(&app, area);
-            assert_eq!(slot, Rect::new(0, 19, 1, 1));
+            assert_eq!(slot, Rect::new(0, 19, 2, 1));
             let mut terminal =
                 Terminal::new(TestBackend::new(width, 20)).expect("ask subtitle footer terminal");
             terminal
@@ -31340,6 +31340,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 socket: None,
             },
         ];
+        app.sidebar_areas.hosts = true;
         let area = Rect::new(0, 0, 40, 12);
         let host_row = sidebar_hosts_rect(&app, area);
         let footer = sidebar_footer_settings_hit_area(area);
@@ -31509,14 +31510,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     #[test]
     fn focus_board_lock_and_window_cycle_footer_targets_do_not_overlap() {
         let app = AppState::test_new();
-        for width in [18, 26] {
+        for width in [22, 30] {
             let sidebar = Rect::new(0, 0, width, 20);
             let board = sidebar_footer_board_hit_area(sidebar);
             let lock = sidebar_footer_planning_lock_hit_area(sidebar);
             let cycle = crate::ui::pomodoro::window_cycle_mode_hit_area(&app, sidebar);
             let notification = crate::ui::pomodoro::notification_hit_area(&app, sidebar);
-            assert_eq!(board.width, 1);
-            assert_eq!(lock.width, 1);
+            assert_eq!(board.width, 2);
+            assert_eq!(lock.width, 2);
             assert_eq!(board.right(), lock.x);
             assert_eq!(lock.right(), cycle.x);
             assert!(cycle.right() <= notification.x);
