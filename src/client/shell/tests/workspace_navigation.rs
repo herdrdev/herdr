@@ -54,6 +54,23 @@ fn assert_selected(state: &ClientShellState, endpoint: &ClientEndpointId, worksp
     );
 }
 
+#[test]
+fn workspace_view_hides_non_presented_workspaces_and_keeps_focus_visible() {
+    let mut projected = workspaces(3);
+    projected.presented_workspace_ids = Some(vec!["ws_1".into()]);
+    projected.focused_workspace_id = Some("ws_3".into());
+    projected.workspaces[0].focused = false;
+    projected.workspaces[2].focused = true;
+
+    let entries = render::workspace_entries(&projected, &HashSet::new());
+    let ids: Vec<_> = entries
+        .iter()
+        .map(|entry| projected.workspaces[entry.index].workspace_id.as_str())
+        .collect();
+    assert_eq!(ids, ["ws_1", "ws_3"]);
+    assert!(!ids.contains(&"ws_2"));
+}
+
 fn workspace_rect(state: &ClientShellState, endpoint: &ClientEndpointId, workspace: &str) -> Rect {
     state
         .hits

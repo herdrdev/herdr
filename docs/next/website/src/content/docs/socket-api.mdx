@@ -100,7 +100,7 @@ Raw socket method names use dot notation:
 | Notification | `notification.show` |
 | Client | `client.window_title.set`, `client.window_title.clear` |
 | Session | `session.snapshot` |
-| Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close` |
+| Workspace | `workspace.create`, `workspace.list`, `workspace.get`, `workspace.focus`, `workspace.rename`, `workspace.move`, `workspace.move_block`, `workspace.report_metadata`, `workspace.close`, `workspace.view.set`, `workspace.view.clear` |
 | Worktree | `worktree.list`, `worktree.create`, `worktree.open`, `worktree.remove` |
 | Tab | `tab.create`, `tab.list`, `tab.get`, `tab.focus`, `tab.rename`, `tab.move`, `tab.close` |
 | Pane | `pane.split`, `pane.swap`, `pane.move`, `pane.zoom`, `pane.layout`, `pane.process_info`, `pane.neighbor`, `pane.edges`, `pane.focus_direction`, `pane.resize`, `pane.list`, `pane.current`, `pane.get`, `pane.rename`, `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `pane.report_agent`, `pane.report_agent_session`, `pane.report_metadata`, `pane.clear_agent_authority`, `pane.release_agent`, `pane.close`, `pane.wait_for_output` |
@@ -364,6 +364,41 @@ Use at most one of `workspace_id` or `cwd` for `worktree.list`, `worktree.create
 Worktree commands also emit lifecycle events. `worktree.create` emits `workspace.created`, `tab.created`, `pane.created`, and `worktree.created`. `worktree.open` emits `worktree.opened`, and it also emits workspace/tab/pane creation events when it opens a new Herdr workspace. `worktree.remove` emits `worktree.removed`; if the linked workspace is still open, it also emits `workspace.closed`.
 
 `workspace.close` rejects closing a primary workspace while linked-worktree workspaces are open unless its params include `"close_group": true`, returning `workspace_group_close_required` when explicit group intent is missing. An explicit group close emits one `workspace.closed` event for each workspace it closes.
+
+## Workspace view presentation
+
+`workspace.view.set` installs one transient presentation allowlist for workspace
+chrome. While active, the sidebar and workspace navigation show only the listed
+workspace IDs. Workspaces outside the list stay open and keep running;
+`workspace.list` and lifecycle events remain unfiltered. The currently focused
+workspace is always treated as presented so focus cannot strand outside the
+chrome.
+
+```json
+{
+  "id": "workspace_view_set",
+  "method": "workspace.view.set",
+  "params": {
+    "source": "plugin:example.zen",
+    "label": "zen",
+    "workspace_ids": ["w1", "w3"]
+  }
+}
+```
+
+`source` identifies the owner. Plugins use `plugin:<HERDR_PLUGIN_ID>`; Herdr
+rejects plugin-owned sets when that plugin is missing or disabled. A successful
+set atomically replaces the previous workspace view. The view lasts until it is
+cleared, replaced, its owning plugin is disabled, unlinked, or uninstalled, or
+the server exits.
+
+```json
+{"id":"workspace_view_clear","method":"workspace.view.clear","params":{}}
+{"id":"workspace_view_clear_owned","method":"workspace.view.clear","params":{"source":"plugin:example.zen"}}
+```
+
+A source mismatch leaves the active view unchanged. Set and clear responses use
+`type: "workspace_view"` and report `active`, `source`, and optional `label`.
 
 ## Agent view queries
 

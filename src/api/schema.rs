@@ -93,6 +93,10 @@ pub enum Method {
     WorkspaceReportMetadata(WorkspaceReportMetadataParams),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseParams),
+    #[serde(rename = "workspace.view.set")]
+    WorkspaceViewSet(WorkspaceViewSetParams),
+    #[serde(rename = "workspace.view.clear")]
+    WorkspaceViewClear(WorkspaceViewClearParams),
     #[serde(rename = "worktree.list")]
     WorktreeList(WorktreeListParams),
     #[serde(rename = "worktree.create")]

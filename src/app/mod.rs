@@ -7,6 +7,7 @@ pub(crate) mod actions;
 mod agent_resume;
 pub(crate) mod agent_view;
 mod agents;
+pub(crate) mod workspace_view;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};
 mod api;
 #[cfg(test)]
@@ -483,6 +484,7 @@ impl App {
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
+            workspace_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
             next_agent_state_change_seq: 0,

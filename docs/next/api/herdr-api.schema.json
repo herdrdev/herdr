@@ -4523,6 +4523,42 @@
           ],
           "type": "object"
         },
+        "WorkspaceViewClearParams": {
+          "properties": {
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "WorkspaceViewSetParams": {
+          "description": "Transient presentation allowlist for workspace chrome (sidebar / navigation).\n\nDoes not close workspaces or change `workspace.list`. Omitted IDs stay intact\nand keep running; only UI presentation is filtered.",
+          "properties": {
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "workspace_ids": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
         "WorkspaceWorktreeInfo": {
           "properties": {
             "checkout_path": {
@@ -5057,6 +5093,38 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/WorkspaceCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "workspace.view.set",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceViewSetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "workspace.view.clear",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/WorkspaceViewClearParams"
             }
           },
           "required": [
@@ -9272,6 +9340,34 @@
               "required": [
                 "type",
                 "workspaces"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "active": {
+                  "type": "boolean"
+                },
+                "label": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "type": {
+                  "const": "workspace_view",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "active"
               ],
               "type": "object"
             },

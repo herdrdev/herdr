@@ -26,6 +26,25 @@ pub struct WorkspaceCloseParams {
     pub close_group: bool,
 }
 
+/// Transient presentation allowlist for workspace chrome (sidebar / navigation).
+///
+/// Does not close workspaces or change `workspace.list`. Omitted IDs stay intact
+/// and keep running; only UI presentation is filtered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct WorkspaceViewSetParams {
+    pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub workspace_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+pub struct WorkspaceViewClearParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceRenameParams {
     pub workspace_id: String,

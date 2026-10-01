@@ -10,6 +10,7 @@ pub(crate) mod plugins;
 pub(super) mod responses;
 mod session;
 mod tabs;
+mod workspace_view;
 mod workspaces;
 mod worktrees;
 
@@ -1047,6 +1048,12 @@ impl App {
             }
             Method::WorkspaceClose(target) => {
                 return self.handle_workspace_close(request.id, target);
+            }
+            Method::WorkspaceViewSet(params) => {
+                return self.handle_workspace_view_set(request.id, params);
+            }
+            Method::WorkspaceViewClear(params) => {
+                return self.handle_workspace_view_clear(request.id, params);
             }
             Method::WorktreeList(_) | Method::WorktreeOpen(_) => {
                 return responses::encode_error(

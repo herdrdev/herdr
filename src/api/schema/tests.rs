@@ -373,6 +373,31 @@ fn client_window_title_requests_round_trip() {
 }
 
 #[test]
+fn workspace_view_requests_round_trip() {
+    let set_json = serde_json::json!({
+        "id": "workspace-view-set",
+        "method": "workspace.view.set",
+        "params": {
+            "source": "plugin:example.zen",
+            "label": "zen",
+            "workspace_ids": ["w1", "w3"]
+        }
+    });
+    let request: Request = serde_json::from_value(set_json.clone()).unwrap();
+    assert!(matches!(request.method, Method::WorkspaceViewSet(_)));
+    assert_eq!(serde_json::to_value(request).unwrap(), set_json);
+
+    let clear_json = serde_json::json!({
+        "id": "workspace-view-clear",
+        "method": "workspace.view.clear",
+        "params": {"source": "plugin:example.zen"}
+    });
+    let request: Request = serde_json::from_value(clear_json.clone()).unwrap();
+    assert!(matches!(request.method, Method::WorkspaceViewClear(_)));
+    assert_eq!(serde_json::to_value(request).unwrap(), clear_json);
+}
+
+#[test]
 fn agent_view_requests_round_trip() {
     let set_json = serde_json::json!({
         "id": "view-set",

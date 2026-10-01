@@ -186,6 +186,12 @@ pub(super) fn snapshot_with_completions(
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
         .collect();
+    let workspace_view_label = app
+        .state
+        .workspace_view_override
+        .as_ref()
+        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
+    let presented_workspace_ids = crate::app::workspace_view::presented_workspace_ids(&app.state);
 
     let zoomed = focused_tab_id
         .as_deref()
@@ -258,6 +264,8 @@ pub(super) fn snapshot_with_completions(
         tab_bar_right_separator: app.state.tab_bar_right_separator.clone(),
         agent_view_label,
         agent_order,
+        workspace_view_label,
+        presented_workspace_ids,
         workspaces,
         tabs,
         panes,

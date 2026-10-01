@@ -131,6 +131,7 @@ impl App {
                 .plugin_panes
                 .retain(|_, record| record.plugin_id != plugin_id);
             self.clear_agent_view_for_source(&format!("plugin:{plugin_id}"));
+            self.clear_workspace_view_for_source(&format!("plugin:{plugin_id}"));
         }
         encode_success(id, ResponseResult::PluginUnlinked { plugin_id, removed })
     }
@@ -735,6 +736,7 @@ impl App {
         };
         if !enabled {
             self.clear_agent_view_for_source(&format!("plugin:{plugin_id}"));
+            self.clear_workspace_view_for_source(&format!("plugin:{plugin_id}"));
         }
         if enabled {
             encode_success(id, ResponseResult::PluginEnabled { plugin })

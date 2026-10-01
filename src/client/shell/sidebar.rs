@@ -455,12 +455,30 @@ pub(crate) fn render_sidebar(
     );
 }
 
+/// Whether a workspace should appear in sidebar/navigation chrome.
+///
+/// No presentation filter means all workspaces are shown. When a filter is
+/// active, the focused workspace is always presented so focus never strands.
+pub(crate) fn workspace_is_presented(
+    snapshot: &ClientShellSnapshot,
+    workspace_id: &str,
+) -> bool {
+    let Some(presented) = snapshot.presented_workspace_ids.as_ref() else {
+        return true;
+    };
+    presented.iter().any(|id| id == workspace_id)
+        || snapshot.focused_workspace_id.as_deref() == Some(workspace_id)
+}
+
 pub(crate) fn workspace_entries(
     snapshot: &ClientShellSnapshot,
     collapsed_groups: &HashSet<String>,
 ) -> Vec<WorkspaceEntry> {
     let mut members = HashMap::<&str, Vec<usize>>::new();
     for (index, workspace) in snapshot.workspaces.iter().enumerate() {
+        if !workspace_is_presented(snapshot, &workspace.workspace_id) {
+            continue;
+        }
         if let Some(worktree) = &workspace.worktree {
             members.entry(&worktree.key).or_default().push(index);
         }
@@ -485,6 +503,9 @@ pub(crate) fn workspace_entries(
     let mut emitted = HashSet::<&str>::new();
     let mut entries = Vec::new();
     for (index, workspace) in snapshot.workspaces.iter().enumerate() {
+        if !workspace_is_presented(snapshot, &workspace.workspace_id) {
+            continue;
+        }
         let Some(worktree) = workspace
             .worktree
             .as_ref()

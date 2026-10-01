@@ -113,6 +113,9 @@ impl ClientShellState {
                     .workspaces
                     .iter()
                     .enumerate()
+                    .filter(|(_, workspace)| {
+                        render::workspace_is_presented(snapshot, &workspace.workspace_id)
+                    })
                     .map(|(index, _)| WorkspaceEntry {
                         index,
                         indented: false,
