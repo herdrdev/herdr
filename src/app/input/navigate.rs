@@ -2314,11 +2314,11 @@ fn window_navigation_order(state: &AppState) -> Vec<WindowCycleTarget> {
             crate::ui::SidebarRow::RemoteAgent { entry, .. } => Some(entry.agent_ref.clone()),
             _ => None,
         });
-        // Fleet agents live in normal sidebar groups and remain visible there.
+        // Fleet scope keeps every host's agents reachable even when device
+        // groups are collapsed and skip-collapsed cycling is enabled.
         let hidden = state
             .remote_agent_panel_entries
             .iter()
-            .filter(|_| !state.skip_collapsed_cycle)
             .map(|entry| entry.agent_ref.clone());
         for agent_ref in visible.chain(hidden) {
             if seen.insert(agent_ref.clone()) {
@@ -4587,6 +4587,92 @@ mod tests {
             .map(|(target, _)| target)
             .collect::<Vec<_>>();
         assert!(blocked_targets.contains(&BlockedPaneTarget::Remote(agent_ref)));
+    }
+
+    #[test]
+    fn fleet_window_cycle_includes_remote_agents_in_collapsed_device_groups() {
+        let mut state = AppState::test_new();
+        state.agent_host_name = "ub2".into();
+        state.workspaces = vec![Workspace::test_new("local")];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        state.skip_collapsed_cycle = true;
+        state.sidebar_sections_layout = true;
+        let remotes = ["ub1", "mbpro"]
+            .into_iter()
+            .map(|host| remote_blocker(host, "worker"))
+            .collect::<Vec<_>>();
+        let expected = remotes
+            .iter()
+            .map(|remote| WindowCycleTarget::Remote(remote.agent_ref.clone()))
+            .collect::<Vec<_>>();
+        state.remote_agent_panel_entries = remotes;
+        state.remote_agent_device_groups =
+            Some(crate::ui::sidebar::remote_agent_device_groups(&state));
+        for host in ["ub1", "mbpro"] {
+            state
+                .collapsed_sidebar_groups
+                .insert(format!("device:main/{host}"));
+        }
+
+        assert_eq!(
+            window_navigation_order(&state)
+                .into_iter()
+                .filter(|target| matches!(target, WindowCycleTarget::Remote(_)))
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    #[test]
+    fn next_window_opens_remote_agent_hidden_in_collapsed_device_group() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        app.state.skip_collapsed_cycle = true;
+        app.state.sidebar_sections_layout = true;
+        app.state.remote_agent_device_groups =
+            Some(crate::ui::sidebar::remote_agent_device_groups(&app.state));
+        app.state
+            .collapsed_sidebar_groups
+            .insert(format!("device:main/{}", agent_ref.host));
+
+        assert!(!crate::ui::sidebar_rows(&app.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                crate::ui::SidebarRow::RemoteAgent { entry, .. } if entry.agent_ref == agent_ref
+            )));
+
+        app.focus_relative_window(true);
+
+        assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
+        assert_eq!(app.remote_focus_operations.len(), 1);
+        assert!(app.state.toast.is_none());
+    }
+
+    #[test]
+    fn next_agent_opens_remote_agent_hidden_in_collapsed_device_group() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        app.state.sidebar_sections_layout = true;
+        app.state.remote_agent_device_groups =
+            Some(crate::ui::sidebar::remote_agent_device_groups(&app.state));
+        app.state
+            .collapsed_sidebar_groups
+            .insert(format!("device:main/{}", agent_ref.host));
+
+        assert!(!crate::ui::sidebar_rows(&app.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                crate::ui::SidebarRow::RemoteAgent { entry, .. } if entry.agent_ref == agent_ref
+            )));
+
+        app.execute_tui_navigate_action(NavigateAction::NextAgent, ActionContext::Prefix);
+
+        assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
+        assert_eq!(app.remote_focus_operations.len(), 1);
+        assert!(app.state.toast.is_none());
     }
 
     #[test]

@@ -4547,12 +4547,12 @@ mod tests {
     }
 
     #[test]
-    fn releasing_a_remote_row_opens_focus_on_this_client() {
+    fn releasing_a_remote_row_keeps_remote_session_actions_selected() {
         let mut app = app_for_mouse_test();
         app.fleet_poller_config.replace(crate::config::FleetConfig {
             hosts: vec![crate::config::FleetHostConfig {
-                name: "ub2".into(),
-                target: "ub2".into(),
+                name: "ub1".into(),
+                target: "ub1".into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -4564,7 +4564,7 @@ mod tests {
             .into_iter()
             .next()
             .expect("local agent panel entry");
-        let agent_ref = crate::api::schema::AgentRef::new("ub2", "pane/1")
+        let agent_ref = crate::api::schema::AgentRef::new("ub1", "pane/1")
             .expect("valid remote agent reference");
         app.state.remote_agent_panel_entries = vec![std::sync::Arc::new(
             crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), entry),
@@ -4614,6 +4614,33 @@ mod tests {
             crate::app::state::ClientFocusIntent::Pane
         );
         assert!(app.state.toast.is_none());
+
+        app.state.focus_client_on_sidebar();
+        let local_pane = app.state.workspaces[0].tabs[0].root_pane;
+        assert!(app.handle_sidebar_session_action_key(KeyEvent::new(
+            KeyCode::Char('z'),
+            KeyModifiers::empty(),
+        )));
+        assert!(app.state.sidebar_snooze.as_ref().is_some_and(|menu| {
+            matches!(
+                &menu.target,
+                crate::app::state::SidebarPaneLifecycleTarget::Remote(target)
+                    if target == &agent_ref
+            )
+        }));
+        app.state.sidebar_snooze = None;
+        assert!(app.handle_sidebar_session_action_key(KeyEvent::new(
+            KeyCode::Char('s'),
+            KeyModifiers::empty(),
+        )));
+        let refusal = app
+            .state
+            .toast
+            .as_ref()
+            .expect("settle revalidates the remote owner");
+        assert_eq!(refusal.title, "ub1 pane action failed");
+        assert!(refusal.context.contains("owner ub1 is unreachable"));
+        assert!(!app.state.pane_is_settled(0, local_pane));
     }
 
     #[test]
