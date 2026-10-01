@@ -402,6 +402,15 @@ fn compact_age(
     (age, instant)
 }
 
+fn compact_age_color(entry: &AgentPanelEntry, now: std::time::Instant, p: &Palette) -> Color {
+    let (_, instant) = compact_age(entry, now);
+    if instant.is_some_and(|instant| now.saturating_duration_since(instant).as_secs() >= 3600) {
+        p.yellow
+    } else {
+        p.overlay0
+    }
+}
+
 fn reply_timestamp(value: Option<&str>, now: std::time::Instant) -> Option<AgentReplyTimestamp> {
     let unix_seconds = crate::fleet::parse_utc_timestamp(value?)?;
     let now_unix_seconds = std::time::SystemTime::now()
@@ -1034,7 +1043,7 @@ fn render_remote_compact_agent_row_with_prefix(
     let age_style = Style::default().fg(if remote.snoozed_until.is_some() {
         p.overlay0
     } else {
-        p.yellow
+        compact_age_color(&remote.entry, app.view_observed_at, p)
     });
 
     let mut x = rect.x.saturating_add(widths.prefix as u16);
@@ -1235,7 +1244,7 @@ fn render_compact_agent_row_with_prefix(
     let provider_style = Style::default()
         .fg(provider_color(entry, p))
         .add_modifier(Modifier::DIM);
-    let age_style = Style::default().fg(p.yellow);
+    let age_style = Style::default().fg(compact_age_color(entry, app.view_observed_at, p));
     let mut spans = vec![
         Span::styled(prefix, row_style(compact_row_style(Style::default(), bg))),
         Span::styled(dot, row_style(dot_style)),
@@ -20630,6 +20639,25 @@ row_gap = 1
             ),
             "Last status report 4m ago\nAgent reply time unavailable"
         );
+    }
+
+    #[test]
+    fn agent_sidebar_age_turns_yellow_at_one_hour() {
+        let now = std::time::Instant::now();
+        let app = app_with_agents(&["one"]);
+        let mut entry = sidebar_thread_entries(&app).remove(0);
+        entry.reported_at = None;
+        entry.activity_at = None;
+        for (minutes, expected) in [(59, false), (60, true)] {
+            entry.last_turn_at = Some(AgentReplyTimestamp {
+                instant: now - std::time::Duration::from_secs(minutes * 60),
+                unix_seconds: 0,
+            });
+            assert_eq!(
+                compact_age_color(&entry, now, &app.palette) == app.palette.yellow,
+                expected
+            );
+        }
     }
 
     #[test]
