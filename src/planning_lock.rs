@@ -81,6 +81,7 @@ pub struct PlanningLock {
     config: Option<Config>,
     corrupt: bool,
     remote_snapshot: Option<Option<Snapshot>>,
+    local_discussion_tab_id: Option<String>,
 }
 
 impl std::fmt::Debug for PlanningLock {
@@ -132,6 +133,7 @@ impl PlanningLock {
                     config: None,
                     corrupt: true,
                     remote_snapshot: None,
+                    local_discussion_tab_id: None,
                 }
             }),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Self::default(),
@@ -141,6 +143,7 @@ impl PlanningLock {
                     config: None,
                     corrupt: true,
                     remote_snapshot: None,
+                    local_discussion_tab_id: None,
                 }
             }
         }
@@ -207,6 +210,7 @@ impl PlanningLock {
             config: Some(config),
             corrupt: false,
             remote_snapshot: None,
+            local_discussion_tab_id: None,
         })
     }
 
@@ -220,6 +224,9 @@ impl PlanningLock {
     pub fn snapshot(&self, now_unix_s: u64) -> Option<Snapshot> {
         if let Some(snapshot) = &self.remote_snapshot {
             return snapshot.clone().map(|mut snapshot| {
+                if let Some(tab_id) = &self.local_discussion_tab_id {
+                    snapshot.discussion_tab_id.clone_from(tab_id);
+                }
                 snapshot.locked |= snapshot
                     .unlock_until_unix_s
                     .is_none_or(|deadline| now_unix_s >= deadline);
@@ -249,6 +256,21 @@ impl PlanningLock {
         self.corrupt = false;
     }
 
+    pub fn set_local_discussion_tab(&mut self, tab_id: &str, now_unix_s: u64) -> Result<(), Error> {
+        if self.is_locked(now_unix_s) {
+            return Err(Error::Locked);
+        }
+        if tab_id.trim().is_empty() {
+            return Err(Error::EmptyDiscussionTab);
+        }
+        self.local_discussion_tab_id = Some(tab_id.to_owned());
+        Ok(())
+    }
+
+    pub fn is_remote_managed(&self) -> bool {
+        self.remote_snapshot.is_some()
+    }
+
     pub fn fail_closed_remote(&mut self) {
         self.apply_remote_snapshot(Some(Snapshot {
             locked: true,
@@ -265,22 +287,33 @@ impl PlanningLock {
     }
 
     pub fn discussion_tab_id(&self) -> Option<&str> {
-        self.config
-            .as_ref()
-            .map(|config| config.discussion_tab_id.as_str())
+        self.local_discussion_tab_id
+            .as_deref()
+            .or_else(|| {
+                self.remote_snapshot
+                    .as_ref()?
+                    .as_ref()
+                    .map(|snapshot| snapshot.discussion_tab_id.as_str())
+            })
+            .or_else(|| {
+                self.config
+                    .as_ref()
+                    .map(|config| config.discussion_tab_id.as_str())
+            })
     }
 
     pub fn configured(&self) -> bool {
-        self.config.is_some() || self.corrupt
+        self.config.is_some()
+            || self.corrupt
+            || self.remote_snapshot.as_ref().is_some_and(Option::is_some)
     }
 
     pub fn permits_tab(&self, tab_id: &str, now_unix_s: u64) -> bool {
         !self.corrupt
             && (!self.is_locked(now_unix_s)
                 || self
-                    .config
-                    .as_ref()
-                    .is_some_and(|config| config.discussion_tab_id == tab_id))
+                    .discussion_tab_id()
+                    .is_some_and(|discussion_tab_id| discussion_tab_id == tab_id))
     }
 
     pub fn configure(&mut self, password: &str, discussion_tab_id: &str) -> Result<(), Error> {
@@ -363,7 +396,7 @@ fn hash_password(password: &str) -> Result<String, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Error, PlanningLock, UNLOCK_MINUTES};
+    use super::{Error, PlanningLock, Snapshot, UNLOCK_MINUTES};
 
     const PASSWORD: &str = "a planning password with 32 chars";
 
@@ -431,6 +464,34 @@ mod tests {
         let lock = configured();
         assert!(lock.permits_tab("session-1", 1_000));
         assert!(!lock.permits_tab("session-2", 1_000));
+    }
+
+    #[test]
+    fn follower_sets_its_local_discussion_tab_only_after_authority_unlocks() {
+        let mut lock = PlanningLock::default();
+        lock.apply_remote_snapshot(Some(Snapshot {
+            locked: true,
+            discussion_tab_id: "authority-tab-id".into(),
+            unlock_until_unix_s: None,
+        }));
+        assert_eq!(
+            lock.set_local_discussion_tab("follower-tab-id", 1_000),
+            Err(Error::Locked)
+        );
+
+        lock.apply_remote_snapshot(Some(Snapshot {
+            locked: false,
+            discussion_tab_id: "authority-tab-id".into(),
+            unlock_until_unix_s: Some(2_000),
+        }));
+        lock.set_local_discussion_tab("follower-tab-id", 1_000)
+            .expect("unlocked local discussion tab");
+
+        let snapshot = lock.snapshot(1_000).expect("authority enabled lock");
+        assert!(!snapshot.locked);
+        assert_eq!(snapshot.discussion_tab_id, "follower-tab-id");
+        assert!(lock.permits_tab("follower-tab-id", 1_000));
+        assert!(lock.permits_tab("authority-tab-id", 1_000));
     }
 
     #[test]

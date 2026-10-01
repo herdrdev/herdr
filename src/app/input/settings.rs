@@ -40,7 +40,9 @@ impl App {
             SettingsAction::SaveAgentBorderLabels(enabled) => {
                 self.save_agent_border_labels(enabled)
             }
-            SettingsAction::SaveConfigEdit(edit) => self.save_config_edit(edit),
+            SettingsAction::SaveConfigEdit(edit) => {
+                self.save_config_edit(edit);
+            }
             SettingsAction::RestoreArchived(target) => {
                 self.restore_archived_pane(&target);
             }

@@ -464,6 +464,8 @@ pub struct Config {
 pub struct PlanningLockConfig {
     /// SSH target of the Herdr server that owns planning-lock state.
     pub authority: Option<String>,
+    /// Per-host tab permitted while the authority's planning lock is active.
+    pub discussion_tab_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

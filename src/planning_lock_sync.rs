@@ -5,6 +5,18 @@ use std::time::Duration;
 
 use crate::planning_lock::{PlanningLock, Snapshot};
 
+const SSH_OPTIONS: &[&str] = &[
+    "-T",
+    "-o",
+    "BatchMode=yes",
+    "-o",
+    "ConnectTimeout=5",
+    "-o",
+    "ServerAliveInterval=5",
+    "-o",
+    "ServerAliveCountMax=1",
+];
+
 pub(crate) trait Runner: Send + Sync {
     fn execute(&self, target: &str, args: &[&str], input: &[u8]) -> Result<Vec<u8>, String>;
 }
@@ -18,17 +30,8 @@ impl Runner for OpenSshRunner {
             return Err("invalid planning-lock SSH target".into());
         }
         let mut child = Command::new("ssh")
-            .args([
-                "-T",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=5",
-                "--",
-                target,
-                "herdr",
-                "planning-lock",
-            ])
+            .args(SSH_OPTIONS.iter().copied())
+            .args(["--", target, "herdr", "planning-lock"])
             .args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -60,8 +63,9 @@ pub(crate) fn forward_action(
     target: &str,
     action: &[&str],
     password: &[u8],
-) -> Result<(), String> {
-    runner.execute(target, action, password).map(|_| ())
+) -> Result<Option<Snapshot>, String> {
+    runner.execute(target, action, password)?;
+    status(runner, target)
 }
 
 pub(crate) fn start_polling(
@@ -172,7 +176,7 @@ fn run_password_action(minutes: u8) -> io::Result<i32> {
         };
         let args = action_owned.iter().map(String::as_str).collect::<Vec<_>>();
         return match forward_action(&OpenSshRunner, target, &args, &password) {
-            Ok(()) => Ok(0),
+            Ok(_) => Ok(0),
             Err(error) => {
                 eprintln!("{error}");
                 Ok(1)
@@ -264,7 +268,7 @@ mod tests {
     #[test]
     fn unlock_password_is_forwarded_only_as_stdin() {
         let runner = FakeRunner::default();
-        *runner.response.lock().unwrap() = Ok(Vec::new());
+        *runner.response.lock().unwrap() = Ok(serde_json::to_vec(&None::<Snapshot>).unwrap());
         let password = b"a secret planning password";
         forward_action(
             &runner,
@@ -279,6 +283,36 @@ mod tests {
             .as_bytes()
             .windows(password.len())
             .any(|part| part == password)));
+        assert_eq!(captured[1].1, ["status", "--json"]);
+    }
+
+    #[test]
+    fn ssh_calls_have_connect_and_server_liveness_timeouts() {
+        assert!(SSH_OPTIONS
+            .windows(2)
+            .any(|option| option == ["-o", "ConnectTimeout=5"]));
+        assert!(SSH_OPTIONS
+            .windows(2)
+            .any(|option| option == ["-o", "ServerAliveInterval=5"]));
+        assert!(SSH_OPTIONS
+            .windows(2)
+            .any(|option| option == ["-o", "ServerAliveCountMax=1"]));
+    }
+
+    #[test]
+    fn forwarded_action_returns_the_authoritys_updated_snapshot() {
+        let runner = FakeRunner::default();
+        let snapshot = Snapshot {
+            locked: false,
+            discussion_tab_id: "authority-tab".into(),
+            unlock_until_unix_s: Some(900),
+        };
+        *runner.response.lock().unwrap() = Ok(serde_json::to_vec(&Some(snapshot.clone())).unwrap());
+        assert_eq!(
+            forward_action(&runner, "host", &["unlock", "--minutes", "5"], b"password"),
+            Ok(Some(snapshot))
+        );
+        assert_eq!(runner.captured.lock().unwrap().len(), 2);
     }
 
     #[test]

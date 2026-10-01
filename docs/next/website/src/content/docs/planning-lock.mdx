@@ -18,6 +18,8 @@ authority = "ubuntu@ubuntu-direct"
 
 The authority must be reachable through the follower's existing OpenSSH setup and have `herdr` on its remote command path. Followers poll `herdr planning-lock status --json` every five seconds. They keep the last received state during an outage; a follower with no initial response remains locked. Use `herdr planning-lock status --json` on the authority to inspect its published state. `herdr planning-lock unlock --minutes 10` and `herdr planning-lock off` read the password from standard input and forward it to the authority over SSH, where it is verified. Passwords are never command-line arguments.
 
+Each follower has its own discussion tab because tab IDs are local to each Herdr server. Choose it from the planning-lock dialog; Herdr saves the selection as `planning_lock.discussion_tab_id` on that host. Unlocking and turning off the lock still require verification by the authority.
+
 ## Recovery
 
 If the password is forgotten, stop the Herdr server and delete `planning-lock.json` from that server's Herdr configuration directory, then restart it. The lock will be reset. Deleting this file removes the password hash and the configured discussion tab.

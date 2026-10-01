@@ -27,7 +27,10 @@ impl App {
 
     /// Persist one UI edit and reload, so the change is live in the same frame
     /// the operator made it.
-    pub(super) fn save_config_edit(&mut self, edit: crate::app::settings_general::ConfigEdit) {
+    pub(super) fn save_config_edit(
+        &mut self,
+        edit: crate::app::settings_general::ConfigEdit,
+    ) -> bool {
         use crate::app::settings_general::ConfigEdit;
 
         let ensure_note = match &edit {
@@ -122,6 +125,7 @@ impl App {
                 self.ensure_notepad_note_file(&name);
             }
         }
+        saved
     }
 
     pub(super) fn toggle_notifications(&mut self) {

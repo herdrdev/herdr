@@ -39,6 +39,12 @@
           "type": "string",
           "default": "unset",
           "description": "SSH target of the Herdr server that owns planning-lock state. Followers poll it every five seconds and retain the last known state while it is unreachable."
+        },
+        {
+          "key": "planning_lock.discussion_tab_id",
+          "type": "string",
+          "default": "unset",
+          "description": "Per-host tab permitted while the authority's planning lock is active. The TUI saves this when a follower chooses its local discussion tab."
         }
       ]
     },

@@ -7422,6 +7422,9 @@ impl HeadlessServer {
         now: Instant,
         geometry_dirty: bool,
     ) -> ScheduledTaskRender {
+        // Unlock windows can expire while no client is rendering. Enforce the
+        // new lock state on the periodic server tick as well as on renders.
+        self.detach_terminal_clients_blocked_by_planning_lock();
         // Nothing renders the status row without an attached app client, so a
         // detached server never samples native metrics.
         let has_app_client = self.has_app_client();
@@ -11061,6 +11064,35 @@ next_tab = ""
             server.detach_terminal_clients_blocked_by_planning_lock();
 
             assert!(!server.clients.contains_key(&20));
+            assert_eq!(
+                read_server_shutdown_reason(control_rx.recv().expect("shutdown message")),
+                Some("detached".to_owned())
+            );
+        });
+    }
+
+    #[test]
+    fn planning_lock_expiry_detaches_clients_on_tick_without_a_render() {
+        with_terminal_session_test_server(|server, _terminal_id, terminal_id, _public_pane_id| {
+            let control_rx = connect_pending_terminal_client_with_control_rx(server, 21);
+            assert!(
+                server.handle_server_event(ServerEvent::ClientAttachTerminal {
+                    client_id: 21,
+                    terminal_id,
+                    takeover: false,
+                })
+            );
+            server.app.state.planning_lock.apply_remote_snapshot(Some(
+                crate::planning_lock::Snapshot {
+                    locked: false,
+                    discussion_tab_id: "another-host-tab".into(),
+                    unlock_until_unix_s: Some(0),
+                },
+            ));
+
+            server.handle_scheduled_tasks_headless(Instant::now(), false);
+
+            assert!(!server.clients.contains_key(&21));
             assert_eq!(
                 read_server_shutdown_reason(control_rx.recv().expect("shutdown message")),
                 Some("detached".to_owned())

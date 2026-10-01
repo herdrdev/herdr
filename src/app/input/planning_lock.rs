@@ -61,6 +61,44 @@ impl App {
         Ok(())
     }
 
+    fn persist_local_discussion_tab(&mut self, tab_id: &str) -> Result<(), String> {
+        let mut candidate = self.state.planning_lock.clone();
+        candidate
+            .set_local_discussion_tab(tab_id, Self::planning_lock_now())
+            .map_err(|error| error.to_string())?;
+        if !self.save_config_edit(crate::app::settings_general::ConfigEdit::Text {
+            section: "planning_lock",
+            key: "discussion_tab_id",
+            value: tab_id.to_owned(),
+        }) {
+            return Err("failed to save discussion tab".into());
+        }
+        self.state.planning_lock = candidate;
+        self.state.mark_session_dirty();
+        Ok(())
+    }
+
+    fn forward_remote_planning_lock_action(
+        &mut self,
+        action: &[&str],
+        password: &str,
+    ) -> Result<(), String> {
+        let target = crate::config::Config::load()
+            .config
+            .planning_lock
+            .authority
+            .ok_or_else(|| "planning-lock authority is not configured".to_owned())?;
+        let snapshot = crate::planning_lock_sync::forward_action(
+            &crate::planning_lock_sync::OpenSshRunner,
+            &target,
+            action,
+            password.as_bytes(),
+        )?;
+        self.state.planning_lock.apply_remote_snapshot(snapshot);
+        self.state.mark_session_dirty();
+        Ok(())
+    }
+
     pub(super) fn handle_planning_lock_text(&mut self, text: &str, paste: bool) -> bool {
         let now = Self::planning_lock_now();
         let locked = self.state.planning_lock.is_locked(now);
@@ -226,8 +264,12 @@ impl App {
                         }
                     }
                     DialogFlow::UnlockPassword | DialogFlow::DisablePassword => {
-                        let candidate = self.state.planning_lock.clone();
-                        match candidate.verify_password(&input) {
+                        let verification = if self.state.planning_lock.is_remote_managed() {
+                            Ok(())
+                        } else {
+                            self.state.planning_lock.clone().verify_password(&input)
+                        };
+                        match verification {
                             Ok(()) if flow == DialogFlow::UnlockPassword => {
                                 dialog.password = Some(input);
                                 dialog.flow = DialogFlow::ChooseDuration;
@@ -242,22 +284,33 @@ impl App {
                     }
                     DialogFlow::ChooseDuration => {
                         if let Some(minutes) = UNLOCK_MINUTES.get(selected_tab).copied() {
-                            let mut candidate = self.state.planning_lock.clone();
-                            match candidate.unlock(
-                                dialog.password.as_deref().unwrap_or_default(),
-                                minutes,
-                                now,
-                            ) {
-                                Ok(()) => match self.persist_planning_lock(candidate) {
+                            let password = dialog.password.as_deref().unwrap_or_default();
+                            if self.state.planning_lock.is_remote_managed() {
+                                let minutes_arg = minutes.to_string();
+                                match self.forward_remote_planning_lock_action(
+                                    &["unlock", "--minutes", &minutes_arg],
+                                    password,
+                                ) {
                                     Ok(()) => dialog.flow = DialogFlow::Manage,
                                     Err(error) => dialog.error = Some(error),
-                                },
-                                Err(error) => dialog.error = Some(error.to_string()),
+                                }
+                            } else {
+                                let mut candidate = self.state.planning_lock.clone();
+                                match candidate.unlock(password, minutes, now) {
+                                    Ok(()) => match self.persist_planning_lock(candidate) {
+                                        Ok(()) => dialog.flow = DialogFlow::Manage,
+                                        Err(error) => dialog.error = Some(error),
+                                    },
+                                    Err(error) => dialog.error = Some(error.to_string()),
+                                }
                             }
                         }
                     }
                     DialogFlow::Manage => match input.as_str() {
                         "u" => dialog.flow = DialogFlow::UnlockPassword,
+                        "d" if self.state.planning_lock.is_locked(now) => {
+                            dialog.error = Some(crate::planning_lock::Error::Locked.to_string())
+                        }
                         "d" => dialog.flow = DialogFlow::ChooseDiscussionTab,
                         "x" => dialog.flow = DialogFlow::DisablePassword,
                         _ => {
@@ -267,24 +320,45 @@ impl App {
                     },
                     DialogFlow::ChooseDiscussionTab => {
                         if let Some((tab_id, _)) = tabs.get(selected_tab) {
-                            let mut candidate = self.state.planning_lock.clone();
-                            match candidate.set_discussion_session(tab_id, now) {
-                                Ok(()) => match self.persist_planning_lock(candidate) {
+                            if self.state.planning_lock.is_remote_managed() {
+                                match self.persist_local_discussion_tab(tab_id) {
                                     Ok(()) => dialog.flow = DialogFlow::Manage,
                                     Err(error) => dialog.error = Some(error),
-                                },
-                                Err(error) => dialog.error = Some(error.to_string()),
+                                }
+                            } else {
+                                let mut candidate = self.state.planning_lock.clone();
+                                match candidate.set_discussion_session(tab_id, now) {
+                                    Ok(()) => match self.persist_planning_lock(candidate) {
+                                        Ok(()) => dialog.flow = DialogFlow::Manage,
+                                        Err(error) => dialog.error = Some(error),
+                                    },
+                                    Err(error) => dialog.error = Some(error.to_string()),
+                                }
                             }
                         }
                     }
                     DialogFlow::DisableConfirmation => {
-                        let mut candidate = self.state.planning_lock.clone();
-                        match candidate.disable(&saved_password.unwrap_or_default(), &input) {
-                            Ok(()) => match self.persist_planning_lock(candidate) {
-                                Ok(()) => keep_dialog = false,
-                                Err(error) => dialog.error = Some(error),
-                            },
-                            Err(error) => dialog.error = Some(error.to_string()),
+                        let password = saved_password.unwrap_or_default();
+                        if self.state.planning_lock.is_remote_managed() {
+                            if input == "turn off" {
+                                match self.forward_remote_planning_lock_action(&["off"], &password)
+                                {
+                                    Ok(()) => keep_dialog = false,
+                                    Err(error) => dialog.error = Some(error),
+                                }
+                            } else {
+                                dialog.error =
+                                    Some("type \"turn off\" to disable planning lock".into());
+                            }
+                        } else {
+                            let mut candidate = self.state.planning_lock.clone();
+                            match candidate.disable(&password, &input) {
+                                Ok(()) => match self.persist_planning_lock(candidate) {
+                                    Ok(()) => keep_dialog = false,
+                                    Err(error) => dialog.error = Some(error),
+                                },
+                                Err(error) => dialog.error = Some(error.to_string()),
+                            }
                         }
                     }
                 }
@@ -366,6 +440,92 @@ mod tests {
             .planning_lock_dialog
             .as_ref()
             .is_some_and(|dialog| dialog.error.as_deref() == Some("incorrect password")));
+    }
+
+    #[test]
+    fn follower_unlock_dialog_forwards_password_for_authority_verification() {
+        let mut app = app();
+        app.state.planning_lock.fail_closed_remote();
+        app.state.planning_lock_dialog = Some(Dialog::new(DialogFlow::UnlockPassword));
+        for character in "typed password".chars() {
+            app.handle_planning_lock_text(&character.to_string(), false);
+        }
+        app.handle_planning_lock_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        let dialog = app
+            .state
+            .planning_lock_dialog
+            .as_ref()
+            .expect("dialog remains open for duration choice");
+        assert_eq!(dialog.flow, DialogFlow::ChooseDuration);
+        assert_eq!(dialog.password.as_deref(), Some("typed password"));
+        assert_eq!(dialog.error, None);
+    }
+
+    #[test]
+    fn follower_can_choose_its_local_discussion_tab_only_while_unlocked() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = std::env::temp_dir().join(format!(
+            "herdr-planning-lock-{}.toml",
+            crate::config::test_unique_suffix()
+        ));
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let mut app = app();
+        let mut workspace = crate::workspace::Workspace::test_new("planning-lock-follower");
+        workspace.test_add_tab(None);
+        app.state.workspaces = vec![workspace];
+        let discussion_tab = app.public_tab_id(0, 1).expect("second tab");
+        app.state.planning_lock.fail_closed_remote();
+        app.state.planning_lock_dialog = Some(Dialog::new(DialogFlow::Manage));
+        app.handle_planning_lock_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
+        app.handle_planning_lock_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+        assert!(app
+            .state
+            .planning_lock_dialog
+            .as_ref()
+            .is_some_and(|dialog| {
+                dialog.flow == DialogFlow::Manage
+                    && dialog.error.as_deref() == Some("the planning lock is active")
+            }));
+
+        let mut dialog = Dialog::new(DialogFlow::ChooseDiscussionTab);
+        dialog.selected_tab = 1;
+        app.state.planning_lock_dialog = Some(dialog);
+
+        app.handle_planning_lock_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(app.state.planning_lock.discussion_tab_id(), Some(""));
+        assert!(app
+            .state
+            .planning_lock_dialog
+            .as_ref()
+            .is_some_and(|dialog| dialog.error.as_deref() == Some("the planning lock is active")));
+
+        app.state
+            .planning_lock
+            .apply_remote_snapshot(Some(crate::planning_lock::Snapshot {
+                locked: false,
+                discussion_tab_id: String::new(),
+                unlock_until_unix_s: Some(App::planning_lock_now() + 60),
+            }));
+        app.handle_planning_lock_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+
+        assert_eq!(
+            app.state.planning_lock.discussion_tab_id(),
+            Some(discussion_tab.as_str())
+        );
+        assert!(app
+            .state
+            .planning_lock
+            .permits_tab(&discussion_tab, App::planning_lock_now()));
+        assert_eq!(
+            app.state
+                .planning_lock_dialog
+                .as_ref()
+                .map(|dialog| dialog.flow),
+            Some(DialogFlow::Manage)
+        );
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
