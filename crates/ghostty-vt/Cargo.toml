@@ -8,7 +8,7 @@ repository = "https://github.com/herdrdev/herdr"
 publish = false
 
 [dependencies]
-base64 = "0.22.1"
+base64 = "0.23.1"
 libc = "0.2"
-png = "0.17"
+png = "0.18"
 tracing = "0.1.44"
