@@ -2902,15 +2902,12 @@ fn snapshot_from_evidence(
                 }
             }
         }
-        let version_skew = evidence
+        let version_skew = evidence.runtime.version.as_deref().is_some_and(|version| {
+            version_base(version) != version_base(&crate::build_info::version())
+        }) || evidence
             .runtime
-            .version
-            .as_deref()
-            .is_some_and(|version| version != crate::build_info::version())
-            || evidence
-                .runtime
-                .protocol
-                .is_some_and(|protocol| protocol != crate::protocol::PROTOCOL_VERSION);
+            .protocol
+            .is_some_and(|protocol| protocol != crate::protocol::PROTOCOL_VERSION);
         let state = if error.is_some() {
             HostState::Unreachable
         } else if version_skew {
@@ -2998,6 +2995,10 @@ fn snapshot_from_evidence(
         hosts,
         group_catalogs,
     }
+}
+
+fn version_base(version: &str) -> &str {
+    version.split_once('+').map_or(version, |(base, _)| base)
 }
 
 pub(crate) fn host_session_sections(
@@ -6483,8 +6484,23 @@ mod tests {
     }
 
     #[test]
-    fn remote_version_or_protocol_difference_marks_version_skew() {
+    fn build_suffix_difference_is_reachable_but_semver_or_protocol_difference_is_skew() {
         let hosts = vec![host("ub2", false)];
+        let current_version = crate::build_info::version();
+        let base_version = current_version
+            .split_once('+')
+            .map_or(current_version.as_str(), |(base, _)| base);
+        let build_reader = fake_reader(
+            Ok(Vec::new()),
+            HostRuntime {
+                version: Some(format!("{base_version}+other-build")),
+                protocol: Some(crate::protocol::PROTOCOL_VERSION),
+                session_events: false,
+            },
+        );
+        let build_snapshot = collect_snapshot_with(&build_reader, &hosts, &FleetConfig::default());
+        assert_eq!(build_snapshot.hosts[0].state, HostState::Reachable);
+
         let version_reader = fake_reader(
             Ok(Vec::new()),
             HostRuntime {

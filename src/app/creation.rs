@@ -326,6 +326,32 @@ impl App {
     /// Without one it opens the whole remote session, which is what the Hosts
     /// surface asks for.
     pub(crate) fn open_fleet_host_focused(&mut self, name: &str, focus_agent: Option<&str>) {
+        if let Some(host) = self
+            .state
+            .fleet_snapshot
+            .hosts
+            .iter()
+            .find(|host| host.name == name)
+        {
+            match host.state {
+                crate::fleet::HostState::Unreachable => {
+                    self.show_fleet_launch_error(
+                        host.error
+                            .clone()
+                            .unwrap_or_else(|| format!("{} is unreachable", host.name)),
+                    );
+                    return;
+                }
+                crate::fleet::HostState::VersionSkew => {
+                    self.show_fleet_launch_error(format!(
+                        "{} has a version skew; update both Herdr builds before opening this session",
+                        host.name
+                    ));
+                    return;
+                }
+                crate::fleet::HostState::Reachable => {}
+            }
+        }
         if let Some(agent_ref) =
             focus_agent.and_then(|agent| crate::api::schema::AgentRef::new(name, agent).ok())
         {
@@ -1107,6 +1133,41 @@ mod tests {
         let toast = app.state.toast.expect("launch failure toast");
         assert_eq!(toast.title, "host launch failed");
         assert_eq!(toast.context, "ssh: connection refused");
+    }
+
+    #[tokio::test]
+    async fn version_skew_fleet_host_surfaces_reason_without_spawning() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut config = crate::config::Config::default();
+        config.remote.fleet.hosts = vec![crate::config::FleetHostConfig {
+            name: "ub2".into(),
+            target: "ub2".into(),
+            ..Default::default()
+        }];
+        let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub2".into(),
+            target: "ub2".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::VersionSkew,
+            version: Some("0.9.0".into()),
+            protocol: Some(crate::protocol::PROTOCOL_VERSION + 1),
+            error: None,
+            remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
+            entries: Vec::new(),
+        }];
+
+        app.open_fleet_host("ub2");
+
+        assert!(app.state.workspaces.is_empty());
+        let toast = app.state.toast.expect("version skew toast");
+        assert_eq!(toast.title, "host launch failed");
+        assert!(toast.context.contains("version skew"));
     }
 
     #[test]

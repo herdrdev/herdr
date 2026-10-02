@@ -8377,7 +8377,6 @@ fn nested_header_rect(key: &str, body: Rect, y: u16, height: u16) -> Rect {
 #[derive(Clone, Debug)]
 pub(crate) struct RemoteAgentRowArea {
     pub agent_ref: crate::api::schema::AgentRef,
-    pub reachable: bool,
     pub rect: Rect,
     pub row_idx: usize,
 }
@@ -8420,7 +8419,6 @@ fn remote_agent_row_areas_from_rows(
         if let SidebarRow::RemoteAgent { entry, .. } = row {
             out.push(RemoteAgentRowArea {
                 agent_ref: entry.agent_ref.clone(),
-                reachable: entry.host_fresh,
                 rect: Rect::new(body.x, y, body.width, height),
                 row_idx: idx,
             });
@@ -8439,7 +8437,7 @@ pub(crate) fn remote_agent_row_at(
 ) -> Option<crate::api::schema::AgentRef> {
     compute_remote_agent_row_areas(app, app.view.sidebar_rect)
         .into_iter()
-        .find(|area| area.reachable && row >= area.rect.y && row < area.rect.bottom())
+        .find(|area| row >= area.rect.y && row < area.rect.bottom())
         .map(|area| area.agent_ref)
 }
 
@@ -29871,7 +29869,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn expanded_offline_device_shows_last_known_row_without_a_click_target() {
+    fn expanded_offline_device_shows_last_known_row_with_a_click_target() {
         let (mut app, entry) = remote_control_fixture(
             crate::fleet::HostState::Unreachable,
             crate::api::schema::AgentStatus::Idle,
@@ -29889,8 +29887,34 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .into_iter()
             .find(|area| area.agent_ref == entry.agent_ref)
             .expect("expanded offline host retains its last-known row");
-        assert!(!area.reachable);
-        assert_eq!(remote_agent_row_at(&app, area.rect.y), None);
+        assert_eq!(
+            remote_agent_row_at(&app, area.rect.y),
+            Some(entry.agent_ref.clone())
+        );
+    }
+
+    #[test]
+    fn version_skew_remote_row_remains_clickable_for_a_reason_toast() {
+        let (mut app, entry) = remote_control_fixture(
+            crate::fleet::HostState::VersionSkew,
+            crate::api::schema::AgentStatus::Idle,
+            false,
+            false,
+            false,
+        );
+        let key = devices::group_key("main", &entry.agent_ref.host);
+        app.sidebar_sections_layout = true;
+        app.collapsed_sidebar_groups
+            .insert(format!("expanded:{key}"));
+        crate::ui::compute_view(&mut app, Rect::new(0, 0, 80, 24));
+        let area = compute_remote_agent_row_areas(&app, app.view.sidebar_rect)
+            .into_iter()
+            .find(|area| area.agent_ref == entry.agent_ref)
+            .expect("skewed host retains its last-known row");
+        assert_eq!(
+            remote_agent_row_at(&app, area.rect.y),
+            Some(entry.agent_ref.clone())
+        );
     }
 
     #[test]
