@@ -3809,19 +3809,31 @@ fn compact_sidebar_rows_inner(
         }
     }
     let remote_terms = sidebar_query_parts(&app.sidebar_work_filter.query).0;
-    let remote_entries = if include_remote {
+    let sections_layout = app.sidebar_sections_layout;
+    let mut remote_entries = if include_remote {
         app.remote_agent_panel_entries
             .iter()
-            .filter(|remote| {
-                remote_sidebar_entry_matches_query(remote, &remote_terms)
-                    && (!app.blocked_filter || entry_has_red_dot(remote))
-            })
+            .filter(|remote| remote_sidebar_entry_matches_query(remote, &remote_terms))
             .map(remote_agent_as_panel_entry)
             .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
-    let sections_layout = app.sidebar_sections_layout;
+    let remote_working_entries = if sections_layout {
+        remote_entries
+            .iter()
+            .filter(|entry| {
+                sidebar_entry_lifecycle(app, entry) == SidebarEntryLifecycle::Active
+                    && sidebar_entry_has_working_state(entry)
+            })
+            .cloned()
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if app.blocked_filter {
+        remote_entries.retain(entry_has_red_dot);
+    }
     let pods = pod_projection(app, &entries);
     if !sections_layout {
         let has_one_space_label = entries.first().is_some_and(|first| {
@@ -3880,6 +3892,17 @@ fn compact_sidebar_rows_inner(
     let workspace_activity = sections_layout.then(|| sidebar_workspace_activity(&active_panes));
     let active_entries =
         ordered_tab_entries_preferring(app, &active_panes, Some(&active_pane_targets));
+    // Keep the shelf's working projection separate from blocked-filtered tab rows.
+    let mut working_entries = if sections_layout {
+        let working_panes = active_panes
+            .iter()
+            .filter(|entry| sidebar_entry_has_working_state(entry))
+            .cloned()
+            .collect::<Vec<_>>();
+        ordered_tab_entries(app, &working_panes)
+    } else {
+        Vec::new()
+    };
     let snoozed_entries = ordered_tab_entries(app, &snoozed_panes);
     let mut snoozed_entries = if app.blocked_filter {
         snoozed_entries
@@ -3916,16 +3939,12 @@ fn compact_sidebar_rows_inner(
         );
         let remote_activity = sidebar_remote_activity(app, &remote_entries);
         let mut space_entries = Vec::new();
-        let mut working_entries = Vec::new();
         let mut remote_main_entries = Vec::new();
         // Working agents get their own section; every other active pane
         // (blocked, done, idle, unknown) stays in the tree above it, so the
         // sidebar holds every pane agent cycling can reach.
-        for mut entry in visible_entries.iter().cloned() {
-            if sidebar_entry_is_working(&entry) {
-                entry.working_shelf = true;
-                working_entries.push(entry);
-            } else {
+        for entry in visible_entries.iter().cloned() {
+            if !sidebar_entry_is_working(&entry) {
                 if entry.remote_entry.is_some() {
                     remote_main_entries.push(entry);
                 } else {
@@ -3935,19 +3954,23 @@ fn compact_sidebar_rows_inner(
         }
         let mut remote_snoozed = Vec::new();
         let mut remote_settled = Vec::new();
-        for mut entry in remote_entries.iter().cloned() {
+        for entry in remote_entries.iter().cloned() {
             match sidebar_entry_lifecycle(app, &entry) {
                 SidebarEntryLifecycle::Active => {
-                    if sidebar_entry_is_working(&entry) {
-                        entry.working_shelf = true;
-                        working_entries.push(entry);
-                    } else {
+                    if !sidebar_entry_is_working(&entry) {
                         remote_main_entries.push(entry);
                     }
                 }
                 SidebarEntryLifecycle::Snoozed => remote_snoozed.push(entry),
                 SidebarEntryLifecycle::Settled => remote_settled.push(entry),
             }
+        }
+        for mut entry in remote_working_entries {
+            entry.working_shelf = true;
+            working_entries.push(entry);
+        }
+        for entry in &mut working_entries {
+            entry.working_shelf = true;
         }
         let mut rows = Vec::new();
         if !needs_you.is_empty() {
@@ -4382,7 +4405,11 @@ fn append_legacy_space_rows(
 }
 
 fn sidebar_entry_is_working(entry: &AgentPanelEntry) -> bool {
-    entry.has_agent && entry.state == AgentState::Working && !entry_is_blocked(entry)
+    sidebar_entry_has_working_state(entry) && !entry_is_blocked(entry)
+}
+
+fn sidebar_entry_has_working_state(entry: &AgentPanelEntry) -> bool {
+    entry.has_agent && entry.state == AgentState::Working
 }
 
 fn append_shelf_space_rows(
@@ -30778,6 +30805,126 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 .count();
             assert_eq!(tab_row_count, 1, "pane {pane_id:?} should have one tab row");
         }
+    }
+
+    #[test]
+    fn sections_layout_keeps_working_tabs_visible_with_blocked_filter() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("working"),
+            Workspace::test_new("blocked"),
+            Workspace::test_new("idle"),
+        ];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.sidebar_sections_layout = true;
+        app.blocked_filter = true;
+
+        for (ws_idx, state) in [
+            (0, AgentState::Working),
+            (1, AgentState::Blocked),
+            (2, AgentState::Idle),
+        ] {
+            let pane_id = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("fixture terminal");
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.set_raw_agent_state_for_test(state);
+        }
+        app.reconcile_sidebar_presentation();
+
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
+                collapsed: true,
+                ..
+            }
+        )));
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.state == AgentState::Blocked && !entry.working_shelf
+        )));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. } if entry.state == AgentState::Idle
+        )));
+
+        app.toggle_sidebar_group(WORKING_SECTION_TITLE);
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.state == AgentState::Working && entry.working_shelf
+        )));
+    }
+
+    #[test]
+    fn sections_layout_shows_blocked_and_working_split_panes_in_both_areas() {
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("blocked and working");
+        let working_pane = workspace.tabs[0].root_pane;
+        let blocked_pane = workspace.test_split(Direction::Horizontal);
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.sidebar_sections_layout = true;
+        app.blocked_filter = true;
+        app.toggle_sidebar_group(WORKING_SECTION_TITLE);
+
+        for (pane_id, state) in [
+            (working_pane, AgentState::Working),
+            (blocked_pane, AgentState::Blocked),
+        ] {
+            let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            let terminal = app
+                .terminals
+                .get_mut(&terminal_id)
+                .expect("fixture terminal");
+            terminal.detected_agent = Some(Agent::Claude);
+            terminal.set_raw_agent_state_for_test(state);
+        }
+        app.reconcile_sidebar_presentation();
+
+        let rows = sidebar_rows(&app);
+        let working_header = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    SidebarRow::SectionHeader {
+                        title: WORKING_SECTION_TITLE,
+                        count: 1,
+                        collapsed: false,
+                        ..
+                    }
+                )
+            })
+            .expect("expanded Working header");
+        assert!(rows[..working_header].iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.pane_id == blocked_pane)
+                    && entry.state == AgentState::Blocked
+                    && !entry.working_shelf
+        )));
+        assert!(rows[working_header + 1..].iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.pane_id == working_pane)
+                    && entry.state == AgentState::Working
+                    && entry.working_shelf
+        )));
     }
 
     #[test]
