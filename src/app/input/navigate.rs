@@ -2423,7 +2423,18 @@ fn blocked_pane_cycle_in_order(
             {
                 return None;
             }
-            let needs_attention = crate::ui::sidebar::entry_needs_human_attention(&entry);
+            let needs_attention = state
+                .workspaces
+                .get(target.ws_idx)
+                .and_then(|workspace| workspace.tabs.get(target.tab_idx))
+                .and_then(|tab| tab.panes.get(&target.pane_id))
+                .and_then(|pane| {
+                    state
+                        .terminals
+                        .get(&pane.attached_terminal_id)
+                        .map(|terminal| pane.agent_projection(terminal).needs_human_attention())
+                })
+                .unwrap_or(false);
             Some((
                 BlockedPaneTarget::Local {
                     ws_idx: target.ws_idx,
@@ -5366,6 +5377,72 @@ mod tests {
             NavigateAction::NextBlockedWindow,
             &[(0, 1), (1, 0), (0, 1)],
         );
+    }
+
+    #[test]
+    fn next_blocked_window_visits_every_inbox_pane() {
+        let mut app = app_with_global_window_fixture();
+        expand_all_workspaces_for_sidebar(&mut app.state);
+        for ws_idx in 0..app.state.workspaces.len() {
+            for tab_idx in 0..app.state.workspaces[ws_idx].tabs.len() {
+                set_tab_agent_state(
+                    &mut app.state,
+                    ws_idx,
+                    tab_idx,
+                    crate::detect::AgentState::Blocked,
+                );
+            }
+        }
+
+        let inbox_panes = app
+            .state
+            .blocked_agents()
+            .into_iter()
+            .map(|agent| agent.pane_id)
+            .collect::<std::collections::HashSet<_>>();
+        let cycle_panes = blocked_pane_cycle(&app.state)
+            .into_iter()
+            .filter_map(|(target, stops)| match (target, stops) {
+                (BlockedPaneTarget::Local { pane_id, .. }, true) => Some(pane_id),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+
+        assert!(!inbox_panes.is_empty());
+        assert!(inbox_panes.is_subset(&cycle_panes));
+    }
+
+    #[test]
+    fn next_blocked_window_uses_projection_when_sidebar_tier_is_stale() {
+        let mut app = app_with_global_window_fixture();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        set_tab_agent_state(&mut app.state, 0, 0, crate::detect::AgentState::Blocked);
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .supervisor_stale = true;
+
+        let projection = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .agent_projection(&app.state.terminals[&terminal_id]);
+        assert!(projection.counts_as_blocked());
+        let entry = crate::ui::all_agent_panel_entries(&app.state)
+            .into_iter()
+            .find(|entry| {
+                entry
+                    .local_target()
+                    .is_some_and(|target| target.pane_id == pane_id)
+            })
+            .expect("panel entry for test pane");
+        assert!(entry.stale);
+
+        assert!(blocked_pane_cycle(&app.state).iter().any(|(target, stops)| {
+            matches!(target, BlockedPaneTarget::Local { pane_id: target_pane, .. } if *target_pane == pane_id)
+                && *stops
+        }));
     }
 
     #[test]
