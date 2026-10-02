@@ -1,0 +1,126 @@
+id = "reasonix"
+version = "2026.10.02.1"
+min_engine_version = 2
+updated_at = "2026-10-02T00:00:00Z"
+
+# Evidence:
+#
+# Version: Reasonix 1.39.6 (esengine/DeepSeek-Reasonix, the Go line).
+#
+# Status: authored from the CLI's own render strings and i18n catalog
+# (internal/i18n/messages_{en,zh,zh_tw}.go), so every phrase below is the literal render for
+# that locale rather than a reading of one. NOT yet confirmed against a live pane — the smoke
+# test through the manifest hot-reload loop (AGENTS.md, "Agent detection changes") still has to
+# be run against a real Reasonix pane before this manifest is submitted.
+#
+# Checked without a pane: every line_regex below was matched, with the same regex engine, against
+# the exact line its format string renders in all three locales and against the lines it must not
+# match (the idle metrics row, the idle status row, a tool line, and a transcript line quoting a
+# working phrase). The blocked phrase pairs were checked against one synthetic approval screen per
+# locale, which also confirms the Simplified 本次允许 and Traditional 本次允許 pairs do not
+# cross-match.
+#
+# Reasonix draws a full-screen TUI (Bubble Tea) and stays out of the terminal title: it never
+# writes OSC 0/2, so osc_title and osc_progress carry no state and every rule below reads the
+# bottom buffer instead.
+#
+# Layout at the bottom of the pane, top to bottom:
+#
+#   (optional todo panel)
+#   (optional approval banner)   <- an approval decision is pending
+#   working (spinner) line       <- only while a turn runs
+#   the composer box             <- ╭─╮ ... ╰─╯
+#   primary status row           <- "<modetag> · <status> · <hint>"
+#   metrics row                  <- MODEL ... EFFORT ... CTX ...
+#
+# The working line and the approval banner sit *above* the composer and the two status rows
+# below it, so a blocked rule pairs a phrase from the banner with one from the status row and
+# takes a region wide enough to span the box. The composer grows with multi-line input, which is
+# why those regions are 16 lines rather than the 8-12 a fixed-height footer would need.
+#
+# Working lines all carry the Bubble Tea Dot spinner (U+28xx braille) plus an elapsed count, in
+# six shapes: "thinking… (12s · Esc cancels)", "stopping… (4s · Ctrl+C exits)", "retrying (2/3)…",
+# a turn phase label "working · 12s", the unlocalized "waiting for provider …, retry in 5s", and
+# the compaction word lines ("compacting conversation…"). One braille range covers the spinner set
+# and the tool-line frames alike; requiring the elapsed count as well keeps an ordinary transcript
+# line that happens to carry a spinner glyph from reading as working. A tool that runs mid-turn
+# also keeps the working line on screen, so no rule is needed for the tool line itself.
+
+[[rules]]
+id = "tool_approval_blocked"
+state = "blocked"
+priority = 980
+region = "bottom_non_empty_lines(16)"
+visible_blocker = true
+any = [
+  { contains = ["Permission required", "1 approve once"] },
+  { contains = ["需要你的许可", "1 本次允许"] },
+  { contains = ["需要你的許可", "1 本次允許"] },
+]
+
+[[rules]]
+id = "plan_approval_blocked"
+state = "blocked"
+priority = 975
+region = "bottom_non_empty_lines(16)"
+visible_blocker = true
+any = [
+  { contains = ["Plan ready above", "1 execute"] },
+  { contains = ["计划已生成", "1 开始执行"] },
+  { contains = ["計畫已生成", "1 開始執行"] },
+]
+
+# Reasonix's own picker for a model question (`ChatStatusQuestion`). The two controls are
+# required together: either phrase alone is ordinary status-bar text.
+[[rules]]
+id = "question_blocked"
+state = "blocked"
+priority = 970
+region = "bottom_non_empty_lines(10)"
+visible_blocker = true
+any = [
+  { contains = ["number to pick", "Enter confirm"] },
+  { contains = ["数字快选", "Enter 确认"] },
+  { contains = ["數字快選", "Enter 確認"] },
+]
+
+[[rules]]
+id = "working_spinner_line"
+state = "working"
+priority = 900
+region = "bottom_non_empty_lines(8)"
+visible_working = true
+line_regex = [
+  # thinking… (12s · Esc cancels) / 思考中… (403 秒 · Esc 取消), and the same shape with a
+  # trailing " · ↓1.2K" token count that the English render appends.
+  '^\s*[\x{2800}-\x{28FF}] .*\(\d+ ?(s|秒) · Esc (cancels|取消)\)',
+  # stopping… (4s · Ctrl+C exits) / 正在停止… (4 秒 · Ctrl+C 退出)
+  '^\s*[\x{2800}-\x{28FF}] .*\(\d+ ?(s|秒) · Ctrl\+C (exits|退出)\)',
+  # retrying (2/3)… — one shape for both locales.
+  '^\s*[\x{2800}-\x{28FF}] .*\(\d+/\d+\)…',
+  # turn phase label: "working · 12s", "工作中 · 12 秒", …
+  '^\s*[\x{2800}-\x{28FF}] .* · \d+ ?(s|秒)$',
+  # "waiting for provider (streaming), retry in 5s — Esc to stop", not localized upstream.
+  '^\s*[\x{2800}-\x{28FF}] .*retry in \d+s',
+  # compaction lines: "compacting conversation…", "正在保存压缩结果…".
+  '^\s*[\x{2800}-\x{28FF}] .*…$',
+]
+
+# The metrics row is the footer a human reads to tell "at the prompt" from "turn running":
+# "MODEL deepseek-v4-flash   EFFORT auto   PRESET balanced   CTX 3%" and its 模型/强度/模式
+# counterpart. It is a fallback, not the primary idle signal — a known agent with no matching
+# rule already falls back to idle — so it only has to be right when it fires.
+[[rules]]
+id = "idle_metrics_row"
+state = "idle"
+priority = 500
+region = "bottom_non_empty_lines(3)"
+visible_idle = true
+line_regex = [
+  'MODEL .*\s{2,}EFFORT ',
+  '模型 .*\s{2,}强度 ',
+]
+not = [
+  { contains = ["Esc cancels"] },
+  { contains = ["Esc 取消"] },
+]

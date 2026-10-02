@@ -64,7 +64,17 @@ STAGED_PUBLISHED_MANIFESTS = {
     ),
 }
 
-UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
+UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {
+    # Reasonix ships a bundled manifest before the release that teaches clients
+    # to identify it, so the published catalog cannot list it yet. The validator
+    # allows the bundled manifest to stay unpublished while this exact
+    # version-and-digest pair is recorded. Remove this entry once
+    # `distribution/agent-detection/` carries reasonix.toml.
+    "reasonix": (
+        "2026.10.02.1",
+        "97087e52fdec8fbc2ac452f5d4aec85bdb787ece63b7811ca1ec78068f24d9c4",
+    ),
+}
 
 
 def parse_args() -> argparse.Namespace:
