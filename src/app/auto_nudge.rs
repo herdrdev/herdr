@@ -185,18 +185,46 @@ impl App {
         pane_id: crate::layout::PaneId,
         key: &crate::input::TerminalKey,
     ) {
+        if key.kind != crossterm::event::KeyEventKind::Release
+            && self.unpark_tab_for_human_input(pane_id)
+        {
+            self.schedule_session_save();
+            self.state.mark_sidebar_projection_changed();
+        }
         self.cancel_pending_stall_nudge_for_pane(pane_id);
         self.retire_stall_nudge_episode_for_pane(pane_id);
         self.state.note_human_key(pane_id, key);
     }
 
     pub(crate) fn note_human_text(&mut self, pane_id: crate::layout::PaneId, text: &str) {
+        if !text.is_empty() && self.unpark_tab_for_human_input(pane_id) {
+            self.schedule_session_save();
+            self.state.mark_sidebar_projection_changed();
+        }
         self.cancel_pending_stall_nudge_for_pane(pane_id);
         self.retire_stall_nudge_episode_for_pane(pane_id);
         self.state.note_human_text(pane_id, text);
     }
 
+    fn unpark_tab_for_human_input(&mut self, pane_id: crate::layout::PaneId) -> bool {
+        let Some(tab) = self.state.workspaces.iter_mut().find_map(|workspace| {
+            workspace
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.panes.contains_key(&pane_id))
+        }) else {
+            return false;
+        };
+        let was_parked = tab.parked;
+        tab.parked = false;
+        was_parked
+    }
+
     pub(crate) fn note_human_bytes(&mut self, pane_id: crate::layout::PaneId, bytes: &[u8]) {
+        if !bytes.is_empty() && self.unpark_tab_for_human_input(pane_id) {
+            self.schedule_session_save();
+            self.state.mark_sidebar_projection_changed();
+        }
         self.cancel_pending_stall_nudge_for_pane(pane_id);
         self.retire_stall_nudge_episode_for_pane(pane_id);
         self.state.note_human_bytes(pane_id, bytes);
@@ -1324,6 +1352,16 @@ mod tests {
     async fn human_input_retires_the_episode() {
         let now = Instant::now();
         let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        app.state.workspaces[0].tabs[0].parked = true;
+        app.state
+            .workspaces
+            .push(crate::workspace::Workspace::test_new("other"));
+
+        app.state.switch_workspace_tab(1, 0);
+        assert!(
+            app.state.workspaces[0].tabs[0].parked,
+            "focus alone keeps the tab parked"
+        );
 
         assert!(app.tick_auto_nudges(now));
         assert!(drain(&mut rx).contains("Re-verify"));
@@ -1336,7 +1374,8 @@ mod tests {
             1
         );
 
-        app.note_human_text(pane_id, "picking this up myself");
+        app.note_human_bytes(pane_id, b"x");
+        assert!(!app.state.workspaces[0].tabs[0].parked);
         assert!(!app.stall_nudge_episodes.contains_key(&terminal_id));
         assert_eq!(
             app.find_pane(pane_id)

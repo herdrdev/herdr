@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::api::schema::{
     EventData, EventEnvelope, EventKind, ResponseResult, TabCreateParams, TabListParams,
-    TabMoveParams, TabPinMode, TabPinParams, TabPrioMode, TabPrioParams, TabPrioResult,
-    TabRenameParams, TabStarMode, TabStarParams, TabTarget,
+    TabMoveParams, TabParkParams, TabPinMode, TabPinParams, TabPrioMode, TabPrioParams,
+    TabPrioResult, TabRenameParams, TabStarMode, TabStarParams, TabTarget,
 };
 use crate::app::App;
 use crate::workspace::TabPrioAction as StateTabPrioAction;
@@ -244,6 +244,27 @@ impl App {
         tab.pinned = pinned;
         self.schedule_session_save();
         if changed {
+            self.state.mark_sidebar_projection_changed();
+        }
+        tab_info_response(id, &params.tab_id, self.tab_info(ws_idx, tab_idx))
+    }
+
+    pub(super) fn handle_tab_park(&mut self, id: String, params: TabParkParams) -> String {
+        let Some((ws_idx, tab_idx)) = self.parse_tab_id(&params.tab_id) else {
+            return tab_not_found(id, &params.tab_id);
+        };
+        let Some(tab) = self
+            .state
+            .workspaces
+            .get_mut(ws_idx)
+            .and_then(|ws| ws.tabs.get_mut(tab_idx))
+        else {
+            return tab_not_found(id, &params.tab_id);
+        };
+        let changed = tab.parked != params.parked;
+        tab.parked = params.parked;
+        if changed {
+            self.schedule_session_save();
             self.state.mark_sidebar_projection_changed();
         }
         tab_info_response(id, &params.tab_id, self.tab_info(ws_idx, tab_idx))
@@ -894,6 +915,41 @@ mod tests {
             },
         );
         assert!(app.state.workspaces[0].tabs[0].pinned);
+    }
+
+    #[test]
+    fn api_tab_park_and_unpark_updates_tab_info_and_projection() {
+        let event_hub = crate::api::EventHub::default();
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(&Config::default(), true, None, api_rx, event_hub);
+        app.state.workspaces = vec![Workspace::test_new("tabs")];
+        let tab_id = app.public_tab_id(0, 0).expect("tab id");
+
+        let parked = app.handle_tab_park(
+            "park".into(),
+            TabParkParams {
+                tab_id: tab_id.clone(),
+                parked: true,
+            },
+        );
+        let parked: SuccessResponse = serde_json::from_str(&parked).expect("park response");
+        let ResponseResult::TabInfo { tab } = parked.result else {
+            panic!("expected tab info")
+        };
+        assert!(tab.parked);
+        assert!(app.state.workspaces[0].tabs[0].parked);
+
+        let listed = app.handle_tab_list("list".into(), TabListParams::default());
+        assert!(listed.contains("\"parked\":true"));
+
+        app.handle_tab_park(
+            "unpark".into(),
+            TabParkParams {
+                tab_id,
+                parked: false,
+            },
+        );
+        assert!(!app.state.workspaces[0].tabs[0].parked);
     }
 
     #[test]

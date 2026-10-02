@@ -195,11 +195,15 @@ herdr tab list [--workspace <workspace_id>]
 herdr tab create [--workspace <workspace_id>] [--cwd PATH] [--label TEXT] [--env KEY=VALUE] [--focus] [--no-focus]
 herdr tab get <tab_id>
 herdr tab focus <tab_id>
+herdr tab park <tab_id>
+herdr tab unpark <tab_id>
 herdr tab rename <tab_id> <label>
 herdr tab close <tab_id>
 ```
 
 A tab is another terminal layout inside a workspace. Without `--workspace`, `tab create` uses the active workspace and fails if none exists. Its JSON response exposes `.result.tab.tab_id` and `.result.root_pane.pane_id`. Closing a workspace's last tab also closes the workspace, matching the TUI close-tab action. If `confirm_close` is enabled and closing the tab would also close a whole worktree group, `tab close` returns a `confirmation_required` error instead.
+
+Parked tabs appear in the dimmed `Inbox · new` sidebar section across workspaces. The first keyboard input sent to any pane in the tab unparks it; focusing the tab does not. `tab list` and `tab get` include the `parked` boolean.
 
 With `ui.confirm_close` enabled, the TUI asks for confirmation before closing a workspace's last tab from a keybinding or the tab menu. Ordinary CLI/API tab closes remain immediate.
 

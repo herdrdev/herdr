@@ -136,6 +136,9 @@ pub struct TabSnapshot {
     /// before stars existed restore unchanged.
     #[serde(default)]
     pub starred: bool,
+    /// Parked inbox state, defaulted for snapshots written before inbox tabs.
+    #[serde(default)]
+    pub parked: bool,
     /// User-named sidebar subgroup. Defaulted so session files written before
     /// subgroups existed restore unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,6 +277,7 @@ impl From<LegacyWorkspaceSnapshot> for WorkspaceSnapshot {
             prio: false,
             pinned: false,
             starred: false,
+            parked: false,
             subgroup: None,
             focused: snap.focused,
             root_pane: snap.root_pane,
@@ -697,6 +701,7 @@ fn capture_tab(
         prio: tab.prio,
         pinned: tab.pinned,
         starred: tab.starred,
+        parked: tab.parked,
         subgroup: tab.subgroup.clone(),
         focused: Some(focused),
         root_pane: Some(root_pane),
@@ -1294,11 +1299,23 @@ mod tests {
     }
 
     #[test]
+    fn tab_parked_round_trips_through_the_session_snapshot() {
+        let mut state = state_with_workspaces(&["parked"]);
+        state.workspaces[0].tabs[0].parked = true;
+        let snapshot = capture_from_state(&state);
+        let json = serde_json::to_string(&snapshot).expect("serialize session snapshot");
+        let restored: SessionSnapshot =
+            serde_json::from_str(&json).expect("parse session snapshot");
+        assert!(restored.workspaces[0].tabs[0].parked);
+    }
+
+    #[test]
     fn tab_snapshot_defaults_a_missing_subgroup_for_legacy_sessions() {
         let snapshot: TabSnapshot =
             serde_json::from_str(r#"{"layout":{"Pane":1},"panes":{},"zoomed":false}"#)
                 .expect("legacy tab snapshot without a subgroup field");
         assert_eq!(snapshot.subgroup, None);
+        assert!(!snapshot.parked);
         // An unset subgroup is also omitted when writing, so sessions that
         // never used subgroups keep their old shape.
         let json = serde_json::to_string(&snapshot).expect("serialize tab snapshot");
@@ -1992,6 +2009,7 @@ mod tests {
                     prio: false,
                     pinned: false,
                     starred: false,
+                    parked: false,
                     subgroup: None,
                     focused: Some(0),
                     root_pane: Some(0),
@@ -2966,6 +2984,7 @@ mod tests {
                     prio: false,
                     pinned: false,
                     starred: false,
+                    parked: false,
                     subgroup: None,
                     focused: Some(0),
                     root_pane: Some(0),

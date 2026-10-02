@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use crate::api::schema::{
-    TabCreateParams, TabListParams, TabPinMode, TabPinParams, TabPrioMode, TabPrioParams,
-    TabRenameParams,
+    TabCreateParams, TabListParams, TabParkParams, TabPinMode, TabPinParams, TabPrioMode,
+    TabPrioParams, TabRenameParams,
 };
 
 pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
@@ -18,6 +18,8 @@ pub(super) fn run_tab_command(args: &[String]) -> std::io::Result<i32> {
         "focus" => tab_focus(&args[1..]),
         "pin" => tab_pin(&args[1..], TabPinMode::Pin),
         "unpin" => tab_pin(&args[1..], TabPinMode::Unpin),
+        "park" => tab_park(&args[1..], true),
+        "unpark" => tab_park(&args[1..], false),
         "rename" => tab_rename(&args[1..]),
         "prio" => tab_prio(&args[1..]),
         "close" => tab_close(&args[1..]),
@@ -188,6 +190,25 @@ fn parse_tab_pin_args(args: &[String], mode: TabPinMode) -> Option<TabPinParams>
     })
 }
 
+fn tab_park(args: &[String], parked: bool) -> std::io::Result<i32> {
+    let Some(params) = parse_tab_park_args(args, parked) else {
+        eprintln!(
+            "usage: herdr tab {} <tab_id>",
+            if parked { "park" } else { "unpark" }
+        );
+        return Ok(2);
+    };
+    super::runtime::tab_park(params)
+}
+
+fn parse_tab_park_args(args: &[String], parked: bool) -> Option<TabParkParams> {
+    let [tab_id] = args else { return None };
+    Some(TabParkParams {
+        tab_id: tab_id.clone(),
+        parked,
+    })
+}
+
 fn tab_rename(args: &[String]) -> std::io::Result<i32> {
     let Some(params) = parse_tab_rename_args(args) else {
         eprintln!("usage: herdr tab rename <tab_id> <label>|--clear");
@@ -310,6 +331,8 @@ fn print_tab_help() {
     eprintln!("  herdr tab focus <tab_id>");
     eprintln!("  herdr tab pin <tab_id>");
     eprintln!("  herdr tab unpin <tab_id>");
+    eprintln!("  herdr tab park <tab_id>");
+    eprintln!("  herdr tab unpark <tab_id>");
     eprintln!("  herdr tab rename <tab_id> <label>");
     eprintln!("  herdr tab prio [<tab_id>|--tab ID|--current] [--toggle|--on|--off]");
     eprintln!("  herdr tab close <tab_id>");
@@ -363,5 +386,16 @@ mod tests {
         assert_eq!(unpin.mode, TabPinMode::Unpin);
         assert!(parse_tab_pin_args(&args(&[]), TabPinMode::Pin).is_none());
         assert!(parse_tab_pin_args(&args(&["w1:t2", "extra"]), TabPinMode::Pin).is_none());
+    }
+
+    #[test]
+    fn parked_tab_cli_parses_explicit_park_and_unpark_commands() {
+        let park = parse_tab_park_args(&args(&["w1:t2"]), true).expect("park takes one id");
+        assert_eq!(park.tab_id, "w1:t2");
+        assert!(park.parked);
+        let unpark = parse_tab_park_args(&args(&["w1:t2"]), false).expect("unpark takes one id");
+        assert!(!unpark.parked);
+        assert!(parse_tab_park_args(&args(&[]), true).is_none());
+        assert!(parse_tab_park_args(&args(&["w1:t2", "extra"]), false).is_none());
     }
 }

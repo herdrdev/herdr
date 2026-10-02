@@ -2185,6 +2185,10 @@
               "minimum": 0,
               "type": "integer"
             },
+            "parked": {
+              "default": false,
+              "type": "boolean"
+            },
             "prio": {
               "type": "boolean"
             },
@@ -6421,6 +6425,21 @@
           ],
           "type": "object"
         },
+        "TabParkParams": {
+          "properties": {
+            "parked": {
+              "type": "boolean"
+            },
+            "tab_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tab_id",
+            "parked"
+          ],
+          "type": "object"
+        },
         "TabPinMode": {
           "enum": [
             "toggle",
@@ -7588,6 +7607,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/TabPinParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "tab.park",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/TabParkParams"
             }
           },
           "required": [
@@ -10132,6 +10167,10 @@
               "format": "uint",
               "minimum": 0,
               "type": "integer"
+            },
+            "parked": {
+              "default": false,
+              "type": "boolean"
             },
             "prio": {
               "type": "boolean"
@@ -16589,6 +16628,10 @@
               "format": "uint",
               "minimum": 0,
               "type": "integer"
+            },
+            "parked": {
+              "default": false,
+              "type": "boolean"
             },
             "prio": {
               "type": "boolean"

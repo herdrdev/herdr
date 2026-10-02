@@ -42,6 +42,7 @@ pub(crate) fn request_changes_ui(request: &Request) -> bool {
             | Method::TabRename(_)
             | Method::TabPrio(_)
             | Method::TabPin(_)
+            | Method::TabPark(_)
             | Method::TabStar(_)
             | Method::TabMove(_)
             | Method::TabClose(_)

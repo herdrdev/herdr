@@ -1612,6 +1612,7 @@ pub(crate) struct AgentPanelEntry {
     pub(crate) settle_hint: Option<crate::app::settled::SettleHint>,
     data: std::sync::Arc<AgentPanelEntryData>,
     pub(crate) pinned: bool,
+    pub(crate) parked: bool,
     /// Projection-only overlay. Keeping it outside shared row data lets group
     /// builders mark redundancy without copying a cached remote entry.
     pub(crate) space_label_redundant: bool,
@@ -1713,6 +1714,7 @@ impl AgentPanelEntry {
             settle_hint: None,
             data: std::sync::Arc::new(data),
             pinned: false,
+            parked: false,
             space_label_redundant: false,
             remote_entry: None,
             remote_show_host_identity: false,
@@ -2398,6 +2400,7 @@ fn collect_agent_panel_entries_with_runtimes(
                     let prio = ws.tabs.get(detail.tab_idx).is_some_and(|tab| tab.prio);
                     let starred = ws.tabs.get(detail.tab_idx).is_some_and(|tab| tab.starred);
                     let pinned = ws.tabs.get(detail.tab_idx).is_some_and(|tab| tab.pinned);
+                    let parked = ws.tabs.get(detail.tab_idx).is_some_and(|tab| tab.parked);
                     let tab_has_custom_name = ws
                         .tabs
                         .get(detail.tab_idx)
@@ -2477,6 +2480,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         )
                     });
                     entry.pinned = pinned;
+                    entry.parked = parked;
                     let pane = ws
                         .tabs
                         .get(detail.tab_idx)
@@ -3331,6 +3335,7 @@ pub(crate) const RUNS_SECTION_TITLE: &str = "Runs";
 /// Aloops findings and runs from the producer host (MAT-159). The count is
 /// the number of pending findings.
 pub(crate) const ALOOPS_SECTION_TITLE: &str = "Aloops";
+pub(crate) const INBOX_NEW_SECTION_TITLE: &str = "Inbox · new";
 pub(crate) const INBOX_SECTION_TITLE: &str = "Inbox";
 
 pub(crate) const NO_REPO_YET_SECTION_TITLE: &str = "No repo yet";
@@ -3352,7 +3357,7 @@ pub(crate) fn sidebar_area_is_visible(app: &AppState, area: crate::config::Sideb
     !app.sidebar_sections_layout || app.sidebar_areas.is_visible(area)
 }
 
-const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 9] = [
+const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 10] = [
     WORKING_SECTION_TITLE,
     NEEDS_YOU_SECTION_TITLE,
     SNOOZED_SECTION_TITLE,
@@ -3360,6 +3365,7 @@ const INITIAL_COLLAPSED_SHARED_GROUP_TITLES: [&str; 9] = [
     FLEET_SECTION_TITLE,
     RUNS_SECTION_TITLE,
     ALOOPS_SECTION_TITLE,
+    INBOX_NEW_SECTION_TITLE,
     INBOX_SECTION_TITLE,
     SYMPHONY_SECTION_TITLE,
 ];
@@ -3784,6 +3790,18 @@ fn compact_sidebar_rows_inner(
             .local_target()
             .is_some_and(|target| !app.remote_focus_proxy_panes.contains(&target.pane_id))
     });
+    let mut inbox_new_entries = ordered_tab_entries(
+        app,
+        &entries
+            .iter()
+            .filter(|entry| entry.parked)
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
+    for entry in &mut inbox_new_entries {
+        entry.working_shelf = true;
+    }
+    entries.retain(|entry| !entry.parked);
     if sidebar_rows_are_filtered(app) {
         let scope = sidebar_project_scope(app);
         let visible_tabs = entries
@@ -4063,6 +4081,7 @@ fn compact_sidebar_rows_inner(
             &[],
             expand_worktrees,
             &pods,
+            &inbox_new_entries,
             false,
         );
         let row_width = sidebar_row_render_width(app, &rows, expand_worktrees);
@@ -4138,6 +4157,7 @@ fn compact_sidebar_rows_inner(
         &projected_settled,
         expand_worktrees,
         &pods,
+        &inbox_new_entries,
         true,
     );
     let needs_you = needs_you_strip_rows(
@@ -5469,6 +5489,7 @@ fn append_ordered_sidebar_blocks(
     settled_entries: &[AgentPanelEntry],
     expand_worktrees: bool,
     pods: &PodProjection,
+    inbox_new_entries: &[AgentPanelEntry],
     include_deferred: bool,
 ) {
     for block in SIDEBAR_BLOCK_ORDER {
@@ -5502,6 +5523,7 @@ fn append_ordered_sidebar_blocks(
                 if sidebar_area_is_visible(app, crate::config::SidebarArea::Aloops) {
                     aloops::append_rows(app, &mut block_rows);
                 }
+                append_inbox_new_rows(app, &mut block_rows, inbox_new_entries);
                 inbox::append_rows(app, &mut block_rows);
                 if sidebar_area_is_visible(app, crate::config::SidebarArea::Symphony) {
                     append_symphony_rows(app, &mut block_rows);
@@ -5515,6 +5537,25 @@ fn append_ordered_sidebar_blocks(
             rows.push(SidebarRow::Divider);
         }
         rows.append(&mut block_rows);
+    }
+}
+
+fn append_inbox_new_rows(app: &AppState, rows: &mut Vec<SidebarRow>, entries: &[AgentPanelEntry]) {
+    if entries.is_empty() {
+        return;
+    }
+    let collapsed = section_is_collapsed(app, INBOX_NEW_SECTION_TITLE);
+    rows.push(SidebarRow::SectionHeader {
+        title: INBOX_NEW_SECTION_TITLE,
+        count: entries.len(),
+        host_counts: Vec::new(),
+        collapsed,
+    });
+    if !collapsed {
+        rows.extend(entries.iter().cloned().map(|entry| SidebarRow::Tab {
+            entry: Box::new(entry),
+            depth: 0,
+        }));
     }
 }
 
@@ -31247,6 +31288,68 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         assert!(!rows[..active_end].iter().any(|row| matches!(row,
             SidebarRow::Tab { entry, .. }
                 if entry.local_target().is_some_and(|target| target.ws_idx != 0)
+        )));
+    }
+
+    #[test]
+    fn parked_tabs_are_only_in_the_dimmed_inbox_new_section() {
+        let mut app = app_with_agents(&["alpha"]);
+        app.sidebar_sections_layout = true;
+        app.workspaces[0].tabs[0].parked = true;
+        app.toggle_sidebar_group(INBOX_NEW_SECTION_TITLE);
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: INBOX_NEW_SECTION_TITLE,
+                count: 1,
+                ..
+            }
+        )));
+        let parked_rows = rows
+            .iter()
+            .filter_map(|row| match row {
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                    if entry
+                        .local_target()
+                        .is_some_and(|target| target.pane_id == pane_id) =>
+                {
+                    Some(entry)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(parked_rows.len(), 1);
+        assert!(parked_rows[0].parked);
+        assert!(
+            parked_rows[0].working_shelf,
+            "parked row uses the muted shelf style"
+        );
+        let inbox_header = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    SidebarRow::SectionHeader {
+                        title: INBOX_NEW_SECTION_TITLE,
+                        ..
+                    }
+                )
+            })
+            .expect("inbox new section");
+        assert!(
+            matches!(rows.get(inbox_header + 1), Some(SidebarRow::Tab { entry, .. }) if entry.parked)
+        );
+
+        app.workspaces[0].tabs[0].parked = false;
+        let rows = sidebar_rows(&app);
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: INBOX_NEW_SECTION_TITLE,
+                ..
+            }
         )));
     }
 

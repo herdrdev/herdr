@@ -569,6 +569,16 @@ fn tab_command() -> Command {
         .subcommand(id_command("focus", "tab_id", "Focus a tab"))
         .subcommand(id_command("pin", "tab_id", "Pin a tab in the sidebar"))
         .subcommand(id_command("unpin", "tab_id", "Unpin a tab in the sidebar"))
+        .subcommand(id_command(
+            "park",
+            "tab_id",
+            "Park a tab in the new inbox section",
+        ))
+        .subcommand(id_command(
+            "unpark",
+            "tab_id",
+            "Unpark a tab from the new inbox section",
+        ))
         .subcommand(
             Command::new("rename")
                 .about("Rename a tab, or clear its name to restore the derived label")

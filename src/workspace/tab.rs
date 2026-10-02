@@ -312,6 +312,8 @@ pub struct Tab {
     /// moves the row between sidebar groups the way `pinned` does, and nothing
     /// but an explicit toggle ever changes it.
     pub starred: bool,
+    /// Awaiting its first human keyboard input; shown in the inbox shelf.
+    pub parked: bool,
     /// User-named sidebar subgroup this window belongs to. Organisation, not
     /// presentation: it persists with the session, and it never moves the
     /// window to a different group — it only nests the window one level under
@@ -580,6 +582,7 @@ impl Tab {
                 prio: false,
                 pinned: false,
                 starred: false,
+                parked: false,
                 subgroup: None,
                 events,
                 render_notify,
@@ -951,6 +954,7 @@ impl Tab {
             prio: false,
             pinned: false,
             starred: false,
+            parked: false,
             subgroup: None,
             events,
             render_notify,

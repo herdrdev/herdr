@@ -79,6 +79,7 @@ mod tests {
             label: id.into(),
             prio: false,
             starred: false,
+            parked: false,
             focused,
             pane_count: 1,
             agent_status: AgentStatus::Idle,
