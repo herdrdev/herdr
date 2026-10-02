@@ -359,6 +359,16 @@ from the build host. Building, testing, and staging an artifact on those hosts
 is fine; swapping the running server is not. Approval covers the one change it
 was given for and does not carry to the next version.
 
+### Merging on the fork
+
+The upstream rule "Never merge a pull request; Can performs the final merge"
+applies to `herdrdev/herdr` only. On `matthias-scale/herdr` agents merge: a
+fork PR lands through `/amerge` once its required checks, `/review` verdict
+and thread sweep pass, and Matthias is never asked to press merge. Decided on
+2026-10-02 (option 4a) after ~120 fork merges had waited on a human for no
+reason the fleet grant did not already cover. Deploying the merged build to
+`ub1` or `ub2` still needs his per-change approval (see above).
+
 ### Identifying the active fork
 
 `main` on `matthias-scale/herdr` is the only base for fork work. It is the
