@@ -96,6 +96,11 @@ bench-render-scale:
 bench-terminal-targets:
     cargo test --release --locked --bin herdr terminal_target_lookup_profile -- --ignored --nocapture --test-threads=1
 
+# Profile Windows foreground inspection of isolated idle shells, without a server.
+[windows]
+bench-process-inspection:
+    cargo test --release --locked --bin herdr windows_process_inspection_profile -- --ignored --nocapture --test-threads=1
+
 # Profile BSP split collection and construction with balanced and skewed trees.
 bench-bsp-layout:
     cargo test --release --locked --bin herdr bsp_layout_profile -- --ignored --nocapture --test-threads=1
