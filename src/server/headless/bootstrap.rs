@@ -27,6 +27,10 @@ pub fn run_server() -> io::Result<()> {
     }
 
     let loaded_config = config::Config::load();
+    #[cfg(windows)]
+    if loaded_config.config.server.allow_unelevated_clients {
+        crate::platform::allow_unelevated_clients();
+    }
     let (api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
     let event_hub = api::EventHub::default();
     let should_quit = Arc::new(AtomicBool::new(false));

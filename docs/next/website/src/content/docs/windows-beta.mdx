@@ -49,7 +49,18 @@ For internal testing, `HERDR_MANIFEST_URL` can point the installer at a custom m
 
 Local persistent sessions continue running after the client detaches or its terminal window closes. Servers and pane processes launched through Windows OpenSSH also survive logout; run `herdr` again to reconnect.
 
-The same Windows account can attach to a session from ordinary and administrator terminals, including sessions started through SSH. The server's privileges stay as they were at startup: attaching from an ordinary terminal to an elevated server still controls administrator panes, and attaching from an administrator terminal does not elevate an ordinary server. This deliberately trusts ordinary local processes belonging to that account to control its elevated Herdr sessions; other accounts are excluded. Older elevated servers need to be stopped from an administrator terminal and restarted with the updated build before ordinary clients can attach; stopping closes their panes.
+Elevated Windows servers require an administrator client by default, including servers started through an elevated SSH login. Ordinary servers accept clients from ordinary and administrator terminals belonging to the same account; attaching never changes the server's privileges.
+
+To deliberately share elevated sessions with ordinary clients, set:
+
+```toml
+[server]
+allow_unelevated_clients = true
+```
+
+This Windows-only setting is off by default and applies when a new server starts, including automatic startup. Reloading config does not change a running server's access policy. You can instead enable sharing for one server process from an administrator terminal with `herdr server --allow-unelevated-clients` (or `herdr --session <name> server --allow-unelevated-clients` for a named session). The flag enables sharing even when the config setting is false.
+
+Either option allows ordinary local processes belonging to that account to control administrator panes; other accounts remain excluded. The flag must be supplied again after a restart unless sharing is enabled in config. Existing servers retain their previous access policy until stopped and restarted with the updated build; stopping closes their panes. Config and recovery files retain their account-based permissions.
 
 Windows agent process detection scans descendants of the pane shell and recognizes direct agents plus common command wrappers, including npm/Node and Git Bash process chains. It follows Git Bash-launched agents across emulated `exec` boundaries, but it is not the same as Unix foreground process-group detection.
 

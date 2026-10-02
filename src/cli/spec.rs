@@ -157,7 +157,7 @@ fn channel_command() -> Command {
 }
 
 fn server_command() -> Command {
-    Command::new("server")
+    let command = Command::new("server")
         .about("Run or control the headless server")
         .subcommand(Command::new("stop").about("Stop the running server"))
         .subcommand(Command::new("reload-config").about("Reload config in the running server"))
@@ -174,7 +174,13 @@ fn server_command() -> Command {
         .subcommand(
             Command::new("reload-agent-manifests")
                 .about("Reload local agent detection manifest overrides"),
-        )
+        );
+    #[cfg(windows)]
+    let command = command.arg(
+        flag("allow-unelevated-clients")
+            .help("Allow ordinary same-account clients to control this elevated server"),
+    );
+    command
 }
 
 fn api_command() -> Command {

@@ -21,6 +21,12 @@ pub(crate) use notifications::{
     show_actionable_desktop_notification, show_desktop_notification,
 };
 
+static ALLOW_UNELEVATED_CLIENTS: OnceLock<bool> = OnceLock::new();
+
+pub(crate) fn allow_unelevated_clients() {
+    let _ = ALLOW_UNELEVATED_CLIENTS.set(true);
+}
+
 pub(crate) fn probe_local_server(path: &std::path::Path) -> std::io::Result<()> {
     use interprocess::os::windows::named_pipe::{pipe_mode::Bytes, DuplexPipeStream};
     use interprocess::ConnectWaitMode;
@@ -38,11 +44,44 @@ pub(crate) fn probe_local_server(path: &std::path::Path) -> std::io::Result<()> 
 
 pub(crate) fn local_server_security_descriptor(
 ) -> std::io::Result<interprocess::os::windows::security_descriptor::SecurityDescriptor> {
-    user_security_descriptor("GRGW")
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut needed = 0;
+    if unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenElevation,
+            (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut needed,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    let allow_unelevated = ALLOW_UNELEVATED_CLIENTS.get().copied().unwrap_or(false);
+    let integrity = if elevation.TokenIsElevated != 0 && !allow_unelevated {
+        "HI"
+    } else {
+        "ME"
+    };
+    // The account DACL alone cannot distinguish ordinary and elevated clients.
+    // The integrity label blocks both reading and writing from lower levels.
+    user_security_descriptor("GRGW", &format!("S:(ML;;NRNW;;;{integrity})"))
 }
 
 fn user_security_descriptor(
     access: &str,
+    integrity_label: &str,
 ) -> std::io::Result<interprocess::os::windows::security_descriptor::SecurityDescriptor> {
     use interprocess::os::windows::security_descriptor::SecurityDescriptor;
     use widestring::{U16CStr, U16CString};
@@ -84,10 +123,11 @@ fn user_security_descriptor(
     }
     let sid_text = unsafe { U16CStr::from_ptr_str(sid) }.to_string_lossy();
     unsafe { LocalFree(sid.cast()) };
-    // The elevated token's default owner can be Administrators. Authorize the
-    // account instead: its ordinary clients deliberately control elevated panes.
-    let sddl = U16CString::from_str(format!("D:P(A;;GA;;;SY)(A;;{access};;;{sid_text})"))
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
+    // Use the account SID rather than the elevated token's Administrators owner.
+    let sddl = U16CString::from_str(format!(
+        "D:P(A;;GA;;;SY)(A;;{access};;;{sid_text}){integrity_label}"
+    ))
+    .map_err(|err| std::io::Error::new(std::io::ErrorKind::InvalidInput, err))?;
     SecurityDescriptor::deserialize(&sddl)
 }
 
@@ -98,8 +138,9 @@ pub(crate) fn local_server_connection_error(error: std::io::Error) -> std::io::E
     std::io::Error::new(
         error.kind(),
         format!(
-            "For an older elevated server, stop it in an admin shell and \
-             reopen Herdr (closes panes). {error}"
+            "For an elevated server, use an administrator terminal. Sharing with ordinary \
+             clients requires stopping it there and restarting its `herdr server` command \
+             with --allow-unelevated-clients (closes panes). {error}"
         ),
     )
 }
@@ -273,7 +314,7 @@ pub(crate) fn create_config_temporary(
             FILE_SHARE_WRITE,
         },
     };
-    let descriptor = user_security_descriptor("GA")?;
+    let descriptor = user_security_descriptor("GA", "")?;
     let mut attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: null_mut(),

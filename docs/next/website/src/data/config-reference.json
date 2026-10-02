@@ -17,6 +17,12 @@
       "title": "Server",
       "keys": [
         {
+          "key": "server.allow_unelevated_clients",
+          "type": "boolean",
+          "default": "false",
+          "description": "Windows only: allow ordinary clients from the same account to control an elevated server and its administrator panes. Applies at server startup and requires a restart; config reload does not change access. The --allow-unelevated-clients startup flag enables sharing even when this setting is false."
+        },
+        {
           "key": "server.headless_cols",
           "type": "integer",
           "default": "120",
