@@ -3743,6 +3743,13 @@ impl PaneRuntime {
         Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
     }
 
+    pub(crate) fn test_scroll_metrics_reads(&self) -> usize {
+        self.terminal
+            .ghostty
+            .scroll_metrics_reads
+            .load(Ordering::Relaxed)
+    }
+
     pub(crate) fn test_contend_during_dirty_collection(
         &self,
         bytes: Vec<u8>,

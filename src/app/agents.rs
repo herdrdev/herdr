@@ -374,7 +374,7 @@ impl App {
         if !terminal.is_agent_terminal() {
             return None;
         }
-        let pane = self.pane_info(ws_idx, pane_id)?;
+        let pane = self.pane_metadata(ws_idx, pane_id)?;
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),

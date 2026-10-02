@@ -309,11 +309,8 @@ impl App {
         ws_idx: usize,
         pane_id: crate::layout::PaneId,
     ) -> Option<crate::api::schema::PaneInfo> {
-        let ws = self.state.workspaces.get(ws_idx)?;
-        let pane = ws.pane_state(pane_id)?;
-        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
-        let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
-        let scroll = self
+        let mut pane = self.pane_metadata(ws_idx, pane_id)?;
+        pane.scroll = self
             .state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
             .and_then(|runtime| runtime.scroll_metrics())
@@ -322,6 +319,18 @@ impl App {
                 max_offset_from_bottom: metrics.max_offset_from_bottom as u64,
                 viewport_rows: metrics.viewport_rows as u64,
             });
+        Some(pane)
+    }
+
+    pub(super) fn pane_metadata(
+        &self,
+        ws_idx: usize,
+        pane_id: crate::layout::PaneId,
+    ) -> Option<crate::api::schema::PaneInfo> {
+        let ws = self.state.workspaces.get(ws_idx)?;
+        let pane = ws.pane_state(pane_id)?;
+        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        let tab_idx = ws.find_tab_index_for_pane(pane_id)?;
         let focused = self.state.active == Some(ws_idx)
             && ws.active_tab == tab_idx
             && ws
@@ -351,7 +360,7 @@ impl App {
             state_labels: presentation.state_labels,
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
-            scroll,
+            scroll: None,
             revision: terminal.revision,
         })
     }

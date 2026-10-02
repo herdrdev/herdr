@@ -24,7 +24,7 @@ pub(super) fn snapshot_with_completions(
     protocol::ClientShellSnapshot,
     protocol::endpoint::EndpointAgentCompletions,
 ) {
-    let snapshot = app.session_snapshot();
+    let snapshot = app.session_metadata_snapshot();
     let completions = protocol::endpoint::EndpointAgentCompletions {
         boot_id: boot_id.to_owned(),
         revision,
@@ -628,6 +628,94 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn snapshot_metadata_skips_scroll_reads_and_preserves_public_session_data() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = crate::workspace::Workspace::test_new("active");
+        workspace.test_add_tab(None);
+        app.state.workspaces = vec![workspace, crate::workspace::Workspace::test_new("hidden")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let history = (0..40)
+            .map(|line| format!("line-{line}\r\n"))
+            .collect::<String>();
+        for (index, terminal) in app.state.terminals.values_mut().enumerate() {
+            if index < 2 {
+                terminal.set_detected_state(
+                    Some(crate::detect::Agent::Pi),
+                    crate::detect::AgentState::Working,
+                );
+                terminal.agent_name = Some(format!("agent-{index}"));
+                terminal.last_agent_state_change_seq = Some(5);
+                terminal.last_agent_completion_seq = Some(7);
+            }
+            let runtime = crate::terminal::TerminalRuntime::test_with_scrollback_bytes(
+                20,
+                5,
+                1000,
+                history.as_bytes(),
+            );
+            runtime.scroll_up(3);
+            app.terminal_runtimes.insert(terminal.id.clone(), runtime);
+        }
+
+        let metadata = app.session_metadata_snapshot();
+        assert_eq!(metadata.panes.len(), 3);
+        assert_eq!(metadata.agents.len(), 2);
+        assert!(metadata.panes.iter().all(|pane| pane.scroll.is_none()));
+        assert!(app
+            .terminal_runtimes
+            .values()
+            .all(|runtime| runtime.test_scroll_metrics_reads() == 0));
+
+        let mut public = app.session_snapshot();
+        for pane in &mut public.panes {
+            let scroll = pane
+                .scroll
+                .take()
+                .expect("public session must expose scroll");
+            assert_eq!(scroll.offset_from_bottom, 3);
+            assert!(scroll.max_offset_from_bottom >= 3);
+            assert_eq!(scroll.viewport_rows, 5);
+        }
+        assert_eq!(metadata, public);
+        assert!(app
+            .terminal_runtimes
+            .values()
+            .all(|runtime| runtime.test_scroll_metrics_reads() == 1));
+
+        let (shell, completions) = snapshot_with_completions(&app, "boot", 9, None, None);
+        assert_eq!(shell.panes.len(), 3);
+        assert_eq!(shell.agents.len(), 2);
+        assert_eq!(shell.focused_pane_id, metadata.focused_pane_id);
+        for (pane, public_pane) in shell.panes.iter().zip(&metadata.panes) {
+            assert_eq!(pane.pane_id, public_pane.pane_id);
+            assert_eq!(pane.workspace_id, public_pane.workspace_id);
+            assert_eq!(pane.tab_id, public_pane.tab_id);
+            assert_eq!(pane.cwd, public_pane.cwd);
+        }
+        for (agent, public_agent) in shell.agents.iter().zip(&metadata.agents) {
+            assert_eq!(agent.pane_id, public_agent.pane_id);
+            assert_eq!(agent.name, public_agent.name);
+            assert_eq!(agent.agent_status, public_agent.agent_status);
+            assert_eq!(agent.state_change_seq, 5);
+        }
+        assert_eq!(completions.revision, 9);
+        assert_eq!(completions.completions.len(), 2);
+        assert!(completions.completions.iter().all(|(_, seq)| *seq == 7));
+        assert!(app
+            .terminal_runtimes
+            .values()
+            .all(|runtime| runtime.test_scroll_metrics_reads() == 1));
+    }
 
     #[test]
     fn snapshot_projects_cached_release_and_update_facts() {
