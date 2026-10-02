@@ -198,6 +198,7 @@ pub struct App {
     /// API requests and transport events, never by render or pane loops.
     pub(crate) remote_focus_operations: remote_focus::RemoteFocusOperations,
     pub(crate) planning_lock_key_burst: std::collections::VecDeque<Instant>,
+    pub(crate) window_cycle_snapshot: Option<crate::app::input::WindowCycleSnapshot>,
     pub(crate) fleet_attach_agents:
         std::collections::HashMap<crate::layout::PaneId, crate::api::schema::AgentRef>,
     pub(crate) remote_focus_transport: Box<dyn remote_focus::RemoteFocusTransport>,
@@ -1652,6 +1653,7 @@ impl App {
             status_log: crate::status_log::StatusLog::for_server(),
             remote_focus_operations: remote_focus::RemoteFocusOperations::default(),
             planning_lock_key_burst: std::collections::VecDeque::new(),
+            window_cycle_snapshot: None,
             fleet_attach_agents: std::collections::HashMap::new(),
             remote_focus_transport: Box::new(crate::remote::SshRemoteFocusTransport::new(
                 &config.remote.fleet,

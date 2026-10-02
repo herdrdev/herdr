@@ -291,6 +291,9 @@ impl App {
         event: crate::raw_input::RawInputEvent,
         pomodoro_presentation: crate::ui::pomodoro::InputPresentation,
     ) -> bool {
+        if !matches!(&event, crate::raw_input::RawInputEvent::Key(_)) {
+            self.invalidate_window_cycle_snapshot();
+        }
         if !matches!(&event, crate::raw_input::RawInputEvent::Key(_))
             && self.intercept_pomodoro_send_off_raw_input_with_visibility(
                 super::LOCAL_INPUT_SOURCE,
