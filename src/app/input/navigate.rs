@@ -962,7 +962,7 @@ impl App {
                 self.runtime_tab_focus("tui.window.focus_relative", tab_id);
             }
             WindowCycleTarget::Remote(agent_ref) => {
-                self.open_fleet_host_focused(&agent_ref.host, Some(&agent_ref.agent));
+                self.open_fleet_host_from_input(&agent_ref.host, Some(&agent_ref.agent));
                 self.state.select_remote_agent_row(agent_ref);
             }
         }
@@ -987,7 +987,7 @@ impl App {
                     .iter()
                     .any(|host| host.name == agent_ref.host && host.reachable);
                 if host_reachable {
-                    self.open_fleet_host_focused(&agent_ref.host, Some(&agent_ref.agent));
+                    self.open_fleet_host_from_input(&agent_ref.host, Some(&agent_ref.agent));
                 }
                 self.state.select_remote_agent_row(agent_ref);
             }
@@ -4660,6 +4660,49 @@ mod tests {
         assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
         assert_eq!(app.remote_focus_operations.len(), 1);
         assert!(app.state.toast.is_none());
+    }
+
+    #[test]
+    fn next_window_to_remote_clears_home_view() {
+        let (mut app, _) = app_with_remote_agent();
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        app.state.home = Some(crate::app::home::HomeState::default());
+
+        app.focus_relative_window(true);
+
+        assert!(app.state.home.is_none());
+        assert!(app.state.active.is_some());
+    }
+
+    #[test]
+    fn next_blocked_window_to_remote_clears_home_view() {
+        let mut app = app_with_global_window_fixture();
+        app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
+        let remote = remote_blocker("ub2", "blocked-agent");
+        let agent_ref = remote.agent_ref.clone();
+        app.state.remote_agent_panel_entries = vec![remote];
+        app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+            name: "ub2".into(),
+            target: "remote-ub2".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: None,
+            entries: Vec::new(),
+        }];
+        app.state.home = Some(crate::app::home::HomeState::default());
+
+        app.focus_next_blocked_window();
+
+        assert!(app.state.home.is_none());
+        assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
     }
 
     #[test]
