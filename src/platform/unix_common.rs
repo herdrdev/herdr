@@ -1,5 +1,25 @@
 use std::path::{Path, PathBuf};
 
+pub(crate) fn client_presentation_identity() -> String {
+    let mut terminal_name = [0_i8; 4096];
+    // SAFETY: `terminal_name` is writable for its full length and ttyname_r
+    // writes at most that many bytes, including the terminating nul.
+    let result = unsafe {
+        libc::ttyname_r(
+            libc::STDIN_FILENO,
+            terminal_name.as_mut_ptr(),
+            terminal_name.len(),
+        )
+    };
+    if result == 0 {
+        // SAFETY: ttyname_r returned success and guarantees a nul-terminated
+        // path in the supplied buffer.
+        let name = unsafe { std::ffi::CStr::from_ptr(terminal_name.as_ptr()) };
+        return name.to_string_lossy().into_owned();
+    }
+    format!("process:{}", std::process::id())
+}
+
 pub(super) fn process_exists_after_kill(result: libc::c_int, errno: Option<i32>) -> bool {
     result == 0 || errno == Some(libc::EPERM)
 }

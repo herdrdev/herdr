@@ -56,6 +56,7 @@ pub(crate) mod settings_keybindings;
 pub(crate) mod settings_providers;
 pub(crate) mod settled;
 pub(crate) mod settled_view;
+pub(crate) mod spawn_dock;
 pub mod state;
 pub(crate) mod status_log;
 mod tab_bar_status;
@@ -946,6 +947,14 @@ impl App {
         #[cfg(test)]
         let sidebar_group_collapsed = std::collections::HashMap::new();
 
+        #[cfg(not(test))]
+        let sidebar_presentation = state::SidebarPresentationState {
+            spawn_dock_client_id: Some(crate::platform::client_presentation_identity()),
+            ..Default::default()
+        };
+        #[cfg(test)]
+        let sidebar_presentation = state::SidebarPresentationState::default();
+
         let mut state = AppState {
             agent_picker: None,
             collapsed_sidebar_groups: crate::ui::initial_collapsed_sidebar_groups(
@@ -1031,6 +1040,7 @@ impl App {
             request_usage_scan: false,
             inbox: None,
             home: None,
+            spawn_dock: None,
             home_agent_choices: Vec::new(),
             home_catalog: if cfg!(test) {
                 crate::app::home_catalog::HomeCatalog::fallback()
@@ -1157,7 +1167,7 @@ impl App {
             work_link_picker: None,
             add_action: None,
             copy_mode: None,
-            sidebar_presentation: state::SidebarPresentationState::default(),
+            sidebar_presentation,
             sidebar_projection_revision: 0,
             workspace_picker_forces_spaces_tree: false,
             workspace_scroll: 0,
@@ -3559,6 +3569,19 @@ impl App {
                                 );
                                 continue;
                             }
+                            // The headless client path has its own synchronous
+                            // router, so it must consume the shared spawn dock
+                            // before any pane forwarding can occur.
+                            if owner == state::InputOwner::SpawnDock
+                                && self.state.spawn_dock.is_some()
+                            {
+                                self.handle_spawn_dock_key(key.as_key_event());
+                                self.input_leases.insert_consumed(
+                                    lease_key,
+                                    input::ConsumedInputLease::SuppressRepeats,
+                                );
+                                continue;
+                            }
                             if let state::InputOwner::Dock(dock_owner) = owner {
                                 if dock_owner != state::DockInputOwner::Editor
                                     && self.handle_dock_key_for_owner_headless(dock_owner, &key)
@@ -3824,6 +3847,7 @@ impl App {
         }
         match owner {
             state::InputOwner::Pomodoro | state::InputOwner::Popup | state::InputOwner::Pane => {}
+            state::InputOwner::SpawnDock => self.handle_spawn_dock_key(key_event),
             state::InputOwner::Client(owner) => match owner {
                 state::ClientInputOwner::Overlay(overlay) => {
                     self.handle_client_overlay_key(overlay, key_event);

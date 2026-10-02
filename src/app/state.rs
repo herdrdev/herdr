@@ -1532,6 +1532,8 @@ impl SidebarSortMode {
 /// app keeps its own instance directly.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SidebarPresentationState {
+    /// Stable local TUI identity used only for this client's spawn-dock draft.
+    pub(crate) spawn_dock_client_id: Option<String>,
     pub(crate) focused: bool,
     pub(crate) focus_intent: ClientFocusIntent,
     pub(crate) expanded_workspace_ids: std::collections::HashSet<String>,
@@ -1555,6 +1557,8 @@ pub(crate) struct SidebarPresentationState {
     pub(crate) search_active: bool,
     pub(crate) new_menu: Option<SidebarNewMenuState>,
     pub(crate) new_thread: Option<SidebarNewThreadState>,
+    /// TUI-only spawn draft. Swapped with this attach and never projected by the server API.
+    pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
     pub(crate) project_menu: Option<SidebarProjectMenuState>,
     pub(crate) selected_work_group: Option<String>,
     pub(crate) object_menu: Option<SidebarObjectMenuState>,
@@ -1820,6 +1824,7 @@ pub(crate) enum InputOwner {
     Pomodoro,
     Client(ClientInputOwner),
     AddProject,
+    SpawnDock,
     Server(ServerInputOwner),
     Popup,
     Surface(SurfaceInputOwner),
@@ -1885,6 +1890,23 @@ pub(crate) struct SidebarSnoozeUiState {
 }
 
 impl SidebarPresentationState {
+    pub(crate) fn load_spawn_dock_draft(
+        &self,
+    ) -> Option<crate::client::presentation::SpawnDockDraft> {
+        self.spawn_dock_client_id
+            .as_deref()
+            .and_then(crate::client::presentation::load_spawn_dock_draft)
+    }
+
+    pub(crate) fn save_spawn_dock_draft(
+        &self,
+        draft: Option<crate::client::presentation::SpawnDockDraft>,
+    ) {
+        if let Some(client_id) = self.spawn_dock_client_id.as_deref() {
+            crate::client::presentation::save_spawn_dock_draft(client_id, draft);
+        }
+    }
+
     pub(crate) fn initialize_group_mode(
         &mut self,
         group_mode: SidebarGroupMode,
@@ -4402,6 +4424,8 @@ pub struct AppState {
     /// Open home view. `Some` means home owns the screen, the same way `inbox`
     /// does; the two are mutually exclusive because each wants the whole frame.
     pub(crate) home: Option<crate::app::home::HomeState>,
+    /// Bottom-docked spawn composer, presented over panes without replacing them.
+    pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
     /// Client-local provider choices retained when Home closes.
     pub(crate) home_agent_choices: Vec<crate::app::home::HomeAgentChoice>,
     /// Provider choices resolved outside `HomeState`, ready for the next Home open.
@@ -6310,6 +6334,10 @@ impl AppState {
             &mut other.known_workspace_ids,
         );
         std::mem::swap(
+            &mut self.sidebar_presentation.spawn_dock_client_id,
+            &mut other.spawn_dock_client_id,
+        );
+        std::mem::swap(
             &mut self.sidebar_presentation.revealed_workspace_id,
             &mut other.revealed_workspace_id,
         );
@@ -6347,6 +6375,7 @@ impl AppState {
         std::mem::swap(&mut self.sidebar_search_active, &mut other.search_active);
         std::mem::swap(&mut self.sidebar_new_menu, &mut other.new_menu);
         std::mem::swap(&mut self.sidebar_new_thread, &mut other.new_thread);
+        std::mem::swap(&mut self.spawn_dock, &mut other.spawn_dock);
         std::mem::swap(&mut self.sidebar_project_menu, &mut other.project_menu);
         std::mem::swap(
             &mut self.sidebar_selected_work_group,
@@ -6488,6 +6517,9 @@ impl AppState {
         }
         if self.add_project_active() {
             return InputOwner::AddProject;
+        }
+        if self.spawn_dock.is_some() {
+            return InputOwner::SpawnDock;
         }
         if self.sidebar_focused && !self.sidebar_collapsed {
             return InputOwner::Sidebar;
@@ -7504,7 +7536,11 @@ impl AppState {
             TerminalAreaSurface::Work
         } else if self.dock_collapsed && self.dock_object_preview.is_some() {
             TerminalAreaSurface::DockObjectPreview
-        } else if self.home.is_some() {
+        } else if self
+            .home
+            .as_ref()
+            .is_some_and(|home| home.pending_dispatch.is_none())
+        {
             TerminalAreaSurface::Home
         } else if let Some(inbox) = self.inbox.as_ref() {
             TerminalAreaSurface::Inbox(inbox)
@@ -7723,6 +7759,7 @@ impl AppState {
             request_usage_scan: false,
             inbox: None,
             home: None,
+            spawn_dock: None,
             home_agent_choices: Vec::new(),
             home_catalog: crate::app::home_catalog::HomeCatalog::fallback(),
             launch_profiles: crate::app::launch_profiles::resolve(&[]),

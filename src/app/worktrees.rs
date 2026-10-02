@@ -1099,6 +1099,8 @@ impl App {
                     result_path.clone(),
                 ) {
                     self.state.clear_home();
+                    self.state.sidebar_presentation.save_spawn_dock_draft(None);
+                    self.state.spawn_dock = None;
                     self.focus_client_on_pane();
                 } else {
                     self.finish_home_worktree_hooks(plan, create, result_path, true);
@@ -1169,6 +1171,8 @@ impl App {
                     }
                 }
                 self.state.clear_home();
+                self.state.sidebar_presentation.save_spawn_dock_draft(None);
+                self.state.spawn_dock = None;
                 self.focus_client_on_pane();
             }
             Err(error) => {
@@ -1178,6 +1182,11 @@ impl App {
                 } else {
                     self.state.config_diagnostic = Some(message);
                     self.config_diagnostic_deadline = None;
+                }
+                if let Some(dock) = self.state.spawn_dock.as_mut() {
+                    if let Some(home) = self.state.home.take() {
+                        dock.home = home;
+                    }
                 }
             }
         }

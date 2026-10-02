@@ -7,6 +7,24 @@ use tracing::warn;
 
 const PRESENTATION_FILE_NAME: &str = "client-presentation.json";
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct SpawnDockDraft {
+    pub(crate) prompt: String,
+    pub(crate) project: String,
+    pub(crate) host: String,
+    pub(crate) profile: String,
+    pub(crate) model: String,
+    pub(crate) effort: Option<String>,
+    pub(crate) worktree: String,
+    pub(crate) worktree_path: Option<PathBuf>,
+    pub(crate) saved_at_unix: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SPAWN_DOCK_DRAFTS: std::cell::RefCell<std::collections::HashMap<String, Option<SpawnDockDraft>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 struct ClientPresentationFile {
     #[serde(default)]
@@ -22,10 +40,94 @@ struct ClientPresentationFile {
         Option<std::collections::HashMap<String, crate::app::state::SidebarSortMode>>,
     #[serde(default)]
     sidebar_group_collapsed: Option<std::collections::HashMap<String, bool>>,
+    #[serde(default, rename = "spawn_dock_draft")]
+    _legacy_spawn_dock_draft: Option<SpawnDockDraft>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct SpawnDockDraftFile {
+    #[serde(default)]
+    draft: Option<SpawnDockDraft>,
 }
 
 fn presentation_path() -> PathBuf {
     crate::config::state_dir().join(PRESENTATION_FILE_NAME)
+}
+
+#[cfg(not(test))]
+fn spawn_dock_draft_path(client_id: &str) -> PathBuf {
+    spawn_dock_draft_path_in(&crate::config::state_dir(), client_id)
+}
+
+fn spawn_dock_draft_path_in(state_dir: &Path, client_id: &str) -> PathBuf {
+    let hash = client_id
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    state_dir.join(format!("spawn-dock-draft-{hash:016x}.json"))
+}
+
+pub(crate) fn load_spawn_dock_draft(client_id: &str) -> Option<SpawnDockDraft> {
+    #[cfg(test)]
+    {
+        TEST_SPAWN_DOCK_DRAFTS.with(|drafts| drafts.borrow().get(client_id).cloned().flatten())
+    }
+    #[cfg(not(test))]
+    {
+        let path = spawn_dock_draft_path(client_id);
+        match load_spawn_dock_draft_from_path(&path) {
+            Ok(state) => state.draft,
+            Err(err) => {
+                warn!(path = %path.display(), err = %err, "failed to load spawn dock draft");
+                None
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn saved_spawn_dock_draft_for_test(client_id: &str) -> Option<SpawnDockDraft> {
+    load_spawn_dock_draft(client_id)
+}
+
+pub(crate) fn save_spawn_dock_draft(client_id: &str, draft: Option<SpawnDockDraft>) {
+    #[cfg(test)]
+    {
+        TEST_SPAWN_DOCK_DRAFTS.with(|saved| {
+            saved.borrow_mut().insert(client_id.to_owned(), draft);
+        });
+    }
+    #[cfg(not(test))]
+    {
+        let path = spawn_dock_draft_path(client_id);
+        if let Err(err) = save_spawn_dock_draft_to_path(&path, draft) {
+            warn!(path = %path.display(), err = %err, "failed to save spawn dock draft");
+        }
+    }
+}
+
+fn save_spawn_dock_draft_to_path(
+    path: &Path,
+    draft: Option<SpawnDockDraft>,
+) -> std::io::Result<()> {
+    save_json_to_path(path, &SpawnDockDraftFile { draft })
+}
+
+fn load_spawn_dock_draft_from_path(path: &Path) -> std::io::Result<SpawnDockDraftFile> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SpawnDockDraftFile::default());
+        }
+        Err(err) => return Err(err),
+    };
+    serde_json::from_str(&content).map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid spawn dock draft: {err}"),
+        )
+    })
 }
 
 fn clamp_dock_width(width: u16) -> u16 {
@@ -211,6 +313,10 @@ fn update_path(
 }
 
 fn save_to_path(path: &Path, state: &ClientPresentationFile) -> std::io::Result<()> {
+    save_json_to_path(path, state)
+}
+
+fn save_json_to_path<T: Serialize>(path: &Path, state: &T) -> std::io::Result<()> {
     let parent = path
         .parent()
         .ok_or_else(|| std::io::Error::other("client presentation path has no parent"))?;
@@ -471,5 +577,49 @@ mod tests {
         let state: ClientPresentationFile =
             serde_json::from_str(r#"{"dock_width":31}"#).expect("legacy presentation state");
         assert!(state.sidebar_group_collapsed.is_none());
+    }
+
+    #[test]
+    fn spawn_dock_drafts_are_isolated_by_client_and_survive_reload() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-spawn-dock-drafts-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let first = SpawnDockDraft {
+            prompt: "first client".into(),
+            project: "project-a".into(),
+            ..Default::default()
+        };
+        let second = SpawnDockDraft {
+            prompt: "second client".into(),
+            project: "project-b".into(),
+            ..Default::default()
+        };
+        let first_path = spawn_dock_draft_path_in(&root, "tty:first");
+        let second_path = spawn_dock_draft_path_in(&root, "tty:second");
+
+        save_spawn_dock_draft_to_path(&first_path, Some(first.clone()))
+            .expect("save first client's draft");
+        save_spawn_dock_draft_to_path(&second_path, Some(second.clone()))
+            .expect("save second client's draft");
+
+        assert_ne!(first_path, second_path);
+        assert_eq!(
+            load_spawn_dock_draft_from_path(&first_path)
+                .expect("reload first client")
+                .draft,
+            Some(first)
+        );
+        assert_eq!(
+            load_spawn_dock_draft_from_path(&second_path)
+                .expect("reload second client")
+                .draft,
+            Some(second)
+        );
+        std::fs::remove_dir_all(root).expect("remove test drafts");
     }
 }

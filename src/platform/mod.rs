@@ -284,6 +284,11 @@ pub(crate) use unix_common::{
     begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
 };
 
+#[cfg(unix)]
+pub(crate) fn client_presentation_identity() -> String {
+    unix_common::client_presentation_identity()
+}
+
 mod client_state;
 pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
 
@@ -308,10 +313,20 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
+#[cfg(target_os = "windows")]
+pub(crate) fn client_presentation_identity() -> String {
+    windows::client_presentation_identity()
+}
+
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 pub use fallback::*;
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub(crate) fn client_presentation_identity() -> String {
+    std::process::id().to_string()
+}
 
 /// Returns the process job used for the sidebar foreground-process label.
 ///

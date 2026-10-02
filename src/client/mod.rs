@@ -1763,7 +1763,7 @@ fn run_client_with_mode(
 /// - server reader thread → reads ServerMessages and sends to main loop
 /// - main loop: coordinates input, output, and server communication
 async fn run_client_loop(
-    stream: LocalStream,
+    mut stream: LocalStream,
     cols: u16,
     rows: u16,
     initial_cell_width_px: u32,
@@ -1800,6 +1800,15 @@ async fn run_client_loop(
         draw_host_cursor,
         first_frame_received: false,
     };
+    if state.attach_escape.is_none() {
+        write_to_server(
+            &mut stream,
+            &ClientMessage::ClientPresentationIdentity {
+                id: crate::platform::client_presentation_identity(),
+            },
+        )
+        .map_err(ClientError::ConnectionFailed)?;
+    }
     debug!(?negotiated_encoding, "client render encoding active");
     let host_mouse_capture_active = Arc::new(AtomicBool::new(state.mouse_capture_active));
     let host_sgr_pixels_active = Arc::new(AtomicBool::new(false));

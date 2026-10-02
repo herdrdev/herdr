@@ -15,7 +15,7 @@ static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
 const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
-pub const CURRENT_PROTOCOL: u32 = 22;
+pub const CURRENT_PROTOCOL: u32 = 23;
 
 // Reuse the binary's own version logic so tests follow a stamped fork build
 // instead of hardcoding the bare cargo version. build.rs `rustc-env` settings

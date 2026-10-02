@@ -118,6 +118,7 @@ const BUILT_IN_GROUPS: &[(&str, &[BuiltIn])] = &[
             built_in("goto", "session navigator", |kb| &kb.goto),
             built_in("new_workspace", "new workspace", |kb| &kb.new_workspace),
             built_in("new_thread", "new thread", |kb| &kb.new_thread),
+            built_in("new_agent_dock", "spawn dock", |kb| &kb.new_agent_dock),
             built_in("new_worktree", "new worktree", |kb| &kb.new_worktree),
             built_in("open_worktree", "open worktree", |kb| &kb.open_worktree),
             built_in("remove_worktree", "remove worktree", |kb| {

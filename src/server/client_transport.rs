@@ -360,6 +360,8 @@ pub(crate) enum ServerEvent {
     },
     /// A client reported its persisted local dock width after connecting.
     ClientDockWidth { client_id: u64, width: u16 },
+    /// Stable local identity for client-owned presentation persistence.
+    ClientPresentationIdentity { client_id: u64, id: String },
     /// A fully decoded interactive paste exceeded the text-input limit.
     ClientPasteRejected {
         client_id: u64,
@@ -801,7 +803,7 @@ fn write_framed_bytes(stream: &mut LocalStream, data: &[u8]) -> bool {
 }
 
 /// The client read loop — reads messages from the client and forwards to the server event channel.
-fn client_read_loop(
+pub(super) fn client_read_loop(
     mut stream: LocalStream,
     client_id: u64,
     server_event_tx: &mpsc::Sender<ServerEvent>,
@@ -945,6 +947,9 @@ fn client_read_loop(
             },
             ClientMessage::SetDockWidth { width } => {
                 ServerEvent::ClientDockWidth { client_id, width }
+            }
+            ClientMessage::ClientPresentationIdentity { id } => {
+                ServerEvent::ClientPresentationIdentity { client_id, id }
             }
             ClientMessage::ObserveTerminal { target } => {
                 ServerEvent::ClientObserveTerminal { client_id, target }

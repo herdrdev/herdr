@@ -1038,6 +1038,37 @@ impl HomeState {
             .unwrap_or(&[])
     }
 
+    pub(crate) fn profile_models(&self, agent: Agent) -> String {
+        self.catalog
+            .provider(agent)
+            .map(|provider| {
+                provider
+                    .models
+                    .iter()
+                    .take(3)
+                    .map(|model| model.display_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .filter(|models| !models.is_empty())
+            .unwrap_or_else(|| "—".into())
+    }
+
+    pub(crate) fn workspace_options(&self) -> &[HomeWorkspace] {
+        &self.workspace_options
+    }
+
+    pub(crate) fn set_workspace_options(&mut self, options: Vec<HomeWorkspace>) {
+        self.workspace_options = options;
+        if !self.workspace_options.contains(&self.workspace) {
+            self.workspace = self
+                .workspace_options
+                .first()
+                .cloned()
+                .unwrap_or(HomeWorkspace::CurrentCheckout);
+        }
+    }
+
     pub(crate) fn effort_options(&self) -> &[String] {
         self.catalog
             .provider(self.agent)
@@ -1056,6 +1087,14 @@ impl HomeState {
             .and_then(|provider| provider.model(&self.model))
             .map(|model| model.display_name.as_str())
             .unwrap_or(&self.model)
+    }
+
+    pub(crate) fn profile_id(&self) -> &str {
+        &self.profile
+    }
+
+    pub(crate) fn project_id(&self) -> &str {
+        &self.project
     }
 
     pub(crate) fn context_options(&self) -> &'static [&'static str] {
@@ -1898,7 +1937,7 @@ impl crate::app::state::AppState {
         true
     }
 
-    fn home_target_for_directory(&self, directory: &Path) -> HomeTarget {
+    pub(crate) fn home_target_for_directory(&self, directory: &Path) -> HomeTarget {
         let direct_match = self
             .workspaces
             .iter()

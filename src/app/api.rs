@@ -710,6 +710,9 @@ impl App {
                 if let Some(home) = self.state.home.as_mut() {
                     home.replace_provider_catalog(catalog);
                     true
+                } else if let Some(dock) = self.state.spawn_dock.as_mut() {
+                    dock.home.replace_provider_catalog(catalog);
+                    true
                 } else {
                     false
                 }

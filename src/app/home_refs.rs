@@ -461,11 +461,18 @@ impl App {
             Ok(pane_id) => {
                 tracing::info!(machine, pane_id, "home dispatched to another machine");
                 self.state.clear_home();
+                self.state.sidebar_presentation.save_spawn_dock_draft(None);
+                self.state.spawn_dock = None;
                 self.state.set_server_mode(super::Mode::Terminal);
             }
             Err(error) => {
                 if let Some(home) = self.state.home.as_mut() {
                     home.dispatch_error = Some(format!("{machine}: {error}"));
+                }
+                if let Some(dock) = self.state.spawn_dock.as_mut() {
+                    if let Some(home) = self.state.home.take() {
+                        dock.home = home;
+                    }
                 }
             }
         }
@@ -493,6 +500,8 @@ impl App {
             Ok(()) => match self.dispatch_home_composer(plan) {
                 Ok(()) => {
                     self.state.clear_home();
+                    self.state.sidebar_presentation.save_spawn_dock_draft(None);
+                    self.state.spawn_dock = None;
                     self.state.set_server_mode(super::Mode::Terminal);
                 }
                 Err(error) => {
@@ -504,6 +513,11 @@ impl App {
             Err(error) => {
                 if let Some(home) = self.state.home.as_mut() {
                     home.dispatch_error = Some(error);
+                }
+                if let Some(dock) = self.state.spawn_dock.as_mut() {
+                    if let Some(home) = self.state.home.take() {
+                        dock.home = home;
+                    }
                 }
             }
         }

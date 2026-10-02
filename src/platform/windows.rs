@@ -17,6 +17,12 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+pub(crate) fn client_presentation_identity() -> String {
+    std::env::var("WT_SESSION")
+        .or_else(|_| std::env::var("TERM_SESSION_ID"))
+        .unwrap_or_else(|_| format!("process:{}", std::process::id()))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct WindowsFileIdentity {
     volume_serial_number: u32,

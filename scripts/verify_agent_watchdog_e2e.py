@@ -97,7 +97,7 @@ class ApiFixture:
                     result = {
                         "type": "pong",
                         "version": "0.9.1-fixture",
-                        "protocol": 22,
+                        "protocol": 23,
                         "capabilities": {
                             "live_handoff": False,
                             "detached_server_daemon": False,

@@ -583,6 +583,12 @@
           "description": "Open the project picker and start a new Home thread in the project it selects."
         },
         {
+          "key": "keys.new_agent_dock",
+          "type": "keybinding",
+          "default": "\"prefix+y\"",
+          "description": "Open the bottom-docked agent launcher."
+        },
+        {
           "key": "keys.new_worktree",
           "type": "keybinding",
           "default": "\"prefix+shift+g\"",

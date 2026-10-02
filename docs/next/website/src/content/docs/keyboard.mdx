@@ -73,6 +73,7 @@ Workspaces and session:
 | --- | --- |
 | New workspace | `prefix+shift+n` |
 | New thread, picking its project first | `prefix+c` |
+| Open bottom-docked agent launcher | `prefix+y` |
 | Rename workspace | `prefix+shift+w` |
 | Close workspace | `prefix+shift+d` |
 | Goto picker | `prefix+g` |
@@ -84,6 +85,8 @@ Workspaces and session:
 | Open Linear tickets | `prefix+ctrl+t` |
 
 `prefix+c` opens the same project picker the sidebar's new-thread icon opens. It lists the checkouts of every configured `[[projects]]` entry, then the directories this session already used. Type to filter by repository or project name, move with Up and Down, and press Enter or `1`–`9` to open the Home composer in that checkout. With Current checkout selected, the composer reuses an eligible Space already working in that directory or repository; New Space remains available in the target picker.
+
+`prefix+y` opens a bottom-docked spawn composer while keeping panes visible. Tab moves across project, host, profile, model, effort, worktree, and prompt; Enter opens a picker, Left and Right cycle the host or field value, and the prompt uses Enter for a new line and Shift+Enter to spawn. Esc keeps the draft for next time; Ctrl+Backspace clears it.
 
 The loop run-history view lists receipt-backed runs across all loops with outcome, gates, human touches, and duration. It refreshes when the receipt file changes. Press Esc or `prefix+ctrl+h` again to close it.
 
