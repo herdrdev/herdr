@@ -132,3 +132,32 @@ A few `ctrl+alt` chords are taken elsewhere. Avoid these:
 | `ctrl+alt+f1..f12` | Linux virtual console switching |
 
 If a direct chord does nothing, your terminal or desktop environment consumed it before Herdr could see it. Rebind either side: free the chord in the terminal's settings, or pick another chord in Herdr.
+
+## Inside a coding-agent pane
+
+When the focused pane is a coding agent — mcode-tools, Claude Code, OpenCode, or any host that drives an LLM in your terminal — the pane itself owns a small set of chords that Herdr will silently capture if you bind them globally.
+
+| Chord | Coding-agent meaning | What you lose if Herdr captures it |
+| --- | --- | --- |
+| `Alt+Enter` | mcode-tools: "Queue a follow-up" while a turn runs | Queued messages never reach it; pressing it splits the pane instead and the focus jump looks like a tab switch. |
+| `Shift+Enter` / `Alt+Shift+Enter` | mcode-tools, Claude Code: "Insert a newline" in the composer | Newlines never reach the composer; pressing it splits the pane instead. |
+| `Alt+arrow` | varies; in some hosts it pages history | Herdr's `next_tab` / `previous_tab` (if you bound them) intercept. |
+
+The same conflict pattern holds for `Ctrl+t` (Claude Code's task tool), `Ctrl+c` (interrupts the agent, but Herdr's `close_pane` does too), and a few others — the shape is always the same: Herdr grabs a chord the agent already owns.
+
+There is nothing to do at the shared end; the agent cannot rebind around Herdr. Keep these rules in your `~/.config/herdr/config.toml`:
+
+```toml
+[keys]
+# Pane splits — keep only the prefix variants
+split_horizontal = ["prefix+h"]           # was ["prefix+h", "alt+enter"]
+split_vertical   = ["prefix+v"]           # was ["prefix+v", "alt+shift+enter"]
+
+# Tab navigation — pick a non-conflicting chord if you want direct binds
+next_tab     = ["prefix+n", "ctrl+alt+]"]
+previous_tab = ["prefix+p", "ctrl+alt+["]
+```
+
+Validate the result with `herdr config check`. The conflicts are most painful in the first session after a fresh install, when muscle memory meets the default keymap. A single check is faster than an afternoon of "why does my queue not work".
+
+Herdr intentionally ships without the `Alt+Enter` and `Alt+Shift+Enter` defaults for these bindings — only the prefix variants. If you have an older `~/.config/herdr/config.toml` that lists them, remove the second entry on each line. The fix is two lines.
