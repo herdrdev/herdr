@@ -1,0 +1,11 @@
+if (( _herdr_zdotdir_set )); then
+    builtin export ZDOTDIR=$_herdr_zdotdir
+else
+    builtin unset ZDOTDIR
+fi
+[[ ! -r ${ZDOTDIR-$HOME}/.zprofile ]] || builtin source "${ZDOTDIR-$HOME}/.zprofile"
+builtin typeset -g _herdr_zdotdir=${ZDOTDIR-}
+builtin typeset -gi _herdr_zdotdir_set=${+ZDOTDIR}
+if [[ -o rcs ]]; then
+    builtin export ZDOTDIR=$_HERDR_ZSH_INIT_DIR
+fi

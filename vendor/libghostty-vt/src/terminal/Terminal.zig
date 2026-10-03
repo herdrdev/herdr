@@ -79,6 +79,14 @@ colors: Colors,
 /// char CSI (ESC [ <n> b).
 previous_char: ?u21 = null,
 
+/// A secondary repaint announces its origin after ED0. Keep the erase
+/// reversible until that marker distinguishes repaint from ordinary editing.
+prompt_redraw_erase: ?struct {
+    x: size.CellCountInt,
+    y: size.CellCountInt,
+    protected: bool,
+} = null,
+
 /// The modes that this terminal currently has active.
 modes: modespkg.ModeState = .{},
 
@@ -537,6 +545,7 @@ pub fn printRepeat(self: *Terminal, count_req: usize) !void {
 /// slower per-codepoint path. They're less common and this is optimized
 /// for the aforementioned cases.
 pub fn printSlice(self: *Terminal, cps: []const u32) !void {
+    self.flushPromptRedrawErase();
     // Check if we can do the fast path up front. If we can't
     // we need to go back to scalar `print`.
     const fast = fast: {
@@ -1199,6 +1208,7 @@ inline fn printSliceCheckExpected(style_id: style.Id) u64 {
 }
 
 pub fn print(self: *Terminal, c: u21) !void {
+    self.flushPromptRedrawErase();
     // log.debug("print={x} y={} x={}", .{ c, self.screens.active.cursor.y, self.screens.active.cursor.x });
 
     // If we're not on the main display, do nothing for now
@@ -1821,6 +1831,9 @@ pub fn invokeCharset(
 
 /// Carriage return moves the cursor to the first column.
 pub fn carriageReturn(self: *Terminal) void {
+    self.flushPromptRedrawErase();
+    // A single-line shell repaint may use CR without a cursor-up command.
+    _ = self.screens.active.rewindPromptRedraw(false);
     // Always reset pending wrap state
     self.screens.active.cursor.pending_wrap = false;
 
@@ -1835,6 +1848,12 @@ pub fn carriageReturn(self: *Terminal) void {
 
 /// Linefeed moves the cursor to the next line.
 pub fn linefeed(self: *Terminal) !void {
+    self.flushPromptRedrawErase();
+    // Accepted continuation input starts a new PS2 rather than repainting it.
+    const screen = self.screens.active;
+    if (screen.cursor.semantic_content == .input and screen.prompt_redraw_secondary) {
+        screen.clearPromptRedrawPin();
+    }
     try self.index();
     if (self.modes.get(.linefeed)) self.carriageReturn();
 }
@@ -2085,10 +2104,18 @@ pub fn semanticPrompt(
     self: *Terminal,
     cmd: osc.Command.SemanticPrompt,
 ) !void {
+    const secondary = cmd.action == .prompt_start and
+        cmd.readOption(.prompt_kind) == .secondary and
+        cmd.readOption(.redraw) == .true;
+    if (!secondary) self.flushPromptRedrawErase();
     switch (cmd.action) {
         .fresh_line => try self.semanticPromptFreshLine(),
 
         .fresh_line_new_prompt => {
+            if (cmd.readOption(.redraw)) |redraw| {
+                if (redraw != .true) self.screens.active.clearPromptRedrawPin();
+            }
+            _ = self.screens.active.rewindPromptRedraw(true);
             // "First do a fresh-line."
             try self.semanticPromptFreshLine();
 
@@ -2151,9 +2178,23 @@ pub fn semanticPrompt(
             // The k (kind) option specifies the type of prompt:
             // regular primary prompt (k=i or default),
             // right-side prompts (k=r), or prompts for continuation lines (k=c or k=s).
-            self.screens.active.cursorSetSemanticContent(.{
-                .prompt = cmd.readOption(.prompt_kind) orelse .initial,
-            });
+            const kind = cmd.readOption(.prompt_kind) orelse .initial;
+            if (cmd.readOption(.redraw)) |redraw| {
+                if (redraw != .true) {
+                    self.screens.active.clearPromptRedrawPin();
+                } else if (kind == .secondary) {
+                    const repaint = self.screens.active.prompt_redraw_secondary;
+                    try self.screens.active.startSecondaryPromptRedraw();
+                    if (self.prompt_redraw_erase) |erase| {
+                        self.prompt_redraw_erase = null;
+                        self.eraseDisplayImmediate(.below, erase.protected);
+                    } else if (repaint) {
+                        self.eraseDisplayImmediate(.below, false);
+                    }
+                }
+                self.flags.shell_redraws_prompt = redraw;
+            }
+            self.screens.active.cursorSetSemanticContent(.{ .prompt = kind });
         },
 
         .end_prompt_start_input => {
@@ -3575,10 +3616,57 @@ pub fn eraseDisplay(
     mode: csi.EraseDisplay,
     protected_req: bool,
 ) void {
+    self.flushPromptRedrawErase();
+    const screen = self.screens.active;
+    if (mode == .below and screen.prompt_redraw_secondary) {
+        if (screen.prompt_redraw_pin) |pin| {
+            if (!pin.garbage) if (screen.pages.pointFromPin(.active, pin.*)) |pt| {
+                if (screen.cursor.y >= pt.active.y) {
+                    self.eraseDisplayImmediate(mode, protected_req);
+                    return;
+                }
+                self.prompt_redraw_erase = .{
+                    .x = screen.cursor.x,
+                    .y = screen.cursor.y,
+                    .protected = protected_req or screen.protected_mode == .iso,
+                };
+                // ED0 resets pending wrap immediately, even before its cells
+                // can be committed at the confirmed repaint origin.
+                screen.cursor.pending_wrap = false;
+                return;
+            };
+        }
+    }
+    self.eraseDisplayImmediate(mode, protected_req);
+}
+
+/// Commit an ED0 that was followed by ordinary editing instead of PS2 repaint.
+pub fn flushPromptRedrawErase(self: *Terminal) void {
+    const erase = self.prompt_redraw_erase orelse return;
+    self.prompt_redraw_erase = null;
+    const screen = self.screens.active;
+    const x = screen.cursor.x;
+    const y = screen.cursor.y;
+    screen.cursorAbsolute(erase.x, erase.y);
+    self.eraseDisplayImmediate(.below, erase.protected);
+    screen.cursorAbsolute(x, y);
+}
+
+/// Apply display erasure at the current cursor without deferring PS2 repaint.
+/// Callers resolve any queued erase coordinates before invoking this helper.
+fn eraseDisplayImmediate(
+    self: *Terminal,
+    mode: csi.EraseDisplay,
+    protected_req: bool,
+) void {
     // We respect protected attributes if explicitly requested (probably
     // a DECSEL sequence) or if our last protected mode was ISO even if its
     // not currently set.
     const protected = self.screens.active.protected_mode == .iso or protected_req;
+    switch (mode) {
+        .complete, .scroll_complete => self.screens.active.clearPromptRedrawPin(),
+        else => {},
+    }
 
     switch (mode) {
         .scroll_complete => {
@@ -4033,6 +4121,12 @@ pub fn resize(
     // Screen and scrolling-region invariants require non-zero dimensions.
     // Validate before changing any terminal state.
     if (opts.cols == 0 or opts.rows == 0) return error.InvalidValue;
+    // A repaint can be split across PTY reads with another resize between ED0
+    // and its prompt marker. Keep the erase pending and follow its cursor.
+    defer if (self.prompt_redraw_erase) |*erase| {
+        erase.x = self.screens.active.cursor.x;
+        erase.y = self.screens.active.cursor.y;
+    };
 
     // Pixel geometry and synchronized output are updated on every valid
     // resize attempt, including one that doesn't change the grid dimensions.
@@ -14563,6 +14657,24 @@ test "Terminal: printAttributes" {
         const buf = try t.printAttributes(&storage);
         try testing.expectEqualStrings("0", buf);
     }
+}
+
+test "Terminal: deferred secondary erase resets pending wrap" {
+    var t = try init(testing.io, testing.allocator, .{ .rows = 5, .cols = 5 });
+    defer t.deinit(testing.allocator);
+    var stream = t.vtStream();
+    defer stream.deinit();
+    stream.nextSlice("\x1b[3;1H\x1b]133;P;k=s;redraw=1\x07> \x1b]133;B\x07\x1b[Hhello");
+    try testing.expect(t.screens.active.cursor.pending_wrap);
+    stream.nextSlice("\x1b[J\x1b[32m");
+    try testing.expect(t.prompt_redraw_erase != null);
+    try testing.expect(!t.screens.active.cursor.pending_wrap);
+    stream.nextSlice("Z");
+    try testing.expectEqual(@as(size.CellCountInt, 0), t.screens.active.cursor.y);
+    stream.nextSlice("Y");
+    const str = try t.plainString(testing.allocator);
+    defer testing.allocator.free(str);
+    try testing.expectEqualStrings("hellZ\nY", str);
 }
 
 test "Terminal: eraseDisplay simple erase below" {

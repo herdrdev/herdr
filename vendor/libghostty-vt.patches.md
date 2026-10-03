@@ -228,3 +228,66 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 preserve semantic prompt origin during resize
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-fix-semantic-prompt-resize.patch`
+
+herdr issue: none; reproduced fish/zsh + Starship duplication during pane resize
+
+upstream discussion/pr: not opened; related ordering change:
+https://github.com/ghostty-org/ghostty/commit/dde3d4d6b05338e1860a7c45fd17990a6d634e8b
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/stream_terminal.zig`
+
+reason: Track the prompt origin before reflow duplicates its row marker, then
+clear after successful resize to preserve allocation-failure atomicity. Cleared
+rows lose soft-wrap metadata, and the cursor retains its pre-resize row offset
+from the prompt origin. Retain that origin until command output, explicit screen clear,
+or an explicit redraw opt-out,
+including across consecutive resizes before a repaint. During that interval,
+pending carriage-return repaint restarts at the origin and relative cursor-up
+cannot cross it. Prompt-start markers re-anchor queued repaints, including
+multiple repaints without a resize between them, so stale shell geometry cannot
+erase history or accumulate blank lines. Explicit redrawable secondary prompts
+retain their own origin, preserving preceding primary input and PS1. Secondary
+resizes preserve input and ordinary cursor movement; only a PS2 repaint marker
+rewinds and clears the retained editable area. An ED0 above that origin waits
+for the next non-styling VT action: PS2 repaint erases at its retained origin,
+ordinary editing erases at the requested cursor. Intervening resizes move that
+deferred erase with its cursor without committing it. Resizing above a primary
+origin preserves content and cursor, with saturating row-offset arithmetic. Accepted input releases the
+secondary origin even when resize repaint is pending. Pruned
+prompt origins must not clear retained content or restore the cursor. Regression
+tests rewind relatively and compare pruned history against terminal-owned reflow.
+The library keeps its default redraw policy; explicit redraw=1 opts into this
+path. Herdr separately sets fish_handle_reflow=0 when launching panes so fish
+uses terminal-owned reflow instead of repainting over it, and marks default zsh
+prompts with explicit redraw=1 through pane-local startup files. Intentional
+prompt clearing must bypass Herdr’s blank-screen ANSI recovery.
+
+remove when: upstream preserves the original prompt origin and cursor row offset
+transactionally, retains the origin across repaints until command output,
+screen clear, or redraw opt-out, protects history from stale shell rewinds
+without constraining secondary editing or losing accepted continuation input,
+safely ignores pruned origins, and the checks below pass without
+this patch.
+
+verification:
+
+```sh
+just check
+(cd vendor/libghostty-vt && zig build test-lib-vt -Demit-lib-vt -Dtest-filter='Screen: resize')
+```
+
+Live fish 4.9.3 and zsh 5.9 + Starship 1.26.0 resize cycles must retain prompt
+count, spacing, completed history, and editable input with single- and multi-line
+prompts, including rapid resizes before the next shell repaint.
