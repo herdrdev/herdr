@@ -197,9 +197,17 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
             cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
             cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+            // Hermes keeps its profile home shared, but its CLI session identity
+            // must be owned by this pane. The Hermes integration consumes this
+            // namespace when generating and rotating session IDs.
+            cmd.env(
+                crate::integration::HERMES_SESSION_NAMESPACE_ENV_VAR,
+                format!("herdr:{workspace_id}:{tab_id}:{pane_id}"),
+            );
         }
         PaneLaunchIdentity::OmitPane => {
             cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+            cmd.env_remove(crate::integration::HERMES_SESSION_NAMESPACE_ENV_VAR);
         }
     }
 }
@@ -4050,6 +4058,39 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
+        );
+    }
+
+    #[test]
+    fn hermes_panes_receive_distinct_session_namespaces_while_sharing_profile_home() {
+        let mut first = CommandBuilder::new("hermes");
+        let mut second = CommandBuilder::new("hermes");
+        first.env(crate::integration::HERMES_HOME_ENV_VAR, "/shared/profile");
+        second.env(crate::integration::HERMES_HOME_ENV_VAR, "/shared/profile");
+        let first_env = PaneLaunchEnv::default().with_identity(
+            "workspace".into(),
+            "tab".into(),
+            "pane-a".into(),
+        );
+        let second_env = PaneLaunchEnv::default().with_identity(
+            "workspace".into(),
+            "tab".into(),
+            "pane-b".into(),
+        );
+        apply_pane_launch_env(&mut first, &first_env);
+        apply_pane_launch_env(&mut second, &second_env);
+
+        let first_namespace = first
+            .get_env(crate::integration::HERMES_SESSION_NAMESPACE_ENV_VAR)
+            .expect("first Hermes pane must have a session namespace");
+        let second_namespace = second
+            .get_env(crate::integration::HERMES_SESSION_NAMESPACE_ENV_VAR)
+            .expect("second Hermes pane must have a session namespace");
+        assert_ne!(first_namespace, second_namespace);
+        assert_eq!(
+            first.get_env(crate::integration::HERMES_HOME_ENV_VAR),
+            second.get_env(crate::integration::HERMES_HOME_ENV_VAR),
+            "session isolation must not split the shared Hermes profile"
         );
     }
 
