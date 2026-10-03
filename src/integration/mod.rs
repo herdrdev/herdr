@@ -18,6 +18,7 @@ pub(crate) use actions::{
 pub(crate) use env::integration_env_lock;
 pub(crate) use env::{
     apply_pane_base_env, HERDR_PANE_ID_ENV_VAR, HERDR_TAB_ID_ENV_VAR, HERDR_WORKSPACE_ID_ENV_VAR,
+    HERMES_SESSION_NAMESPACE_ENV_VAR,
 };
 pub(crate) use registry::{
     experimental_letta_integration_status, installed_integration_statuses,
