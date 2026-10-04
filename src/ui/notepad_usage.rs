@@ -34,8 +34,9 @@ fn provider_label(provider: QuotaProvider) -> &'static str {
     match provider {
         QuotaProvider::Claude => "claude",
         QuotaProvider::Codex => "codex",
-        QuotaProvider::Kimi => "opencode",
-        QuotaProvider::Agy => "antigravity",
+        QuotaProvider::Kimi => "kimi",
+        QuotaProvider::Agy => "agy",
+        QuotaProvider::OpenCode => "opencode",
     }
 }
 
@@ -45,6 +46,7 @@ fn provider_presentation(provider: QuotaProvider, app: &AppState) -> (&'static s
         QuotaProvider::Codex => crate::ui::icons::codex_color(&app.palette),
         QuotaProvider::Kimi => app.palette.mauve,
         QuotaProvider::Agy => app.palette.teal,
+        QuotaProvider::OpenCode => app.palette.blue,
     };
     (provider_label(provider), color)
 }
@@ -166,6 +168,7 @@ fn provider_initial(provider: QuotaProvider) -> char {
         QuotaProvider::Codex => 'X',
         QuotaProvider::Kimi => 'K',
         QuotaProvider::Agy => 'A',
+        QuotaProvider::OpenCode => 'O',
     }
 }
 
@@ -238,6 +241,7 @@ fn codex_window_text(
             reset_text(Some(window), now),
         )
     });
+    let weekly = weekly.or_else(|| account.usage.five_hour.map(|_| "7d —".to_string()));
     let count = include_count
         .then(|| codex_reset_count(account, now))
         .flatten();
@@ -296,6 +300,24 @@ fn codex_row_text(
     if width >= 32 && display_width(&medium) <= usize::from(width) {
         return medium;
     }
+    if account.usage.five_hour.is_some() && width < 32 {
+        return truncate_end(
+            &format!(
+                "{narrow_label} 5h{}/7d{}@{}{stale_mark}",
+                window_percent(account.usage.five_hour, false),
+                window_percent(account.usage.seven_day, false),
+                narrow_reset_text(
+                    account
+                        .usage
+                        .seven_day
+                        .filter(|window| window.used_percent >= 100)
+                        .or(account.usage.five_hour),
+                    now
+                )
+            ),
+            usize::from(width),
+        );
+    }
     let compact = format!(
         "  {narrow_label} 7{}{}@{}{stale_mark}",
         window_meter(account.usage.seven_day, 1),
@@ -321,6 +343,24 @@ fn account_row_text(
 ) -> String {
     if account.provider == QuotaProvider::Codex {
         return codex_row_text(account, narrow_label, width, now);
+    }
+    if account.usage.five_hour.is_none() {
+        let summary = account
+            .usage
+            .seven_day
+            .map(|window| {
+                format!(
+                    "7d {} {} {}",
+                    window_meter(Some(window), 4),
+                    window_percent(Some(window), true),
+                    reset_text(Some(window), now),
+                )
+            })
+            .unwrap_or_else(|| "—".into());
+        return truncate_end(
+            &format!("  {} {summary}", account_label(account)),
+            usize::from(width),
+        );
     }
     let stale = if account.usage.stale { " stale" } else { "" };
     let stale_mark = if account.usage.stale { "~" } else { "" };
@@ -385,7 +425,7 @@ fn account_row(
     if is_out_of_usage(account) {
         text = truncate_end(&format!("{text} ⊘"), usize::from(width));
     }
-    let inactive = !is_primary(app, account) || account.usage.stale || is_out_of_usage(account);
+    let inactive = account.usage.stale || is_out_of_usage(account);
     let style = if inactive {
         Style::default()
             .fg(app.palette.overlay0)
@@ -398,10 +438,6 @@ fn account_row(
         action: NotepadUsageAction::OpenDashboard,
         tooltip: Some(account_tooltip(account)),
     }
-}
-
-fn short_account_label(account: &ProviderAccountUsage) -> String {
-    account.label.chars().take(3).collect()
 }
 
 fn is_primary(app: &AppState, account: &ProviderAccountUsage) -> bool {
@@ -418,7 +454,7 @@ fn is_primary(app: &AppState, account: &ProviderAccountUsage) -> bool {
 }
 
 fn is_out_of_usage(account: &ProviderAccountUsage) -> bool {
-    account.usage.peak_percent() == Some(100)
+    account.usage.peak_percent().is_some_and(|used| used >= 100)
 }
 
 fn provider_header_row(app: &AppState, provider: QuotaProvider, width: u16) -> NotepadUsageRow {
@@ -449,26 +485,72 @@ fn provider_summary_row(
     width: u16,
 ) -> NotepadUsageRow {
     let (label, color) = provider_presentation(provider, app);
-    let prefix = format!(
-        "{} {}",
-        label.chars().take(3).collect::<String>(),
-        short_account_label(account)
-    );
-    let summary = format!(
-        "{} {}",
-        window_meter(account.usage.five_hour, 1),
-        window_meter(account.usage.seven_day, 1)
-    );
-    let prefix = truncate_end(&prefix, usize::from(width));
+    let now = app
+        .status_now_unix
+        .unwrap_or(app.view_observed_unix_s.min(i64::MAX as u64) as i64);
+    let mut windows = Vec::new();
+    let mut compact_windows = Vec::new();
+    for (name, window) in [
+        ("5h", account.usage.five_hour),
+        ("7d", account.usage.seven_day),
+    ] {
+        if let Some(window) = window {
+            windows.push(format!(
+                "{name} {} {} {}",
+                window_meter(Some(window), 1),
+                window_percent(Some(window), true),
+                reset_text(Some(window), now)
+            ));
+            compact_windows.push(format!("{name}{}", window.used_percent));
+        } else if name == "7d" && account.usage.five_hour.is_some() {
+            windows.push("7d —".into());
+            compact_windows.push("7d—".into());
+        }
+    }
+    if windows.is_empty() {
+        windows.push("—".into());
+        compact_windows.push("—".into());
+    }
+    let full_prefix = format!("{label} {}", account_label(account));
+    let full_summary = windows.join(" ");
+    let (prefix, summary) =
+        if display_width(&full_prefix) + 1 + display_width(&full_summary) <= usize::from(width) {
+            (full_prefix, full_summary)
+        } else {
+            // Keep both quota windows before optional bars and reset details.
+            // The tooltip retains the full account identity on narrow clients.
+            let summary = compact_windows.join(" ");
+            let prefix_width = usize::from(width).saturating_sub(display_width(&summary) + 1);
+            let short_provider = match provider {
+                QuotaProvider::Claude => "CL",
+                QuotaProvider::Codex => "CX",
+                QuotaProvider::Kimi => "KI",
+                QuotaProvider::Agy => "AG",
+                QuotaProvider::OpenCode => "OC",
+            };
+            let prefix = if display_width(&full_prefix) <= prefix_width {
+                full_prefix
+            } else {
+                truncate_end(
+                    &format!("{short_provider} {}", account_label(account)),
+                    prefix_width,
+                )
+            };
+            (
+                prefix,
+                truncate_end(
+                    &summary,
+                    usize::from(width).saturating_sub(prefix_width + 1),
+                ),
+            )
+        };
     let prefix_width = display_width(&prefix);
-    let summary_width = usize::from(width).saturating_sub(prefix_width.saturating_add(1));
-    let summary = truncate_end(&summary, summary_width);
     let out_of_usage = is_out_of_usage(account)
         && prefix_width
             .saturating_add(display_width(&summary))
             .saturating_add(2)
             <= usize::from(width);
-    let inactive = !is_primary(app, account) || account.usage.stale || is_out_of_usage(account);
+    let inactive = account.usage.stale || is_out_of_usage(account);
     let mut spans = vec![Span::styled(
         prefix,
         Style::default()
@@ -496,14 +578,66 @@ fn provider_summary_row(
     NotepadUsageRow {
         line: Line::from(spans),
         action: NotepadUsageAction::ToggleProvider(provider),
-        tooltip: Some(provider_tooltip(provider)),
+        tooltip: Some(format!(
+            "{}\n{}",
+            account_label(account),
+            account_tooltip(account)
+        )),
     }
+}
+
+fn quota_provider_for_agent(agent: crate::detect::Agent) -> Option<QuotaProvider> {
+    use crate::detect::Agent;
+    match agent {
+        Agent::Claude => Some(QuotaProvider::Claude),
+        Agent::Codex => Some(QuotaProvider::Codex),
+        Agent::Kimi => Some(QuotaProvider::Kimi),
+        Agent::Antigravity => Some(QuotaProvider::Agy),
+        Agent::OpenCode => Some(QuotaProvider::OpenCode),
+        _ => None,
+    }
+}
+
+/// One scalar pass over already observed agent state; no terminal snapshots,
+/// process inspection, or I/O. A pane without profile metadata uses its
+/// provider's selected account, while named profiles remain distinct.
+fn accounts_in_use(
+    app: &AppState,
+) -> std::collections::BTreeMap<QuotaProvider, std::collections::BTreeSet<Option<&str>>> {
+    let mut active =
+        std::collections::BTreeMap::<QuotaProvider, std::collections::BTreeSet<Option<&str>>>::new(
+        );
+    for terminal in app.terminals.values() {
+        if let Some(provider) = terminal
+            .effective_known_agent()
+            .and_then(quota_provider_for_agent)
+        {
+            let profile = terminal
+                .metadata_tokens
+                .get("profile")
+                .or_else(|| terminal.metadata_tokens.get("account"));
+            active.entry(provider).or_default().insert(profile);
+        }
+    }
+    for remote in &app.remote_agent_panel_entries {
+        if let Some(provider) = remote.entry.agent.and_then(quota_provider_for_agent) {
+            let profile = remote
+                .entry
+                .tokens
+                .get("profile")
+                .or_else(|| remote.entry.tokens.get("account"))
+                .map(String::as_str);
+            active.entry(provider).or_default().insert(profile);
+        }
+    }
+    active
 }
 
 enum UsageRowSource<'a> {
     Provider(QuotaProvider),
     Account(&'a str, &'a ProviderAccountUsage),
     Summary(QuotaProvider, &'a ProviderAccountUsage),
+    Unavailable(QuotaProvider, Option<&'a str>),
 }
 
 pub(crate) fn usage_rows_window(
@@ -512,7 +646,8 @@ pub(crate) fn usage_rows_window(
     scroll: usize,
     visible: usize,
 ) -> (Vec<NotepadUsageRow>, usize) {
-    if app.provider_usage.accounts.is_empty() {
+    let active_accounts = accounts_in_use(app);
+    if app.provider_usage.accounts.is_empty() && active_accounts.is_empty() {
         return (
             vec![NotepadUsageRow {
                 line: Line::from(Span::styled(
@@ -525,6 +660,17 @@ pub(crate) fn usage_rows_window(
             0,
         );
     }
+    let account_identities = app
+        .provider_usage
+        .accounts
+        .iter()
+        .flat_map(|account| {
+            [
+                (account.provider, account.profile_id.as_str()),
+                (account.provider, account.label.as_str()),
+            ]
+        })
+        .collect::<std::collections::BTreeSet<_>>();
     let visible = visible.max(1);
     let narrow_labels = narrow_account_labels(&app.provider_usage.accounts);
     let mut sources = Vec::with_capacity(app.provider_usage.accounts.len().saturating_add(3));
@@ -533,23 +679,29 @@ pub(crate) fn usage_rows_window(
         QuotaProvider::Codex,
         QuotaProvider::Kimi,
         QuotaProvider::Agy,
+        QuotaProvider::OpenCode,
     ] {
-        if app
+        let has_accounts = app
             .provider_usage
             .accounts
             .iter()
-            .any(|account| account.provider == provider)
-        {
+            .any(|account| account.provider == provider);
+        if has_accounts || active_accounts.contains_key(&provider) {
             if app.notepad.usage_collapsed
                 && !app.notepad.usage_expanded_providers.contains(&provider)
             {
-                if let Some(account) = app.provider_usage.primary(provider).or_else(|| {
-                    app.provider_usage
-                        .accounts
-                        .iter()
-                        .find(|account| account.provider == provider)
+                let mut seen_accounts = HashSet::new();
+                for account in app.provider_usage.accounts.iter().filter(|account| {
+                    account.provider == provider
+                        && active_accounts.get(&provider).is_some_and(|profiles| {
+                            (profiles.contains(&None) && is_primary(app, account))
+                                || profiles.contains(&Some(account.profile_id.as_str()))
+                                || profiles.contains(&Some(account.label.as_str()))
+                        })
                 }) {
-                    sources.push(UsageRowSource::Summary(provider, account));
+                    if seen_accounts.insert(account.label.as_str()) {
+                        sources.push(UsageRowSource::Summary(provider, account));
+                    }
                 }
             } else {
                 sources.push(UsageRowSource::Provider(provider));
@@ -564,6 +716,17 @@ pub(crate) fn usage_rows_window(
                         })
                         .map(|(label, account)| UsageRowSource::Account(label, account)),
                 );
+            }
+            if let Some(profiles) = active_accounts.get(&provider) {
+                for profile in profiles {
+                    let known = match profile {
+                        Some(profile) => account_identities.contains(&(provider, *profile)),
+                        None => has_accounts,
+                    };
+                    if !known {
+                        sources.push(UsageRowSource::Unavailable(provider, *profile));
+                    }
+                }
             }
         }
     }
@@ -581,6 +744,24 @@ pub(crate) fn usage_rows_window(
                 }
                 UsageRowSource::Summary(provider, account) => {
                     provider_summary_row(app, provider, account, width)
+                }
+                UsageRowSource::Unavailable(provider, profile) => {
+                    // Account identity is observed already; quota collection may
+                    // lag behind, or be unsupported by this provider.
+                    let label = profile.unwrap_or("default");
+                    let account = ProviderAccountUsage {
+                        provider,
+                        profile_id: label.into(),
+                        label: label.into(),
+                        usage: crate::provider_usage::AccountUsage::default(),
+                    };
+                    if app.notepad.usage_collapsed
+                        && !app.notepad.usage_expanded_providers.contains(&provider)
+                    {
+                        provider_summary_row(app, provider, &account, width)
+                    } else {
+                        account_row(app, &account, label, width)
+                    }
                 }
             })
             .collect(),
@@ -659,11 +840,11 @@ mod tests {
             text.iter().map(String::as_str).collect::<Vec<_>>(),
             [
                 "▾ \u{EC82} claude",
-                "  Claude Code  5h ········ — — · 7d ········ — —",
+                "  Claude Code —",
                 "▾ \u{EC81} codex",
                 "  Codex  7d ········ — —",
-                "▾ \u{F6001} opencode",
-                "  Kimi  5h ········ — — · 7d ········ — —",
+                "▾ \u{F6001} kimi",
+                "  Kimi —",
             ]
         );
         assert_eq!(
@@ -683,7 +864,7 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_accounts_have_a_provider_header_and_usage_row() {
+    fn agy_accounts_have_a_provider_header_and_usage_row() {
         let mut app = AppState::test_new();
         app.notepad.usage_collapsed = false;
         app.provider_usage.accounts.push(ProviderAccountUsage {
@@ -702,7 +883,7 @@ mod tests {
         let (rows, _) = usage_rows_window(&app, 100, 0, 20);
         let text = rows.iter().map(row_text).collect::<Vec<_>>();
 
-        assert_eq!(text[0], "▾ \u{F6000} antigravity");
+        assert_eq!(text[0], "▾ \u{F6000} agy");
         assert!(text[1].contains("Antigravity"));
         assert!(text[1].contains("5h"));
     }
@@ -925,7 +1106,7 @@ mod tests {
         assert_eq!(max_scroll, 4);
         assert_eq!(
             rows.iter().map(row_text).collect::<Vec<_>>(),
-            ["▾ \u{F6001} opencode", "  KKI 5·—/7·—@—/—"]
+            ["▾ \u{F6001} kimi", "  Kimi —"]
         );
         assert_eq!(
             rows[0].action,
@@ -1034,7 +1215,6 @@ mod tests {
 
     #[test]
     fn provider_headers_and_collapsed_summaries_use_each_configured_icon_fallback() {
-        let mut app = AppState::test_new();
         let usage = crate::provider_usage::AccountUsage {
             five_hour: Some(QuotaWindow {
                 used_percent: 42,
@@ -1051,9 +1231,11 @@ mod tests {
             QuotaProvider::Codex,
             QuotaProvider::Kimi,
             QuotaProvider::Agy,
+            QuotaProvider::OpenCode,
         ];
 
         for provider in providers {
+            let mut app = AppState::test_new();
             let label = provider_label(provider);
             app.provider_usage.accounts = vec![ProviderAccountUsage {
                 provider,
@@ -1066,14 +1248,17 @@ mod tests {
                 QuotaProvider::Codex => crate::ui::icons::codex_color(&app.palette),
                 QuotaProvider::Kimi => app.palette.mauve,
                 QuotaProvider::Agy => app.palette.teal,
+                QuotaProvider::OpenCode => app.palette.blue,
             };
             let fallback = match provider {
                 QuotaProvider::Claude => "CC",
                 QuotaProvider::Codex => "CX",
                 QuotaProvider::Kimi => "KI",
                 QuotaProvider::Agy => "AG",
+                QuotaProvider::OpenCode => "OC",
             };
 
+            use_account(&mut app, provider, "default");
             for nerd_font in [true, false] {
                 let icon = crate::ui::icons::usage_label(provider, nerd_font);
                 if !nerd_font {
@@ -1104,13 +1289,20 @@ mod tests {
     }
 
     #[test]
-    fn collapsing_usage_reduces_rendered_rows_to_one_per_provider() {
+    fn collapsing_usage_reduces_rendered_rows_to_used_accounts() {
         let mut app = AppState::test_new();
         app.provider_usage = ProviderUsageSnapshot::with_primary_accounts(
             AccountUsage::default(),
             AccountUsage::default(),
             AccountUsage::default(),
         );
+        for provider in [
+            QuotaProvider::Claude,
+            QuotaProvider::Codex,
+            QuotaProvider::Kimi,
+        ] {
+            use_account(&mut app, provider, "default");
+        }
         let (collapsed, _) = usage_rows_window(&app, 100, 0, 20);
         assert_eq!(collapsed.len(), 3);
 
@@ -1120,5 +1312,214 @@ mod tests {
         assert!(expanded
             .iter()
             .any(|row| matches!(row.action, NotepadUsageAction::ToggleProvider(_))));
+    }
+    fn use_account(app: &mut AppState, provider: QuotaProvider, profile: &str) {
+        let agent = match provider {
+            QuotaProvider::Claude => crate::detect::Agent::Claude,
+            QuotaProvider::Codex => crate::detect::Agent::Codex,
+            QuotaProvider::Kimi => crate::detect::Agent::Kimi,
+            QuotaProvider::Agy => crate::detect::Agent::Antigravity,
+            QuotaProvider::OpenCode => crate::detect::Agent::OpenCode,
+        };
+        app.workspaces
+            .push(crate::workspace::Workspace::test_new(profile));
+        app.ensure_test_terminals();
+        let pane = app.workspaces.last().unwrap().tabs[0].root_pane;
+        let terminal_id = app
+            .terminal_id_for_pane(app.workspaces.len() - 1, pane)
+            .unwrap()
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(agent);
+        terminal.metadata_tokens.patch(
+            std::collections::HashMap::from([("profile".into(), Some(profile.into()))]),
+            None,
+            std::time::Instant::now(),
+        );
+    }
+
+    #[test]
+    fn freeze_usage_collapsed_includes_every_used_account_and_both_windows() {
+        let mut app = AppState::test_new();
+        app.notepad.usage_collapsed = true;
+        app.provider_usage = ProviderUsageSnapshot::with_primary_accounts(
+            AccountUsage {
+                five_hour: Some(QuotaWindow {
+                    used_percent: 20,
+                    resets_at: Some(7200),
+                }),
+                seven_day: Some(QuotaWindow {
+                    used_percent: 30,
+                    resets_at: Some(86400),
+                }),
+                ..AccountUsage::default()
+            },
+            AccountUsage::default(),
+            AccountUsage::default(),
+        );
+        let mut second = app.provider_usage.accounts[0].clone();
+        second.profile_id = "work".into();
+        second.label = "work".into();
+        app.provider_usage.accounts.push(second);
+        let mut unused = app.provider_usage.accounts[0].clone();
+        unused.profile_id = "unused".into();
+        unused.label = "unused".into();
+        app.provider_usage.accounts.push(unused);
+        use_account(&mut app, QuotaProvider::Claude, "default");
+        use_account(&mut app, QuotaProvider::Claude, "work");
+        let (rows, _) = usage_rows_window(&app, 100, 0, 20);
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            let text = row_text(row);
+            assert!(text.contains("claude"), "{text}");
+            assert!(text.contains("5h"), "{text}");
+            assert!(text.contains("7d"), "{text}");
+            assert!(!text.contains("unused"), "{text}");
+        }
+        app.notepad.usage_collapsed = false;
+        let (rows, _) = usage_rows_window(&app, 100, 0, 20);
+        assert!(rows.iter().any(|row| row_text(row).contains("unused")));
+    }
+
+    #[test]
+    fn freeze_usage_keeps_unknown_weekly_window_when_five_hour_is_reported() {
+        for provider in [QuotaProvider::Claude, QuotaProvider::Codex] {
+            let mut app = AppState::test_new();
+            app.provider_usage.accounts = vec![ProviderAccountUsage {
+                provider,
+                profile_id: "owner".into(),
+                label: "owner".into(),
+                usage: AccountUsage {
+                    five_hour: Some(QuotaWindow {
+                        used_percent: 20,
+                        resets_at: None,
+                    }),
+                    ..AccountUsage::default()
+                },
+            }];
+            use_account(&mut app, provider, "owner");
+            for (collapsed, width) in [(true, 18), (true, 80), (false, 80)] {
+                app.notepad.usage_collapsed = collapsed;
+                let (rows, _) = usage_rows_window(&app, width, 0, 20);
+                let text = row_text(rows.last().unwrap());
+                assert!(text.contains("5h"), "{provider:?} {collapsed}: {text}");
+                assert!(text.contains("7d"), "{provider:?} {collapsed}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn freeze_collapsed_usage_keeps_both_windows_on_an_18_column_client() {
+        let mut app = AppState::test_new();
+        app.notepad.usage_collapsed = true;
+        app.provider_usage = ProviderUsageSnapshot::with_primary_accounts(
+            AccountUsage {
+                five_hour: Some(QuotaWindow {
+                    used_percent: 78,
+                    resets_at: Some(10000),
+                }),
+                seven_day: Some(QuotaWindow {
+                    used_percent: 35,
+                    resets_at: Some(20000),
+                }),
+                ..AccountUsage::default()
+            },
+            AccountUsage::default(),
+            AccountUsage::default(),
+        );
+        use_account(&mut app, QuotaProvider::Claude, "default");
+        let (rows, _) = usage_rows_window(&app, 18, 0, 5);
+        let text = row_text(&rows[0]);
+        assert!(text.contains("5h78") && text.contains("7d35"), "{text}");
+        assert!(rows[0]
+            .tooltip
+            .as_ref()
+            .is_some_and(|tooltip| tooltip.contains("Claude Code")));
+    }
+
+    #[test]
+    fn freeze_usage_opencode_and_agy_have_distinct_used_accounts_and_groups() {
+        let mut app = AppState::test_new();
+        for provider in [QuotaProvider::OpenCode, QuotaProvider::Agy] {
+            app.provider_usage.accounts.push(ProviderAccountUsage {
+                provider,
+                profile_id: "default".into(),
+                label: "default".into(),
+                usage: AccountUsage::default(),
+            });
+            use_account(&mut app, provider, "default");
+        }
+        let (rows, _) = usage_rows_window(&app, 100, 0, 20);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row_text(row).starts_with("opencode")));
+        assert!(rows.iter().any(|row| row_text(row).starts_with("agy")));
+        app.notepad.usage_collapsed = false;
+        let (rows, _) = usage_rows_window(&app, 100, 0, 20);
+        for provider in [QuotaProvider::OpenCode, QuotaProvider::Agy] {
+            assert!(rows
+                .iter()
+                .any(|row| row.action == NotepadUsageAction::ToggleProvider(provider)));
+        }
+        assert!(rows.iter().all(|row| !row_text(row).contains("100%")));
+    }
+
+    #[test]
+    fn freeze_named_opencode_and_agy_accounts_stay_visible_without_quota_data() {
+        let mut app = AppState::test_new();
+        app.notepad.usage_collapsed = true;
+        app.provider_usage.accounts.clear();
+        use_account(&mut app, QuotaProvider::OpenCode, "owner-one");
+        use_account(&mut app, QuotaProvider::OpenCode, "owner-two");
+        use_account(&mut app, QuotaProvider::Agy, "matthias");
+        let (rows, _) = usage_rows_window(&app, 80, 0, 10);
+        let text = rows.iter().map(row_text).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 3);
+        for expected in [
+            "opencode owner-one —",
+            "opencode owner-two —",
+            "agy matthias —",
+        ] {
+            assert!(text.iter().any(|row| row == expected), "{text:?}");
+        }
+        app.notepad.usage_collapsed = false;
+        let (rows, _) = usage_rows_window(&app, 80, 0, 10);
+        let text = rows.iter().map(row_text).collect::<Vec<_>>();
+        assert_eq!(rows.len(), 5);
+        assert!(text.iter().any(|row| row.contains("opencode")));
+        assert!(text.iter().any(|row| row.contains("agy")));
+        assert!(text.iter().any(|row| row.contains("owner-two")));
+    }
+
+    #[test]
+    fn freeze_exhausted_account_is_dim_and_its_reset_counts_down() {
+        let mut app = AppState::test_new();
+        app.notepad.usage_collapsed = false;
+        app.status_now_unix = Some(0);
+        let account = ProviderAccountUsage {
+            provider: QuotaProvider::Claude,
+            profile_id: "default".into(),
+            label: "owner".into(),
+            usage: AccountUsage {
+                five_hour: Some(QuotaWindow {
+                    used_percent: 100,
+                    resets_at: Some(7200),
+                }),
+                seven_day: Some(QuotaWindow {
+                    used_percent: 25,
+                    resets_at: Some(86400),
+                }),
+                ..AccountUsage::default()
+            },
+        };
+        let before = account_row(&app, &account, "OWN", 100);
+        assert!(before.line.spans[0]
+            .style
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM));
+        app.status_now_unix = Some(3600);
+        let after = account_row(&app, &account, "OWN", 100);
+        assert_ne!(row_text(&before), row_text(&after));
+        assert!(row_text(&after).contains("owner"));
+        assert!(row_text(&after).contains("100%"));
     }
 }

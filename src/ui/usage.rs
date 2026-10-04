@@ -101,11 +101,12 @@ pub(crate) struct UsageLayout {
 
 /// Every quota provider herdr collects, in display order. Each always gets a
 /// row; providers without data render placeholder windows.
-pub(crate) const SUBSCRIPTION_PROVIDERS: [QuotaProvider; 4] = [
+pub(crate) const SUBSCRIPTION_PROVIDERS: [QuotaProvider; 5] = [
     QuotaProvider::Claude,
     QuotaProvider::Codex,
     QuotaProvider::Kimi,
     QuotaProvider::Agy,
+    QuotaProvider::OpenCode,
 ];
 
 pub(crate) fn layout(area: Rect) -> UsageLayout {
@@ -116,7 +117,7 @@ pub(crate) fn layout(area: Rect) -> UsageLayout {
     let extra = if narrow && outer.height >= 26 { 2 } else { 0 };
     let rows = Layout::vertical([
         Constraint::Length(header_rows(outer.width)),
-        Constraint::Length(if narrow { 11 + extra } else { 9 }),
+        Constraint::Length(if narrow { 11 + extra } else { 10 }),
         Constraint::Length(if narrow { 3 } else { 2 }),
         Constraint::Min(3),
         Constraint::Length(if narrow { 2 } else { 1 }),
@@ -937,7 +938,8 @@ fn quota_provider_label(provider: QuotaProvider) -> &'static str {
         QuotaProvider::Claude => "Claude Code",
         QuotaProvider::Codex => "Codex",
         QuotaProvider::Kimi => "Kimi",
-        QuotaProvider::Agy => "Antigravity",
+        QuotaProvider::Agy => "agy",
+        QuotaProvider::OpenCode => "opencode",
     }
 }
 
@@ -949,6 +951,7 @@ fn quota_provider_color(provider: QuotaProvider, palette: &Palette) -> Color {
         QuotaProvider::Codex => super::icons::codex_color(palette),
         QuotaProvider::Kimi => palette.yellow,
         QuotaProvider::Agy => palette.teal,
+        QuotaProvider::OpenCode => palette.blue,
     }
 }
 
@@ -1193,7 +1196,7 @@ mod tests {
             render_snapshot_with_provider_usage_at(120, 40, fixture(), provider_usage.clone());
         let narrow =
             render_snapshot_with_provider_usage_at(80, 24, fixture(), provider_usage.clone());
-        for expected in ["Kimi", "Antigravity", "5h 1% · 12m"] {
+        for expected in ["Kimi", "agy", "5h 1% · 12m"] {
             assert!(
                 narrow.contains(expected),
                 "missing {expected:?} at 80x24\n{narrow}"
@@ -1201,7 +1204,7 @@ mod tests {
         }
         // Antigravity takes two chart rows on narrow screens; a slightly taller one keeps the legend.
         let taller = render_snapshot_with_provider_usage_at(80, 26, fixture(), provider_usage);
-        for expected in ["Antigravity", "◆ Claude Code  ● Codex"] {
+        for expected in ["agy", "◆ Claude Code  ● Codex"] {
             assert!(
                 taller.contains(expected),
                 "missing {expected:?} at 80x26\n{taller}"
@@ -1218,7 +1221,7 @@ mod tests {
             "Kimi",
             "5h 0% · —",
             "week 24% · 2h45",
-            "Antigravity",
+            "agy",
             "5h 1% · 12m",
         ] {
             assert!(text.contains(expected), "missing {expected:?}\n{text}");
@@ -1278,18 +1281,18 @@ mod tests {
                 ProviderUsageSnapshot::default(),
             );
 
-            for provider in ["Claude Code", "Codex", "Kimi", "Antigravity"] {
+            for provider in ["Claude Code", "Codex", "Kimi", "agy", "opencode"] {
                 assert!(
                     text.contains(provider),
                     "missing {provider:?} at {width}x{height}\n{text}"
                 );
             }
             // Compact rows on short narrow screens may clip the week window.
-            assert_eq!(text.matches("5h —").count(), 4, "{width}x{height}\n{text}");
+            assert_eq!(text.matches("5h —").count(), 5, "{width}x{height}\n{text}");
             if width >= 80 {
                 assert_eq!(
                     text.matches("week — · —").count(),
-                    4,
+                    5,
                     "{width}x{height}\n{text}"
                 );
             }

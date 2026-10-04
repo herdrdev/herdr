@@ -491,14 +491,8 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
                     crate::app::state::StatusButtonAction::Home => {
                         "Home: overview of all workspaces"
                     }
-                    crate::app::state::StatusButtonAction::Work => {
-                        "Work view: branches and pull requests"
-                    }
-                    crate::app::state::StatusButtonAction::BlockedFilter => {
-                        "Filter to blocked agents"
-                    }
-                    crate::app::state::StatusButtonAction::Attention => "Agents needing you",
-                    crate::app::state::StatusButtonAction::Dock => "Toggle dock panel",
+                    crate::app::state::StatusButtonAction::NewSession => "New session",
+                    crate::app::state::StatusButtonAction::Board => "Board",
                     crate::app::state::StatusButtonAction::Scratch => "Scratch: write notes",
                 }
                 .into(),
@@ -877,6 +871,12 @@ mod tests {
     #[test]
     fn usage_row_and_toggle_hit_areas_resolve_to_their_own_tooltips() {
         let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("usage")];
+        app.ensure_test_terminals();
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.terminal_id_for_pane(0, pane).unwrap().clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent =
+            Some(crate::detect::Agent::Claude);
         app.provider_usage
             .accounts
             .push(crate::provider_usage::ProviderAccountUsage {
@@ -967,6 +967,66 @@ mod status_segments {
             let (anchor, label) = tooltip_target(&app, control).expect("tooltip");
             assert_eq!(anchor, Rect::new(index as u16 * 4, 0, 3, 1));
             assert!(!label.trim().is_empty(), "{kind:?} tooltip empty");
+        }
+    }
+
+    #[test]
+    fn freeze_footer_icons_have_legible_cells_and_named_tooltips() {
+        let mut app = AppState::test_new();
+        let area = Rect::new(0, 0, 30, 24);
+        app.view.sidebar_footer_settings_hit_area =
+            super::super::sidebar::sidebar_footer_settings_hit_area(area);
+        app.view.sidebar_footer_work_hit_area =
+            super::super::sidebar::sidebar_footer_work_hit_area(area);
+        app.view.sidebar_footer_usage_hit_area =
+            super::super::sidebar::sidebar_footer_usage_hit_area(area);
+        app.view.sidebar_footer_ticket_hit_area =
+            super::super::sidebar::sidebar_footer_ticket_hit_area(area);
+        for item in [
+            SidebarFooterItem::Settings,
+            SidebarFooterItem::PullRequests,
+            SidebarFooterItem::Usage,
+            SidebarFooterItem::Linear,
+        ] {
+            let (rect, label) = tooltip_target(&app, ControlId::SidebarFooter(item)).unwrap();
+            assert!(rect.width >= 2);
+            assert!(!label.trim().is_empty());
+            assert_eq!(
+                hovered_control_at(&app, rect.x, rect.y),
+                Some(ControlId::SidebarFooter(item))
+            );
+        }
+    }
+
+    #[test]
+    fn topbar_action_buttons_have_named_tooltips() {
+        let mut app = AppState::test_new();
+        let labels = [
+            "Home: overview of all workspaces",
+            "New session",
+            "Board",
+            "Scratch: write notes",
+        ];
+        app.view.status_buttons = labels
+            .iter()
+            .enumerate()
+            .map(|(index, _)| crate::app::state::StatusButton {
+                action: [
+                    crate::app::state::StatusButtonAction::Home,
+                    crate::app::state::StatusButtonAction::NewSession,
+                    crate::app::state::StatusButtonAction::Board,
+                    crate::app::state::StatusButtonAction::Scratch,
+                ][index],
+                label: String::new(),
+                rect: Rect::new(index as u16 * 2, 0, 1, 1),
+                active: false,
+            })
+            .collect();
+
+        for (index, expected) in labels.iter().enumerate() {
+            let target = tooltip_target(&app, ControlId::StatusButton(index))
+                .expect("topbar button tooltip");
+            assert_eq!(target.1, *expected);
         }
     }
 

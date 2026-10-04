@@ -181,6 +181,7 @@ pub(crate) fn usage_label(provider: QuotaProvider, nerd_font: bool) -> &'static 
             QuotaProvider::Codex => "CX",
             QuotaProvider::Kimi => "KI",
             QuotaProvider::Agy => "AG",
+            QuotaProvider::OpenCode => "OC",
         };
     }
     match provider {
@@ -188,6 +189,7 @@ pub(crate) fn usage_label(provider: QuotaProvider, nerd_font: bool) -> &'static 
         QuotaProvider::Codex => OPENAI,
         QuotaProvider::Kimi => KIMI,
         QuotaProvider::Agy => ANTIGRAVITY,
+        QuotaProvider::OpenCode => OPENCODE,
     }
 }
 

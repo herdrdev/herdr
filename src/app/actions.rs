@@ -8154,9 +8154,24 @@ mod tests {
     #[test]
     fn close_pane_removes_from_workspace() {
         let mut state = app_with_workspaces(&["test"]);
+        let root = state.workspaces[0].tabs[0].root_pane;
         let closed = state.workspaces[0].test_split(Direction::Horizontal);
+        let survivor = state.workspaces[0].test_split(Direction::Horizontal);
+        state.workspaces[0].tabs[0].layout.focus_pane(closed);
         state.ensure_test_terminals();
-        assert_eq!(state.workspaces[0].panes.len(), 2);
+        assert_eq!(state.workspaces[0].panes.len(), 3);
+        let root_terminal = state.terminal_id_for_pane(0, root).unwrap().clone();
+        let survivor_terminal = state.terminal_id_for_pane(0, survivor).unwrap().clone();
+        state
+            .terminals
+            .get_mut(&root_terminal)
+            .unwrap()
+            .set_raw_agent_state_for_test(AgentState::Working);
+        state
+            .terminals
+            .get_mut(&survivor_terminal)
+            .unwrap()
+            .set_raw_agent_state_for_test(AgentState::Blocked);
         state.plugin_panes.insert(
             closed,
             crate::app::state::PluginPaneRecord {
@@ -8165,7 +8180,17 @@ mod tests {
             },
         );
         state.close_pane();
-        assert_eq!(state.workspaces[0].panes.len(), 1);
+        assert_eq!(state.workspaces[0].panes.len(), 2);
+        assert!(state.workspaces[0].pane_state(root).is_some());
+        assert!(state.workspaces[0].pane_state(survivor).is_some());
+        assert_eq!(
+            state.terminals[&root_terminal].raw_agent_state(),
+            AgentState::Working
+        );
+        assert_eq!(
+            state.terminals[&survivor_terminal].raw_agent_state(),
+            AgentState::Blocked
+        );
         assert!(!state.plugin_panes.contains_key(&closed));
         state.assert_invariants_for_test();
     }

@@ -558,6 +558,7 @@ pub(crate) enum QuotaProvider {
     Codex,
     Kimi,
     Agy,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -575,6 +576,7 @@ pub(crate) struct ProviderUsageSnapshot {
     primary_codex: String,
     primary_kimi: String,
     primary_agy: String,
+    primary_opencode: String,
 }
 
 impl ProviderUsageSnapshot {
@@ -609,6 +611,7 @@ impl ProviderUsageSnapshot {
             primary_codex: "default".into(),
             primary_kimi: "default".into(),
             primary_agy: "default".into(),
+            primary_opencode: "default".into(),
         }
     }
 
@@ -618,6 +621,7 @@ impl ProviderUsageSnapshot {
             QuotaProvider::Codex => &self.primary_codex,
             QuotaProvider::Kimi => &self.primary_kimi,
             QuotaProvider::Agy => &self.primary_agy,
+            QuotaProvider::OpenCode => &self.primary_opencode,
         };
         self.accounts
             .iter()
@@ -638,6 +642,7 @@ impl ProviderUsageSnapshot {
             QuotaProvider::Codex => &mut self.primary_codex,
             QuotaProvider::Kimi => &mut self.primary_kimi,
             QuotaProvider::Agy => &mut self.primary_agy,
+            QuotaProvider::OpenCode => &mut self.primary_opencode,
         };
         if profile_id.is_empty() {
             *profile_id = "default".into();
@@ -673,7 +678,15 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
     let mut accounts = claude;
     accounts.extend(codex);
     accounts.push(kimi);
-    if !agy_usage.is_empty() {
+    // OpenCode has no account quota cache contract. Keep it visible without
+    // borrowing another provider's limits or inventing usage percentages.
+    accounts.push(ProviderAccountUsage {
+        provider: QuotaProvider::OpenCode,
+        profile_id: "default".into(),
+        label: "default".into(),
+        usage: AccountUsage::default(),
+    });
+    {
         accounts.push(ProviderAccountUsage {
             provider: QuotaProvider::Agy,
             profile_id: "default".into(),
@@ -687,6 +700,7 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
         primary_codex,
         primary_kimi: "default".into(),
         primary_agy: "default".into(),
+        primary_opencode: "default".into(),
     }
 }
 

@@ -52,6 +52,8 @@ Reload applies most UI settings without restarting panes. Startup-only settings 
 
 Themes, sidebar layouts, copy behavior, and other presentation settings come from the client's local config, including when viewing an SSH machine. Pane defaults, worktrees, integrations, and custom commands belong to the server where the panes run. The UI's `reload config` action reloads both the client's local settings and the selected server's config. Local keybindings reload too; `--remote-keybindings server` instead uses the selected server's keybindings.
 
+The sidebar starts with this device expanded and other devices collapsed; devices without agents stay hidden. Device expansion choices survive restart and client handoff. Working, Snoozed, Settled, and usage start collapsed; Runs and Aloops start hidden, while the inbox stays visible. Collapsed usage shows accounts in use, and expanded usage groups all accounts by provider. Remote pane titles include their host.
+
 ## Headless terminal size
 
 When no client is attached, the server uses a 120×40 virtual terminal for layout and newly created panes. Change that fallback for headless orchestration with:

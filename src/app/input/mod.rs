@@ -1423,25 +1423,8 @@ impl App {
                 self.state.scratch.open = false;
                 self.state.toggle_home();
             }
-            StatusButtonAction::Work => {
-                self.state.scratch.open = false;
-                self.toggle_work_view();
-            }
-            StatusButtonAction::BlockedFilter => {
-                self.state.blocked_filter = !self.state.blocked_filter;
-                self.state.workspace_scroll = crate::ui::normalized_workspace_scroll(
-                    &self.state,
-                    self.state.view.sidebar_rect,
-                    self.state.workspace_scroll,
-                );
-            }
-            StatusButtonAction::Attention => {
-                self.state.scratch.open = false;
-                self.state.toggle_home();
-            }
-            StatusButtonAction::Dock => {
-                self.state.dock_collapsed = !self.state.dock_collapsed;
-            }
+            StatusButtonAction::NewSession => self.state.request_new_workspace = true,
+            StatusButtonAction::Board => self.toggle_board_view(),
         }
     }
 
@@ -7157,6 +7140,33 @@ sidebar_visible = true
             .note
             .body
             .is_empty());
+    }
+
+    #[test]
+    fn topbar_buttons_dispatch_to_home_new_session_board_and_scratchpad() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+
+        app.activate_status_button(crate::app::state::StatusButtonAction::Home);
+        assert!(app.state.home.is_some());
+
+        app.activate_status_button(crate::app::state::StatusButtonAction::NewSession);
+        assert!(app.state.request_new_workspace);
+
+        let date = time::Date::from_calendar_date(2026, time::Month::September, 28)
+            .expect("fixed board date");
+        let note = crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+            .expect("synthetic board week");
+        app.state.board_view = Some(crate::board::BoardView::test_new(
+            note,
+            crate::board::Board::default(),
+        ));
+        app.activate_status_button(crate::app::state::StatusButtonAction::Board);
+        assert!(app.state.board_view.is_none());
+
+        app.activate_status_button(crate::app::state::StatusButtonAction::Scratch);
+        assert!(app.state.scratch.open);
+        assert!(app.state.scratch.editor.is_some());
     }
 
     #[test]

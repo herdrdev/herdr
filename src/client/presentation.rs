@@ -552,6 +552,8 @@ mod tests {
             state.sidebar_group_collapsed = Some(std::collections::HashMap::from([
                 ("repo:Runs".to_string(), true),
                 ("repo:Settled".to_string(), false),
+                ("device:main/ub2".to_string(), true),
+                ("device:main/mbpro".to_string(), false),
             ]));
         })
         .expect("save sidebar collapse overrides");
@@ -567,6 +569,8 @@ mod tests {
             Some(std::collections::HashMap::from([
                 ("repo:Runs".to_string(), true),
                 ("repo:Settled".to_string(), false),
+                ("device:main/ub2".to_string(), true),
+                ("device:main/mbpro".to_string(), false),
             ]))
         );
         let _ = std::fs::remove_file(path);

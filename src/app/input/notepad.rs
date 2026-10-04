@@ -1082,6 +1082,7 @@ mod tests {
             crate::provider_usage::AccountUsage::default(),
             crate::provider_usage::AccountUsage::default(),
         );
+        state.notepad.usage_collapsed = false;
         state.notepad.select_usage_tab();
         crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
         let body = notepad_body_rect(state.view.notepad_rect);
@@ -1102,9 +1103,18 @@ mod tests {
             crate::provider_usage::AccountUsage::default(),
             crate::provider_usage::AccountUsage::default(),
         );
+        state.workspaces = vec![crate::workspace::Workspace::test_new("claude")];
+        state.ensure_test_terminals();
+        let pane = state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = state.terminal_id_for_pane(0, pane).unwrap().clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .detected_agent = Some(crate::detect::Agent::Claude);
         state.notepad.select_usage_tab();
         crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
-        assert_eq!(state.view.notepad_usage_rows.len(), 3);
+        assert_eq!(state.view.notepad_usage_rows.len(), 1);
 
         let toggle = state.view.notepad_usage_toggle_hit_area;
         assert_eq!(toggle.width, 1);

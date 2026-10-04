@@ -525,8 +525,8 @@ impl Default for SidebarAreasConfig {
             sky_header: true,
             view_bar: true,
             unassigned: true,
-            runs: true,
-            aloops: true,
+            runs: false,
+            aloops: false,
             symphony: true,
             notes: true,
             pomodoro: true,
@@ -566,6 +566,8 @@ mod tests {
         assert_eq!(config.header, SidebarHeaderConfig::Plain);
         assert_eq!(config.areas, SidebarAreasConfig::default());
         assert!(!config.areas.hosts);
+        assert!(!config.areas.runs);
+        assert!(!config.areas.aloops);
         assert_eq!(
             config.agents.rows,
             vec![vec![

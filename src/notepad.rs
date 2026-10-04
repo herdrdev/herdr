@@ -459,6 +459,7 @@ impl NotepadState {
                 crate::provider_usage::QuotaProvider::Codex,
                 crate::provider_usage::QuotaProvider::Kimi,
                 crate::provider_usage::QuotaProvider::Agy,
+                crate::provider_usage::QuotaProvider::OpenCode,
             ] {
                 if candidate != provider {
                     self.usage_expanded_providers.insert(candidate);

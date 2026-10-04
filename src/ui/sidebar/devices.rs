@@ -88,6 +88,11 @@ pub(crate) fn reset_offline_expansions(
     section: &str,
     host: &str,
 ) {
+    // Device preferences survive reconnects and runtime handoff. An offline
+    // main device keeps its saved choice while showing last-known rows.
+    if section == "main" {
+        return;
+    }
     let key = group_key(section, host);
     collapsed.remove(&key);
     collapsed.remove(&format!("expanded:{key}"));
@@ -99,6 +104,22 @@ pub(super) fn append_remote_entry_groups(
     section: &str,
     entries: Vec<super::AgentPanelEntry>,
 ) {
+    if section != "main" {
+        super::append_space_tree_rows(
+            app,
+            rows,
+            entries,
+            false,
+            None,
+            super::SidebarGroupMode::Spaces,
+            false,
+            true,
+            None,
+            app.remote_device_activity.as_ref(),
+            Some(section),
+        );
+        return;
+    }
     let fallback_activity = app.remote_device_activity.is_none().then(|| {
         let activity_entries = app
             .remote_agent_panel_entries
@@ -183,7 +204,7 @@ pub(super) fn append_remote_entry_groups(
             rows,
             section,
             group,
-            group.items.len(),
+            group.items.iter().filter(|entry| entry.has_agent).count(),
             group.items.iter().cloned(),
             remote_activity,
         );
@@ -328,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn local_only_has_no_device_header_and_remotes_start_collapsed() {
+    fn local_device_starts_expanded_and_remote_devices_start_collapsed() {
         let app = AppState::test_new();
         let local = group_items("ub2", [("ub2".into(), true, true, 1)]);
         assert_eq!(local.len(), 1);
@@ -337,16 +358,35 @@ mod tests {
     }
 
     #[test]
-    fn offline_groups_collapse_and_clear_manual_expansions() {
+    fn offline_devices_preserve_their_saved_expansion_across_handoff() {
         let mut app = AppState::test_new();
         let key = group_key("main", "ub1");
         app.collapsed_sidebar_groups
             .insert(format!("expanded:{key}"));
         assert!(!group_is_collapsed(&app, "main", "ub1", false, false));
         reset_offline_expansions(&mut app.collapsed_sidebar_groups, "main", "ub1");
-        assert!(group_is_collapsed(&app, "main", "ub1", false, false));
-        assert!(!app
+        assert!(!group_is_collapsed(&app, "main", "ub1", false, false));
+        assert!(app
             .collapsed_sidebar_groups
             .contains(&format!("expanded:{key}")));
+        assert!(!group_is_collapsed(&app, "main", "ub1", false, true));
+    }
+    #[test]
+    fn freeze_device_preferences_survive_restart_and_are_independent() {
+        let saved = std::collections::HashMap::from([
+            (group_key("main", "ub2"), true),
+            (group_key("main", "ub1"), false),
+        ]);
+        let serialized = serde_json::to_string(&saved).unwrap();
+        let restored: std::collections::HashMap<String, bool> =
+            serde_json::from_str(&serialized).unwrap();
+        let mut app = AppState::test_new();
+        app.collapsed_sidebar_groups = crate::ui::initial_collapsed_sidebar_groups(&restored);
+        assert!(group_is_collapsed(&app, "main", "ub2", true, true));
+        assert!(!group_is_collapsed(&app, "main", "ub1", false, true));
+        reset_offline_expansions(&mut app.collapsed_sidebar_groups, "main", "ub1");
+        assert!(!group_is_collapsed(&app, "main", "ub1", false, false));
+        assert!(!group_is_collapsed(&app, "main", "ub1", false, true));
+        assert!(group_is_collapsed(&app, "main", "air", false, true));
     }
 }

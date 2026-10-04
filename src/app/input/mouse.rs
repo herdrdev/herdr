@@ -6757,19 +6757,9 @@ mod tests {
             );
         }
         let board = app.state.view.sidebar_footer_board_hit_area;
-        assert_eq!(board.width, 2);
-        assert_eq!(
-            board.x,
-            app.state.view.sidebar_footer_refresh_hit_area.right()
-        );
-        app.handle_mouse(mouse(MouseEventKind::Moved, board.x, board.y));
-        assert_eq!(
-            app.state.hovered_control,
-            Some(ControlId::SidebarFooter(SidebarFooterItem::Board))
-        );
+        assert_eq!(board, ratatui::layout::Rect::default());
         let lock = app.state.view.sidebar_footer_planning_lock_hit_area;
         assert_eq!(lock.width, 2);
-        assert_eq!(lock.x, board.right());
         app.handle_mouse(mouse(MouseEventKind::Moved, lock.x, lock.y));
         assert_eq!(
             app.state.hovered_control,

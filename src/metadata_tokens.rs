@@ -83,7 +83,6 @@ impl MetadataTokens {
 
     /// Read one token without materialising the whole map. Pane-scaled callers
     /// such as the status watchdog run this per sweep and only need one value.
-    #[cfg(test)]
     pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.entries.get(key).map(|token| token.value.as_str())
     }
