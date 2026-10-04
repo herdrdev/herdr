@@ -2012,6 +2012,15 @@ impl App {
         }
         if board_active && !state.board_detail_open {
             match key.code {
+                KeyCode::Char('m') if key.modifiers.is_empty() => {
+                    if let Some(state) = self.state.work_view.as_mut() {
+                        state.board_mine_only = !state.board_mine_only;
+                        state.board_rows = [0; 5];
+                        state.board_scroll = [0; 5];
+                        state.selected = None;
+                    }
+                    return true;
+                }
                 KeyCode::Left if key.modifiers.is_empty() => {
                     self.move_ticket_board_column(-1);
                     return true;
@@ -2045,6 +2054,7 @@ impl App {
                 KeyCode::Char('v' | 'l') if key.modifiers.is_empty() => {
                     if let Some(state) = self.state.work_view.as_mut() {
                         state.ticket_layout = crate::app::state::LinearViewLayout::List;
+                        state.selected = None;
                     }
                     return true;
                 }
@@ -2295,6 +2305,9 @@ impl App {
         let Some(view) = self.state.work_view.as_ref() else {
             return Vec::new();
         };
+        if view.ticket_layout == crate::app::state::LinearViewLayout::Board {
+            return crate::ui::work_view::ticket_board_items(&self.state, view);
+        }
         let Some(snapshot) = view.snapshot.as_ref() else {
             return Vec::new();
         };
@@ -5823,15 +5836,32 @@ impl App {
         if view.projection != crate::app::state::WorkProjection::Tickets {
             return;
         }
-        let area = self.state.view.terminal_area;
-        let list_toggle = ratatui::layout::Rect::new(area.x + 10.min(area.width), area.y, 6, 1);
-        let board_toggle = ratatui::layout::Rect::new(area.x + 17.min(area.width), area.y, 7, 1);
+        let full_area = self.state.view.terminal_area;
+        let area = ratatui::layout::Rect {
+            height: full_area.height.saturating_sub(1),
+            ..full_area
+        };
+        let header = crate::ui::work_view::ticket_board_layout(&self.state, view, area);
+        let (list_toggle, board_toggle) = if view.ticket_layout
+            == crate::app::state::LinearViewLayout::Board
+            && !view.board_detail_open
+        {
+            (header.list_toggle, header.board_toggle)
+        } else {
+            (
+                ratatui::layout::Rect::new(area.x + 10.min(area.width), area.y, 6, 1),
+                ratatui::layout::Rect::new(area.x + 17.min(area.width), area.y, 7, 1),
+            )
+        };
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             if self
                 .state
                 .point_in_rect(list_toggle, mouse.column, mouse.row)
             {
                 if let Some(view) = self.state.work_view.as_mut() {
+                    if view.ticket_layout == crate::app::state::LinearViewLayout::Board {
+                        view.selected = None;
+                    }
                     view.ticket_layout = crate::app::state::LinearViewLayout::List;
                     view.board_detail_open = false;
                 }
@@ -5853,7 +5883,54 @@ impl App {
         {
             return;
         }
-        let layout = crate::ui::work_view::ticket_board_layout(&self.state, view, area);
+        let layout = header;
+        let columns = crate::ui::work_view::ticket_board_columns(&self.state, view);
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if self
+                .state
+                .point_in_rect(layout.filter_toggle, mouse.column, mouse.row)
+            {
+                if let Some(view) = self.state.work_view.as_mut() {
+                    view.board_mine_only = !view.board_mine_only;
+                    view.board_rows = [0; 5];
+                    view.board_scroll = [0; 5];
+                    view.selected = None;
+                }
+                return;
+            }
+            if layout
+                .done_column
+                .is_some_and(|rect| self.state.point_in_rect(rect, mouse.column, mouse.row))
+            {
+                if let Some(view) = self.state.work_view.as_mut() {
+                    view.board_column = 4;
+                    view.board_rows[4] = view.board_rows[4].min(columns[4].len().saturating_sub(1));
+                    view.selected = columns[4].get(view.board_rows[4]).cloned();
+                }
+                return;
+            }
+            if let Some((key, _)) = layout
+                .spawn_buttons
+                .iter()
+                .find(|(_, rect)| self.state.point_in_rect(*rect, mouse.column, mouse.row))
+            {
+                if let Some(view) = self.state.work_view.as_mut() {
+                    view.selected = Some(key.clone());
+                    view.board_column = columns
+                        .iter()
+                        .position(|column| column.contains(key))
+                        .unwrap_or(view.board_column);
+                    view.board_rows[view.board_column] = columns[view.board_column]
+                        .iter()
+                        .position(|candidate| candidate == key)
+                        .unwrap_or(0);
+                    view.ticket_start_menu =
+                        Some(crate::app::state::PrCheckoutChoice::CurrentCheckout);
+                }
+                self.open_selected_ticket_thread();
+                return;
+            }
+        }
         let hit = layout
             .cards
             .iter()
@@ -9060,6 +9137,7 @@ printf '%s' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"i
             }),
         );
         view.projection = crate::app::state::WorkProjection::Tickets;
+        app.state.work_index_session.linear.viewer = Some("matthias".into());
         app.state.work_view = Some(view);
         app
     }
@@ -9245,6 +9323,13 @@ printf '%s' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"i
         view.ticket_layout = crate::app::state::LinearViewLayout::Board;
         app.state.view.terminal_area = ratatui::layout::Rect::new(26, 2, 53, 7);
 
+        assert!(app.handle_work_view_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty())));
+        assert!(!app.state.work_view.as_ref().expect("view").board_mine_only);
+        app.handle_work_view_key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::empty()));
+        assert!(app.state.work_view.as_ref().expect("view").ticket_open_only);
+        assert!(!app.state.work_view.as_ref().expect("view").board_mine_only);
+        app.handle_work_view_key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::empty()));
+
         assert!(app.handle_work_view_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty())));
         assert!(app.handle_work_view_key(KeyEvent::new(KeyCode::Right, KeyModifiers::empty())));
         assert_eq!(app.state.work_view.as_ref().expect("view").board_column, 2);
@@ -9330,6 +9415,120 @@ printf '%s' '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"i
                 .as_ref()
                 .expect("view")
                 .board_detail_open
+        );
+    }
+
+    #[test]
+    fn ticket_board_to_list_drops_a_ticket_hidden_by_list_filters() {
+        for mouse in [false, true] {
+            let mut app = ticket_view_app();
+            let mut foreign = app
+                .state
+                .work_view
+                .as_ref()
+                .expect("view")
+                .snapshot
+                .as_ref()
+                .expect("snapshot")
+                .items[0]
+                .clone();
+            foreign.ticket_details[0].identifier = "SCA-5000".into();
+            foreign.ticket_details[0].assignee = Some("other person".into());
+            foreign.ticket_ids = vec!["SCA-5000".into()];
+            app.state.sidebar_work_filter.assignee = Some("matthias".into());
+            app.state.view.terminal_area = ratatui::layout::Rect::new(26, 2, 120, 30);
+            let view = app.state.work_view.as_mut().expect("view");
+            view.snapshot
+                .as_mut()
+                .expect("snapshot")
+                .items
+                .push(foreign);
+            view.ticket_layout = crate::app::state::LinearViewLayout::Board;
+            view.board_mine_only = false;
+            view.selected = Some(crate::app::state::WorkItemKey {
+                repo: String::new(),
+                pr_number: None,
+                pr_url: None,
+                ticket_id: Some("SCA-5000".into()),
+            });
+            if mouse {
+                let layout = crate::ui::work_view::ticket_board_layout(
+                    &app.state,
+                    app.state.work_view.as_ref().expect("view"),
+                    app.state.view.terminal_area,
+                );
+                app.handle_ticket_board_mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: layout.list_toggle.x,
+                    row: layout.list_toggle.y,
+                    modifiers: KeyModifiers::empty(),
+                });
+            } else {
+                app.handle_work_view_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::empty()));
+            }
+            let (_, ticket, _) = app.selected_ticket_parts().expect("visible list ticket");
+            assert_eq!(
+                ticket.identifier, "SCA-3165",
+                "List actions must target the ticket List shows after switching from Board all"
+            );
+        }
+    }
+
+    #[test]
+    fn ticket_board_mouse_toggles_mine_filter_selects_done_and_spawns_from_plus() {
+        let mut app = ticket_view_app();
+        app.state.view.terminal_area = ratatui::layout::Rect::new(26, 2, 120, 30);
+        app.state.work_view.as_mut().expect("view").ticket_layout =
+            crate::app::state::LinearViewLayout::Board;
+        let layout = crate::ui::work_view::ticket_board_layout(
+            &app.state,
+            app.state.work_view.as_ref().expect("view"),
+            app.state.view.terminal_area,
+        );
+        let filter = layout.filter_toggle;
+        app.handle_ticket_board_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: filter.x,
+            row: filter.y,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert!(!app.state.work_view.as_ref().expect("view").board_mine_only);
+
+        let layout = crate::ui::work_view::ticket_board_layout(
+            &app.state,
+            app.state.work_view.as_ref().expect("view"),
+            app.state.view.terminal_area,
+        );
+        let done = layout.done_column.expect("collapsed Done strip");
+        app.handle_ticket_board_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: done.x,
+            row: done.y,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(app.state.work_view.as_ref().expect("view").board_column, 4);
+
+        app.state.work_view.as_mut().expect("view").board_column = 2;
+        let layout = crate::ui::work_view::ticket_board_layout(
+            &app.state,
+            app.state.work_view.as_ref().expect("view"),
+            app.state.view.terminal_area,
+        );
+        let plus = layout.spawn_buttons.first().expect("spawn affordance").1;
+        app.handle_ticket_board_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: plus.x,
+            row: plus.y,
+            modifiers: KeyModifiers::empty(),
+        });
+        assert_eq!(
+            app.state
+                .home
+                .as_ref()
+                .and_then(|home| home.ticket.as_ref())
+                .map(|ticket| ticket.identifier.as_str()),
+            Some("SCA-3165"),
+            "plus reuses the existing ticket start flow",
         );
     }
 

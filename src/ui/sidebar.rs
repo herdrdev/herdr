@@ -1881,6 +1881,10 @@ pub(crate) struct RemoteAgentPanelEntry {
 }
 
 impl RemoteAgentPanelEntry {
+    pub(crate) fn work_context(&self) -> &crate::work_context::PaneWorkContext {
+        &self.work_context
+    }
+
     #[cfg(test)]
     pub(crate) fn new(agent_ref: crate::api::schema::AgentRef, entry: AgentPanelEntry) -> Self {
         let mut entry = entry;

@@ -114,6 +114,37 @@ fn wrap_tooltip_label(label: &str, max_width: u16) -> Vec<String> {
 
 pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<ControlId> {
     let view = &app.view;
+    if let Some(work) = app.work_view.as_ref().filter(|work| {
+        work.projection == crate::app::state::WorkProjection::Tickets
+            && work.ticket_layout == crate::app::state::LinearViewLayout::Board
+            && !work.board_detail_open
+    }) {
+        let board = crate::ui::work_view::ticket_board_layout(
+            app,
+            work,
+            Rect {
+                height: view.terminal_area.height.saturating_sub(1),
+                ..view.terminal_area
+            },
+        );
+        if rect_contains(board.filter_toggle, col, row) {
+            return Some(ControlId::TicketBoardFilter);
+        }
+        if board
+            .done_column
+            .is_some_and(|rect| rect_contains(rect, col, row))
+        {
+            return Some(ControlId::TicketBoardDone);
+        }
+        if let Some((index, _)) = board
+            .spawn_buttons
+            .iter()
+            .enumerate()
+            .find(|(_, (_, rect))| rect_contains(*rect, col, row))
+        {
+            return Some(ControlId::TicketBoardSpawn(index));
+        }
+    }
     if app.config_diagnostic.is_some() && rect_contains(view.config_diagnostic_hit_area, col, row) {
         return Some(ControlId::ConfigDiagnostic);
     }
@@ -258,6 +289,56 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
     let view = &app.view;
     let target = match control {
         ControlId::ConfigDiagnostic => return None,
+        ControlId::TicketBoardFilter => {
+            let work = app.work_view.as_ref()?;
+            (
+                crate::ui::work_view::ticket_board_layout(
+                    app,
+                    work,
+                    Rect {
+                        height: view.terminal_area.height.saturating_sub(1),
+                        ..view.terminal_area
+                    },
+                )
+                .filter_toggle,
+                if work.board_mine_only {
+                    "Show all tickets (m)"
+                } else {
+                    "Show mine (m)"
+                }
+                .into(),
+            )
+        }
+        ControlId::TicketBoardDone => {
+            let work = app.work_view.as_ref()?;
+            (
+                crate::ui::work_view::ticket_board_layout(
+                    app,
+                    work,
+                    Rect {
+                        height: view.terminal_area.height.saturating_sub(1),
+                        ..view.terminal_area
+                    },
+                )
+                .done_column?,
+                "Expand Done tickets".into(),
+            )
+        }
+        ControlId::TicketBoardSpawn(index) => {
+            let work = app.work_view.as_ref()?;
+            let board = crate::ui::work_view::ticket_board_layout(
+                app,
+                work,
+                Rect {
+                    height: view.terminal_area.height.saturating_sub(1),
+                    ..view.terminal_area
+                },
+            );
+            (
+                board.spawn_buttons.get(index)?.1,
+                "Start work on this ticket".into(),
+            )
+        }
         ControlId::NotepadUsageRow(index) => (
             *view.notepad_usage_hit_areas.get(index)?,
             view.notepad_usage_rows.get(index)?.tooltip.clone()?,
@@ -616,6 +697,25 @@ pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn board_filter_and_done_controls_have_actionable_tooltips() {
+        let mut app = AppState::test_new();
+        app.view.terminal_area = Rect::new(26, 2, 120, 20);
+        let mut work = crate::app::state::WorkViewState::new(true, None);
+        work.projection = crate::app::state::WorkProjection::Tickets;
+        work.ticket_layout = crate::app::state::LinearViewLayout::Board;
+        app.work_view = Some(work);
+
+        assert_eq!(
+            tooltip_target(&app, ControlId::TicketBoardFilter).map(|(_, label)| label),
+            Some("Show all tickets (m)".into()),
+        );
+        assert_eq!(
+            tooltip_target(&app, ControlId::TicketBoardDone).map(|(_, label)| label),
+            Some("Expand Done tickets".into()),
+        );
+    }
 
     #[test]
     fn tooltip_prefers_below_and_falls_back_above_without_covering_anchor() {

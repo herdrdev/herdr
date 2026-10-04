@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthStr;
+
 use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
@@ -318,6 +320,9 @@ fn render_tickets(app: &AppState, state: &WorkViewState, area: Rect, frame: &mut
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
     let has_context_pr = super::dock::pr::focused_pr_key(app).is_some();
     let items = state.snapshot.as_ref().map(|snapshot| {
+        if state.ticket_layout == crate::app::state::LinearViewLayout::Board {
+            return ticket_board_items(app, state);
+        }
         sorted_filtered_tickets(
             &snapshot.items,
             &app.work_item_detail_cache,
@@ -515,8 +520,12 @@ pub(crate) struct BoardCardHitArea {
 pub(crate) struct TicketBoardLayout {
     pub(crate) list_toggle: Rect,
     pub(crate) board_toggle: Rect,
+    pub(crate) filter_toggle: Rect,
     pub(crate) visible_columns: std::ops::Range<usize>,
     pub(crate) cards: Vec<BoardCardHitArea>,
+    pub(crate) column_areas: Vec<Rect>,
+    pub(crate) done_column: Option<Rect>,
+    pub(crate) spawn_buttons: Vec<(crate::app::state::WorkItemKey, Rect)>,
 }
 
 pub(crate) fn ticket_board_page_size(width: u16) -> usize {
@@ -527,41 +536,47 @@ pub(crate) fn ticket_board_page_size(width: u16) -> usize {
     }
 }
 
+pub(crate) fn ticket_board_items<'a>(
+    app: &'a AppState,
+    state: &'a WorkViewState,
+) -> Vec<TicketItem<'a>> {
+    let Some(snapshot) = state.snapshot.as_ref() else {
+        return Vec::new();
+    };
+    let identities = [
+        app.work_index_session.linear.viewer.as_deref(),
+        app.work_index_session.linear_viewer_identity(),
+    ];
+    sorted_filtered_tickets(
+        &snapshot.items,
+        &app.work_item_detail_cache,
+        &state.search,
+        state.ticket_sort,
+        state.ticket_open_only,
+        snapshot.observed_at,
+        super::dock::pr::focused_pr_key(app).is_some(),
+        None,
+    )
+    .into_iter()
+    .filter(|item| {
+        !state.board_mine_only
+            || identities.iter().flatten().any(|identity| {
+                item.summary
+                    .assignee
+                    .as_deref()
+                    .is_some_and(|assignee| assignee.eq_ignore_ascii_case(identity))
+            })
+    })
+    .collect()
+}
+
 pub(crate) fn ticket_board_columns(
     app: &AppState,
     state: &WorkViewState,
 ) -> [Vec<crate::app::state::WorkItemKey>; 5] {
     let mut columns: [Vec<crate::app::state::WorkItemKey>; 5] = std::array::from_fn(|_| Vec::new());
-    let observed_at = state
-        .snapshot
-        .as_ref()
-        .map(|snapshot| snapshot.observed_at)
-        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-    let has_context_pr = super::dock::pr::focused_pr_key(app).is_some();
-    let items = state
-        .snapshot
-        .as_ref()
-        .map(|snapshot| {
-            sorted_filtered_tickets(
-                &snapshot.items,
-                &app.work_item_detail_cache,
-                &state.search,
-                state.ticket_sort,
-                state.ticket_open_only,
-                observed_at,
-                has_context_pr,
-                Some((&app.sidebar_work_filter, &app.work_index_session)),
-            )
-        })
-        .unwrap_or_default();
-    for item in items {
-        let column = LinearBoardColumn::for_ticket(item.summary) as usize;
-        columns[column].push(crate::app::state::WorkItemKey {
-            repo: String::new(),
-            pr_number: None,
-            pr_url: None,
-            ticket_id: Some(item.summary.identifier.clone()),
-        });
+    for item in ticket_board_items(app, state) {
+        columns[LinearBoardColumn::for_ticket(item.summary) as usize].push(item.stable_key());
     }
     columns
 }
@@ -570,6 +585,18 @@ pub(crate) fn ticket_board_layout(
     app: &AppState,
     state: &WorkViewState,
     area: Rect,
+) -> TicketBoardLayout {
+    let columns = ticket_board_columns(app, state);
+    let agents = board_agent_summaries(app);
+    ticket_board_layout_from(app, state, area, &columns, &agents)
+}
+
+fn ticket_board_layout_from(
+    app: &AppState,
+    state: &WorkViewState,
+    area: Rect,
+    columns: &[Vec<crate::app::state::WorkItemKey>; 5],
+    agent_summaries: &std::collections::HashMap<String, BoardAgentSummary<'_>>,
 ) -> TicketBoardLayout {
     if area.width == 0 || area.height < 2 {
         return TicketBoardLayout::default();
@@ -588,15 +615,29 @@ pub(crate) fn ticket_board_layout(
     let page_end = (page_start + page_size).min(LinearBoardColumn::ALL.len());
     let body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
     let constraints = (page_start..page_end)
-        .map(|_| Constraint::Ratio(1, page_size as u32))
+        .map(|index| {
+            if index == LinearBoardColumn::Done as usize && index != state.board_column {
+                Constraint::Length(board_done_label(app, columns[4].len()).width() as u16 + 2)
+            } else {
+                Constraint::Fill(1)
+            }
+        })
         .collect::<Vec<_>>();
     let column_areas = Layout::horizontal(constraints).split(body);
-    let columns = ticket_board_columns(app, state);
     let mut cards = Vec::new();
+    let mut spawn_buttons = Vec::new();
+    let mut done_column = None;
     for (visible_index, column_index) in (page_start..page_end).enumerate() {
-        let inner = Block::default()
-            .borders(Borders::ALL)
-            .inner(column_areas[visible_index]);
+        let column_area = column_areas[visible_index];
+        let column = LinearBoardColumn::ALL[column_index];
+        if column == LinearBoardColumn::Done && column_index != state.board_column {
+            done_column = Some(column_area);
+            continue;
+        }
+        let inner = Block::default().borders(Borders::ALL).inner(column_area);
+        if inner.width == 0 {
+            continue;
+        }
         let capacity = usize::from(inner.height) / 4;
         let first = state.board_scroll[column_index]
             .min(columns[column_index].len().saturating_sub(capacity.max(1)));
@@ -610,17 +651,78 @@ pub(crate) fn ticket_board_layout(
                 row,
                 rect: Rect::new(inner.x, inner.y + visible_row as u16 * 4, inner.width, 4),
             });
+            let card = Rect::new(inner.x, inner.y + visible_row as u16 * 4, inner.width, 4);
+            let key = &columns[column_index][row];
+            let ticket_id = key.ticket_id.as_deref().unwrap_or_default();
+            if card.width >= if app.nerd_font { 3 } else { 2 }
+                && !agent_summaries.contains_key(&ticket_id.to_ascii_lowercase())
+            {
+                spawn_buttons.push((
+                    key.clone(),
+                    Rect::new(
+                        card.right()
+                            .saturating_sub(if app.nerd_font { 3 } else { 2 }),
+                        card.y + 3,
+                        if app.nerd_font { 2 } else { 1 },
+                        1,
+                    ),
+                ));
+            }
         }
     }
+    let prefix = board_header_prefix(app);
+    let list_start = prefix.width() as u16;
+    let board_start = list_start + 7;
+    let filter_start = board_start + 8;
+    let header_hit = |start: u16, width: u16| {
+        Rect::new(
+            area.x + start.min(area.width),
+            area.y,
+            width.min(area.width.saturating_sub(start)),
+            1,
+        )
+    };
     TicketBoardLayout {
-        list_toggle: Rect::new(area.x + 10.min(area.width), area.y, 6.min(area.width), 1),
-        board_toggle: Rect::new(area.x + 17.min(area.width), area.y, 7.min(area.width), 1),
+        list_toggle: header_hit(list_start, 4),
+        board_toggle: header_hit(board_start, 5),
+        filter_toggle: header_hit(filter_start, board_filter_label(app, state).width() as u16),
         visible_columns: page_start..page_end,
         cards,
+        column_areas: column_areas.to_vec(),
+        done_column,
+        spawn_buttons,
+    }
+}
+
+fn board_header_prefix(app: &AppState) -> &'static str {
+    if app.nerd_font {
+        "▦ Board   "
+    } else {
+        "Board   "
+    }
+}
+
+fn board_filter_label(app: &AppState, state: &WorkViewState) -> String {
+    let scope = if state.board_mine_only { "mine" } else { "all" };
+    if app.nerd_font {
+        format!("🔍 filter   {scope} ▾")
+    } else {
+        format!("filter   {scope}")
+    }
+}
+
+fn board_done_label(app: &AppState, count: usize) -> String {
+    if app.nerd_font {
+        format!(" ✓ {count} ")
+    } else {
+        format!(" Done {count} ")
     }
 }
 
 fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame: &mut Frame) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
     let refresh = if state.refreshing || !app.work_item_detail_loading.is_empty() {
         " · refreshing…"
     } else {
@@ -629,7 +731,7 @@ fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame:
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             ratatui::text::Span::styled(
-                "Tickets ",
+                board_header_prefix(app),
                 Style::default()
                     .fg(app.palette.text)
                     .add_modifier(Modifier::BOLD),
@@ -643,32 +745,39 @@ fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame:
                     .bg(app.palette.surface0)
                     .add_modifier(Modifier::BOLD),
             ),
+            ratatui::text::Span::raw("   "),
+            ratatui::text::Span::styled(
+                board_filter_label(app, state),
+                Style::default().fg(app.palette.subtext0),
+            ),
             ratatui::text::Span::styled(refresh, Style::default().fg(app.palette.subtext0)),
         ])),
         Rect::new(area.x, area.y, area.width, 1),
     );
-    let layout = ticket_board_layout(app, state, area);
     let columns = ticket_board_columns(app, state);
-    let body = Rect::new(
-        area.x,
-        area.y + 1,
-        area.width,
-        area.height.saturating_sub(1),
-    );
-    let constraints = layout
-        .visible_columns
-        .clone()
-        .map(|_| Constraint::Ratio(1, layout.visible_columns.len() as u32))
-        .collect::<Vec<_>>();
-    let column_areas = Layout::horizontal(constraints).split(body);
+    let agent_summaries = board_agent_summaries(app);
+    let layout = ticket_board_layout_from(app, state, area, &columns, &agent_summaries);
     for (visible_index, column_index) in layout.visible_columns.clone().enumerate() {
         let column = LinearBoardColumn::ALL[column_index];
         let selected_column = column_index == state.board_column;
+        let column_area = layout.column_areas[visible_index];
+        if column == LinearBoardColumn::Done && !selected_column {
+            let strip = Block::default()
+                .borders(Borders::ALL)
+                .title(board_done_label(app, columns[column_index].len()))
+                .border_style(Style::default().fg(app.palette.surface_dim));
+            frame.render_widget(strip, column_area);
+            continue;
+        }
         let block = Block::default()
             .borders(Borders::ALL)
             .title(format!(
-                " {} · {} ",
-                column.label(),
+                " {} {} ",
+                if column == LinearBoardColumn::Todo {
+                    "Todo"
+                } else {
+                    column.label()
+                },
                 columns[column_index].len()
             ))
             .border_style(Style::default().fg(if selected_column {
@@ -676,8 +785,8 @@ fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame:
             } else {
                 app.palette.surface_dim
             }));
-        let inner = block.inner(column_areas[visible_index]);
-        frame.render_widget(block, column_areas[visible_index]);
+        let inner = block.inner(column_area);
+        frame.render_widget(block, column_area);
         if columns[column_index].is_empty() {
             frame.render_widget(
                 Paragraph::new(Line::styled(
@@ -688,15 +797,12 @@ fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame:
             );
             continue;
         }
-        let first = state.board_scroll[column_index];
-        let capacity = usize::from(inner.height) / 4;
-        for (visible_row, key) in columns[column_index]
+        for card in layout
+            .cards
             .iter()
-            .skip(first)
-            .take(capacity)
-            .enumerate()
+            .filter(|card| card.column == column_index)
         {
-            let Some(ticket_id) = key.ticket_id.as_deref() else {
+            let Some(ticket_id) = card.key.ticket_id.as_deref() else {
                 continue;
             };
             let Some(ticket) = state.snapshot.as_ref().and_then(|snapshot| {
@@ -708,83 +814,245 @@ fn render_ticket_board(app: &AppState, state: &WorkViewState, area: Rect, frame:
             }) else {
                 continue;
             };
-            let selected = selected_column && state.board_rows[column_index] == first + visible_row;
-            let style = if selected {
-                Style::default()
-                    .fg(app.palette.text)
-                    .bg(app.palette.surface0)
+            let selected = selected_column && state.board_rows[column_index] == card.row;
+            let style = Style::default().fg(app.palette.text).bg(if selected {
+                app.palette.surface0
             } else {
-                Style::default().fg(app.palette.text)
-            };
-            let glyph = match LinearBoardColumn::for_ticket(ticket) {
-                LinearBoardColumn::Triage => "●",
-                LinearBoardColumn::Todo => "○",
-                LinearBoardColumn::InProgress | LinearBoardColumn::InReview => "◐",
-                LinearBoardColumn::Done => "✓",
-            };
-            let priority = ticket
-                .priority
-                .map_or("P—".into(), |value| format!("P{value}"));
-            let width = usize::from(inner.width.saturating_sub(2)).max(1);
-            let title = wrap_board_title(ticket.title.as_deref().unwrap_or("(untitled)"), width);
-            let initials = assignee_initials(ticket.assignee.as_deref());
-            let marker = if selected { "▸" } else { " " };
+                app.palette.panel_bg
+            });
+            let width = usize::from(card.rect.width);
+            let title = wrap_board_title(
+                ticket.title.as_deref().unwrap_or("(untitled)"),
+                width.saturating_sub(2),
+            );
             let lines = vec![
-                Line::styled(
-                    format!("{marker}{glyph} {} {priority}", ticket.identifier),
-                    style,
-                ),
+                Line::styled(board_card_heading(ticket, selected, width), style),
                 Line::styled(format!(" {}", title[0]), style),
                 Line::styled(format!(" {}", title[1]), style),
-                Line::styled(
-                    format!(" {initials}"),
-                    Style::default().fg(app.palette.subtext0).bg(if selected {
-                        app.palette.surface0
-                    } else {
-                        app.palette.panel_bg
-                    }),
-                ),
+                board_agent_line(app, ticket, &agent_summaries, width).style(style),
             ];
-            frame.render_widget(
-                Paragraph::new(lines),
-                Rect::new(inner.x, inner.y + visible_row as u16 * 4, inner.width, 4),
-            );
+            frame.render_widget(Paragraph::new(lines), card.rect);
         }
     }
+}
+
+fn board_card_heading(
+    ticket: &crate::work_index::WorkTicket,
+    selected: bool,
+    width: usize,
+) -> String {
+    if width < 2 {
+        return fit_board_text(if selected { "▸" } else { " " }, width);
+    }
+    let priority = ticket
+        .priority
+        .map_or("P—".into(), |value| format!("P{value}"));
+    let priority = fit_board_text(&priority, width.saturating_sub(2));
+    let id_width = width.saturating_sub(priority.width() + 2);
+    let id = fit_board_text(&ticket.identifier, id_width);
+    let marker = if selected { "▸" } else { " " };
+    format!(
+        "{marker}{id}{}{priority} ",
+        " ".repeat(id_width.saturating_sub(id.width()))
+    )
 }
 
 fn wrap_board_title(title: &str, width: usize) -> [String; 2] {
-    let mut lines = [String::new(), String::new()];
-    let mut line = 0;
-    for word in title.split_whitespace() {
-        let needed = word.chars().count() + usize::from(!lines[line].is_empty());
-        if lines[line].chars().count() + needed > width && line == 0 {
-            line = 1;
-        }
-        if lines[line].chars().count() + needed > width {
-            break;
-        }
-        if !lines[line].is_empty() {
-            lines[line].push(' ');
-        }
-        lines[line].push_str(word);
+    if width == 0 {
+        return [String::new(), String::new()];
     }
-    lines
+    let text = title.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut first = fit_board_text(&text, width);
+    if first.len() == text.len() {
+        return [first, String::new()];
+    }
+    if let Some(space) = first
+        .rfind(' ')
+        .filter(|_| !text[first.len()..].starts_with(' '))
+    {
+        first.truncate(space);
+    }
+    let rest = text[first.len()..].trim_start();
+    let mut second = fit_board_text(rest, width);
+    if second.len() < rest.len() {
+        second = fit_board_text(rest, width.saturating_sub(1));
+        second.push('…');
+    }
+    [first, second]
 }
 
-fn assignee_initials(assignee: Option<&str>) -> String {
-    let initials = assignee
-        .unwrap_or("unassigned")
-        .split(|character: char| character.is_whitespace() || character == '.' || character == '-')
-        .filter_map(|part| part.chars().next())
-        .take(2)
-        .flat_map(char::to_uppercase)
-        .collect::<String>();
-    if initials.is_empty() {
-        "—".into()
-    } else {
-        initials
+fn fit_board_text(value: &str, width: usize) -> String {
+    let mut used = 0;
+    value
+        .chars()
+        .take_while(|character| {
+            used += unicode_width::UnicodeWidthChar::width(*character).unwrap_or(0);
+            used <= width
+        })
+        .collect()
+}
+
+#[derive(Clone, Copy)]
+struct BoardAgentSummary<'a> {
+    agent: crate::detect::Agent,
+    host: &'a str,
+    state: crate::detect::AgentState,
+    seen: bool,
+    activity_at: Option<std::time::Instant>,
+}
+
+// One scalar projection per attached pane per board computation. No terminal-core
+// locks, snapshots, process probes, or sidebar presentation collection.
+fn board_agent_summaries(
+    app: &AppState,
+) -> std::collections::HashMap<String, BoardAgentSummary<'_>> {
+    let mut by_ticket = std::collections::HashMap::new();
+    for workspace in &app.workspaces {
+        for tab in &workspace.tabs {
+            for pane in tab.panes.values() {
+                let Some(terminal) = app.terminals.get(&pane.attached_terminal_id) else {
+                    continue;
+                };
+                let Some(agent) = terminal.detected_agent else {
+                    continue;
+                };
+                let context = terminal.effective_work_context();
+                if context.ticket_ids.is_empty() {
+                    continue;
+                }
+                let projection = pane.agent_projection(terminal);
+                let summary = BoardAgentSummary {
+                    agent,
+                    host: &app.agent_host_name,
+                    state: projection.state,
+                    seen: projection.seen,
+                    activity_at: terminal.agent_activity_at(),
+                };
+                for ticket in &context.ticket_ids {
+                    by_ticket
+                        .entry(ticket.to_ascii_lowercase())
+                        .or_insert(summary);
+                }
+            }
+        }
     }
+    for remote in &app.remote_agent_panel_entries {
+        let Some(agent) = remote.entry.agent else {
+            continue;
+        };
+        if !remote.entry.has_agent {
+            continue;
+        }
+        let summary = BoardAgentSummary {
+            agent,
+            host: &remote.agent_ref.host,
+            state: remote.entry.state,
+            seen: remote.entry.seen,
+            activity_at: remote.entry.activity_at,
+        };
+        for ticket in &remote.work_context().ticket_ids {
+            by_ticket
+                .entry(ticket.to_ascii_lowercase())
+                .or_insert(summary);
+        }
+    }
+    by_ticket
+}
+
+fn board_agent_state_label(state: crate::detect::AgentState) -> &'static str {
+    match state {
+        crate::detect::AgentState::Working => "working",
+        crate::detect::AgentState::Blocked => "blocked",
+        crate::detect::AgentState::Idle => "idle",
+        crate::detect::AgentState::Unknown => "unknown",
+    }
+}
+
+pub(crate) fn ticket_board_next_age_change(
+    app: &AppState,
+    now: std::time::Instant,
+) -> Option<std::time::Instant> {
+    let state = app.work_view.as_ref()?;
+    if state.projection != WorkProjection::Tickets
+        || state.ticket_layout != crate::app::state::LinearViewLayout::Board
+        || state.board_detail_open
+    {
+        return None;
+    }
+    let agents = board_agent_summaries(app);
+    let columns = ticket_board_columns(app, state);
+    let area = Rect {
+        height: app.view.terminal_area.height.saturating_sub(1),
+        ..app.view.terminal_area
+    };
+    let layout = ticket_board_layout_from(app, state, area, &columns, &agents);
+    layout
+        .cards
+        .iter()
+        .filter_map(|card| {
+            let agent = agents.get(&card.key.ticket_id.as_deref()?.to_ascii_lowercase())?;
+            crate::activity_age::next_change_at(agent.activity_at, now)
+        })
+        .min()
+}
+
+fn board_agent_line(
+    app: &AppState,
+    ticket: &crate::work_index::WorkTicket,
+    summaries: &std::collections::HashMap<String, BoardAgentSummary<'_>>,
+    width: usize,
+) -> Line<'static> {
+    let Some(summary) = summaries.get(&ticket.identifier.to_ascii_lowercase()) else {
+        let plus = if app.nerd_font { "＋" } else { "+" };
+        if width < plus.width() + 1 {
+            return Line::styled(
+                fit_board_text(" no agent", width),
+                Style::default().fg(app.palette.overlay0),
+            );
+        }
+        let label = fit_board_text(" no agent", width.saturating_sub(plus.width() + 1));
+        return Line::from(vec![
+            ratatui::text::Span::styled(label.clone(), Style::default().fg(app.palette.overlay0)),
+            ratatui::text::Span::raw(
+                " ".repeat(width.saturating_sub(label.width() + plus.width() + 1)),
+            ),
+            ratatui::text::Span::raw(if width >= 2 {
+                format!("{plus} ")
+            } else {
+                String::new()
+            }),
+        ]);
+    };
+    let agent = crate::ui::icons::agent_label(summary.agent, app.nerd_font).unwrap_or("agent");
+    let state = if summary.state == crate::detect::AgentState::Idle && !summary.seen {
+        "done"
+    } else {
+        board_agent_state_label(summary.state)
+    };
+    let age = crate::activity_age::compact_label(summary.activity_at, app.view_observed_at);
+    let dot = crate::ui::sidebar::compact_dot_for_state(
+        summary.state,
+        summary.seen,
+        true,
+        false,
+        false,
+        false,
+    );
+    let text = fit_board_text(
+        &format!("{agent} {} · {state} {age}", summary.host),
+        width.saturating_sub(3),
+    );
+    Line::from(vec![
+        ratatui::text::Span::styled(
+            fit_board_text(&format!(" {dot} "), width),
+            Style::default().fg(super::status::state_label_color(
+                summary.state,
+                summary.seen,
+                &app.palette,
+            )),
+        ),
+        ratatui::text::Span::raw(text),
+    ])
 }
 
 fn render_review_queue(palette: &Palette, state: &WorkViewState, area: Rect, frame: &mut Frame) {
@@ -2227,7 +2495,7 @@ fn render_footer(palette: &Palette, state: &WorkViewState, area: Rect, frame: &m
             if state.ticket_layout == crate::app::state::LinearViewLayout::Board
                 && !state.board_detail_open =>
         {
-            " ←/→ columns   ↑/↓ cards   Enter detail   t transition   v list"
+            " ←/→ columns   ↑/↓ cards   Enter detail   m mine/all   t transition   v list"
         }
         WorkProjection::Tickets => {
             " / search   ↑/↓ move   s sort   f open/all   c start   t transition   l link PR   m more   v board"
@@ -2491,6 +2759,7 @@ mod tests {
         let mut state = WorkViewState::new(true, Some(snapshot(items)));
         state.projection = WorkProjection::Tickets;
         state.ticket_layout = crate::app::state::LinearViewLayout::Board;
+        state.board_mine_only = false;
         state
     }
 
@@ -2518,6 +2787,309 @@ mod tests {
     }
 
     #[test]
+    fn board_mine_filter_defaults_on_and_keeps_done_outside_sidebar_status_filters() {
+        let mut app = AppState::test_new();
+        assert!(WorkViewState::new(true, None).board_mine_only);
+        let mut state = board_state();
+        state.board_mine_only = true;
+        app.work_index_session.linear.viewer = Some("matthias".into());
+        state.snapshot.as_mut().expect("snapshot").items[0].ticket_details[0].assignee =
+            Some("matthias".into());
+        state.snapshot.as_mut().expect("snapshot").items[4].ticket_details[0].assignee =
+            Some("other".into());
+        app.sidebar_work_filter.linear_statuses = [crate::app::state::LinearStatusFilter::Todo]
+            .into_iter()
+            .collect();
+
+        let columns = ticket_board_columns(&app, &state);
+        assert_eq!(columns[0].len(), 1);
+        assert!(columns[4].is_empty(), "mine excludes another assignee");
+        state.board_mine_only = false;
+        let columns = ticket_board_columns(&app, &state);
+        assert_eq!(
+            columns[4].len(),
+            1,
+            "all includes Done despite sidebar active status filters"
+        );
+    }
+
+    #[test]
+    fn board_renders_compact_cards_and_tracks_nonzero_origin_spawn_geometry() {
+        let app = AppState::test_new();
+        let state = board_state();
+        let layout = ticket_board_layout(&app, &state, Rect::new(26, 2, 93, 24));
+        assert_eq!(layout.visible_columns, 0..5);
+        assert_eq!(
+            layout.cards.len(),
+            4,
+            "collapsed Done has no card hit areas"
+        );
+        assert_eq!(
+            layout.spawn_buttons[0].1.x,
+            layout.cards[0].rect.right().saturating_sub(3)
+        );
+        let text = rendered_text_at(&state, 120, 30);
+        assert!(text.contains("Todo"), "{text}");
+        assert!(text.contains("no agent"), "{text}");
+        assert!(
+            !text.contains("SCA-1 P2"),
+            "status and left priority glyphs are removed: {text}"
+        );
+        assert!(
+            text.contains("✓ 1"),
+            "Done is collapsed to its count: {text}"
+        );
+    }
+
+    fn board_app_with_local_agent(state: crate::detect::AgentState, seen: bool) -> AppState {
+        let mut app = AppState::test_new();
+        app.agent_host_name = "ub1".into();
+        let workspace = crate::workspace::Workspace::test_new("board");
+        let pane = workspace.tabs[0].panes.values().next().expect("pane");
+        let id = pane.attached_terminal_id.clone();
+        let mut terminal =
+            crate::terminal::TerminalState::new(id.clone(), std::path::PathBuf::from("/tmp"));
+        terminal.detected_agent = Some(crate::detect::Agent::Codex);
+        terminal.set_detected_state(Some(crate::detect::Agent::Codex), state);
+        terminal
+            .apply_manual_work_context_patch(crate::work_context::PaneWorkContextPatch {
+                ticket_ids: Some(vec!["sca-3".into()]),
+                ..Default::default()
+            })
+            .expect("context");
+        app.terminals.insert(id, terminal);
+        app.workspaces.push(workspace);
+        for pane in app.workspaces[0].tabs[0].panes.values_mut() {
+            pane.seen = seen;
+        }
+        app.nerd_font = false;
+        app
+    }
+
+    #[test]
+    fn board_projects_attached_local_agents_and_live_lifecycle() {
+        for (state, seen, label) in [
+            (crate::detect::AgentState::Working, true, "working"),
+            (crate::detect::AgentState::Blocked, true, "blocked"),
+            (crate::detect::AgentState::Idle, true, "idle"),
+            (crate::detect::AgentState::Idle, false, "done"),
+        ] {
+            let mut app = board_app_with_local_agent(state, seen);
+            app.work_view = Some(board_state());
+            let summaries = board_agent_summaries(&app);
+            assert_eq!(summaries.len(), 1);
+            let ticket = &app
+                .work_view
+                .as_ref()
+                .expect("view")
+                .snapshot
+                .as_ref()
+                .expect("snapshot")
+                .items[2]
+                .ticket_details[0];
+            let text = board_agent_line(&app, ticket, &summaries, 50).to_string();
+            assert!(text.contains(&format!("cx ub1 · {label}")), "{text}");
+            assert!(!text.contains("no agent") && !text.contains('+'), "{text}");
+            let layout = ticket_board_layout(
+                &app,
+                app.work_view.as_ref().expect("view"),
+                Rect::new(0, 0, 160, 24),
+            );
+            assert!(!layout
+                .spawn_buttons
+                .iter()
+                .any(|(key, _)| key.ticket_id.as_deref() == Some("SCA-3")));
+        }
+    }
+
+    #[test]
+    fn board_attached_remote_agent_uses_remote_host_context_and_age() {
+        let (mut app, _) = crate::ui::sidebar::tests::remote_control_fixture(
+            crate::fleet::HostState::Reachable,
+            crate::api::schema::AgentStatus::Working,
+            false,
+            false,
+            false,
+        );
+        let mut info = app.fleet_snapshot.hosts[0].entries[0]
+            .agent_info()
+            .expect("info")
+            .clone();
+        info.work_context.ticket_ids = vec!["SCA-3".into()];
+        info.reported_at = Some("1970-01-01T00:00:00Z".into());
+        app.fleet_snapshot.hosts[0].entries[0] =
+            crate::fleet::FleetRow::test_agent_info_row("ub2", info);
+        app.remote_agent_panel_entries =
+            crate::ui::sidebar::remote_agent_panel_entries_at(&app.fleet_snapshot, 2, false);
+        let summaries = board_agent_summaries(&app);
+        let remote = summaries.get("sca-3").expect("remote ticket agent");
+        assert_eq!(remote.host, "ub2");
+        assert_eq!(remote.state, crate::detect::AgentState::Working);
+        assert!(remote.activity_at.is_some());
+    }
+
+    #[test]
+    fn board_card_alignment_wrapping_fallback_and_clipped_controls() {
+        let mut app = AppState::test_new();
+        let state = board_state();
+        let ticket = &state.snapshot.as_ref().expect("snapshot").items[0].ticket_details[0];
+        let heading = board_card_heading(ticket, true, 24);
+        assert_eq!(heading.width(), 24);
+        assert!(heading.starts_with("▸SCA-1"));
+        assert!(heading.ends_with("P2 "));
+        assert_eq!(
+            wrap_board_title("export presets for studio", 18),
+            ["export presets for".to_string(), "studio".to_string()]
+        );
+        assert_eq!(
+            wrap_board_title("averylongwordcannotfit and more", 10),
+            ["averylongw".to_string(), "ordcannot…".to_string()]
+        );
+        for nerd_font in [true, false] {
+            app.nerd_font = nerd_font;
+            let layout = ticket_board_layout(&app, &state, Rect::new(26, 2, 120, 24));
+            let card = &layout.cards[0];
+            let line =
+                board_agent_line(&app, ticket, &Default::default(), card.rect.width as usize);
+            assert_eq!(line.width(), card.rect.width as usize);
+            let plus = if nerd_font { "＋" } else { "+" };
+            assert!(line.to_string().ends_with(&format!("{plus} ")));
+            let button = layout.spawn_buttons[0].1;
+            assert_eq!(button.x + button.width + 1, card.rect.right());
+            assert_eq!(button.y, card.rect.y + 3);
+            for width in 0..20 {
+                let area = Rect::new(26, 2, width, 10);
+                let layout = ticket_board_layout(&app, &state, area);
+                for rect in [
+                    layout.list_toggle,
+                    layout.board_toggle,
+                    layout.filter_toggle,
+                ] {
+                    assert!(rect.is_empty() || (rect.x >= area.x && rect.right() <= area.right()));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn board_mine_uses_viewer_identity_and_stale_scroll_matches_rendered_cards() {
+        let mut app = AppState::test_new();
+        app.work_index_session
+            .set_linear_viewer_identity_for_test("viewer-id");
+        let mut state = board_state();
+        state.board_mine_only = true;
+        state.snapshot.as_mut().expect("snapshot").items[2].ticket_details[0].assignee =
+            Some("viewer-id".into());
+        assert_eq!(ticket_board_columns(&app, &state)[2].len(), 1);
+        state.board_scroll[2] = usize::MAX;
+        let layout = ticket_board_layout(&app, &state, Rect::new(0, 0, 160, 24));
+        assert_eq!(layout.cards.len(), 1);
+        assert_eq!(layout.cards[0].row, 0);
+        app.work_view = Some(state);
+        assert!(rendered_app_text_at(&app, 160, 24).contains("SCA-3"));
+    }
+
+    #[test]
+    fn board_done_detail_and_mouse_rectangles_follow_board_scope() {
+        let mut app = AppState::test_new();
+        let mut state = board_state();
+        state.board_column = 4;
+        state.selected = ticket_board_columns(&app, &state)[4].first().cloned();
+        state.board_detail_open = true;
+        app.work_view = Some(state);
+        let detail = rendered_app_text_at(&app, 160, 40);
+        assert!(
+            detail.contains("SCA-5"),
+            "Done detail must not fall back to an active ticket: {detail}"
+        );
+        app.work_view.as_mut().expect("view").board_detail_open = false;
+        app.work_view.as_mut().expect("view").board_column = 0;
+        let area = Rect::new(26, 2, 120, 24);
+        let state = app.work_view.as_ref().expect("view");
+        let layout = ticket_board_layout(&app, state, area);
+        let mut terminal = Terminal::new(TestBackend::new(160, 40)).expect("test terminal");
+        terminal
+            .draw(|frame| render_ticket_board(&app, state, area, frame))
+            .expect("board render");
+        let buffer = terminal.backend().buffer();
+        assert_eq!(buffer[(layout.list_toggle.x, area.y)].symbol(), "L");
+        assert_eq!(buffer[(layout.board_toggle.x, area.y)].symbol(), "B");
+        assert_eq!(buffer[(layout.filter_toggle.x, area.y)].symbol(), "🔍");
+        for (key, plus) in &layout.spawn_buttons {
+            assert_eq!(buffer[(plus.x, plus.y)].symbol(), "＋");
+            let card = layout
+                .cards
+                .iter()
+                .find(|card| &card.key == key)
+                .expect("card");
+            assert_eq!(plus.y, card.rect.y + 3);
+        }
+        let done = layout.done_column.expect("Done strip");
+        assert!(done.width < layout.column_areas[0].width);
+        assert_eq!(buffer[(done.x + 2, done.y)].symbol(), "✓");
+    }
+
+    #[test]
+    fn board_live_age_refreshes_with_sidebar_hidden() {
+        let mut app = board_app_with_local_agent(crate::detect::AgentState::Working, true);
+        let activity = app
+            .terminals
+            .values()
+            .next()
+            .expect("terminal")
+            .agent_activity_at()
+            .expect("activity");
+        app.work_view = Some(board_state());
+        app.view.terminal_area = Rect::new(0, 0, 160, 24);
+        app.view.visible_agent_activity_instants.clear();
+        let now = activity + std::time::Duration::from_secs(75);
+        assert_eq!(
+            app.next_agent_activity_age_change(now),
+            Some(activity + std::time::Duration::from_secs(120))
+        );
+        app.work_view.as_mut().expect("view").board_detail_open = true;
+        assert_eq!(app.next_agent_activity_age_change(now), None);
+    }
+
+    #[test]
+    #[ignore = "supporting render scaling profile; run with just bench-render-scale"]
+    fn board_render_scale_profile() {
+        let mut measurements = Vec::new();
+        for panes in [1, 15] {
+            let mut app = board_app_with_local_agent(crate::detect::AgentState::Working, true);
+            for _ in 1..panes {
+                let mut extra =
+                    board_app_with_local_agent(crate::detect::AgentState::Working, true);
+                app.workspaces.append(&mut extra.workspaces);
+                app.terminals.extend(extra.terminals);
+            }
+            app.work_view = Some(board_state());
+            app.view.terminal_area = Rect::new(0, 0, 160, 40);
+            let mut terminal = Terminal::new(TestBackend::new(160, 40)).expect("test terminal");
+            for _ in 0..10 {
+                terminal
+                    .draw(|frame| render(&app, frame.area(), frame))
+                    .expect("warmup");
+            }
+            let started = std::time::Instant::now();
+            for _ in 0..200 {
+                terminal
+                    .draw(|frame| render(&app, frame.area(), frame))
+                    .expect("board render");
+                std::hint::black_box(app.next_agent_activity_age_change(app.view_observed_at));
+            }
+            let per_frame = started.elapsed().as_secs_f64() * 1_000_000.0 / 200.0;
+            println!("board profile 160x40, {panes} populated panes: {per_frame:.2} us/frame");
+            measurements.push(per_frame);
+        }
+        println!(
+            "board profile 1 -> 15 panes: {:.2}x, {:+.2} us/frame",
+            measurements[1] / measurements[0],
+            measurements[1] - measurements[0]
+        );
+    }
+
+    #[test]
     fn board_pages_two_columns_at_eighty_and_renders_all_at_one_twenty() {
         let app = AppState::test_new();
         let mut state = board_state();
@@ -2533,12 +3105,23 @@ mod tests {
         let text = rendered_text_at(&state, 120, 40);
         assert!(text.contains("List | Board"), "{text}");
         assert!(text.contains("In Progress"), "{text}");
-        assert!(text.contains("SCA-5"), "{text}");
+        assert!(
+            text.contains("✓ 1"),
+            "collapsed Done shows its count: {text}"
+        );
+
+        state.board_column = 4;
+        let done_selected = ticket_board_layout(&app, &state, Rect::new(26, 2, 93, 36));
+        assert!(done_selected.done_column.is_none());
+        assert!(done_selected
+            .cards
+            .iter()
+            .any(|card| card.key.ticket_id.as_deref() == Some("SCA-5")));
 
         state.refreshing = true;
         let narrow_text = rendered_text_at(&state, 80, 24);
         assert!(
-            narrow_text.contains("Tickets List | Board"),
+            narrow_text.contains("Board   List | Board"),
             "{narrow_text}"
         );
     }
