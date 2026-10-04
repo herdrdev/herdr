@@ -313,6 +313,47 @@ fn ping_over_socket_returns_version() {
 }
 
 #[test]
+fn spawned_server_ignores_inherited_pane_env() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let startup_cwd = base.join("startup");
+    fs::create_dir_all(&startup_cwd).unwrap();
+
+    // A shell inside a herdr pane passes these to every process it starts.
+    let saved: Vec<_> = ["HERDR_STARTUP_CWD", "HERDR_SESSION"]
+        .into_iter()
+        .map(|name| (name, std::env::var_os(name)))
+        .collect();
+    std::env::set_var("HERDR_STARTUP_CWD", &startup_cwd);
+    std::env::set_var("HERDR_SESSION", "inherited");
+    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    for (name, value) in saved {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let value = send_request(
+        &socket_path,
+        r#"{"id":"req_1","method":"workspace.list","params":{}}"#,
+    );
+    assert_eq!(value["result"]["workspaces"], serde_json::json!([]));
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    assert!(!config_home.join(app_dir).join("sessions").exists());
+
+    cleanup_spawned_herdr(child, base);
+}
+
+#[test]
 fn server_reload_agent_manifests_reports_runtime_override() {
     let _lock = test_lock();
     let base = unique_test_dir();
