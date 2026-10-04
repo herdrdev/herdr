@@ -65,6 +65,13 @@ impl App {
     }
 
     pub(crate) fn collect_agent_infos(&self) -> Vec<crate::api::schema::AgentInfo> {
+        self.collect_agent_infos_limited(usize::MAX)
+    }
+
+    pub(crate) fn collect_agent_infos_limited(
+        &self,
+        limit: usize,
+    ) -> Vec<crate::api::schema::AgentInfo> {
         self.state
             .workspaces
             .iter()
@@ -77,6 +84,7 @@ impl App {
                         .filter_map(move |pane_id| self.agent_info(ws_idx, pane_id))
                 })
             })
+            .take(limit)
             .collect()
     }
 

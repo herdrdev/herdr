@@ -53,6 +53,43 @@ pub struct AgentReadParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentSearchParams {
+    pub query: String,
+    #[serde(default = "super::common::default_true")]
+    pub include_session: bool,
+    #[serde(default = "default_agent_search_limit")]
+    pub limit: u16,
+}
+
+fn default_agent_search_limit() -> u16 {
+    100
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSearchSource {
+    Title,
+    Tail,
+    Session,
+    Path,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentSearchHit {
+    pub target: String,
+    pub title: String,
+    pub source: AgentSearchSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    pub context: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview: Vec<String>,
+    pub agent: AgentInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentSendKeysParams {
     pub target: String,
     pub keys: Vec<String>,

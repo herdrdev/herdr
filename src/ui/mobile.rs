@@ -553,6 +553,27 @@ pub(crate) fn render_mobile_panel(
     fill_rect(frame, area, Style::default().bg(p.panel_bg));
 
     let areas = mobile_switcher_areas(app);
+    if app.agent_finder_saved_query.is_some() {
+        frame.render_widget(
+            Paragraph::new(" ⌕ search agents").style(
+                Style::default()
+                    .fg(p.text)
+                    .bg(p.panel_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Rect::new(area.x, area.y, areas.close.x.saturating_sub(area.x), 1),
+        );
+        render_close_button(app, frame, areas.close);
+        if area.height > areas.close.height {
+            draw_horizontal_rule(
+                frame,
+                Rect::new(area.x, area.y + areas.close.height, area.width, 1),
+                p,
+            );
+        }
+        super::render_agent_finder_preview(app, frame, areas.viewport);
+        return;
+    }
     frame.render_widget(
         Paragraph::new(" switch").style(
             Style::default()

@@ -24,6 +24,10 @@ use super::tabs::TabInfo;
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SuccessResponse {
     pub id: String,
@@ -151,6 +155,11 @@ pub enum ResponseResult {
     },
     AgentList {
         agents: Vec<AgentInfo>,
+    },
+    AgentSearch {
+        hits: Vec<super::agents::AgentSearchHit>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        partial: bool,
     },
     DayItem {
         item: super::day::DerivedDayItem,

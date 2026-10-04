@@ -122,6 +122,7 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.new_workspace), "new workspace"),
         help_entry(keybind_label(&kb.new_thread), "new thread"),
         help_entry(keybind_label(&kb.new_agent_dock), "spawn dock"),
+        help_entry(keybind_label(&kb.agent_finder), "search agents"),
         help_entry(keybind_label(&kb.new_worktree), "new worktree"),
         help_entry(keybind_label(&kb.open_worktree), "open worktree"),
         help_entry(
@@ -189,7 +190,7 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.sidebar_refresh), "sidebar.refresh"),
         help_entry(
             keybind_label(&kb.toggle_blocked_filter),
-            "toggle blocked filter",
+            "toggle blocked filter (configurable)",
         ),
         help_entry(keybind_label(&kb.toggle_dock), "toggle dock"),
         help_entry(keybind_label(&kb.previous_dock_tab), "previous dock tab"),
@@ -520,9 +521,8 @@ mod tests {
 
         let entries = keybind_help_groups(&app)
             .into_iter()
-            .find(|(title, _)| *title == "workspaces / tabs")
-            .expect("workspace and tab help group")
-            .1;
+            .flat_map(|(_, entries)| entries)
+            .collect::<Vec<_>>();
 
         assert!(entries.iter().any(|(key, label)| {
             key == "prefix+p" && label == "previous tab across all Spaces"
@@ -536,6 +536,24 @@ mod tests {
         assert!(entries
             .iter()
             .any(|(key, label)| { key == "prefix+ctrl+n" && label == "next tab in this Space" }));
+    }
+
+    #[test]
+    fn finder_default_and_configurable_blocked_filter_appear_in_help() {
+        let mut app = AppState::test_new();
+        app.keybinds = crate::config::Config::default().keybinds();
+
+        let entries = keybind_help_groups(&app)
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+            .collect::<Vec<_>>();
+
+        assert!(entries
+            .iter()
+            .any(|(key, label)| key == "prefix+f" && label == "search agents"));
+        assert!(entries
+            .iter()
+            .any(|(key, label)| key == "unset" && label == "toggle blocked filter (configurable)"));
     }
 
     #[test]

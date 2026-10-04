@@ -28,6 +28,7 @@ const SOCKET_PERMISSION_MODE: u32 = 0o600;
 pub(super) const CONNECTION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 pub(super) const APP_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
 const INITIAL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const AGENT_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 const STREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_INITIAL_REQUEST_BYTES: usize = 1024 * 1024;
 
@@ -432,6 +433,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::TabMove(_) => "tab.move",
         Method::TabClose(_) => "tab.close",
         Method::AgentList(_) => "agent.list",
+        Method::AgentSearch(_) => "agent.search",
         Method::AgentGet(_) => "agent.get",
         Method::AgentState(_) => "agent.state",
         Method::AgentReport(_) => "agent.report",
@@ -879,6 +881,10 @@ fn dispatch_to_app(
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
     stream_active: Option<Arc<AtomicBool>>,
 ) -> String {
+    let agent_search = matches!(&request.method, Method::AgentSearch(_));
+    let timeout = timeout.or_else(|| agent_search.then_some(AGENT_SEARCH_TIMEOUT));
+    let stream_active =
+        stream_active.or_else(|| agent_search.then(|| Arc::new(AtomicBool::new(true))));
     let request_id = request.id.clone();
     let request_active = stream_active.clone();
     let (respond_to, response_rx) = std::sync::mpsc::channel();

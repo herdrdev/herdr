@@ -79,6 +79,19 @@ pub enum AppEvent {
     FleetRefreshed {
         snapshot: crate::fleet::Snapshot,
     },
+    /// Filesystem-backed agent finder matches completed for one query generation.
+    AgentFinderSearchCompleted {
+        generation: u64,
+        query: String,
+        hits: Vec<crate::api::schema::AgentSearchHit>,
+        partial: bool,
+    },
+    /// A filesystem-backed agent search completed without occupying the app loop.
+    AgentSearchFinished {
+        response: String,
+        respond_to: std::sync::mpsc::Sender<String>,
+        active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    },
     /// A remote owner pushed its current agent inventory over the host event stream.
     FleetAgentInventoryChanged {
         host: crate::config::FleetHostConfig,

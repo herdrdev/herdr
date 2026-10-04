@@ -1075,6 +1075,11 @@ pub struct TabCardArea {
 pub(crate) struct SidebarWorkFilter {
     /// Persisted row-search query shared by every sidebar view.
     pub(crate) query: String,
+    /// Limit agent finder results to agents running on this machine.
+    pub(crate) only_this_machine: bool,
+    /// Client presentation history for the sidebar agent finder.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) agent_finder_history: Vec<String>,
     /// Id of the `[[projects]]` entry the sidebar is scoped to. `None` shows
     /// every project, which is what an unconfigured Herdr always shows.
     pub(crate) project: Option<String>,
@@ -1262,6 +1267,8 @@ impl Default for SidebarWorkFilter {
     fn default() -> Self {
         Self {
             query: String::new(),
+            only_this_machine: true,
+            agent_finder_history: Vec::new(),
             project: None,
             team: Some("SCA".into()),
             assignee: Some("me".into()),
@@ -1555,6 +1562,15 @@ pub(crate) struct SidebarPresentationState {
     pub(crate) filter_menu_open: bool,
     pub(crate) filter_menu_selected: usize,
     pub(crate) search_active: bool,
+    pub(crate) agent_finder_saved_query: Option<String>,
+    pub(crate) agent_finder_history: Vec<String>,
+    pub(crate) agent_finder_history_index: Option<usize>,
+    pub(crate) agent_finder_results: Vec<crate::api::schema::AgentSearchHit>,
+    pub(crate) agent_finder_partial: bool,
+    pub(crate) agent_finder_selected: usize,
+    pub(crate) agent_finder_deadline: Option<std::time::Instant>,
+    pub(crate) agent_finder_generation: u64,
+    pub(crate) agent_finder_side_pane: bool,
     pub(crate) new_menu: Option<SidebarNewMenuState>,
     pub(crate) new_thread: Option<SidebarNewThreadState>,
     /// TUI-only spawn draft. Swapped with this attach and never projected by the server API.
@@ -4611,6 +4627,15 @@ pub struct AppState {
     pub(crate) sidebar_filter_menu_selected: usize,
     /// Typed input goes to the persisted sidebar row query while this is set.
     pub(crate) sidebar_search_active: bool,
+    pub(crate) agent_finder_saved_query: Option<String>,
+    pub(crate) agent_finder_history: Vec<String>,
+    pub(crate) agent_finder_history_index: Option<usize>,
+    pub(crate) agent_finder_results: Vec<crate::api::schema::AgentSearchHit>,
+    pub(crate) agent_finder_partial: bool,
+    pub(crate) agent_finder_selected: usize,
+    pub(crate) agent_finder_deadline: Option<std::time::Instant>,
+    pub(crate) agent_finder_generation: u64,
+    pub(crate) agent_finder_side_pane: bool,
     /// Sidebar-only view gate: show just the starred sessions. Pure client
     /// presentation state — the star itself lives on the tab.
     pub(crate) sidebar_starred_only: bool,
@@ -6380,6 +6405,42 @@ impl AppState {
             &mut other.filter_menu_selected,
         );
         std::mem::swap(&mut self.sidebar_search_active, &mut other.search_active);
+        std::mem::swap(
+            &mut self.agent_finder_saved_query,
+            &mut other.agent_finder_saved_query,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_history,
+            &mut other.agent_finder_history,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_history_index,
+            &mut other.agent_finder_history_index,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_results,
+            &mut other.agent_finder_results,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_partial,
+            &mut other.agent_finder_partial,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_selected,
+            &mut other.agent_finder_selected,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_deadline,
+            &mut other.agent_finder_deadline,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_generation,
+            &mut other.agent_finder_generation,
+        );
+        std::mem::swap(
+            &mut self.agent_finder_side_pane,
+            &mut other.agent_finder_side_pane,
+        );
         std::mem::swap(&mut self.sidebar_new_menu, &mut other.new_menu);
         std::mem::swap(&mut self.sidebar_new_thread, &mut other.new_thread);
         std::mem::swap(&mut self.spawn_dock, &mut other.spawn_dock);
@@ -6533,6 +6594,12 @@ impl AppState {
         }
         if self.spawn_dock.is_some() {
             return InputOwner::SpawnDock;
+        }
+        // The finder is rendered over the terminal area, so it must keep
+        // input ownership even when the compact layout has collapsed the
+        // sidebar that normally owns search keystrokes.
+        if self.agent_finder_saved_query.is_some() {
+            return InputOwner::Sidebar;
         }
         if self.sidebar_focused && !self.sidebar_collapsed {
             return InputOwner::Sidebar;
@@ -7892,6 +7959,15 @@ impl AppState {
             sidebar_filter_menu_open: false,
             sidebar_filter_menu_selected: 0,
             sidebar_search_active: false,
+            agent_finder_saved_query: None,
+            agent_finder_history: Vec::new(),
+            agent_finder_history_index: None,
+            agent_finder_results: Vec::new(),
+            agent_finder_partial: false,
+            agent_finder_selected: 0,
+            agent_finder_deadline: None,
+            agent_finder_generation: 0,
+            agent_finder_side_pane: false,
             sidebar_starred_only: false,
             sidebar_new_menu: None,
             sidebar_areas_menu_selected: None,

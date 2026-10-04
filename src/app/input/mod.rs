@@ -188,6 +188,38 @@ impl App {
         self.open_fleet_host_focused(name, focus_agent);
     }
 
+    pub(super) fn accept_selected_agent_finder_result(&mut self) {
+        let Some(hit) = self
+            .state
+            .agent_finder_results
+            .get(self.state.agent_finder_selected)
+            .cloned()
+        else {
+            self.state
+                .handle_sidebar_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
+            return;
+        };
+
+        if let Some(agent_ref) = hit
+            .agent
+            .agent_ref
+            .as_ref()
+            .filter(|agent_ref| agent_ref.host != self.state.agent_host_name)
+        {
+            self.open_fleet_host_from_input(&agent_ref.host, Some(&agent_ref.agent));
+        } else if self
+            .state
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.id == hit.agent.workspace_id)
+        {
+            let _ = self.focus_agent_target(&hit.target);
+        } else if let Some(agent_ref) = hit.agent.agent_ref.as_ref() {
+            self.open_fleet_host_from_input(&agent_ref.host, Some(&agent_ref.agent));
+        }
+        self.state.accept_agent_finder_query();
+    }
+
     #[cfg(test)]
     pub(super) async fn handle_key(
         &mut self,
@@ -414,6 +446,13 @@ impl App {
                 }
             }
             InputOwner::Sidebar => {
+                if self.state.agent_finder_saved_query.is_some()
+                    && key_event.code == KeyCode::Enter
+                    && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    self.accept_selected_agent_finder_result();
+                    return None;
+                }
                 if self.state.handle_sidebar_search_key(key_event) {
                     return None;
                 }
@@ -4759,6 +4798,9 @@ impl App {
         if self.paste_into_input_owner(owner, &text) {
             return;
         }
+        if owner == InputOwner::Sidebar && self.state.insert_agent_finder_text(&text) {
+            return;
+        }
         if !owner.forwards_unhandled_input_to_pane() {
             return;
         }
@@ -4819,7 +4861,13 @@ impl App {
             }
             return;
         }
-        if self.paste_into_input_owner(owner, &text) || !owner.forwards_unhandled_input_to_pane() {
+        if self.paste_into_input_owner(owner, &text) {
+            return;
+        }
+        if owner == InputOwner::Sidebar && self.state.insert_agent_finder_text(&text) {
+            return;
+        }
+        if !owner.forwards_unhandled_input_to_pane() {
             return;
         }
 
@@ -7118,6 +7166,59 @@ sidebar_visible = true
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn agent_finder_enter_routes_remote_ref_before_colliding_workspace_id() {
+        let mut app = test_app();
+        app.state.agent_host_name = "local-host".into();
+        let mut workspace = crate::workspace::Workspace::test_new("collision");
+        let first = workspace.tabs[0].root_pane;
+        let second = workspace.test_split(Direction::Vertical);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&first]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(
+                Some(crate::detect::Agent::Codex),
+                crate::detect::AgentState::Idle,
+            );
+        app.state.workspaces[0].tabs[0].layout.focus_pane(first);
+        let mut agent = app.agent_info(0, first).expect("local agent info");
+        agent.agent_ref = Some(
+            crate::api::schema::AgentRef::new("remote-host", "remote-pane").expect("remote ref"),
+        );
+        // This remote workspace id deliberately collides with the local workspace.
+        agent.workspace_id = app.state.workspaces[0].id.clone();
+        let colliding_target = app.public_pane_id(0, second).expect("local pane target");
+        app.state.agent_finder_saved_query = Some(String::new());
+        app.state.agent_finder_results = vec![crate::api::schema::AgentSearchHit {
+            target: colliding_target,
+            title: "remote agent".into(),
+            source: crate::api::schema::AgentSearchSource::Title,
+            path: None,
+            line: None,
+            context: vec!["remote agent".into()],
+            preview: Vec::new(),
+            agent,
+        }];
+
+        app.handle_key_for_input_owner(
+            TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()),
+            InputOwner::Sidebar,
+        )
+        .await;
+
+        assert_ne!(
+            app.state.workspaces[0].focused_pane_id(),
+            Some(second),
+            "remote result must not focus the colliding local pane"
+        );
     }
 
     #[tokio::test]

@@ -147,6 +147,21 @@ fn fleet_list_is_a_typed_read_only_api_method() {
 }
 
 #[test]
+fn agent_search_is_a_typed_read_only_api_method() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "finder",
+        "method": "agent.search",
+        "params": { "query": "needle" }
+    }))
+    .unwrap();
+    assert!(matches!(request.method, Method::AgentSearch(_)));
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(value["method"], "agent.search");
+    assert_eq!(value["params"]["include_session"], true);
+    assert_eq!(value["params"]["limit"], 100);
+}
+
+#[test]
 fn workspace_close_group_intent_defaults_false_and_round_trips() {
     let request: Request = serde_json::from_value(serde_json::json!({
         "id": "close",

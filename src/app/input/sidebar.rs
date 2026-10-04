@@ -79,6 +79,61 @@ fn sidebar_snooze_params(
 }
 
 impl AppState {
+    pub(crate) fn open_agent_finder(&mut self) {
+        if self.agent_finder_saved_query.is_none() {
+            self.agent_finder_saved_query = Some(self.sidebar_work_filter.query.clone());
+        }
+        self.sidebar_work_filter.query.clear();
+        self.agent_finder_history = self.sidebar_work_filter.agent_finder_history.clone();
+        self.sidebar_search_active = true;
+        self.agent_finder_history_index = None;
+        self.agent_finder_results.clear();
+        self.agent_finder_partial = false;
+        self.agent_finder_selected = 0;
+        self.agent_finder_deadline = None;
+        self.agent_finder_generation = self.agent_finder_generation.wrapping_add(1);
+        self.agent_finder_side_pane = false;
+        self.schedule_agent_finder_search();
+    }
+
+    fn close_agent_finder(&mut self) {
+        if let Some(query) = self.agent_finder_saved_query.take() {
+            let mut filter = self.sidebar_work_filter.clone();
+            filter.query = query;
+            self.set_sidebar_work_filter(filter);
+        }
+        self.sidebar_search_active = false;
+        self.agent_finder_history_index = None;
+        self.agent_finder_deadline = None;
+        self.agent_finder_results.clear();
+        self.agent_finder_partial = false;
+        self.agent_finder_generation = self.agent_finder_generation.wrapping_add(1);
+        self.agent_finder_side_pane = false;
+    }
+
+    pub(crate) fn accept_agent_finder_query(&mut self) {
+        let query = self.sidebar_work_filter.query.trim().to_owned();
+        if !query.is_empty() && self.agent_finder_history.last() != Some(&query) {
+            self.agent_finder_history.push(query);
+            if self.agent_finder_history.len() > 64 {
+                self.agent_finder_history.remove(0);
+            }
+            let mut filter = self.sidebar_work_filter.clone();
+            filter.agent_finder_history = self.agent_finder_history.clone();
+            self.set_sidebar_work_filter(filter);
+        }
+        if let Some(saved_query) = self.agent_finder_saved_query.take() {
+            let mut filter = self.sidebar_work_filter.clone();
+            filter.query = saved_query;
+            self.set_sidebar_work_filter(filter);
+        }
+        self.agent_finder_history_index = None;
+        self.sidebar_search_active = false;
+        self.agent_finder_deadline = None;
+        self.agent_finder_generation = self.agent_finder_generation.wrapping_add(1);
+        self.agent_finder_side_pane = false;
+    }
+
     pub(crate) fn settled_target_has_resume_plan(
         &self,
         target: &crate::app::state::PaneFocusTarget,
@@ -318,17 +373,45 @@ impl AppState {
             return false;
         }
         match key.code {
+            KeyCode::Esc if self.agent_finder_saved_query.is_some() => self.close_agent_finder(),
+            KeyCode::Enter
+                if self.agent_finder_saved_query.is_some()
+                    && key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.agent_finder_side_pane = true;
+            }
+            KeyCode::Enter if self.agent_finder_saved_query.is_some() => {
+                self.accept_agent_finder_query();
+            }
             KeyCode::Esc | KeyCode::Enter => self.sidebar_search_active = false,
+            KeyCode::Up if key.modifiers == KeyModifiers::CONTROL => {
+                self.step_agent_finder_history(-1);
+            }
+            KeyCode::Down if key.modifiers == KeyModifiers::CONTROL => {
+                self.step_agent_finder_history(1);
+            }
+            KeyCode::Up if key.modifiers.is_empty() => {
+                self.agent_finder_selected = self.agent_finder_selected.saturating_sub(1);
+            }
+            KeyCode::Down if key.modifiers.is_empty() => {
+                self.agent_finder_selected = self
+                    .agent_finder_selected
+                    .saturating_add(1)
+                    .min(self.agent_finder_results.len().saturating_sub(1));
+            }
             KeyCode::Backspace => {
                 let mut filter = self.sidebar_work_filter.clone();
                 filter.query.pop();
                 self.set_sidebar_work_filter(filter);
+                self.agent_finder_history_index = None;
+                self.schedule_agent_finder_search();
                 self.sidebar_search_active = true;
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 let mut filter = self.sidebar_work_filter.clone();
                 filter.query.clear();
                 self.set_sidebar_work_filter(filter);
+                self.schedule_agent_finder_search();
                 self.sidebar_search_active = true;
             }
             KeyCode::Char(character)
@@ -337,11 +420,63 @@ impl AppState {
                 let mut filter = self.sidebar_work_filter.clone();
                 filter.query.push(character);
                 self.set_sidebar_work_filter(filter);
+                self.agent_finder_history_index = None;
+                self.schedule_agent_finder_search();
                 self.sidebar_search_active = true;
             }
             _ => {}
         }
         true
+    }
+
+    fn step_agent_finder_history(&mut self, direction: isize) {
+        if self.agent_finder_history.is_empty() {
+            return;
+        }
+        let current = self
+            .agent_finder_history_index
+            .unwrap_or(self.agent_finder_history.len());
+        let next = if direction < 0 {
+            current.saturating_sub(1)
+        } else {
+            current
+                .saturating_add(1)
+                .min(self.agent_finder_history.len())
+        };
+        self.agent_finder_history_index = (next < self.agent_finder_history.len()).then_some(next);
+        let mut filter = self.sidebar_work_filter.clone();
+        filter.query = self
+            .agent_finder_history_index
+            .and_then(|index| self.agent_finder_history.get(index))
+            .cloned()
+            .unwrap_or_default();
+        self.set_sidebar_work_filter(filter);
+        self.schedule_agent_finder_search();
+    }
+
+    pub(crate) fn insert_agent_finder_text(&mut self, text: &str) -> bool {
+        if !self.sidebar_search_active || self.agent_finder_saved_query.is_none() {
+            return false;
+        }
+        let mut filter = self.sidebar_work_filter.clone();
+        filter
+            .query
+            .extend(text.chars().filter(|character| !character.is_control()));
+        self.set_sidebar_work_filter(filter);
+        self.agent_finder_history_index = None;
+        self.schedule_agent_finder_search();
+        true
+    }
+
+    fn schedule_agent_finder_search(&mut self) {
+        if self.agent_finder_saved_query.is_some() {
+            self.agent_finder_generation = self.agent_finder_generation.wrapping_add(1);
+            self.agent_finder_deadline =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(180));
+            self.agent_finder_results.clear();
+            self.agent_finder_partial = false;
+            self.agent_finder_selected = 0;
+        }
     }
 
     pub(crate) fn open_sidebar_object_menu(&mut self, target: String) {
@@ -652,6 +787,10 @@ impl AppState {
         let mut filter = self.sidebar_work_filter.clone();
         let mut keep_open = false;
         match option {
+            crate::ui::SidebarFilterOption::OnlyThisMachine(enabled) => {
+                filter.only_this_machine = !enabled;
+                keep_open = true;
+            }
             crate::ui::SidebarFilterOption::LinearTeam(team) => filter.team = team,
             crate::ui::SidebarFilterOption::LinearOwnership(ownership) => {
                 filter.linear_ownership = ownership;
@@ -692,6 +831,9 @@ impl AppState {
             }
         }
         self.set_sidebar_work_filter(filter);
+        if self.agent_finder_saved_query.is_some() {
+            self.schedule_agent_finder_search();
+        }
         if keep_open {
             self.sidebar_filter_menu_open = true;
             self.sidebar_filter_menu_selected = index;
@@ -2988,6 +3130,40 @@ mod tests {
         detect::{Agent, AgentState},
         workspace::Workspace,
     };
+
+    #[tokio::test]
+    async fn agent_finder_text_and_paste_stay_with_the_sidebar_input_owner() {
+        let mut app = app_for_mouse_test();
+        app.state.focus_client_on_sidebar();
+        app.state.open_agent_finder();
+        assert_eq!(
+            app.state.input_owner(),
+            crate::app::state::InputOwner::Sidebar
+        );
+
+        app.handle_text_commit_for_input_owner(
+            crate::app::state::InputOwner::Sidebar,
+            "needle".into(),
+        )
+        .await;
+        app.handle_paste_for_input_owner(crate::app::state::InputOwner::Sidebar, " pasted".into())
+            .await;
+
+        assert_eq!(app.state.sidebar_work_filter.query, "needle pasted");
+        assert!(app.state.agent_finder_deadline.is_some());
+        assert!(
+            app.state.workspaces.is_empty(),
+            "finder input must not be sent to a PTY"
+        );
+        app.state
+            .handle_sidebar_search_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL));
+        assert!(app.state.agent_finder_side_pane);
+        app.state
+            .handle_sidebar_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
+        assert!(!app.state.sidebar_search_active);
+        assert!(app.state.agent_finder_saved_query.is_none());
+        assert!(!app.state.agent_finder_side_pane);
+    }
 
     #[test]
     fn sidebar_areas_menu_accepts_nonmodal_surfaces_and_excludes_modal_owners() {
@@ -5460,9 +5636,52 @@ mod tests {
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
             layout.list_rect.x,
-            layout.list_rect.y,
+            layout.list_rect.y + 1,
         ));
         assert!(!app.state.sidebar_filter_menu_open);
+    }
+
+    #[test]
+    fn only_this_machine_filter_toggles_through_mouse_input_and_is_persisted() {
+        let mut app = app_for_mouse_test();
+        app.state
+            .set_sidebar_group_mode(crate::app::state::SidebarGroupMode::LinearTeam);
+        let area = Rect::new(0, 0, 106, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let anchor = app.state.sidebar_filter_anchor_rect();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            anchor.x,
+            anchor.y,
+        ));
+        let layout =
+            crate::ui::sidebar_filter_menu_layout(&app.state, area).expect("filter dropdown");
+        assert_eq!(
+            crate::ui::sidebar_filter_options(&app.state)[0].label(),
+            "[x] Only this machine"
+        );
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            layout.list_rect.x,
+            layout.list_rect.y,
+        ));
+        assert!(!app.state.sidebar_work_filter.only_this_machine);
+        assert!(app.state.sidebar_filter_menu_open);
+        assert!(
+            !app.state
+                .take_sidebar_work_filter_persistence_request()
+                .expect("toggle requests persistence")
+                .only_this_machine
+        );
+
+        let layout =
+            crate::ui::sidebar_filter_menu_layout(&app.state, area).expect("filter stays open");
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            layout.list_rect.x,
+            layout.list_rect.y,
+        ));
+        assert!(app.state.sidebar_work_filter.only_this_machine);
     }
 
     #[test]

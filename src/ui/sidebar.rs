@@ -7691,6 +7691,7 @@ fn unassigned_empty_text(app: &AppState) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SidebarFilterOption {
+    OnlyThisMachine(bool),
     LinearTeam(Option<String>),
     LinearOwnership(crate::app::state::WorkOwnershipFilter),
     LinearAssignee(Option<String>),
@@ -7707,6 +7708,9 @@ pub(crate) enum SidebarFilterOption {
 impl SidebarFilterOption {
     pub(crate) fn label(&self) -> String {
         match self {
+            Self::OnlyThisMachine(enabled) => {
+                format!("{} Only this machine", if *enabled { "[x]" } else { "[ ]" })
+            }
             Self::LinearTeam(None) => "team: all".into(),
             Self::LinearTeam(Some(team)) => format!("team: {team}"),
             Self::LinearOwnership(scope) => format!("me: {}", scope.label()),
@@ -7736,7 +7740,9 @@ impl SidebarFilterOption {
 }
 
 pub(crate) fn sidebar_filter_options(app: &AppState) -> Vec<SidebarFilterOption> {
-    let mut options = Vec::new();
+    let mut options = vec![SidebarFilterOption::OnlyThisMachine(
+        app.sidebar_work_filter.only_this_machine,
+    )];
     let mut view_options = match app.sidebar_group_mode {
         SidebarGroupMode::LinearTeam => {
             let mut teams = sidebar_linear_ticket_rows(app)
@@ -10985,9 +10991,13 @@ pub(super) fn render_sidebar(
     // input paths do; its walkers subtract the separator, notepad and
     // animation reservations themselves. Passing the already-shrunk list rect
     // here takes them twice and clips rows compute_view considers visible.
-    render_workspace_list(app, terminal_runtimes, frame, area, is_navigating);
-    crate::ui::notepad::render_notepad(app, frame, sidebar_notepad_rect(app, area));
-    crate::ui::goals::render_goals(app, frame, sidebar_goals_rect(app, area));
+    if app.agent_finder_saved_query.is_some() {
+        render_agent_finder_results(app, frame, area);
+    } else {
+        render_workspace_list(app, terminal_runtimes, frame, area, is_navigating);
+        crate::ui::notepad::render_notepad(app, frame, sidebar_notepad_rect(app, area));
+        crate::ui::goals::render_goals(app, frame, sidebar_goals_rect(app, area));
+    }
     render_sidebar_header(app, frame, area, p);
     render_sidebar_hosts(app, frame, area);
     let settings = sidebar_footer_settings_hit_area(area);
@@ -11131,6 +11141,129 @@ pub(super) fn render_sidebar(
     render_window_cycle_mode_menu(app, frame);
 }
 
+fn render_agent_finder_results(app: &AppState, frame: &mut Frame, area: Rect) {
+    let body = Rect::new(
+        area.x,
+        area.y.saturating_add(2),
+        area.width.saturating_sub(1),
+        area.height.saturating_sub(3),
+    );
+    if body.is_empty() {
+        return;
+    }
+    let query = app.sidebar_work_filter.query.to_lowercase();
+    let mut lines = Vec::new();
+    for (index, hit) in app.agent_finder_results.iter().enumerate() {
+        let selected = index == app.agent_finder_selected;
+        let background = if selected {
+            app.palette.active_row_bg
+        } else {
+            app.palette.sidebar_bg.unwrap_or(app.palette.panel_bg)
+        };
+        let style = Style::default().bg(background).fg(app.palette.text);
+        let status = match hit.agent.agent_status {
+            crate::api::schema::AgentStatus::Working => "●",
+            crate::api::schema::AgentStatus::Blocked => "●",
+            crate::api::schema::AgentStatus::Done => "●",
+            _ => "○",
+        };
+        let host = hit
+            .agent
+            .agent_ref
+            .as_ref()
+            .map(|host| host.host.as_str())
+            .unwrap_or("local");
+        let source = match hit.source {
+            crate::api::schema::AgentSearchSource::Title => "title".to_owned(),
+            crate::api::schema::AgentSearchSource::Tail => "tail".to_owned(),
+            crate::api::schema::AgentSearchSource::Session => "session".to_owned(),
+            crate::api::schema::AgentSearchSource::Path => format!(
+                "{}:{}",
+                hit.path.as_deref().unwrap_or("path"),
+                hit.line.unwrap_or_default()
+            ),
+        };
+        let mut title_spans = vec![Span::styled(format!("{status} "), style)];
+        title_spans.extend(finder_highlight_spans(
+            &hit.title,
+            &query,
+            style,
+            Style::default()
+                .fg(app.palette.accent)
+                .bg(background)
+                .add_modifier(Modifier::BOLD),
+        ));
+        lines.push(Line::from(title_spans));
+        lines.push(Line::from(vec![
+            Span::styled("  ", style),
+            Span::styled(
+                host,
+                Style::default().fg(app.palette.overlay0).bg(background),
+            ),
+            Span::styled(" · ", style),
+            Span::styled(
+                source,
+                Style::default().fg(app.palette.overlay0).bg(background),
+            ),
+        ]));
+        for context in hit.context.iter().take(2) {
+            let mut spans = vec![Span::styled("  ", style)];
+            spans.extend(finder_highlight_spans(
+                context,
+                &query,
+                style,
+                Style::default()
+                    .fg(app.palette.accent)
+                    .bg(background)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            lines.push(Line::from(spans));
+        }
+        if lines.len() >= usize::from(body.height) {
+            break;
+        }
+    }
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No matches",
+            Style::default().fg(app.palette.overlay0),
+        )));
+    }
+    if app.agent_finder_partial {
+        lines.push(Line::from(Span::styled(
+            "Partial results",
+            Style::default().fg(app.palette.overlay0),
+        )));
+    }
+    frame.render_widget(Paragraph::new(lines), body);
+}
+
+fn finder_highlight_spans<'a>(
+    text: &'a str,
+    query_lower: &str,
+    normal: Style,
+    accent: Style,
+) -> Vec<Span<'a>> {
+    if query_lower.is_empty() {
+        return vec![Span::styled(text, normal)];
+    }
+    let lower = text.to_lowercase();
+    let Some(start) = lower.find(query_lower) else {
+        return vec![Span::styled(text, normal)];
+    };
+    let end = start.saturating_add(query_lower.len());
+    let (Some(before), Some(matched), Some(after)) =
+        (text.get(..start), text.get(start..end), text.get(end..))
+    else {
+        return vec![Span::styled(text, normal)];
+    };
+    vec![
+        Span::styled(before, normal),
+        Span::styled(matched, accent),
+        Span::styled(after, normal),
+    ]
+}
+
 fn sidebar_footer_style(
     app: &AppState,
     item: crate::app::state::SidebarFooterItem,
@@ -11258,13 +11391,27 @@ fn render_sidebar_header(app: &AppState, frame: &mut Frame, area: Rect, p: &Pale
     }
     if search.width > 0 {
         let query = app.sidebar_work_filter.query.as_str();
-        let text = if query.is_empty() && app.sidebar_search_active {
-            "🔍 ▏".to_string()
+        let icon = if app.agent_finder_saved_query.is_some() {
+            if app.nerd_font {
+                "⌕"
+            } else {
+                "Find"
+            }
+        } else {
+            "🔍"
+        };
+        let text = if app.agent_finder_saved_query.is_some()
+            && app.sidebar_search_active
+            && !query.is_empty()
+        {
+            format!("{query}▏")
+        } else if query.is_empty() && app.sidebar_search_active {
+            format!("{icon} ▏")
         } else if query.is_empty() {
-            "🔍 Search".to_string()
+            format!("{icon} Search")
         } else {
             format!(
-                "🔍 {query}{}",
+                "{icon} {query}{}",
                 if app.sidebar_search_active { "▏" } else { "" }
             )
         };
@@ -24477,8 +24624,9 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .map(|option| option.label())
             .collect::<Vec<_>>();
         assert_eq!(
-            &labels[..7],
+            &labels[..8],
             [
+                "[x] Only this machine",
                 "team: all",
                 "team: OPS",
                 "team: SCA",
@@ -24507,6 +24655,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 .map(|option| option.label())
                 .collect::<Vec<_>>(),
             [
+                "[x] Only this machine",
                 "assignee: me",
                 "me: assigned",
                 "me: authored",
@@ -24529,6 +24678,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 .map(|option| option.label())
                 .collect::<Vec<_>>(),
             [
+                "[x] Only this machine",
                 "team: all",
                 "assignee: me",
                 "assignee: all",
@@ -32344,6 +32494,24 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             assert_ne!(sky.bg, app.palette.panel_bg, "sky band should stand out");
             assert!(matches!(sky.bg, Color::Rgb(_, _, _)));
         }
+    }
+
+    #[test]
+    fn compact_header_keeps_the_active_agent_finder_query_visible_at_64_columns() {
+        let mut app = AppState::test_new();
+        app.sidebar_sections_layout = true;
+        app.sidebar_header_plain = true;
+        app.agent_finder_saved_query = Some(String::new());
+        app.sidebar_search_active = true;
+        app.sidebar_work_filter.query = "needle".into();
+        let area = Rect::new(0, 0, 64, 39);
+        let mut terminal = Terminal::new(TestBackend::new(64, 39)).expect("header terminal");
+        terminal
+            .draw(|frame| render_sidebar_header(&app, frame, area, &app.palette))
+            .expect("render compact finder header");
+        let row = row_text(terminal.backend().buffer(), 0, 64);
+        assert!(row.contains("needle"), "{row:?}");
+        assert!(!row.contains(&sidebar_prefixed_key_label(&app, &app.keybinds.goto)));
     }
 
     #[test]

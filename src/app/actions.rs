@@ -3451,6 +3451,8 @@ impl AppState {
                 Vec::new()
             }
             AppEvent::FleetRefreshed { .. } => Vec::new(),
+            AppEvent::AgentFinderSearchCompleted { .. } => Vec::new(),
+            AppEvent::AgentSearchFinished { .. } => Vec::new(),
             AppEvent::FleetAgentInventoryChanged { .. } => Vec::new(),
             AppEvent::FleetSessionInventoryChanged { .. } => Vec::new(),
             AppEvent::AuthorityAcceptanceLedgerPersisted { .. } => Vec::new(),

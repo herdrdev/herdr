@@ -151,6 +151,8 @@ pub enum Method {
     TabClose(TabTarget),
     #[serde(rename = "agent.list")]
     AgentList(EmptyParams),
+    #[serde(rename = "agent.search")]
+    AgentSearch(AgentSearchParams),
     #[serde(rename = "agent.get")]
     AgentGet(AgentTarget),
     #[serde(rename = "agent.state")]

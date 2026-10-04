@@ -571,6 +571,12 @@
           "description": "Open the fuzzy command palette."
         },
         {
+          "key": "keys.agent_finder",
+          "type": "keybinding",
+          "default": "\"prefix+f\"",
+          "description": "Search agents from the sidebar."
+        },
+        {
           "key": "keys.new_workspace",
           "type": "keybinding",
           "default": "\"prefix+shift+n\"",
@@ -1047,8 +1053,8 @@
         {
           "key": "keys.toggle_blocked_filter",
           "type": "keybinding",
-          "default": "\"prefix+f\"",
-          "description": "Toggle the sidebar blocked filter."
+          "default": "unset",
+          "description": "Toggle the sidebar blocked filter. Unset by default."
         },
         {
           "key": "keys.toggle_dock",

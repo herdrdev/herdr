@@ -616,6 +616,34 @@ impl App {
                 self.refresh_board_remote_lines();
                 changed
             }
+            AppEvent::AgentFinderSearchCompleted {
+                generation,
+                query,
+                hits,
+                partial,
+            } => {
+                if self.state.agent_finder_saved_query.is_none()
+                    || generation != self.state.agent_finder_generation
+                    || query != self.state.sidebar_work_filter.query.trim().to_lowercase()
+                {
+                    return false;
+                }
+                self.state.agent_finder_results.extend(hits);
+                self.state.agent_finder_results.truncate(100);
+                self.state.agent_finder_partial = partial;
+                self.state.agent_finder_selected = 0;
+                true
+            }
+            AppEvent::AgentSearchFinished {
+                response,
+                respond_to,
+                active,
+            } => {
+                if active.load(std::sync::atomic::Ordering::Acquire) {
+                    let _ = respond_to.send(response);
+                }
+                false
+            }
             AppEvent::BoardRemoteLinesFetched {
                 note_path,
                 fleet_generation,
@@ -2364,6 +2392,7 @@ impl App {
             Method::TabMove(params) => return self.handle_tab_move(request.id, params),
             Method::TabClose(target) => return self.handle_tab_close(request.id, target),
             Method::AgentList(_) => return self.handle_agent_list(request.id),
+            Method::AgentSearch(params) => return self.handle_agent_search(request.id, params),
             Method::AgentGet(target) => return self.handle_agent_get(request.id, target),
             Method::AgentState(params) => return self.handle_agent_state(request.id, params),
             Method::AgentReport(params) => return self.handle_agent_report(request.id, params),

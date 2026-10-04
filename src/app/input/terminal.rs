@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use tracing::{debug, warn};
 
 use crate::{
@@ -74,6 +74,14 @@ impl App {
         if self.handle_sidebar_snooze_time_key(key_event)
             || self.handle_sidebar_snooze_menu_key(key_event)
         {
+            return None;
+        }
+
+        if self.state.agent_finder_saved_query.is_some()
+            && key_event.code == KeyCode::Enter
+            && !key_event.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            self.accept_selected_agent_finder_result();
             return None;
         }
 

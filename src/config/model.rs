@@ -962,6 +962,8 @@ pub struct KeysConfig {
     pub goto: BindingConfig,
     /// Open the fuzzy command palette. Default: ["ctrl+alt+p", "super+p"]
     pub command_palette: BindingConfig,
+    /// Search agents from the sidebar. Default: "prefix+f".
+    pub agent_finder: BindingConfig,
     /// Move workspace selection up in navigate mode. Default: "up".
     pub navigate_workspace_up: BindingConfig,
     /// Move workspace selection down in navigate mode. Default: "down".
@@ -1104,7 +1106,7 @@ pub struct KeysConfig {
     pub sidebar_cycle_group_mode: BindingConfig,
     /// Refresh sidebar work and Git metadata. Unset by default.
     pub sidebar_refresh: BindingConfig,
-    /// Toggle the sidebar blocked filter. Default: "prefix+f".
+    /// Toggle the sidebar blocked filter. Unset by default.
     pub toggle_blocked_filter: BindingConfig,
     /// Toggle dock collapse. Default: ["prefix+shift+e", "ctrl+alt+d"]
     pub toggle_dock: BindingConfig,
@@ -1209,6 +1211,8 @@ pub(crate) struct KeysConfigOverlay {
     goto: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     command_palette: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_finder: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     navigate_workspace_up: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1442,6 +1446,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(workspace_picker);
         apply_field!(goto);
         apply_field!(command_palette);
+        apply_field!(agent_finder);
         apply_field!(navigate_workspace_up);
         apply_field!(navigate_workspace_down);
         apply_field!(navigate_pane_left);
@@ -1604,6 +1609,7 @@ impl KeysConfig {
         copy_effective_action_field!(workspace_picker, keybinds.workspace_picker);
         copy_effective_action_field!(goto, keybinds.goto);
         copy_effective_action_field!(command_palette, keybinds.command_palette);
+        copy_effective_action_field!(agent_finder, keybinds.agent_finder);
         copy_effective_action_field!(navigate_workspace_up, keybinds.navigate.workspace_up);
         copy_effective_action_field!(navigate_workspace_down, keybinds.navigate.workspace_down);
         copy_effective_action_field!(navigate_pane_left, keybinds.navigate.pane_left);
@@ -2221,6 +2227,7 @@ impl Default for KeysConfig {
             workspace_picker: BindingConfig::one("prefix+w"),
             goto: BindingConfig::one("prefix+g"),
             command_palette: BindingConfig::Many(vec!["ctrl+alt+p".into(), "super+p".into()]),
+            agent_finder: BindingConfig::one("prefix+f"),
             navigate_workspace_up: BindingConfig::one("up"),
             navigate_workspace_down: BindingConfig::one("down"),
             navigate_pane_left: BindingConfig::one("h"),
@@ -2291,7 +2298,7 @@ impl Default for KeysConfig {
             focus_owning_repo_group: BindingConfig::one("prefix+i"),
             sidebar_cycle_group_mode: BindingConfig::empty(),
             sidebar_refresh: BindingConfig::empty(),
-            toggle_blocked_filter: BindingConfig::one("prefix+f"),
+            toggle_blocked_filter: BindingConfig::empty(),
             toggle_dock: BindingConfig::Many(vec!["prefix+shift+e".into(), "ctrl+alt+d".into()]),
             previous_dock_tab: BindingConfig::one("prefix+shift+["),
             next_dock_tab: BindingConfig::one("prefix+shift+]"),

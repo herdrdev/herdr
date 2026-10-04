@@ -420,6 +420,7 @@ mod tests {
         let path = temp_path();
         let mut filters = crate::app::state::SidebarWorkFilter {
             query: "label:billing pricing".into(),
+            only_this_machine: false,
             team: Some("ENG".into()),
             assignee: None,
             ..Default::default()

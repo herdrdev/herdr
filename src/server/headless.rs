@@ -1234,6 +1234,13 @@ impl HeadlessServer {
                 .fold(next_deadline, |deadline, hover| {
                     Some(deadline.map_or(hover, |current| current.min(hover)))
                 });
+            let next_deadline = self
+                .clients
+                .values()
+                .filter_map(|client| client.sidebar_presentation.agent_finder_deadline)
+                .fold(next_deadline, |deadline, finder| {
+                    Some(deadline.map_or(finder, |current| current.min(finder)))
+                });
             let event = {
                 tokio::select! {
                     maybe_api = self.app.api_rx.recv() => match maybe_api {
@@ -3993,6 +4000,32 @@ impl HeadlessServer {
             return self.handle_client_owned_worktree_event(client_id, ev);
         }
         match &ev {
+            AppEvent::AgentFinderSearchCompleted {
+                generation,
+                query,
+                hits,
+                partial,
+            } => {
+                let mut changed = false;
+                for client in self.clients.values_mut() {
+                    let presentation = &mut client.sidebar_presentation;
+                    if presentation.agent_finder_saved_query.is_none()
+                        || presentation.agent_finder_generation != *generation
+                        || query != &presentation.work_filter.query.trim().to_lowercase()
+                    {
+                        continue;
+                    }
+                    presentation
+                        .agent_finder_results
+                        .extend(hits.iter().cloned());
+                    presentation.agent_finder_results.truncate(100);
+                    presentation.agent_finder_partial = *partial;
+                    presentation.agent_finder_selected = 0;
+                    client.request_repaint();
+                    changed = true;
+                }
+                changed
+            }
             AppEvent::PlanningLockFileChanged(lock) => {
                 self.app.state.planning_lock = lock.clone();
                 self.app.state.mark_session_dirty();
@@ -7500,6 +7533,7 @@ impl HeadlessServer {
             self.app.agent_activity_refresh_deadline = None;
             false
         };
+        other_changed |= self.tick_client_agent_finders(now);
         let mut sidebar_animation_changed = false;
         for client in self.clients.values_mut() {
             if client.dock_presentation.reveal_hover_tooltip_at(now) {
@@ -7768,6 +7802,41 @@ impl HeadlessServer {
             changed: other_changed || sidebar_animation_changed,
             sidebar_animation_only: sidebar_animation_changed && !other_changed,
         }
+    }
+
+    fn tick_client_agent_finders(&mut self, now: Instant) -> bool {
+        let due_clients = self
+            .clients
+            .iter()
+            .filter_map(|(client_id, client)| {
+                client
+                    .sidebar_presentation
+                    .agent_finder_deadline
+                    .is_some_and(|deadline| now >= deadline)
+                    .then_some(*client_id)
+            })
+            .collect::<Vec<_>>();
+        let mut changed = false;
+        for client_id in due_clients {
+            let Some(mut presentation) = self
+                .clients
+                .get_mut(&client_id)
+                .map(|client| std::mem::take(&mut client.sidebar_presentation))
+            else {
+                continue;
+            };
+            self.app.state.swap_sidebar_presentation(&mut presentation);
+            let client_changed = self.app.tick_agent_finder(now);
+            self.app.state.swap_sidebar_presentation(&mut presentation);
+            if let Some(client) = self.clients.get_mut(&client_id) {
+                client.sidebar_presentation = presentation;
+                if client_changed {
+                    client.request_repaint();
+                }
+            }
+            changed |= client_changed;
+        }
+        changed
     }
 
     fn start_foreground_dock_diff_refresh_if_needed(&mut self) -> bool {
@@ -18080,6 +18149,324 @@ next_tab = ""
             .expect("client socket reader exits cleanly");
         drop(listener);
         let _ = std::fs::remove_file(socket_path);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "current_thread")]
+    async fn compact_agent_finder_uses_socket_input_renders_results_and_focuses_selected_agent() {
+        use crate::protocol::{
+            ClientInputEvent, ClientKeyCode, ClientKeyKind, ClientKeySource, ClientMessage,
+        };
+
+        fn key(
+            code: ClientKeyCode,
+            modifiers: KeyModifiers,
+            text: Option<String>,
+        ) -> ClientInputEvent {
+            ClientInputEvent::Key {
+                code,
+                modifiers: modifiers.bits(),
+                kind: ClientKeyKind::Press,
+                repeat_count: 1,
+                generated_text: text,
+                source: ClientKeySource::Synthesized,
+            }
+        }
+
+        async fn send(
+            server: &mut HeadlessServer,
+            writer: &mut crate::ipc::LocalStream,
+            events: &mut tokio::sync::mpsc::Receiver<ServerEvent>,
+            input: Vec<ClientInputEvent>,
+        ) {
+            crate::protocol::write_message(writer, &ClientMessage::InputEvents { events: input })
+                .expect("write client input frame");
+            let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+                .await
+                .expect("socket reader returns client input")
+                .expect("socket reader remains connected");
+            assert!(server.handle_server_event(event));
+        }
+
+        for (width, height) in [(247, 91), (64, 39)] {
+            let mut server = test_headless_server();
+            let mut workspace = crate::workspace::Workspace::test_new("finder");
+            let claude_pane = workspace.tabs[0].root_pane;
+            let codex_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+            server.app.state.workspaces = vec![workspace];
+            server.app.state.ensure_test_terminals();
+            server.app.state.active = Some(0);
+            server.app.state.selected = 0;
+            server.app.state.sidebar_collapsed = true;
+            server.app.state.set_server_mode(crate::app::Mode::Terminal);
+            for (pane_id, agent) in [
+                (claude_pane, crate::detect::Agent::Claude),
+                (codex_pane, crate::detect::Agent::Codex),
+            ] {
+                let terminal_id = server.app.state.workspaces[0]
+                    .terminal_id(pane_id)
+                    .expect("agent terminal id")
+                    .clone();
+                server
+                    .app
+                    .state
+                    .terminals
+                    .get_mut(&terminal_id)
+                    .expect("test terminal")
+                    .detected_agent = Some(agent);
+            }
+            let mut remote_agent = server
+                .app
+                .collect_agent_infos()
+                .into_iter()
+                .next()
+                .expect("test agent info");
+            remote_agent.agent_ref = Some(
+                crate::api::schema::AgentRef::new("fleet-box", "remote-agent")
+                    .expect("remote agent reference"),
+            );
+            remote_agent.pane_id = "remote-agent".into();
+            server.app.state.fleet_snapshot.hosts = vec![crate::fleet::HostSnapshot {
+                name: "fleet-box".into(),
+                target: "fleet-box".into(),
+                local: false,
+                session: None,
+                socket: None,
+                state: crate::fleet::HostState::Reachable,
+                version: None,
+                protocol: None,
+                error: None,
+                remote_identity: Some("fleet-box".into()),
+                sessions: None,
+                reachable: true,
+                last_seen_unix_ms: None,
+                entries: vec![crate::fleet::FleetRow::test_agent_info_row(
+                    "fleet-box",
+                    remote_agent,
+                )],
+            }];
+
+            let (writer, control_rx, render_rx) = test_client_writer();
+            let mut client = ClientConnection::new(
+                (width, height),
+                crate::kitty_graphics::HostCellSize::default(),
+                crate::terminal_theme::TerminalTheme::default(),
+                Some(true),
+                1,
+                RenderEncoding::SemanticFrame,
+                Some(writer),
+            );
+            client.sidebar_presentation.focus_intent = crate::app::state::ClientFocusIntent::Pane;
+            server.clients.insert(1, client);
+            server.foreground_client_id = Some(1);
+            server.sync_foreground_client_state();
+            server.resize_shared_runtime_to_effective_size();
+            while control_rx.try_recv().is_ok() {}
+            while render_rx.try_recv().is_ok() {}
+
+            let socket_path = std::env::temp_dir().join(format!(
+                "agent-finder-{}.sock",
+                crate::config::test_unique_suffix()
+            ));
+            let _ = std::fs::remove_file(&socket_path);
+            let listener =
+                crate::ipc::bind_local_listener(&socket_path).expect("bind client socket");
+            let mut client_socket =
+                crate::ipc::connect_local_stream(&socket_path).expect("connect client socket");
+            let server_socket = listener.accept().expect("accept client socket");
+            let (server_event_tx, mut server_event_rx) = tokio::sync::mpsc::channel(16);
+            let should_quit = Arc::new(AtomicBool::new(false));
+            let read_quit = should_quit.clone();
+            let reader = std::thread::spawn(move || {
+                crate::server::client_transport::client_read_loop(
+                    server_socket,
+                    1,
+                    &server_event_tx,
+                    &read_quit,
+                )
+            });
+
+            send(
+                &mut server,
+                &mut client_socket,
+                &mut server_event_rx,
+                vec![key(ClientKeyCode::Char('b'), KeyModifiers::CONTROL, None)],
+            )
+            .await;
+            send(
+                &mut server,
+                &mut client_socket,
+                &mut server_event_rx,
+                vec![key(
+                    ClientKeyCode::Char('f'),
+                    KeyModifiers::empty(),
+                    Some("f".into()),
+                )],
+            )
+            .await;
+            assert_eq!(
+                server.clients[&1]
+                    .sidebar_presentation
+                    .agent_finder_saved_query
+                    .as_deref(),
+                Some("")
+            );
+            let empty_deadline = server.clients[&1]
+                .sidebar_presentation
+                .agent_finder_deadline
+                .expect("opening finder schedules empty-query results");
+            assert!(
+                server.handle_scheduled_tasks_headless(
+                    empty_deadline + Duration::from_millis(1),
+                    false,
+                )
+            );
+            let empty_results = &server.clients[&1].sidebar_presentation.agent_finder_results;
+            assert_eq!(empty_results.len(), 2, "only local agents show by default");
+            assert!(empty_results.iter().all(|hit| hit
+                .agent
+                .agent_ref
+                .as_ref()
+                .is_none_or(|agent_ref| agent_ref.host != "fleet-box")));
+
+            server
+                .clients
+                .get_mut(&1)
+                .expect("client")
+                .sidebar_presentation
+                .work_filter
+                .only_this_machine = false;
+            server
+                .clients
+                .get_mut(&1)
+                .expect("client")
+                .sidebar_presentation
+                .agent_finder_deadline = Some(Instant::now());
+            assert!(server
+                .handle_scheduled_tasks_headless(Instant::now() + Duration::from_millis(1), false));
+            assert!(
+                server.clients[&1]
+                    .sidebar_presentation
+                    .agent_finder_results
+                    .iter()
+                    .any(|hit| {
+                        hit.agent
+                            .agent_ref
+                            .as_ref()
+                            .is_some_and(|agent_ref| agent_ref.host == "fleet-box")
+                    }),
+                "turning the machine filter off includes remote agents"
+            );
+            server
+                .clients
+                .get_mut(&1)
+                .expect("client")
+                .sidebar_presentation
+                .work_filter
+                .only_this_machine = true;
+            server
+                .clients
+                .get_mut(&1)
+                .expect("client")
+                .sidebar_presentation
+                .agent_finder_deadline = Some(Instant::now());
+            assert!(server
+                .handle_scheduled_tasks_headless(Instant::now() + Duration::from_millis(1), false));
+
+            for character in "claude".chars() {
+                send(
+                    &mut server,
+                    &mut client_socket,
+                    &mut server_event_rx,
+                    vec![key(
+                        ClientKeyCode::Char(character),
+                        KeyModifiers::empty(),
+                        Some(character.to_string()),
+                    )],
+                )
+                .await;
+            }
+            assert_eq!(
+                server.clients[&1].sidebar_presentation.work_filter.query,
+                "claude"
+            );
+            let finder_deadline = server.clients[&1]
+                .sidebar_presentation
+                .agent_finder_deadline
+                .expect("typing schedules a finder search");
+            assert!(server.handle_scheduled_tasks_headless(
+                finder_deadline + Duration::from_millis(1),
+                false,
+            ));
+            assert_eq!(
+                server.clients[&1].sidebar_presentation.agent_finder_results[0]
+                    .agent
+                    .agent,
+                Some("claude".into()),
+                "the selected result is the detected Claude pane"
+            );
+
+            server.render_and_stream();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut rendered = String::new();
+            while Instant::now() < deadline {
+                let Ok(bytes) = render_rx.recv_timeout(Duration::from_millis(100)) else {
+                    continue;
+                };
+                if let ServerMessage::Frame(frame) = read_server_message(bytes) {
+                    assert_eq!((frame.width, frame.height), (width, height));
+                    rendered = frame_text(&frame);
+                    break;
+                }
+            }
+            assert!(
+                rendered.contains("claude"),
+                "compact finder frame:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("› claude ·"),
+                "compact finder result row:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("Matched in title"),
+                "compact finder title match:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("Search agents: claude"),
+                "compact finder query:\n{rendered}"
+            );
+            assert_eq!(
+                server.clients[&1]
+                    .sidebar_presentation
+                    .agent_finder_saved_query
+                    .as_deref(),
+                Some("")
+            );
+
+            send(
+                &mut server,
+                &mut client_socket,
+                &mut server_event_rx,
+                vec![key(ClientKeyCode::Enter, KeyModifiers::empty(), None)],
+            )
+            .await;
+            assert!(server.app.state.agent_finder_saved_query.is_none());
+            assert_eq!(
+                server.app.state.workspaces[0].focused_pane_id(),
+                Some(claude_pane),
+                "Enter focuses the matching detected agent pane"
+            );
+
+            should_quit.store(true, Ordering::Release);
+            drop(client_socket);
+            reader
+                .join()
+                .expect("client socket reader joins")
+                .expect("client socket reader exits cleanly");
+            drop(listener);
+            let _ = std::fs::remove_file(socket_path);
+            shutdown_test_runtimes(&mut server);
+        }
     }
 
     #[tokio::test]

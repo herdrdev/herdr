@@ -2590,6 +2590,28 @@
           ],
           "type": "object"
         },
+        "AgentSearchParams": {
+          "properties": {
+            "include_session": {
+              "default": true,
+              "type": "boolean"
+            },
+            "limit": {
+              "default": 100,
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "type": "object"
+        },
         "AgentSendKeysParams": {
           "properties": {
             "keys": {
@@ -7698,6 +7720,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.search",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentSearchParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.get",
               "type": "string"
             },
@@ -10648,6 +10686,65 @@
         },
         "AgentRef": {
           "description": "Cross-host identity for a pane-backed agent or windowless run.",
+          "type": "string"
+        },
+        "AgentSearchHit": {
+          "properties": {
+            "agent": {
+              "$ref": "#/schemas/success_response/$defs/AgentInfo"
+            },
+            "context": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "line": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "preview": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/AgentSearchSource"
+            },
+            "target": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "title",
+            "source",
+            "context",
+            "agent"
+          ],
+          "type": "object"
+        },
+        "AgentSearchSource": {
+          "enum": [
+            "title",
+            "tail",
+            "session",
+            "path"
+          ],
           "type": "string"
         },
         "AgentSessionInfo": {
@@ -15156,6 +15253,28 @@
               "required": [
                 "type",
                 "agents"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "hits": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AgentSearchHit"
+                  },
+                  "type": "array"
+                },
+                "partial": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "agent_search",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "hits"
               ],
               "type": "object"
             },

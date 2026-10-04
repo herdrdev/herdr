@@ -347,6 +347,7 @@ pub struct Keybinds {
     pub workspace_picker: ActionKeybinds,
     pub goto: ActionKeybinds,
     pub command_palette: ActionKeybinds,
+    pub agent_finder: ActionKeybinds,
     pub detach: ActionKeybinds,
     pub reload_config: ActionKeybinds,
     pub open_notification_target: ActionKeybinds,
@@ -574,6 +575,7 @@ impl Config {
             workspace_picker: empty_action!(),
             goto: empty_action!(),
             command_palette: empty_action!(),
+            agent_finder: empty_action!(),
             detach: empty_action!(),
             reload_config: empty_action!(),
             open_notification_target: empty_action!(),
@@ -761,6 +763,7 @@ impl Config {
             apply_action!(keybinds.workspace_picker, workspace_picker, source);
             apply_action!(keybinds.goto, goto, source);
             apply_action!(keybinds.command_palette, command_palette, source);
+            apply_action!(keybinds.agent_finder, agent_finder, source);
             apply_action!(keybinds.detach, detach, source);
             apply_action!(keybinds.reload_config, reload_config, source);
             apply_action!(
@@ -924,20 +927,6 @@ impl Config {
                     &mut diagnostics,
                 );
             }
-        }
-
-        if keybinds.toggle_blocked_filter.bindings.is_empty()
-            && !self
-                .keys
-                .key_field_is_user_configured("toggle_blocked_filter")
-        {
-            keybinds.toggle_blocked_filter = parse_action_bindings(
-                "keys.toggle_blocked_filter",
-                &BindingConfig::one("prefix+m"),
-                &mut registry,
-                &mut diagnostics,
-                BindingSource::Default,
-            );
         }
 
         // Keep the pre-picker field names usable for existing configurations;
@@ -2691,11 +2680,21 @@ switch_tab = "prefix+?"
     }
 
     #[test]
-    fn blocked_filter_falls_back_when_preferred_prefix_binding_is_taken() {
+    fn agent_finder_uses_prefix_f_and_blocked_filter_is_unbound_by_default() {
+        let defaults = Config::default().keybinds();
+        assert_eq!(
+            binding_triggers(&defaults.agent_finder),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('f'),
+                KeyModifiers::empty()
+            ))]
+        );
+        assert!(binding_triggers(&defaults.toggle_blocked_filter).is_empty());
+
         let config: Config = toml::from_str(
             r#"
 [keys]
-new_workspace = "prefix+f"
+toggle_blocked_filter = "prefix+shift+f"
 "#,
         )
         .unwrap();
@@ -2704,8 +2703,8 @@ new_workspace = "prefix+f"
         assert_eq!(
             binding_triggers(&kb.toggle_blocked_filter),
             vec![BindingTrigger::Prefix((
-                KeyCode::Char('m'),
-                KeyModifiers::empty()
+                KeyCode::Char('f'),
+                KeyModifiers::SHIFT
             ))]
         );
     }

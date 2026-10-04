@@ -970,6 +970,15 @@ impl App {
             sidebar_filter_menu_open: false,
             sidebar_filter_menu_selected: 0,
             sidebar_search_active: false,
+            agent_finder_saved_query: None,
+            agent_finder_history: Vec::new(),
+            agent_finder_history_index: None,
+            agent_finder_results: Vec::new(),
+            agent_finder_partial: false,
+            agent_finder_selected: 0,
+            agent_finder_deadline: None,
+            agent_finder_generation: 0,
+            agent_finder_side_pane: false,
             sidebar_starred_only: false,
             sidebar_new_menu: None,
             sidebar_areas_menu_selected: None,
@@ -2498,7 +2507,11 @@ impl App {
             };
 
             match event {
-                LoopEvent::Timer => {}
+                LoopEvent::Timer => {
+                    if self.tick_agent_finder(Instant::now()) {
+                        needs_render = true;
+                    }
+                }
                 LoopEvent::Internal(ev) => {
                     if self.handle_internal_event_with_prefix_sync(ev) {
                         needs_render = true;
@@ -3862,6 +3875,15 @@ impl App {
         key: crate::input::TerminalKey,
     ) {
         let key_event = key.as_key_event();
+        if self.state.agent_finder_saved_query.is_some()
+            && key_event.code == crossterm::event::KeyCode::Enter
+            && !key_event
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL)
+        {
+            self.accept_selected_agent_finder_result();
+            return;
+        }
         if self.handle_sidebar_areas_menu_key(key_event, owner) {
             return;
         }
