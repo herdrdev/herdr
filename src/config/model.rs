@@ -260,6 +260,12 @@ pub struct TerminalConfig {
     pub new_cwd: NewTerminalCwdConfig,
     /// Render Kitty graphics in compatible outer terminals. Default: true.
     pub kitty_graphics: Option<bool>,
+    /// Console font family to request on startup. Windows-only; ignored
+    /// elsewhere. Empty means "leave the host's console font alone", which is
+    /// what a build without a font picker has always done.
+    pub font_family: Option<String>,
+    /// Console font height in pixels, used only with `font_family`.
+    pub font_size: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]

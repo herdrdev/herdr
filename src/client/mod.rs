@@ -163,6 +163,22 @@ fn run_client_with_mode(
     init_logging();
 
     let loaded_config = crate::config::Config::load();
+    // Request the configured console font before anything is drawn, so the very
+    // first frame already carries the right glyphs instead of repainting over a
+    // wrong font table. Failure is logged and never fatal: a font that is not
+    // installed must not stop herdr from starting.
+    #[cfg(windows)]
+    if let Some(family) = loaded_config.config.terminal.font_family.as_deref() {
+        let size = loaded_config
+            .config
+            .terminal
+            .font_size
+            .filter(|px| *px >= 4)
+            .unwrap_or(16);
+        if let Err(why) = crate::platform::apply_console_font(family, size) {
+            tracing::warn!("terminal.font_family not applied: {why}");
+        }
+    }
     // Windows may not have virtual terminal processing enabled until the rendered
     // client initializes the terminal, so defer the host mouse reset to
     // `setup_terminal_with_capabilities` instead of emitting raw escapes early.

@@ -355,6 +355,8 @@ pub use macos::*;
 
 #[cfg(target_os = "windows")]
 mod windows;
+#[cfg(windows)]
+pub(crate) use windows::console_font::apply_console_font;
 #[cfg(target_os = "windows")]
 pub use windows::*;
 
