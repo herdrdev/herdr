@@ -1,0 +1,18 @@
+---
+title: Scratch
+description: 本地 Markdown 笔记和全屏写作界面。
+---
+
+点击顶部的 **✎ scratch** 打开居中的写作界面。修改自动保存，底部显示词数和保存状态。
+按 **Esc** 查看笔记列表，**Enter** 打开，**n** 新建，**s** 切换同步，**d** 确认后删除。在列表中按 Esc 返回终端。
+
+inbox 上方的 **Notes** 显示最近修改的三篇笔记。点击 **▸ N more** 原地展开更多笔记，点击 **＋** 新建。**⇅** 表示与 Zen writer 共享。
+
+```toml
+[scratch]
+dir = "~/workspaces/personal/vault/Scratch"
+```
+
+这是默认目录，`~` 会展开为用户主目录。笔记是 Markdown 文件，本地笔记位于 `.local`。
+开启同步将笔记移到共享目录，并在 frontmatter 添加 `sync: true`；关闭同步则移回 `.local`。
+Scratch 不发起网络请求，其他 frontmatter 字段保留。外部修改会刷新列表；保存冲突会显示错误，而不会静默覆盖另一编辑器的修改。

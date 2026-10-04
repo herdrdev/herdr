@@ -412,6 +412,98 @@ impl AppState {
             return None;
         }
 
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            for (line, rect) in crate::ui::sidebar::notes::areas(self, self.view.sidebar_rect) {
+                if self.point_in_rect(rect, mouse.column, mouse.row) {
+                    match line {
+                        crate::ui::sidebar::notes::NotesLine::Header => {
+                            if mouse.column >= rect.right().saturating_sub(2) {
+                                self.scratch.new_note();
+                            } else {
+                                self.scratch.collapsed = !self.scratch.collapsed;
+                            }
+                        }
+                        crate::ui::sidebar::notes::NotesLine::Note(i) => self.scratch.open_note(i),
+                        crate::ui::sidebar::notes::NotesLine::More => {
+                            self.scratch.expanded = !self.scratch.expanded
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+        if owner == InputOwner::Surface(SurfaceInputOwner::Scratch)
+            && self.point_in_rect(self.view.terminal_area, mouse.column, mouse.row)
+        {
+            let column = crate::ui::scratch::writer_rect(self.view.terminal_area);
+            if self.scratch.list {
+                let count = usize::from(column.height.saturating_sub(3));
+                let start = self
+                    .scratch
+                    .selected
+                    .saturating_sub(count.saturating_sub(1));
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                    && mouse.row > column.y
+                    && self.point_in_rect(column, mouse.column, mouse.row)
+                    && !self.scratch.confirm_delete
+                {
+                    self.scratch
+                        .open_note(start + usize::from(mouse.row - column.y - 1));
+                }
+                if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+                    self.scratch.selected =
+                        (self.scratch.selected + 1).min(self.scratch.notes.len().saturating_sub(1));
+                }
+                if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                    self.scratch.selected = self.scratch.selected.saturating_sub(1);
+                }
+            } else if let Some(editor) = &mut self.scratch.editor {
+                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                    && column.contains((mouse.column, mouse.row).into())
+                {
+                    let (rows, cursor) = editor.rows(usize::from(column.width));
+                    let start = editor
+                        .scroll
+                        .max(
+                            cursor
+                                .0
+                                .saturating_sub(usize::from(column.height.saturating_sub(1))),
+                        )
+                        .min(cursor.0);
+                    let target = start + usize::from(mouse.row - column.y);
+                    let mut row = 0;
+                    let mut x = 0;
+                    let width = usize::from(column.width).max(1);
+                    for (i, c) in editor.note.body.char_indices() {
+                        let w = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+                        if c != '\n' && x + w > width {
+                            row += 1;
+                            x = 0;
+                        }
+                        if row == target && x >= usize::from(mouse.column - column.x) {
+                            editor.cursor = i;
+                            break;
+                        }
+                        if c == '\n' {
+                            if row == target {
+                                editor.cursor = i;
+                                break;
+                            }
+                            row += 1;
+                            x = 0;
+                        } else {
+                            x += w;
+                        }
+                        if row == target {
+                            editor.cursor = i + c.len_utf8();
+                        }
+                    }
+                    let _ = rows;
+                }
+            }
+            return None;
+        }
+
         // Home covers the panes, so every event inside its frame is consumed:
         // otherwise a click that misses a row reaches the pane hidden behind it
         // and silently moves focus. The status bar sits outside this rect, so
@@ -2855,6 +2947,18 @@ impl AppState {
         }
 
         match crate::ui::mobile_switcher_target_at(self, mouse.column, mouse.row) {
+            Some(crate::ui::MobileSwitcherTarget::NotesHeader) => {
+                self.scratch.collapsed = !self.scratch.collapsed;
+            }
+            Some(crate::ui::MobileSwitcherTarget::NotesMore) => {
+                self.scratch.expanded = !self.scratch.expanded;
+            }
+            Some(crate::ui::MobileSwitcherTarget::NotesNew) => {
+                self.scratch.new_note();
+            }
+            Some(crate::ui::MobileSwitcherTarget::Note(i)) => {
+                self.scratch.open_note(i);
+            }
             Some(crate::ui::MobileSwitcherTarget::Section(title)) => {
                 self.toggle_sidebar_group(title);
             }

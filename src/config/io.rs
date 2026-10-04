@@ -21,6 +21,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "linear",
     "missive",
     "notepad",
+    "scratch",
     "onboarding",
     "panel",
     "planning_lock",
@@ -313,6 +314,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.terminal = section,
+    );
+    load_live_section(
+        table,
+        "scratch",
+        "scratch config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.scratch = section,
     );
     load_live_section(
         table,

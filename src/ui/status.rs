@@ -420,7 +420,7 @@ fn fit_focused_pane_title(repo: &str, thread: &str, width: usize) -> Option<Stri
 /// opening another surface.
 type StatusButtonSpec = (StatusButtonAction, String, bool);
 
-fn status_button_specs(app: &AppState, blocked: usize, attention: usize) -> [StatusButtonSpec; 5] {
+fn status_button_specs(app: &AppState, blocked: usize, attention: usize) -> [StatusButtonSpec; 6] {
     [
         (
             StatusButtonAction::Home,
@@ -454,6 +454,15 @@ fn status_button_specs(app: &AppState, blocked: usize, attention: usize) -> [Sta
             StatusButtonAction::Dock,
             " dock ".to_string(),
             !app.dock_collapsed,
+        ),
+        (
+            StatusButtonAction::Scratch,
+            if app.nerd_font {
+                " ✎ ".into()
+            } else {
+                " scratch ".into()
+            },
+            app.scratch.open,
         ),
     ]
 }
@@ -497,7 +506,12 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         .sum::<usize>();
     let width_without_attention = specs
         .iter()
-        .filter(|(action, _, _)| *action != StatusButtonAction::Attention)
+        .filter(|(action, _, _)| {
+            !matches!(
+                action,
+                StatusButtonAction::Attention | StatusButtonAction::Scratch
+            )
+        })
         .map(|(_, label, _)| display_width(label))
         .sum::<usize>();
     let attention_crosses_sidebar =
@@ -2476,7 +2490,8 @@ mod tests {
                 StatusButtonAction::Work,
                 StatusButtonAction::BlockedFilter,
                 StatusButtonAction::Attention,
-                StatusButtonAction::Dock
+                StatusButtonAction::Dock,
+                StatusButtonAction::Scratch
             ]
         );
         assert_eq!(buttons[0].rect.x, 0);
@@ -2489,13 +2504,14 @@ mod tests {
     #[test]
     fn status_button_specs_are_a_fixed_array() {
         let app = AppState::test_new();
-        let [home, work, blocked, attention, dock] = status_button_specs(&app, 2, 3);
+        let [home, work, blocked, attention, dock, scratch] = status_button_specs(&app, 2, 3);
 
         assert_eq!(home.0, StatusButtonAction::Home);
         assert_eq!(work.0, StatusButtonAction::Work);
         assert_eq!(blocked.1.trim(), "blocked 2");
         assert_eq!(attention.1.trim(), "attention 3");
         assert_eq!(dock.0, StatusButtonAction::Dock);
+        assert_eq!(scratch.0, StatusButtonAction::Scratch);
     }
 
     #[test]

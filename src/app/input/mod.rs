@@ -382,6 +382,9 @@ impl App {
                     self.state.dock_linear_focused = false;
                 }
             }
+            InputOwner::Surface(SurfaceInputOwner::Scratch) => {
+                self.handle_scratch_key(key_event);
+            }
             InputOwner::Surface(SurfaceInputOwner::Inbox) => {
                 return self.handle_inbox_key(key).await;
             }
@@ -1412,10 +1415,18 @@ impl App {
     fn activate_status_button(&mut self, action: crate::app::state::StatusButtonAction) {
         use crate::app::state::StatusButtonAction;
         match action {
+            StatusButtonAction::Scratch => {
+                self.tick_scratch(std::time::Instant::now(), true);
+                self.state.scratch.open_writer();
+            }
             StatusButtonAction::Home => {
+                self.state.scratch.open = false;
                 self.state.toggle_home();
             }
-            StatusButtonAction::Work => self.toggle_work_view(),
+            StatusButtonAction::Work => {
+                self.state.scratch.open = false;
+                self.toggle_work_view();
+            }
             StatusButtonAction::BlockedFilter => {
                 self.state.blocked_filter = !self.state.blocked_filter;
                 self.state.workspace_scroll = crate::ui::normalized_workspace_scroll(
@@ -1425,6 +1436,7 @@ impl App {
                 );
             }
             StatusButtonAction::Attention => {
+                self.state.scratch.open = false;
                 self.state.toggle_home();
             }
             StatusButtonAction::Dock => {
@@ -4864,6 +4876,14 @@ impl App {
 
     pub(crate) fn paste_into_input_owner(&mut self, owner: InputOwner, text: &str) -> bool {
         match owner {
+            InputOwner::Surface(SurfaceInputOwner::Scratch) => {
+                if !self.state.scratch.list && !self.state.scratch.confirm_delete {
+                    if let Some(editor) = &mut self.state.scratch.editor {
+                        editor.insert(text);
+                    }
+                }
+                true
+            }
             InputOwner::Notepad => {
                 // Read-only tabs own the input but have no buffer; pasting there
                 // must not reach a note the user cannot see.
@@ -7038,6 +7058,28 @@ sidebar_visible = true
             tokio::sync::mpsc::unbounded_channel().1,
             crate::api::EventHub::default(),
         )
+    }
+
+    #[tokio::test]
+    async fn scratch_writer_prefix_key_enters_prefix_without_editing() {
+        let mut app = test_app();
+        app.state = AppState::test_new();
+        app.state.scratch.new_note();
+        let key = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('b'),
+            crossterm::event::KeyModifiers::CONTROL,
+        );
+        app.handle_key_inner(TerminalKey::from(key)).await;
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        assert!(app
+            .state
+            .scratch
+            .editor
+            .as_ref()
+            .expect("editor")
+            .note
+            .body
+            .is_empty());
     }
 
     #[test]

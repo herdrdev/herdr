@@ -39,6 +39,7 @@ pub(crate) use input::SidebarWorkGroupKeyAction;
 mod notepad;
 pub(crate) mod pane_graphics;
 mod pane_lifecycle;
+mod scratch;
 pub(crate) use pane_lifecycle::pane_is_quiet;
 mod pane_send;
 mod popup;
@@ -1377,6 +1378,10 @@ impl App {
             dock_editor_errors: std::collections::HashMap::new(),
             dock_editor_requested_paths: std::collections::HashMap::new(),
             scratchpad: crate::scratchpad::ScratchpadDoc::default(),
+            scratch: crate::scratch::ScratchState {
+                dir: crate::scratch::expand_dir(&config.scratch.dir),
+                ..Default::default()
+            },
             notepad: crate::notepad::NotepadState::from_config(&config.notepad),
             sidebar_note_names: crate::app::state::sidebar_panel_note_names(
                 &config.notepad.files,
@@ -2520,6 +2525,8 @@ impl App {
             }
         }
 
+        self.tick_scratch(Instant::now(), true);
+
         // Save session on exit (skip in --no-session mode)
         if !self.no_session {
             self.save_session_now();
@@ -3066,6 +3073,19 @@ impl App {
 
         // Their own gates: these sidebar companions read nothing out of `[ui]`,
         // so a broken `[ui]` section must not freeze any of them.
+        if !invalid_section("scratch") {
+            let dir = crate::scratch::expand_dir(&config.scratch.dir);
+            if dir != self.state.scratch.dir {
+                self.tick_scratch(Instant::now(), true);
+                if self.state.scratch.error.is_none() && self.state.scratch.pending_saves.is_empty()
+                {
+                    self.state.scratch = crate::scratch::ScratchState {
+                        dir,
+                        ..Default::default()
+                    };
+                }
+            }
+        }
         if !invalid_section("notepad") {
             self.apply_notepad_config(&config.notepad);
         }
@@ -3958,6 +3978,9 @@ impl App {
                     self.state.dock_pr_focused = false;
                     self.state.dock_linear_focused = false;
                 }
+            }
+            state::InputOwner::Surface(state::SurfaceInputOwner::Scratch) => {
+                self.handle_scratch_key(key_event);
             }
             state::InputOwner::Surface(state::SurfaceInputOwner::Inbox) => {
                 self.handle_inbox_key_headless(key_event);
@@ -9263,6 +9286,24 @@ mod tests {
             Mode::Terminal,
             "q should leave navigate mode"
         );
+    }
+
+    #[test]
+    fn scratch_headless_raw_prefix_enters_prefix_without_editing() {
+        let mut app = test_app();
+        app.state = AppState::test_new();
+        app.state.scratch.new_note();
+        app.route_client_input(vec![0x02]);
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        assert!(app
+            .state
+            .scratch
+            .editor
+            .as_ref()
+            .expect("editor")
+            .note
+            .body
+            .is_empty());
     }
 
     #[test]

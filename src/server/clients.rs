@@ -83,6 +83,8 @@ pub(crate) struct ClientConnection {
     pub(crate) focus_initialized: bool,
     /// Dock layout and focus state for this attach; editor PTYs are server-owned.
     pub(crate) dock_presentation: crate::app::state::DockPresentationState,
+    /// Writer, note selection, confirmation, and sidebar folds for this attach.
+    pub(crate) scratch_presentation: crate::scratch::ScratchPresentation,
     /// Selected notepad projection, folds, and scroll for this attach.
     pub(crate) notepad_presentation: crate::notepad::NotepadPresentationState,
     /// Client-local run-history detail surface, separate from server-owned receipt facts.
@@ -196,6 +198,7 @@ impl ClientConnection {
             selected_pane: 0,
             focus_initialized: false,
             dock_presentation: crate::app::state::DockPresentationState::default(),
+            scratch_presentation: Default::default(),
             notepad_presentation: crate::notepad::NotepadPresentationState::default(),
             loop_run_history_detail: None,
             aloop_run_detail: None,

@@ -506,6 +506,7 @@ impl App {
         let mut changed = self.take_due_agent_activity_refresh(now);
         changed |= self.handle_loop_receipt_fallback(now);
         changed |= self.tick_notepad(now);
+        changed |= self.tick_scratch(now, false);
         changed |= self.schedule_goals_refresh(now);
         changed |= self.tick_pomodoro(now, self.state.outer_terminal_focus != Some(false));
         changed |= self.pomodoro_animation_due(now);
@@ -1202,6 +1203,15 @@ impl App {
         let deadline = self.next_loop_deadline_with_resize_poll(now, needs_render, true, true);
         [
             deadline,
+            self.state
+                .scratch
+                .poll_at
+                .map(|at| at + std::time::Duration::from_secs(2)),
+            self.state
+                .scratch
+                .editor
+                .as_ref()
+                .and_then(|e| e.dirty_at.map(|at| at + crate::scratch::SAVE_DELAY)),
             crate::ui::pomodoro::animation_deadline_at(&self.state, self.state.screen_rect(), now),
             self.planning_lock_render_deadline(now),
         ]

@@ -418,6 +418,7 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
                     }
                     crate::app::state::StatusButtonAction::Attention => "Agents needing you",
                     crate::app::state::StatusButtonAction::Dock => "Toggle dock panel",
+                    crate::app::state::StatusButtonAction::Scratch => "Scratch: write notes",
                 }
                 .into(),
             )

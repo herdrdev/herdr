@@ -109,6 +109,7 @@ mod release_notes;
 mod remote;
 mod render_prof;
 mod render_signal;
+mod scratch;
 mod scratchpad;
 mod selection;
 mod server;

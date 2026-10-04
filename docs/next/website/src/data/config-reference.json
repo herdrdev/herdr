@@ -2586,6 +2586,18 @@
           "description": "Seconds a bound agent may stay quiet before its item reads as stale. The clock ignores an idle agent repainting its own chrome."
         }
       ]
+    },
+    {
+      "id": "scratch",
+      "title": "Scratch",
+      "keys": [
+        {
+          "key": "scratch.dir",
+          "type": "string",
+          "default": "\"~/workspaces/personal/vault/Scratch\"",
+          "description": "Markdown folder shared with Zen writer. ~ expands to the home directory. Synced notes have sync: true frontmatter; local notes are stored in .local. No network calls."
+        }
+      ]
     }
   ]
 }

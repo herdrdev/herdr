@@ -1267,6 +1267,7 @@ impl AppState {
                 | crate::ui::SidebarRow::AloopCleanRun { .. }
                 | crate::ui::SidebarRow::AloopUnreachable { .. }
                 | crate::ui::SidebarRow::AloopEmpty
+                | crate::ui::SidebarRow::Notes(_)
                 | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
@@ -1312,6 +1313,7 @@ impl AppState {
                 | crate::ui::SidebarRow::AloopCleanRun { .. }
                 | crate::ui::SidebarRow::AloopUnreachable { .. }
                 | crate::ui::SidebarRow::AloopEmpty
+                | crate::ui::SidebarRow::Notes(_)
                 | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
@@ -3450,6 +3452,7 @@ mod tests {
                 crate::ui::SidebarRow::AloopUnreachable { .. } => "aloop:unreachable".to_string(),
                 crate::ui::SidebarRow::AloopEmpty => "aloop:empty".to_string(),
                 crate::ui::SidebarRow::Inbox(_) => "inbox".to_string(),
+                crate::ui::SidebarRow::Notes(_) => "notes".to_string(),
             })
             .collect()
     }

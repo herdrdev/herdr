@@ -1,0 +1,26 @@
+---
+title: Scratch
+description: Local Markdown notes and a full-pane writer.
+---
+
+Open **✎ scratch** in the top bar to write in a centered column. Changes autosave;
+the footer shows the word count and save status. Press **Esc** to show all notes,
+then **Enter** to open a note, **n** to create one, **s** to toggle sync, or **d**
+to delete with confirmation. Esc from the list returns to the terminal.
+
+The sidebar **Notes** section, above inbox, shows the three most recently modified
+notes. Click **▸ N more** to expand the remaining notes in place, or **＋** to
+create a note. **⇅** marks notes shared with Zen writer.
+
+```toml
+[scratch]
+dir = "~/workspaces/personal/vault/Scratch"
+```
+
+This is the default folder; `~` expands to your home directory. Notes are plain
+Markdown. Local notes live in `.local`; toggling sync moves a note into the shared
+folder and adds `sync: true` to its frontmatter. Turning sync off moves it back to
+`.local`. Herdr makes no network requests for Scratch. Other frontmatter is
+preserved. External edits refresh the notes list; a conflicting save shows a
+notice and saves your draft as a new local conflict copy, preserving the other
+editor's changes.

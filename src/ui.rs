@@ -33,6 +33,7 @@ pub(crate) mod notepad_agent;
 pub(crate) mod notepad_usage;
 mod onboarding;
 mod panes;
+pub(crate) mod scratch;
 pub(crate) use panes::settled_max_scroll;
 mod planning_lock;
 pub(crate) mod pomodoro;
@@ -430,8 +431,11 @@ fn compute_view_internal_at(
         || app.work_view.is_some()
         || app.dock_object_preview.is_some()
         || app.home.is_some()
-        || app.inbox.is_some();
-    let dock_w = if app.dock_collapsed {
+        || app.inbox.is_some()
+        || app.scratch.open;
+    let dock_w = if app.scratch.open {
+        0
+    } else if app.dock_collapsed {
         DOCK_COLLAPSED_WIDTH
     } else if available_after_sidebar < DOCK_MIN_WIDTH + DOCK_MIN_TERMINAL_WIDTH {
         app.dock_collapsed = true;
@@ -1343,6 +1347,9 @@ fn render_with_runtime_registry_inner(
         render_tab_action_buttons(app, frame);
     }
     match app.terminal_area_surface() {
+        crate::app::state::TerminalAreaSurface::Scratch => {
+            scratch::render(app, frame, terminal_area)
+        }
         crate::app::state::TerminalAreaSurface::Board => {
             board::render(app, terminal_area, frame);
         }

@@ -46,6 +46,10 @@ pub(crate) enum MobileSwitcherTarget {
     Section(&'static str),
     NeedsYou(super::sidebar::NeedsYouTarget),
     NeedsYouMore,
+    NotesHeader,
+    NotesNew,
+    NotesMore,
+    Note(usize),
     NewWorkspace,
     Workspace(usize),
     WorkspaceDisclosure(usize),
@@ -243,6 +247,17 @@ fn mobile_switcher_target_for_row(
         | SidebarRow::AloopEmpty
         | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { summary: None, .. } => return None,
+        SidebarRow::Notes(line) => match line {
+            super::sidebar::notes::NotesLine::Header => {
+                if col >= content.right().saturating_sub(2) {
+                    MobileSwitcherTarget::NotesNew
+                } else {
+                    MobileSwitcherTarget::NotesHeader
+                }
+            }
+            super::sidebar::notes::NotesLine::Note(i) => MobileSwitcherTarget::Note(*i),
+            super::sidebar::notes::NotesLine::More => MobileSwitcherTarget::NotesMore,
+        },
     })
 }
 
@@ -282,6 +297,7 @@ fn mobile_sidebar_row_height(app: &AppState, row: &SidebarRow) -> usize {
         | SidebarRow::AloopCleanRun { .. }
         | SidebarRow::AloopUnreachable { .. }
         | SidebarRow::AloopEmpty
+        | SidebarRow::Notes(_)
         | SidebarRow::Inbox(_)
         | SidebarRow::AgentRun { .. } => 1,
         SidebarRow::NeedsYou { subtitle, .. } => 1 + usize::from(subtitle.is_some()),
@@ -1425,6 +1441,25 @@ fn render_mobile_switcher_content(
                     app.mobile_switcher_scroll,
                     p.panel_bg,
                     Line::from(Span::styled(label, Style::default().fg(p.overlay0))),
+                );
+            }
+            SidebarRow::Notes(line) => {
+                let mut label = super::sidebar::notes::label(app, line, usize::from(content.width));
+                if matches!(line, super::sidebar::notes::NotesLine::Header) {
+                    let glyph = if app.nerd_font { "＋" } else { "+" };
+                    let spaces = usize::from(content.width)
+                        .saturating_sub(unicode_width::UnicodeWidthStr::width(label.as_str()) + 2);
+                    label.push_str(&" ".repeat(spaces));
+                    label.push_str(glyph);
+                }
+                render_one_line_item(
+                    frame,
+                    viewport,
+                    content,
+                    doc_y,
+                    app.mobile_switcher_scroll,
+                    p.panel_bg,
+                    Line::from(Span::styled(label, Style::default().fg(p.text))),
                 );
             }
             SidebarRow::Inbox(line) => {
@@ -3443,9 +3478,9 @@ mod tests {
         app.active = Some(0);
         app.selected = 0;
         app.view.mobile_header_rect = Rect::new(0, 0, 40, 2);
-        app.view.terminal_area = Rect::new(0, 2, 40, 18);
+        app.view.terminal_area = Rect::new(0, 2, 40, 22);
 
-        let backend = ratatui::backend::TestBackend::new(40, 20);
+        let backend = ratatui::backend::TestBackend::new(40, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
@@ -3453,12 +3488,12 @@ mod tests {
                     &app,
                     &TerminalRuntimeRegistry::new(),
                     frame,
-                    Rect::new(0, 0, 40, 20),
+                    Rect::new(0, 0, 40, 24),
                 )
             })
             .unwrap();
 
-        let rows = (0..20)
+        let rows = (0..24)
             .map(|y| {
                 (0..40)
                     .map(|x| terminal.backend().buffer()[(x, y)].symbol())

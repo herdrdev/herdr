@@ -452,6 +452,7 @@ pub struct Config {
     pub panel: PanelConfig,
     pub linear: LinearConfig,
     pub notepad: NotepadConfig,
+    pub scratch: ScratchConfig,
     pub goals_panel: GoalsPanelConfig,
     pub pomodoro: PomodoroConfig,
     pub actions: Vec<ActionConfig>,
@@ -542,6 +543,20 @@ pub struct LaunchProfileConfig {
     /// `kimi`. Absent means the lane reports no usage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub usage: Option<String>,
+}
+
+/// `[scratch]` — shared Markdown folder; unsynced notes live in `.local`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ScratchConfig {
+    pub dir: String,
+}
+impl Default for ScratchConfig {
+    fn default() -> Self {
+        Self {
+            dir: crate::scratch::DEFAULT_DIR.into(),
+        }
+    }
 }
 
 /// `[notepad]` — the sidebar note folder.

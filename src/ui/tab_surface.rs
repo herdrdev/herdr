@@ -358,9 +358,9 @@ mod tests {
         assert_eq!(
             frame_digest(&frame),
             // One-line mobile Space → direct tab/window projection followed by
-            // the collapsed section structure. The digest includes content
+            // the collapsed section structure and Scratch Notes header. The digest includes content
             // and style.
-            "226b71905b237b6b7cd8b01506a96195f65df6ce440b39409a5cdaaa3996462c"
+            "b5ffcd36190de146cc4a838e9f0d11aa90bb411a3b91b869a7873406d2534bad"
         );
     }
 }
