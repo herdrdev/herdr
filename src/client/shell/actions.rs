@@ -48,6 +48,17 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if matches!(
+                    action,
+                    crate::input::KeybindAction::HistoryBack
+                        | crate::input::KeybindAction::HistoryForward
+                ) {
+                    self.navigate_history(
+                        action == crate::input::KeybindAction::HistoryBack,
+                        outcome,
+                    );
+                    return;
+                }
                 if action == crate::input::KeybindAction::Help {
                     self.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
                         query: TextEditor::default(),
@@ -371,6 +382,9 @@ impl ClientShellState {
             _ => false,
         };
         if changes_focus {
+            if !matches!(kind, PendingEndpointKind::NavigationHistory { .. }) {
+                self.navigation_history.cancel(&self.active_endpoint_id);
+            }
             outcome.repaint |= self.pending_workspace_highlight.take().is_some();
         }
         if !self.endpoint_is_online(&self.active_endpoint_id) {
@@ -561,6 +575,12 @@ impl ClientShellState {
             }
         }
         match pending.kind {
+            PendingEndpointKind::NavigationHistory { serial } => {
+                if result.is_err() {
+                    self.navigation_history
+                        .fail(&self.active_endpoint_id, serial);
+                }
+            }
             PendingEndpointKind::Generic => {}
             PendingEndpointKind::PaneLinkResolve { .. } => unreachable!("handled above"),
             PendingEndpointKind::ProductAnnouncementDismiss { version, id } => {

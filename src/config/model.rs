@@ -378,6 +378,10 @@ pub struct KeysConfig {
     pub previous_workspace: BindingConfig,
     /// Select the next workspace. Unset by default.
     pub next_workspace: BindingConfig,
+    /// Go back in tab history. Default: "prefix+left".
+    pub navigation_back: BindingConfig,
+    /// Go forward in tab history. Default: "prefix+right".
+    pub navigation_forward: BindingConfig,
     /// Focus the previous agent shown in the agent panel. Unset by default.
     pub previous_agent: BindingConfig,
     /// Focus the next agent shown in the agent panel. Unset by default.
@@ -511,6 +515,10 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     next_workspace: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    navigation_back: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    navigation_forward: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     previous_agent: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     next_agent: Option<BindingConfig>,
@@ -636,6 +644,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(open_notification_target);
         apply_field!(previous_workspace);
         apply_field!(next_workspace);
+        apply_field!(navigation_back);
+        apply_field!(navigation_forward);
         apply_field!(previous_agent);
         apply_field!(next_agent);
         apply_field!(focus_agent);
@@ -741,6 +751,8 @@ impl KeysConfig {
         copy_effective_action_field!(open_notification_target, keybinds.open_notification_target);
         copy_effective_action_field!(previous_workspace, keybinds.previous_workspace);
         copy_effective_action_field!(next_workspace, keybinds.next_workspace);
+        copy_effective_action_field!(navigation_back, keybinds.navigation_back);
+        copy_effective_action_field!(navigation_forward, keybinds.navigation_forward);
         copy_effective_action_field!(previous_agent, keybinds.previous_agent);
         copy_effective_action_field!(next_agent, keybinds.next_agent);
         copy_effective_indexed_field!(focus_agent, keybinds.focus_agent);
@@ -921,6 +933,10 @@ pub struct UiConfig {
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
     pub mouse_capture: bool,
+    /// Tab history stays on the current machine. Default: across_spaces.
+    pub navigation_history_scope: NavigationHistoryScope,
+    /// Use host mouse Back/Forward buttons for tab history. Default: true.
+    pub mouse_history_navigation: bool,
     /// Copy text selected with the mouse. Default: true.
     pub copy_on_select: bool,
     /// Host cursor policy. Default: auto.
@@ -1110,6 +1126,8 @@ impl Default for KeysConfig {
             open_notification_target: BindingConfig::one("prefix+o"),
             previous_workspace: BindingConfig::empty(),
             next_workspace: BindingConfig::empty(),
+            navigation_back: BindingConfig::one("prefix+left"),
+            navigation_forward: BindingConfig::one("prefix+right"),
             previous_agent: BindingConfig::empty(),
             next_agent: BindingConfig::empty(),
             focus_agent: BindingConfig::empty(),
@@ -1163,6 +1181,23 @@ impl Default for WorktreesConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationHistoryScope {
+    #[default]
+    AcrossSpaces,
+    CurrentSpace,
+}
+
+impl NavigationHistoryScope {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::AcrossSpaces => "across_spaces",
+            Self::CurrentSpace => "current_space",
+        }
+    }
+}
+
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
@@ -1173,6 +1208,8 @@ impl Default for UiConfig {
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
+            navigation_history_scope: NavigationHistoryScope::AcrossSpaces,
+            mouse_history_navigation: true,
             copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),

@@ -1172,6 +1172,30 @@ async fn run_client_loop(
                 }
                 // Direct terminal attach is Unix-only; every Windows client uses ClientShell.
             }
+            #[cfg(windows)]
+            ClientLoopEvent::HostNavigation { back } => {
+                if let Some(shell) = state.shell.as_mut() {
+                    let outcome = shell.handle_raw_events(vec![
+                        crate::raw_input::RawInputEvent::NavigationMouseButton { back },
+                    ]);
+                    let frame = outcome
+                        .repaint
+                        .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+                        .flatten();
+                    if finish_client_shell_input(
+                        &mut state,
+                        outcome,
+                        frame,
+                        &mut write_stream,
+                        &mut pending_activation,
+                        &mut endpoint_commands,
+                        &mut prefix_input_source,
+                        &mut scheduled_activation,
+                    )? {
+                        return Ok(());
+                    }
+                }
+            }
             ClientLoopEvent::TerminalUnavailable(err) => {
                 info!(err = %err, "client terminal unavailable; detaching");
                 let _ = write_to_server(&mut write_stream, &ClientMessage::Detach);
@@ -2245,6 +2269,9 @@ async fn run_client_loop(
                             outcome.repaint |= repaint;
                             outcome.actions.extend(actions);
                         }
+                        let navigation = shell.tick_navigation_history(now);
+                        outcome.repaint |= navigation.repaint;
+                        outcome.actions.extend(navigation.actions);
                         let (effects, notification_repaint) = shell.tick_notifications(now);
                         outcome.repaint |= notification_repaint
                             | shell.tick_copy_feedback(now)

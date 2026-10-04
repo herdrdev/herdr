@@ -9,6 +9,25 @@ You already know this model. Jump to the [keybinding reference](/docs/configurat
 
 Herdr is mouse-native. You can click panes, tabs, workspaces, and agents, drag split borders, and use right-click menus without learning a single keybinding. Keyboard control is optional.
 
+Mouse Back/Forward buttons and `prefix+left` / `prefix+right` retrace the tabs you have viewed, like browser history. Back/Forward stops at either end; selecting another tab after going Back replaces the forward branch. Pane-only focus and workspace previews do not create visits. Closed tabs are skipped, and transferred tabs follow their current space.
+
+History stays on the current machine: each connected machine keeps its own history when you switch away and return. **Settings → navigation** offers **across spaces** (the default), **current space only** (independent history per space), and a mouse Back/Forward toggle. Histories keep up to 256 visits each and last for the attached client's lifetime; reconnecting to the same server preserves them, while restarting the server resets that machine's history. Navigation waits for confirmed focus and is blocked by dialogs, terminal popups, and active drags.
+
+Mouse buttons work when the host terminal forwards extended SGR mouse reports or native Windows side-button records. If your terminal consumes them, map them in the terminal to your configured navigation shortcuts. Keyboard bindings can be changed independently:
+
+```toml
+[ui]
+navigation_history_scope = "across_spaces" # or "current_space"
+mouse_history_navigation = true
+
+[keys]
+navigation_back = "prefix+left"
+navigation_forward = "prefix+right"
+# Optional browser-like direct shortcuts:
+# navigation_back = ["prefix+left", "alt+left"]
+# navigation_forward = ["prefix+right", "alt+right"]
+```
+
 ## What the prefix is
 
 A terminal multiplexer sits between your terminal and the programs running inside it. Those programs already use most key combinations: `ctrl+c` interrupts, `ctrl+r` searches history, editors claim nearly everything else. If Herdr grabbed common keys directly, it would break the programs inside it.

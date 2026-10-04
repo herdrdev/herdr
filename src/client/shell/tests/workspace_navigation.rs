@@ -14,6 +14,253 @@ fn workspaces(count: usize) -> ClientShellSnapshot {
     projected
 }
 
+fn mouse_history_state(config: &Config) -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(config));
+    state.config.copy_on_select = false;
+    let mut projected = snapshot();
+    let mut second = projected.tabs[0].clone();
+    second.tab_id = "tab_2".into();
+    second.number = 2;
+    second.focused = false;
+    projected.tabs.push(second);
+    let mut second_pane = projected.panes[0].clone();
+    second_pane.pane_id = "pane_2".into();
+    second_pane.tab_id = "tab_2".into();
+    second_pane.focused = false;
+    projected.panes.push(second_pane);
+    state.set_snapshot(Box::new(projected.clone()));
+    projected.focused_tab_id = Some("tab_2".into());
+    projected.focused_pane_id = Some("pane_2".into());
+    projected.workspaces[0].active_tab_id = "tab_2".into();
+    for tab in &mut projected.tabs {
+        tab.focused = tab.tab_id == "tab_2";
+    }
+    for pane in &mut projected.panes {
+        pane.focused = pane.pane_id == "pane_2";
+    }
+    projected.revision += 1;
+    let mut pane_surface = surface();
+    pane_surface.projection_revision = projected.revision;
+    pane_surface.panes[0].pane_id = "pane_2".into();
+    pane_surface.panes[0].scroll = Some(crate::protocol::PaneSurfaceScrollMetrics {
+        offset_from_bottom: 0,
+        max_offset_from_bottom: 20,
+        viewport_rows: 2,
+    });
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("pane frame");
+    state
+}
+
+fn start_history_mouse_selection(state: &mut ClientShellState) -> MouseEvent {
+    let pane = state.hits.panes[0].clone();
+    let mut mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(state.has_active_mouse_selection());
+    assert!(state
+        .copy_mode
+        .as_ref()
+        .is_none_or(|copy_mode| copy_mode.selection.is_none()));
+    mouse.kind = MouseEventKind::Drag(MouseButton::Left);
+    mouse.column += 2;
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(state.has_active_mouse_selection());
+    assert!(state.selection_autoscroll.is_some());
+    assert!(state.selection_autoscroll_deadline.is_some());
+    mouse
+}
+
+#[test]
+fn keyboard_history_waits_for_mouse_selection_release() {
+    for direct in [false, true] {
+        let mut config = Config::default();
+        if direct {
+            config.keys.navigation_back = crate::config::BindingConfig::one("ctrl+alt+b");
+        }
+        let mut state = mouse_history_state(&config);
+        let mut mouse = start_history_mouse_selection(&mut state);
+        assert!(state.selection.as_ref().unwrap().is_in_progress());
+        assert!(state.copy_mode.is_none());
+
+        let history_key = if direct {
+            crate::input::TerminalKey::new(
+                KeyCode::Char('b'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            )
+        } else {
+            crate::input::TerminalKey::new(KeyCode::Left, KeyModifiers::empty())
+        };
+        if !direct {
+            preview_key(&mut state, b"\x02");
+            assert!(state.selection.as_ref().unwrap().is_in_progress());
+        }
+        let blocked = state.handle_raw_events(vec![RawInputEvent::Key(history_key.clone())]);
+        assert!(blocked.actions.is_empty() && blocked.requests.is_empty());
+        assert!(state.selection.as_ref().unwrap().is_in_progress());
+        assert!(state.selection_autoscroll.is_some());
+        assert_eq!(state.mode, ClientShellMode::Terminal);
+
+        mouse.kind = MouseEventKind::Up(MouseButton::Left);
+        state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+        assert!(state.selection.as_ref().unwrap().is_finalized());
+        if !direct {
+            preview_key(&mut state, b"\x02");
+        }
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Key(history_key)]);
+        assert!(matches!(
+            outcome.actions.as_slice(),
+            [ClientShellAction::Endpoint { request, .. }]
+                if matches!(&request.method, crate::api::schema::Method::TabFocus(target) if target.tab_id == "tab_1")
+        ));
+        assert!(state.selection.is_none());
+    }
+}
+
+#[test]
+fn mouse_selection_in_copy_mode_blocks_history_until_release() {
+    for keyboard_selection in [None, Some(b"v".as_slice()), Some(b"V".as_slice())] {
+        for prefix in [false, true] {
+            let mut state = mouse_history_state(&Config::default());
+            assert!(state.enter_copy_mode(&mut ClientShellInput::default()));
+            if let Some(key) = keyboard_selection {
+                state.handle_input_bytes(key);
+                assert!(state.copy_mode.as_ref().unwrap().selection.is_some());
+                assert!(state.selection.is_some());
+                assert!(!state.has_active_mouse_selection());
+            }
+            let mut mouse = start_history_mouse_selection(&mut state);
+            assert!(state.copy_mode.as_ref().unwrap().selection.is_none());
+            let history_key = if prefix {
+                preview_key(&mut state, b"\x02");
+                b"\x1b[D".as_slice()
+            } else {
+                b"\x1b[<128;5;3M".as_slice()
+            };
+            let blocked = state.handle_input_bytes(history_key);
+            assert!(blocked.actions.is_empty() && blocked.requests.is_empty());
+            assert!(state.has_active_mouse_selection());
+            assert!(state.copy_mode.is_some());
+
+            mouse.kind = MouseEventKind::Up(MouseButton::Left);
+            state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+            assert!(!state.has_active_mouse_selection());
+            assert!(state.selection.as_ref().unwrap().is_finalized());
+            if prefix {
+                preview_key(&mut state, b"\x02");
+            }
+            let allowed = state.handle_input_bytes(history_key);
+            assert!(allowed.actions.iter().any(|action| matches!(
+                action,
+                ClientShellAction::Endpoint { request, .. }
+                    if matches!(&request.method, crate::api::schema::Method::TabFocus(target)
+                        if target.tab_id == "tab_1")
+            )));
+            assert!(state.copy_mode.is_none());
+        }
+    }
+}
+
+#[test]
+fn non_history_keys_clear_mouse_selection_and_stop_autoscroll() {
+    for route in ["typing", "double_prefix", "prefix_action", "direct_action"] {
+        let mut config = Config::default();
+        if route == "direct_action" {
+            config.keys.focus_pane_left = crate::config::BindingConfig::one("ctrl+alt+h");
+        }
+        let mut state = mouse_history_state(&config);
+        start_history_mouse_selection(&mut state);
+        if matches!(route, "double_prefix" | "prefix_action") {
+            preview_key(&mut state, b"\x02");
+            assert!(state.has_active_mouse_selection());
+            assert!(state.selection_autoscroll.is_some());
+        }
+        let (code, modifiers) = match route {
+            "typing" => (KeyCode::Char('x'), KeyModifiers::empty()),
+            "double_prefix" => (KeyCode::Char('b'), KeyModifiers::CONTROL),
+            "prefix_action" => (KeyCode::Char('h'), KeyModifiers::empty()),
+            "direct_action" => (
+                KeyCode::Char('h'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+            _ => unreachable!(),
+        };
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(code, modifiers),
+        )]);
+        assert!(state.selection.is_none(), "{route}");
+        assert!(state.selection_autoscroll.is_none(), "{route}");
+        assert!(state.selection_autoscroll_deadline.is_none(), "{route}");
+        if matches!(route, "typing" | "double_prefix") {
+            let [ClientMessage::ClientShellPaneInput { pane_id, events }] =
+                outcome.requests.as_slice()
+            else {
+                panic!("expected forwarded pane key: {route}");
+            };
+            assert_eq!(pane_id, "pane_2");
+            assert!(
+                matches!(events.as_slice(), [crate::protocol::ClientPaneInputEvent::Key {
+                    code: crate::protocol::ClientKeyCode::Char(forwarded), modifiers: forwarded_modifiers, ..
+                }] if KeyCode::Char(*forwarded) == code
+                    && *forwarded_modifiers == modifiers.bits())
+            );
+        } else {
+            assert!(outcome.actions.iter().any(|action| matches!(
+                action,
+                ClientShellAction::Endpoint { request, .. }
+                    if matches!(&request.method, crate::api::schema::Method::PaneFocusDirection(_))
+            )));
+        }
+    }
+}
+
+#[test]
+fn held_word_selection_blocks_history_while_row_read_is_pending() {
+    let mut state = mouse_history_state(&Config::default());
+    let pane = state.hits.panes[0].clone();
+    let mut mouse = MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: pane.inner_rect.x,
+        row: pane.inner_rect.y,
+        modifiers: KeyModifiers::empty(),
+    };
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    mouse.kind = MouseEventKind::Up(MouseButton::Left);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    mouse.kind = MouseEventKind::Down(MouseButton::Left);
+    let down = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(down.actions.iter().any(|action| matches!(
+        action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(&request.method, crate::api::schema::Method::PaneSelectionRead(_))
+    )));
+    assert!(state.selection.is_none());
+    assert!(state.has_active_mouse_selection());
+    assert!(state
+        .handle_input_bytes(b"\x1b[<128;5;3M")
+        .actions
+        .is_empty());
+    preview_key(&mut state, b"\x02");
+    let blocked = state.handle_input_bytes(b"\x1b[D");
+    assert!(blocked.actions.is_empty() && blocked.requests.is_empty());
+    assert!(state.has_active_mouse_selection());
+    mouse.kind = MouseEventKind::Up(MouseButton::Left);
+    state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(!state.has_active_mouse_selection());
+    let allowed = state.handle_input_bytes(b"\x1b[<128;5;3M");
+    assert!(matches!(
+        allowed.actions.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::TabFocus(target)
+                if target.tab_id == "tab_1")
+    ));
+}
+
 fn grouped_workspaces() -> ClientShellSnapshot {
     let mut projected = workspaces(3);
     for (index, linked) in [(0, false), (2, true)] {

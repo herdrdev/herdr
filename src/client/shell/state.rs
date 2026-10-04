@@ -42,6 +42,8 @@ pub(crate) struct ClientShellConfig {
     pub(super) prompt_new_workspace_name: bool,
     pub(super) confirm_close: bool,
     pub(super) mouse_capture: bool,
+    pub(super) navigation_history_scope: crate::config::NavigationHistoryScope,
+    pub(super) mouse_history_navigation: bool,
     pub(super) mouse_scroll_lines: usize,
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
@@ -387,6 +389,7 @@ pub(super) enum ClientSettingsSection {
     Indicators,
     Sound,
     Toast,
+    Navigation,
     Integrations,
 }
 
@@ -396,6 +399,7 @@ impl ClientSettingsSection {
         Self::Indicators,
         Self::Sound,
         Self::Toast,
+        Self::Navigation,
         Self::Integrations,
     ];
 
@@ -405,6 +409,7 @@ impl ClientSettingsSection {
             Self::Indicators => "indicators",
             Self::Sound => "sound",
             Self::Toast => "toasts",
+            Self::Navigation => "navigation",
             Self::Integrations => "integrations",
         }
     }
@@ -416,6 +421,8 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) selected: usize,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
+    pub(super) navigation_history_scope: crate::config::NavigationHistoryScope,
+    pub(super) mouse_history_navigation: bool,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
@@ -615,6 +622,9 @@ impl ClientShellOverlay {
 
 #[derive(Debug)]
 pub(super) enum PendingEndpointKind {
+    NavigationHistory {
+        serial: u64,
+    },
     Generic,
     ProductAnnouncementDismiss {
         version: String,
@@ -892,6 +902,7 @@ pub(crate) struct ClientShellState {
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) previous_pane_id: Option<String>,
+    pub(super) navigation_history: super::navigation_history::NavigationHistory,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
     pub(super) url_click_consumes_until_up: bool,
@@ -1057,6 +1068,7 @@ impl ClientShellState {
             reveal_navigation_workspace: false,
             overlay,
             previous_pane_id: None,
+            navigation_history: Default::default(),
             pane_mouse_gesture: None,
             link_hover: None,
             url_click_consumes_until_up: false,
@@ -1250,6 +1262,7 @@ impl ClientShellState {
             .startup_onboarding
             .then_some(ClientShellOverlay::Onboarding);
         self.previous_pane_id = None;
+        self.navigation_history.cancel(&self.active_endpoint_id);
         self.pane_mouse_gesture = None;
         self.link_hover = None;
         self.url_click_consumes_until_up = false;
@@ -1561,6 +1574,10 @@ impl ClientShellState {
             }
         }
         self.snapshot = Some(snapshot);
+        if let Some(snapshot) = self.snapshot.as_deref() {
+            self.navigation_history
+                .observe(&self.active_endpoint_id, snapshot);
+        }
         self.reconcile_pending_workspace_highlight();
         let pending_surface = self.pending_pane_surface.take();
         if let Some(surface) = pending_surface {

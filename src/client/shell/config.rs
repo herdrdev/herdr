@@ -71,6 +71,10 @@ impl ClientShellState {
     pub(crate) fn reload_client_config(&mut self) {
         match crate::config::load_live_config() {
             Ok(loaded) => {
+                if self.config.navigation_history_scope != loaded.config.ui.navigation_history_scope
+                {
+                    self.navigation_history.cancel(&self.active_endpoint_id);
+                }
                 let agent_panel_sort = self.config.agent_panel_sort;
                 let diagnostics = self.config.apply_live_config(
                     &loaded.config,
@@ -148,6 +152,8 @@ impl ClientShellConfig {
             prompt_new_workspace_name: config.ui.prompt_new_workspace_name,
             confirm_close: config.ui.confirm_close,
             mouse_capture: config.ui.mouse_capture,
+            navigation_history_scope: config.ui.navigation_history_scope,
+            mouse_history_navigation: config.ui.mouse_history_navigation,
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
             right_click_passthrough_modifiers: config.ui.right_click_passthrough_modifiers(),
             redraw_on_focus_gained: config.ui.redraw_on_focus_gained,
@@ -338,6 +344,8 @@ impl ClientShellConfig {
                 self.prompt_new_workspace_name = ui.prompt_new_workspace_name;
                 self.confirm_close = ui.confirm_close;
                 self.mouse_capture = ui.mouse_capture;
+                self.navigation_history_scope = ui.navigation_history_scope;
+                self.mouse_history_navigation = ui.mouse_history_navigation;
                 self.mouse_scroll_lines = ui.mouse_scroll_lines();
                 self.right_click_passthrough_modifiers = ui.right_click_passthrough_modifiers();
                 self.redraw_on_focus_gained = ui.redraw_on_focus_gained;

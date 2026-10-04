@@ -4,6 +4,8 @@ pub(crate) enum ConfigEdit<'a> {
     StatusIndicators(super::StatusIndicatorStyle),
     Sound(bool),
     ToastDelivery(super::ToastDelivery),
+    NavigationHistoryScope(super::NavigationHistoryScope),
+    MouseHistoryNavigation(bool),
 }
 
 impl ConfigEdit<'_> {
@@ -13,11 +15,22 @@ impl ConfigEdit<'_> {
             Self::StatusIndicators(_) => "status indicators",
             Self::Sound(_) => "sound setting",
             Self::ToastDelivery(_) => "toast setting",
+            Self::NavigationHistoryScope(_) => "navigation history scope",
+            Self::MouseHistoryNavigation(_) => "mouse history navigation",
         }
     }
 
     pub(crate) fn apply(self, content: &str) -> String {
         match self {
+            Self::NavigationHistoryScope(scope) => super::upsert_section_value(
+                content,
+                "ui",
+                "navigation_history_scope",
+                &format!("\"{}\"", scope.as_str()),
+            ),
+            Self::MouseHistoryNavigation(enabled) => {
+                super::upsert_section_bool(content, "ui", "mouse_history_navigation", enabled)
+            }
             Self::Theme(name) => {
                 let content =
                     super::upsert_section_value(content, "theme", "name", &format!("\"{name}\""));
@@ -77,6 +90,23 @@ pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_edits_preserve_other_config_and_round_trip() {
+        let original = "[ui]\nmouse_capture = false\n[terminal]\ndefault_shell = \"bash\"\n";
+        let content =
+            ConfigEdit::NavigationHistoryScope(crate::config::NavigationHistoryScope::CurrentSpace)
+                .apply(original);
+        let content = ConfigEdit::MouseHistoryNavigation(false).apply(&content);
+        let config: crate::config::Config = toml::from_str(&content).unwrap();
+        assert_eq!(
+            config.ui.navigation_history_scope,
+            crate::config::NavigationHistoryScope::CurrentSpace
+        );
+        assert!(!config.ui.mouse_history_navigation);
+        assert!(!config.ui.mouse_capture);
+        assert!(content.contains("default_shell = \"bash\""));
+    }
 
     #[test]
     fn update_file_at_does_not_move_a_leading_bom_into_the_file() {

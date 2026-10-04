@@ -106,7 +106,14 @@ impl ClientShellState {
             return ClientShellInput::default();
         };
         let events = crate::raw_input::parse_raw_input_bytes_sync(&cell_report);
-        if events.len() != 1 || !matches!(events[0], RawInputEvent::Mouse(_)) {
+        if events.len() != 1
+            || !matches!(
+                events[0],
+                RawInputEvent::Mouse(_)
+                    | RawInputEvent::NavigationMouseButton { .. }
+                    | RawInputEvent::Unsupported
+            )
+        {
             return ClientShellInput::default();
         }
         self.host_mouse_pixels = Some(crate::input::mouse::HostPixels { x, y, geometry });
@@ -239,6 +246,22 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Mouse(mouse) => self.handle_mouse(mouse, &mut outcome),
+                RawInputEvent::NavigationMouseButton { back } => {
+                    if self.config.mouse_history_navigation
+                        && self.overlay.is_none()
+                        && self.popup_input_target().is_none()
+                        && !self.popup_pending
+                    {
+                        self.record_binding(
+                            crate::input::KeybindMatch::Action(if back {
+                                crate::input::KeybindAction::HistoryBack
+                            } else {
+                                crate::input::KeybindAction::HistoryForward
+                            }),
+                            &mut outcome,
+                        );
+                    }
+                }
                 RawInputEvent::OuterFocusGained => {
                     self.outer_focused = Some(true);
                     outcome.query_host_appearance = true;
@@ -535,7 +558,38 @@ impl ClientShellState {
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }
-        self.word_selection_gesture = None;
+        let prefix_key =
+            crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix);
+        let binding = match self.mode {
+            ClientShellMode::Terminal => {
+                crate::input::resolve_direct_binding(&self.config.keybinds.keybinds, key)
+            }
+            ClientShellMode::Prefix if !prefix_key && key.code != KeyCode::Esc => {
+                crate::input::resolve_prefix_binding(&self.config.keybinds.keybinds, key)
+            }
+            _ => None,
+        };
+        let starts_prefix = prefix_key
+            && binding.is_none()
+            && (self.mode == ClientShellMode::Terminal
+                || (self.mode == ClientShellMode::Copy
+                    && self
+                        .copy_mode
+                        .as_ref()
+                        .is_none_or(|copy_mode| copy_mode.search_prompt.is_none())));
+        // Only history dispatch (and its initial prefix) needs held mouse evidence.
+        let preserve_mouse_selection = self.has_active_mouse_selection()
+            && (starts_prefix
+                || matches!(
+                    binding,
+                    Some(crate::input::KeybindMatch::Action(
+                        crate::input::KeybindAction::HistoryBack
+                            | crate::input::KeybindAction::HistoryForward
+                    ))
+                ));
+        if !preserve_mouse_selection && self.word_selection_gesture.take().is_some() {
+            self.stop_selection_autoscroll();
+        }
         if self.mode != ClientShellMode::Copy
             && self.copy_or_terminal_mode() != ClientShellMode::Copy
             && !self.config.copy_on_select
@@ -554,6 +608,7 @@ impl ClientShellState {
         }
         if self.mode != ClientShellMode::Copy
             && self.copy_or_terminal_mode() != ClientShellMode::Copy
+            && !preserve_mouse_selection
             && self.selection.take().is_some()
         {
             self.stop_selection_autoscroll();
@@ -563,13 +618,11 @@ impl ClientShellState {
 
         match self.mode {
             ClientShellMode::Terminal => {
-                if let Some(binding) =
-                    crate::input::resolve_direct_binding(&self.config.keybinds.keybinds, key)
-                {
+                if let Some(binding) = binding {
                     self.record_binding(binding, outcome);
                     return None;
                 }
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
+                if prefix_key {
                     self.mode = ClientShellMode::Prefix;
                     outcome.repaint = true;
                     return None;
@@ -584,7 +637,7 @@ impl ClientShellState {
                 } else {
                     ClientShellMode::Terminal
                 };
-                if crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix) {
+                if prefix_key {
                     self.mode = return_mode;
                     outcome.repaint = true;
                     return self.focused_pane_id().map(ClientInputTarget::Pane);
@@ -594,9 +647,7 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return None;
                 }
-                if let Some(binding) =
-                    crate::input::resolve_prefix_binding(&self.config.keybinds.keybinds, key)
-                {
+                if let Some(binding) = binding {
                     self.mode = return_mode;
                     outcome.repaint = true;
                     self.record_binding(binding, outcome);
@@ -615,12 +666,7 @@ impl ClientShellState {
                 None
             }
             ClientShellMode::Copy => {
-                if self
-                    .copy_mode
-                    .as_ref()
-                    .is_none_or(|copy_mode| copy_mode.search_prompt.is_none())
-                    && crate::config::terminal_key_matches_combo(key, self.config.keybinds.prefix)
-                {
+                if starts_prefix {
                     self.mode = ClientShellMode::Prefix;
                     outcome.repaint = true;
                 } else {

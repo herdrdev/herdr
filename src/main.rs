@@ -165,6 +165,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # rename_tab = "prefix+shift+t"
 # previous_tab = "prefix+p"
 # next_tab = "prefix+n"
+# navigation_back = "prefix+left"
+# navigation_forward = "prefix+right"
 # move_tab_previous = ""   # optional, e.g. "alt+shift+left" moves the tab toward the front
 # move_tab_next = ""       # optional, e.g. "alt+shift+right" moves the tab toward the back
 # switch_tab = "prefix+1..9"
@@ -253,6 +255,11 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Set false to let the terminal handle normal clicks, such as Cmd-clicking URLs.
 # Pane apps like lazygit and btop can still receive mouse when they request it.
 # mouse_capture = true
+
+# Browser-style tab history on the current machine: "across_spaces" or "current_space".
+# navigation_history_scope = "across_spaces"
+# Use mouse Back/Forward buttons when the host terminal reports them.
+# mouse_history_navigation = true
 
 # Automatically copy text selected with the mouse.
 # Set false to retain drag or double-click word selection until Ctrl+C,

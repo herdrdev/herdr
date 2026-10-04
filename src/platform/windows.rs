@@ -16,6 +16,23 @@ use std::{
 mod clipboard_image;
 mod config_backup;
 
+/// Console side buttons are edges, never motion, held-button repeats or releases.
+pub(crate) fn windows_navigation_button_presses(
+    previous: u32,
+    current: u32,
+    event_flags: u32,
+) -> (bool, bool) {
+    use windows_sys::Win32::System::Console::DOUBLE_CLICK;
+
+    if event_flags != 0 && event_flags != DOUBLE_CLICK {
+        return (false, false);
+    }
+    const BACK: u32 = 0x0008;
+    const FORWARD: u32 = 0x0010;
+    let pressed = current & !previous;
+    (pressed & BACK != 0, pressed & FORWARD != 0)
+}
+
 pub(crate) fn windows_virtual_terminal_input_active() -> bool {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{

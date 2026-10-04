@@ -88,7 +88,7 @@ fn worktree_list_result(open_workspace_id: Option<&str>) -> crate::api::schema::
     }
 }
 
-fn surface() -> PaneSurfaceFrame {
+pub(super) fn surface() -> PaneSurfaceFrame {
     let surface_buffer = Buffer::with_lines(["LIVE", "PANE"]);
     PaneSurfaceFrame {
         boot_id: "boot-1".into(),
@@ -258,5 +258,6 @@ mod keybindings_settings;
 mod link_hover;
 mod mobile;
 mod mouse_selection;
+mod navigation_settings;
 mod popup_focus_projection;
 mod startup_overlays;

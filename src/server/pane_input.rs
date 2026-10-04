@@ -331,6 +331,7 @@ fn apply_client_terminal_input_events(
                     .map_err(|err| format!("targeted pane paste failed: {err}"))?;
             }
             crate::raw_input::RawInputEvent::Mouse(_)
+            | crate::raw_input::RawInputEvent::NavigationMouseButton { .. }
             | crate::raw_input::RawInputEvent::OuterFocusGained
             | crate::raw_input::RawInputEvent::OuterFocusLost
             | crate::raw_input::RawInputEvent::HostDefaultColor { .. }

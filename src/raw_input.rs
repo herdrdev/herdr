@@ -52,6 +52,10 @@ pub enum RawInputEvent {
     Text(TextCommit),
     Paste(String),
     Mouse(MouseEvent),
+    /// Xterm SGR extended side buttons; crossterm has no representation for these.
+    NavigationMouseButton {
+        back: bool,
+    },
     OuterFocusGained,
     OuterFocusLost,
     HostDefaultColor {
@@ -656,6 +660,16 @@ fn extract_one_event(buffer: &[u8]) -> Option<(RawInputEvent, usize)> {
         if let Some(mouse) = parse_sgr_mouse(seq) {
             return Some((RawInputEvent::Mouse(mouse), seq_len));
         }
+        if let Some((back, pressed)) = parse_sgr_navigation_button(seq) {
+            return Some((
+                if pressed {
+                    RawInputEvent::NavigationMouseButton { back }
+                } else {
+                    RawInputEvent::Unsupported
+                },
+                seq_len,
+            ));
+        }
 
         if let Some(key) = parse_terminal_key_sequence(seq) {
             return Some((
@@ -808,7 +822,9 @@ fn complete_escape_sequence_len(buffer: &[u8]) -> Option<usize> {
     if buffer.starts_with(b"\x1b\x1b[<") {
         if let Some(mouse_len) = find_csi_final(&buffer[1..], b"Mm") {
             let mouse_sequence = std::str::from_utf8(&buffer[1..1 + mouse_len]).ok()?;
-            if parse_sgr_mouse(mouse_sequence).is_some() {
+            if parse_sgr_mouse(mouse_sequence).is_some()
+                || parse_sgr_navigation_button(mouse_sequence).is_some()
+            {
                 return Some(1);
             }
         }
@@ -916,7 +932,7 @@ fn discard_complete_orphaned_sgr_mouse_tail(buffer: &mut Vec<u8>) -> bool {
     let Ok(sequence) = std::str::from_utf8(&sequence) else {
         return false;
     };
-    if parse_sgr_mouse(sequence).is_none() {
+    if parse_sgr_mouse(sequence).is_none() && parse_sgr_navigation_button(sequence).is_none() {
         return false;
     }
     buffer.drain(..terminator_len);
@@ -966,10 +982,9 @@ fn classify_sgr_mouse_continuation(prefix: &[u8], tail: &[u8]) -> SgrMouseContin
     }
     if let Some(index) = final_index {
         report.push(tail[index]);
-        let valid = std::str::from_utf8(&report)
-            .ok()
-            .and_then(parse_sgr_mouse)
-            .is_some();
+        let valid = std::str::from_utf8(&report).ok().is_some_and(|sequence| {
+            parse_sgr_mouse(sequence).is_some() || parse_sgr_navigation_button(sequence).is_some()
+        });
         return if valid {
             SgrMouseContinuation::Complete(index + 1)
         } else {
@@ -1010,7 +1025,10 @@ fn plausible_sgr_mouse_prefix(report: &[u8]) -> bool {
             return false;
         }
         if fields.peek().is_some()
-            && ((field == 0 && parse_mouse_cb(value as u8).is_none()) || (field == 1 && value == 0))
+            && ((field == 0
+                && parse_mouse_cb(value as u8).is_none()
+                && navigation_button_direction(value as u8).is_none())
+                || (field == 1 && value == 0))
         {
             return false;
         }
@@ -1111,6 +1129,32 @@ fn parse_sgr_mouse(sequence: &str) -> Option<MouseEvent> {
     })
 }
 
+fn parse_sgr_navigation_button(sequence: &str) -> Option<(bool, bool)> {
+    let body = sequence.strip_prefix("\x1b[<")?;
+    let (body, pressed) = if let Some(body) = body.strip_suffix('M') {
+        (body, true)
+    } else {
+        (body.strip_suffix('m')?, false)
+    };
+    let mut parts = body.split(';');
+    let cb = parts.next()?.parse::<u8>().ok()?;
+    // Foot maps BTN_SIDE/BTN_EXTRA to 8/9 (128/129), and BTN_BACK/BTN_FORWARD
+    // to 11/10 (131/130). Modifiers may be present, but drag/release events
+    // must not navigate again.
+    let back = navigation_button_direction(cb)?;
+    parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    parts.next()?.parse::<u16>().ok()?.checked_sub(1)?;
+    (parts.next().is_none()).then_some((back, pressed && cb & 0b0010_0000 == 0))
+}
+
+fn navigation_button_direction(cb: u8) -> Option<bool> {
+    match cb & !0b0011_1100 {
+        128 | 131 => Some(true),
+        129 | 130 => Some(false),
+        _ => None,
+    }
+}
+
 fn parse_mouse_cb(cb: u8) -> Option<(MouseEventKind, KeyModifiers)> {
     let button_number = (cb & 0b0000_0011) | ((cb & 0b1100_0000) >> 4);
     let dragging = cb & 0b0010_0000 == 0b0010_0000;
@@ -1151,6 +1195,45 @@ fn parse_mouse_cb(cb: u8) -> Option<(MouseEventKind, KeyModifiers)> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyCode, KeyEventKind};
+
+    #[test]
+    fn extended_mouse_buttons_navigate_only_on_press() {
+        for (sequence, back) in [
+            (b"\x1b[<128;5;3M".as_slice(), true),
+            (b"\x1b[<129;5;3M".as_slice(), false),
+            (b"\x1b[<132;5;3M".as_slice(), true),
+            (b"\x1b[<131;5;3M".as_slice(), true),
+            (b"\x1b[<130;5;3M".as_slice(), false),
+        ] {
+            assert!(matches!(
+                parse_raw_input_bytes_sync(sequence).as_slice(),
+                [RawInputEvent::NavigationMouseButton { back: observed }] if *observed == back
+            ));
+        }
+        for sequence in [b"\x1b[<128;5;3m".as_slice(), b"\x1b[<160;5;3M".as_slice()] {
+            assert!(!parse_raw_input_bytes_sync(sequence)
+                .iter()
+                .any(|event| matches!(event, RawInputEvent::NavigationMouseButton { .. })));
+        }
+    }
+
+    #[test]
+    fn split_side_button_reports_preserve_following_input_and_consume_release() {
+        for report in [b"\x1b[<128;5;3M".as_slice(), b"\x1b[<129;5;3m".as_slice()] {
+            for split in 1..report.len() {
+                let mut framer = RawInputFramer::default();
+                assert!(framer.push(&report[..split]).is_empty());
+                let mut remaining = report[split..].to_vec();
+                remaining.push(b'x');
+                let events = framer.push(&remaining);
+                assert_eq!(events.len(), 2, "split {split}: {events:?}");
+                assert!(
+                    matches!(&events[1], RawInputEvent::Key(key) if key.code == KeyCode::Char('x'))
+                );
+                assert!(framer.flush_timeout().is_empty());
+            }
+        }
+    }
 
     fn assert_raw_key(event: RawInputEvent, code: KeyCode, modifiers: KeyModifiers) {
         let RawInputEvent::Key(key) = event else {

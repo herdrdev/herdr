@@ -656,6 +656,18 @@
           "description": "Select the next tab."
         },
         {
+          "key": "keys.navigation_back",
+          "type": "keybinding",
+          "default": "\"prefix+left\"",
+          "description": "Go back through previously viewed tabs on the current machine."
+        },
+        {
+          "key": "keys.navigation_forward",
+          "type": "keybinding",
+          "default": "\"prefix+right\"",
+          "description": "Go forward in tab navigation history on the current machine."
+        },
+        {
           "key": "keys.move_tab_previous",
           "type": "keybinding",
           "default": "unset",
@@ -904,6 +916,19 @@
           "type": "boolean",
           "default": "true",
           "description": "Capture mouse input for Herdr's mouse UI."
+        },
+        {
+          "key": "ui.navigation_history_scope",
+          "type": "enum",
+          "default": "across_spaces",
+          "description": "Retrace tabs across spaces on the current machine, or keep separate histories within each space. History is client-local and retained when switching machines.",
+          "values": ["across_spaces", "current_space"]
+        },
+        {
+          "key": "ui.mouse_history_navigation",
+          "type": "boolean",
+          "default": "true",
+          "description": "Use mouse Back/Forward buttons for tab history when the host terminal reports them. Keyboard navigation is available independently."
         },
         {
           "key": "ui.copy_on_select",

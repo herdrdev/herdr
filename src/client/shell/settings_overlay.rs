@@ -128,6 +128,69 @@ pub(super) fn render_settings_overlay(
     );
     let mut choice_hits = Vec::new();
     match settings.section {
+        ClientSettingsSection::Navigation => {
+            put_text(
+                buffer,
+                content.x,
+                content.y,
+                content.width,
+                "tab history (current machine)",
+                Style::default()
+                    .fg(palette.text)
+                    .bg(palette.panel_bg)
+                    .add_modifier(Modifier::BOLD),
+            );
+            put_text(
+                buffer,
+                content.x,
+                content.y + 1,
+                content.width,
+                "Back/Forward retraces tabs you have viewed",
+                Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            );
+            let mouse_offset = if content.height >= 9 { 7 } else { 5 };
+            for (index, (label, offset, current)) in [
+                (
+                    "across spaces",
+                    3,
+                    settings.navigation_history_scope
+                        == crate::config::NavigationHistoryScope::AcrossSpaces,
+                ),
+                (
+                    "current space only",
+                    4,
+                    settings.navigation_history_scope
+                        == crate::config::NavigationHistoryScope::CurrentSpace,
+                ),
+                (
+                    "mouse Back/Forward enabled",
+                    mouse_offset,
+                    settings.mouse_history_navigation,
+                ),
+                (
+                    "mouse Back/Forward disabled",
+                    mouse_offset + 1,
+                    !settings.mouse_history_navigation,
+                ),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if content.y + offset >= content.bottom() {
+                    continue;
+                }
+                let rect = Rect::new(content.x, content.y + offset, content.width, 1);
+                draw_choice(
+                    buffer,
+                    rect,
+                    label,
+                    index == settings.selected,
+                    current,
+                    palette,
+                );
+                choice_hits.push((rect, index));
+            }
+        }
         ClientSettingsSection::Theme => {
             let visible = usize::from(content.height);
             let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));

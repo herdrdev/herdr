@@ -161,6 +161,20 @@ impl ClientShellState {
         )
     }
 
+    pub(super) fn has_active_mouse_selection(&self) -> bool {
+        self.word_selection_gesture
+            .as_ref()
+            .is_some_and(|gesture| !gesture.released)
+            || (self
+                .selection
+                .as_ref()
+                .is_some_and(crate::selection::Selection::is_in_progress)
+                && self
+                    .copy_mode
+                    .as_ref()
+                    .is_none_or(|copy_mode| copy_mode.selection.is_none()))
+    }
+
     fn active_selection_pane(&self) -> Option<PaneHit> {
         let pane_id = if let Some(gesture) = self.word_selection_gesture.as_ref() {
             if gesture.released {
@@ -2212,6 +2226,10 @@ impl ClientShellState {
                             last_event: mouse,
                         });
                     } else if super::contains(hit.inner_rect, point) {
+                        // The new mouse gesture replaces any keyboard-owned range.
+                        if let Some(copy_mode) = self.copy_mode.as_mut() {
+                            copy_mode.selection = None;
+                        }
                         let click = ClientPaneClick {
                             pane_id: hit.pane_id.clone(),
                             viewport_row: mouse.row.saturating_sub(hit.inner_rect.y),

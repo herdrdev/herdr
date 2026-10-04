@@ -230,6 +230,7 @@ impl ClientShellState {
         let switching_endpoint = endpoint_id != &self.active_endpoint_id;
         let agent_scroll = self.agent_scroll;
         if switching_endpoint {
+            self.navigation_history.cancel(&self.active_endpoint_id);
             self.active_endpoint_id = endpoint_id.clone();
             self.pane_surface = None;
             self.pending_pane_surface = None;

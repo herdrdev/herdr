@@ -587,7 +587,7 @@ fn send_windows_raw_events(
     let raw_event_count = events.len();
     let events = events
         .into_iter()
-        .filter_map(windows_client_input_event_from_raw)
+        .filter_map(windows_host_input_from_raw)
         .collect::<Vec<_>>();
     if events.is_empty() {
         return true;
@@ -598,9 +598,58 @@ fn send_windows_raw_events(
         forwarded_event_count = events.len(),
         "windows raw-framed input events forwarded"
     );
-    event_tx
-        .blocking_send(ClientLoopEvent::StdinEvents(events))
-        .is_ok()
+    for group in windows_host_input_groups(events) {
+        if event_tx.blocking_send(group).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Host-only input never becomes part of a published endpoint codec.
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WindowsHostInput {
+    Semantic(crate::protocol::ClientInputEvent),
+    Navigation { back: bool },
+}
+
+#[cfg(any(windows, test))]
+impl From<crate::protocol::ClientInputEvent> for WindowsHostInput {
+    fn from(event: crate::protocol::ClientInputEvent) -> Self {
+        Self::Semantic(event)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_host_input_from_raw(event: crate::raw_input::RawInputEvent) -> Option<WindowsHostInput> {
+    match event {
+        crate::raw_input::RawInputEvent::NavigationMouseButton { back } => {
+            Some(WindowsHostInput::Navigation { back })
+        }
+        event => windows_client_input_event_from_raw(event).map(WindowsHostInput::Semantic),
+    }
+}
+
+#[cfg(windows)]
+fn windows_host_input_groups(events: Vec<WindowsHostInput>) -> Vec<ClientLoopEvent> {
+    let mut groups = Vec::new();
+    let mut semantic = Vec::new();
+    for event in events {
+        match event {
+            WindowsHostInput::Semantic(event) => semantic.push(event),
+            WindowsHostInput::Navigation { back } => {
+                if !semantic.is_empty() {
+                    groups.push(ClientLoopEvent::StdinEvents(std::mem::take(&mut semantic)));
+                }
+                groups.push(ClientLoopEvent::HostNavigation { back });
+            }
+        }
+    }
+    if !semantic.is_empty() {
+        groups.push(ClientLoopEvent::StdinEvents(semantic));
+    }
+    groups
 }
 
 #[cfg(any(windows, test))]
@@ -655,6 +704,7 @@ fn windows_client_input_event_from_raw(
         | crate::raw_input::RawInputEvent::HostColorSchemeChanged(_)
         | crate::raw_input::RawInputEvent::HostCellSizeReport { .. }
         | crate::raw_input::RawInputEvent::Unsupported => None,
+        crate::raw_input::RawInputEvent::NavigationMouseButton { .. } => None,
     }
 }
 

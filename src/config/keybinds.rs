@@ -333,6 +333,8 @@ pub struct Keybinds {
     pub open_notification_target: ActionKeybinds,
     pub previous_workspace: ActionKeybinds,
     pub next_workspace: ActionKeybinds,
+    pub navigation_back: ActionKeybinds,
+    pub navigation_forward: ActionKeybinds,
     pub previous_agent: ActionKeybinds,
     pub next_agent: ActionKeybinds,
     pub focus_agent: Vec<IndexedKeybind>,
@@ -502,6 +504,8 @@ impl Config {
             open_notification_target: empty_action!(),
             previous_workspace: empty_action!(),
             next_workspace: empty_action!(),
+            navigation_back: empty_action!(),
+            navigation_forward: empty_action!(),
             previous_agent: empty_action!(),
             next_agent: empty_action!(),
             focus_agent: Vec::new(),
@@ -635,6 +639,8 @@ impl Config {
             );
             apply_action!(keybinds.previous_workspace, previous_workspace, source);
             apply_action!(keybinds.next_workspace, next_workspace, source);
+            apply_action!(keybinds.navigation_back, navigation_back, source);
+            apply_action!(keybinds.navigation_forward, navigation_forward, source);
             apply_action!(keybinds.previous_agent, previous_agent, source);
             apply_action!(keybinds.next_agent, next_agent, source);
             apply_indexed!(
@@ -1628,6 +1634,32 @@ next_tab = "prefix+n"
     fn back_and_forth_keybinds_are_unset_by_default() {
         let kb = Config::default().keybinds();
         assert!(kb.last_pane.bindings.is_empty());
+        assert_eq!(
+            kb.navigation_back.prefix_rhs_label().as_deref(),
+            Some("left")
+        );
+        assert_eq!(
+            kb.navigation_forward.prefix_rhs_label().as_deref(),
+            Some("right")
+        );
+    }
+
+    #[test]
+    fn history_keybinds_can_be_configured_without_changing_tab_shortcuts() {
+        let config: Config = toml::from_str(
+            "[keys]\nnavigation_back = \"ctrl+alt+shift+h\"\nnavigation_forward = \"ctrl+alt+shift+l\"\n",
+        )
+        .unwrap();
+        let kb = config.keybinds();
+        assert_eq!(
+            kb.navigation_back.label().as_deref(),
+            Some("ctrl+alt+shift+h")
+        );
+        assert_eq!(
+            kb.navigation_forward.label().as_deref(),
+            Some("ctrl+alt+shift+l")
+        );
+        assert_eq!(kb.previous_tab.prefix_rhs_label().as_deref(), Some("p"));
     }
 
     #[test]

@@ -9,6 +9,25 @@ description: 前缀键是什么、应该先学哪些绑定,以及如何做到不
 
 Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智能体,拖动分割边框,使用右键菜单,一个按键绑定都不用学。键盘操作是可选的一层,不是必需项。
 
+鼠标后退/前进按钮和 `prefix+left` / `prefix+right` 会像浏览器一样，沿着实际显示过的标签页历史跳转。到达两端时停止；后退后选择其他标签页会替换前进分支。同一标签页内的窗格焦点变化和工作区预览不会产生记录。已关闭的标签页会被跳过，移动过的标签页会在当前所属空间打开。
+
+每台机器保留独立历史，切换机器再返回时仍会保留。**设置 → navigation** 可选择跨空间历史（默认）、仅当前空间（每个空间独立历史），以及启用或禁用鼠标后退/前进。每份历史最多 256 条，在当前客户端运行期间保留；重新连接同一服务器会保留历史，重启服务器则重置该机器的历史。跳转会等待焦点确认；对话框、终端弹窗和拖动期间不会跳转。
+
+鼠标按钮需要宿主终端转发扩展 SGR 鼠标报告或 Windows 原生侧键记录。如果终端自行处理这些按钮，可在终端中将其映射到配置的导航快捷键。键盘绑定可独立配置：
+
+```toml
+[ui]
+navigation_history_scope = "across_spaces" # or "current_space"
+mouse_history_navigation = true
+
+[keys]
+navigation_back = "prefix+left"
+navigation_forward = "prefix+right"
+# Optional browser-like direct shortcuts:
+# navigation_back = ["prefix+left", "alt+left"]
+# navigation_forward = ["prefix+right", "alt+right"]
+```
+
 ## 前缀键是什么
 
 终端复用器位于终端和其中运行的程序之间。这些程序已经占用了大多数按键组合: `ctrl+c` 中断,`ctrl+r` 搜索历史,编辑器几乎占用了剩下的一切。如果 Herdr 直接抢占常用按键,就会破坏其中运行的程序。

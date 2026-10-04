@@ -10,9 +10,9 @@ use std::{fs::OpenOptions, io::Write as _};
 #[cfg(windows)]
 use tokio::sync::mpsc;
 
-use super::windows_client_input_event_from_raw;
 #[cfg(windows)]
 use super::ClientLoopEvent;
+use super::{windows_host_input_from_raw, WindowsHostInput};
 use crate::input::WindowsKeyRecord;
 
 #[cfg(windows)]
@@ -38,7 +38,7 @@ pub(super) fn raw_console_reader_loop(
                     &mut handoff,
                     trace.as_mut(),
                 );
-                push_platform_input_events(pump.idle(), &mut handoff, trace.as_mut());
+                push_platform_input_events(pump.idle_host(), &mut handoff, trace.as_mut());
             }
             WindowsInputItems::Closed => return,
         }
@@ -79,13 +79,13 @@ fn process_platform_input_items(
     mut trace: Option<&mut WindowsInputTraceBatch>,
 ) {
     for item in items {
-        push_platform_input_events(pump.process(item), handoff, trace.as_deref_mut());
+        push_platform_input_events(pump.process_host(item), handoff, trace.as_deref_mut());
     }
 }
 
 #[cfg(windows)]
 fn push_platform_input_events(
-    events: Vec<crate::protocol::ClientInputEvent>,
+    events: Vec<WindowsHostInput>,
     handoff: &mut WindowsInputHandoff,
     trace: Option<&mut WindowsInputTraceBatch>,
 ) {
@@ -125,26 +125,25 @@ enum WindowsInputItems {
 #[derive(Default)]
 struct WindowsInputTraceBatch {
     raw_keys: Vec<WindowsKeyRecord>,
-    mapped_event_groups: Vec<Vec<crate::protocol::ClientInputEvent>>,
+    mapped_event_groups: Vec<Vec<WindowsHostInput>>,
 }
 
 #[cfg(windows)]
 #[derive(Default)]
 struct WindowsInputHandoff {
-    pending: VecDeque<Vec<crate::protocol::ClientInputEvent>>,
+    pending: VecDeque<ClientLoopEvent>,
     backpressured: bool,
 }
 
 #[cfg(windows)]
 impl WindowsInputHandoff {
-    fn push(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
-        if events.is_empty() {
-            return;
-        }
-        if self.backpressured {
-            self.push_backpressured(events);
-        } else {
-            self.pending.push_back(events);
+    fn push(&mut self, events: Vec<WindowsHostInput>) {
+        for group in super::windows_host_input_groups(events) {
+            if self.backpressured {
+                self.push_backpressured(group);
+            } else {
+                self.pending.push_back(group);
+            }
         }
     }
 
@@ -161,7 +160,7 @@ impl WindowsInputHandoff {
                     let Some(events) = self.pending.pop_front() else {
                         continue;
                     };
-                    permit.send(ClientLoopEvent::StdinEvents(events));
+                    permit.send(events);
                 }
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     if !self.backpressured {
@@ -178,12 +177,20 @@ impl WindowsInputHandoff {
         }
     }
 
-    fn push_backpressured(&mut self, events: Vec<crate::protocol::ClientInputEvent>) {
+    fn push_backpressured(&mut self, events: ClientLoopEvent) {
         if let Some(previous) = self.pending.back_mut() {
-            if let ([previous_event], [next_event]) = (previous.as_slice(), events.as_slice()) {
-                if windows_mouse_motion_can_replace(previous_event, next_event) {
-                    *previous = events;
-                    return;
+            if let (
+                ClientLoopEvent::StdinEvents(previous_events),
+                ClientLoopEvent::StdinEvents(next_events),
+            ) = (&*previous, &events)
+            {
+                if let ([previous_event], [next_event]) =
+                    (previous_events.as_slice(), next_events.as_slice())
+                {
+                    if windows_mouse_motion_can_replace(previous_event, next_event) {
+                        *previous = events;
+                        return;
+                    }
                 }
             }
         }
@@ -324,6 +331,8 @@ struct WindowsInputMapper {
     pending_high_surrogate: Option<u16>,
     pending_paste_high_surrogate: Option<u16>,
     mouse_buttons: WindowsMouseButtons,
+    #[cfg(windows)]
+    navigation_buttons: u32,
     win32_input: WindowsWin32InputModeFramer,
 }
 
@@ -358,6 +367,9 @@ impl Default for WindowsInputPump {
 enum PlatformInputItem {
     Bytes(Vec<u8>),
     Semantic(crate::protocol::ClientInputEvent),
+    Navigation {
+        back: bool,
+    },
     PasteAwareBytes {
         paste_bytes: Vec<u8>,
         raw_bytes: Vec<u8>,
@@ -386,7 +398,23 @@ enum WindowsWin32InputModeItem {
 }
 
 impl WindowsInputPump {
+    #[cfg(test)]
     fn process(&mut self, item: PlatformInputItem) -> Vec<crate::protocol::ClientInputEvent> {
+        Self::semantic_only(self.process_host(item))
+    }
+
+    #[cfg(test)]
+    fn semantic_only(events: Vec<WindowsHostInput>) -> Vec<crate::protocol::ClientInputEvent> {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                WindowsHostInput::Semantic(event) => Some(event),
+                WindowsHostInput::Navigation { .. } => None,
+            })
+            .collect()
+    }
+
+    fn process_host(&mut self, item: PlatformInputItem) -> Vec<WindowsHostInput> {
         let mut events = Vec::new();
         if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
             let raw_bytes = item.raw_bytes();
@@ -403,7 +431,7 @@ impl WindowsInputPump {
                 self.pending_physical_escape = Some((escape, true));
                 return events;
             } else {
-                events.push(escape);
+                events.push(escape.into());
                 if open_bracket {
                     let raw_events = self.framer.push(b"[");
                     events.extend(self.process_raw_events(raw_events));
@@ -420,6 +448,12 @@ impl WindowsInputPump {
         }
 
         let mut next = match item {
+            PlatformInputItem::Navigation { back } => {
+                let raw_events = self.framer.flush_interrupted();
+                let mut events = self.process_raw_events(raw_events);
+                events.push(WindowsHostInput::Navigation { back });
+                events
+            }
             PlatformInputItem::Bytes(bytes) => {
                 let raw_events = self.framer.push(&bytes);
                 self.process_raw_events(raw_events)
@@ -427,7 +461,7 @@ impl WindowsInputPump {
             PlatformInputItem::Semantic(event) => {
                 let raw_events = self.framer.flush_interrupted();
                 let mut events = self.process_raw_events(raw_events);
-                events.push(event);
+                events.push(event.into());
                 events
             }
             PlatformInputItem::PasteAwareBytes {
@@ -490,7 +524,7 @@ impl WindowsInputPump {
                         self.framer.flush_interrupted()
                     };
                     let mut output = self.process_raw_events(raw_events);
-                    output.extend(events);
+                    output.extend(events.into_iter().map(WindowsHostInput::Semantic));
                     output
                 }
             }
@@ -499,10 +533,15 @@ impl WindowsInputPump {
         events
     }
 
+    #[cfg(test)]
     fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
+        Self::semantic_only(self.idle_host())
+    }
+
+    fn idle_host(&mut self) -> Vec<WindowsHostInput> {
         let mut events = Vec::new();
         if let Some((escape, open_bracket)) = self.pending_physical_escape.take() {
-            events.push(escape);
+            events.push(escape.into());
             if open_bracket {
                 let raw_events = self.framer.push(b"[");
                 events.extend(self.process_raw_events(raw_events));
@@ -516,7 +555,7 @@ impl WindowsInputPump {
     fn process_raw_events(
         &mut self,
         mut events: Vec<crate::raw_input::RawInputEvent>,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+    ) -> Vec<WindowsHostInput> {
         for event in &mut events {
             if let crate::raw_input::RawInputEvent::Paste(text) = event {
                 decode_windows_terminal_paste_enters(text);
@@ -537,7 +576,10 @@ impl WindowsInputPump {
                 self.consumed_default_mouse_keys
                     .append(&mut self.default_mouse_candidate.unreleased_keys);
             } else {
-                let mut staged = std::mem::take(&mut self.default_mouse_candidate.events);
+                let mut staged = std::mem::take(&mut self.default_mouse_candidate.events)
+                    .into_iter()
+                    .map(WindowsHostInput::Semantic)
+                    .collect::<Vec<_>>();
                 self.default_mouse_candidate.unreleased_keys.clear();
                 staged.append(&mut output);
                 output = staged;
@@ -580,10 +622,10 @@ impl WindowsInputPump {
 
     fn raw_events_to_client_events(
         events: Vec<crate::raw_input::RawInputEvent>,
-    ) -> Vec<crate::protocol::ClientInputEvent> {
+    ) -> Vec<WindowsHostInput> {
         events
             .into_iter()
-            .filter_map(windows_client_input_event_from_raw)
+            .filter_map(windows_host_input_from_raw)
             .collect()
     }
 }
@@ -610,7 +652,7 @@ impl PlatformInputItem {
             | Self::PasteAwareBytes {
                 raw_bytes: bytes, ..
             } => Some(bytes),
-            Self::Semantic(_) | Self::PasteAwareKey { .. } => None,
+            Self::Semantic(_) | Self::Navigation { .. } | Self::PasteAwareKey { .. } => None,
         }
     }
 
@@ -696,7 +738,24 @@ impl WindowsInputMapper {
                     .translate_mouse(mouse)
                     .map(PlatformInputItem::Semantic)
                     .into_iter()
-                    .collect();
+                    .collect::<Vec<_>>();
+                #[cfg(windows)]
+                let items = {
+                    let mut items = items;
+                    let (back, forward) = crate::platform::windows_navigation_button_presses(
+                        self.navigation_buttons,
+                        mouse.button_state,
+                        mouse.event_flags,
+                    );
+                    self.navigation_buttons = mouse.button_state;
+                    if back {
+                        items.push(PlatformInputItem::Navigation { back: true });
+                    }
+                    if forward {
+                        items.push(PlatformInputItem::Navigation { back: false });
+                    }
+                    items
+                };
                 self.with_pending_win32_flush(items)
             }
             WindowsInputRecord::Focus(focused) => {
@@ -1621,14 +1680,169 @@ mod tests {
         assert!(translator.idle().is_empty());
     }
 
+    #[test]
+    fn windows_host_side_buttons_preserve_split_report_and_semantic_input_order() {
+        let mut pump = WindowsInputPump::default();
+        assert!(pump
+            .process_host(PlatformInputItem::Bytes(b"\x1b[<128;".to_vec()))
+            .is_empty());
+        let events = pump.process_host(PlatformInputItem::Bytes(b"5;3M\x1b[<128;5;3mX".to_vec()));
+        assert!(matches!(
+            events.as_slice(),
+            [
+                WindowsHostInput::Navigation { back: true },
+                WindowsHostInput::Semantic(crate::protocol::ClientInputEvent::Key {
+                    code: crate::protocol::ClientKeyCode::Char('X'),
+                    ..
+                })
+            ]
+        ));
+        assert!(pump.idle_host().is_empty());
+        let events = pump.process_host(PlatformInputItem::Navigation { back: false });
+        assert_eq!(events, vec![WindowsHostInput::Navigation { back: false }]);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_side_buttons_fire_on_press_edges_only() {
+        let mut mapper = WindowsInputMapper::default();
+        let mut pump = WindowsInputPump::default();
+        let mut navigation = Vec::new();
+        for button_state in [8, 8, 0, 16, 16, 0] {
+            for item in mapper.translate(WindowsInputRecord::Mouse(WindowsMouseRecord {
+                x: 4,
+                y: 3,
+                button_state,
+                control_key_state: 0,
+                event_flags: 0,
+            })) {
+                navigation.extend(pump.process_host(item));
+            }
+        }
+        assert_eq!(
+            navigation,
+            vec![
+                WindowsHostInput::Navigation { back: true },
+                WindowsHostInput::Navigation { back: false }
+            ]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_held_side_buttons_do_not_navigate_on_motion_or_wheel() {
+        use crate::protocol::{ClientInputEvent, ClientMouseKind};
+        use windows_sys::Win32::System::Console::{
+            DOUBLE_CLICK, MOUSE_HWHEELED, MOUSE_MOVED, MOUSE_WHEELED,
+        };
+
+        for (button, back) in [(8, true), (16, false)] {
+            for (flag, kind) in [
+                (MOUSE_MOVED, ClientMouseKind::Moved),
+                (MOUSE_WHEELED, ClientMouseKind::ScrollUp),
+                (MOUSE_HWHEELED, ClientMouseKind::ScrollRight),
+            ] {
+                let mut mapper = WindowsInputMapper::default();
+                let mut pump = WindowsInputPump::default();
+                let record = WindowsMouseRecord {
+                    x: 4,
+                    y: 3,
+                    button_state: button | if flag == MOUSE_MOVED { 0 } else { 120 << 16 },
+                    control_key_state: 0,
+                    event_flags: flag,
+                };
+                let events = mapper
+                    .translate(WindowsInputRecord::Mouse(record))
+                    .into_iter()
+                    .flat_map(|item| pump.process_host(item))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    events,
+                    vec![WindowsHostInput::Semantic(ClientInputEvent::Mouse {
+                        kind,
+                        column: 4,
+                        row: 3,
+                        modifiers: 0,
+                    })]
+                );
+
+                // Remembering held buttons also prevents a later button-change
+                // record for another button from turning the hold into a press.
+                for button_state in [button, 0] {
+                    let events = mapper
+                        .translate(WindowsInputRecord::Mouse(WindowsMouseRecord {
+                            button_state,
+                            event_flags: 0,
+                            ..record
+                        }))
+                        .into_iter()
+                        .flat_map(|item| pump.process_host(item))
+                        .collect::<Vec<_>>();
+                    assert!(events.is_empty());
+                }
+                for event_flags in [0, DOUBLE_CLICK] {
+                    let events = mapper
+                        .translate(WindowsInputRecord::Mouse(WindowsMouseRecord {
+                            button_state: button,
+                            event_flags,
+                            ..record
+                        }))
+                        .into_iter()
+                        .flat_map(|item| pump.process_host(item))
+                        .collect::<Vec<_>>();
+                    assert_eq!(events, vec![WindowsHostInput::Navigation { back }]);
+                    mapper.translate(WindowsInputRecord::Mouse(WindowsMouseRecord {
+                        button_state: 0,
+                        event_flags: 0,
+                        ..record
+                    }));
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_host_navigation_survives_backpressure_between_semantic_batches() {
+        let mut handoff = WindowsInputHandoff::default();
+        let (event_tx, mut event_rx) = mpsc::channel(1);
+        event_tx.try_send(ClientLoopEvent::Timer).unwrap();
+        handoff.push(vec![
+            WindowsHostInput::Semantic(crate::protocol::ClientInputEvent::FocusGained),
+            WindowsHostInput::Navigation { back: true },
+            WindowsHostInput::Semantic(crate::protocol::ClientInputEvent::FocusLost),
+        ]);
+        assert!(handoff.try_flush(&event_tx));
+        assert!(matches!(event_rx.try_recv(), Ok(ClientLoopEvent::Timer)));
+        assert!(handoff.try_flush(&event_tx));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(ClientLoopEvent::StdinEvents(_))
+        ));
+        assert!(handoff.try_flush(&event_tx));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(ClientLoopEvent::HostNavigation { back: true })
+        ));
+        assert!(handoff.try_flush(&event_tx));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Ok(ClientLoopEvent::StdinEvents(_))
+        ));
+        assert!(handoff.pending.is_empty());
+    }
+
     #[cfg(windows)]
     #[test]
     fn windows_input_trace_preserves_mapped_event_groups() {
         let groups = vec![
-            vec![crate::protocol::ClientInputEvent::FocusGained],
             vec![
-                crate::protocol::ClientInputEvent::FocusLost,
-                crate::protocol::ClientInputEvent::FocusGained,
+                WindowsHostInput::Semantic(crate::protocol::ClientInputEvent::FocusGained),
+                WindowsHostInput::Navigation { back: true },
+            ],
+            vec![
+                WindowsHostInput::Semantic(crate::protocol::ClientInputEvent::FocusLost),
+                WindowsHostInput::Navigation { back: false },
             ],
         ];
         let mut trace = WindowsInputTraceBatch::default();
@@ -1640,7 +1854,26 @@ mod tests {
         push_platform_input_events(Vec::new(), &mut handoff, Some(&mut trace));
 
         assert_eq!(trace.mapped_event_groups, groups);
-        assert_eq!(handoff.pending, VecDeque::from(groups));
+        let mut pending = handoff.pending.into_iter();
+        assert!(matches!(
+            pending.next(),
+            Some(ClientLoopEvent::StdinEvents(events))
+                if events == vec![crate::protocol::ClientInputEvent::FocusGained]
+        ));
+        assert!(matches!(
+            pending.next(),
+            Some(ClientLoopEvent::HostNavigation { back: true })
+        ));
+        assert!(matches!(
+            pending.next(),
+            Some(ClientLoopEvent::StdinEvents(events))
+                if events == vec![crate::protocol::ClientInputEvent::FocusLost]
+        ));
+        assert!(matches!(
+            pending.next(),
+            Some(ClientLoopEvent::HostNavigation { back: false })
+        ));
+        assert!(pending.next().is_none());
     }
 
     #[cfg(windows)]
@@ -1690,7 +1923,7 @@ mod tests {
             shortcut_release.clone(),
             text.clone(),
         ] {
-            handoff.push(vec![event]);
+            handoff.push(vec![event.into()]);
         }
 
         assert!(handoff.try_flush(&event_tx));
@@ -1705,7 +1938,14 @@ mod tests {
             text,
         ];
         assert_eq!(
-            handoff.pending,
+            handoff
+                .pending
+                .iter()
+                .map(|event| match event {
+                    ClientLoopEvent::StdinEvents(events) => events.clone(),
+                    _ => panic!("expected semantic batch"),
+                })
+                .collect::<VecDeque<_>>(),
             expected
                 .iter()
                 .cloned()

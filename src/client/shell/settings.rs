@@ -38,6 +38,8 @@ impl ClientShellState {
             selected: theme_index(&self.config.theme_name),
             original_theme_name: self.config.theme_name.clone(),
             original_palette: self.config.palette.clone(),
+            navigation_history_scope: self.config.navigation_history_scope,
+            mouse_history_navigation: self.config.mouse_history_navigation,
             integrations: Vec::new(),
             integration_messages: Vec::new(),
             loading_integrations: false,
@@ -51,6 +53,10 @@ impl ClientShellState {
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
+            ClientSettingsSection::Navigation => usize::from(
+                self.config.navigation_history_scope
+                    == crate::config::NavigationHistoryScope::CurrentSpace,
+            ),
             ClientSettingsSection::Integrations => 0,
         }
     }
@@ -99,6 +105,7 @@ impl ClientShellState {
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
+                ClientSettingsSection::Navigation => 4,
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
             _ => 0,
@@ -188,6 +195,28 @@ impl ClientShellState {
         let section = settings.section;
         let selected = settings.selected;
         match section {
+            ClientSettingsSection::Navigation => {
+                let edit = match selected {
+                    0 => crate::config::ConfigEdit::NavigationHistoryScope(
+                        crate::config::NavigationHistoryScope::AcrossSpaces,
+                    ),
+                    1 => crate::config::ConfigEdit::NavigationHistoryScope(
+                        crate::config::NavigationHistoryScope::CurrentSpace,
+                    ),
+                    2 => crate::config::ConfigEdit::MouseHistoryNavigation(true),
+                    _ => crate::config::ConfigEdit::MouseHistoryNavigation(false),
+                };
+                if let Err(error) = crate::config::write_edit(edit) {
+                    self.set_endpoint_error(error);
+                } else {
+                    self.reload_client_config();
+                    if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                        settings.navigation_history_scope = self.config.navigation_history_scope;
+                        settings.mouse_history_navigation = self.config.mouse_history_navigation;
+                    }
+                }
+                outcome.repaint = true;
+            }
             ClientSettingsSection::Theme => {
                 let Some(name) = crate::config::THEME_NAMES.get(selected).copied() else {
                     return;
