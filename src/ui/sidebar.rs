@@ -3665,11 +3665,6 @@ pub(crate) fn sidebar_rows(app: &AppState) -> Vec<SidebarRow> {
     sidebar_rows_inner(app, None, false, false)
 }
 
-/// Navigation keeps the attention order even while its visual strip is folded.
-pub(crate) fn sidebar_navigation_rows(app: &AppState) -> Vec<SidebarRow> {
-    sidebar_rows_inner(app, None, false, true)
-}
-
 fn sidebar_query_parts(query: &str) -> (Vec<&str>, Vec<&str>) {
     query
         .split_whitespace()
