@@ -590,8 +590,14 @@ fn clipped_placement(placement: &HostPlacement) -> Option<(ClippedPlacement, u32
     let visible_width_px = visible_cols.saturating_mul(placement.cell_size.width_px);
     let visible_height_px = visible_rows.saturating_mul(placement.cell_size.height_px);
 
-    let source_x = render.source_x + scale_pixels(crop_left_px, source_width, pixel_width);
-    let source_y = render.source_y + scale_pixels(crop_top_px, source_height, pixel_height);
+    let source_x =
+        render
+            .source_x
+            .saturating_add(scale_pixels(crop_left_px, source_width, pixel_width));
+    let source_y =
+        render
+            .source_y
+            .saturating_add(scale_pixels(crop_top_px, source_height, pixel_height));
     let source_width = scale_pixels(visible_width_px, source_width, pixel_width)
         .max(1)
         .min(placement.placement.image_width.saturating_sub(source_x));
@@ -869,6 +875,16 @@ mod tests {
         assert_eq!(clipped.rows, 2);
         assert_eq!(clipped.source_x, 10);
         assert_eq!(clipped.source_y, 10);
+    }
+
+    #[test]
+    fn clipped_placement_large_source_offsets_do_not_overflow() {
+        let mut placement = test_placement(-1, -1);
+        placement.placement.render.source_x = u32::MAX - 5;
+        placement.placement.render.source_y = u32::MAX - 5;
+
+        let result = clipped_placement(&placement);
+        assert!(result.is_none());
     }
 
     #[test]
