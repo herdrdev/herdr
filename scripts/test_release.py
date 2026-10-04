@@ -11,7 +11,7 @@ from scripts import release
 
 class ReleaseTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="herdr-release-", dir="/var/tmp" if os.name != "nt" else None)
+        self.temp = tempfile.TemporaryDirectory(prefix="herdr-release-")
         self.addCleanup(self.temp.cleanup)
         self.previous_cwd = Path.cwd()
         os.chdir(self.temp.name)

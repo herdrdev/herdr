@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const load = (name: string): any =>
@@ -60,7 +61,7 @@ describe("official publishing workflow boundaries", () => {
   });
 
   test.skipIf(process.platform === "win32")("admin gate permits admins and fails closed for other roles or API errors", () => {
-    const dir = mkdtempSync("/var/tmp/herdr-admin-gate-");
+    const dir = mkdtempSync(join(tmpdir(), "herdr-admin-gate-"));
     try {
       writeFileSync(join(dir, "gh"), `#!/bin/sh
 case "$2" in

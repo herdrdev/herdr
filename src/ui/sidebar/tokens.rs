@@ -234,6 +234,7 @@ mod tests {
                 primary_tab_label: None,
                 tab_has_custom_name: false,
                 tab_label_leads_with_agent: false,
+                tab_has_live_agent_title: false,
                 pane_label: None,
                 pane_label_is_agent_identity: false,
                 terminal_title: None,

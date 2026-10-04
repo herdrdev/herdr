@@ -466,8 +466,7 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         .into_iter()
         .fold((0usize, 0usize), |(blocked, attention), entry| {
             let tier = crate::ui::sidebar::entry_attention_tier(&entry);
-            let is_blocked = tier == crate::terminal::state::AttentionTier::Blocked
-                && (entry.state != AgentState::Working || entry.usage_limited);
+            let is_blocked = tier == crate::terminal::state::AttentionTier::Blocked;
             if is_blocked {
                 (blocked + 1, attention)
             } else if tier == crate::terminal::state::AttentionTier::Attention {
@@ -2531,6 +2530,32 @@ mod tests {
             .terminal_id(pane_id)
             .expect("terminal")
             .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).expect("terminal state");
+        terminal.set_raw_agent_state_for_test(AgentState::Working);
+        terminal.apply_closing_block_payload(
+            vec![crate::api::schema::ClosingBlockItem {
+                blocking: true,
+                n: 1,
+                label: "Gate".into(),
+                text: "Approve the change".into(),
+                pr: None,
+                ticket: None,
+                url: None,
+                default: None,
+                default_at: None,
+            }],
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let working_blocked = status_buttons(&app, Rect::new(0, 0, 120, 1));
+        assert_eq!(
+            button_for(&working_blocked, StatusButtonAction::BlockedFilter)
+                .label
+                .trim(),
+            "blocked 1"
+        );
+
         app.terminals
             .get_mut(&terminal_id)
             .expect("terminal state")

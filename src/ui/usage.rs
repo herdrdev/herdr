@@ -299,7 +299,8 @@ fn render_subscription_usage(
     let compact = usize::from(area.height) < count * 2;
     let row_height = if compact { 1 } else { 2 };
     let shown = count.min(usize::from(area.height / row_height)).max(1);
-    let rows = Layout::vertical(&[Constraint::Length(row_height); 4][..shown]).split(area);
+    let constraints = vec![Constraint::Length(row_height); shown];
+    let rows = Layout::vertical(&constraints).split(area);
     let providers = SUBSCRIPTION_PROVIDERS.map(|provider| {
         (
             quota_provider_label(provider),

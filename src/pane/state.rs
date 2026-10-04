@@ -16,9 +16,10 @@ pub(crate) struct PaneAgentProjection {
 }
 
 impl PaneAgentProjection {
+    /// A human-blocked attention tier counts even while independent work keeps
+    /// the lifecycle state at `Working`.
     pub(crate) fn counts_as_blocked(self) -> bool {
         self.attention_tier == AttentionTier::Blocked
-            && (self.state != AgentState::Working || self.usage_limited)
     }
 
     pub(crate) fn needs_human_attention(self) -> bool {
@@ -28,6 +29,12 @@ impl PaneAgentProjection {
     pub(crate) fn status_key(self) -> &'static str {
         if self.attention_tier == AttentionTier::Attention {
             return "attention";
+        }
+        if self.state == AgentState::Working
+            && self.attention_tier == AttentionTier::Blocked
+            && !self.usage_limited
+        {
+            return "working";
         }
         if self.counts_as_blocked() {
             return "blocked";

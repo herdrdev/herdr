@@ -383,7 +383,6 @@ pub(crate) struct AgentInfoProjection {
 impl AgentInfoProjection {
     pub(crate) fn counts_as_blocked(self) -> bool {
         self.attention_tier == crate::terminal::state::AttentionTier::Blocked
-            && (self.state != crate::detect::AgentState::Working || self.usage_limited)
     }
 }
 

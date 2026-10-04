@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn answer_only_waits_stay_out_of_inbox_and_clear_with_the_runtime() {
+    async fn answer_only_waits_stay_in_inbox_while_work_continues_and_clear_with_runtime() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![crate::workspace::Workspace::test_new("attention")];
         app.active = Some(0);
@@ -278,7 +278,11 @@ mod tests {
             1,
             "independent work must not erase pending human input"
         );
-        assert!(app.blocked_agents().is_empty());
+        assert_eq!(
+            app.blocked_agents().len(),
+            1,
+            "a blocked attention tier remains in the inbox while work continues"
+        );
 
         {
             let terminal = app.terminals.get_mut(&terminal_id).unwrap();
@@ -306,11 +310,10 @@ mod tests {
         );
     }
 
-    /// Owner correction to #77: a latched gate becomes blocking only when the
-    /// pane stops working. The same gate must then enter the inbox without a
-    /// fresh closing-block report.
+    /// A latched gate remains blocking while its pane continues working and
+    /// remains in the inbox after work stops without a fresh report.
     #[tokio::test(flavor = "current_thread")]
-    async fn a_latched_gate_reaches_the_queue_only_after_work_stops() {
+    async fn a_latched_gate_reaches_the_queue_while_working_and_after_work_stops() {
         let mut app = crate::app::state::AppState::test_new();
         app.workspaces = vec![crate::workspace::Workspace::test_new("inbox")];
         app.active = Some(0);
@@ -337,10 +340,9 @@ mod tests {
             terminal.set_raw_agent_state_for_test(AgentState::Working);
         }
 
-        assert!(
-            app.blocked_agents().is_empty(),
-            "work already in flight means the human gate is not blocking yet"
-        );
+        let queue = app.blocked_agents();
+        assert_eq!(queue.len(), 1, "the human gate blocks while work continues");
+        assert_eq!(queue[0].pane_id, pane_id);
 
         app.terminals
             .get_mut(&terminal_id)
@@ -460,9 +462,7 @@ mod tests {
                     );
                     assert_eq!(
                         in_queue,
-                        state == AgentState::Blocked
-                            || usage_limited
-                            || (latched_gate && state != AgentState::Working),
+                        state == AgentState::Blocked || usage_limited || latched_gate,
                         "wrong answer for state={state:?} latched_gate={latched_gate} usage_limited={usage_limited}"
                     );
                 }

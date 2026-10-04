@@ -1856,7 +1856,7 @@ impl GlobalAgentCounts {
 fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
     let mut counts = GlobalAgentCounts::default();
     for entry in crate::ui::all_agent_panel_entries(app) {
-        if super::sidebar::entry_is_blocked(&entry) {
+        if super::sidebar::entry_is_blocked(&entry) && entry.state != AgentState::Working {
             counts.blocked += 1;
             continue;
         }
@@ -2277,6 +2277,7 @@ mod tests {
                 primary_tab_label: primary_tab_label.map(str::to_string),
                 tab_has_custom_name: false,
                 tab_label_leads_with_agent: false,
+                tab_has_live_agent_title: false,
                 pane_label: None,
                 pane_label_is_agent_identity: false,
                 terminal_title: None,
@@ -3075,7 +3076,7 @@ mod tests {
     }
 
     #[test]
-    fn mobile_expanded_remote_working_row_is_dim_without_a_dot() {
+    fn mobile_expanded_remote_working_row_is_dim_and_keeps_its_status_dot() {
         let mut app = AppState::test_new();
         app.sidebar_sections_layout = true;
         app.view.layout = crate::app::state::ViewLayout::Mobile;
@@ -3086,7 +3087,10 @@ mod tests {
         app.remote_agent_panel_entries = vec![std::sync::Arc::new(
             crate::ui::sidebar::RemoteAgentPanelEntry::new(agent_ref, entry),
         )];
-        app.toggle_sidebar_group("Working");
+        app.collapsed_sidebar_groups
+            .insert("sections:Working".into());
+        app.collapsed_sidebar_groups
+            .insert("expanded:device:working/ub2".into());
         assert!(mobile_sidebar_rows(&app).iter().any(|row| matches!(
             row,
             SidebarRow::RemoteAgent {
@@ -3114,7 +3118,7 @@ mod tests {
         let row = (0..area.width)
             .map(|x| terminal.backend().buffer()[(x, y)].symbol())
             .collect::<String>();
-        assert!(!row.contains('●'), "{row}");
+        assert!(row.contains('●'), "{row}");
         let title_x = (0..area.width)
             .find(|x| terminal.backend().buffer()[(*x, y)].symbol() == "N")
             .expect("remote title");

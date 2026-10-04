@@ -6186,7 +6186,7 @@ mod tests {
     }
 
     #[test]
-    fn next_blocked_window_skips_working_pane_with_blocker_and_stops_at_idle_blocked_pane() {
+    fn next_blocked_window_visits_working_pane_with_blocker_and_idle_blocked_pane() {
         let mut app = app_with_global_window_fixture();
         expand_all_workspaces_for_sidebar(&mut app.state);
         let working_blocker = app.state.workspaces[0].tabs[1].root_pane;
@@ -6201,7 +6201,7 @@ mod tests {
         assert_tui_window_cycle(
             &mut app,
             NavigateAction::NextBlockedWindow,
-            &[(1, 0), (0, 0)],
+            &[(0, 1), (1, 0), (0, 0)],
         );
 
         let mut state = app_with_global_window_fixture().state;
@@ -6218,7 +6218,7 @@ mod tests {
         assert_headless_window_cycle(
             &mut state,
             NavigateAction::NextBlockedWindow,
-            &[(1, 0), (0, 0)],
+            &[(0, 1), (1, 0), (0, 0)],
         );
     }
 

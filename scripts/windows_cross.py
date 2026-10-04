@@ -54,7 +54,7 @@ def setup(accept_license: bool) -> None:
         raise ValueError("Install Zig 0.16.0 first, or set ZIG to its executable.")
     SDK_ROOT.mkdir(parents=True, exist_ok=True)
     # SDK downloads can be large; /tmp is often RAM-backed on Linux.
-    temp_parent = "/var/tmp" if sys.platform.startswith("linux") else None
+    temp_parent = tempfile.gettempdir() if sys.platform.startswith("linux") else None
     with tempfile.TemporaryDirectory(prefix="herdr-windows-sdk-", dir=temp_parent) as cache:
         command = ["xwin", "--arch", "x86_64", "--cache-dir", cache]
         if accept_license:
