@@ -24,6 +24,9 @@ pub(crate) const GROK_CONFIG_DIR_ENV_VAR: &str = "GROK_CONFIG_DIR";
 /// `$GROK_HOME/config.toml` and `$GROK_HOME/auth.json`).
 pub(crate) const GROK_HOME_ENV_VAR: &str = "GROK_HOME";
 pub(crate) const HERMES_HOME_ENV_VAR: &str = "HERMES_HOME";
+/// Codebuddy (WorkBuddy's terminal agent) stores global config, skills and
+/// sessions under `~/.codebuddy`, mirroring the claude layout.
+pub(crate) const CODEBUDDY_CONFIG_DIR_ENV_VAR: &str = "CODEBUDDY_CONFIG_DIR";
 
 pub(crate) fn apply_pane_base_env(cmd: &mut CommandBuilder) {
     cmd.env(crate::api::SOCKET_PATH_ENV_VAR, crate::api::socket_path());
@@ -204,6 +207,10 @@ pub(crate) fn grok_dir() -> io::Result<PathBuf> {
     // The grok CLI honors GROK_HOME as its config home (config.toml,
     // auth.json, hooks/); mirror it so hook installs land where grok looks.
     config_dir_from_env_or_home(GROK_HOME_ENV_VAR, &[".grok"])
+}
+
+pub(crate) fn codebuddy_dir() -> io::Result<PathBuf> {
+    config_dir_from_env_or_home(CODEBUDDY_CONFIG_DIR_ENV_VAR, &[".codebuddy"])
 }
 
 pub(crate) fn home_dir() -> io::Result<PathBuf> {

@@ -320,6 +320,21 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
     include_str!("assets/grok/herdr-agent-state.sh")
 };
 const GROK_INTEGRATION_VERSION: u32 = 2;
+/// Codebuddy (Tencent WorkBuddy's terminal agent, `codebuddy` / `cbc`) speaks
+/// the Claude Code hook protocol, so it reuses the claude hook shape. Session
+/// only: screen detection owns agent state.
+const CODEBUDDY_HOOK_INSTALL_NAME: &str = if cfg!(windows) {
+    "herdr-agent-state.ps1"
+} else {
+    "herdr-agent-state.sh"
+};
+const CODEBUDDY_HOOK_ASSET: &str = if cfg!(windows) {
+    include_str!("assets/codebuddy/herdr-agent-state.ps1")
+} else {
+    include_str!("assets/codebuddy/herdr-agent-state.sh")
+};
+const CODEBUDDY_INTEGRATION_VERSION: u32 = 1;
+const CODEBUDDY_HOOK_EVENTS: [(&str, &str); 1] = [("SessionStart", "session")];
 
 pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
 

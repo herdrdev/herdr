@@ -1,0 +1,74 @@
+id = "codebuddy"
+version = "2026.10.04.1"
+min_engine_version = 2
+updated_at = "2026-10-04T00:00:00Z"
+aliases = ["cbc", "workbuddy"]
+
+# Codebuddy (Tencent WorkBuddy's terminal agent) is Claude Code derived, so the
+# initial rule set mirrors claude.toml's locale-independent signals only: OSC
+# title spinners, the interrupt hint, and the resting prompt box. Locale-bound
+# permission copy is intentionally left out until the real strings are observed.
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+visible_working = true
+# Braille covers the classic busy spinner; half-circles cover the newer one.
+regex = ['^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] ']
+
+[[rules]]
+id = "interrupt_hint_working"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^\s*[⏸⏵].*esc to interrupt(?:\s|·|$)']
+
+[[rules]]
+id = "spinner_elapsed_working"
+state = "working"
+priority = 960
+region = "bottom_non_empty_lines(12)"
+visible_working = true
+line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)']
+
+[[rules]]
+id = "confirmation_prompt_blocked"
+state = "blocked"
+priority = 980
+region = "after_last_horizontal_rule"
+visible_blocker = true
+contains = ["esc to cancel"]
+any = [
+  { contains = ["enter to confirm"] },
+  { contains = ["enter to select"] },
+]
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 950
+region = "prompt_box_body"
+visible_idle = true
+line_regex = ['^\s*[❯>]\s*\S*$']
+not = [
+  { contains = ["enter to select"] },
+  { contains = ["esc to cancel"] },
+]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 250
+region = "osc_title"
+visible_idle = true
+regex = ['^\x{2733} ']
+
+[[rules]]
+id = "osc_progress_idle"
+state = "idle"
+priority = 250
+region = "osc_progress"
+regex = ['^4;0']

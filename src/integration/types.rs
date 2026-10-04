@@ -111,6 +111,20 @@ pub(crate) struct MastracodeUninstallResult {
 }
 
 #[derive(Debug)]
+pub(crate) struct CodebuddyInstallPaths {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+}
+
+#[derive(Debug)]
+pub(crate) struct CodebuddyUninstallResult {
+    pub hook_path: PathBuf,
+    pub settings_path: PathBuf,
+    pub removed_hook_file: bool,
+    pub updated_settings: bool,
+}
+
+#[derive(Debug)]
 pub(crate) struct GrokInstallPaths {
     pub hook_path: PathBuf,
     pub config_path: PathBuf,
