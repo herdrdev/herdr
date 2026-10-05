@@ -13,6 +13,8 @@ pub(crate) struct StallNudgeHandoffState {
     pub next_nudge_in: Option<std::time::Duration>,
     #[serde(default)]
     pub schedule_failed: bool,
+    #[serde(default)]
+    pub cap_notified: bool,
 }
 
 #[cfg(unix)]
@@ -111,5 +113,6 @@ mod tests {
 
         assert_eq!(state.nudges_without_human, 0);
         assert!(state.episode_active);
+        assert!(!state.cap_notified);
     }
 }

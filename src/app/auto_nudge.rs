@@ -25,6 +25,7 @@ pub(crate) struct StallNudgeEpisode {
     /// answers every nudge and goes stale again, which used to restore the
     /// budget to zero and turn a three-nudge escalation into an endless one.
     dormant_since: Option<Instant>,
+    cap_notified: bool,
 }
 
 #[derive(Debug)]
@@ -54,6 +55,9 @@ struct AutoNudgeFacts {
     max_nudges: u32,
     nudges_without_human: u32,
     max_nudges_without_human: u32,
+    stale_floor_nudge: Duration,
+    working: bool,
+    working_progress_at: Option<Instant>,
     next_nudge_at: Option<Instant>,
     schedule_failed: bool,
     now: Instant,
@@ -68,7 +72,16 @@ enum AutoNudgeDecision {
 }
 
 fn auto_nudge_decision(facts: &AutoNudgeFacts) -> AutoNudgeDecision {
-    if !facts.supervisor_stale {
+    let working_floor_deadline =
+        (!facts.supervisor_stale && facts.working && !facts.stale_floor_nudge.is_zero())
+            .then(|| {
+                facts
+                    .working_progress_at
+                    .and_then(|progress_at| progress_at.checked_add(facts.stale_floor_nudge))
+            })
+            .flatten();
+    let working_floor_applies = working_floor_deadline.is_some();
+    if !facts.supervisor_stale && !working_floor_applies {
         return AutoNudgeDecision::Reset("a fresh status report cleared the stale mark");
     }
     if facts.schedule_failed {
@@ -101,13 +114,42 @@ fn auto_nudge_decision(facts: &AutoNudgeFacts) -> AutoNudgeDecision {
     if !facts.detected_agent {
         return AutoNudgeDecision::Drop("the pane has no detected agent");
     }
-    if facts.max_nudges_without_human > 0
-        && facts.nudges_without_human >= facts.max_nudges_without_human
-    {
-        return AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED);
+    if !facts.supervisor_stale {
+        let Some(deadline) = working_floor_deadline else {
+            return AutoNudgeDecision::Reset("a fresh status report cleared the stale mark");
+        };
+        if deadline > facts.now {
+            return AutoNudgeDecision::RetryAt(deadline);
+        }
     }
-    if facts.nudges_sent >= facts.max_nudges {
+    let no_human_cap_reached = facts.max_nudges_without_human > 0
+        && facts.nudges_without_human >= facts.max_nudges_without_human;
+    if no_human_cap_reached {
+        if facts.stale_floor_nudge.is_zero() {
+            return AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED);
+        }
+        if let Some(deadline) = facts.next_nudge_at.filter(|due| *due > facts.now) {
+            return AutoNudgeDecision::RetryAt(deadline);
+        }
+    }
+    if facts.max_nudges == 0 {
         return AutoNudgeDecision::Drop("the stall episode exhausted its nudge budget");
+    }
+    let episode_cap_reached = facts.nudges_sent >= facts.max_nudges;
+    if episode_cap_reached {
+        if facts.stale_floor_nudge.is_zero() {
+            return AutoNudgeDecision::Drop("the stall episode exhausted its nudge budget");
+        }
+        if let Some(deadline) = facts.next_nudge_at.filter(|due| *due > facts.now) {
+            return AutoNudgeDecision::RetryAt(deadline);
+        }
+    }
+    if no_human_cap_reached || episode_cap_reached {
+        return if facts.runtime_hosts_agent {
+            AutoNudgeDecision::Nudge
+        } else {
+            AutoNudgeDecision::Drop("the pane runtime does not host the detected agent")
+        };
     }
     if facts.quiet_for < facts.nudge_after {
         let wait = facts.nudge_after.saturating_sub(facts.quiet_for);
@@ -129,12 +171,34 @@ fn next_stall_nudge_delay(
     nudge_after: Duration,
     nudges_sent_after_send: u32,
     max_nudges: u32,
+    stale_floor_nudge: Duration,
+    cap_reached: bool,
 ) -> Result<Option<Duration>, ()> {
-    if nudges_sent_after_send >= max_nudges {
+    if cap_reached && stale_floor_nudge.is_zero() {
         return Ok(None);
     }
-    let multiplier = 1_u32.checked_shl(nudges_sent_after_send).ok_or(())?;
-    nudge_after.checked_mul(multiplier).ok_or(()).map(Some)
+    if (nudges_sent_after_send >= max_nudges || cap_reached) && !stale_floor_nudge.is_zero() {
+        return Ok(Some(stale_floor_nudge));
+    }
+    let Some(multiplier) = 1_u32.checked_shl(nudges_sent_after_send) else {
+        return if stale_floor_nudge.is_zero() {
+            Err(())
+        } else {
+            Ok(Some(stale_floor_nudge))
+        };
+    };
+    let Some(delay) = nudge_after.checked_mul(multiplier) else {
+        return if stale_floor_nudge.is_zero() {
+            Err(())
+        } else {
+            Ok(Some(stale_floor_nudge))
+        };
+    };
+    Ok(Some(if stale_floor_nudge.is_zero() {
+        delay
+    } else {
+        delay.min(stale_floor_nudge)
+    }))
 }
 
 fn next_stall_nudge_at(
@@ -142,8 +206,16 @@ fn next_stall_nudge_at(
     nudge_after: Duration,
     nudges_sent_after_send: u32,
     max_nudges: u32,
+    stale_floor_nudge: Duration,
+    cap_reached: bool,
 ) -> Result<Option<Instant>, ()> {
-    let Some(delay) = next_stall_nudge_delay(nudge_after, nudges_sent_after_send, max_nudges)?
+    let Some(delay) = next_stall_nudge_delay(
+        nudge_after,
+        nudges_sent_after_send,
+        max_nudges,
+        stale_floor_nudge,
+        cap_reached,
+    )?
     else {
         return Ok(None);
     };
@@ -163,6 +235,29 @@ fn stall_nudge_recovery_window(nudge_after: Duration, max_nudges: u32) -> Durati
         .max(crate::terminal::state::AGENT_BUSY_STALE_SILENCE.saturating_mul(2))
 }
 
+fn working_progress_at(terminal: &crate::terminal::TerminalState) -> Option<Instant> {
+    [
+        terminal.latest_agent_report_at(),
+        terminal.last_turn_at_instant(),
+    ]
+    .into_iter()
+    .flatten()
+    .max()
+    .or_else(|| terminal.working_since())
+}
+
+fn stale_working_by_floor(
+    terminal: &crate::terminal::TerminalState,
+    stale_floor_nudge: Duration,
+    now: Instant,
+) -> bool {
+    terminal.raw_agent_state() == crate::detect::AgentState::Working
+        && !stale_floor_nudge.is_zero()
+        && working_progress_at(terminal)
+            .and_then(|progress_at| progress_at.checked_add(stale_floor_nudge))
+            .is_some_and(|deadline| deadline <= now)
+}
+
 pub(crate) fn nudge_after_duration(minutes: u64) -> Duration {
     let bounded_minutes = minutes.min(crate::config::MAX_NUDGE_AFTER_MINUTES);
     let Some(seconds) = bounded_minutes.checked_mul(60) else {
@@ -177,6 +272,7 @@ struct AutoNudgeTarget {
     declaration_kind: &'static str,
     quiet_for: Duration,
     decision: AutoNudgeDecision,
+    cap_reached: bool,
 }
 
 impl App {
@@ -294,6 +390,7 @@ impl App {
                     .map(|deadline| deadline.saturating_duration_since(now))
             }),
             schedule_failed: episode.is_some_and(|episode| episode.schedule_failed),
+            cap_notified: episode.is_some_and(|episode| episode.cap_notified),
         })
     }
 
@@ -357,6 +454,7 @@ impl App {
                     last_drop_reason: schedule_failed.then_some(STALL_NUDGE_SCHEDULE_FAILED),
                     schedule_failed,
                     dormant_since: None,
+                    cap_notified: state.cap_notified,
                 },
             );
         }
@@ -435,6 +533,7 @@ impl App {
                             last_drop_reason: None,
                             schedule_failed: false,
                             dormant_since: None,
+                            cap_notified: false,
                         });
                     episode.pane_id = target.pane_id;
                     episode.declaration_kind = target.declaration_kind;
@@ -462,12 +561,21 @@ impl App {
                             last_drop_reason: None,
                             schedule_failed: false,
                             dormant_since: None,
+                            cap_notified: false,
                         });
                     episode.pane_id = target.pane_id;
                     episode.declaration_kind = target.declaration_kind;
                     episode.last_drop_reason = None;
+                    if target.cap_reached {
+                        self.notify_stall_nudge_cap_once(&target);
+                    }
                 }
-                AutoNudgeDecision::Nudge => fire.push(target),
+                AutoNudgeDecision::Nudge => {
+                    if target.cap_reached {
+                        self.notify_stall_nudge_cap_once(&target);
+                    }
+                    fire.push(target);
+                }
             }
         }
 
@@ -482,6 +590,7 @@ impl App {
                     last_drop_reason: None,
                     schedule_failed: false,
                     dormant_since: None,
+                    cap_notified: false,
                 });
             if !self.send_stall_nudge(&target, now) {
                 if let Some(episode) = self.stall_nudge_episodes.get_mut(&target.terminal_id) {
@@ -502,11 +611,22 @@ impl App {
                 .unwrap_or(0);
             let nudge_after = self.state.nudge_after;
             let max_nudges = self.state.max_nudges;
+            let stale_floor_nudge = self.state.stale_floor_nudge;
             let Some(episode) = self.stall_nudge_episodes.get_mut(&target.terminal_id) else {
                 continue;
             };
             episode.nudges_sent = episode.nudges_sent.saturating_add(1);
-            match next_stall_nudge_at(now, nudge_after, episode.nudges_sent, max_nudges) {
+            let cap_reached = (self.state.max_nudges_without_human > 0
+                && nudges_without_human >= self.state.max_nudges_without_human)
+                || (max_nudges > 0 && episode.nudges_sent >= max_nudges);
+            match next_stall_nudge_at(
+                now,
+                nudge_after,
+                episode.nudges_sent,
+                max_nudges,
+                stale_floor_nudge,
+                cap_reached,
+            ) {
                 Ok(next_nudge_at) => {
                     episode.next_nudge_at = next_nudge_at;
                     episode.last_drop_reason = None;
@@ -561,7 +681,10 @@ impl App {
                 .state
                 .terminals
                 .get(&terminal_id)
-                .is_some_and(|terminal| terminal.supervisor_stale);
+                .is_some_and(|terminal| {
+                    terminal.supervisor_stale
+                        || stale_working_by_floor(terminal, self.state.stale_floor_nudge, now)
+                });
             if current_draft != pending.draft_at_send
                 || current_draft
                     .as_deref()
@@ -616,7 +739,8 @@ impl App {
                         enabled: self.state.auto_nudge_stalled_agents,
                         message_present: !self.state.stall_nudge_message.trim().is_empty(),
                         settled: pane.settled_at.is_some(),
-                        supervisor_stale: terminal.supervisor_stale,
+                        supervisor_stale: terminal.supervisor_stale
+                            || stale_working_by_floor(terminal, self.state.stale_floor_nudge, now),
                         quiet_for,
                         nudge_after: self.state.nudge_after,
                         blocked: terminal.raw_agent_state() == crate::detect::AgentState::Blocked,
@@ -637,6 +761,9 @@ impl App {
                         max_nudges: self.state.max_nudges,
                         nudges_without_human: pane.stall_nudges_without_human,
                         max_nudges_without_human: self.state.max_nudges_without_human,
+                        stale_floor_nudge: self.state.stale_floor_nudge,
+                        working: terminal.raw_agent_state() == crate::detect::AgentState::Working,
+                        working_progress_at: working_progress_at(terminal),
                         next_nudge_at,
                         schedule_failed: episode.is_some_and(|episode| episode.schedule_failed),
                         now,
@@ -656,6 +783,9 @@ impl App {
                         declaration_kind,
                         quiet_for,
                         decision,
+                        cap_reached: (facts.max_nudges_without_human > 0
+                            && facts.nudges_without_human >= facts.max_nudges_without_human)
+                            || (facts.max_nudges > 0 && facts.nudges_sent >= facts.max_nudges),
                     });
                 }
             }
@@ -669,7 +799,10 @@ impl App {
         for (terminal_id, episode) in &mut self.stall_nudge_episodes {
             match self.state.terminals.get(terminal_id) {
                 None => drop_ids.push((terminal_id.clone(), "the terminal is gone")),
-                Some(terminal) if !terminal.supervisor_stale => {
+                Some(terminal)
+                    if !terminal.supervisor_stale
+                        && !stale_working_by_floor(terminal, self.state.stale_floor_nudge, now) =>
+                {
                     let dormant_since = *episode.dormant_since.get_or_insert(now);
                     episode.next_nudge_at = None;
                     if now.saturating_duration_since(dormant_since) >= recovery {
@@ -744,6 +877,35 @@ impl App {
             reason,
             "dropping stalled-agent nudge candidate"
         );
+    }
+
+    fn notify_stall_nudge_cap_once(&mut self, target: &AutoNudgeTarget) {
+        let should_notify = {
+            let episode = self
+                .stall_nudge_episodes
+                .entry(target.terminal_id.clone())
+                .or_insert(StallNudgeEpisode {
+                    pane_id: target.pane_id,
+                    nudges_sent: 0,
+                    next_nudge_at: None,
+                    declaration_kind: target.declaration_kind,
+                    last_drop_reason: None,
+                    schedule_failed: false,
+                    dormant_since: None,
+                    cap_notified: false,
+                });
+            episode.pane_id = target.pane_id;
+            episode.declaration_kind = target.declaration_kind;
+            if episode.cap_notified {
+                false
+            } else {
+                episode.cap_notified = true;
+                true
+            }
+        };
+        if should_notify {
+            self.notify_stall_nudge_cap(target.pane_id);
+        }
     }
 
     fn send_stall_nudge(&mut self, target: &AutoNudgeTarget, now: Instant) -> bool {
@@ -822,6 +984,9 @@ mod tests {
             max_nudges: 3,
             nudges_without_human: 0,
             max_nudges_without_human: 5,
+            stale_floor_nudge: Duration::from_secs(40 * 60),
+            working: false,
+            working_progress_at: None,
             next_nudge_at: None,
             schedule_failed: false,
             now,
@@ -1015,6 +1180,7 @@ mod tests {
             },
             AutoNudgeFacts {
                 nudges_sent: 3,
+                stale_floor_nudge: Duration::ZERO,
                 ..ready_facts(now)
             },
         ];
@@ -1028,14 +1194,43 @@ mod tests {
     }
 
     #[test]
-    fn the_no_human_input_cap_drops_at_its_limit_and_zero_is_unlimited() {
+    fn the_no_human_input_cap_uses_floor_cadence_and_zero_disables_the_cap() {
         let now = Instant::now();
         let capped = AutoNudgeFacts {
             nudges_without_human: 5,
+            next_nudge_at: Some(now + Duration::from_secs(40 * 60)),
             ..ready_facts(now)
         };
         assert_eq!(
             auto_nudge_decision(&capped),
+            AutoNudgeDecision::RetryAt(now + Duration::from_secs(40 * 60))
+        );
+        let due_capped = AutoNudgeFacts {
+            quiet_for: Duration::ZERO,
+            nudges_without_human: 5,
+            next_nudge_at: Some(now),
+            ..ready_facts(now)
+        };
+        assert_eq!(auto_nudge_decision(&due_capped), AutoNudgeDecision::Nudge);
+
+        let episode_capped = AutoNudgeFacts {
+            nudges_sent: 3,
+            next_nudge_at: Some(now + Duration::from_secs(40 * 60)),
+            ..ready_facts(now)
+        };
+        assert_eq!(
+            auto_nudge_decision(&episode_capped),
+            AutoNudgeDecision::RetryAt(now + Duration::from_secs(40 * 60))
+        );
+
+        let legacy = AutoNudgeFacts {
+            stale_floor_nudge: Duration::ZERO,
+            nudges_without_human: 5,
+            next_nudge_at: None,
+            ..ready_facts(now)
+        };
+        assert_eq!(
+            auto_nudge_decision(&legacy),
             AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED)
         );
 
@@ -1063,6 +1258,35 @@ mod tests {
     }
 
     #[test]
+    fn working_without_a_fresh_report_or_turn_completion_is_stale_at_the_floor() {
+        let now = Instant::now();
+        let floor = Duration::from_secs(40 * 60);
+        let before_floor = AutoNudgeFacts {
+            supervisor_stale: false,
+            working: true,
+            working_progress_at: Some(now - floor + Duration::from_secs(1)),
+            stale_floor_nudge: floor,
+            ..ready_facts(now)
+        };
+        assert_eq!(
+            auto_nudge_decision(&before_floor),
+            AutoNudgeDecision::RetryAt(now + Duration::from_secs(1))
+        );
+
+        let stale_working = AutoNudgeFacts {
+            supervisor_stale: false,
+            working: true,
+            working_progress_at: Some(now - floor),
+            stale_floor_nudge: floor,
+            ..ready_facts(now)
+        };
+        assert_eq!(
+            auto_nudge_decision(&stale_working),
+            AutoNudgeDecision::Nudge
+        );
+    }
+
+    #[test]
     fn screen_activity_and_backoff_both_have_to_be_due() {
         let now = Instant::now();
         let quiet = AutoNudgeFacts {
@@ -1086,26 +1310,56 @@ mod tests {
     }
 
     #[test]
-    fn successful_nudges_back_off_and_stop_at_the_episode_cap() {
+    fn successful_nudges_back_off_with_a_floor_and_continue_at_the_episode_cap() {
         let base = Duration::from_secs(20 * 60);
-        assert_eq!(next_stall_nudge_delay(base, 1, 3), Ok(Some(base * 2)));
-        assert_eq!(next_stall_nudge_delay(base, 2, 3), Ok(Some(base * 4)));
-        assert_eq!(next_stall_nudge_delay(base, 3, 3), Ok(None));
+        let floor = Duration::from_secs(40 * 60);
+        assert_eq!(
+            next_stall_nudge_delay(base, 1, 3, floor, false),
+            Ok(Some(base * 2))
+        );
+        assert_eq!(
+            next_stall_nudge_delay(base, 2, 3, floor, false),
+            Ok(Some(floor))
+        );
+        assert_eq!(
+            next_stall_nudge_delay(base, 3, 3, floor, true),
+            Ok(Some(floor))
+        );
+        assert_eq!(
+            next_stall_nudge_delay(base, 1, 3, Duration::from_secs(5 * 60), false),
+            Ok(Some(Duration::from_secs(5 * 60)))
+        );
+        assert_eq!(
+            next_stall_nudge_delay(base, 3, 3, Duration::ZERO, true),
+            Ok(None)
+        );
     }
 
     #[test]
     fn nudge_schedule_arithmetic_failures_fail_closed() {
         let now = Instant::now();
+        let floor = Duration::from_secs(40 * 60);
         assert_eq!(
-            next_stall_nudge_delay(Duration::from_secs(1), 32, 33),
+            next_stall_nudge_delay(Duration::from_secs(1), 32, 33, Duration::ZERO, false),
             Err(())
         );
         assert_eq!(
-            next_stall_nudge_delay(Duration::from_secs(u64::MAX), 1, 3),
+            next_stall_nudge_delay(Duration::from_secs(1), 32, 33, floor, false),
+            Ok(Some(floor))
+        );
+        assert_eq!(
+            next_stall_nudge_delay(Duration::from_secs(u64::MAX), 1, 3, Duration::ZERO, false),
             Err(())
         );
         assert_eq!(
-            next_stall_nudge_at(now, Duration::from_secs(u64::MAX), 0, 3),
+            next_stall_nudge_at(
+                now,
+                Duration::from_secs(u64::MAX),
+                0,
+                3,
+                Duration::ZERO,
+                false
+            ),
             Err(())
         );
 
@@ -1168,6 +1422,82 @@ mod tests {
         (app, pane_id, terminal_id, rx)
     }
 
+    #[tokio::test]
+    async fn cap_notification_is_emitted_once_for_the_stall_episode() {
+        let now = Instant::now();
+        let (mut app, pane_id, terminal_id, _rx) = app_with_stalled_pane(now);
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .stall_nudges_without_human = app.state.max_nudges_without_human;
+        app.stall_nudge_episodes.insert(
+            terminal_id.clone(),
+            StallNudgeEpisode {
+                pane_id,
+                nudges_sent: app.state.max_nudges,
+                next_nudge_at: Some(now + app.state.stale_floor_nudge),
+                declaration_kind: "agent_status",
+                last_drop_reason: None,
+                schedule_failed: false,
+                dormant_since: None,
+                cap_notified: false,
+            },
+        );
+
+        assert!(!app.tick_auto_nudges(now));
+        let first = app.state.toast.clone().expect("cap notification");
+        assert!(first
+            .context
+            .contains("nudging will continue every 40 minutes"));
+
+        app.state.toast = Some(crate::app::state::ToastNotification {
+            kind: crate::app::state::ToastKind::Finished,
+            title: "sentinel".into(),
+            context: String::new(),
+            position: None,
+            target: None,
+        });
+        assert!(!app.tick_auto_nudges(now + Duration::from_secs(1)));
+        assert_eq!(
+            app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("sentinel")
+        );
+    }
+
+    #[tokio::test]
+    async fn silent_working_agent_is_nudged_at_floor_despite_active_subagents() {
+        let now = Instant::now();
+        let floor = Duration::from_secs(40 * 60);
+        let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
+        app.state.stale_floor_nudge = floor;
+        app.state.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .activity
+            .set_last_at(now - floor);
+        let terminal = app.state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.set_active_subagents(Some(1));
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Claude),
+            AgentState::Working,
+            false,
+            false,
+            false,
+            false,
+            false,
+            now - floor,
+        );
+        terminal.supervisor_stale = false;
+
+        assert!(app.tick_auto_nudges(now));
+        assert!(drain(&mut rx).contains("Re-verify"));
+        assert!(app.tick_auto_nudges(now + STALL_NUDGE_SUBMIT_DELAY));
+        assert_eq!(drain(&mut rx), "\r");
+    }
+
     fn drain(rx: &mut tokio::sync::mpsc::Receiver<bytes::Bytes>) -> String {
         let mut out = String::new();
         while let Ok(bytes) = rx.try_recv() {
@@ -1221,7 +1551,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_nudge_episode_sends_three_times_then_stops() {
+    async fn auto_nudge_episode_continues_at_the_floor_after_its_budget() {
         let now = Instant::now();
         let (mut app, _pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
 
@@ -1242,9 +1572,13 @@ mod tests {
             .contains("Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."));
         assert!(app.tick_auto_nudges(now + Duration::from_secs(30 * 60) + STALL_NUDGE_SUBMIT_DELAY));
         assert_eq!(drain(&mut rx), "\r");
-        assert!(!app.tick_auto_nudges(now + Duration::from_secs(1_000 * 60)));
+        assert!(!app.tick_auto_nudges(now + Duration::from_secs(69 * 60)));
         assert_eq!(drain(&mut rx), "");
-        assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 3);
+        assert!(app.tick_auto_nudges(now + Duration::from_secs(70 * 60)));
+        assert!(drain(&mut rx).contains("Re-verify"));
+        assert!(app.tick_auto_nudges(now + Duration::from_secs(70 * 60) + STALL_NUDGE_SUBMIT_DELAY));
+        assert_eq!(drain(&mut rx), "\r");
+        assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 4);
     }
 
     /// The loop this guards against: the nudge lands, the agent answers, the
@@ -1252,7 +1586,7 @@ mod tests {
     /// The episode used to be deleted on that fresh report, so every nudge in
     /// twelve hours of production logs was `nudge=1` and the cap never applied.
     #[tokio::test]
-    async fn answering_a_nudge_does_not_hand_the_budget_back() {
+    async fn answering_nudges_does_not_refill_either_stall_budget() {
         let now = Instant::now();
         let (mut app, pane_id, terminal_id, mut rx) = app_with_stalled_pane(now);
         let nudge_after = app.state.nudge_after;
@@ -1287,17 +1621,14 @@ mod tests {
                 .for_each(|pane| pane.activity.set_last_at(at - nudge_after));
         }
 
-        assert_eq!(sent, app.state.max_nudges);
-        assert_eq!(
-            app.stall_nudge_episodes[&terminal_id].nudges_sent,
-            app.state.max_nudges
-        );
+        assert_eq!(sent, 6);
+        assert_eq!(app.stall_nudge_episodes[&terminal_id].nudges_sent, 6);
         assert_eq!(
             app.find_pane(pane_id)
                 .expect("pane")
                 .1
                 .stall_nudges_without_human,
-            app.state.max_nudges
+            6
         );
     }
 
@@ -1436,6 +1767,16 @@ mod tests {
             auto_nudge_decision(&AutoNudgeFacts {
                 nudges_without_human: 2,
                 max_nudges_without_human: 2,
+                next_nudge_at: Some(now + Duration::from_secs(40 * 60)),
+                ..ready_facts(now)
+            }),
+            AutoNudgeDecision::RetryAt(now + Duration::from_secs(40 * 60))
+        );
+        assert_eq!(
+            auto_nudge_decision(&AutoNudgeFacts {
+                nudges_without_human: 2,
+                max_nudges_without_human: 2,
+                stale_floor_nudge: Duration::ZERO,
                 ..ready_facts(now)
             }),
             AutoNudgeDecision::Drop(STALL_NUDGE_HUMAN_INPUT_CAP_REACHED)
@@ -1800,6 +2141,7 @@ mod tests {
                 last_drop_reason: None,
                 schedule_failed: false,
                 dormant_since: None,
+                cap_notified: false,
             },
         );
 
@@ -1846,6 +2188,7 @@ mod tests {
                 last_drop_reason: None,
                 schedule_failed: false,
                 dormant_since: None,
+                cap_notified: false,
             },
         );
         let persisted = app
@@ -1950,6 +2293,7 @@ mod tests {
         config.session.nudge_after_minutes = 12;
         config.session.max_nudges = 5;
         config.session.max_nudges_without_human = 8;
+        config.session.stale_floor_nudge_minutes = 25;
         config.session.stall_nudge_message = "report".into();
         let mut app = App::new(&config, true, None, api_rx, crate::api::EventHub::default());
         assert!(app.state.auto_nudge_stalled_agents);
@@ -1961,6 +2305,7 @@ mod tests {
         assert_eq!(app.state.nudge_after, Duration::from_secs(12 * 60));
         assert_eq!(app.state.max_nudges, 5);
         assert_eq!(app.state.max_nudges_without_human, 8);
+        assert_eq!(app.state.stale_floor_nudge, Duration::from_secs(25 * 60));
         assert_eq!(app.state.stall_nudge_message, "report");
 
         config.session.auto_nudge_stalled_agents = false;
@@ -1969,6 +2314,7 @@ mod tests {
         config.session.nudge_after_minutes = 7;
         config.session.max_nudges = 2;
         config.session.max_nudges_without_human = 0;
+        config.session.stale_floor_nudge_minutes = 0;
         config.session.stall_nudge_message = "still working?".into();
         app.apply_live_config(&config, &[], &[], false);
         assert!(!app.state.auto_nudge_stalled_agents);
@@ -1980,6 +2326,7 @@ mod tests {
         assert_eq!(app.state.nudge_after, Duration::from_secs(7 * 60));
         assert_eq!(app.state.max_nudges, 2);
         assert_eq!(app.state.max_nudges_without_human, 0);
+        assert_eq!(app.state.stale_floor_nudge, Duration::ZERO);
         assert_eq!(app.state.stall_nudge_message, "still working?");
 
         config.session.agent_stale_after_minutes = u64::MAX;

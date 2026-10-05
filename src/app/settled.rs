@@ -490,7 +490,8 @@ impl AppState {
                         }
                         continue;
                     }
-                    if projection.state == crate::detect::AgentState::Working
+                    if terminal.raw_agent_state() == crate::detect::AgentState::Working
+                        || projection.state == crate::detect::AgentState::Working
                         || projection.needs_human_attention()
                         || projection.open_blockers
                         || terminal.declares_running_subagents()
@@ -1388,6 +1389,12 @@ mod tests {
             .get_mut(&finished_terminal)
             .expect("root terminal")
             .set_detected_state(Some(crate::detect::Agent::Codex), AgentState::Working);
+        let terminal = finished
+            .terminals
+            .get_mut(&finished_terminal)
+            .expect("working terminal");
+        terminal.supervisor_stale = true;
+        terminal.stale_resolution = Some((AgentState::Idle, true));
         finished.auto_settle_inactive = false;
         finished.workspaces[0].tabs[0]
             .panes

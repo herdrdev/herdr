@@ -366,6 +366,10 @@ pub struct SessionConfig {
     /// Maximum stalled-agent nudges sent to one pane without human input.
     /// Zero disables this cap. Default: 5.
     pub max_nudges_without_human: u32,
+    /// Keep nudging a stale working pane at no more than this many minutes
+    /// between prompts after escalation caps are reached. Zero preserves the
+    /// legacy behavior of stopping at the caps. Default: 40.
+    pub stale_floor_nudge_minutes: u64,
     /// Prompt submitted to a stalled pane. Default: "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."
     pub stall_nudge_message: String,
 }
@@ -393,6 +397,7 @@ impl Default for SessionConfig {
             nudge_after_minutes: 5,
             max_nudges: 3,
             max_nudges_without_human: 5,
+            stale_floor_nudge_minutes: 40,
             stall_nudge_message:
                 "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue.".to_string(),
         }
@@ -2519,6 +2524,7 @@ mod tests {
         assert_eq!(session.nudge_after_minutes, 5);
         assert_eq!(session.max_nudges, 3);
         assert_eq!(session.max_nudges_without_human, 5);
+        assert_eq!(session.stale_floor_nudge_minutes, 40);
         assert_eq!(
             session.stall_nudge_message,
             "Re-verify what you are working on now; do not answer from memory. If you have subagents, poll them and restart any that are stalled. If everything is still progressing, reply with one line: Progressing, plus the count and names of running subagents if any (e.g. Progressing, 2 subagents: build, review). If it is done or something changed, say so and continue."

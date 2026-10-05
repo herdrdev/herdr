@@ -988,7 +988,6 @@ impl TerminalState {
         self.state
     }
 
-    #[cfg(test)]
     pub(crate) fn working_since(&self) -> Option<Instant> {
         self.working_since
     }
@@ -1457,6 +1456,12 @@ impl TerminalState {
         self.closing_report
             .as_ref()
             .and_then(|report| report.last_turn_at_instant)
+    }
+
+    pub(crate) fn latest_agent_report_at(&self) -> Option<Instant> {
+        self.hook_authority
+            .as_ref()
+            .map(|authority| authority.reported_at)
     }
 
     pub(crate) fn last_turn_at_unix_s(&self) -> Option<u64> {

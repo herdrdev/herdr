@@ -2031,6 +2031,36 @@ impl App {
         result
     }
 
+    pub(crate) fn notify_stall_nudge_cap(&mut self, pane_id: crate::layout::PaneId) {
+        let title = "Stalled agent still needs attention";
+        let body = format!(
+            "Pane {} reached its automatic nudge cap; nudging will continue every {} minutes.",
+            pane_id.raw(),
+            self.state.stale_floor_nudge.as_secs() / 60
+        );
+        match self.state.toast_config.delivery {
+            crate::config::ToastDelivery::Off => {}
+            crate::config::ToastDelivery::Herdr => {
+                if self.state.toast.is_none() {
+                    let previous_toast = self.state.toast.clone();
+                    self.state.toast = Some(crate::app::state::ToastNotification {
+                        kind: crate::app::state::ToastKind::NeedsAttention,
+                        title: title.to_string(),
+                        context: body,
+                        position: None,
+                        target: None,
+                    });
+                    self.sync_toast_deadline(previous_toast);
+                }
+            }
+            crate::config::ToastDelivery::Terminal | crate::config::ToastDelivery::System => {
+                if self.local_terminal_notifications {
+                    let _ = self.show_client_local_notification(title, Some(&body));
+                }
+            }
+        }
+    }
+
     pub(crate) fn refresh_agent_notification_delivery_contexts(
         &mut self,
         deliveries: &mut [crate::app::state::AgentNotificationDelivery],

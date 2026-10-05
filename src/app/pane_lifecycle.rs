@@ -230,7 +230,10 @@ pub(crate) fn pane_is_done(
         return false;
     }
     let (state, seen) = terminal.sidebar_projection(pane.seen);
-    if seen || terminal.supervisor_stale {
+    if seen
+        || terminal.supervisor_stale
+        || terminal.raw_agent_state() == crate::detect::AgentState::Working
+    {
         return false;
     }
     // Idle is not enough to close a pane. A latched human-action closing item,
@@ -249,7 +252,9 @@ pub(crate) fn pane_is_quiet(
     pane: &crate::pane::PaneState,
     terminal: &crate::terminal::TerminalState,
 ) -> bool {
-    if terminal.supervisor_stale && terminal.stale_resolution.is_none() {
+    if terminal.raw_agent_state() == crate::detect::AgentState::Working
+        || (terminal.supervisor_stale && terminal.stale_resolution.is_none())
+    {
         return false;
     }
     let state = terminal.sidebar_projection(pane.seen).0;
@@ -402,6 +407,27 @@ mod tests {
             let due = app.due_done_pane_ids(now);
             assert!(due.is_empty(), "{label}: still-live pane reaped: {due:?}");
         }
+    }
+
+    #[test]
+    fn never_reaps_stale_working_even_when_stale_resolution_says_idle() {
+        let (done_since, now) = elapsed_test_clock(Duration::from_secs(5 * 60 * 60));
+        let (mut app, pane_id) = lifecycle_state(AgentState::Working, false, done_since);
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.supervisor_stale = true;
+        terminal.stale_resolution = Some((AgentState::Idle, true));
+        app.workspaces[0].tabs[0]
+            .panes
+            .get_mut(&pane_id)
+            .expect("pane")
+            .settled_at = Some(1);
+
+        let pane = app.workspaces[0].pane_state(pane_id).expect("pane state");
+        assert!(!pane_is_quiet(pane, terminal));
+        assert!(app.due_done_pane_ids(now).is_empty());
     }
 
     #[test]

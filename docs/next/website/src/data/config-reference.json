@@ -2206,7 +2206,13 @@
           "key": "session.max_nudges_without_human",
           "type": "integer",
           "default": "5",
-          "description": "Maximum stalled-agent nudges sent to one pane without human input, across status reports and recovered episodes. Once reached, nudging stops until you type into that pane. Set to 0 for no cap."
+          "description": "Maximum stalled-agent nudges sent to one pane without human input, across status reports and recovered episodes. Once reached, Herdr continues at the stale floor cadence. Set stale_floor_nudge_minutes to 0 to stop at the cap, or this value to 0 for no cap."
+        },
+        {
+          "key": "session.stale_floor_nudge_minutes",
+          "type": "integer",
+          "default": "40",
+          "description": "Maximum minutes between nudges to a stale working pane, including after an escalation cap is reached. A working status without a fresh report or turn completion is stale after this interval, even while subagents are reported. Set to 0 to restore the legacy stop-at-cap behavior."
         },
         {
           "key": "session.stall_nudge_message",
