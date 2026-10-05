@@ -69,6 +69,17 @@ impl Area {
         }
     }
 
+    pub(crate) fn icon(self, nerd_font: bool) -> &'static str {
+        match (self, nerd_font) {
+            (Self::Scalable, true) => "⚡",
+            (Self::Harness, true) => "⚙",
+            (Self::Personal, true) => "󰣉",
+            (Self::Scalable, false) => "S",
+            (Self::Harness, false) => "H",
+            (Self::Personal, false) => "P",
+        }
+    }
+
     pub(crate) fn next(self) -> Self {
         match self {
             Self::Scalable => Self::Harness,
@@ -167,6 +178,7 @@ pub(crate) struct BoardView {
     pub(crate) error: Option<String>,
     baseline: String,
     pub(crate) agent_lines: std::collections::HashMap<AgentLink, (u64, String)>,
+    pub(crate) agent_activity: std::collections::HashMap<AgentLink, std::time::Instant>,
     pub(crate) agent_lanes: std::collections::HashMap<AgentLink, Lane>,
     pub(crate) last_agent_refresh_unix_s: u64,
     pub(crate) remote_line_fetch_in_flight: bool,
@@ -207,6 +219,7 @@ impl BoardView {
             baseline,
             agent_lines: std::collections::HashMap::new(),
             agent_lanes: std::collections::HashMap::new(),
+            agent_activity: std::collections::HashMap::new(),
             last_agent_refresh_unix_s: 0,
             remote_line_fetch_in_flight: false,
             remote_line_request_id: 0,
@@ -232,6 +245,7 @@ impl BoardView {
             baseline: String::new(),
             agent_lines: std::collections::HashMap::new(),
             agent_lanes: std::collections::HashMap::new(),
+            agent_activity: std::collections::HashMap::new(),
             last_agent_refresh_unix_s: 0,
             remote_line_fetch_in_flight: false,
             remote_line_request_id: 0,
@@ -390,6 +404,14 @@ pub(crate) enum Lane {
 }
 
 impl Lane {
+    pub(crate) fn glyph(self) -> &'static str {
+        match self {
+            Self::Blocked => "●",
+            Self::Working => "◐",
+            Self::DoneAwaitingYou => "✓",
+        }
+    }
+
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",
@@ -444,19 +466,22 @@ impl crate::app::state::AppState {
         let mut seen = std::collections::HashSet::new();
         let mut line_changes = Vec::new();
         let mut lane_changes = Vec::new();
+        let mut activity_changes = std::collections::HashMap::new();
+        let now = self.view_observed_at;
         for link in links {
             if !seen.insert(link.clone()) {
                 continue;
             }
             if link.host != self.agent_host_name {
-                let lane = self
-                    .remote_agent_panel_entries
-                    .iter()
-                    .find(|entry| {
-                        entry.agent_ref.host == link.host && entry.agent_ref.agent == link.pane_id
-                    })
+                let remote = self.remote_agent_panel_entries.iter().find(|entry| {
+                    entry.agent_ref.host == link.host && entry.agent_ref.agent == link.pane_id
+                });
+                let lane = remote
                     .map(|entry| lane_from_state(entry.entry.state))
                     .unwrap_or(Lane::Working);
+                if let Some(at) = remote.and_then(|entry| entry.entry.activity_at) {
+                    activity_changes.insert(link.clone(), at);
+                }
                 lane_changes.push((link.clone(), lane));
                 if !view.agent_lines.contains_key(&link) {
                     line_changes.push((link, (u64::MAX, "remote terminal".into())));
@@ -482,14 +507,21 @@ impl crate::app::state::AppState {
                     let pane = workspace.pane_state(pane_id)?;
                     let terminal = self.terminals.get(&pane.attached_terminal_id)?;
                     let lane = lane_from_state(pane.agent_projection(terminal).state);
-                    Some((pane.attached_terminal_id.clone(), lane))
+                    Some((
+                        pane.attached_terminal_id.clone(),
+                        lane,
+                        now.checked_sub(pane.activity.inactive_for(now)),
+                    ))
                 });
-            let Some((terminal_id, lane)) = evidence else {
+            let Some((terminal_id, lane, activity_at)) = evidence else {
                 lane_changes.push((link.clone(), Lane::Working));
                 line_changes.push((link, (u64::MAX, "terminal unavailable".into())));
                 continue;
             };
             lane_changes.push((link.clone(), lane));
+            if let Some(at) = activity_at {
+                activity_changes.insert(link.clone(), at);
+            }
             let Some(runtime) = runtimes.get(&terminal_id) else {
                 continue;
             };
@@ -517,6 +549,7 @@ impl crate::app::state::AppState {
         }
         if let Some(view) = self.board_view.as_mut() {
             view.last_agent_refresh_unix_s = observed_unix_s;
+            view.agent_activity = activity_changes;
             for (id, lane) in lane_changes {
                 view.agent_lanes.insert(id, lane);
             }

@@ -466,8 +466,9 @@ impl App {
     }
 
     fn page_board_goals(&mut self, delta: i8) {
-        let page_size = crate::ui::board::goal_page_size(self.state.view.terminal_area.width);
         if let Some(view) = self.state.board_view.as_mut() {
+            let page_size =
+                crate::ui::board::goal_page_capacity(self.state.view.terminal_area, view);
             let max_offset = view.board.goals.len().saturating_sub(page_size);
             view.goal_offset = if delta < 0 {
                 view.goal_offset.saturating_sub(page_size)

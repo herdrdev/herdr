@@ -1,13 +1,14 @@
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
 
 use crate::{
     app::state::AppState,
-    board::{BoardView, Column, Dialog, EditField, Lane},
+    board::{BoardView, Column, Dialog, EditField, GoalScope, Lane},
 };
 
 pub(crate) fn render(app: &AppState, area: Rect, frame: &mut Frame) {
@@ -19,46 +20,8 @@ pub(crate) fn render(app: &AppState, area: Rect, frame: &mut Frame) {
         return;
     }
     let palette = &app.palette;
-    let header = Rect::new(area.x, area.y, area.width, 1);
-    frame.render_widget(
-        Paragraph::new(format!("  {}", view.note.header())).style(
-            Style::default()
-                .fg(palette.text)
-                .add_modifier(Modifier::BOLD),
-        ),
-        header,
-    );
-    if area.width > 12 {
-        frame.render_widget(
-            Paragraph::new("+ goal").style(Style::default().fg(palette.accent)),
-            Rect::new(area.right() - 8, area.y, 7, 1),
-        );
-    }
-    let goal_page_size = goal_page_size(area.width);
-    if view.board.goals.len() > goal_page_size && area.width > 26 {
-        let first = view.goal_offset + 1;
-        let last = (view.goal_offset + goal_page_size).min(view.board.goals.len());
-        frame.render_widget(
-            Paragraph::new(format!("{first}–{last}/{}", view.board.goals.len()))
-                .style(Style::default().fg(palette.subtext0)),
-            Rect::new(area.right().saturating_sub(25), area.y, 11, 1),
-        );
-        frame.render_widget(
-            Paragraph::new("← →"),
-            Rect::new(area.right() - 13, area.y, 3, 1),
-        );
-    }
-    let goals_height = goals_height(view, area.height);
-    let goals_area = Rect::new(area.x, area.y + 1, area.width, goals_height);
-    render_goals(app, view, goals_area, frame);
-    let board_area = Rect::new(
-        area.x,
-        goals_area.bottom(),
-        area.width,
-        area.bottom()
-            .saturating_sub(goals_area.bottom())
-            .saturating_sub(1),
-    );
+    render_goals(app, view, Rect::new(area.x, area.y, area.width, 1), frame);
+    let board_area = board_rect(area, view);
     render_columns(app, view, board_area, frame);
     let footer = Rect::new(area.x, area.bottom() - 1, area.width, 1);
     let hint = if view.dialog.is_some() || view.editor.is_some() {
@@ -95,120 +58,216 @@ pub(crate) fn render(app: &AppState, area: Rect, frame: &mut Frame) {
     }
 }
 
+fn header_date(view: &BoardView) -> String {
+    let (_, week, _) = view.note.today.to_iso_week_date();
+    let date = view.note.header();
+    format!("W{week:02} · {}", date.split(" · ").next().unwrap_or(""))
+}
+
+fn goal_area(area: Rect, view: &BoardView) -> Rect {
+    let start = super::text::display_width_u16(&header_date(view))
+        .saturating_add(4)
+        .min(area.width);
+    Rect::new(
+        area.x + start,
+        area.y,
+        area.width.saturating_sub(start + 8),
+        1,
+    )
+}
+
+fn new_goal_rect(area: Rect) -> Rect {
+    Rect::new(
+        area.right().saturating_sub(2).max(area.x),
+        area.y,
+        area.width.min(2),
+        1,
+    )
+}
+
 fn render_goals(app: &AppState, view: &BoardView, area: Rect, frame: &mut Frame) {
-    if view.board.goals.is_empty() {
-        frame.render_widget(Paragraph::new("  No goals yet · + goal"), area);
-        return;
+    frame.render_widget(
+        Paragraph::new(format!("  {}", header_date(view))).style(
+            Style::default()
+                .fg(app.palette.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        area,
+    );
+    frame.render_widget(
+        Paragraph::new("＋").style(Style::default().fg(app.palette.accent)),
+        new_goal_rect(area),
+    );
+    let goals = goal_area(area, view);
+    let count = goal_page_size(goals.width);
+    if view.board.goals.len() > count {
+        frame.render_widget(
+            Paragraph::new("← →"),
+            Rect::new(area.right().saturating_sub(7), area.y, 3, 1),
+        );
     }
-    let cols = view.board.goals.len().clamp(1, goal_page_size(area.width)) as u16;
-    let width = area.width / cols;
+    let width = goals.width / count as u16;
     for (i, goal) in view
         .board
         .goals
         .iter()
         .skip(view.goal_offset)
-        .take(cols as usize)
+        .take(count)
         .enumerate()
     {
-        let x = area.x + width * i as u16;
-        let w = if i + 1 == cols as usize {
-            area.right() - x
-        } else {
-            width
-        };
-        let rect = Rect::new(x, area.y, w, area.height);
-        let linked: Vec<_> = view
+        let total = view
             .board
             .cards
             .iter()
             .filter(|card| card.goal_id.as_deref() == Some(&goal.id))
-            .collect();
-        let done = linked
-            .iter()
-            .filter(|card| card.column == Column::Done)
             .count();
-        let icon = if view.board.goal_done(&goal.id) {
-            "✓"
+        let done = view
+            .board
+            .cards
+            .iter()
+            .filter(|card| card.goal_id.as_deref() == Some(&goal.id) && card.column == Column::Done)
+            .count();
+        let bars = total.clamp(1, 8);
+        let filled = (done * bars).checked_div(total).unwrap_or(0);
+        let progress = format!(
+            " {}{} {done}/{total}",
+            "▰".repeat(filled),
+            "▱".repeat(bars - filled)
+        );
+        let scope = if goal.scope == GoalScope::Week {
+            String::new()
         } else {
-            "○"
+            format!(" {}", goal.scope.label())
         };
-        let mut lines = vec![
-            format!("{icon} {}", goal.title),
-            format!("{} · {done}/{}", goal.scope.label(), linked.len()),
-        ];
-        let visible = usize::from(area.height.saturating_sub(4));
-        let shown = if linked.len() > visible {
-            visible.saturating_sub(1)
-        } else {
-            visible
-        };
-        for card in linked.iter().take(shown) {
-            lines.push(format!(
-                "  {} {}",
-                if card.column == Column::Done {
-                    "✓"
-                } else {
-                    "·"
-                },
-                card.title
-            ));
-        }
-        if linked.len() > shown {
-            lines.push(format!("  +{} more", linked.len() - shown));
-        }
+        let reserved = super::text::display_width_u16(&progress)
+            .saturating_add(super::text::display_width_u16(&scope))
+            .saturating_add(4);
+        let title =
+            super::text::truncate_end(&goal.title, usize::from(width.saturating_sub(reserved)));
         frame.render_widget(
-            Paragraph::new(lines.join("\n"))
-                .block(Block::default().borders(Borders::ALL))
-                .style(Style::default().fg(app.palette.text)),
-            rect,
+            Paragraph::new(Line::from(vec![
+                Span::raw(format!("◎ {title}")),
+                Span::raw(progress),
+                Span::styled(scope, Style::default().fg(app.palette.subtext0)),
+            ]))
+            .style(Style::default().fg(app.palette.text)),
+            Rect::new(goals.x + i as u16 * width, goals.y, width, 1),
         );
     }
 }
 
-pub(crate) fn goal_page_size(width: u16) -> usize {
-    usize::from((width / 22).clamp(1, 4))
+pub(crate) fn goal_page_capacity(area: Rect, view: &BoardView) -> usize {
+    goal_page_size(goal_area(area, view).width)
 }
 
-fn goals_height(view: &BoardView, screen_height: u16) -> u16 {
-    if view.board.goals.is_empty() {
-        return 2;
-    }
-    8.min((screen_height / 3).max(4))
+pub(crate) fn goal_page_size(width: u16) -> usize {
+    usize::from((width / 32).clamp(1, 4))
 }
 
 pub(crate) fn column_rects(area: Rect, selected: Column) -> Vec<(Column, Rect)> {
     if area.width == 0 {
         return Vec::new();
     }
-    let page_size = if area.width >= 100 { 4 } else { 2 };
-    let start = if page_size == 4 || matches!(selected, Column::Draft | Column::Todo) {
-        0
+    let columns: &[Column] = if area.width >= 100 {
+        &Column::ALL
+    } else if matches!(selected, Column::Draft | Column::Todo) {
+        &Column::ALL[..2]
     } else {
-        2
+        &Column::ALL[2..]
     };
-    (0..page_size)
-        .map(|slot| {
-            let index = start + slot;
-            let width = area.width / page_size as u16;
-            let x = area.x + width * slot as u16;
-            let w = if slot == page_size - 1 {
+    let collapsed = selected != Column::Done && columns.contains(&Column::Done);
+    let strip = if collapsed { 7.min(area.width) } else { 0 };
+    let available = area.width - strip;
+    let weight = |column| match column {
+        Column::Draft => 2,
+        Column::Todo => 3,
+        Column::InProgress => 5,
+        Column::Done => 3,
+    };
+    let total: u16 = columns
+        .iter()
+        .filter(|c| !(collapsed && **c == Column::Done))
+        .map(|c| weight(*c))
+        .sum();
+    let mut x = area.x;
+    columns
+        .iter()
+        .enumerate()
+        .map(|(i, &column)| {
+            let width = if collapsed && column == Column::InProgress {
+                area.right() - x - strip
+            } else if i + 1 == columns.len() {
                 area.right() - x
+            } else if collapsed && column == Column::Done {
+                strip
             } else {
-                width
+                (u32::from(available) * u32::from(weight(column)) / u32::from(total)) as u16
             };
-            (Column::ALL[index], Rect::new(x, area.y, w, area.height))
+            let rect = Rect::new(x, area.y, width, area.height);
+            x += width;
+            (column, rect)
         })
         .collect()
 }
 
-pub(crate) fn board_rect(area: Rect, view: &BoardView) -> Rect {
-    let goals_height = goals_height(view, area.height);
+pub(crate) fn board_rect(area: Rect, _view: &BoardView) -> Rect {
     Rect::new(
         area.x,
-        area.y.saturating_add(1 + goals_height),
+        area.y.saturating_add(1),
         area.width,
-        area.height.saturating_sub(2 + goals_height),
+        area.height.saturating_sub(2),
     )
+}
+
+fn ordered_cards<'a>(
+    app: &AppState,
+    view: &'a BoardView,
+    column: Column,
+) -> Vec<&'a crate::board::Card> {
+    let mut cards: Vec<_> = view
+        .board
+        .cards
+        .iter()
+        .filter(|card| card.column == column)
+        .collect();
+    if column == Column::InProgress {
+        cards.sort_by_key(|card| app.board_lane(card));
+    }
+    cards
+}
+
+fn card_agent_metadata(
+    app: &AppState,
+    view: &BoardView,
+    card: &crate::board::Card,
+    row: Rect,
+) -> Option<(usize, Rect, String)> {
+    if card.column != Column::InProgress {
+        return None;
+    }
+    let (index, agent) = card
+        .agents
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, agent)| app.board_agent(agent).lane)?;
+    let age = view
+        .agent_activity
+        .get(agent)
+        .map(|at| crate::activity_age::coarse_label(Some(*at), app.view_observed_at));
+    let label = match age {
+        Some(age) => format!("{} · {age}", agent.host),
+        None => agent.host.clone(),
+    };
+    let width = super::text::display_width_u16(&label);
+    // Metadata yields first on narrow screens, preserving a readable title.
+    if width == 0 || row.width <= width.saturating_add(12) {
+        return None;
+    }
+    Some((
+        index,
+        Rect::new(row.right() - width, row.y, width, 1),
+        label,
+    ))
 }
 
 fn render_columns(app: &AppState, view: &BoardView, area: Rect, frame: &mut Frame) {
@@ -228,7 +287,12 @@ fn render_columns(app: &AppState, view: &BoardView, area: Rect, frame: &mut Fram
             .iter()
             .filter(|card| card.column == column)
             .count();
-        let title = format!(" {} · {count} ", column.label());
+        let collapsed = column == Column::Done && !selected;
+        let title = if collapsed {
+            format!(" ✓ {count} ")
+        } else {
+            format!(" {} {count} ", column.label())
+        };
         let block = Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -237,118 +301,73 @@ fn render_columns(app: &AppState, view: &BoardView, area: Rect, frame: &mut Fram
         frame.render_widget(block, rect);
         if column == Column::Draft && rect.width >= 8 {
             frame.render_widget(
-                Paragraph::new("+"),
-                Rect::new(rect.right() - 3, rect.y, 1, 1),
+                Paragraph::new("＋"),
+                Rect::new(rect.right() - 3, rect.y, 2, 1),
             );
         }
-        let mut cards: Vec<_> = view
-            .board
-            .cards
-            .iter()
-            .filter(|card| card.column == column)
-            .collect();
-        if column == Column::InProgress {
-            cards.sort_by_key(|card| app.board_lane(card));
+        if collapsed {
+            continue;
         }
-        let mut y = inner.y;
-        let lanes = [Lane::Blocked, Lane::Working, Lane::DoneAwaitingYou];
-        let mut lane_index = 0;
         let start = if selected { view.row } else { 0 };
-        for (index, card) in cards.into_iter().enumerate().skip(start) {
-            if y >= inner.bottom() {
-                break;
-            }
-            if column == Column::InProgress {
-                let lane = app.board_lane(card);
-                while lane_index < lanes.len() && lanes[lane_index] <= lane && y < inner.bottom() {
-                    let current = lanes[lane_index];
-                    let marker = match current {
-                        Lane::Blocked => "●",
-                        Lane::Working => "◐",
-                        Lane::DoneAwaitingYou => "✓",
-                    };
-                    frame.render_widget(
-                        Paragraph::new(format!(" {marker} {}", current.label()))
-                            .style(Style::default().fg(app.palette.subtext0)),
-                        Rect::new(inner.x, y, inner.width, 1),
-                    );
-                    y += 1;
-                    lane_index += 1;
-                }
-            }
-            if y >= inner.bottom() {
-                break;
-            }
-            let height = u16::try_from(card.agents.len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(4)
-                .min(inner.bottom() - y);
-            let card_rect = Rect::new(inner.x, y, inner.width, height);
-            let selected_card = selected && view.row == index;
-            let text_width = usize::from(card_rect.width.saturating_sub(2));
-            let mut lines = vec![
-                format!(
-                    "{} {}",
-                    if selected_card { "▸" } else { " " },
-                    super::text::truncate_end(&card.title, text_width.saturating_sub(2))
-                ),
-                format!(
-                    " {}{}",
-                    card.area.label(),
-                    if card.agents.is_empty() && column != Column::Draft {
-                        " · ▶ spawn"
-                    } else {
-                        ""
-                    }
-                ),
-            ];
-            for agent in &card.agents {
-                let info = app.board_agent(agent);
-                let dot = match info.lane {
-                    Lane::Blocked => "●",
-                    Lane::Working => "◐",
-                    Lane::DoneAwaitingYou => "✓",
-                };
-                lines.push(super::text::truncate_end(
-                    &format!(" {dot} {} {}", info.host, info.last_line),
-                    text_width,
-                ));
-            }
-            frame.render_widget(
-                Paragraph::new(lines.join("\n"))
-                    .block(Block::default().borders(Borders::ALL))
-                    .style(Style::default().fg(if selected_card {
-                        app.palette.accent
-                    } else {
-                        app.palette.text
-                    })),
-                card_rect,
+        for (offset, card) in ordered_cards(app, view, column)
+            .into_iter()
+            .skip(start)
+            .take(usize::from(inner.height))
+            .enumerate()
+        {
+            let selected_card = selected && offset == 0;
+            let lane = app.board_lane(card);
+            let prefix = if column == Column::InProgress {
+                format!("{} ", lane.glyph())
+            } else {
+                String::new()
+            };
+            let suffix = if card.goal_id.is_some() { " ◎" } else { "" };
+            let y = inner.y + offset as u16;
+            let metadata =
+                card_agent_metadata(app, view, card, Rect::new(inner.x, y, inner.width, 1));
+            let text_width = metadata
+                .as_ref()
+                .map(|(_, rect, _)| rect.x.saturating_sub(inner.x + 2))
+                .unwrap_or(inner.width);
+            let icon = card.area.icon(app.nerd_font);
+            let reserved = super::text::display_width_u16(&format!(" {prefix}{icon} {suffix}"));
+            let title = super::text::truncate_end(
+                &card.title,
+                usize::from(text_width.saturating_sub(reserved)),
             );
-            y += height;
-        }
-        if column == Column::InProgress {
-            while lane_index < lanes.len() && y < inner.bottom() {
-                let lane = lanes[lane_index];
-                let marker = match lane {
-                    Lane::Blocked => "●",
-                    Lane::Working => "◐",
-                    Lane::DoneAwaitingYou => "✓",
-                };
+            let lane_color = match lane {
+                Lane::Blocked => app.palette.red,
+                Lane::Working => app.palette.green,
+                Lane::DoneAwaitingYou => app.palette.accent,
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(prefix, Style::default().fg(lane_color)),
+                    Span::raw(format!("{icon} {title}{suffix}")),
+                ]))
+                .style(
+                    Style::default()
+                        .fg(if selected_card {
+                            app.palette.accent
+                        } else {
+                            app.palette.text
+                        })
+                        .add_modifier(if selected_card {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
+                ),
+                Rect::new(inner.x, y, text_width, 1),
+            );
+            if let Some((_, rect, label)) = metadata {
                 frame.render_widget(
-                    Paragraph::new(format!(" {marker} {}", lane.label()))
-                        .style(Style::default().fg(app.palette.subtext0)),
-                    Rect::new(inner.x, y, inner.width, 1),
+                    Paragraph::new(label).style(Style::default().fg(app.palette.subtext0)),
+                    rect,
                 );
-                y += 1;
-                lane_index += 1;
             }
-        }
-        if column == Column::Draft && count == 0 && inner.height > 1 {
-            frame.render_widget(
-                Paragraph::new(" + new to-do\n agents never pick up Draft")
-                    .style(Style::default().fg(app.palette.subtext0)),
-                inner,
-            );
         }
     }
 }
@@ -470,14 +489,14 @@ pub(crate) fn hit_at(app: &AppState, area: Rect, x: u16, y: u16) -> Option<Board
         }
         return None;
     }
-    if y == area.y && x >= area.right().saturating_sub(8) {
+    if contains(new_goal_rect(area), x, y) {
         return Some(BoardHit::NewGoal);
     }
-    if y == area.y && area.width > 26 && view.board.goals.len() > goal_page_size(area.width) {
-        if x == area.right().saturating_sub(13) {
+    if y == area.y && view.board.goals.len() > goal_page_capacity(area, view) {
+        if x == area.right().saturating_sub(7) {
             return Some(BoardHit::GoalPage(-1));
         }
-        if x == area.right().saturating_sub(11) {
+        if x == area.right().saturating_sub(5) {
             return Some(BoardHit::GoalPage(1));
         }
     }
@@ -502,46 +521,25 @@ pub(crate) fn hit_at(app: &AppState, area: Rect, x: u16, y: u16) -> Option<Board
             rect.width.saturating_sub(2),
             rect.height.saturating_sub(2),
         );
-        let mut cards: Vec<_> = view
-            .board
-            .cards
-            .iter()
-            .filter(|card| card.column == column)
-            .collect();
-        if column == Column::InProgress {
-            cards.sort_by_key(|card| app.board_lane(card));
+        if column == Column::Done && view.column != Column::Done {
+            return Some(BoardHit::Column(Column::Done));
         }
         let start = if column == view.column { view.row } else { 0 };
-        let mut top = inner.y;
-        let lanes = [Lane::Blocked, Lane::Working, Lane::DoneAwaitingYou];
-        let mut lane_index = 0;
-        for card in cards.into_iter().skip(start) {
-            if column == Column::InProgress {
-                let lane = app.board_lane(card);
-                while lane_index < lanes.len() && lanes[lane_index] <= lane {
-                    top += 1;
-                    lane_index += 1;
-                }
-            }
-            if top >= inner.bottom() {
-                break;
-            }
-            let height = u16::try_from(card.agents.len())
-                .unwrap_or(u16::MAX)
-                .saturating_add(4)
-                .min(inner.bottom().saturating_sub(top));
-            if y >= top && y < top + height {
-                let offset = y - top;
+        if contains(inner, x, y) {
+            if let Some(card) =
+                ordered_cards(app, view, column).get(start + usize::from(y - inner.y))
+            {
                 return Some(BoardHit::Card {
                     id: card.id.clone(),
-                    spawn: offset == 2 && card.agents.is_empty() && column != Column::Draft,
-                    agent: (offset >= 3 && usize::from(offset - 3) < card.agents.len())
-                        .then_some(usize::from(offset.saturating_sub(3))),
+                    spawn: false,
+                    agent: card_agent_metadata(
+                        app,
+                        view,
+                        card,
+                        Rect::new(inner.x, y, inner.width, 1),
+                    )
+                    .and_then(|(index, rect, _)| contains(rect, x, y).then_some(index)),
                 });
-            }
-            top += height;
-            if top >= inner.bottom() {
-                break;
             }
         }
         return if column == Column::Draft {
@@ -551,6 +549,96 @@ pub(crate) fn hit_at(app: &AppState, area: Rect, x: u16, y: u16) -> Option<Board
         };
     }
     None
+}
+
+fn contains(rect: Rect, x: u16, y: u16) -> bool {
+    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
+}
+
+pub(crate) fn hovered_control(
+    app: &AppState,
+    x: u16,
+    y: u16,
+) -> Option<crate::app::state::ControlId> {
+    use crate::app::state::ControlId;
+    let view = app.board_view.as_ref()?;
+    if view.dialog.is_some() || view.detail.is_some() || view.editor.is_some() {
+        return None;
+    }
+    match hit_at(app, app.view.terminal_area, x, y)? {
+        BoardHit::NewGoal => Some(ControlId::FocusBoardNewGoal),
+        BoardHit::NewCard => Some(ControlId::FocusBoardNewCard),
+        BoardHit::Column(Column::Done) => Some(ControlId::FocusBoardDone),
+        BoardHit::Card { id, .. } => view
+            .board
+            .cards
+            .iter()
+            .position(|card| card.id == id)
+            .map(ControlId::FocusBoardCard),
+        _ => None,
+    }
+}
+
+pub(crate) fn tooltip_target(
+    app: &AppState,
+    control: crate::app::state::ControlId,
+) -> Option<(Rect, String)> {
+    use crate::app::state::ControlId;
+    let view = app.board_view.as_ref()?;
+    if view.dialog.is_some() || view.detail.is_some() || view.editor.is_some() {
+        return None;
+    }
+    let area = app.view.terminal_area;
+    let columns = column_rects(board_rect(area, view), view.column);
+    match control {
+        ControlId::FocusBoardNewGoal => Some((new_goal_rect(area), "Add a goal".into())),
+        ControlId::FocusBoardNewCard => {
+            let (_, rect) = columns
+                .iter()
+                .find(|(column, _)| *column == Column::Draft)?;
+            Some((
+                Rect::new(rect.right().saturating_sub(3), rect.y, 2, 1),
+                "Add a to-do · agents never pick up Draft".into(),
+            ))
+        }
+        ControlId::FocusBoardDone => {
+            let (_, rect) = columns.iter().find(|(column, _)| *column == Column::Done)?;
+            Some((*rect, "Done · select to expand".into()))
+        }
+        ControlId::FocusBoardCard(index) => {
+            let card = view.board.cards.get(index)?;
+            let (_, rect) = columns.iter().find(|(column, _)| *column == card.column)?;
+            if card.column == Column::Done && view.column != Column::Done {
+                return None;
+            }
+            let position = ordered_cards(app, view, card.column)
+                .iter()
+                .position(|c| c.id == card.id)?;
+            let offset = position.checked_sub(if view.column == card.column {
+                view.row
+            } else {
+                0
+            })?;
+            if offset >= usize::from(rect.height.saturating_sub(2)) {
+                return None;
+            }
+            let lane = if card.column == Column::InProgress {
+                format!(" · {}", app.board_lane(card).label())
+            } else {
+                String::new()
+            };
+            Some((
+                Rect::new(
+                    rect.x + 1,
+                    rect.y + 1 + offset as u16,
+                    rect.width.saturating_sub(2),
+                    1,
+                ),
+                format!("{} · {}{lane}", card.area.label(), card.title),
+            ))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn side_rect(area: Rect) -> Rect {
@@ -778,6 +866,240 @@ mod tests {
     use crate::board::{Area, Board, Card, Goal, GoalScope, WeekNote};
     use ratatui::{backend::TestBackend, Terminal};
 
+    fn sample_card(id: &str, column: Column) -> Card {
+        Card {
+            id: id.into(),
+            title: format!("Task {id}"),
+            description: String::new(),
+            area: Area::Personal,
+            column,
+            goal_id: None,
+            agent_summary: String::new(),
+            updates: Vec::new(),
+            agents: Vec::new(),
+        }
+    }
+
+    fn sample_app(cards: Vec<Card>) -> AppState {
+        let date = time::Date::from_calendar_date(2026, time::Month::October, 5).expect("date");
+        let mut app = AppState::test_new();
+        app.board_view = Some(BoardView::test_new(
+            WeekNote::for_date(std::path::Path::new("/vault"), date).expect("note"),
+            Board {
+                cards,
+                goals: Vec::new(),
+            },
+        ));
+        app.view.terminal_area = Rect::new(10, 3, 120, 25);
+        app
+    }
+
+    fn rendered_text(app: &AppState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).expect("terminal");
+        terminal
+            .draw(|frame| render(app, frame.area(), frame))
+            .expect("render");
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .chunks(120)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn column_widths_prioritize_progress_and_expand_done_without_gaps() {
+        for width in [30, 60, 100, 120, 240] {
+            let area = Rect::new(7, 4, width, 20);
+            for selected in Column::ALL {
+                let columns = column_rects(area, selected);
+                assert_eq!(columns[0].1.x, area.x);
+                assert_eq!(columns.last().expect("column").1.right(), area.right());
+                for pair in columns.windows(2) {
+                    assert_eq!(pair[0].1.right(), pair[1].1.x);
+                }
+                if width >= 100 {
+                    assert!(columns[0].1.width < columns[1].1.width);
+                    assert!(columns[2].1.width > columns[1].1.width);
+                    assert_eq!(columns[3].1.width == 7, selected != Column::Done);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn done_strip_click_selects_column_and_reveals_cards() {
+        let mut app = sample_app(vec![sample_card("finished", Column::Done)]);
+        let area = app.view.terminal_area;
+        let view = app.board_view.as_ref().expect("view");
+        let strip = column_rects(board_rect(area, view), view.column)[3].1;
+        assert_eq!(
+            hit_at(&app, area, strip.x + 2, strip.y + 1),
+            Some(BoardHit::Column(Column::Done))
+        );
+        assert!(!rendered_text(&app).contains("Task finished"));
+        app.board_view.as_mut().expect("view").column = Column::Done;
+        assert!(rendered_text(&app).contains("Task finished"));
+        let expanded = column_rects(
+            board_rect(area, app.board_view.as_ref().expect("view")),
+            Column::Done,
+        )[3]
+        .1;
+        assert!(expanded.width > strip.width);
+        assert!(
+            matches!(hit_at(&app, area, expanded.x + 2, expanded.y + 1), Some(BoardHit::Card { id, .. }) if id == "finished")
+        );
+    }
+
+    #[test]
+    fn single_rows_sort_by_lane_and_mouse_matches_keyboard_order() {
+        let mut cards = Vec::new();
+        for id in ["done", "working", "blocked", "blocked2"] {
+            let mut card = sample_card(id, Column::InProgress);
+            card.agents.push(crate::board::AgentLink {
+                host: "ub2".into(),
+                pane_id: id.into(),
+            });
+            cards.push(card);
+        }
+        let mut app = sample_app(cards);
+        let view = app.board_view.as_mut().expect("view");
+        view.column = Column::InProgress;
+        for card in &view.board.cards {
+            let lane = match card.id.as_str() {
+                "done" => Lane::DoneAwaitingYou,
+                "working" => Lane::Working,
+                _ => Lane::Blocked,
+            };
+            view.agent_lanes.insert(card.agents[0].clone(), lane);
+            view.agent_activity.insert(
+                card.agents[0].clone(),
+                app.view_observed_at - std::time::Duration::from_secs(1200),
+            );
+        }
+        let area = app.view.terminal_area;
+        let view = app.board_view.as_ref().expect("view");
+        let progress = column_rects(board_rect(area, view), view.column)[2].1;
+        let ids: Vec<_> = view
+            .visible_cards(&app)
+            .iter()
+            .map(|c| c.id.as_str())
+            .collect();
+        assert_eq!(ids, ["blocked", "blocked2", "working", "done"]);
+        for (row, id) in ids.iter().enumerate() {
+            assert!(
+                matches!(hit_at(&app, area, progress.x + 2, progress.y + 1 + row as u16), Some(BoardHit::Card { id: hit, .. }) if hit == *id)
+            );
+        }
+        let text = rendered_text(&app);
+        assert!(text.contains("ub2 · 20m"));
+        assert!(!text.contains("awaiting you"));
+        assert_eq!(
+            app.next_agent_activity_age_change(app.view_observed_at),
+            Some(app.view_observed_at + std::time::Duration::from_secs(60))
+        );
+        app.board_view.as_mut().expect("view").row = 2;
+        assert!(
+            matches!(hit_at(&app, area, progress.x + 2, progress.y + 1), Some(BoardHit::Card { id, .. }) if id == "working")
+        );
+    }
+
+    #[test]
+    fn agent_metadata_hit_uses_the_displayed_worst_lane_link() {
+        let mut card = sample_card("linked", Column::InProgress);
+        card.agents = vec![
+            crate::board::AgentLink {
+                host: "ub1".into(),
+                pane_id: "working".into(),
+            },
+            crate::board::AgentLink {
+                host: "ub2".into(),
+                pane_id: "blocked".into(),
+            },
+        ];
+        let mut app = sample_app(vec![card]);
+        let view = app.board_view.as_mut().expect("view");
+        view.agent_lanes
+            .insert(view.board.cards[0].agents[1].clone(), Lane::Blocked);
+        let area = app.view.terminal_area;
+        let view = app.board_view.as_ref().expect("view");
+        let progress = column_rects(board_rect(area, view), view.column)[2].1;
+        assert!(rendered_text(&app).contains("ub2"));
+        assert!(matches!(
+            hit_at(&app, area, progress.right() - 2, progress.y + 1),
+            Some(BoardHit::Card { agent: Some(1), .. })
+        ));
+        assert!(matches!(
+            hit_at(&app, area, progress.x + 2, progress.y + 1),
+            Some(BoardHit::Card { agent: None, .. })
+        ));
+        let narrow = Rect::new(0, 0, 14, 1);
+        assert!(card_agent_metadata(&app, view, &view.board.cards[0], narrow).is_none());
+    }
+
+    #[test]
+    fn icons_fallback_goal_scope_and_add_tooltips() {
+        let mut card = sample_card("tax", Column::Todo);
+        card.goal_id = Some("taxes".into());
+        let mut app = sample_app(vec![card]);
+        let view = app.board_view.as_mut().expect("view");
+        view.board.goals = vec![Goal {
+            id: "taxes".into(),
+            title: "Taxes".into(),
+            scope: GoalScope::Today,
+        }];
+        app.nerd_font = false;
+        let text = rendered_text(&app);
+        assert!(text.contains("P Task tax ◎"));
+        assert!(text.contains("◎ Taxes ▱ 0/1 today"));
+        assert_eq!(Area::Scalable.icon(false), "S");
+        assert_eq!(Area::Harness.icon(false), "H");
+        let area = app.view.terminal_area;
+        let view = app.board_view.as_ref().expect("view");
+        let draft = column_rects(board_rect(area, view), Column::Draft)[0].1;
+        assert_eq!(
+            hit_at(&app, area, draft.right() - 2, draft.y),
+            Some(BoardHit::NewCard)
+        );
+        assert_eq!(
+            hit_at(&app, area, area.right() - 2, area.y),
+            Some(BoardHit::NewGoal)
+        );
+        let control = hovered_control(&app, draft.right() - 2, draft.y).expect("control");
+        assert!(tooltip_target(&app, control)
+            .expect("tooltip")
+            .1
+            .contains("agents never pick up Draft"));
+        app.board_view.as_mut().expect("view").board.goals[0].scope = GoalScope::Week;
+        assert!(!rendered_text(&app).contains("0/1 week"));
+    }
+
+    #[test]
+    fn goal_paging_hits_share_header_capacity() {
+        let mut app = sample_app(Vec::new());
+        let view = app.board_view.as_mut().expect("view");
+        view.board.goals = (0..8)
+            .map(|i| Goal {
+                id: i.to_string(),
+                title: format!("Goal {i}"),
+                scope: GoalScope::Week,
+            })
+            .collect();
+        let area = app.view.terminal_area;
+        assert!(goal_page_capacity(area, view) < view.board.goals.len());
+        assert_eq!(
+            hit_at(&app, area, area.right() - 7, area.y),
+            Some(BoardHit::GoalPage(-1))
+        );
+        assert_eq!(
+            hit_at(&app, area, area.right() - 5, area.y),
+            Some(BoardHit::GoalPage(1))
+        );
+        assert_eq!(hit_at(&app, area, area.x - 1, area.y), None);
+    }
+
     #[test]
     fn wide_board_renders_goal_strip_columns_and_working_lane() {
         let date = time::Date::from_calendar_date(2026, time::Month::September, 28).expect("date");
@@ -829,15 +1151,15 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         for required in [
-            "Mo 28.09 · W40 28.09–04.10",
+            "W40 · Mo 28.09",
             "Board v1 shipped",
             "Draft",
             "To Do",
             "In Progress",
-            "Done",
-            "working",
+            "✓ 0",
+            "◐",
             "goals sync",
-            "ub1 last words",
+            "ub1",
         ] {
             assert!(text.contains(required), "missing {required}: {text}");
         }
@@ -860,8 +1182,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![Column::InProgress, Column::Done]
         );
-        assert_eq!(goal_page_size(120), 4);
-        assert_eq!(goal_page_size(60), 2);
+        assert_eq!(goal_page_size(120), 3);
+        assert_eq!(goal_page_size(60), 1);
     }
 
     #[test]
@@ -893,8 +1215,8 @@ mod tests {
         let board = board_rect(area, app.board_view.as_ref().expect("view"));
         let todo = column_rects(board, Column::Draft)[1].1;
         assert!(matches!(
-            hit_at(&app, area, todo.x + 2, todo.y + 4),
-            Some(BoardHit::Card { agent: Some(0), .. })
+            hit_at(&app, area, todo.x + 2, todo.y + 1),
+            Some(BoardHit::Card { agent: None, .. })
         ));
         app.board_view.as_mut().expect("view").dialog = Some(Dialog::Card {
             title: String::new(),

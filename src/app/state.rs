@@ -5492,6 +5492,10 @@ pub(crate) enum ControlId {
     SidebarRowHover(u16),
     NotepadUsageRow(usize),
     NotepadUsageToggle,
+    FocusBoardNewCard,
+    FocusBoardNewGoal,
+    FocusBoardDone,
+    FocusBoardCard(usize),
     TicketBoardFilter,
     TicketBoardDone,
     TicketBoardSpawn(usize),
@@ -7500,6 +7504,13 @@ impl AppState {
         sidebar
             .into_iter()
             .chain(notepad)
+            .chain(
+                self.board_view
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|view| view.agent_activity.values())
+                    .filter_map(|at| crate::activity_age::next_coarse_change_at(Some(*at), now)),
+            )
             .chain(crate::ui::work_view::ticket_board_next_age_change(
                 self, now,
             ))

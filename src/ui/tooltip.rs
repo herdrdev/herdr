@@ -113,6 +113,14 @@ fn wrap_tooltip_label(label: &str, max_width: u16) -> Vec<String> {
 }
 
 pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<ControlId> {
+    if app.board_view.is_some()
+        && col >= app.view.terminal_area.x
+        && col < app.view.terminal_area.right()
+        && row >= app.view.terminal_area.y
+        && row < app.view.terminal_area.bottom()
+    {
+        return crate::ui::board::hovered_control(app, col, row);
+    }
     let view = &app.view;
     if let Some(work) = app.work_view.as_ref().filter(|work| {
         work.projection == crate::app::state::WorkProjection::Tickets
@@ -288,6 +296,10 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
 fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> {
     let view = &app.view;
     let target = match control {
+        ControlId::FocusBoardNewCard
+        | ControlId::FocusBoardNewGoal
+        | ControlId::FocusBoardDone
+        | ControlId::FocusBoardCard(_) => return crate::ui::board::tooltip_target(app, control),
         ControlId::ConfigDiagnostic => return None,
         ControlId::TicketBoardFilter => {
             let work = app.work_view.as_ref()?;
