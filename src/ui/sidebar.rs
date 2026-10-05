@@ -269,7 +269,7 @@ fn compact_row_dot(entry: &AgentPanelEntry) -> &'static str {
         return "◌";
     }
     compact_dot_for_state(
-        entry.state,
+        sidebar_entry_display_state(entry),
         entry.seen,
         entry.has_agent,
         entry.state == AgentState::Working && entry_has_gate(entry),
@@ -820,7 +820,15 @@ fn compact_row_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
     if entry.waiting_on_agents {
         return p.yellow;
     }
-    state_label_color(entry.state, entry.seen, p)
+    state_label_color(sidebar_entry_display_state(entry), entry.seen, p)
+}
+
+fn sidebar_entry_display_state(entry: &AgentPanelEntry) -> AgentState {
+    if sidebar_entry_has_working_state(entry) {
+        AgentState::Working
+    } else {
+        entry.state
+    }
 }
 
 fn provider_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
@@ -4649,7 +4657,10 @@ fn append_legacy_space_rows(
 }
 
 fn sidebar_entry_has_working_state(entry: &AgentPanelEntry) -> bool {
-    entry.has_agent && entry.state == AgentState::Working
+    entry.has_agent
+        && entry_attention_tier(entry) == AttentionTier::None
+        && (entry.state == AgentState::Working
+            || entry.active_subagents.is_some_and(|count| count > 0))
 }
 
 fn append_shelf_space_rows(
@@ -31496,6 +31507,176 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             row,
             SidebarRow::SectionHeader {
                 title: WORKING_SECTION_TITLE,
+                count: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn active_subagents_project_idle_parent_as_working_across_sidebar_renderers() {
+        let mut app = sort_app(&[sort_tab("parent title", "owner/herdr", AgentState::Idle, 1)]);
+        app.sidebar_sections_layout = true;
+        app.nerd_font = false;
+        set_active_subagents(&mut app, 0, Some(1));
+        app.toggle_sidebar_group(WORKING_SECTION_TITLE);
+
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
+                ..
+            }
+        )));
+        let entry = rows
+            .iter()
+            .find_map(|row| match row {
+                SidebarRow::Tab { entry, .. } if entry.working_shelf => Some(entry),
+                _ => None,
+            })
+            .expect("idle parent with working subagent in Working shelf");
+        assert_eq!(entry.state, AgentState::Working);
+        let mut idle_parent = entry.clone();
+        idle_parent.state = AgentState::Idle;
+        assert!(sidebar_entry_has_working_state(&idle_parent));
+        assert_eq!(compact_row_dot(&idle_parent), "●");
+        assert_eq!(
+            compact_row_color(&idle_parent, &app.palette),
+            app.palette.blue
+        );
+        assert_eq!(entry.active_subagents, Some(1));
+
+        for width in [18, 40] {
+            let area = Rect::new(0, 0, width, 24);
+            let mut desktop = Terminal::new(TestBackend::new(width, area.height)).unwrap();
+            desktop
+                .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+                .unwrap();
+            let desktop_text = (0..area.height)
+                .map(|y| row_text(desktop.backend().buffer(), y, width))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                desktop_text.contains("parent"),
+                "desktop width {width}: {desktop_text}"
+            );
+            assert!(
+                desktop_text.contains("pi"),
+                "desktop provider suffix width {width}: {desktop_text}"
+            );
+
+            app.view.mobile_header_rect = Rect::new(0, 0, width, 2);
+            app.view.terminal_area = Rect::new(0, 2, width, 22);
+            let mut mobile = Terminal::new(TestBackend::new(width, area.height)).unwrap();
+            mobile
+                .draw(|frame| {
+                    super::super::mobile::render_mobile_panel(
+                        &app,
+                        &TerminalRuntimeRegistry::new(),
+                        frame,
+                        area,
+                    )
+                })
+                .unwrap();
+            let mobile_text = (0..area.height)
+                .map(|y| row_text(mobile.backend().buffer(), y, width))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                mobile_text.contains("parent"),
+                "mobile width {width}: {mobile_text}"
+            );
+            assert!(
+                mobile_text.contains("pi"),
+                "mobile provider suffix width {width}: {mobile_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn active_subagents_do_not_override_attention_and_zero_count_restores_idle_or_done() {
+        let mut blocked = sort_app(&[sort_tab(
+            "blocked parent",
+            "owner/herdr",
+            AgentState::Blocked,
+            1,
+        )]);
+        blocked.sidebar_sections_layout = true;
+        set_active_subagents(&mut blocked, 0, Some(2));
+        let blocked_entry = sidebar_thread_entries(&blocked).into_iter().next().unwrap();
+        assert!(!sidebar_entry_has_working_state(&blocked_entry));
+        assert_eq!(compact_row_dot(&blocked_entry), "○");
+
+        let mut gated = sort_app(&[sort_tab("gated parent", "owner/herdr", AgentState::Idle, 1)]);
+        gated.sidebar_sections_layout = true;
+        let pane_id = gated.workspaces[0].tabs[0].root_pane;
+        let terminal_id = gated.workspaces[0].tabs[0]
+            .terminal_id(pane_id)
+            .unwrap()
+            .clone();
+        gated
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .apply_closing_block_payload(
+                vec![crate::api::schema::ClosingBlockItem {
+                    blocking: true,
+                    n: 1,
+                    label: "Gate".into(),
+                    text: "Approve this work".into(),
+                    pr: None,
+                    ticket: None,
+                    url: None,
+                    default: None,
+                    default_at: None,
+                }],
+                Vec::new(),
+                Vec::new(),
+            );
+        gated.reconcile_sidebar_presentation();
+        set_active_subagents(&mut gated, 0, Some(2));
+        let gated_entry = sidebar_thread_entries(&gated).into_iter().next().unwrap();
+        assert!(
+            !sidebar_entry_has_working_state(&gated_entry),
+            "closing-block parent should keep attention priority: state={:?}, tier={:?}, open_blockers={}, gates={}, active_subagents={:?}",
+            gated_entry.state,
+            entry_attention_tier(&gated_entry),
+            gated_entry.open_blockers,
+            gated_entry.gate_count,
+            gated_entry.active_subagents
+        );
+        assert!(entry_needs_human_attention(&gated_entry));
+
+        let mut idle = sort_app(&[sort_tab("idle parent", "owner/herdr", AgentState::Idle, 1)]);
+        idle.sidebar_sections_layout = true;
+        set_active_subagents(&mut idle, 0, Some(1));
+        set_active_subagents(&mut idle, 0, Some(0));
+        assert_eq!(sidebar_thread_entries(&idle)[0].state, AgentState::Idle);
+        assert!(!sidebar_rows(&idle)
+            .iter()
+            .any(|row| matches!(row, SidebarRow::Tab { entry, .. } if entry.working_shelf)));
+
+        let mut done = sort_app(&[sort_tab("done parent", "owner/herdr", AgentState::Idle, 1)]);
+        done.sidebar_sections_layout = true;
+        let pane_id = done.workspaces[0].tabs[0].root_pane;
+        let pane = done.workspaces[0].tabs[0].panes.get_mut(&pane_id).unwrap();
+        pane.seen = false;
+        let done_since = std::time::Instant::now();
+        pane.done_since = Some(done_since);
+        done.hide_done_after = std::time::Duration::from_secs(30 * 60);
+        done.view_observed_at =
+            done_since + done.hide_done_after + std::time::Duration::from_nanos(1);
+        set_active_subagents(&mut done, 0, Some(1));
+        set_active_subagents(&mut done, 0, Some(0));
+        assert!(!sidebar_rows(&done)
+            .iter()
+            .any(|row| matches!(row, SidebarRow::Tab { entry, .. } if entry.working_shelf)));
+        assert!(sidebar_rows(&done).iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: SETTLED_SECTION_TITLE,
                 count: 1,
                 ..
             }
