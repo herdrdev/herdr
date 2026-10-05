@@ -2007,7 +2007,8 @@ impl GlobalAgentCounts {
 fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
     let mut counts = GlobalAgentCounts::default();
     for entry in crate::ui::all_agent_panel_entries(app) {
-        if super::sidebar::entry_is_blocked(&entry) && entry.state != AgentState::Working {
+        let display_state = super::sidebar::sidebar_entry_display_state(&entry);
+        if super::sidebar::entry_is_blocked(&entry) && display_state != AgentState::Working {
             counts.blocked += 1;
             continue;
         }
@@ -2017,7 +2018,7 @@ fn global_agent_counts(app: &AppState) -> GlobalAgentCounts {
             counts.attention += 1;
             continue;
         }
-        match super::sidebar::agent_panel_status_key(entry.state, entry.seen) {
+        match super::sidebar::agent_panel_status_key(display_state, entry.seen) {
             "blocked" => counts.blocked += 1,
             "done" => counts.done += 1,
             "working" => counts.working += 1,
@@ -2497,6 +2498,31 @@ mod tests {
         let counts = global_agent_counts(&app);
         assert_eq!(counts.blocked, 1);
         assert_eq!(counts.working, 1);
+    }
+
+    #[test]
+    fn global_agent_counts_include_subagent_work_without_overriding_blocked() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![
+            crate::workspace::Workspace::test_new("idle-with-subagent"),
+            crate::workspace::Workspace::test_new("blocked-with-subagent"),
+        ];
+        app.ensure_test_terminals();
+
+        for (ws_idx, state) in [(0, AgentState::Idle), (1, AgentState::Blocked)] {
+            let pane_id = app.workspaces[ws_idx].tabs[0].root_pane;
+            let terminal_id = app.workspaces[ws_idx].terminal_id(pane_id).unwrap().clone();
+            let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.set_raw_agent_state_for_test(state);
+            terminal.set_active_subagents(Some(1));
+        }
+
+        let counts = global_agent_counts(&app);
+        assert_eq!(counts.working, 1);
+        assert_eq!(counts.blocked, 1);
+        assert_eq!(counts.idle, 0);
+        assert_eq!(counts.total(), 2);
     }
 
     #[test]

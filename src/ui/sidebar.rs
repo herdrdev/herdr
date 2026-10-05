@@ -823,7 +823,7 @@ fn compact_row_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
     state_label_color(sidebar_entry_display_state(entry), entry.seen, p)
 }
 
-fn sidebar_entry_display_state(entry: &AgentPanelEntry) -> AgentState {
+pub(crate) fn sidebar_entry_display_state(entry: &AgentPanelEntry) -> AgentState {
     if sidebar_entry_has_working_state(entry) {
         AgentState::Working
     } else {
