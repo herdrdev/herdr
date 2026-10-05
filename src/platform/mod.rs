@@ -565,6 +565,102 @@ fn child_exit_classification_only_checkpoints_interruptions() {
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_pane_process_group_rejects_processes_outside_the_pane_session() {
+        use std::os::unix::process::CommandExt;
+
+        let mut detached = std::process::Command::new("sleep");
+        detached.arg("30");
+        // SAFETY: setsid is async-signal-safe and touches only the child.
+        unsafe {
+            detached.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut detached = detached.spawn().expect("spawn detached");
+        let token = process_start_token(detached.id()).expect("start token");
+        let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+        let gone_pid = gone.id();
+        gone.wait().expect("reap");
+
+        assert_eq!(
+            live_pane_process_group(std::process::id(), detached.id(), token),
+            None,
+            "a live process in another terminal session"
+        );
+        assert_eq!(
+            live_pane_process_group(gone_pid, detached.id(), token),
+            None,
+            "a pane shell that is gone"
+        );
+        let _ = detached.kill();
+        let _ = detached.wait();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn live_pane_process_group_follows_the_agent_process_not_its_job() {
+        use std::os::unix::process::CommandExt;
+
+        let shell_pid = std::process::id();
+        let mut wrapper = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn wrapper");
+        let job = wrapper.id();
+        let mut agent = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(job as i32)
+            .spawn()
+            .expect("spawn agent");
+        let agent_pid = agent.id();
+        let token = process_start_token(agent_pid).expect("agent start token");
+        let wrapper_token = process_start_token(job).expect("wrapper start token");
+
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token + 1),
+            None,
+            "a reused pid has a different start token"
+        );
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGSTOP);
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGKILL);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while live_pane_process_group(shell_pid, agent_pid, token).is_some()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            None,
+            "an unreaped agent must not count as alive while its wrapper lives"
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, job, wrapper_token),
+            Some(job)
+        );
+        agent.wait().expect("reap agent");
+        assert_eq!(live_pane_process_group(shell_pid, agent_pid, token), None);
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+    }
+
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {
         watch_terminal_resize_signal();

@@ -5,6 +5,8 @@
 
 pub(crate) mod actions;
 mod agent_resume;
+#[cfg(test)]
+mod agent_suspend_tests;
 pub(crate) mod agent_view;
 mod agents;
 pub(crate) use agents::{AGENT_START_SETTLE_DELAY, MAX_AGENT_START_TIMEOUT};

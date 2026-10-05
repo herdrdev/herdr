@@ -664,6 +664,50 @@ pub fn foreground_process_group_id_for_tty_fd(fd: RawFd) -> Option<u32> {
     (pgid > 0).then_some(pgid as u32)
 }
 
+/// Start time of `pid` in clock ticks since boot. It tells a process apart
+/// from a later one that reuses its pid.
+pub fn process_start_token(pid: u32) -> Option<u64> {
+    process_job_stat(pid).map(|stat| stat.start_time)
+}
+
+/// Process group of `pid` while that same process, matched by its start
+/// token, is alive in the terminal session of the pane shell `shell_pid`.
+/// A stopped or backgrounded job still counts.
+pub fn live_pane_process_group(shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+    let stat = process_job_stat(pid)?;
+    let shell_session = process_job_stat(shell_pid)?.session;
+    (!matches!(stat.state, 'Z' | 'X')
+        && stat.start_time == start_token
+        && stat.session == shell_session
+        && stat.pgrp > 0)
+        .then_some(stat.pgrp as u32)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ProcessJobStat {
+    state: char,
+    pgrp: i32,
+    session: i32,
+    start_time: u64,
+}
+
+fn process_job_stat(pid: u32) -> Option<ProcessJobStat> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    process_job_stat_from_stat(&stat)
+}
+
+fn process_job_stat_from_stat(stat: &str) -> Option<ProcessJobStat> {
+    let rest = stat.get(stat.rfind(')')? + 2..)?;
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    // After (comm): state(0) ppid(1) pgrp(2) session(3) ... starttime(19)
+    Some(ProcessJobStat {
+        state: fields.first()?.chars().next()?,
+        pgrp: fields.get(2)?.parse().ok()?,
+        session: fields.get(3)?.parse().ok()?,
+        start_time: fields.get(19)?.parse().ok()?,
+    })
+}
+
 fn process_pgrp_comm_and_state(pid: u32) -> Option<(i32, String, char)> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     process_pgrp_comm_and_state_from_stat(&stat)
@@ -1574,6 +1618,22 @@ mod tests {
             process_pgrp_comm_and_state_from_stat("123 (name with ) paren) S 1 456 789 0 456"),
             Some((456, "name with ) paren".to_string(), 'S'))
         );
+    }
+
+    #[test]
+    fn proc_stat_parsing_reads_job_fields_and_start_time() {
+        let stat =
+            "123 (node ) x) T 1 456 789 34816 456 4194560 1 2 3 4 5 6 7 8 20 0 11 0 987654 0 0";
+        assert_eq!(
+            process_job_stat_from_stat(stat),
+            Some(ProcessJobStat {
+                state: 'T',
+                pgrp: 456,
+                session: 789,
+                start_time: 987654,
+            })
+        );
+        assert_eq!(process_job_stat_from_stat("123 (short) S 1 456 789"), None);
     }
 
     #[test]

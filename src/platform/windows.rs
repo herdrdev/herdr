@@ -1640,14 +1640,15 @@ fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         return Some(foreground_job_from_entry(shell));
     }
 
-    let Some(shell_runtime_marker) = runtime_marker(shell).filter(|marker| !marker.is_empty())
-    else {
+    let Some(shell_runtime_marker) = pane_runtime_marker(shell, &mut runtime_marker) else {
         return Some(foreground_job_from_entry(shell));
     };
     let matching_candidates: Vec<_> = escaped_agent_indices
         .iter()
         .map(|&index| &entries[index])
-        .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
+        .filter(|entry| {
+            carries_pane_runtime_marker(entry, &shell_runtime_marker, &mut runtime_marker)
+        })
         .collect();
     let selected =
         select_topmost_agent_chain_candidate(&matching_candidates, snapshot).unwrap_or(shell);
@@ -1663,6 +1664,69 @@ fn select_pane_foreground_job(
         shell_pid,
         &ProcessSnapshot::new(entries.to_vec()),
     )
+}
+
+/// Git Bash can start agents outside the pane shell's process tree. Those
+/// belong to the pane when they carry the runtime marker the shell got.
+fn pane_runtime_marker(
+    shell: &WindowsProcessEntry,
+    runtime_marker: &mut impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> Option<String> {
+    runtime_marker(shell).filter(|marker| !marker.is_empty())
+}
+
+fn carries_pane_runtime_marker(
+    entry: &WindowsProcessEntry,
+    pane_marker: &str,
+    runtime_marker: &mut impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> bool {
+    runtime_marker(entry).as_deref() == Some(pane_marker)
+}
+
+/// Whether foreground selection could pick `pid` for this pane: a descendant
+/// of the pane shell, or an escaped Git Bash agent with the pane's marker.
+fn process_belongs_to_pane(
+    shell_pid: u32,
+    pid: u32,
+    snapshot: &ProcessSnapshot,
+    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
+    mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> bool {
+    if process_is_ancestor(shell_pid, pid, snapshot) {
+        return true;
+    }
+    let (Some(shell), Some(entry)) = (snapshot.entry(shell_pid), snapshot.entry(pid)) else {
+        return false;
+    };
+    shell_is_git_bash(shell)
+        && process_entry_identifies_agent(entry)
+        && pane_runtime_marker(shell, &mut runtime_marker).is_some_and(|pane_marker| {
+            carries_pane_runtime_marker(entry, &pane_marker, &mut runtime_marker)
+        })
+}
+
+/// Creation time of `pid`. It tells a process apart from a later one that
+/// reuses its pid.
+pub fn process_start_token(pid: u32) -> Option<u64> {
+    ProcessIdentity::open(pid)?.creation_time()
+}
+
+/// Returns `pid` while that same process, matched by its creation time, is
+/// still running for the pane shell `shell_pid`. Windows has no job control,
+/// so the process stands in for its own group.
+pub fn live_pane_process_group(shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+    let identity = ProcessIdentity::open(pid)?;
+    if !identity.running() || identity.creation_time() != Some(start_token) {
+        return None;
+    }
+    process_belongs_to_pane(
+        shell_pid,
+        pid,
+        &cached_foreground_processes(),
+        |shell| process_is_git_bash(shell.pid),
+        |entry| process_runtime_marker(entry.pid),
+    )
+    .then_some(pid)
 }
 
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
@@ -4260,6 +4324,50 @@ mod tests {
 
         assert_eq!(job.process_group_id, 10);
         assert_eq!(job.processes[0].name, "bash.exe");
+    }
+
+    #[test]
+    fn windows_held_agent_must_still_belong_to_the_pane() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(11, 10, "claude.exe", &["claude.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+            test_entry(30, 98, "vim.exe", &["vim.exe"]),
+            test_entry(50, 77, "claude.exe", &["claude.exe"]),
+        ];
+        let snapshot = super::ProcessSnapshot::new(entries);
+        let marker = |pane: &'static str| {
+            move |entry: &super::WindowsProcessEntry| {
+                Some(if entry.pid == 10 { "pane-a" } else { pane }.to_string())
+            }
+        };
+        let belongs = |pid, git_bash, pane| {
+            super::process_belongs_to_pane(10, pid, &snapshot, |_| git_bash, marker(pane))
+        };
+
+        assert!(belongs(11, false, "pane-b"), "descendant of the shell");
+        assert!(
+            belongs(20, true, "pane-a"),
+            "escaped agent with the pane marker"
+        );
+        assert!(!belongs(20, true, "pane-b"), "marker from another pane");
+        assert!(
+            !belongs(20, false, "pane-a"),
+            "escape only applies to Git Bash"
+        );
+        assert!(!belongs(30, true, "pane-a"), "escaped non-agent process");
+        assert!(
+            !belongs(40, true, "pane-a"),
+            "process gone from the snapshot"
+        );
+        assert!(
+            !belongs(50, false, "pane-a"),
+            "agent whose parent chain no longer reaches the shell"
+        );
+        assert!(
+            !super::process_belongs_to_pane(60, 11, &snapshot, |_| true, marker("pane-a")),
+            "pane shell gone"
+        );
     }
 
     #[test]

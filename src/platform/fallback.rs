@@ -221,6 +221,16 @@ pub fn session_processes(_child_pid: u32) -> Vec<u32> {
 pub fn signal_processes(_pids: &[u32], _signal: Signal) {}
 
 /// Unsupported platform stub.
+pub fn process_start_token(_pid: u32) -> Option<u64> {
+    None
+}
+
+/// Unsupported platform stub.
+pub fn live_pane_process_group(_shell_pid: u32, _pid: u32, _start_token: u64) -> Option<u32> {
+    None
+}
+
+/// Unsupported platform stub.
 pub fn process_exists(_pid: u32) -> bool {
     false
 }
