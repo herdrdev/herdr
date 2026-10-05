@@ -14,6 +14,16 @@ pub(crate) fn set_default_plugin_pane_pwd(
 }
 
 #[cfg(unix)]
+pub(super) fn socket_peer_pid(_fd: std::os::fd::RawFd) -> Option<u32> {
+    None
+}
+
+#[cfg(unix)]
+pub(super) fn process_name_and_parent(_pid: u32) -> Option<(String, u32)> {
+    None
+}
+
+#[cfg(unix)]
 pub(super) const REMOTE_BRIDGE_CLOCK: libc::clockid_t = libc::CLOCK_MONOTONIC;
 
 pub(crate) fn forward_remote_bridge_stdio(

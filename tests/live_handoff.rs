@@ -33,7 +33,7 @@ struct RequestError {
 impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
+        support::stop_spawned_herdr(&mut *self.child);
         unregister_spawned_herdr_pid(pid);
     }
 }
