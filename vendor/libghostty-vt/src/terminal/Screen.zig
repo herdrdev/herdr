@@ -2014,6 +2014,9 @@ pub const Resize = struct {
     /// currently at a prompt. This detects OSC133 prompts lines and clears
     /// them. If set to `.last`, only the most recent prompt line is cleared.
     prompt_redraw: osc.semantic_prompt.Redraw = .false,
+
+    /// See PageList.Resize.keep_cursor_row.
+    keep_cursor_row: bool = false,
 };
 
 const resize_tw = tripwire.module(enum {
@@ -2110,6 +2113,9 @@ pub inline fn resize(
             .y = self.cursor.y,
             .pin = self.cursor.page_pin,
         },
+        // Without scrollback the rows pushed above the cursor would be
+        // erased below, so keep the top of the screen instead.
+        .keep_cursor_row = opts.keep_cursor_row and !self.no_scrollback,
     });
 
     // No more failures are possible after this. Enforced by compiler
@@ -8442,6 +8448,60 @@ test "Screen: resize less cols with reflow but row space" {
     // Cursor should be on the last line
     try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.x);
     try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
+}
+
+test "Screen: resize less cols with reflow keep cursor row" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 6, .rows = 4, .max_scrollback_bytes = 1 });
+    defer s.deinit();
+    try s.testWriteString("ABCDEF\n> ");
+    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
+
+    try s.resize(.{ .cols = 3, .rows = 4, .keep_cursor_row = true });
+    {
+        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("DEF\n> ", contents);
+    }
+    {
+        const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("ABC\nDEF\n> ", contents);
+    }
+    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.x);
+    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
+
+    // Widening pulls the wrapped row back from scrollback.
+    try s.resize(.{ .cols = 6, .rows = 4, .keep_cursor_row = true });
+    {
+        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("ABCDEF\n> ", contents);
+    }
+    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
+}
+
+test "Screen: resize less cols with reflow keep cursor row without scrollback" {
+    const testing = std.testing;
+    const alloc = testing.allocator;
+    const io = testing.io;
+
+    var s = try init(io, alloc, .{ .cols = 6, .rows = 4, .max_scrollback_bytes = 0 });
+    defer s.deinit();
+    try s.testWriteString("ABCDEF\n> ");
+
+    // Pushing ABC into history would erase it, so the top stays fixed.
+    try s.resize(.{ .cols = 3, .rows = 4, .keep_cursor_row = true });
+    {
+        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
+        defer alloc.free(contents);
+        try testing.expectEqualStrings("ABC\nDEF\n> ", contents);
+    }
+    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.x);
+    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
 }
 
 test "Screen: resize less cols with reflow with trimmed rows" {

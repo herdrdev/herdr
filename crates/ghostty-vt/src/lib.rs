@@ -4548,6 +4548,42 @@ mod tests {
             .is_empty());
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn narrowing_keeps_cursor_row_so_shell_prompt_redraw_leaves_one_copy() {
+        let mut terminal = Terminal::new(40, 6, 1000).unwrap();
+        let first_line = format!("PROMPT{}", "-".repeat(34));
+        terminal.write(format!("{first_line}\r\n> ").as_bytes());
+        assert_eq!(terminal.cursor_y().unwrap(), 1);
+
+        terminal.resize(30, 6, 8, 16).unwrap();
+        assert_eq!(terminal.cursor_y().unwrap(), 1);
+        // zsh after SIGWINCH: up by its old prompt row count, CR, ED0, reprint.
+        terminal.write(format!("\x1b[1A\r\x1b[J{}\r\n> ", &first_line[..30]).as_bytes());
+
+        let visible = terminal.read_text_viewport((0, 0), (29, 5), false).unwrap();
+        assert_eq!(visible.matches("PROMPT").count(), 1, "{visible:?}");
+        let rows = terminal.total_rows().unwrap() as u32;
+        let screen = terminal
+            .read_text_screen((0, 0), (29, rows - 1), false)
+            .unwrap();
+        assert_eq!(screen.matches("PROMPT").count(), 2, "{screen:?}");
+    }
+
+    // ConPTY repaints the screen itself, so Windows keeps the top row fixed.
+    #[cfg(windows)]
+    #[test]
+    fn narrowing_keeps_top_row_on_windows() {
+        let mut terminal = Terminal::new(40, 6, 1000).unwrap();
+        terminal.write(format!("PROMPT{}\r\n> ", "-".repeat(34)).as_bytes());
+        assert_eq!(terminal.cursor_y().unwrap(), 1);
+
+        terminal.resize(30, 6, 8, 16).unwrap();
+        assert_eq!(terminal.cursor_y().unwrap(), 2);
+        let visible = terminal.read_text_viewport((0, 0), (29, 5), false).unwrap();
+        assert!(visible.starts_with("PROMPT"), "{visible:?}");
+    }
+
     #[test]
     fn clipboard_queries_never_disclose_contents_and_split_writes_complete_once() {
         for suffix in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {

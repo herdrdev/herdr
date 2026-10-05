@@ -228,3 +228,53 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 keep the cursor row when narrowing with reflow
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-keep-cursor-row-on-reflow.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/3672
+
+upstream discussion: none; Ghostty deliberately keeps the top of the screen
+fixed (upstream 8589f2c0f) and relies on its own shell integration to clear
+the prompt on resize
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+
+reason: When columns shrink, libghostty-vt keeps rows newly wrapped above the
+cursor on screen and moves the cursor down. Shells without prompt marks, such
+as zsh, then redraw relative to their old prompt height and leave stale prompt
+copies on screen after every split or resize. A default-off resize flag adopts
+the tmux and Alacritty rule instead: the cursor keeps its screen row and the
+extra wrapped rows go to scrollback. The C embedder constructor enables it
+except on Windows, and a full reset preserves it because it is embedder
+policy. Windows ConPTY reflows and repaints the whole screen itself, so rows
+pushed to scrollback reappear on screen and pile up as duplicates in history
+on every narrowing step. Screens without scrollback keep the old top-anchored
+reflow, because rows pushed into history there would be erased. Widening is
+unchanged. Prompts below existing output can still leave copies, as in tmux;
+fixing that requires prompt marks.
+
+remove when: upstream provides an equivalent embedder resize option that keeps
+the cursor row when narrowing, and Herdr enables it and passes the checks below
+without this patch.
+
+verification:
+
+```sh
+just test-one narrowing_keeps_cursor_row
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='keep cursor row')
+just maintenance-test
+just check
+```

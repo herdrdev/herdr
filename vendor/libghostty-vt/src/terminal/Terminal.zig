@@ -104,6 +104,9 @@ flags: packed struct {
     // disable clearing the prompt on resize.
     shell_redraws_prompt: osc.semantic_prompt.Redraw = .true,
 
+    /// See PageList.Resize.keep_cursor_row.
+    reflow_keeps_cursor_row: bool = false,
+
     // This is set via ESC[4;2m. Any other modify key mode just sets
     // this to false and we act in mode 1 by default.
     modify_other_keys_2: bool = false,
@@ -4089,6 +4092,7 @@ pub fn resize(
         .rows = opts.rows,
         .reflow = self.modes.get(.wraparound),
         .prompt_redraw = self.flags.shell_redraws_prompt,
+        .keep_cursor_row = self.flags.reflow_keeps_cursor_row,
     });
 
     // Alternate screen, if it exists, doesn't reflow. The primary resize
@@ -4920,11 +4924,14 @@ pub fn fullReset(self: *Terminal) void {
 
     // Rest our basic state
     const visible = self.flags.visible;
+    const reflow_keeps_cursor_row = self.flags.reflow_keeps_cursor_row;
     self.modes.reset();
     self.flags = .{
         // Visibility belongs to the view rather than terminal state, so a
         // terminal reset must not make a hidden view potentially visible.
         .visible = visible,
+        // Resize policy is chosen by the embedder, not the child program.
+        .reflow_keeps_cursor_row = reflow_keeps_cursor_row,
     };
     self.tabstops.reset(TABSTOP_INTERVAL);
     self.previous_char = null;
@@ -15629,6 +15636,15 @@ test "Terminal: fullReset with a non-empty pen" {
 
     try testing.expectEqual(@as(style.Id, 0), t.screens.active.cursor.style_id);
     try testing.expectEqual(.output, t.screens.active.cursor.semantic_content);
+}
+
+test "Terminal: fullReset preserves reflow keeps cursor row" {
+    var t = try init(testing.io, testing.allocator, .{ .cols = 80, .rows = 80 });
+    defer t.deinit(testing.allocator);
+
+    t.flags.reflow_keeps_cursor_row = true;
+    t.fullReset();
+    try testing.expect(t.flags.reflow_keeps_cursor_row);
 }
 
 test "Terminal: fullReset hyperlink" {

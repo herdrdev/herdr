@@ -283,6 +283,9 @@ fn mixed_reflow_reads_are_stable_and_chunk_independent() {
     for chunk in MIXED.as_bytes().chunks(3) {
         fragmented.write(chunk);
     }
+    // Narrowing keeps the cursor row; park it above the link so it stays visible.
+    whole.write(b"\x1b[H");
+    fragmented.write(b"\x1b[H");
     for (width, height) in [(12, 5), (8, 4), (17, 6), (9, 5), (12, 5)] {
         whole.resize(width, height);
         fragmented.resize(width, height);

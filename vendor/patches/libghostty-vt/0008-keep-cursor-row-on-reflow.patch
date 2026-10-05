@@ -1,0 +1,205 @@
+diff --git a/vendor/libghostty-vt/src/terminal/PageList.zig b/vendor/libghostty-vt/src/terminal/PageList.zig
+index 94ef9bb0..bef32a45 100644
+--- a/vendor/libghostty-vt/src/terminal/PageList.zig
++++ b/vendor/libghostty-vt/src/terminal/PageList.zig
+@@ -1234,6 +1234,11 @@ pub const Resize = struct {
+     /// resize/reflow behavior depends on the cursor position.
+     cursor: ?Cursor = null,
+ 
++    /// When reflowing to fewer columns, keep the cursor on its active row
++    /// and push rows newly wrapped above it into scrollback (tmux and
++    /// Alacritty behavior) instead of keeping the top of the screen fixed.
++    keep_cursor_row: bool = false,
++
+     pub const Cursor = struct {
+         x: size.CellCountInt,
+         y: size.CellCountInt,
+@@ -1295,7 +1300,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+         .gt => {
+             // We grow rows after cols so that we can do our unwrapping/reflow
+             // before we do a no-reflow grow.
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.keep_cursor_row);
+             try self.resizeWithoutReflow(opts);
+         },
+ 
+@@ -1307,7 +1312,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
+                 copy.cols = self.cols;
+                 break :opts copy;
+             });
+-            try self.resizeCols(cols, opts.cursor);
++            try self.resizeCols(cols, opts.cursor, opts.keep_cursor_row);
+         },
+     }
+ 
+@@ -1332,6 +1337,7 @@ fn resizeCols(
+     self: *PageList,
+     cols: size.CellCountInt,
+     cursor: ?Resize.Cursor,
++    keep_cursor_row: bool,
+ ) Allocator.Error!void {
+     assert(cols != self.cols);
+ 
+@@ -1536,7 +1542,7 @@ fn resizeCols(
+         const current = self.rows -| (active_pt.active.y + 1);
+ 
+         var req_rows = c.remaining_rows;
+-        req_rows -|= wrapped -| c.wrapped_rows;
++        if (!keep_cursor_row) req_rows -|= wrapped -| c.wrapped_rows;
+         req_rows -|= current;
+ 
+         while (req_rows > 0) {
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index d0d2b929..baf32293 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -2014,6 +2014,9 @@ pub const Resize = struct {
+     /// currently at a prompt. This detects OSC133 prompts lines and clears
+     /// them. If set to `.last`, only the most recent prompt line is cleared.
+     prompt_redraw: osc.semantic_prompt.Redraw = .false,
++
++    /// See PageList.Resize.keep_cursor_row.
++    keep_cursor_row: bool = false,
+ };
+ 
+ const resize_tw = tripwire.module(enum {
+@@ -2110,6 +2113,9 @@ pub inline fn resize(
+             .y = self.cursor.y,
+             .pin = self.cursor.page_pin,
+         },
++        // Without scrollback the rows pushed above the cursor would be
++        // erased below, so keep the top of the screen instead.
++        .keep_cursor_row = opts.keep_cursor_row and !self.no_scrollback,
+     });
+ 
+     // No more failures are possible after this. Enforced by compiler
+@@ -8444,6 +8450,60 @@ test "Screen: resize less cols with reflow but row space" {
+     try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
+ }
+ 
++test "Screen: resize less cols with reflow keep cursor row" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 6, .rows = 4, .max_scrollback_bytes = 1 });
++    defer s.deinit();
++    try s.testWriteString("ABCDEF\n> ");
++    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
++
++    try s.resize(.{ .cols = 3, .rows = 4, .keep_cursor_row = true });
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("DEF\n> ", contents);
++    }
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .screen = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("ABC\nDEF\n> ", contents);
++    }
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.x);
++    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
++
++    // Widening pulls the wrapped row back from scrollback.
++    try s.resize(.{ .cols = 6, .rows = 4, .keep_cursor_row = true });
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("ABCDEF\n> ", contents);
++    }
++    try testing.expectEqual(@as(size.CellCountInt, 1), s.cursor.y);
++}
++
++test "Screen: resize less cols with reflow keep cursor row without scrollback" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 6, .rows = 4, .max_scrollback_bytes = 0 });
++    defer s.deinit();
++    try s.testWriteString("ABCDEF\n> ");
++
++    // Pushing ABC into history would erase it, so the top stays fixed.
++    try s.resize(.{ .cols = 3, .rows = 4, .keep_cursor_row = true });
++    {
++        const contents = try s.dumpStringAlloc(alloc, .{ .viewport = .{} });
++        defer alloc.free(contents);
++        try testing.expectEqualStrings("ABC\nDEF\n> ", contents);
++    }
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.x);
++    try testing.expectEqual(@as(size.CellCountInt, 2), s.cursor.y);
++}
++
+ test "Screen: resize less cols with reflow with trimmed rows" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
+diff --git a/vendor/libghostty-vt/src/terminal/Terminal.zig b/vendor/libghostty-vt/src/terminal/Terminal.zig
+index e9cc3b8e..002aab2a 100644
+--- a/vendor/libghostty-vt/src/terminal/Terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/Terminal.zig
+@@ -104,6 +104,9 @@ flags: packed struct {
+     // disable clearing the prompt on resize.
+     shell_redraws_prompt: osc.semantic_prompt.Redraw = .true,
+ 
++    /// See PageList.Resize.keep_cursor_row.
++    reflow_keeps_cursor_row: bool = false,
++
+     // This is set via ESC[4;2m. Any other modify key mode just sets
+     // this to false and we act in mode 1 by default.
+     modify_other_keys_2: bool = false,
+@@ -4089,6 +4092,7 @@ pub fn resize(
+         .rows = opts.rows,
+         .reflow = self.modes.get(.wraparound),
+         .prompt_redraw = self.flags.shell_redraws_prompt,
++        .keep_cursor_row = self.flags.reflow_keeps_cursor_row,
+     });
+ 
+     // Alternate screen, if it exists, doesn't reflow. The primary resize
+@@ -4920,11 +4924,14 @@ pub fn fullReset(self: *Terminal) void {
+ 
+     // Rest our basic state
+     const visible = self.flags.visible;
++    const reflow_keeps_cursor_row = self.flags.reflow_keeps_cursor_row;
+     self.modes.reset();
+     self.flags = .{
+         // Visibility belongs to the view rather than terminal state, so a
+         // terminal reset must not make a hidden view potentially visible.
+         .visible = visible,
++        // Resize policy is chosen by the embedder, not the child program.
++        .reflow_keeps_cursor_row = reflow_keeps_cursor_row,
+     };
+     self.tabstops.reset(TABSTOP_INTERVAL);
+     self.previous_char = null;
+@@ -15631,6 +15638,15 @@ test "Terminal: fullReset with a non-empty pen" {
+     try testing.expectEqual(.output, t.screens.active.cursor.semantic_content);
+ }
+ 
++test "Terminal: fullReset preserves reflow keeps cursor row" {
++    var t = try init(testing.io, testing.allocator, .{ .cols = 80, .rows = 80 });
++    defer t.deinit(testing.allocator);
++
++    t.flags.reflow_keeps_cursor_row = true;
++    t.fullReset();
++    try testing.expect(t.flags.reflow_keeps_cursor_row);
++}
++
+ test "Terminal: fullReset hyperlink" {
+     var t = try init(testing.io, testing.allocator, .{ .cols = 80, .rows = 80 });
+     defer t.deinit(testing.allocator);
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index e825183e..2c16d2e8 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -852,6 +852,11 @@ fn new_(
+     // integration, so don't assume OSC 133 prompts can be redrawn on resize.
+     // Shells can still opt in with OSC 133;A;redraw=1.
+     t.flags.shell_redraws_prompt = .false;
++    // Without prompt redraw, shells repaint relative to the cursor after
++    // SIGWINCH. Keep the cursor row so stale wrapped prompt rows scroll away.
++    // Windows ConPTY reflows and repaints the whole screen itself, so rows
++    // pushed to scrollback there would reappear on screen as duplicates.
++    t.flags.reflow_keeps_cursor_row = builtin.os.tag != .windows;
+ 
+     return try wrap(
+         alloc,

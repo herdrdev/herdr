@@ -852,6 +852,11 @@ fn new_(
     // integration, so don't assume OSC 133 prompts can be redrawn on resize.
     // Shells can still opt in with OSC 133;A;redraw=1.
     t.flags.shell_redraws_prompt = .false;
+    // Without prompt redraw, shells repaint relative to the cursor after
+    // SIGWINCH. Keep the cursor row so stale wrapped prompt rows scroll away.
+    // Windows ConPTY reflows and repaints the whole screen itself, so rows
+    // pushed to scrollback there would reappear on screen as duplicates.
+    t.flags.reflow_keeps_cursor_row = builtin.os.tag != .windows;
 
     return try wrap(
         alloc,

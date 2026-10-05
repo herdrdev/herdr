@@ -2393,6 +2393,8 @@ mod tests {
             .viewport_link_regions(1, 0, url_byte_range)
             .unwrap()
             .is_empty());
+        // Keep the wrapped link on screen; narrowing keeps the cursor row.
+        terminal.write(b"\x1b[H");
         terminal.resize(20, 4, 0, 0).unwrap();
         assert_eq!(
             terminal
@@ -2531,6 +2533,8 @@ mod tests {
             url_from_link_target(terminal.viewport_link_target(7, 0).unwrap().unwrap()).as_deref(),
             Some("https://example.com/路径?q=a(b)")
         );
+        // Keep the wrapped link on screen; narrowing keeps the cursor row.
+        terminal.write(b"\x1b[H");
         terminal.resize(20, 5, 0, 0).unwrap();
         assert_eq!(
             url_from_link_target(terminal.viewport_link_target(9, 1).unwrap().unwrap()).as_deref(),

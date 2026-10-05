@@ -1234,6 +1234,11 @@ pub const Resize = struct {
     /// resize/reflow behavior depends on the cursor position.
     cursor: ?Cursor = null,
 
+    /// When reflowing to fewer columns, keep the cursor on its active row
+    /// and push rows newly wrapped above it into scrollback (tmux and
+    /// Alacritty behavior) instead of keeping the top of the screen fixed.
+    keep_cursor_row: bool = false,
+
     pub const Cursor = struct {
         x: size.CellCountInt,
         y: size.CellCountInt,
@@ -1295,7 +1300,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
         .gt => {
             // We grow rows after cols so that we can do our unwrapping/reflow
             // before we do a no-reflow grow.
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, opts.keep_cursor_row);
             try self.resizeWithoutReflow(opts);
         },
 
@@ -1307,7 +1312,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
                 copy.cols = self.cols;
                 break :opts copy;
             });
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, opts.keep_cursor_row);
         },
     }
 
@@ -1332,6 +1337,7 @@ fn resizeCols(
     self: *PageList,
     cols: size.CellCountInt,
     cursor: ?Resize.Cursor,
+    keep_cursor_row: bool,
 ) Allocator.Error!void {
     assert(cols != self.cols);
 
@@ -1536,7 +1542,7 @@ fn resizeCols(
         const current = self.rows -| (active_pt.active.y + 1);
 
         var req_rows = c.remaining_rows;
-        req_rows -|= wrapped -| c.wrapped_rows;
+        if (!keep_cursor_row) req_rows -|= wrapped -| c.wrapped_rows;
         req_rows -|= current;
 
         while (req_rows > 0) {
