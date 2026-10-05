@@ -190,6 +190,12 @@ pub enum AppEvent {
         results: Vec<WorkspaceGitStatus>,
         cache_updates: Vec<(std::path::PathBuf, GitStatusCacheEntry)>,
     },
+    /// Background validation of a saved membership after session restore.
+    RestoredWorktreeSpaceChecked {
+        workspace_id: String,
+        expected: crate::workspace::WorktreeSpaceMembership,
+        valid: bool,
+    },
     /// A configured tab bar status command finished.
     TabBarCommandFinished {
         generation: u64,

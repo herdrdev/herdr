@@ -1970,14 +1970,18 @@ impl App {
         };
         let workspace_id = self.public_workspace_id(ws_idx);
         let layout_update_target = self.layout_update_target_after_pane_removal(ws_idx, pane_id);
-        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
-            && self.state.confirm_implicit_worktree_group_close(ws_idx)
-        {
-            return Err(encode_error(
-                id,
-                "confirmation_required",
-                "closing this pane would close a worktree group",
-            ));
+        if self.state.close_pane_would_close_workspace(ws_idx, pane_id) {
+            self.require_restored_group_close_ready(
+                &id,
+                &self.state.workspace_close_indices(ws_idx),
+            )?;
+            if self.state.confirm_implicit_worktree_group_close(ws_idx) {
+                return Err(encode_error(
+                    id,
+                    "confirmation_required",
+                    "closing this pane would close a worktree group",
+                ));
+            }
         }
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);

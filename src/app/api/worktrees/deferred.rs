@@ -235,6 +235,10 @@ impl App {
             );
             return;
         };
+        if let Err(err) = self.require_restored_worktree_ready(ws_idx) {
+            Self::send_api_response(respond_to, encode_error(id, err.code, err.message));
+            return;
+        }
         let Some(space) = self
             .state
             .workspaces

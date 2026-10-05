@@ -233,6 +233,12 @@ impl App {
             .unwrap_or_default();
 
         if closes_workspace {
+            if let Err(response) = self.require_restored_group_close_ready(
+                &id,
+                &self.state.workspace_close_indices(ws_idx),
+            ) {
+                return response;
+            }
             if self.state.confirm_implicit_worktree_group_close(ws_idx) {
                 return encode_error(
                     id,

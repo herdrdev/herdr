@@ -225,6 +225,7 @@ impl App {
     }
 
     fn worktree_source_from_workspace(&self, ws_idx: usize) -> Result<WorktreeSource, ApiFailure> {
+        self.require_restored_worktree_ready(ws_idx)?;
         let Some(ws) = self.state.workspaces.get(ws_idx) else {
             return Err(ApiFailure::new(
                 "workspace_not_found",
@@ -271,6 +272,38 @@ impl App {
             repo_key: space.key,
             repo_name: space.repo_name,
         })
+    }
+
+    fn require_restored_worktree_ready(&self, ws_idx: usize) -> Result<(), ApiFailure> {
+        if self.state.workspaces.get(ws_idx).is_some_and(|workspace| {
+            self.pending_restored_worktree_spaces
+                .iter()
+                .any(|(id, expected)| {
+                    id == &workspace.id && workspace.worktree_space.as_ref() == Some(expected)
+                })
+        }) {
+            return Err(ApiFailure::new(
+                "worktree_operation_in_progress",
+                "Restored worktree is still loading. Try again shortly.",
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn require_restored_group_close_ready(
+        &self,
+        request_id: &str,
+        close_indices: &[usize],
+    ) -> Result<(), String> {
+        // Closing one workspace does not trust saved group identity and must
+        // remain possible even when that checkout's metadata is unavailable.
+        if close_indices.len() >= 2 {
+            for &ws_idx in close_indices {
+                self.require_restored_worktree_ready(ws_idx)
+                    .map_err(|err| encode_error(request_id.to_owned(), err.code, err.message))?;
+            }
+        }
+        Ok(())
     }
 
     fn ensure_source_parent_membership(
@@ -485,7 +518,7 @@ impl App {
         });
     }
 
-    fn emit_workspace_updated(&mut self, ws_idx: usize) {
+    pub(super) fn emit_workspace_updated(&mut self, ws_idx: usize) {
         self.emit_event(EventEnvelope {
             event: EventKind::WorkspaceUpdated,
             data: EventData::WorkspaceUpdated {

@@ -411,22 +411,20 @@ fn restore_workspace(
         return (None, failed_imports);
     }
 
-    let worktree_space = restored_worktree_space_membership(snap.worktree_space.clone());
-    let (cached_git_space, cached_auto_label, cached_git_status_key) =
-        crate::workspace::discover_workspace_git_identity(&snap.identity_cwd);
-
     (
         Some(Workspace {
             id: workspace_id,
             custom_name: snap.custom_name.clone(),
             identity_cwd: snap.identity_cwd.clone(),
             cached_identity_cwd: snap.identity_cwd.clone(),
-            cached_auto_label,
-            cached_git_status_key,
-            cached_git_branch: crate::workspace::git_branch(&snap.identity_cwd),
+            // Repository metadata is optional and may block on unavailable
+            // storage. The app refreshes it after restoring the session.
+            cached_auto_label: crate::workspace::fallback_label_from_cwd(&snap.identity_cwd),
+            cached_git_status_key: snap.identity_cwd.clone(),
+            cached_git_branch: None,
             cached_git_ahead_behind: None,
-            cached_git_space,
-            worktree_space,
+            cached_git_space: None,
+            worktree_space: snap.worktree_space.clone(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             metadata_token_sequences: HashMap::new(),
             public_pane_numbers,
@@ -473,7 +471,7 @@ fn unavailable_restored_terminal(
     terminal
 }
 
-fn restored_worktree_space_membership(
+pub(crate) fn restored_worktree_space_membership(
     space: Option<crate::workspace::WorktreeSpaceMembership>,
 ) -> Option<crate::workspace::WorktreeSpaceMembership> {
     space.filter(|space| {

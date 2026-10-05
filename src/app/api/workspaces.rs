@@ -324,6 +324,9 @@ impl App {
         } else {
             self.state.workspace_close_indices(index)
         };
+        if let Err(response) = self.require_restored_group_close_ready(&id, &close_indices) {
+            return response;
+        }
         if close_indices.len() >= 2 && !params.close_group {
             return encode_error(
                 id,
@@ -589,6 +592,86 @@ mod tests {
         app.state.selected = 1;
         app.state.mode = crate::app::Mode::Terminal;
         app
+    }
+
+    #[test]
+    fn restored_group_close_waits_for_every_membership_before_mutating_state() {
+        for method in ["workspace.close", "pane.close", "tab.close", "group"] {
+            for pending_index in [0, 2] {
+                for valid in [false, true] {
+                    let mut app = app_with_worktree_group();
+                    let parent = app.state.workspaces.remove(0);
+                    let linked = app.state.workspaces.remove(0);
+                    app.state = crate::app::AppState::test_with_adversarial_identity_state();
+                    app.state.workspaces.insert(0, parent);
+                    app.state.workspaces.push(linked);
+                    app.state.confirm_close = false;
+                    app.state.ensure_test_terminals();
+                    app.state.assert_invariants_for_test();
+                    let expected = app.state.workspaces[pending_index]
+                        .worktree_space
+                        .clone()
+                        .unwrap();
+                    let pending_id = app.state.workspaces[pending_index].id.clone();
+                    app.pending_restored_worktree_spaces
+                        .push((pending_id.clone(), expected.clone()));
+                    let parent_pane = app.state.workspaces[0].tabs[0].root_pane;
+                    let request = serde_json::json!({
+                        "id": "req",
+                        "method": if method == "group" { "workspace.close" } else { method },
+                        "params": match method {
+                            "pane.close" => serde_json::json!({"pane_id": app.public_pane_id(0, parent_pane).unwrap()}),
+                            "tab.close" => serde_json::json!({"tab_id": app.public_tab_id(0, 0).unwrap()}),
+                            _ => serde_json::json!({"workspace_id": app.public_workspace_id(0), "close_group": method == "group"}),
+                        }
+                    });
+                    let before = app.workspace_list_info();
+                    let response =
+                        app.handle_api_request(serde_json::from_value(request.clone()).unwrap());
+                    let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+                    assert_eq!(response.error.code, "worktree_operation_in_progress");
+                    assert_eq!(app.workspace_list_info(), before);
+                    assert!(app.state.terminal_runtime_shutdowns.is_empty());
+                    assert!(app.event_hub.events_after(0).is_empty());
+                    app.state.assert_invariants_for_test();
+
+                    app.handle_internal_event(
+                        crate::events::AppEvent::RestoredWorktreeSpaceChecked {
+                            workspace_id: pending_id,
+                            expected,
+                            valid,
+                        },
+                    );
+                    let response = app.handle_api_request(serde_json::from_value(request).unwrap());
+                    if valid && method == "workspace.close" {
+                        let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+                        assert_eq!(response.error.code, "workspace_group_close_required");
+                    } else {
+                        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+                        assert_eq!(app.state.workspaces.len(), if valid { 1 } else { 2 });
+                    }
+                    app.state.assert_invariants_for_test();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn restored_linked_workspace_can_close_while_its_validation_is_pending() {
+        let mut app = app_with_worktree_group();
+        let linked = &app.state.workspaces[1];
+        app.pending_restored_worktree_spaces
+            .push((linked.id.clone(), linked.worktree_space.clone().unwrap()));
+        let response = app.handle_workspace_close(
+            "req".into(),
+            WorkspaceCloseParams {
+                workspace_id: app.public_workspace_id(1),
+                close_group: true,
+            },
+        );
+        let _: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.workspaces[0].display_name(), "parent");
     }
 
     #[test]
