@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub(crate) fn client_presentation_identity() -> String {
-    let mut terminal_name = [0_i8; 4096];
+    let mut terminal_name = [0 as libc::c_char; 4096];
     // SAFETY: `terminal_name` is writable for its full length and ttyname_r
     // writes at most that many bytes, including the terminating nul.
     let result = unsafe {
