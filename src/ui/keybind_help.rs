@@ -144,9 +144,20 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.toggle_prio_panel), "toggle PRIO panel"),
         help_entry(
             keybind_label(&kb.previous_window),
+            "previous tab needing attention across all Spaces",
+        ),
+        help_entry(
+            keybind_label(&kb.next_window),
+            "next tab needing attention across all Spaces",
+        ),
+        help_entry(
+            keybind_label(&kb.previous_any_window),
             "previous tab across all Spaces",
         ),
-        help_entry(keybind_label(&kb.next_window), "next tab across all Spaces"),
+        help_entry(
+            keybind_label(&kb.next_any_window),
+            "next tab across all Spaces",
+        ),
         help_entry(
             keybind_label(&kb.next_blocked_window),
             "next blocked tab across all Spaces",
@@ -525,11 +536,17 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(entries.iter().any(|(key, label)| {
-            key == "prefix+p" && label == "previous tab across all Spaces"
+            key == "prefix+p" && label == "previous tab needing attention across all Spaces"
         }));
+        assert!(entries.iter().any(|(key, label)| {
+            key == "prefix+n" && label == "next tab needing attention across all Spaces"
+        }));
+        assert!(entries.iter().any(
+            |(key, label)| key == "prefix+shift+p" && label == "previous tab across all Spaces"
+        ));
         assert!(entries
             .iter()
-            .any(|(key, label)| key == "prefix+n" && label == "next tab across all Spaces"));
+            .any(|(key, label)| key == "prefix+shift+n" && label == "next tab across all Spaces"));
         assert!(entries.iter().any(|(key, label)| {
             key == "prefix+ctrl+p" && label == "previous tab in this Space"
         }));

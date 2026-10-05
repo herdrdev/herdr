@@ -375,6 +375,8 @@ pub struct Keybinds {
     pub move_tab_next: ActionKeybinds,
     pub previous_window: ActionKeybinds,
     pub next_window: ActionKeybinds,
+    pub previous_any_window: ActionKeybinds,
+    pub next_any_window: ActionKeybinds,
     pub next_blocked_window: ActionKeybinds,
     pub switch_tab: Vec<IndexedKeybind>,
     pub switch_workspace: Vec<IndexedKeybind>,
@@ -603,6 +605,8 @@ impl Config {
             move_tab_next: empty_action!(),
             previous_window: empty_action!(),
             next_window: empty_action!(),
+            previous_any_window: empty_action!(),
+            next_any_window: empty_action!(),
             next_blocked_window: empty_action!(),
             switch_tab: Vec::new(),
             switch_workspace: Vec::new(),
@@ -800,6 +804,8 @@ impl Config {
             apply_action!(keybinds.move_tab_next, move_tab_next, source);
             apply_action!(keybinds.previous_window, previous_window, source);
             apply_action!(keybinds.next_window, next_window, source);
+            apply_action!(keybinds.previous_any_window, previous_any_window, source);
+            apply_action!(keybinds.next_any_window, next_any_window, source);
             apply_action!(keybinds.next_blocked_window, next_blocked_window, source);
             apply_indexed!(
                 keybinds.switch_tab,
@@ -2595,6 +2601,34 @@ switch_tab = "prefix+?"
             vec![BindingTrigger::Prefix((
                 KeyCode::Char('p'),
                 KeyModifiers::empty()
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.next_any_window),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('n'),
+                KeyModifiers::SHIFT
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.previous_any_window),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('p'),
+                KeyModifiers::SHIFT
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.new_workspace),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('n'),
+                KeyModifiers::ALT
+            ))]
+        );
+        assert_eq!(
+            binding_triggers(&kb.rename_pane),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('p'),
+                KeyModifiers::ALT
             ))]
         );
         assert_eq!(

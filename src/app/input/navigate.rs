@@ -188,7 +188,10 @@ impl App {
     ) {
         if !matches!(
             action,
-            NavigateAction::PreviousWindow | NavigateAction::NextWindow
+            NavigateAction::PreviousWindow
+                | NavigateAction::NextWindow
+                | NavigateAction::PreviousAnyWindow
+                | NavigateAction::NextAnyWindow
         ) {
             self.invalidate_window_cycle_snapshot();
         }
@@ -397,11 +400,19 @@ impl App {
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::PreviousWindow => {
-                self.focus_relative_window(false);
+                self.focus_relative_window(false, true);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::NextWindow => {
-                self.focus_relative_window(true);
+                self.focus_relative_window(true, true);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::PreviousAnyWindow => {
+                self.focus_relative_window(false, false);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::NextAnyWindow => {
+                self.focus_relative_window(true, false);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::NextBlockedWindow => {
@@ -967,9 +978,15 @@ impl App {
 
     /// Windows are Herdr tabs. Cycle bursts follow the sidebar's visible order,
     /// frozen briefly so sorting changes caused by focus cannot reshuffle them.
-    fn focus_relative_window(&mut self, forward: bool) {
+    fn focus_relative_window(&mut self, forward: bool, attention_only: bool) {
         let windows = self.window_cycle_order_at(Instant::now());
-        let Some(next) = relative_window_target_index(&self.state, &windows, forward) else {
+        let next = if attention_only {
+            let qualifying = attention_window_targets(&self.state);
+            relative_filtered_window_target_index(&self.state, &windows, &qualifying, forward)
+        } else {
+            relative_window_target_index(&self.state, &windows, forward)
+        };
+        let Some(next) = next else {
             return;
         };
         match windows[next].clone() {
@@ -1973,7 +1990,12 @@ pub(crate) fn is_window_cycle_key(state: &AppState, key: &TerminalKey) -> bool {
     };
     matches!(
         action,
-        Some(NavigateAction::PreviousWindow | NavigateAction::NextWindow)
+        Some(
+            NavigateAction::PreviousWindow
+                | NavigateAction::NextWindow
+                | NavigateAction::PreviousAnyWindow
+                | NavigateAction::NextAnyWindow
+        )
     )
 }
 
@@ -2404,7 +2426,19 @@ fn relative_window_target_index(
     windows: &[WindowCycleTarget],
     forward: bool,
 ) -> Option<usize> {
-    let current = state
+    let current = current_window_cycle_target(state)
+        .and_then(|current| windows.iter().position(|target| *target == current));
+    if let Some(current) = current {
+        crate::workspace::relative_window_index(windows.len(), current, forward)
+    } else if windows.is_empty() {
+        None
+    } else {
+        Some(if forward { 0 } else { windows.len() - 1 })
+    }
+}
+
+fn current_window_cycle_target(state: &AppState) -> Option<WindowCycleTarget> {
+    state
         .sidebar_selected_remote_agent
         .as_ref()
         .map(|agent| WindowCycleTarget::Remote(agent.clone()))
@@ -2416,14 +2450,66 @@ fn relative_window_target_index(
                 tab_idx: workspace.active_tab_index(),
             })
         })
-        .and_then(|current| windows.iter().position(|target| *target == current));
-    if let Some(current) = current {
-        crate::workspace::relative_window_index(windows.len(), current, forward)
-    } else if windows.is_empty() {
-        None
-    } else {
-        Some(if forward { 0 } else { windows.len() - 1 })
+}
+
+fn attention_window_targets(state: &AppState) -> std::collections::HashSet<WindowCycleTarget> {
+    let mut targets = std::collections::HashSet::new();
+    for entry in crate::ui::sidebar::all_agent_panel_entries(state) {
+        if crate::ui::sidebar::entry_needs_human_attention(&entry)
+            || crate::ui::sidebar::entry_has_unread_done_marker(&entry)
+        {
+            if let Some(target) = entry.local_target() {
+                targets.insert(WindowCycleTarget::Local {
+                    ws_idx: target.ws_idx,
+                    tab_idx: target.tab_idx,
+                });
+            }
+        }
     }
+    for entry in &state.remote_agent_panel_entries {
+        if crate::ui::sidebar::entry_needs_human_attention(entry)
+            || crate::ui::sidebar::entry_has_unread_done_marker(entry)
+        {
+            targets.insert(WindowCycleTarget::Remote(entry.agent_ref.clone()));
+        }
+    }
+    targets
+}
+
+fn relative_filtered_window_target_index(
+    state: &AppState,
+    windows: &[WindowCycleTarget],
+    qualifying: &std::collections::HashSet<WindowCycleTarget>,
+    forward: bool,
+) -> Option<usize> {
+    if qualifying.is_empty() || windows.is_empty() {
+        return None;
+    }
+    let current_index = current_window_cycle_target(state)
+        .as_ref()
+        .and_then(|current| windows.iter().position(|target| target == current));
+    for offset in 1..=windows.len() {
+        let index = current_index.map_or_else(
+            || {
+                if forward {
+                    offset - 1
+                } else {
+                    windows.len() - offset
+                }
+            },
+            |current| {
+                if forward {
+                    (current + offset) % windows.len()
+                } else {
+                    (current + windows.len() - offset % windows.len()) % windows.len()
+                }
+            },
+        );
+        if qualifying.contains(&windows[index]) {
+            return Some(index);
+        }
+    }
+    None
 }
 
 /// Panes `next_blocked_window` visits, in sidebar row order.
@@ -2659,6 +2745,8 @@ pub(crate) enum NavigateAction {
     MoveTabNext,
     PreviousWindow,
     NextWindow,
+    PreviousAnyWindow,
+    NextAnyWindow,
     NextBlockedWindow,
     CloseTab,
     RenamePane,
@@ -2771,6 +2859,8 @@ fn copy_mode_survives_prefix_action(action: NavigateAction) -> bool {
             | NavigateAction::ToggleTabPrio
             | NavigateAction::PreviousWindow
             | NavigateAction::NextWindow
+            | NavigateAction::PreviousAnyWindow
+            | NavigateAction::NextAnyWindow
             | NavigateAction::NextBlockedWindow
             | NavigateAction::FocusPaneLeft
             | NavigateAction::FocusPaneDown
@@ -2944,6 +3034,8 @@ macro_rules! non_indexed_action_bindings {
             (&kb.move_tab_next, NavigateAction::MoveTabNext),
             (&kb.previous_window, NavigateAction::PreviousWindow),
             (&kb.next_window, NavigateAction::NextWindow),
+            (&kb.previous_any_window, NavigateAction::PreviousAnyWindow),
+            (&kb.next_any_window, NavigateAction::NextAnyWindow),
             (&kb.next_blocked_window, NavigateAction::NextBlockedWindow),
             (&kb.close_tab, NavigateAction::CloseTab),
             (&kb.rename_pane, NavigateAction::RenamePane),
@@ -3276,10 +3368,27 @@ pub(super) fn execute_navigate_action_in_context(
             move_active_tab_relative(state, 1);
             leave_navigate_mode(state);
         }
-        NavigateAction::PreviousWindow | NavigateAction::NextWindow => {
+        NavigateAction::PreviousWindow
+        | NavigateAction::NextWindow
+        | NavigateAction::PreviousAnyWindow
+        | NavigateAction::NextAnyWindow => {
             let windows = window_navigation_order(state);
-            let forward = matches!(action, NavigateAction::NextWindow);
-            if let Some(next) = relative_window_target_index(state, &windows, forward) {
+            let forward = matches!(
+                action,
+                NavigateAction::NextWindow | NavigateAction::NextAnyWindow
+            );
+            let attention_only = matches!(
+                action,
+                NavigateAction::PreviousWindow | NavigateAction::NextWindow
+            );
+            let qualifying = attention_only.then(|| attention_window_targets(state));
+            let next = qualifying.as_ref().map_or_else(
+                || relative_window_target_index(state, &windows, forward),
+                |qualifying| {
+                    relative_filtered_window_target_index(state, &windows, qualifying, forward)
+                },
+            );
+            if let Some(next) = next {
                 match windows[next].clone() {
                     WindowCycleTarget::Local { ws_idx, tab_idx } => {
                         state.sidebar_selected_remote_agent = None;
@@ -4325,6 +4434,65 @@ mod tests {
         (workspace, state.workspaces[workspace].active_tab_index())
     }
 
+    fn expected_attention_window_cycle(
+        state: &AppState,
+        windows: &[WindowCycleTarget],
+        forward: bool,
+        steps: usize,
+    ) -> Vec<(usize, usize)> {
+        let qualifying = attention_window_targets(state);
+        let qualifying_windows = windows
+            .iter()
+            .filter(|target| qualifying.contains(*target))
+            .cloned()
+            .collect::<Vec<_>>();
+        if qualifying_windows.is_empty() {
+            return Vec::new();
+        }
+        let current_index = current_window_cycle_target(state)
+            .as_ref()
+            .and_then(|current| windows.iter().position(|target| target == current));
+        let first = (1..=windows.len())
+            .map(|offset| {
+                current_index.map_or_else(
+                    || {
+                        if forward {
+                            offset - 1
+                        } else {
+                            windows.len() - offset
+                        }
+                    },
+                    |current| {
+                        if forward {
+                            (current + offset) % windows.len()
+                        } else {
+                            (current + windows.len() - offset % windows.len()) % windows.len()
+                        }
+                    },
+                )
+            })
+            .find_map(|index| {
+                qualifying_windows
+                    .iter()
+                    .position(|target| *target == windows[index])
+            })
+            .expect("a qualifying target is present in window order");
+        (0..steps)
+            .filter_map(|step| {
+                let index = if forward {
+                    (first + step) % qualifying_windows.len()
+                } else {
+                    (first + qualifying_windows.len() - step % qualifying_windows.len())
+                        % qualifying_windows.len()
+                };
+                match qualifying_windows[index] {
+                    WindowCycleTarget::Local { ws_idx, tab_idx } => Some((ws_idx, tab_idx)),
+                    WindowCycleTarget::Remote(_) => None,
+                }
+            })
+            .collect()
+    }
+
     fn assert_tui_window_cycle(app: &mut App, action: NavigateAction, expected: &[(usize, usize)]) {
         for expected_window in expected {
             app.execute_tui_navigate_action(action, ActionContext::Prefix);
@@ -4361,8 +4529,8 @@ mod tests {
         let backward = (1..=order.len())
             .map(|step| order[(current_index + order.len() - step % order.len()) % order.len()])
             .collect::<Vec<_>>();
-        assert_tui_window_cycle(&mut app, NavigateAction::NextWindow, &forward);
-        assert_tui_window_cycle(&mut app, NavigateAction::PreviousWindow, &backward);
+        assert_tui_window_cycle(&mut app, NavigateAction::NextAnyWindow, &forward);
+        assert_tui_window_cycle(&mut app, NavigateAction::PreviousAnyWindow, &backward);
 
         let mut state = app_with_global_window_fixture().state;
         let order = window_cycle_order(&state);
@@ -4374,8 +4542,187 @@ mod tests {
         let backward = (1..=order.len())
             .map(|step| order[(current_index + order.len() - step % order.len()) % order.len()])
             .collect::<Vec<_>>();
-        assert_headless_window_cycle(&mut state, NavigateAction::NextWindow, &forward);
-        assert_headless_window_cycle(&mut state, NavigateAction::PreviousWindow, &backward);
+        assert_headless_window_cycle(&mut state, NavigateAction::NextAnyWindow, &forward);
+        assert_headless_window_cycle(&mut state, NavigateAction::PreviousAnyWindow, &backward);
+    }
+
+    fn app_with_attention_window_fixture() -> App {
+        let mut app = app_with_test_workspaces(&["working", "attention"]);
+        app.state.workspaces[0].test_add_tab(Some("done-unread"));
+        app.state.workspaces[1].test_add_tab(Some("idle-read"));
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+
+        for (workspace, tab, agent_state, seen) in [
+            (0, 0, crate::detect::AgentState::Working, true),
+            (0, 1, crate::detect::AgentState::Idle, false),
+            (1, 0, crate::detect::AgentState::Blocked, true),
+            (1, 1, crate::detect::AgentState::Idle, true),
+        ] {
+            set_tab_agent_state(&mut app.state, workspace, tab, agent_state);
+            let pane = app.state.workspaces[workspace].tabs[tab].root_pane;
+            app.state.workspaces[workspace].tabs[tab]
+                .panes
+                .get_mut(&pane)
+                .unwrap()
+                .seen = seen;
+        }
+        app.invalidate_window_cycle_snapshot();
+        app
+    }
+
+    #[test]
+    fn attention_window_cycle_skips_working_and_read_idle_tabs_and_wraps() {
+        let app = app_with_attention_window_fixture();
+        let qualifying = attention_window_targets(&app.state);
+        assert_eq!(
+            qualifying,
+            std::collections::HashSet::from([
+                WindowCycleTarget::Local {
+                    ws_idx: 0,
+                    tab_idx: 1,
+                },
+                WindowCycleTarget::Local {
+                    ws_idx: 1,
+                    tab_idx: 0,
+                },
+            ])
+        );
+        for (forward, action) in [
+            (true, NavigateAction::NextWindow),
+            (false, NavigateAction::PreviousWindow),
+        ] {
+            let mut app = app_with_attention_window_fixture();
+            let frozen_order = window_navigation_order(&app.state);
+            let mut visited = std::collections::HashSet::new();
+            for _ in 0..3 {
+                let expected =
+                    expected_attention_window_cycle(&app.state, &frozen_order, forward, 1);
+                assert_eq!(expected.len(), 1);
+                app.execute_tui_navigate_action(action, ActionContext::Prefix);
+                assert_eq!(active_window(&app.state), expected[0]);
+                visited.insert(WindowCycleTarget::Local {
+                    ws_idx: expected[0].0,
+                    tab_idx: expected[0].1,
+                });
+            }
+            assert!(visited.contains(&WindowCycleTarget::Local {
+                ws_idx: 0,
+                tab_idx: 1,
+            }));
+            assert!(visited.contains(&WindowCycleTarget::Local {
+                ws_idx: 1,
+                tab_idx: 0,
+            }));
+
+            let mut state = app_with_attention_window_fixture().state;
+            let mut visited = std::collections::HashSet::new();
+            for _ in 0..3 {
+                let order = window_navigation_order(&state);
+                let expected = expected_attention_window_cycle(&state, &order, forward, 1);
+                assert_eq!(expected.len(), 1);
+                execute_navigate_action_in_context(
+                    &mut state,
+                    &mut TerminalRuntimeRegistry::new(),
+                    action,
+                    ActionContext::Prefix,
+                );
+                assert_eq!(active_window(&state), expected[0]);
+                visited.insert(WindowCycleTarget::Local {
+                    ws_idx: expected[0].0,
+                    tab_idx: expected[0].1,
+                });
+            }
+            assert!(visited.contains(&WindowCycleTarget::Local {
+                ws_idx: 0,
+                tab_idx: 1,
+            }));
+            assert!(visited.contains(&WindowCycleTarget::Local {
+                ws_idx: 1,
+                tab_idx: 0,
+            }));
+        }
+    }
+
+    #[test]
+    fn attention_window_cycle_without_qualifying_tabs_keeps_focus() {
+        let mut app = app_with_test_workspaces(&["working", "idle"]);
+        app.state.ensure_test_terminals();
+        for workspace in &mut app.state.workspaces {
+            let pane = workspace.tabs[0].root_pane;
+            workspace.tabs[0].panes.get_mut(&pane).unwrap().seen = true;
+        }
+        set_tab_agent_state(&mut app.state, 0, 0, crate::detect::AgentState::Working);
+        set_tab_agent_state(&mut app.state, 1, 0, crate::detect::AgentState::Idle);
+        let current = active_window(&app.state);
+        app.execute_tui_navigate_action(NavigateAction::NextWindow, ActionContext::Prefix);
+        assert_eq!(active_window(&app.state), current);
+
+        let mut state = app_with_test_workspaces(&["working", "idle"]).state;
+        state.ensure_test_terminals();
+        for workspace in &mut state.workspaces {
+            let pane = workspace.tabs[0].root_pane;
+            workspace.tabs[0].panes.get_mut(&pane).unwrap().seen = true;
+        }
+        set_tab_agent_state(&mut state, 0, 0, crate::detect::AgentState::Working);
+        set_tab_agent_state(&mut state, 1, 0, crate::detect::AgentState::Idle);
+        let current = active_window(&state);
+        execute_navigate_action_in_context(
+            &mut state,
+            &mut TerminalRuntimeRegistry::new(),
+            NavigateAction::PreviousWindow,
+            ActionContext::Prefix,
+        );
+        assert_eq!(active_window(&state), current);
+    }
+
+    #[test]
+    fn attention_window_cycle_includes_remote_done_and_blocked_states_only() {
+        let (mut app, agent_ref) = app_with_remote_agent();
+        let base_entry = crate::ui::sidebar_thread_entries(&app.state)
+            .into_iter()
+            .next()
+            .expect("local remote-entry fixture");
+        for (agent_state, seen, attention_tier, expected) in [
+            (
+                crate::detect::AgentState::Working,
+                true,
+                crate::terminal::state::AttentionTier::None,
+                false,
+            ),
+            (
+                crate::detect::AgentState::Idle,
+                false,
+                crate::terminal::state::AttentionTier::None,
+                true,
+            ),
+            (
+                crate::detect::AgentState::Idle,
+                true,
+                crate::terminal::state::AttentionTier::None,
+                false,
+            ),
+            (
+                crate::detect::AgentState::Blocked,
+                true,
+                crate::terminal::state::AttentionTier::Blocked,
+                true,
+            ),
+        ] {
+            let mut entry = base_entry.clone();
+            entry.state = agent_state;
+            entry.seen = seen;
+            entry.attention_tier = Some(attention_tier);
+            app.state.remote_agent_panel_entries = vec![std::sync::Arc::new(
+                crate::ui::RemoteAgentPanelEntry::new(agent_ref.clone(), entry),
+            )];
+            assert_eq!(
+                attention_window_targets(&app.state)
+                    .contains(&WindowCycleTarget::Remote(agent_ref.clone())),
+                expected,
+                "state={agent_state:?}, seen={seen}"
+            );
+        }
     }
 
     #[test]
@@ -4586,7 +4933,7 @@ mod tests {
             .launch_argv = Some(argv);
 
         app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
-        app.focus_relative_window(true);
+        app.focus_relative_window(true, false);
 
         assert_eq!(app.state.active, Some(1));
         assert_eq!(
@@ -4736,7 +5083,7 @@ mod tests {
                 crate::ui::SidebarRow::RemoteAgent { entry, .. } if entry.agent_ref == agent_ref
             )));
 
-        app.focus_relative_window(true);
+        app.focus_relative_window(true, false);
 
         assert_eq!(app.state.sidebar_selected_remote_agent, Some(agent_ref));
         assert_eq!(app.remote_focus_operations.len(), 1);
@@ -4749,7 +5096,7 @@ mod tests {
         app.state.window_cycle_mode = crate::config::WindowCycleModeConfig::ThisMachineAndFleet;
         app.state.home = Some(crate::app::home::HomeState::default());
 
-        app.focus_relative_window(true);
+        app.focus_relative_window(true, false);
 
         assert!(app.state.home.is_none());
         assert!(app.state.active.is_some());
@@ -5247,18 +5594,18 @@ mod tests {
         app.state.focus_client_on_pane();
         app.state.prefix_code = KeyCode::Char('a');
         app.state.prefix_mods = KeyModifiers::CONTROL;
-        app.state.keybinds.next_window = crate::config::ActionKeybinds::prefix("n");
+        app.state.keybinds.next_any_window = crate::config::ActionKeybinds::prefix("shift+n");
+        set_window_agent_state(&mut app.state, (0, 1), crate::detect::AgentState::Blocked);
         for workspace in &app.state.workspaces {
             app.state
                 .sidebar_group_sorts
                 .insert(format!("space:{}", workspace.id), SidebarSortMode::Status);
         }
-        set_window_agent_state(&mut app.state, (0, 1), crate::detect::AgentState::Blocked);
         let initial_order = window_navigation_order(&app.state);
         assert!(initial_order.len() >= 3);
 
         let prefix = TerminalKey::new(app.state.prefix_code, app.state.prefix_mods);
-        let next = TerminalKey::new(KeyCode::Char('n'), KeyModifiers::empty());
+        let next = TerminalKey::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
         let passthrough = TerminalKey::new(KeyCode::F(12), KeyModifiers::empty());
         let initial_active = active_window(&app.state);
         let initial_index = initial_order
@@ -5578,14 +5925,14 @@ mod tests {
 
         assert_tui_window_cycle(
             &mut app,
-            NavigateAction::NextWindow,
+            NavigateAction::NextAnyWindow,
             &[(0, 1), (1, 0), (1, 1), (0, 0)],
         );
 
         let mut state = app.state;
         assert_headless_window_cycle(
             &mut state,
-            NavigateAction::PreviousWindow,
+            NavigateAction::PreviousAnyWindow,
             &[(1, 1), (1, 0), (0, 1), (0, 0)],
         );
     }
@@ -9063,7 +9410,7 @@ command = "printf literal > '{}'"
     }
 
     #[tokio::test]
-    async fn navigate_mode_runs_prefix_action_rhs_without_pressing_prefix_again() {
+    async fn navigate_mode_runs_shifted_any_window_without_pressing_prefix_again() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -9077,15 +9424,20 @@ command = "printf literal > '{}'"
         app.state.selected = 0;
         app.state.set_server_mode(Mode::Navigate);
 
-        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::SHIFT));
+        let key = TerminalKey::new(KeyCode::Char('n'), KeyModifiers::SHIFT);
+        assert_eq!(
+            action_for_key_for_test(&app.state, key.clone(), BindingDispatch::Prefix),
+            Some(NavigateAction::NextAnyWindow)
+        );
+        app.handle_navigate_key(key);
 
-        assert_eq!(app.state.workspaces.len(), 2);
-        assert_eq!(app.state.server_mode(), Mode::Navigate);
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.server_mode(), Mode::Terminal);
         assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
     }
 
     #[tokio::test]
-    async fn navigate_mode_matches_legacy_uppercase_shifted_letter() {
+    async fn navigate_mode_matches_legacy_uppercase_shifted_window_cycle() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -9099,10 +9451,15 @@ command = "printf literal > '{}'"
         app.state.selected = 0;
         app.state.set_server_mode(Mode::Navigate);
 
-        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('N'), KeyModifiers::empty()));
+        let key = TerminalKey::new(KeyCode::Char('N'), KeyModifiers::empty());
+        assert_eq!(
+            action_for_key_for_test(&app.state, key.clone(), BindingDispatch::Prefix),
+            Some(NavigateAction::NextAnyWindow)
+        );
+        app.handle_navigate_key(key);
 
-        assert_eq!(app.state.workspaces.len(), 2);
-        assert_eq!(app.state.server_mode(), Mode::Navigate);
+        assert_eq!(app.state.workspaces.len(), 1);
+        assert_eq!(app.state.server_mode(), Mode::Terminal);
         assert_eq!(app.state.effective_interaction_mode(), Mode::Terminal);
     }
 
@@ -9180,7 +9537,7 @@ command = "printf literal > '{}'"
     }
 
     #[tokio::test]
-    async fn legacy_uppercase_prefers_shifted_pane_binding_over_unshifted() {
+    async fn legacy_uppercase_prefers_shifted_window_binding_over_unshifted() {
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
             &Config::default(),
@@ -9194,9 +9551,14 @@ command = "printf literal > '{}'"
         app.state.selected = 0;
         app.state.set_server_mode(Mode::Navigate);
 
-        app.handle_navigate_key(TerminalKey::new(KeyCode::Char('P'), KeyModifiers::empty()));
+        let key = TerminalKey::new(KeyCode::Char('P'), KeyModifiers::empty());
+        assert_eq!(
+            action_for_key_for_test(&app.state, key.clone(), BindingDispatch::Prefix),
+            Some(NavigateAction::PreviousAnyWindow)
+        );
+        app.handle_navigate_key(key);
 
-        assert_eq!(app.state.effective_interaction_mode(), Mode::RenamePane);
+        assert_eq!(app.state.server_mode(), Mode::Terminal);
     }
 
     #[test]

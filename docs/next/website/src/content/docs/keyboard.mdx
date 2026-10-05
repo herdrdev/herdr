@@ -61,7 +61,8 @@ Tabs:
 
 | Action | Key |
 | --- | --- |
-| Next / previous tab across all Spaces | `prefix+n` / `prefix+p` |
+| Next / previous tab needing attention across all Spaces | `prefix+n` / `prefix+p` |
+| Next / previous tab across all Spaces | `prefix+shift+n` / `prefix+shift+p` |
 | Next / previous tab in this Space | `prefix+ctrl+n` / `prefix+ctrl+p` |
 | Jump to tab 1–9 | `prefix+1..9` |
 | Rename tab | `prefix+shift+t` |
@@ -71,7 +72,7 @@ Workspaces and session:
 
 | Action | Key |
 | --- | --- |
-| New workspace | `prefix+shift+n` |
+| New workspace | `prefix+alt+n` |
 | New thread, picking its project first | `prefix+c` |
 | Open bottom-docked agent launcher | `prefix+y` |
 | Search agents from the sidebar | `prefix+f` |
@@ -160,8 +161,10 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_window = "prefix+p" # previous tab across all Spaces
-next_window = "prefix+n" # next tab across all Spaces
+previous_window = "prefix+p" # previous tab needing attention across all Spaces
+next_window = "prefix+n" # next tab needing attention across all Spaces
+previous_any_window = "prefix+shift+p" # previous tab across all Spaces
+next_any_window = "prefix+shift+n" # next tab across all Spaces
 next_blocked_window = "prefix+b" # next blocked tab across all Spaces
 previous_tab = ["prefix+ctrl+p", "ctrl+alt+["]
 next_tab = ["prefix+ctrl+n", "ctrl+alt+]"]
@@ -174,11 +177,11 @@ zoom = ["prefix+z", "ctrl+alt+z"]
 toggle_sidebar = "prefix+shift+b"
 ```
 
-The four split directions have collision-free defaults: `prefix+v` is right, `prefix+shift+v` is left, `prefix+minus` is down, and `prefix+shift+minus` is up. The legacy `split_vertical` and `split_horizontal` names remain right and down. `next_window` and `previous_window` cycle every tab, including tabs without agents. The order follows the workspace list, then each workspace's tab list, and wraps at both ends. Sidebar and Space collapse state do not change it. `next_tab` and `previous_tab` stay within the active Space.
+`next_window` and `previous_window` cycle only through tabs that need attention: unread Done tabs and tabs with blockers or unanswered questions. Working and settled/read tabs are skipped. `next_any_window` and `previous_any_window` cycle every tab, including tabs without agents. Both cycles follow the sidebar order, freeze that order during a quick burst, and wrap at both ends. `next_tab` and `previous_tab` stay within the active Space. The new workspace and rename pane defaults are `prefix+alt+n` and `prefix+alt+p`.
 
 `next_blocked_window` moves forward through that same global order and stops only on a tab whose pane state rolls up to `blocked`. It wraps after the last match. If no tab is blocked, focus stays where it is. The default is `prefix+b`; `toggle_sidebar` uses `prefix+shift+b`.
 
-The same global cycle is available without a keybinding: `herdr window next` and `herdr window previous`. Both use the existing tab list/focus API and wrap at either end.
+The all-tab cycle is also available without a keybinding: `herdr window next` and `herdr window previous`. Both use the existing tab list/focus API and wrap at either end.
 
 A few `ctrl+alt` chords are taken elsewhere. Avoid these:
 

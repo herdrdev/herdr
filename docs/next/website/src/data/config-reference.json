@@ -579,7 +579,7 @@
         {
           "key": "keys.new_workspace",
           "type": "keybinding",
-          "default": "\"prefix+shift+n\"",
+          "default": "\"prefix+alt+n\"",
           "description": "Create a new workspace."
         },
         {
@@ -849,7 +849,7 @@
         {
           "key": "keys.rename_pane",
           "type": "keybinding",
-          "default": "\"prefix+shift+p\"",
+          "default": "\"prefix+alt+p\"",
           "description": "Rename the focused pane."
         },
         {
@@ -934,13 +934,25 @@
           "key": "keys.previous_window",
           "type": "keybinding",
           "default": "\"prefix+p\"",
-          "description": "Focus the previous tab across all workspaces in canonical order."
+          "description": "Focus the previous tab needing attention across all workspaces in sidebar order."
         },
         {
           "key": "keys.next_window",
           "type": "keybinding",
           "default": "\"prefix+n\"",
-          "description": "Focus the next tab across all workspaces in canonical order."
+          "description": "Focus the next tab needing attention across all workspaces in sidebar order."
+        },
+        {
+          "key": "keys.previous_any_window",
+          "type": "keybinding",
+          "default": "\"prefix+shift+p\"",
+          "description": "Focus the previous tab across all workspaces in sidebar order."
+        },
+        {
+          "key": "keys.next_any_window",
+          "type": "keybinding",
+          "default": "\"prefix+shift+n\"",
+          "description": "Focus the next tab across all workspaces in sidebar order."
         },
         {
           "key": "keys.next_blocked_window",

@@ -45,7 +45,8 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 
 | アクション | キー |
 | --- | --- |
-| 全 Space の次 / 前のタブ | `prefix+n` / `prefix+p` |
+| 全 Space の次 / 前の要対応タブ | `prefix+n` / `prefix+p` |
+| 全 Space の次 / 前のタブ | `prefix+shift+n` / `prefix+shift+p` |
 | この Space の次 / 前のタブ | `prefix+ctrl+n` / `prefix+ctrl+p` |
 | タブ 1–9 にジャンプ | `prefix+1..9` |
 | タブの名前を変更 | `prefix+shift+t` |
@@ -55,7 +56,7 @@ Herdr はマウスネイティブです。キーバインドをひとつも覚�
 
 | アクション | キー |
 | --- | --- |
-| 新しいワークスペース | `prefix+shift+n` |
+| 新しいワークスペース | `prefix+alt+n` |
 | ワークスペースの名前を変更 | `prefix+shift+w` |
 | ワークスペースを閉じる | `prefix+shift+d` |
 | Goto ピッカー | `prefix+g` |
@@ -123,8 +124,10 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_window = "prefix+p" # 全 Space の前のタブ
-next_window = "prefix+n" # 全 Space の次のタブ
+previous_window = "prefix+p" # 全 Space の前の要対応タブ
+next_window = "prefix+n" # 全 Space の次の要対応タブ
+previous_any_window = "prefix+shift+p" # 全 Space の前のタブ
+next_any_window = "prefix+shift+n" # 全 Space の次のタブ
 next_blocked_window = "prefix+b" # 全 Space の次の blocked タブ
 previous_tab = ["prefix+ctrl+p", "ctrl+alt+["]
 next_tab = ["prefix+ctrl+n", "ctrl+alt+]"]
@@ -137,7 +140,7 @@ zoom = ["prefix+z", "ctrl+alt+z"]
 toggle_sidebar = "prefix+shift+b"
 ```
 
-4 方向の分割には衝突しないデフォルトがあります。`prefix+v` は右、`prefix+shift+v` は左、`prefix+minus` は下、`prefix+shift+minus` は上です。従来の `split_vertical` と `split_horizontal` は引き続き右と下を表します。`next_window` と `previous_window` は、エージェントのないタブも含むすべてのタブを、ワークスペース順、その中のタブ順で循環し、両端でラップします。サイドバーや Space の折りたたみ状態は順序に影響しません。`next_tab` と `previous_tab` はアクティブな Space 内だけを移動します。
+`next_window` と `previous_window` は、未読の Done タブとブロッカーや未回答の質問があるタブだけを循環します。作業中や既読・settled のタブはスキップします。`next_any_window` と `previous_any_window` は、エージェントのないタブも含めてすべてのタブを循環します。両方のサイクルはサイドバー順を使い、短時間に続けて操作している間は順序を固定し、両端でラップします。`next_tab` と `previous_tab` はアクティブな Space 内だけを移動します。新しい Space とペイン名変更のデフォルトは `prefix+alt+n` と `prefix+alt+p` です。
 
 `next_blocked_window` は同じグローバル順序を前に進み、ペイン状態が `blocked` に集約されるタブだけで停止します。最後の一致の後は先頭に戻ります。blocked なタブがなければ、フォーカスは移動しません。デフォルトは `prefix+b` です。`toggle_sidebar` は `prefix+shift+b` を使います。
 

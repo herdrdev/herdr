@@ -944,7 +944,7 @@ pub struct KeysConfig {
     pub help: BindingConfig,
     /// Open settings. Default: "prefix+s"
     pub settings: BindingConfig,
-    /// Create a new workspace. Default: "prefix+shift+n"
+    /// Create a new workspace. Default: "prefix+alt+n"
     pub new_workspace: BindingConfig,
     /// Open the project picker and start a new Home thread in the project it
     /// selects. Default: "prefix+c"
@@ -1033,10 +1033,14 @@ pub struct KeysConfig {
     pub move_tab_previous: BindingConfig,
     /// Move the active tab one position toward the back. Unset by default.
     pub move_tab_next: BindingConfig,
-    /// Focus the previous tab across all workspaces. Default: "prefix+p".
+    /// Focus the previous tab needing attention across all workspaces. Default: "prefix+p".
     pub previous_window: BindingConfig,
-    /// Focus the next tab across all workspaces. Default: "prefix+n".
+    /// Focus the next tab needing attention across all workspaces. Default: "prefix+n".
     pub next_window: BindingConfig,
+    /// Focus the previous tab across all workspaces. Default: "prefix+shift+p".
+    pub previous_any_window: BindingConfig,
+    /// Focus the next tab across all workspaces. Default: "prefix+shift+n".
+    pub next_any_window: BindingConfig,
     /// Focus the next blocked tab across all workspaces. Default: "prefix+b".
     pub next_blocked_window: BindingConfig,
     /// Switch to tab 1-9. Default: "prefix+1..9".
@@ -1045,7 +1049,7 @@ pub struct KeysConfig {
     pub switch_workspace: BindingConfig,
     /// Close the active tab. Default: "prefix+shift+x".
     pub close_tab: BindingConfig,
-    /// Rename the focused pane. Default: "prefix+shift+p".
+    /// Rename the focused pane. Default: "prefix+alt+p".
     pub rename_pane: BindingConfig,
     /// Open the focused pane scrollback in $EDITOR. Default: "prefix+e".
     pub edit_scrollback: BindingConfig,
@@ -1287,6 +1291,10 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     next_window: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    previous_any_window: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_any_window: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     next_blocked_window: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     switch_tab: Option<BindingConfig>,
@@ -1486,6 +1494,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(move_tab_next);
         apply_field!(previous_window);
         apply_field!(next_window);
+        apply_field!(previous_any_window);
+        apply_field!(next_any_window);
         apply_field!(next_blocked_window);
         apply_field!(switch_tab);
         apply_field!(switch_workspace);
@@ -1649,6 +1659,8 @@ impl KeysConfig {
         copy_effective_action_field!(move_tab_next, keybinds.move_tab_next);
         copy_effective_action_field!(previous_window, keybinds.previous_window);
         copy_effective_action_field!(next_window, keybinds.next_window);
+        copy_effective_action_field!(previous_any_window, keybinds.previous_any_window);
+        copy_effective_action_field!(next_any_window, keybinds.next_any_window);
         copy_effective_action_field!(next_blocked_window, keybinds.next_blocked_window);
         copy_effective_indexed_field!(switch_tab, keybinds.switch_tab);
         copy_effective_indexed_field!(switch_workspace, keybinds.switch_workspace);
@@ -2221,7 +2233,7 @@ impl Default for KeysConfig {
             prefix: "ctrl+b".into(),
             help: BindingConfig::one("prefix+?"),
             settings: BindingConfig::one("prefix+s"),
-            new_workspace: BindingConfig::one("prefix+shift+n"),
+            new_workspace: BindingConfig::one("prefix+alt+n"),
             new_thread: BindingConfig::one("prefix+c"),
             new_agent_dock: BindingConfig::one("prefix+y"),
             new_worktree: BindingConfig::one("prefix+shift+g"),
@@ -2267,11 +2279,13 @@ impl Default for KeysConfig {
             move_tab_next: BindingConfig::empty(),
             previous_window: BindingConfig::one("prefix+p"),
             next_window: BindingConfig::one("prefix+n"),
+            previous_any_window: BindingConfig::one("prefix+shift+p"),
+            next_any_window: BindingConfig::one("prefix+shift+n"),
             next_blocked_window: BindingConfig::one("prefix+b"),
             switch_tab: BindingConfig::one("prefix+1..9"),
             switch_workspace: BindingConfig::empty(),
             close_tab: BindingConfig::one("prefix+shift+x"),
-            rename_pane: BindingConfig::one("prefix+shift+p"),
+            rename_pane: BindingConfig::one("prefix+alt+p"),
             edit_scrollback: BindingConfig::one("prefix+e"),
             copy_mode: BindingConfig::one("prefix+["),
             focus_pane_left: BindingConfig::one("prefix+h"),

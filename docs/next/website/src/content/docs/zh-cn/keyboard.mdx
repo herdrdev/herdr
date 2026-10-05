@@ -45,7 +45,8 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 | 动作 | 按键 |
 | --- | --- |
-| 所有 Space 中的下一个 / 上一个标签页 | `prefix+n` / `prefix+p` |
+| 所有 Space 中下一个 / 上一个需要关注的标签页 | `prefix+n` / `prefix+p` |
+| 所有 Space 中的下一个 / 上一个标签页 | `prefix+shift+n` / `prefix+shift+p` |
 | 当前 Space 中的下一个 / 上一个标签页 | `prefix+ctrl+n` / `prefix+ctrl+p` |
 | 跳转到标签页 1–9 | `prefix+1..9` |
 | 重命名标签页 | `prefix+shift+t` |
@@ -55,7 +56,7 @@ Herdr 是鼠标原生的。你可以点击窗格、标签页、工作区和智�
 
 | 动作 | 按键 |
 | --- | --- |
-| 新建工作区 | `prefix+shift+n` |
+| 新建工作区 | `prefix+alt+n` |
 | 重命名工作区 | `prefix+shift+w` |
 | 关闭工作区 | `prefix+shift+d` |
 | Goto 选择器 | `prefix+g` |
@@ -123,8 +124,10 @@ focus_pane_left = ["prefix+h", "ctrl+alt+h"]
 focus_pane_down = ["prefix+j", "ctrl+alt+j"]
 focus_pane_up = ["prefix+k", "ctrl+alt+k"]
 focus_pane_right = ["prefix+l", "ctrl+alt+l"]
-previous_window = "prefix+p" # 所有 Space 中的上一个标签页
-next_window = "prefix+n" # 所有 Space 中的下一个标签页
+previous_window = "prefix+p" # 所有 Space 中上一个需要关注的标签页
+next_window = "prefix+n" # 所有 Space 中下一个需要关注的标签页
+previous_any_window = "prefix+shift+p" # 所有 Space 中的上一个标签页
+next_any_window = "prefix+shift+n" # 所有 Space 中的下一个标签页
 next_blocked_window = "prefix+b" # 所有 Space 中的下一个 blocked 标签页
 previous_tab = ["prefix+ctrl+p", "ctrl+alt+["]
 next_tab = ["prefix+ctrl+n", "ctrl+alt+]"]
@@ -137,7 +140,7 @@ zoom = ["prefix+z", "ctrl+alt+z"]
 toggle_sidebar = "prefix+shift+b"
 ```
 
-四个分割方向都有互不冲突的默认绑定:`prefix+v` 向右,`prefix+shift+v` 向左,`prefix+minus` 向下,`prefix+shift+minus` 向上。旧名称 `split_vertical` 和 `split_horizontal` 仍分别表示向右和向下。`next_window` 和 `previous_window` 会按工作区顺序、再按各工作区的标签页顺序循环所有标签页,包括没有智能体的标签页,并在两端循环。侧边栏和 Space 的折叠状态不会改变顺序。`next_tab` 和 `previous_tab` 只在当前 Space 中移动。
+`next_window` 和 `previous_window` 只循环需要关注的标签页：未读 Done 标签页，以及有阻塞项或未回答问题的标签页。工作中和已读/已结算的标签页会被跳过。`next_any_window` 和 `previous_any_window` 会循环所有标签页，包括没有智能体的标签页。两种循环都按侧边栏顺序移动，在快速连续操作期间固定顺序，并在两端循环。`next_tab` 和 `previous_tab` 只在当前 Space 中移动。新建 Space 和重命名窗格的默认键位分别是 `prefix+alt+n` 和 `prefix+alt+p`。
 
 `next_blocked_window` 按相同的全局顺序向前移动,只停在窗格状态汇总为 `blocked` 的标签页。到达最后一个匹配项后会回到开头。如果没有 blocked 标签页,焦点保持不变。默认键位是 `prefix+b`;`toggle_sidebar` 使用 `prefix+shift+b`。
 

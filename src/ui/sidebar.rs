@@ -424,7 +424,7 @@ fn sidebar_host_tag_color(app: &AppState, entry: &AgentPanelEntry, p: &Palette) 
     }
 }
 
-fn entry_has_unread_done_marker(entry: &AgentPanelEntry) -> bool {
+pub(crate) fn entry_has_unread_done_marker(entry: &AgentPanelEntry) -> bool {
     entry.has_agent && entry.state == AgentState::Idle && !entry.seen
 }
 

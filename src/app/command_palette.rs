@@ -64,6 +64,8 @@ pub(crate) fn action_for_field(field: &str) -> Option<NavigateAction> {
         "move_tab_next" => NavigateAction::MoveTabNext,
         "previous_window" => NavigateAction::PreviousWindow,
         "next_window" => NavigateAction::NextWindow,
+        "previous_any_window" => NavigateAction::PreviousAnyWindow,
+        "next_any_window" => NavigateAction::NextAnyWindow,
         "next_blocked_window" => NavigateAction::NextBlockedWindow,
         "focus_pane_left" => NavigateAction::FocusPaneLeft,
         "focus_pane_down" => NavigateAction::FocusPaneDown,

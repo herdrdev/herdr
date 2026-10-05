@@ -9505,7 +9505,7 @@ esac
         server.app.state.status_git_cwd = Some("/first".into());
         server.app.state.status_git_branch = Some("first-branch".into());
 
-        server.app.route_client_input(vec![0x02, b'n']);
+        server.app.route_client_input(vec![0x02, b'N']);
         assert_eq!(server.app.state.workspaces[0].active_tab, second_tab);
         let (stale_cwd, stale_branch) =
             crate::ui::focused_status_context_for_test(&server.app.state);

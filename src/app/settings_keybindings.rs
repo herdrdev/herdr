@@ -157,6 +157,12 @@ const BUILT_IN_GROUPS: &[(&str, &[BuiltIn])] = &[
                 &kb.previous_window
             }),
             built_in("next_window", "next window", |kb| &kb.next_window),
+            built_in("previous_any_window", "previous any window", |kb| {
+                &kb.previous_any_window
+            }),
+            built_in("next_any_window", "next any window", |kb| {
+                &kb.next_any_window
+            }),
             built_in("next_blocked_window", "next blocked window", |kb| {
                 &kb.next_blocked_window
             }),
