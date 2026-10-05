@@ -470,13 +470,17 @@ fn foreground_shell_agent_action(
             ForegroundShellAgentAction::ObserveProbe
         };
     }
+    if agent_job == AgentJobStatus::ReplacedInFront {
+        // The held agent's identity must not pass to the new process.
+        return ForegroundShellAgentAction::ReportProcessExit;
+    }
     if new_agent.is_some() {
         return ForegroundShellAgentAction::ObserveProbe;
     }
     match agent_job {
         AgentJobStatus::Background => return ForegroundShellAgentAction::HoldBackgroundAgent,
         AgentJobStatus::ExitedInBackground => return ForegroundShellAgentAction::ReportProcessExit,
-        AgentJobStatus::Unknown => {}
+        AgentJobStatus::Unknown | AgentJobStatus::ReplacedInFront => {}
     }
 
     if foreground_is_pane_shell {
@@ -575,12 +579,23 @@ fn observe_foreground_agent(
     pane_id: PaneId,
 ) -> (ForegroundShellAgentAction, bool) {
     let previous_agent = agent_presence.current_agent();
-    let agent_job_status = agent_job.status(
-        previous_agent.is_some() && observation.agent.is_none() && !*foreground_shell_exit_reported,
-        observation.shell_pid,
-        observation.process_group_id,
-        |shell_pid, pid, start_token| processes.live_process_group(shell_pid, pid, start_token),
-    );
+    let same_agent_in_front = previous_agent.is_some()
+        && observation.agent == previous_agent
+        && !*foreground_shell_exit_reported;
+    let agent_job_status = if same_agent_in_front
+        && agent_job.replaced_in_front(observation.agent_pid, |pid| processes.start_token(pid))
+    {
+        AgentJobStatus::ReplacedInFront
+    } else {
+        agent_job.status(
+            previous_agent.is_some()
+                && observation.agent.is_none()
+                && !*foreground_shell_exit_reported,
+            observation.shell_pid,
+            observation.process_group_id,
+            |shell_pid, pid, start_token| processes.live_process_group(shell_pid, pid, start_token),
+        )
+    };
     let action = foreground_shell_agent_action(
         previous_agent,
         observation.agent,
@@ -5381,6 +5396,15 @@ mod tests {
                 agent: Option<Agent>,
                 foreground_group: u32,
             ) -> (ForegroundShellAgentAction, bool) {
+                self.probe_process(agent, AGENT_PID, foreground_group)
+            }
+
+            pub(super) fn probe_process(
+                &mut self,
+                agent: Option<Agent>,
+                agent_pid: u32,
+                foreground_group: u32,
+            ) -> (ForegroundShellAgentAction, bool) {
                 let result = observe_foreground_agent(
                     &mut self.presence,
                     &mut self.job,
@@ -5389,7 +5413,7 @@ mod tests {
                     ForegroundAgentObservation {
                         shell_pid: SHELL,
                         agent,
-                        agent_pid: agent.map(|_| AGENT_PID),
+                        agent_pid: agent.map(|_| agent_pid),
                         process_group_id: Some(foreground_group),
                         foreground_is_pane_shell: foreground_group == SHELL,
                     },
@@ -5489,6 +5513,42 @@ mod tests {
             .spawn(held_agent::AGENT_PID, 9_000, held_agent::WRAPPER_JOB);
 
         pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn same_kind_agent_started_in_front_of_a_held_one_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        // A second Claude starts in front of the suspended one.
+        pane.processes.spawn(31, 9_000, 30);
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
+        assert!(!pane.job.in_background());
+    }
+
+    #[test]
+    fn same_kind_agent_reusing_the_held_pid_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.spawn(held_agent::AGENT_PID, 9_000, 30);
+
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
     }
 
     #[test]

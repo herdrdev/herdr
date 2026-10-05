@@ -17,6 +17,8 @@ pub(super) enum AgentJobStatus {
     Background,
     /// Was held in the background and has since exited.
     ExitedInBackground,
+    /// Was held, and a different process of the same agent kind is in front.
+    ReplacedInFront,
 }
 
 /// The identified agent process. The start token tells it apart from a later
@@ -70,6 +72,20 @@ impl AgentJobTracker {
         }
     }
 
+    /// While an agent is held, a same-kind agent in front is that agent only
+    /// when its pid and start token match the held process.
+    pub(super) fn replaced_in_front(
+        &self,
+        identified_pid: Option<u32>,
+        start_token: impl FnOnce(u32) -> Option<u64>,
+    ) -> bool {
+        let Some(held) = self.process.filter(|_| self.in_background) else {
+            return false;
+        };
+        identified_pid
+            .is_none_or(|pid| pid != held.pid || start_token(pid) != Some(held.start_token))
+    }
+
     pub(super) fn observe(
         &mut self,
         status: AgentJobStatus,
@@ -80,13 +96,14 @@ impl AgentJobTracker {
     ) {
         if current_agent.is_none() {
             *self = Self::default();
+        } else if status == AgentJobStatus::ReplacedInFront {
+            // Keep holding until the held agent's exit has been reported.
         } else if identified_agent == current_agent {
             self.in_background = false;
-            if self.process.map(|process| process.pid) != identified_pid {
-                self.process = identified_pid.and_then(|pid| {
-                    start_token(pid).map(|start_token| AgentProcess { pid, start_token })
-                });
-            }
+            // Reread every time: a new process may have reused the pid.
+            self.process = identified_pid.and_then(|pid| {
+                start_token(pid).map(|start_token| AgentProcess { pid, start_token })
+            });
         } else if status == AgentJobStatus::Background {
             self.in_background = true;
         }
@@ -192,20 +209,41 @@ mod tests {
     }
 
     #[test]
-    fn known_agent_process_keeps_its_start_token() {
+    fn reidentified_agent_refreshes_its_start_token() {
+        const REUSED_START: u64 = 9_000;
         let mut tracker = acquired(Agent::Pi);
+        // A new Pi reused the pid between two probes.
         tracker.observe(
             AgentJobStatus::Unknown,
             Some(Agent::Pi),
             Some(Agent::Pi),
             Some(AGENT_PID),
-            |_| panic!("start token reread for a known process"),
+            |_| Some(REUSED_START),
         );
 
         assert_eq!(
-            tracker.status(true, SHELL, Some(SHELL), live_agent),
+            tracker.status(true, SHELL, Some(SHELL), |_, pid, token| {
+                (pid == AGENT_PID && token == REUSED_START).then_some(WRAPPER_JOB)
+            }),
             AgentJobStatus::Background
         );
+    }
+
+    #[test]
+    fn held_agent_is_replaced_only_by_a_different_process() {
+        let mut tracker = acquired(Agent::Claude);
+        assert!(
+            !tracker.replaced_in_front(Some(31), |_| Some(1)),
+            "not held"
+        );
+        let status = tracker.status(true, SHELL, Some(SHELL), live_agent);
+        tracker.observe(status, Some(Agent::Claude), None, None, |_| None);
+
+        assert!(!tracker.replaced_in_front(Some(AGENT_PID), |_| Some(AGENT_START)));
+        assert!(tracker.replaced_in_front(Some(31), |_| Some(AGENT_START)));
+        assert!(tracker.replaced_in_front(Some(AGENT_PID), |_| Some(9_000)));
+        assert!(tracker.replaced_in_front(Some(AGENT_PID), |_| None));
+        assert!(tracker.replaced_in_front(None, |_| Some(AGENT_START)));
     }
 
     #[test]

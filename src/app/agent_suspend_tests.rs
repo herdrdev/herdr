@@ -242,3 +242,44 @@ fn suspended_pi_keeps_session_name_and_authority_for_its_next_reports() {
     assert_eq!(session_value(&app, &terminal_id), Some(pi_session().value));
     app.assert_invariants_for_test();
 }
+
+/// The events detection publishes when a new process of the same agent kind
+/// replaces the previous one without the shell in between.
+fn same_kind_replacement(app: &mut AppState, pane_id: PaneId, agent: Agent, at: Instant) {
+    detection_state(app, pane_id, Some(agent), true, at);
+    detect(app, pane_id, agent, at + Duration::from_millis(1));
+}
+
+#[test]
+fn same_kind_replacement_drops_the_previous_claude_session() {
+    let start = Instant::now();
+    let (mut app, pane_id, terminal_id) = claude_with_session(start);
+
+    same_kind_replacement(
+        &mut app,
+        pane_id,
+        Agent::Claude,
+        start + Duration::from_secs(1),
+    );
+
+    assert_eq!(session_value(&app, &terminal_id), None);
+    assert_eq!(
+        app.terminals[&terminal_id].effective_agent_label(),
+        Some("claude")
+    );
+    app.assert_invariants_for_test();
+}
+
+#[test]
+fn same_kind_replacement_drops_the_previous_pi_session_and_authority() {
+    let start = Instant::now();
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(start);
+
+    same_kind_replacement(&mut app, pane_id, Agent::Pi, start + Duration::from_secs(1));
+    pi_report(&mut app, pane_id, AgentState::Working, 101);
+
+    let terminal = &app.terminals[&terminal_id];
+    assert!(!terminal.full_lifecycle_hook_authority_active());
+    assert_eq!(session_value(&app, &terminal_id), None);
+    app.assert_invariants_for_test();
+}
