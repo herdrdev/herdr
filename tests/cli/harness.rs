@@ -81,7 +81,7 @@ impl Drop for SpawnedServerProcess {
 impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
+        crate::support::stop_spawned_herdr(&mut *self.child);
 
         if let Some(pid) = pid {
             let deadline = Instant::now() + Duration::from_secs(2);

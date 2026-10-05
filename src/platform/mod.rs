@@ -51,6 +51,47 @@ pub struct ForegroundJob {
     pub processes: Vec<ForegroundProcess>,
 }
 
+/// A request from outside the process to stop the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerQuitSignal {
+    #[cfg(unix)]
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+    #[cfg(not(unix))]
+    ConsoleControl,
+}
+
+impl std::fmt::Display for ServerQuitSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            #[cfg(unix)]
+            Self::Interrupt => "SIGINT",
+            #[cfg(unix)]
+            Self::Terminate => "SIGTERM",
+            #[cfg(not(unix))]
+            Self::ConsoleControl => "console control event",
+        })
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn spawn_server_signal_monitor(
+    on_quit: impl Fn(ServerQuitSignal) + Send + Sync + 'static,
+) {
+    if let Err(err) = ctrlc::set_handler(move || on_quit(ServerQuitSignal::ConsoleControl)) {
+        tracing::warn!(%err, "failed to install server stop handler");
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn ignore_server_hangup() {}
+
+#[cfg(not(unix))]
+pub(crate) fn local_stream_peer_description(_stream: &crate::ipc::LocalStream) -> Option<String> {
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
     Hangup,
@@ -331,7 +372,8 @@ mod unix_common;
 pub(crate) mod unix_image_files;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, ignore_server_hangup,
+    local_stream_peer_description, spawn_server_signal_monitor, RemoteBridgeWake,
 };
 
 mod client_state;

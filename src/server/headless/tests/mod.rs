@@ -90,7 +90,8 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         .set_nonblocking(ListenerNonblockingMode::Accept)
         .expect("set listener nonblocking");
     let (server_event_tx, server_event_rx) = mpsc::channel(64);
-    let should_quit = Arc::new(AtomicBool::new(false));
+    let server_stop = ServerStop::default();
+    let should_quit = server_stop.flag().clone();
     #[cfg(windows)]
     spawn_windows_client_accept_thread(listener, should_quit.clone(), server_event_tx.clone());
     let server_keybindings = app_keybindings(&app);
@@ -130,6 +131,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
         should_quit,
+        server_stop,
         server_event_rx,
         server_event_tx,
     }

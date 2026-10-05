@@ -67,6 +67,7 @@ use crate::server::pane_input::{
     apply_client_pane_input_events, apply_client_popup_input_events, apply_terminal_attach_input,
     apply_terminal_attach_scroll, terminal_attach_mouse_position,
 };
+use crate::server::shutdown::{ServerStop, ShutdownReason};
 use crate::server::socket_paths::{
     client_socket_path, prepare_socket_path, restrict_socket_permissions,
 };
@@ -240,8 +241,9 @@ pub struct HeadlessServer {
     /// Imported panes get one app-safe resize nudge after the first client attaches.
     #[cfg(unix)]
     pending_handoff_repaint_nudge: bool,
-    /// Flag set by Ctrl+C or `server stop` signal.
+    /// Flag set by a stop signal or `server stop`; shares `server_stop`'s flag.
     should_quit: Arc<AtomicBool>,
+    server_stop: ServerStop,
     host_shutdown_requested: Arc<AtomicBool>,
     /// Channel for receiving server events from client connection threads.
     server_event_rx: mpsc::Receiver<ServerEvent>,
@@ -306,8 +308,9 @@ impl HeadlessServer {
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
-        should_quit: Arc<AtomicBool>,
+        server_stop: ServerStop,
     ) -> io::Result<Self> {
+        let should_quit = server_stop.flag().clone();
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
 
@@ -372,6 +375,7 @@ impl HeadlessServer {
             #[cfg(unix)]
             pending_handoff_repaint_nudge: false,
             should_quit,
+            server_stop,
             server_event_rx,
             server_event_tx,
         })
@@ -389,10 +393,12 @@ impl HeadlessServer {
     pub async fn run(&mut self) -> io::Result<()> {
         crate::logging::startup("server");
 
-        // Register SIGINT handler for graceful shutdown.
-        let should_quit = self.should_quit.clone();
+        let server_stop = self.server_stop.clone();
         let quit_notify = self.server_event_tx.clone();
-        ctrlc_handler(should_quit, quit_notify);
+        crate::platform::spawn_server_signal_monitor(move |signal| {
+            server_stop.request(ShutdownReason::Signal(signal));
+            let _ = quit_notify.try_send(ServerEvent::QuitSignal);
+        });
         let quit_notify = self.server_event_tx.clone();
         let _host_shutdown = crate::platform::HostShutdownMonitor::start(
             self.host_shutdown_requested.clone(),
@@ -3324,16 +3330,6 @@ impl Drop for HeadlessServer {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Installs a Ctrl+C handler that sets the should_quit flag and wakes up
-/// the event loop by sending a QuitSignal on the server event channel.
-fn ctrlc_handler(should_quit: Arc<AtomicBool>, server_event_tx: mpsc::Sender<ServerEvent>) {
-    let _ = ctrlc::set_handler(move || {
-        should_quit.store(true, Ordering::Release);
-        // Wake up the event loop so the quit flag is checked promptly.
-        let _ = server_event_tx.try_send(ServerEvent::QuitSignal);
-    });
-}
 
 /// Sleep until a deadline, or return pending if none.
 async fn sleep_until_or_pending(deadline: Option<Instant>) {
