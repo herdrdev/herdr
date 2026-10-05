@@ -216,7 +216,6 @@ impl App {
             }
             NavigateAction::OpenAgentFinder => {
                 leave_navigate_mode(&mut self.state);
-                self.state.focus_client_on_sidebar();
                 self.state.open_agent_finder();
             }
             NavigateAction::NewWorktree => {

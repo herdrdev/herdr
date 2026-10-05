@@ -554,8 +554,19 @@ pub(crate) fn render_mobile_panel(
 
     let areas = mobile_switcher_areas(app);
     if app.agent_finder_saved_query.is_some() {
+        let icon = if app.nerd_font { "⌕" } else { "Find" };
+        let query = app.sidebar_work_filter.query.as_str();
+        let search = if query.is_empty() {
+            format!("{icon} ▌")
+        } else {
+            format!("{icon} {query}▌")
+        };
         frame.render_widget(
-            Paragraph::new(" ⌕ search agents").style(
+            Paragraph::new(truncate_end(
+                &search,
+                usize::from(areas.close.x.saturating_sub(area.x)),
+            ))
+            .style(
                 Style::default()
                     .fg(p.text)
                     .bg(p.panel_bg)
@@ -571,7 +582,75 @@ pub(crate) fn render_mobile_panel(
                 p,
             );
         }
-        super::render_agent_finder_preview(app, frame, areas.viewport);
+        if areas.viewport.height > 2 {
+            let footer_height = 2.min(areas.viewport.height);
+            let body_height = areas.viewport.height.saturating_sub(footer_height);
+            let results_height = (body_height / 2).max(1);
+            let results = Rect::new(
+                areas.viewport.x,
+                areas.viewport.y,
+                areas.viewport.width,
+                results_height,
+            );
+            super::sidebar::render_agent_finder_results_in_area(app, frame, results);
+
+            let divider_y = results.y.saturating_add(results.height);
+            if divider_y < areas.viewport.y.saturating_add(areas.viewport.height) {
+                draw_horizontal_rule(
+                    frame,
+                    Rect::new(areas.viewport.x, divider_y, areas.viewport.width, 1),
+                    p,
+                );
+            }
+            let footer_y = areas
+                .viewport
+                .y
+                .saturating_add(areas.viewport.height)
+                .saturating_sub(footer_height);
+            let preview_y = divider_y.saturating_add(1);
+            if preview_y < footer_y {
+                super::render_agent_finder_preview(
+                    app,
+                    frame,
+                    Rect::new(
+                        areas.viewport.x,
+                        preview_y,
+                        areas.viewport.width,
+                        footer_y.saturating_sub(preview_y),
+                    ),
+                );
+            }
+            let selection = if app.agent_finder_results.is_empty() {
+                "0 of 0".to_owned()
+            } else {
+                format!(
+                    "{} of {}",
+                    app.agent_finder_selected
+                        .min(app.agent_finder_results.len().saturating_sub(1))
+                        .saturating_add(1),
+                    app.agent_finder_results.len()
+                )
+            };
+            let footer_lines = vec![
+                Line::from(Span::styled(
+                    format!("{selection} · ↑/↓ results · ctrl+↑/↓ history"),
+                    Style::default().fg(p.overlay0).bg(p.panel_bg),
+                )),
+                Line::from(Span::styled(
+                    "⏎ focus · ctrl+⏎ side pane · esc back",
+                    Style::default().fg(p.overlay0).bg(p.panel_bg),
+                )),
+            ];
+            frame.render_widget(
+                Paragraph::new(footer_lines),
+                Rect::new(
+                    areas.viewport.x,
+                    footer_y,
+                    areas.viewport.width,
+                    footer_height,
+                ),
+            );
+        }
         return;
     }
     frame.render_widget(

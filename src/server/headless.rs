@@ -17972,13 +17972,15 @@ next_tab = ""
         let (server_event_tx, mut server_event_rx) = tokio::sync::mpsc::channel(16);
         let should_quit = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let read_quit = should_quit.clone();
+        let (reader_exit_tx, reader_exit_rx) = std::sync::mpsc::sync_channel(1);
         let reader = std::thread::spawn(move || {
-            crate::server::client_transport::client_read_loop(
+            let result = crate::server::client_transport::client_read_loop(
                 server_socket,
                 1,
                 &server_event_tx,
                 &read_quit,
-            )
+            );
+            let _ = reader_exit_tx.send(result);
         });
 
         crate::protocol::write_message(
@@ -18143,10 +18145,11 @@ next_tab = ""
             .save_spawn_dock_draft(None);
         should_quit.store(true, std::sync::atomic::Ordering::Release);
         drop(client_socket);
-        reader
-            .join()
-            .expect("client socket reader joins")
-            .expect("client socket reader exits cleanly");
+        let reader_result = reader_exit_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("client socket reader exits within the bounded wait");
+        reader.join().expect("client socket reader joins");
+        reader_result.expect("client socket reader returns without an error");
         drop(listener);
         let _ = std::fs::remove_file(socket_path);
     }
@@ -18188,12 +18191,29 @@ next_tab = ""
             assert!(server.handle_server_event(event));
         }
 
-        for (width, height) in [(247, 91), (64, 39)] {
+        for (width, height) in [(120, 40), (64, 39)] {
             let mut server = test_headless_server();
+            // Keep the finder fixture local and deterministic across CI hosts.
+            server.app.state.agent_host_name = "localhost".into();
+            server.app.remote_focus_transport =
+                Box::new(crate::app::remote_focus::StubRemoteFocusTransport);
             let mut workspace = crate::workspace::Workspace::test_new("finder");
             let claude_pane = workspace.tabs[0].root_pane;
             let codex_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+            let (claude_runtime, mut claude_input_rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 8);
+            claude_runtime.test_process_pty_bytes(
+                b"Claude context line one\r\nClaude context line two\r\nCLAUDE PREVIEW BODY UNIQUE\r\n",
+            );
+            let (codex_runtime, mut codex_input_rx) =
+                crate::terminal::TerminalRuntime::test_with_channel_capacity(80, 24, 8);
+            codex_runtime.test_process_pty_bytes(
+                b"Codex context line one\r\nCodex context line two\r\nCODEX PREVIEW BODY UNIQUE\r\n",
+            );
+            workspace.insert_test_runtime(claude_pane, claude_runtime);
+            workspace.insert_test_runtime(codex_pane, codex_runtime);
             server.app.state.workspaces = vec![workspace];
+            server.app.state.refresh_local_agent_panel_identities();
             server.app.state.ensure_test_terminals();
             server.app.state.active = Some(0);
             server.app.state.selected = 0;
@@ -18277,13 +18297,15 @@ next_tab = ""
             let (server_event_tx, mut server_event_rx) = tokio::sync::mpsc::channel(16);
             let should_quit = Arc::new(AtomicBool::new(false));
             let read_quit = should_quit.clone();
+            let (reader_exit_tx, reader_exit_rx) = std::sync::mpsc::sync_channel(1);
             let reader = std::thread::spawn(move || {
-                crate::server::client_transport::client_read_loop(
+                let result = crate::server::client_transport::client_read_loop(
                     server_socket,
                     1,
                     &server_event_tx,
                     &read_quit,
-                )
+                );
+                let _ = reader_exit_tx.send(result);
             });
 
             send(
@@ -18328,6 +18350,107 @@ next_tab = ""
                 .agent_ref
                 .as_ref()
                 .is_none_or(|agent_ref| agent_ref.host != "fleet-box")));
+            assert!(empty_results.iter().all(|hit| !hit.preview.is_empty()));
+            let codex_index = empty_results
+                .iter()
+                .position(|hit| hit.agent.agent.as_deref() == Some("codex"))
+                .expect("empty-query results contain Codex");
+            let claude_index = empty_results
+                .iter()
+                .position(|hit| hit.agent.agent.as_deref() == Some("claude"))
+                .expect("empty-query results contain Claude");
+            assert_ne!(codex_index, claude_index);
+            server
+                .clients
+                .get_mut(&1)
+                .expect("client")
+                .sidebar_presentation
+                .agent_finder_selected = claude_index;
+
+            send(
+                &mut server,
+                &mut client_socket,
+                &mut server_event_rx,
+                vec![key(
+                    if codex_index > claude_index {
+                        ClientKeyCode::Down
+                    } else {
+                        ClientKeyCode::Up
+                    },
+                    KeyModifiers::empty(),
+                    None,
+                )],
+            )
+            .await;
+            assert_eq!(
+                server.clients[&1]
+                    .sidebar_presentation
+                    .agent_finder_selected,
+                codex_index,
+                "the selection key moves from Claude to Codex"
+            );
+            server.render_and_stream();
+            let bytes = render_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("selected Codex preview frame arrives");
+            let codex_rendered = match read_server_message(bytes) {
+                ServerMessage::Frame(frame) => frame_text(&frame),
+                other => panic!("expected Codex preview frame, got {other:?}"),
+            };
+            assert!(
+                codex_rendered.contains("CODEX PREVIEW BODY UNIQUE"),
+                "selected Codex preview:\n{codex_rendered}"
+            );
+            let preview_header = codex_rendered
+                .lines()
+                .position(|line| line.to_lowercase().contains("localhost · codex"))
+                .expect("preview header belongs to selected Codex result");
+            let preview_body = codex_rendered
+                .lines()
+                .skip(preview_header)
+                .take(42)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                preview_body.contains("CODEX PREVIEW BODY UNIQUE"),
+                "Codex preview body:\n{preview_body}"
+            );
+            assert!(
+                !preview_body.contains("CLAUDE PREVIEW BODY UNIQUE"),
+                "Codex preview must not retain Claude output:\n{preview_body}"
+            );
+            if width == 120 {
+                let main = codex_rendered
+                    .split_once('│')
+                    .map(|(_, main)| main)
+                    .expect("desktop screen has a sidebar divider");
+                assert!(
+                    main.contains("CODEX PREVIEW BODY UNIQUE"),
+                    "{codex_rendered}"
+                );
+            }
+            send(
+                &mut server,
+                &mut client_socket,
+                &mut server_event_rx,
+                vec![key(
+                    if codex_index > claude_index {
+                        ClientKeyCode::Up
+                    } else {
+                        ClientKeyCode::Down
+                    },
+                    KeyModifiers::empty(),
+                    None,
+                )],
+            )
+            .await;
+            assert_eq!(
+                server.clients[&1]
+                    .sidebar_presentation
+                    .agent_finder_selected,
+                claude_index,
+                "the selection key restores Claude for the title search"
+            );
 
             server
                 .clients
@@ -18405,36 +18528,76 @@ next_tab = ""
                 Some("claude".into()),
                 "the selected result is the detected Claude pane"
             );
+            assert!(
+                server.clients[&1].sidebar_presentation.agent_finder_results[0]
+                    .context
+                    .iter()
+                    .any(|line| line.contains("Claude context line"))
+            );
+            assert!(
+                server.clients[&1].sidebar_presentation.agent_finder_results[0]
+                    .preview
+                    .iter()
+                    .any(|line| line.contains("CLAUDE PREVIEW BODY UNIQUE"))
+            );
 
             server.render_and_stream();
-            let deadline = Instant::now() + Duration::from_secs(3);
-            let mut rendered = String::new();
-            while Instant::now() < deadline {
-                let Ok(bytes) = render_rx.recv_timeout(Duration::from_millis(100)) else {
-                    continue;
-                };
-                if let ServerMessage::Frame(frame) = read_server_message(bytes) {
+            let bytes = render_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("finder frame arrives within the bounded socket render wait");
+            let rendered = match read_server_message(bytes) {
+                ServerMessage::Frame(frame) => {
                     assert_eq!((frame.width, frame.height), (width, height));
-                    rendered = frame_text(&frame);
-                    break;
+                    frame_text(&frame)
                 }
-            }
+                other => panic!("expected finder frame, got {other:?}"),
+            };
             assert!(
                 rendered.contains("claude"),
                 "compact finder frame:\n{rendered}"
             );
             assert!(
-                rendered.contains("› claude ·"),
-                "compact finder result row:\n{rendered}"
+                rendered.contains("localhost · title") || rendered.contains("title ·"),
+                "finder result metadata:\n{rendered}"
             );
             assert!(
-                rendered.contains("Matched in title"),
-                "compact finder title match:\n{rendered}"
-            );
-            assert!(
-                rendered.contains("Search agents: claude"),
+                rendered.contains("claude▌"),
                 "compact finder query:\n{rendered}"
             );
+            assert!(
+                rendered.contains("Enter focus") || rendered.contains("⏎ focus"),
+                "finder footer:\n{rendered}"
+            );
+            let bottom_footer = rendered
+                .lines()
+                .rev()
+                .take(4)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                bottom_footer.contains("ctrl+↑/↓ history") && bottom_footer.contains("esc back"),
+                "finder footer must be visible at the bottom:\n{rendered}"
+            );
+            assert!(
+                rendered.contains("CLAUDE PREVIEW BODY UNIQUE"),
+                "selected result preview:\n{rendered}"
+            );
+            if width == 120 {
+                assert!(
+                    rendered.lines().any(|line| {
+                        line.split_once('│')
+                            .is_some_and(|(sidebar, _)| sidebar.contains("Claude context line"))
+                    }),
+                    "result context must render before the sidebar divider:\n{rendered}"
+                );
+                assert!(
+                    rendered.lines().any(|line| {
+                        line.split_once('│')
+                            .is_some_and(|(_, main)| main.contains("CLAUDE PREVIEW BODY UNIQUE"))
+                    }),
+                    "preview text must render in the main area after the sidebar divider:\n{rendered}"
+                );
+            }
             assert_eq!(
                 server.clients[&1]
                     .sidebar_presentation
@@ -18456,13 +18619,22 @@ next_tab = ""
                 Some(claude_pane),
                 "Enter focuses the matching detected agent pane"
             );
+            assert!(
+                claude_input_rx.try_recv().is_err(),
+                "finder input reached Claude PTY"
+            );
+            assert!(
+                codex_input_rx.try_recv().is_err(),
+                "finder input reached Codex PTY"
+            );
 
             should_quit.store(true, Ordering::Release);
             drop(client_socket);
-            reader
-                .join()
-                .expect("client socket reader joins")
-                .expect("client socket reader exits cleanly");
+            let reader_result = reader_exit_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("client socket reader exits within the bounded wait");
+            reader.join().expect("client socket reader joins");
+            reader_result.expect("client socket reader returns without an error");
             drop(listener);
             let _ = std::fs::remove_file(socket_path);
             shutdown_test_runtimes(&mut server);

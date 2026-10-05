@@ -3134,7 +3134,6 @@ mod tests {
     #[tokio::test]
     async fn agent_finder_text_and_paste_stay_with_the_sidebar_input_owner() {
         let mut app = app_for_mouse_test();
-        app.state.focus_client_on_sidebar();
         app.state.open_agent_finder();
         assert_eq!(
             app.state.input_owner(),
@@ -3163,6 +3162,10 @@ mod tests {
         assert!(!app.state.sidebar_search_active);
         assert!(app.state.agent_finder_saved_query.is_none());
         assert!(!app.state.agent_finder_side_pane);
+        assert!(
+            !app.state.sidebar_focused,
+            "closing the finder restores the focus that was active before it opened"
+        );
     }
 
     #[test]

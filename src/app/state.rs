@@ -6595,9 +6595,8 @@ impl AppState {
         if self.spawn_dock.is_some() {
             return InputOwner::SpawnDock;
         }
-        // The finder is rendered over the terminal area, so it must keep
-        // input ownership even when the compact layout has collapsed the
-        // sidebar that normally owns search keystrokes.
+        // Finder input belongs to the client while its result panel replaces
+        // the sidebar or mobile switcher.
         if self.agent_finder_saved_query.is_some() {
             return InputOwner::Sidebar;
         }

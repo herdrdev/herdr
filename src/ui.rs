@@ -412,7 +412,8 @@ fn compute_view_internal_at(
         (Rect::default(), area)
     };
 
-    let sidebar_w = if app.sidebar_collapsed {
+    let finder_sidebar = app.agent_finder_saved_query.is_some();
+    let sidebar_w = if app.sidebar_collapsed && !finder_sidebar {
         match app.sidebar_collapsed_mode {
             crate::config::SidebarCollapsedModeConfig::Compact => COLLAPSED_WIDTH,
             crate::config::SidebarCollapsedModeConfig::Hidden => 0,
@@ -1417,7 +1418,7 @@ fn render_with_runtime_registry_inner(
     if app.view.layout != ViewLayout::Mobile {
         render_dock(app, terminal_runtimes, frame);
     }
-    if app.agent_finder_saved_query.is_some() {
+    if app.agent_finder_saved_query.is_some() && app.view.layout != ViewLayout::Mobile {
         render_agent_finder_preview(app, frame, terminal_area);
     }
 
@@ -1436,6 +1437,11 @@ fn render_with_runtime_registry_inner(
     };
 
     match input_owner {
+        InputOwner::Sidebar
+            if app.view.layout == ViewLayout::Mobile && app.agent_finder_saved_query.is_some() =>
+        {
+            render_mobile_panel(app, terminal_runtimes, frame, frame.area())
+        }
         InputOwner::Client(ClientInputOwner::Overlay(overlay)) => match overlay {
             ClientOverlay::RenameWorkspace
             | ClientOverlay::RenameTab
@@ -1543,12 +1549,15 @@ fn render_with_runtime_registry_inner(
 fn render_agent_finder_preview(app: &AppState, frame: &mut Frame, area: Rect) {
     use ratatui::{
         text::{Line, Span},
-        widgets::Paragraph,
+        widgets::{Clear, Paragraph},
     };
     if area.is_empty() {
         return;
     }
-    let area = if app.agent_finder_side_pane && area.width >= 48 {
+    let area = if app.agent_finder_side_pane
+        && app.view.layout != ViewLayout::Mobile
+        && area.width >= 48
+    {
         let width = area.width / 2;
         Rect::new(
             area.x.saturating_add(area.width - width),
@@ -1559,67 +1568,23 @@ fn render_agent_finder_preview(app: &AppState, frame: &mut Frame, area: Rect) {
     } else {
         area
     };
-    let query = app.sidebar_work_filter.query.trim();
-    let mut lines = vec![
-        Line::from(Span::styled(
-            format!("⌕  Search agents: {query}"),
-            Style::default()
-                .fg(app.palette.text)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            "↑/↓ select · Enter focus · Ctrl+Enter preview · Esc close",
-            Style::default().fg(app.palette.overlay0),
-        )),
-    ];
-    if app.agent_finder_results.is_empty() {
-        lines.push(Line::from(Span::styled(
-            if query.is_empty() {
-                "Type to search agent names, recent output and sessions"
-            } else {
-                "No matches yet"
-            },
-            Style::default().fg(app.palette.overlay0),
-        )));
-    } else {
-        let list_rows = area.height.saturating_sub(7) as usize;
-        for (index, hit) in app.agent_finder_results.iter().take(list_rows).enumerate() {
-            let agent = hit
-                .agent
-                .display_agent
-                .as_deref()
-                .or(hit.agent.agent.as_deref())
-                .unwrap_or("agent");
-            let marker = if index == app.agent_finder_selected {
-                "›"
-            } else {
-                " "
-            };
-            let style = if index == app.agent_finder_selected {
-                Style::default()
-                    .fg(app.palette.text)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(app.palette.subtext0)
-            };
-            lines.push(Line::from(Span::styled(
-                format!("{marker} {agent} · {}", hit.title),
-                style,
-            )));
-        }
-    }
-    if app.agent_finder_partial {
-        lines.push(Line::from(Span::styled(
-            "Partial results",
-            Style::default().fg(app.palette.yellow),
-        )));
-    }
-    lines.push(Line::from(""));
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        ratatui::widgets::Block::default().style(Style::default().bg(app.palette.panel_bg)),
+        area,
+    );
     let Some(hit) = app.agent_finder_results.get(app.agent_finder_selected) else {
+        let message = if app.agent_finder_results.is_empty() {
+            "No matching agents"
+        } else {
+            "No result selected"
+        };
         frame.render_widget(
-            Paragraph::new(lines)
-                .style(Style::default().bg(app.palette.panel_bg))
-                .wrap(ratatui::widgets::Wrap { trim: false }),
+            Paragraph::new(Span::styled(
+                message,
+                Style::default().fg(app.palette.overlay0),
+            ))
+            .style(Style::default().bg(app.palette.panel_bg)),
             area,
         );
         return;
@@ -1636,34 +1601,37 @@ fn render_agent_finder_preview(app: &AppState, frame: &mut Frame, area: Rect) {
         .as_deref()
         .or(hit.agent.agent.as_deref())
         .unwrap_or("agent");
-    let age = agent_state_age(hit.agent.reported_at.as_deref());
-    let status = format!("{:?}", hit.agent.agent_status).to_lowercase();
-    lines.extend([
-        Line::from(Span::styled(
-            format!("{}  {status} · {host} · {agent} · {age}", hit.title),
+    let status = agent_finder_status_label(&hit.agent);
+    let age = agent_finder_age_for_agent(app, &hit.agent);
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "● ",
+            Style::default().fg(agent_finder_status_color(app, hit.agent.agent_status)),
+        ),
+        Span::styled(
+            hit.title.as_str(),
             Style::default()
                 .fg(app.palette.text)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!(
-                "Matched in {}",
-                match hit.source {
-                    crate::api::schema::AgentSearchSource::Title => "title",
-                    crate::api::schema::AgentSearchSource::Tail => "tail",
-                    crate::api::schema::AgentSearchSource::Session => "session",
-                    crate::api::schema::AgentSearchSource::Path => "session files",
-                }
-            ),
-            Style::default().fg(app.palette.overlay0),
-        )),
-    ]);
-    lines.extend(hit.preview.iter().rev().take(40).rev().map(|line| {
+        ),
+        Span::styled(
+            format!(" · {host} · {agent} · {status} {age}"),
+            Style::default().fg(app.palette.subtext0),
+        ),
+    ])];
+    let preview = &hit.preview;
+    lines.extend(preview.iter().take(40).map(|line| {
         Line::from(Span::styled(
             line.as_str(),
             Style::default().fg(app.palette.text),
         ))
     }));
+    if preview.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "No recent session output",
+            Style::default().fg(app.palette.overlay0),
+        )));
+    }
     frame.render_widget(
         Paragraph::new(lines)
             .style(Style::default().bg(app.palette.panel_bg))
@@ -1672,16 +1640,62 @@ fn render_agent_finder_preview(app: &AppState, frame: &mut Frame, area: Rect) {
     );
 }
 
-fn agent_state_age(reported_at: Option<&str>) -> String {
+pub(super) fn agent_finder_status_label(agent: &crate::api::schema::AgentInfo) -> String {
+    let (key, fallback) = match agent.agent_status {
+        crate::api::schema::AgentStatus::Idle => ("idle", "idle"),
+        crate::api::schema::AgentStatus::Working => ("working", "working"),
+        crate::api::schema::AgentStatus::Blocked => ("blocked", "blocked"),
+        crate::api::schema::AgentStatus::Done => ("done", "done"),
+        crate::api::schema::AgentStatus::Stale => ("unknown", "?"),
+        crate::api::schema::AgentStatus::Unknown => ("unknown", "idle"),
+    };
+    agent
+        .state_labels
+        .get(key)
+        .cloned()
+        .unwrap_or_else(|| fallback.to_owned())
+}
+
+pub(super) fn agent_finder_status_color(
+    app: &AppState,
+    status: crate::api::schema::AgentStatus,
+) -> ratatui::style::Color {
+    match status {
+        crate::api::schema::AgentStatus::Blocked => app.palette.red,
+        crate::api::schema::AgentStatus::Done => app.palette.green,
+        crate::api::schema::AgentStatus::Idle
+        | crate::api::schema::AgentStatus::Stale
+        | crate::api::schema::AgentStatus::Unknown => app.palette.overlay0,
+        crate::api::schema::AgentStatus::Working => app.palette.accent,
+    }
+}
+
+pub(super) fn agent_finder_age(app: &AppState, reported_at: Option<&str>) -> String {
+    let age = agent_state_age(reported_at, app.view_observed_unix_s);
+    age.strip_suffix(" ago").unwrap_or(&age).to_owned()
+}
+
+pub(super) fn agent_finder_age_for_agent(
+    app: &AppState,
+    agent: &crate::api::schema::AgentInfo,
+) -> String {
+    agent_finder_age(
+        app,
+        agent
+            .reported_at
+            .as_deref()
+            .or(agent.last_turn_at.as_deref()),
+    )
+}
+
+fn agent_state_age(reported_at: Option<&str>, observed_unix_s: u64) -> String {
     let Some(timestamp) = reported_at.and_then(|value| {
         time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
     }) else {
         return "age unknown".into();
     };
-    let seconds = time::OffsetDateTime::now_utc()
-        .unix_timestamp()
-        .saturating_sub(timestamp.unix_timestamp())
-        .max(0);
+    let now = i64::try_from(observed_unix_s).unwrap_or(i64::MAX);
+    let seconds = now.saturating_sub(timestamp.unix_timestamp()).max(0);
     if seconds < 60 {
         format!("{seconds}s ago")
     } else if seconds < 3_600 {
@@ -1701,7 +1715,7 @@ fn render_navigation_chrome(
     if app.view.layout == ViewLayout::Mobile {
         render_mobile_header(app, terminal_runtimes, frame, app.view.mobile_header_rect);
     } else if app.view.sidebar_rect.width > 0 {
-        if app.sidebar_collapsed {
+        if app.sidebar_collapsed && app.agent_finder_saved_query.is_none() {
             render_sidebar_collapsed(app, frame, app.view.sidebar_rect);
         } else {
             render_sidebar(app, terminal_runtimes, frame, app.view.sidebar_rect);
@@ -1933,9 +1947,106 @@ mod tests {
             .join("\n");
         assert!(rendered.contains("pelican"), "{rendered}");
         assert!(rendered.contains("Pelican task"), "{rendered}");
-        assert!(rendered.contains("Enter focus"), "{rendered}");
+        assert!(rendered.contains("⏎ focus"), "{rendered}");
         assert!(rendered.contains("visible finder preview"), "{rendered}");
         assert!(!rendered.contains("switch workspace"), "{rendered}");
+    }
+
+    #[test]
+    fn agent_finder_preview_tracks_selected_result_and_clears_underlying_pane_text() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.agent_finder_saved_query = Some(String::new());
+        app.agent_finder_results = [
+            ("claude", "Claude task", "CLAUDE OUT FILE BODY"),
+            ("codex", "Codex task", "Codex preview text"),
+        ]
+        .into_iter()
+        .map(
+            |(provider, title, preview)| crate::api::schema::AgentSearchHit {
+                target: format!("w1:{provider}"),
+                title: title.into(),
+                source: crate::api::schema::AgentSearchSource::Path,
+                path: Some(format!("/worktree/out/{provider}.md")),
+                line: Some(14),
+                context: vec![format!("{provider} file match")],
+                preview: vec![preview.into()],
+                agent: serde_json::from_value(serde_json::json!({
+                    "terminal_id": format!("terminal-{provider}"),
+                    "agent_status": "idle",
+                    "workspace_id": "w1",
+                    "tab_id": "t2",
+                    "pane_id": provider,
+                    "focused": false,
+                    "revision": 1,
+                    "agent": provider,
+                    "display_agent": provider,
+                    "cwd": "/worktree"
+                }))
+                .expect("minimal agent fixture deserializes"),
+            },
+        )
+        .collect();
+        app.agent_finder_selected = 1;
+
+        let mut terminal = Terminal::new(TestBackend::new(50, 6)).expect("test terminal");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                frame.render_widget(ratatui::widgets::Paragraph::new("CLAUDE_UNDERLAY"), area);
+                render_agent_finder_preview(&app, frame, area);
+            })
+            .expect("preview renders");
+        let buffer = terminal.backend().buffer();
+        let rendered = (0..6)
+            .map(|y| (0..50).map(|x| buffer[(x, y)].symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Codex preview text"), "{rendered}");
+        assert!(!rendered.contains("CLAUDE OUT FILE BODY"), "{rendered}");
+        assert!(!rendered.contains("CLAUDE_UNDERLAY"), "{rendered}");
+    }
+
+    #[test]
+    fn agent_finder_status_uses_agent_state_label_overrides() {
+        let mut agent: crate::api::schema::AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "terminal",
+            "agent_status": "working",
+            "workspace_id": "w1",
+            "tab_id": "t1",
+            "pane_id": "p1",
+            "focused": false,
+            "revision": 1,
+            "state_labels": {"working": "active"}
+        }))
+        .expect("minimal agent fixture deserializes");
+        assert_eq!(agent_finder_status_label(&agent), "active");
+        agent.agent_status = crate::api::schema::AgentStatus::Unknown;
+        assert_eq!(agent_finder_status_label(&agent), "idle");
+    }
+
+    #[test]
+    fn agent_finder_age_falls_back_to_last_turn_when_report_time_is_missing() {
+        let mut app = AppState::test_new();
+        let mut agent: crate::api::schema::AgentInfo = serde_json::from_value(serde_json::json!({
+            "terminal_id": "terminal",
+            "agent_status": "unknown",
+            "workspace_id": "w1",
+            "tab_id": "t1",
+            "pane_id": "p1",
+            "focused": false,
+            "revision": 1,
+            "last_turn_at": "2026-10-05T02:00:00Z"
+        }))
+        .expect("minimal agent fixture deserializes");
+        agent.reported_at = None;
+        app.view_observed_unix_s = time::OffsetDateTime::parse(
+            "2026-10-05T02:02:00Z",
+            &time::format_description::well_known::Rfc3339,
+        )
+        .expect("fixed observation time parses")
+        .unix_timestamp() as u64;
+
+        assert_eq!(agent_finder_age_for_agent(&app, &agent), "2m");
     }
 
     /// A cell that only carries the right half of a double-width glyph is
