@@ -53,16 +53,10 @@ MAX_MATCHERS_PER_GATE = 32
 MAX_TOTAL_MATCHERS = 1024
 MAX_MATCHER_CHARS = 512
 
-# Keep engine-2 clients on the OSC-capable manifest until an engine-3 release
-# can consume top_non_empty_lines. Remove this entry when the distribution
-# publishes the bundled Grok manifest.
-STAGED_PUBLISHED_MANIFESTS = {
-    "grok": (
-        "2026.09.18.2",
-        "2026.09.18.1",
-        "0f31b111144900b02f303577d27587f72d58d8c505185a682bd7887f822316ee",
-    ),
-}
+# Keep older-engine clients on a published manifest until a release with the
+# bundled manifest's engine ships. Maps agent id to (bundled version, published
+# version, published sha256). Remove an entry once the bundled manifest ships.
+STAGED_PUBLISHED_MANIFESTS: dict[str, tuple[str, str, str]] = {}
 
 UNPUBLISHED_BUNDLED_MANIFESTS: dict[str, tuple[str, str]] = {}
 
