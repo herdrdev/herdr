@@ -773,6 +773,53 @@ impl AppState {
         self.sidebar_filter_menu_open = true;
     }
 
+    pub(crate) fn open_sidebar_blocker_scope_menu(&mut self) {
+        self.sidebar_blocker_scope_menu_selected = crate::app::state::BlockerScope::ALL
+            .iter()
+            .position(|scope| *scope == self.sidebar_blocker_scope)
+            .unwrap_or(1);
+        self.sidebar_filter_menu_open = false;
+        self.sidebar_group_menu_open = false;
+        self.sidebar_blocker_scope_menu_open = true;
+    }
+
+    pub(crate) fn sidebar_blocker_scope_menu_item_at(&self, col: u16, row: u16) -> Option<usize> {
+        let layout = crate::ui::sidebar_blocker_scope_menu_layout(self, self.screen_rect())?;
+        crate::ui::dropdown::hit_test(&layout, col, row)
+    }
+
+    pub(crate) fn select_sidebar_blocker_scope_option(&mut self, index: usize) {
+        if let Some(scope) = crate::app::state::BlockerScope::ALL.get(index).copied() {
+            self.set_sidebar_blocker_scope(scope);
+        } else {
+            self.sidebar_blocker_scope_menu_open = false;
+        }
+    }
+
+    pub(crate) fn handle_sidebar_blocker_scope_menu_key(&mut self, key: KeyEvent) -> bool {
+        if !self.sidebar_blocker_scope_menu_open {
+            return false;
+        }
+        match key.code {
+            KeyCode::Esc => self.sidebar_blocker_scope_menu_open = false,
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.sidebar_blocker_scope_menu_selected =
+                    self.sidebar_blocker_scope_menu_selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.sidebar_blocker_scope_menu_selected = self
+                    .sidebar_blocker_scope_menu_selected
+                    .saturating_add(1)
+                    .min(crate::app::state::BlockerScope::ALL.len().saturating_sub(1));
+            }
+            KeyCode::Enter => {
+                self.select_sidebar_blocker_scope_option(self.sidebar_blocker_scope_menu_selected)
+            }
+            _ => {}
+        }
+        true
+    }
+
     /// Apply the option at `index` to the stored filter. A team option replaces
     /// the team and leaves the assignee alone, and vice versa, so the two
     /// narrowings compose instead of resetting each other.
@@ -1413,6 +1460,7 @@ impl AppState {
                 | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
+                | crate::ui::SidebarRow::BlockersOtherDevices { .. }
                 | crate::ui::SidebarRow::AgentRun { .. } => None,
             })
     }
@@ -1459,6 +1507,7 @@ impl AppState {
                 | crate::ui::SidebarRow::Inbox(_)
                 | crate::ui::SidebarRow::NeedsYou { .. }
                 | crate::ui::SidebarRow::NeedsYouMore { .. }
+                | crate::ui::SidebarRow::BlockersOtherDevices { .. }
                 | crate::ui::SidebarRow::AgentRun { .. } => None,
                 crate::ui::SidebarRow::Tab { entry, .. } => entry
                     .local_target()
@@ -3613,6 +3662,9 @@ mod tests {
                 }
                 crate::ui::SidebarRow::NeedsYou { title, .. } => format!("needs-you:{title}"),
                 crate::ui::SidebarRow::NeedsYouMore { .. } => "needs-you-more".to_string(),
+                crate::ui::SidebarRow::BlockersOtherDevices { .. } => {
+                    "blockers-other-devices".to_string()
+                }
                 crate::ui::SidebarRow::NestedHeader { key, .. } => format!("group:{key}"),
                 crate::ui::SidebarRow::SymphonyJob { name, .. } => format!("symphony:{name}"),
                 crate::ui::SidebarRow::SymphonyEmpty => "symphony:empty".to_string(),
@@ -5688,6 +5740,70 @@ mod tests {
     }
 
     #[test]
+    fn blocker_scope_dropdown_selects_by_mouse_and_keyboard() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_sections_layout = true;
+        app.state.workspaces = vec![Workspace::test_new("blocked")];
+        app.state.ensure_test_terminals();
+        let pane = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).expect("terminal");
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_raw_agent_state_for_test(AgentState::Blocked);
+
+        let area = Rect::new(0, 0, 106, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let anchor =
+            crate::ui::sidebar_blocker_scope_anchor_rect(&app.state, app.state.view.sidebar_rect);
+        assert!(anchor.width > 0);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            anchor.x,
+            anchor.y,
+        ));
+        assert!(app.state.sidebar_blocker_scope_menu_open);
+        let layout = crate::ui::sidebar_blocker_scope_menu_layout(&app.state, area)
+            .expect("blocker scope dropdown");
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            layout.list_rect.x,
+            layout.list_rect.y,
+        ));
+        assert_eq!(
+            app.state.sidebar_blocker_scope,
+            crate::app::state::BlockerScope::ThisDevice
+        );
+        assert_eq!(
+            app.state.take_sidebar_blocker_scope_persistence_request(),
+            Some(crate::app::state::BlockerScope::ThisDevice)
+        );
+
+        app.state.open_sidebar_blocker_scope_menu();
+        app.state
+            .handle_sidebar_blocker_scope_menu_key(KeyEvent::new(
+                KeyCode::Down,
+                KeyModifiers::NONE,
+            ));
+        app.state
+            .handle_sidebar_blocker_scope_menu_key(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            ));
+        assert_eq!(
+            app.state.sidebar_blocker_scope,
+            crate::app::state::BlockerScope::Fleet
+        );
+        assert!(!app.state.sidebar_blocker_scope_menu_open);
+
+        app.state.open_sidebar_blocker_scope_menu();
+        app.state
+            .handle_sidebar_blocker_scope_menu_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.state.sidebar_blocker_scope_menu_open);
+    }
+
+    #[test]
     fn hovering_global_menu_updates_highlight() {
         let mut app = app_for_mouse_test();
         let launcher = app.state.global_launcher_rect();
@@ -6797,6 +6913,7 @@ mod tests {
         app.state.selected = 0;
         app.state.tab_scroll = usize::MAX;
         app.state.tab_scroll_follow_active = false;
+        app.state.sidebar_width = 26;
         // 91 columns leaves the same tab strip as 65 did before the tab row
         // gained the action, git, and pane-toggle buttons at its right end.
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 91, 20));

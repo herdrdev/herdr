@@ -36,6 +36,8 @@ struct ClientPresentationFile {
     #[serde(default)]
     sidebar_work_filter: Option<crate::app::state::SidebarWorkFilter>,
     #[serde(default)]
+    sidebar_blocker_scope: Option<crate::app::state::BlockerScope>,
+    #[serde(default)]
     sidebar_group_sorts:
         Option<std::collections::HashMap<String, crate::app::state::SidebarSortMode>>,
     #[serde(default)]
@@ -223,6 +225,25 @@ pub(crate) fn load_sidebar_work_filter() -> crate::app::state::SidebarWorkFilter
 pub(crate) fn save_sidebar_work_filter(filter: crate::app::state::SidebarWorkFilter) {
     let path = presentation_path();
     if let Err(err) = update_path(&path, |state| state.sidebar_work_filter = Some(filter)) {
+        warn!(path = %path.display(), err = %err, "failed to save client presentation state");
+    }
+}
+
+#[cfg(not(test))]
+pub(crate) fn load_sidebar_blocker_scope() -> crate::app::state::BlockerScope {
+    let path = presentation_path();
+    match load_from_path(&path) {
+        Ok(state) => state.sidebar_blocker_scope.unwrap_or_default(),
+        Err(err) => {
+            warn!(path = %path.display(), err = %err, "failed to load client presentation state");
+            crate::app::state::BlockerScope::default()
+        }
+    }
+}
+
+pub(crate) fn save_sidebar_blocker_scope(scope: crate::app::state::BlockerScope) {
+    let path = presentation_path();
+    if let Err(err) = update_path(&path, |state| state.sidebar_blocker_scope = Some(scope)) {
         warn!(path = %path.display(), err = %err, "failed to save client presentation state");
     }
 }
@@ -493,6 +514,29 @@ mod tests {
         assert_eq!(
             state.sidebar_group_mode,
             Some(crate::app::state::SidebarGroupMode::RepoPr)
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn sidebar_blocker_scope_round_trips_and_legacy_defaults_to_fleet() {
+        let path = temp_path();
+        update_path(&path, |state| {
+            state.sidebar_blocker_scope = Some(crate::app::state::BlockerScope::ThisDevice);
+        })
+        .expect("save blocker scope");
+        assert_eq!(
+            load_from_path(&path)
+                .expect("load client presentation state")
+                .sidebar_blocker_scope,
+            Some(crate::app::state::BlockerScope::ThisDevice)
+        );
+        let legacy: ClientPresentationFile =
+            serde_json::from_str(r#"{"sidebar_group_mode":"repo_pr"}"#)
+                .expect("legacy presentation state");
+        assert_eq!(
+            legacy.sidebar_blocker_scope.unwrap_or_default(),
+            crate::app::state::BlockerScope::Fleet
         );
         let _ = std::fs::remove_file(path);
     }

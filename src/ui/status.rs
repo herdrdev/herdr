@@ -450,8 +450,17 @@ fn fit_focused_pane_title(repo: &str, thread: &str, width: usize) -> Option<Stri
 ///
 type StatusButtonSpec = (StatusButtonAction, String, bool);
 
-fn status_button_specs(app: &AppState) -> [StatusButtonSpec; 4] {
+fn status_button_specs(app: &AppState, blocked: usize) -> [StatusButtonSpec; 5] {
     [
+        (
+            StatusButtonAction::BlockedFilter,
+            if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice {
+                format!(" ⛔ {blocked} · {} ", app.agent_host_name)
+            } else {
+                format!(" ⛔ {blocked} ")
+            },
+            app.blocked_filter,
+        ),
         (
             StatusButtonAction::Home,
             if app.nerd_font { " ⌂ " } else { " H " }.to_string(),
@@ -479,14 +488,49 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let specs = status_button_specs(app);
+    let mut blocked = crate::ui::sidebar::all_agent_panel_entries(app)
+        .into_iter()
+        .fold(0usize, |blocked, entry| {
+            if crate::ui::sidebar::entry_attention_tier(&entry)
+                != crate::terminal::state::AttentionTier::Blocked
+            {
+                return blocked;
+            }
+            let on_this_device = entry.local_target().is_some_and(|target| {
+                app.workspaces
+                    .get(target.ws_idx)
+                    .is_some_and(|workspace| !workspace.is_fleet)
+            });
+            if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+                && !on_this_device
+            {
+                blocked
+            } else {
+                blocked + 1
+            }
+        });
+    if app.sidebar_blocker_scope == crate::app::state::BlockerScope::Fleet {
+        for remote in &app.remote_agent_panel_entries {
+            if crate::ui::sidebar::entry_attention_tier(&remote.entry)
+                == crate::terminal::state::AttentionTier::Blocked
+            {
+                blocked = blocked.saturating_add(1);
+            }
+        }
+    }
+    let specs = status_button_specs(app, blocked);
 
     // The right-aligned segments are load-bearing; buttons yield to them rather
     // than overlapping, and drop whole rather than truncating to an unreadable stub.
-    let title_reserve = focused_pane_title_parts(app)
-        .map(|(repo, _)| display_width(&repo))
-        .unwrap_or(0)
-        .saturating_add(usize::from(focused_agent_dot_color(app).is_some()) * 2);
+    let title_reserve = if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+    {
+        0
+    } else {
+        focused_pane_title_parts(app)
+            .map(|(repo, _)| display_width(&repo))
+            .unwrap_or(0)
+            .saturating_add(usize::from(focused_agent_dot_color(app).is_some()) * 2)
+    };
     let content_width = area
         .width
         .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, area));
@@ -2444,6 +2488,7 @@ mod tests {
         assert_eq!(
             actions,
             vec![
+                StatusButtonAction::BlockedFilter,
                 StatusButtonAction::Home,
                 StatusButtonAction::NewSession,
                 StatusButtonAction::Board,
@@ -2458,22 +2503,26 @@ mod tests {
     }
 
     #[test]
-    fn freeze_topbar_does_not_rescan_attention_for_removed_controls() {
+    fn blocker_button_counts_entries_once_with_the_topbar() {
         let app = AppState::test_new();
         super::super::sidebar::take_entry_attention_tier_visits();
         let buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
-        assert_eq!(buttons.len(), 4);
-        assert_eq!(super::super::sidebar::take_entry_attention_tier_visits(), 0);
+        assert_eq!(buttons.len(), 5);
+        assert_eq!(
+            super::super::sidebar::take_entry_attention_tier_visits(),
+            crate::ui::all_agent_panel_entries(&app).len()
+        );
     }
 
     #[test]
     fn status_button_specs_use_icon_fallbacks_and_only_the_approved_actions() {
         let app = AppState::test_new();
-        let [home, new_session, board, scratch] = status_button_specs(&app);
+        let [blocked, home, new_session, board, scratch] = status_button_specs(&app, 2);
         assert_eq!(home.0, StatusButtonAction::Home);
         assert_eq!(home.1.trim(), "⌂");
         assert_eq!(new_session.0, StatusButtonAction::NewSession);
         assert_eq!(new_session.1.trim(), "＋");
+        assert_eq!(blocked.1.trim(), "⛔ 2");
         assert_eq!(board.0, StatusButtonAction::Board);
         assert_eq!(board.1.trim(), "▦");
         assert_eq!(scratch.0, StatusButtonAction::Scratch);
@@ -2481,10 +2530,70 @@ mod tests {
 
         let mut fallback = app;
         fallback.nerd_font = false;
-        let [home, _, board, scratch] = status_button_specs(&fallback);
+        let [blocked, home, new_session, board, scratch] = status_button_specs(&fallback, 0);
         assert_eq!(home.1.trim(), "H");
+        assert_eq!(new_session.1.trim(), "+");
+        assert_eq!(blocked.1.trim(), "⛔ 0");
         assert_eq!(board.1.trim(), "B");
         assert_eq!(scratch.1.trim(), "S");
+    }
+
+    #[test]
+    fn blocker_count_and_host_follow_the_selected_scope() {
+        let mut app = AppState::test_new();
+        let local = crate::workspace::Workspace::test_new("local");
+        let mut fleet = crate::workspace::Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        app.workspaces = vec![local, fleet];
+        app.agent_host_name = "ub1".into();
+        app.ensure_test_terminals();
+        for workspace in &app.workspaces {
+            let pane = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.tabs[0].panes[&pane].attached_terminal_id.clone();
+            let terminal = app.terminals.get_mut(&terminal_id).expect("test terminal");
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.set_raw_agent_state_for_test(AgentState::Blocked);
+        }
+        let remote_host = crate::fleet::HostSnapshot {
+            name: "capture-remote".into(),
+            target: "capture-remote".into(),
+            local: false,
+            session: None,
+            socket: None,
+            state: crate::fleet::HostState::Reachable,
+            version: None,
+            protocol: None,
+            error: None,
+            remote_identity: None,
+            sessions: None,
+            reachable: true,
+            last_seen_unix_ms: Some(1),
+            entries: vec![crate::fleet::FleetRow::test_agent_row_with_state(
+                "capture-remote",
+                "remote-blocked",
+                "blocked",
+            )],
+        };
+        let remote_snapshot = crate::fleet::Snapshot {
+            hosts: vec![remote_host],
+            ..Default::default()
+        };
+        app.remote_agent_panel_entries =
+            crate::ui::sidebar::remote_agent_panel_entries_at(&remote_snapshot, 1, true);
+        let fleet_buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
+        let blocked_label = |buttons: &[StatusButton]| {
+            buttons
+                .iter()
+                .find(|button| button.action == StatusButtonAction::BlockedFilter)
+                .expect("blocked count button")
+                .label
+                .trim()
+                .to_string()
+        };
+        assert_eq!(blocked_label(&fleet_buttons), "⛔ 2");
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::ThisDevice;
+        let local_buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
+        assert_eq!(blocked_label(&local_buttons), "⛔ 1 · ub1");
     }
 
     #[test]

@@ -504,6 +504,7 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
                         "Home: overview of all workspaces"
                     }
                     crate::app::state::StatusButtonAction::NewSession => "New session",
+                    crate::app::state::StatusButtonAction::BlockedFilter => "Blocked agents",
                     crate::app::state::StatusButtonAction::Board => "Board",
                     crate::app::state::StatusButtonAction::Scratch => "Scratch: write notes",
                 }
@@ -1016,6 +1017,7 @@ mod status_segments {
         let labels = [
             "Home: overview of all workspaces",
             "New session",
+            "Blocked agents",
             "Board",
             "Scratch: write notes",
         ];
@@ -1026,6 +1028,7 @@ mod status_segments {
                 action: [
                     crate::app::state::StatusButtonAction::Home,
                     crate::app::state::StatusButtonAction::NewSession,
+                    crate::app::state::StatusButtonAction::BlockedFilter,
                     crate::app::state::StatusButtonAction::Board,
                     crate::app::state::StatusButtonAction::Scratch,
                 ][index],

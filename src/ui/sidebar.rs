@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -3330,6 +3330,9 @@ pub(crate) enum SidebarRow {
         remaining: usize,
         expanded: bool,
     },
+    BlockersOtherDevices {
+        count: usize,
+    },
     /// Read-only fleet agent. It carries no local card hit area, so clicks and
     /// focus actions cannot be misrouted to a colliding local pane id.
     RemoteAgent {
@@ -4110,6 +4113,10 @@ fn compact_sidebar_rows_inner(
             &settled_entries,
             &remote_entries,
         );
+        let blocker_count = blockers
+            .iter()
+            .filter(|row| matches!(row, SidebarRow::NeedsYou { .. }))
+            .count();
         let remote_activity = sidebar_remote_activity(app, &remote_entries);
         let mut space_entries = Vec::new();
         let mut remote_main_entries = Vec::new();
@@ -4143,7 +4150,7 @@ fn compact_sidebar_rows_inner(
         if !blockers.is_empty() {
             rows.push(SidebarRow::SectionHeader {
                 title: BLOCKERS_SECTION_TITLE,
-                count: blockers.len(),
+                count: blocker_count,
                 host_counts: Vec::new(),
                 collapsed: section_is_collapsed(app, BLOCKERS_SECTION_TITLE),
             });
@@ -5894,6 +5901,11 @@ fn blocker_group_rows(
         let Some(workspace) = app.workspaces.get(target.ws_idx) else {
             continue;
         };
+        if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+            && workspace.is_fleet
+        {
+            continue;
+        }
         let space_name = workspace
             .custom_name
             .clone()
@@ -5911,8 +5923,13 @@ fn blocker_group_rows(
             target: NeedsYouTarget::Local(target),
         });
     }
+    let mut other_device_blockers = 0usize;
     for entry in remote_entries {
         if !entry_is_blocked(entry) {
+            continue;
+        }
+        if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice {
+            other_device_blockers = other_device_blockers.saturating_add(1);
             continue;
         }
         let Some(remote) = entry.remote_entry.as_ref() else {
@@ -5932,6 +5949,11 @@ fn blocker_group_rows(
             target: NeedsYouTarget::Remote(remote.agent_ref.clone()),
         });
     }
+    if other_device_blockers > 0 {
+        rows.push(SidebarRow::BlockersOtherDevices {
+            count: other_device_blockers,
+        });
+    }
     fn blocker_row_key(row: &SidebarRow) -> (&str, &str, &str) {
         match row {
             SidebarRow::NeedsYou {
@@ -5943,7 +5965,14 @@ fn blocker_group_rows(
             _ => ("", "", ""),
         }
     }
-    rows.sort_by(|left, right| blocker_row_key(left).cmp(&blocker_row_key(right)));
+    rows.sort_by(|left, right| match (left, right) {
+        (SidebarRow::BlockersOtherDevices { .. }, SidebarRow::BlockersOtherDevices { .. }) => {
+            std::cmp::Ordering::Equal
+        }
+        (SidebarRow::BlockersOtherDevices { .. }, _) => std::cmp::Ordering::Greater,
+        (_, SidebarRow::BlockersOtherDevices { .. }) => std::cmp::Ordering::Less,
+        _ => blocker_row_key(left).cmp(&blocker_row_key(right)),
+    });
     rows
 }
 
@@ -8245,6 +8274,7 @@ fn sidebar_row_height(app: &AppState, row: &SidebarRow, body_height: u16) -> u16
         SidebarRow::PodHeader { .. }
         | SidebarRow::PodMember { .. }
         | SidebarRow::NeedsYouMore { .. }
+        | SidebarRow::BlockersOtherDevices { .. }
         | SidebarRow::SectionHeader { .. }
         | SidebarRow::Divider
         | SidebarRow::ShelfDivider
@@ -8352,8 +8382,18 @@ fn sidebar_row_gap(app: &AppState, rows: &[SidebarRow], row_idx: usize) -> u16 {
             | SidebarRow::Inbox(_),
         ) => 0,
         // Strip rows hug each other and the divider that closes the strip.
-        (SidebarRow::NeedsYou { .. } | SidebarRow::NeedsYouMore { .. }, _)
-        | (_, SidebarRow::NeedsYou { .. } | SidebarRow::NeedsYouMore { .. }) => 0,
+        (
+            SidebarRow::NeedsYou { .. }
+            | SidebarRow::NeedsYouMore { .. }
+            | SidebarRow::BlockersOtherDevices { .. },
+            _,
+        )
+        | (
+            _,
+            SidebarRow::NeedsYou { .. }
+            | SidebarRow::NeedsYouMore { .. }
+            | SidebarRow::BlockersOtherDevices { .. },
+        ) => 0,
     }
 }
 
@@ -8417,7 +8457,9 @@ pub(crate) fn sidebar_row_belongs_to_workspace(row: &SidebarRow, ws_idx: usize) 
         // workspace must never land on one.
         SidebarRow::SectionHeader { .. } => false,
         // Strip rows duplicate a row the workspace owns further down.
-        SidebarRow::NeedsYou { .. } | SidebarRow::NeedsYouMore { .. } => false,
+        SidebarRow::NeedsYou { .. }
+        | SidebarRow::NeedsYouMore { .. }
+        | SidebarRow::BlockersOtherDevices { .. } => false,
         SidebarRow::Divider | SidebarRow::ShelfDivider => false,
         SidebarRow::NestedHeader { .. } => false,
         // A Symphony workflow runs on a worker, not in a workspace.
@@ -8571,6 +8613,7 @@ pub(crate) fn compute_sidebar_row_areas(
             SidebarRow::Tab { .. }
             | SidebarRow::NeedsYou { .. }
             | SidebarRow::NeedsYouMore { .. }
+            | SidebarRow::BlockersOtherDevices { .. }
             | SidebarRow::RemoteAgent { .. }
             | SidebarRow::PodHeader { .. }
             | SidebarRow::PodMember { .. }
@@ -8837,7 +8880,9 @@ fn needs_you_row_areas_from_rows(
         }
         if matches!(
             row,
-            SidebarRow::NeedsYou { .. } | SidebarRow::NeedsYouMore { .. }
+            SidebarRow::NeedsYou { .. }
+                | SidebarRow::NeedsYouMore { .. }
+                | SidebarRow::BlockersOtherDevices { .. }
         ) {
             out.push((idx, Rect::new(body.x, y, body.width, height)));
         }
@@ -10879,7 +10924,7 @@ pub(super) fn render_sidebar_collapsed(app: &AppState, frame: &mut Frame, area: 
                     Rect::new(ws_area.x, y, ws_area.width, 1),
                 );
             }
-            SidebarRow::NeedsYouMore { .. } => {}
+            SidebarRow::NeedsYouMore { .. } | SidebarRow::BlockersOtherDevices { .. } => {}
         }
     }
 
@@ -12010,6 +12055,35 @@ fn render_section_header(
             header.title,
             Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD),
         ));
+        if header.title == BLOCKERS_SECTION_TITLE {
+            spans.push(Span::raw("  "));
+            let prefix_width = 3
+                + display_width(glyph)
+                + usize::from(!glyph.is_empty())
+                + display_width(header.title)
+                + 2;
+            let count_width = if collapsed {
+                display_width(&format!(" ({count})"))
+            } else {
+                0
+            };
+            let label_width =
+                usize::from(header.rect.width).saturating_sub(prefix_width + count_width);
+            let label = if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+            {
+                "[Local ▾]".to_string()
+            } else {
+                "[Fleet ▾]".to_string()
+            };
+            spans.push(Span::styled(
+                if display_width(&label) <= label_width {
+                    label
+                } else {
+                    truncate_end(&label, label_width)
+                },
+                Style::default().fg(p.overlay0),
+            ));
+        }
         if collapsed {
             spans.push(Span::styled(
                 format!(" ({count})"),
@@ -12749,6 +12823,15 @@ fn render_workspace_list(
                         rect,
                     );
                 }
+                Some(SidebarRow::BlockersOtherDevices { count }) => {
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            format!(" {count} more on other devices"),
+                            Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+                        )),
+                        rect,
+                    );
+                }
                 _ => {}
             }
         }
@@ -13189,6 +13272,62 @@ pub(crate) fn sidebar_filter_anchor_rect(app: &AppState, area: Rect) -> Rect {
         width
     };
     Rect::new(x, mode_anchor.y, width, 1)
+}
+
+pub(crate) fn sidebar_blocker_scope_anchor_rect(app: &AppState, area: Rect) -> Rect {
+    let Some(header) = compute_sidebar_section_header_areas(app, area)
+        .into_iter()
+        .find(|header| header.title == BLOCKERS_SECTION_TITLE)
+    else {
+        return Rect::default();
+    };
+    let glyph = section_header_glyph_for_app(app, BLOCKERS_SECTION_TITLE);
+    let prefix_width = 3
+        + display_width(glyph)
+        + usize::from(!glyph.is_empty())
+        + display_width(BLOCKERS_SECTION_TITLE)
+        + 2;
+    let label = format!("[{} ▾]", app.sidebar_blocker_scope.label());
+    let x = header
+        .rect
+        .x
+        .saturating_add(u16::try_from(prefix_width).unwrap_or(u16::MAX));
+    let width = u16::try_from(display_width(&label))
+        .unwrap_or(u16::MAX)
+        .min(header.rect.right().saturating_sub(x));
+    Rect::new(x, header.rect.y, width, 1)
+}
+
+pub(crate) fn sidebar_blocker_scope_menu_layout(
+    app: &AppState,
+    area: Rect,
+) -> Option<super::dropdown::DropdownLayout> {
+    let mut layout = super::dropdown::layout_dropdown(
+        &super::dropdown::DropdownSpec {
+            anchor: sidebar_blocker_scope_anchor_rect(app, app.view.sidebar_rect),
+            item_count: crate::app::state::BlockerScope::ALL.len(),
+            selected: app.sidebar_blocker_scope_menu_selected,
+            has_filter: false,
+            max_rows: crate::app::state::BlockerScope::ALL.len(),
+            min_width: 20,
+        },
+        area,
+    )?;
+    let outer_width = layout.rect.width.min(area.width);
+    let outer_height = layout
+        .rect
+        .height
+        .saturating_add(2)
+        .min(area.bottom().saturating_sub(layout.rect.y));
+    layout.rect = Rect::new(layout.rect.x, layout.rect.y, outer_width, outer_height);
+    layout.list_rect = Rect::new(
+        layout.rect.x.saturating_add(1),
+        layout.rect.y.saturating_add(1),
+        layout.rect.width.saturating_sub(2),
+        layout.rect.height.saturating_sub(2),
+    );
+    layout.visible_rows = usize::from(layout.list_rect.height).min(layout.visible_rows);
+    Some(layout)
 }
 
 pub(crate) fn sidebar_group_mode_anchor_rect(area: Rect) -> Rect {
@@ -14556,6 +14695,52 @@ pub(super) fn render_sidebar_filter_menu(app: &AppState, frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(app.palette.panel_bg)),
         layout.list_rect,
+    );
+}
+
+pub(super) fn render_sidebar_blocker_scope_menu(app: &AppState, frame: &mut Frame) {
+    if !app.sidebar_blocker_scope_menu_open {
+        return;
+    }
+    let Some(layout) = sidebar_blocker_scope_menu_layout(app, frame.area()) else {
+        return;
+    };
+    frame.render_widget(ratatui::widgets::Clear, layout.rect);
+    let lines = crate::app::state::BlockerScope::ALL
+        .iter()
+        .enumerate()
+        .skip(layout.first_visible)
+        .take(layout.visible_rows)
+        .map(|(index, scope)| {
+            let selected = index == app.sidebar_blocker_scope_menu_selected;
+            let active = *scope == app.sidebar_blocker_scope;
+            let style = if selected {
+                Style::default()
+                    .fg(app.palette.text)
+                    .bg(app.palette.surface1)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+                    .fg(app.palette.subtext0)
+                    .bg(app.palette.panel_bg)
+            };
+            Line::from(Span::styled(
+                super::dropdown::pad_menu_row(
+                    &format!("{} {}", if active { "✓" } else { " " }, scope.label()),
+                    layout.list_rect.width,
+                ),
+                style,
+            ))
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.palette.overlay0))
+                .style(Style::default().bg(app.palette.panel_bg)),
+        ),
+        layout.rect,
     );
 }
 
@@ -17208,6 +17393,60 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn blocker_scope_limits_the_blocker_strip_and_marks_remote_remainder() {
+        let mut app = AppState::test_new();
+        app.agent_host_name = "ub1".into();
+        app.sidebar_sections_layout = true;
+        app.workspaces = vec![Workspace::test_new("local")];
+        app.ensure_test_terminals();
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).expect("local terminal");
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_raw_agent_state_for_test(AgentState::Blocked);
+
+        let mut remote = compact_test_entry("remote blocked", Some(Agent::Codex));
+        remote.state = AgentState::Blocked;
+        let agent_ref = crate::api::schema::AgentRef::new("ub2", "remote-blocked")
+            .expect("remote agent reference");
+        app.remote_agent_panel_entries = vec![std::sync::Arc::new(RemoteAgentPanelEntry::new(
+            agent_ref, remote,
+        ))];
+
+        let fleet_rows = sidebar_rows(&app);
+        assert_eq!(
+            fleet_rows
+                .iter()
+                .filter(|row| matches!(row, SidebarRow::NeedsYou { .. }))
+                .count(),
+            2
+        );
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::ThisDevice;
+        let local_rows = sidebar_rows(&app);
+        assert_eq!(
+            local_rows
+                .iter()
+                .filter(|row| matches!(row, SidebarRow::NeedsYou { .. }))
+                .count(),
+            1
+        );
+        assert!(local_rows
+            .iter()
+            .any(|row| matches!(row, SidebarRow::BlockersOtherDevices { count: 1 })));
+        let other_devices_row = local_rows
+            .iter()
+            .position(|row| matches!(row, SidebarRow::BlockersOtherDevices { count: 1 }))
+            .expect("other-device blocker row");
+        assert!(
+            needs_you_row_areas_from_rows(&app, &local_rows, Rect::new(0, 0, 40, 12), 0,)
+                .iter()
+                .any(|(row_idx, _)| *row_idx == other_devices_row)
+        );
+    }
+
+    #[test]
     fn blocked_filter_keeps_spaces_and_only_red_rows_including_snoozed_entries() {
         let mut app = AppState::test_new();
         app.workspaces = vec![
@@ -19142,6 +19381,7 @@ pub(crate) mod tests {
                 | SidebarRow::ShelfDivider
                 | SidebarRow::NeedsYou { .. }
                 | SidebarRow::NeedsYouMore { .. }
+                | SidebarRow::BlockersOtherDevices { .. }
                 | SidebarRow::SymphonyJob { .. }
                 | SidebarRow::SymphonyEmpty
                 | SidebarRow::AgentRun { .. }
@@ -20577,6 +20817,7 @@ pub(crate) mod tests {
                 | SidebarRow::NestedHeader { .. }
                 | SidebarRow::NeedsYou { .. }
                 | SidebarRow::NeedsYouMore { .. }
+                | SidebarRow::BlockersOtherDevices { .. }
                 | SidebarRow::SymphonyJob { .. }
                 | SidebarRow::SymphonyEmpty
                 | SidebarRow::AloopLoop { .. }
@@ -20640,6 +20881,9 @@ pub(crate) mod tests {
                     SidebarRow::NestedHeader { .. } => ("section", 0, None, None),
                     SidebarRow::NeedsYou { .. } => ("needs-you", 0, None, None),
                     SidebarRow::NeedsYouMore { .. } => ("needs-you-more", 0, None, None),
+                    SidebarRow::BlockersOtherDevices { .. } => {
+                        ("blockers-other-devices", 0, None, None)
+                    }
                     SidebarRow::SymphonyJob { .. } | SidebarRow::SymphonyEmpty => {
                         ("symphony", 0, None, None)
                     }
@@ -22918,6 +23162,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 | SidebarRow::ShelfDivider
                 | SidebarRow::NeedsYou { .. }
                 | SidebarRow::NeedsYouMore { .. }
+                | SidebarRow::BlockersOtherDevices { .. }
                 | SidebarRow::SymphonyJob { .. }
                 | SidebarRow::SymphonyEmpty
                 | SidebarRow::AgentRun { .. }
@@ -28777,6 +29022,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn narrow_group_headers_truncate_the_title_and_keep_the_glyph_and_id() {
         let mut app = linear_state_fixture(&[("OPS-3", "In Progress")]);
         app.dock_width = 26;
+        app.sidebar_width = 26;
 
         let headers = rendered_nested_headers(&mut app, 80, 24);
 
@@ -30213,6 +30459,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 | SidebarRow::ShelfDivider
                 | SidebarRow::NeedsYou { .. }
                 | SidebarRow::NeedsYouMore { .. }
+                | SidebarRow::BlockersOtherDevices { .. }
                 | SidebarRow::SymphonyJob { .. }
                 | SidebarRow::SymphonyEmpty
                 | SidebarRow::AgentRun { .. }
@@ -32785,6 +33032,79 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let row = row_text(buffer, anchor.y, 60);
         assert!(row.contains("Spaces ▾"), "{row:?}");
         assert!(!row.contains("all") && !row.contains("mbair"), "{row:?}");
+    }
+
+    #[test]
+    fn blocker_scope_labels_fit_the_default_sidebar_width() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut app = AppState::test_new();
+        app.sidebar_sections_layout = true;
+        for (scope, expected) in [
+            (crate::app::state::BlockerScope::Fleet, "[Fleet ▾]"),
+            (crate::app::state::BlockerScope::ThisDevice, "[Local ▾]"),
+        ] {
+            app.sidebar_blocker_scope = scope;
+            let width = 26;
+            let area = Rect::new(0, 0, width, 1);
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("header terminal");
+            terminal
+                .draw(|frame| {
+                    render_section_header(
+                        &app,
+                        frame,
+                        &SectionHeaderArea {
+                            title: BLOCKERS_SECTION_TITLE,
+                            rect: area,
+                        },
+                        1,
+                        &[],
+                        false,
+                    )
+                })
+                .expect("render blocker header");
+            let row = row_text(terminal.backend().buffer(), 0, width);
+            assert!(row.contains(expected), "{expected:?} missing from {row:?}");
+        }
+    }
+
+    #[test]
+    fn blocker_scope_selector_renders_as_a_bordered_popup() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut app = AppState::test_new();
+        app.sidebar_sections_layout = true;
+        app.workspaces = vec![Workspace::test_new("blocked")];
+        app.ensure_test_terminals();
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&terminal_id)
+            .expect("terminal")
+            .set_raw_agent_state_for_test(AgentState::Blocked);
+        let area = Rect::new(0, 0, 26, 30);
+        crate::ui::compute_view(&mut app, area);
+        app.open_sidebar_blocker_scope_menu();
+        let layout = sidebar_blocker_scope_menu_layout(&app, area).expect("scope layout");
+        let mut terminal = Terminal::new(TestBackend::new(26, 30)).expect("popup terminal");
+        terminal
+            .draw(|frame| render_sidebar_blocker_scope_menu(&app, frame))
+            .expect("render scope popup");
+        let buffer = terminal.backend().buffer();
+        let has_border = buffer[(layout.rect.x, layout.rect.y)].symbol() == "┌";
+        assert!(has_border, "selector should have a visible top border");
+        assert!(
+            (0..30).any(|y| (0..26).any(|x| buffer[(x, y)].symbol() == "✓")),
+            "current scope should be marked"
+        );
+        let popup = (layout.rect.y..layout.rect.bottom())
+            .map(|y| row_text(buffer, y, 26))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(popup.contains("This device"), "{popup:?}");
+        assert!(popup.contains("Fleet"), "{popup:?}");
     }
 
     #[test]

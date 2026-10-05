@@ -106,6 +106,11 @@ impl crate::app::AppState {
         let mut working = 0usize;
         let mut blocked = 0usize;
         for workspace in &self.workspaces {
+            if self.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+                && workspace.is_fleet
+            {
+                continue;
+            }
             for tab in &workspace.tabs {
                 for pane in tab.panes.values() {
                     let Some(terminal) = self.terminals.get(&pane.attached_terminal_id) else {

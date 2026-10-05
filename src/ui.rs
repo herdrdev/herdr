@@ -116,13 +116,14 @@ pub(crate) use self::sidebar::SPACES_SECTION_TITLE;
 pub(crate) use self::sidebar::{compute_agent_card_areas, workspace_drop_indicator_row};
 pub(crate) use self::sidebar::{
     compute_sidebar_section_header_areas, initial_collapsed_sidebar_groups,
+    sidebar_blocker_scope_anchor_rect, sidebar_blocker_scope_menu_layout,
 };
 use self::sidebar::{
-    render_sidebar, render_sidebar_collapsed, render_sidebar_filter_menu,
-    render_sidebar_group_menu, render_sidebar_new_menu, render_sidebar_new_thread,
-    render_sidebar_object_menu, render_sidebar_pod_picker, render_sidebar_project_menu,
-    render_sidebar_settled_menu, render_sidebar_snooze_menu, render_sidebar_sort_menu,
-    render_sidebar_subgroup_picker,
+    render_sidebar, render_sidebar_blocker_scope_menu, render_sidebar_collapsed,
+    render_sidebar_filter_menu, render_sidebar_group_menu, render_sidebar_new_menu,
+    render_sidebar_new_thread, render_sidebar_object_menu, render_sidebar_pod_picker,
+    render_sidebar_project_menu, render_sidebar_settled_menu, render_sidebar_snooze_menu,
+    render_sidebar_sort_menu, render_sidebar_subgroup_picker,
 };
 #[cfg(test)]
 pub(crate) use self::status::focused_context as focused_status_context_for_test;
@@ -1476,6 +1477,9 @@ fn render_with_runtime_registry_inner(
         }
         InputOwner::Client(ClientInputOwner::SidebarFilterMenu) => {
             render_sidebar_filter_menu(app, frame)
+        }
+        InputOwner::Client(ClientInputOwner::SidebarBlockerScopeMenu) => {
+            render_sidebar_blocker_scope_menu(app, frame)
         }
         InputOwner::Client(ClientInputOwner::SidebarNewMenu) => render_sidebar_new_menu(app, frame),
         InputOwner::Client(ClientInputOwner::SidebarNewThread) => {

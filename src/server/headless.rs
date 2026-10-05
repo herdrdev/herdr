@@ -18221,6 +18221,9 @@ next_tab = ""
             server.app.state.ensure_test_terminals();
             server.app.state.active = Some(0);
             server.app.state.selected = 0;
+            // Keep this fixed-width finder fixture independent of the product default.
+            server.app.state.default_sidebar_width = 26;
+            server.app.state.sidebar_width = 26;
             server.app.state.sidebar_collapsed = true;
             server.app.state.set_server_mode(crate::app::Mode::Terminal);
             for (pane_id, agent) in [

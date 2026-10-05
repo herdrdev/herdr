@@ -223,6 +223,7 @@ fn mobile_switcher_target_for_row(
         SidebarRow::NestedHeader { key, .. } => MobileSwitcherTarget::NestedHeader(key.clone()),
         SidebarRow::NeedsYou { target, .. } => MobileSwitcherTarget::NeedsYou(target.clone()),
         SidebarRow::NeedsYouMore { .. } => MobileSwitcherTarget::NeedsYouMore,
+        SidebarRow::BlockersOtherDevices { .. } => return None,
         SidebarRow::AgentRun {
             host,
             summary: Some(summary),
@@ -283,6 +284,7 @@ fn mobile_sidebar_row_height(app: &AppState, row: &SidebarRow) -> usize {
         | SidebarRow::Divider
         | SidebarRow::ShelfDivider
         | SidebarRow::NeedsYouMore { .. }
+        | SidebarRow::BlockersOtherDevices { .. }
         | SidebarRow::NestedHeader { .. }
         | SidebarRow::SymphonyJob { .. }
         | SidebarRow::SymphonyEmpty
@@ -1541,6 +1543,20 @@ fn render_mobile_switcher_content(
                     app.mobile_switcher_scroll,
                     p.panel_bg,
                     Line::from(Span::styled(label, Style::default().fg(p.overlay0))),
+                );
+            }
+            SidebarRow::BlockersOtherDevices { count } => {
+                render_one_line_item(
+                    frame,
+                    viewport,
+                    content,
+                    doc_y,
+                    app.mobile_switcher_scroll,
+                    p.panel_bg,
+                    Line::from(Span::styled(
+                        format!("{count} more on other devices"),
+                        Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+                    )),
                 );
             }
             SidebarRow::Notes(line) => {

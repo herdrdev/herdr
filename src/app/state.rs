@@ -1517,6 +1517,25 @@ pub(crate) enum SidebarSortMode {
     Recent,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum BlockerScope {
+    ThisDevice,
+    #[default]
+    Fleet,
+}
+
+impl BlockerScope {
+    pub(crate) const ALL: [Self; 2] = [Self::ThisDevice, Self::Fleet];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::ThisDevice => "This device",
+            Self::Fleet => "Fleet",
+        }
+    }
+}
+
 impl SidebarSortMode {
     pub(crate) const ALL: [Self; 4] = [Self::Default, Self::Name, Self::Status, Self::Recent];
 
@@ -1561,6 +1580,9 @@ pub(crate) struct SidebarPresentationState {
     pub(crate) work_filter: SidebarWorkFilter,
     pub(crate) filter_menu_open: bool,
     pub(crate) filter_menu_selected: usize,
+    pub(crate) blocker_scope: BlockerScope,
+    pub(crate) blocker_scope_menu_open: bool,
+    pub(crate) blocker_scope_menu_selected: usize,
     pub(crate) search_active: bool,
     pub(crate) agent_finder_saved_query: Option<String>,
     pub(crate) agent_finder_history: Vec<String>,
@@ -1636,6 +1658,7 @@ pub(crate) enum ClientInputOwner {
     AgentPicker,
     SidebarGroupMenu,
     SidebarFilterMenu,
+    SidebarBlockerScopeMenu,
     SidebarNewMenu,
     SidebarNewThread,
     SidebarProjectMenu,
@@ -2808,6 +2831,7 @@ pub struct ViewState {
 pub(crate) enum StatusButtonAction {
     Home,
     NewSession,
+    BlockedFilter,
     Board,
     Scratch,
 }
@@ -4592,6 +4616,7 @@ pub struct AppState {
     pub(crate) sidebar_group_collapsed_persistence_request: Option<(String, bool)>,
     pub(crate) sidebar_view_scan_request: bool,
     pub(crate) sidebar_work_filter_persistence_request: Option<SidebarWorkFilter>,
+    pub(crate) sidebar_blocker_scope_persistence_request: Option<BlockerScope>,
     /// Set when UI interaction requested a clipboard write that must be
     /// handled by the outer App/event loop instead of directly from AppState.
     pub request_clipboard_write: Option<Vec<u8>>,
@@ -4625,6 +4650,9 @@ pub struct AppState {
     pub(crate) sidebar_work_filter: SidebarWorkFilter,
     pub(crate) sidebar_filter_menu_open: bool,
     pub(crate) sidebar_filter_menu_selected: usize,
+    pub(crate) sidebar_blocker_scope: BlockerScope,
+    pub(crate) sidebar_blocker_scope_menu_open: bool,
+    pub(crate) sidebar_blocker_scope_menu_selected: usize,
     /// Typed input goes to the persisted sidebar row query while this is set.
     pub(crate) sidebar_search_active: bool,
     pub(crate) agent_finder_saved_query: Option<String>,
@@ -5102,6 +5130,7 @@ struct ClientInputOwnerState {
     new_thread_open: bool,
     new_menu_open: bool,
     filter_menu_open: bool,
+    blocker_scope_menu_open: bool,
     group_menu_open: bool,
     pr_confirmation_open: bool,
     dock_surface_menu_open: bool,
@@ -5127,6 +5156,7 @@ impl ClientInputOwnerState {
             new_thread_open: app.sidebar_new_thread.is_some(),
             new_menu_open: app.sidebar_new_menu.is_some(),
             filter_menu_open: app.sidebar_filter_menu_open,
+            blocker_scope_menu_open: app.sidebar_blocker_scope_menu_open,
             group_menu_open: app.sidebar_group_menu_open,
             pr_confirmation_open: app.pr_action_confirmation.is_some(),
             dock_surface_menu_open: app.dock_surface_menu.is_some(),
@@ -5156,6 +5186,7 @@ impl ClientInputOwnerState {
             new_thread_open: sidebar.new_thread.is_some(),
             new_menu_open: sidebar.new_menu.is_some(),
             filter_menu_open: sidebar.filter_menu_open,
+            blocker_scope_menu_open: sidebar.blocker_scope_menu_open,
             group_menu_open: sidebar.group_menu_open,
             pr_confirmation_open: dock.pr_action_confirmation.is_some(),
             dock_surface_menu_open: dock.surface_menu.is_some(),
@@ -5204,6 +5235,9 @@ impl ClientInputOwnerState {
         }
         if self.filter_menu_open {
             return Some(ClientInputOwner::SidebarFilterMenu);
+        }
+        if self.blocker_scope_menu_open {
+            return Some(ClientInputOwner::SidebarBlockerScopeMenu);
         }
         if self.group_menu_open {
             return Some(ClientInputOwner::SidebarGroupMenu);
@@ -6313,6 +6347,27 @@ impl AppState {
         self.sidebar_work_filter_persistence_request.take()
     }
 
+    pub(crate) fn set_sidebar_blocker_scope(&mut self, scope: BlockerScope) {
+        self.sidebar_blocker_scope_menu_open = false;
+        if self.sidebar_blocker_scope == scope {
+            return;
+        }
+        self.sidebar_blocker_scope = scope;
+        self.sidebar_blocker_scope_menu_selected = BlockerScope::ALL
+            .iter()
+            .position(|candidate| *candidate == scope)
+            .unwrap_or(1);
+        self.sidebar_blocker_scope_persistence_request = Some(scope);
+        self.workspace_scroll = 0;
+        self.mark_sidebar_projection_changed();
+    }
+
+    pub(crate) fn take_sidebar_blocker_scope_persistence_request(
+        &mut self,
+    ) -> Option<BlockerScope> {
+        self.sidebar_blocker_scope_persistence_request.take()
+    }
+
     /// The sort one sidebar group is explicitly set to, `Default` when the
     /// group never chose one. Inheritance from an enclosing group is resolved
     /// by the row builders, which walk parent-first.
@@ -6407,6 +6462,15 @@ impl AppState {
         std::mem::swap(
             &mut self.sidebar_filter_menu_selected,
             &mut other.filter_menu_selected,
+        );
+        std::mem::swap(&mut self.sidebar_blocker_scope, &mut other.blocker_scope);
+        std::mem::swap(
+            &mut self.sidebar_blocker_scope_menu_open,
+            &mut other.blocker_scope_menu_open,
+        );
+        std::mem::swap(
+            &mut self.sidebar_blocker_scope_menu_selected,
+            &mut other.blocker_scope_menu_selected,
         );
         std::mem::swap(&mut self.sidebar_search_active, &mut other.search_active);
         std::mem::swap(
@@ -7947,6 +8011,7 @@ impl AppState {
             sidebar_group_collapsed_persistence_request: None,
             sidebar_view_scan_request: false,
             sidebar_work_filter_persistence_request: None,
+            sidebar_blocker_scope_persistence_request: None,
             request_clipboard_write: None,
             creating_new_tab: false,
             requested_new_tab_name: None,
@@ -7968,6 +8033,9 @@ impl AppState {
             sidebar_work_filter: SidebarWorkFilter::default(),
             sidebar_filter_menu_open: false,
             sidebar_filter_menu_selected: 0,
+            sidebar_blocker_scope: BlockerScope::default(),
+            sidebar_blocker_scope_menu_open: false,
+            sidebar_blocker_scope_menu_selected: 1,
             sidebar_search_active: false,
             agent_finder_saved_query: None,
             agent_finder_history: Vec::new(),
@@ -8854,6 +8922,9 @@ mod tests {
             }
             ClientInputOwner::SidebarGroupMenu => state.sidebar_group_menu_open = true,
             ClientInputOwner::SidebarFilterMenu => state.sidebar_filter_menu_open = true,
+            ClientInputOwner::SidebarBlockerScopeMenu => {
+                state.sidebar_blocker_scope_menu_open = true;
+            }
             ClientInputOwner::SidebarNewMenu => {
                 state.sidebar_new_menu = Some(SidebarNewMenuState::default());
             }
@@ -8980,6 +9051,7 @@ mod tests {
             ClientInputOwner::AgentPicker,
             ClientInputOwner::SidebarGroupMenu,
             ClientInputOwner::SidebarFilterMenu,
+            ClientInputOwner::SidebarBlockerScopeMenu,
             ClientInputOwner::SidebarNewMenu,
             ClientInputOwner::SidebarNewThread,
             ClientInputOwner::SidebarProjectMenu,

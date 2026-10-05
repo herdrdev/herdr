@@ -1422,6 +1422,12 @@ impl AppState {
                         self.toggle_sidebar_group(crate::ui::sidebar::NEEDS_YOU_SECTION_TITLE);
                         return None;
                     }
+                    if crate::ui::sidebar_blocker_scope_anchor_rect(self, self.view.sidebar_rect)
+                        .contains((mouse.column, mouse.row).into())
+                    {
+                        self.open_sidebar_blocker_scope_menu();
+                        return None;
+                    }
                     // Headers are tested before spaces: a header row owns its
                     // whole width, so anywhere on it folds the group.
                     if let Some(title) = self.sidebar_section_header_at(mouse.row) {
@@ -2478,6 +2484,21 @@ impl AppState {
                     match self.sidebar_filter_menu_item_at(mouse.column, mouse.row) {
                         Some(index) => self.select_sidebar_filter_option(index),
                         None => self.sidebar_filter_menu_open = false,
+                    }
+                }
+                None
+            }
+            ClientInputOwner::SidebarBlockerScopeMenu => {
+                if matches!(mouse.kind, MouseEventKind::Moved) {
+                    if let Some(index) =
+                        self.sidebar_blocker_scope_menu_item_at(mouse.column, mouse.row)
+                    {
+                        self.sidebar_blocker_scope_menu_selected = index;
+                    }
+                } else if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                    match self.sidebar_blocker_scope_menu_item_at(mouse.column, mouse.row) {
+                        Some(index) => self.select_sidebar_blocker_scope_option(index),
+                        None => self.sidebar_blocker_scope_menu_open = false,
                     }
                 }
                 None

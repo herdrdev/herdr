@@ -335,6 +335,9 @@ impl App {
                 ClientInputOwner::SidebarFilterMenu => {
                     self.state.handle_sidebar_filter_menu_key(key_event);
                 }
+                ClientInputOwner::SidebarBlockerScopeMenu => {
+                    self.state.handle_sidebar_blocker_scope_menu_key(key_event);
+                }
                 ClientInputOwner::SidebarNewMenu => {
                     self.state.handle_sidebar_new_menu_key(key_event);
                 }
@@ -1463,6 +1466,9 @@ impl App {
                 self.state.toggle_home();
             }
             StatusButtonAction::NewSession => self.state.request_new_workspace = true,
+            StatusButtonAction::BlockedFilter => {
+                self.state.blocked_filter = !self.state.blocked_filter
+            }
             StatusButtonAction::Board => self.toggle_board_view(),
         }
     }
@@ -5782,6 +5788,7 @@ impl App {
             | ClientInputOwner::AgentPicker
             | ClientInputOwner::SidebarGroupMenu
             | ClientInputOwner::SidebarFilterMenu
+            | ClientInputOwner::SidebarBlockerScopeMenu
             | ClientInputOwner::SidebarNewMenu
             | ClientInputOwner::SidebarNewThread
             | ClientInputOwner::SidebarProjectMenu
