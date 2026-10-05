@@ -153,7 +153,7 @@ jobs:
             zig-build-v1-${{ runner.os }}-${{ runner.arch }}-0.16.0-
 
       - name: Restore cargo cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           cache-bin: false
           key: ${{ matrix.os }}
@@ -268,7 +268,7 @@ jobs:
             zig-build-v1-conpty-package-windows-2022-${{ runner.arch }}-0.16.0-
 
       - name: Restore Cargo cache
-        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           cache-bin: false
           key: conpty-package-windows-2022
