@@ -204,6 +204,47 @@ mod tests {
         app
     }
     #[test]
+    fn freeze_scratch_autosave_never_creates_blank_drafts() {
+        let dir = std::env::temp_dir().join(format!(
+            "scratch-blank-{}",
+            crate::config::test_unique_suffix()
+        ));
+        let mut app = app(&dir);
+        app.state.scratch.open_writer();
+        app.tick_scratch(Instant::now(), true);
+        assert!(!dir.exists());
+        app.state
+            .scratch
+            .editor
+            .as_mut()
+            .expect("editor")
+            .insert(" \t\n");
+        app.tick_scratch(Instant::now() + SAVE_DELAY, false);
+        assert!(!dir.exists());
+        app.state
+            .scratch
+            .editor
+            .as_mut()
+            .expect("editor")
+            .insert(" ");
+        app.state.scratch.new_note();
+        app.tick_scratch(Instant::now(), true);
+        assert!(app.state.scratch.pending_saves.is_empty());
+        assert!(!dir.exists());
+        app.state
+            .scratch
+            .editor
+            .as_mut()
+            .expect("editor")
+            .insert("first text");
+        app.tick_scratch(Instant::now() + SAVE_DELAY, false);
+        let notes = scratch::load_notes(&dir).expect("notes");
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].body, "first text");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+
+    #[test]
     fn scratch_autosave_tick_and_switching_preserve_both_drafts() {
         let dir = std::env::temp_dir().join(format!(
             "scratch-tick-{}",
@@ -257,6 +298,12 @@ mod tests {
         std::fs::write(&dir, "not a directory").expect("fixture");
         let mut app = app(&dir);
         app.state.scratch.new_note();
+        app.state
+            .scratch
+            .editor
+            .as_mut()
+            .expect("editor")
+            .insert("draft");
         app.tick_scratch(Instant::now(), true);
         assert!(app.state.scratch.error.is_some());
         assert!(app

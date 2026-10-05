@@ -1068,6 +1068,25 @@ pub(super) fn render_remote_compact_agent_row_with_shelf(
     );
 }
 
+/// Device sections already name the host; retain the full cached title for
+/// other surfaces and layouts, including remote pane/tab titles.
+fn remote_sidebar_title<'a>(app: &AppState, remote: &'a RemoteAgentPanelEntry) -> &'a str {
+    if app.sidebar_sections_layout {
+        remote.render_title.rsplit_once(" · ").map_or(
+            remote.render_title.as_str(),
+            |(title, host)| {
+                if host == remote.agent_ref.host {
+                    title
+                } else {
+                    &remote.render_title
+                }
+            },
+        )
+    } else {
+        &remote.render_title
+    }
+}
+
 fn render_remote_compact_agent_row_with_prefix(
     app: &AppState,
     frame: &mut Frame,
@@ -1099,7 +1118,7 @@ fn render_remote_compact_agent_row_with_prefix(
     let machine_width = remote_machine_field_width(row_width);
     let fitting_width = row_width + SIDEBAR_MACHINE_FIELD_WIDTH - machine_width;
     let title = compact_row_title_for_width(
-        &remote.render_title,
+        remote_sidebar_title(app, remote),
         &remote.render_provider,
         fitting_width,
         requested_prefix,
@@ -1139,7 +1158,11 @@ fn render_remote_compact_agent_row_with_prefix(
         rect.width,
     );
     let title_text_width = title_width.saturating_sub(controls_width);
-    let title_text = truncate_remote_title(title, title_text_width);
+    let title_text = if app.sidebar_sections_layout {
+        truncate_end(title, title_text_width)
+    } else {
+        truncate_remote_title(title, title_text_width)
+    };
     let title_style = if selected {
         Style::default()
             .fg(active_sidebar_title_color(p))
@@ -1618,7 +1641,7 @@ pub(crate) fn selected_remote_row_control_at(
     let machine_width = remote_machine_field_width(row_width);
     let fitting_width = row_width + SIDEBAR_MACHINE_FIELD_WIDTH - machine_width;
     let title = compact_row_title_for_width(
-        &entry.render_title,
+        remote_sidebar_title(app, entry),
         &entry.render_provider,
         fitting_width,
         requested_prefix,
@@ -9571,7 +9594,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                 let total_width = usize::from(body.width);
                 let row_width = total_width;
                 let title = compact_row_title_for_width(
-                    &entry.render_title,
+                    remote_sidebar_title(app, entry),
                     &entry.render_provider,
                     row_width,
                     requested_prefix,
@@ -12097,6 +12120,16 @@ fn device_count_label(key: &str, count: usize) -> String {
     }
 }
 
+fn nested_header_prefix(header: &NestedHeaderArea) -> &'static str {
+    if header.dim && !header.key.starts_with("device:") {
+        "   "
+    } else if header.collapsed {
+        "  ▸ "
+    } else {
+        "  ▾ "
+    }
+}
+
 fn nested_header_spans(header: &NestedHeaderArea) -> NestedHeaderSpans {
     let count_width = nested_header_count_label(header)
         .as_deref()
@@ -12104,7 +12137,7 @@ fn nested_header_spans(header: &NestedHeaderArea) -> NestedHeaderSpans {
     let action_width = usize::from(header.action_key.is_some()) * 2;
     let spawn_width = usize::from(header.spawn) * 2;
     let sort_width = usize::from(header.sort_key.is_some()) * 2;
-    let prefix_width = display_width(if header.dim { "   " } else { "  ▸ " });
+    let prefix_width = display_width(nested_header_prefix(header));
     // The status glyph sits before the id, so it costs the title its width.
     let glyph = header.status.map(WorkGroupStatus::glyph);
     let glyph_width = glyph.map(|glyph| display_width(glyph) + 1).unwrap_or(0);
@@ -12168,13 +12201,7 @@ fn render_nested_header(app: &AppState, frame: &mut Frame, header: &NestedHeader
     let NestedHeaderSpans { glyph, title, .. } = nested_header_spans(header);
     // A dim header carries no live state colour: nothing is running under it.
     let color = if header.dim { p.overlay0 } else { p.subtext0 };
-    let mut spans = vec![Span::raw(if header.dim {
-        "   "
-    } else if header.collapsed {
-        "  ▸ "
-    } else {
-        "  ▾ "
-    })];
+    let mut spans = vec![Span::raw(nested_header_prefix(header))];
     if let Some(glyph) = glyph {
         let status_color = header
             .status
@@ -14766,6 +14793,149 @@ pub(crate) mod tests {
             REMOTE_AGENT_DEVICE_GROUP_BUILDS.with(std::cell::Cell::get),
             builds_after_snapshot
         );
+    }
+
+    #[test]
+    fn freeze_empty_devices_are_hidden_in_cached_and_uncached_projections() {
+        let mut app = app_with_two_remote_hosts();
+        app.sidebar_sections_layout = true;
+        // Keep a known device and its shell row, but no running agent.
+        for remote in &mut app.remote_agent_panel_entries {
+            std::sync::Arc::make_mut(remote).entry.has_agent = false;
+        }
+        for cached in [false, true] {
+            app.remote_agent_device_groups = cached.then(|| remote_agent_device_groups(&app));
+            let entries = app
+                .remote_agent_panel_entries
+                .iter()
+                .map(remote_agent_as_panel_entry)
+                .collect();
+            let mut rows = Vec::new();
+            devices::append_remote_entry_groups(&app, &mut rows, "main", entries);
+            assert!(
+                rows.is_empty(),
+                "zero-agent devices must not have headers or rows (cached={cached})"
+            );
+        }
+    }
+
+    #[test]
+    fn freeze_remote_devices_start_folded_even_when_focused_and_count_only_agents() {
+        let mut app = app_with_two_remote_hosts();
+        app.sidebar_sections_layout = true;
+        app.view.focused_remote_host = Some("remote-b".into());
+        // An agentless tab does not increase the device's agent count.
+        let mut shell = (*app.remote_agent_panel_entries[0]).clone();
+        shell.entry.has_agent = false;
+        app.remote_agent_panel_entries
+            .push(std::sync::Arc::new(shell));
+        for cached in [false, true] {
+            app.remote_agent_device_groups = cached.then(|| remote_agent_device_groups(&app));
+            let entries = app
+                .remote_agent_panel_entries
+                .iter()
+                .map(remote_agent_as_panel_entry)
+                .collect();
+            let mut rows = Vec::new();
+            devices::append_remote_entry_groups(&app, &mut rows, "main", entries);
+            assert!(rows.iter().all(|row| matches!(
+                row,
+                SidebarRow::NestedHeader {
+                    collapsed: true,
+                    ..
+                }
+            )));
+            assert!(rows.iter().any(|row| matches!(row, SidebarRow::NestedHeader { key, count: 2, activity_count: None, .. } if key == "device:main/remote-b")));
+        }
+        app.collapsed_sidebar_groups
+            .insert("expanded:device:main/remote-b".into());
+        let mut expanded = Vec::new();
+        devices::append_remote_entry_groups(&app, &mut expanded, "main", Vec::new());
+        assert!(expanded
+            .iter()
+            .any(|row| matches!(row, SidebarRow::RemoteAgent { .. })));
+        app.collapsed_sidebar_groups
+            .remove("expanded:device:main/remote-b");
+        app.collapsed_sidebar_groups
+            .insert("device:main/remote-b".into());
+        let mut collapsed = Vec::new();
+        devices::append_remote_entry_groups(&app, &mut collapsed, "main", Vec::new());
+        assert!(collapsed.iter().all(|row| matches!(
+            row,
+            SidebarRow::NestedHeader {
+                collapsed: true,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn freeze_dim_device_headers_keep_fold_arrows_and_collapsed_agent_counts() {
+        let mut app = AppState::test_new();
+        for nerd_font in [false, true] {
+            app.nerd_font = nerd_font;
+            for width in [18, 42] {
+                for collapsed in [false, true] {
+                    let mut header = test_nested_header("", None, width);
+                    header.key = "device:main/ub1".into();
+                    header.title = devices::device_title(&app, "ub1", false);
+                    header.action_key = None;
+                    header.dim = true;
+                    header.collapsed = collapsed;
+                    let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
+                    terminal
+                        .draw(|frame| render_nested_header(&app, frame, &header))
+                        .expect("render");
+                    let text = row_text(terminal.backend().buffer(), 0, width);
+                    assert!(text.contains(if collapsed { "▸" } else { "▾" }), "{text}");
+                    assert!(text.contains("ub1"), "{text}");
+                    assert_eq!(text.contains("(2)"), collapsed, "{text}");
+                    assert!(!text.contains('●'), "{text}");
+                    assert_eq!(nested_header_spans(&header).prefix_width, 4);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn freeze_device_rows_omit_redundant_host_suffix_in_desktop_and_mobile() {
+        let mut app = app_with_two_remote_hosts();
+        app.sidebar_sections_layout = true;
+        let remote = &app.remote_agent_panel_entries[0];
+        let original_title = remote.render_title.clone();
+        assert!(original_title.ends_with(" · remote-b"));
+        assert!(!remote_sidebar_title(&app, remote).contains(" · remote-b"));
+        for layout in [
+            crate::app::state::ViewLayout::Desktop,
+            crate::app::state::ViewLayout::Mobile,
+        ] {
+            app.view.layout = layout;
+            for width in [18, 80] {
+                let mut terminal = Terminal::new(TestBackend::new(width, 1)).expect("terminal");
+                terminal
+                    .draw(|frame| {
+                        render_remote_compact_agent_row(
+                            &app,
+                            frame,
+                            remote,
+                            Rect::new(0, 0, width, 1),
+                            1,
+                            None,
+                        )
+                    })
+                    .expect("render");
+                let text = row_text(terminal.backend().buffer(), 0, width);
+                assert!(!text.contains(" · remote-b"), "{text}");
+                assert!(text.contains("first"), "{text}");
+                assert!(text.contains('●'), "{text}");
+            }
+        }
+        assert_eq!(
+            remote.render_title, original_title,
+            "other surfaces retain the host suffix"
+        );
+        app.sidebar_sections_layout = false;
+        assert_eq!(remote_sidebar_title(&app, remote), original_title);
     }
 
     #[test]

@@ -67,7 +67,7 @@ pub(crate) fn group_is_collapsed(
     {
         return false;
     }
-    if reachable && app.view.focused_remote_host.as_deref() == Some(host) {
+    if section != "main" && reachable && app.view.focused_remote_host.as_deref() == Some(host) {
         return false;
     }
     !reachable || !local
@@ -146,7 +146,7 @@ pub(super) fn append_remote_entry_groups(
                         rows,
                         section,
                         group,
-                        group.items.len(),
+                        group.items.iter().filter(|entry| entry.has_agent).count(),
                         group.items.iter().map(|entry| (**entry).clone()),
                         remote_activity,
                     );
@@ -158,7 +158,12 @@ pub(super) fn append_remote_entry_groups(
                         super::remote_sidebar_entry_matches_query(remote, &remote_terms)
                             && (!app.blocked_filter || super::entry_has_red_dot(entry.as_ref()))
                     };
-                    let entry_count = group.items.iter().filter(is_visible).count();
+                    let entry_count = group
+                        .items
+                        .iter()
+                        .filter(is_visible)
+                        .filter(|entry| entry.has_agent)
+                        .count();
                     append_device_group(
                         app,
                         rows,
@@ -174,12 +179,6 @@ pub(super) fn append_remote_entry_groups(
                     );
                 }
             }
-            append_empty_device_groups(
-                app,
-                rows,
-                section,
-                groups.iter().map(|group| group.host.as_str()),
-            );
             return;
         }
     }
@@ -209,59 +208,6 @@ pub(super) fn append_remote_entry_groups(
             remote_activity,
         );
     }
-    append_empty_device_groups(
-        app,
-        rows,
-        section,
-        groups.iter().map(|group| group.host.as_str()),
-    );
-}
-
-fn append_empty_device_groups<'a>(
-    app: &AppState,
-    rows: &mut Vec<super::SidebarRow>,
-    section: &str,
-    present_hosts: impl IntoIterator<Item = &'a str>,
-) {
-    if !app.sidebar_sections_layout || section == "main" {
-        return;
-    }
-    let present = present_hosts
-        .into_iter()
-        .collect::<std::collections::HashSet<_>>();
-    let known = app
-        .machines
-        .iter()
-        .map(|machine| machine.target.as_deref().unwrap_or(&machine.name))
-        .chain(
-            app.fleet_snapshot
-                .hosts
-                .iter()
-                .filter(|host| !host.local)
-                .map(|host| host.name.as_str()),
-        );
-    let known = known
-        .filter(|host| *host != app.agent_host_name)
-        .collect::<std::collections::BTreeSet<_>>();
-    for host in known {
-        if present.contains(host) {
-            continue;
-        }
-        let key = group_key(section, host);
-        rows.push(super::SidebarRow::NestedHeader {
-            key,
-            action_key: None,
-            sort_key: None,
-            sort_mode: crate::app::state::SidebarSortMode::Default,
-            title: device_title(app, host, false),
-            count: 0,
-            activity_count: None,
-            collapsed: true,
-            dim: true,
-            status: None,
-            spawn: false,
-        });
-    }
 }
 
 fn append_device_group<T>(
@@ -274,10 +220,15 @@ fn append_device_group<T>(
     remote_activity: &std::collections::HashMap<(String, String), super::SidebarActivityCount>,
 ) {
     let collapsed = group_is_collapsed(app, section, &group.host, group.local, group.reachable);
-    if entry_count == 0 && !collapsed {
+    if entry_count == 0 {
         return;
     }
-    let entries = entries.into_iter().collect::<Vec<_>>();
+    // Collapsed devices need only the count, not cloned rows or activity scans.
+    let entries = if collapsed {
+        Vec::new()
+    } else {
+        entries.into_iter().collect::<Vec<_>>()
+    };
     let has_done_or_blocked = entries.iter().any(|entry| {
         super::entry_is_blocked(entry)
             || (entry.has_agent && entry.state == crate::detect::AgentState::Idle && !entry.seen)

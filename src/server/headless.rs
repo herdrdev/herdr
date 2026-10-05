@@ -9642,6 +9642,8 @@ esac
             Some(second_writer),
         );
         second.notepad_presentation.usage_tab = true;
+        // This client chose the expanded account list; new clients start folded.
+        second.notepad_presentation.usage_collapsed = false;
         second.notepad_presentation.usage_scroll = 1;
         let third = ClientConnection::new(
             (80, 24),
@@ -9687,6 +9689,8 @@ esac
                 .tasks
         );
         assert!(server.clients[&2].notepad_presentation.usage_tab);
+        assert!(!server.clients[&2].notepad_presentation.usage_collapsed);
+        assert!(server.clients[&3].notepad_presentation.usage_collapsed);
         assert!(!server.clients[&3].notepad_presentation.agent_tab);
         assert_eq!(server.clients[&1].notepad_presentation.agent_scroll, 1);
         assert_eq!(server.clients[&2].notepad_presentation.usage_scroll, 1);

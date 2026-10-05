@@ -147,7 +147,16 @@ fn check_original(note: &Note) -> std::io::Result<()> {
 /// Save via a sibling temporary file; an external edit is never silently lost.
 pub(crate) fn save_note(note: &mut Note) -> std::io::Result<()> {
     use std::io::Write;
+    // A blank draft has no file. Clearing an existing note removes its file
+    // only after checking that no external editor has changed it.
     check_original(note)?;
+    if note.body.trim().is_empty() {
+        if note.original.is_some() {
+            std::fs::remove_file(&note.path)?;
+            note.original = None;
+        }
+        return Ok(());
+    }
     let parent = note
         .path
         .parent()
@@ -488,9 +497,7 @@ impl ScratchState {
             frontmatter: Vec::new(),
             original: None,
         };
-        let mut editor = Editor::new(note);
-        editor.dirty_at = Some(Instant::now());
-        self.editor = Some(editor);
+        self.editor = Some(Editor::new(note));
         self.open = true;
         self.list = false;
         self.error = None;
@@ -620,6 +627,54 @@ mod tests {
         assert!(!app.scratch.open);
     }
     #[test]
+    fn freeze_scratch_open_and_whitespace_do_not_create_files() {
+        let temp = tempdir().expect("temp");
+        let mut app = app();
+        let dir = temp.path().join("notes");
+        app.scratch.dir = dir.clone();
+        app.scratch.open_writer();
+        let editor = app.scratch.editor.as_mut().expect("editor");
+        assert!(editor.dirty_at.is_none());
+        save_note(&mut editor.note).expect("blank save");
+        assert!(!editor.note.path.exists());
+        editor.insert(" \t\n\u{2003}");
+        save_note(&mut editor.note).expect("whitespace save");
+        assert!(!editor.note.path.exists());
+        assert!(!dir.exists());
+        assert!(load_notes(&dir).expect("notes").is_empty());
+        editor.insert("first text");
+        save_note(&mut editor.note).expect("first text save");
+        assert!(editor.note.path.exists());
+        assert_eq!(load_notes(&app.scratch.dir).expect("notes").len(), 1);
+    }
+
+    #[test]
+    fn freeze_scratch_cleared_note_is_not_persisted_empty_and_preserves_external_edits() {
+        let temp = tempdir().expect("temp");
+        let mut app = app();
+        app.scratch.dir = temp.path().into();
+        app.scratch.new_note();
+        let editor = app.scratch.editor.as_mut().expect("editor");
+        editor.insert("text");
+        save_note(&mut editor.note).expect("save");
+        editor.note.body = " \n".into();
+        editor.cursor = editor.note.body.len();
+        std::fs::write(&editor.note.path, "external edit").expect("external edit");
+        assert!(save_note(&mut editor.note).is_err());
+        assert_eq!(
+            std::fs::read_to_string(&editor.note.path).expect("read"),
+            "external edit"
+        );
+        editor.note.original = Some("external edit".into());
+        save_note(&mut editor.note).expect("clear");
+        assert!(!editor.note.path.exists());
+        assert!(editor.note.original.is_none());
+        editor.insert("new text");
+        save_note(&mut editor.note).expect("recreate");
+        assert!(editor.note.path.exists());
+    }
+
+    #[test]
     fn scratch_editor_unicode_navigation_words_and_paste() {
         let mut app = app();
         app.scratch.new_note();
@@ -687,7 +742,9 @@ mod tests {
         let mut app = app();
         app.scratch.dir = temp.path().into();
         app.scratch.new_note();
-        save_note(&mut app.scratch.editor.as_mut().expect("editor").note).expect("save");
+        let editor = app.scratch.editor.as_mut().expect("editor");
+        editor.insert("note to delete");
+        save_note(&mut editor.note).expect("save");
         app.scratch.notes = load_notes(temp.path()).expect("load");
         app.scratch.list = true;
         app.scratch.key(key(KeyCode::Char('d')));
@@ -728,7 +785,9 @@ mod tests {
         let mut app = app();
         app.scratch.dir = temp.path().into();
         app.scratch.new_note();
-        let note = &mut app.scratch.editor.as_mut().expect("editor").note;
+        let editor = app.scratch.editor.as_mut().expect("editor");
+        editor.insert("original");
+        let note = &mut editor.note;
         save_note(note).expect("save");
         std::fs::write(&note.path, "external").expect("write");
         assert!(save_note(note).is_err());

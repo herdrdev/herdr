@@ -81,7 +81,7 @@ pub(crate) struct AgentSectionCollapse {
 
 /// Attach-local notepad controls. Note contents remain session-owned, while
 /// each TUI client may select and fold the read-only projection independently.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NotepadPresentationState {
     pub(crate) agent_tab: bool,
     pub(crate) usage_tab: bool,
@@ -91,6 +91,20 @@ pub(crate) struct NotepadPresentationState {
     pub(crate) agent_collapsed: AgentSectionCollapse,
     pub(crate) agent_scroll: usize,
     pub(crate) usage_scroll: usize,
+}
+
+impl Default for NotepadPresentationState {
+    fn default() -> Self {
+        Self {
+            agent_tab: false,
+            usage_tab: false,
+            usage_collapsed: true,
+            usage_expanded_providers: std::collections::BTreeSet::new(),
+            agent_collapsed: AgentSectionCollapse::default(),
+            agent_scroll: 0,
+            usage_scroll: 0,
+        }
+    }
 }
 
 impl AgentSectionCollapse {
@@ -952,9 +966,30 @@ mod tests {
     }
 
     #[test]
+    fn freeze_usage_defaults_collapsed_for_new_clients_and_preserves_saved_expansion() {
+        let mut app = crate::app::AppState::test_new();
+        let mut new_client = NotepadPresentationState::default();
+        app.notepad.swap_presentation(&mut new_client);
+        assert!(app.notepad.usage_collapsed);
+        let mut saved_client = NotepadPresentationState {
+            usage_collapsed: false,
+            ..Default::default()
+        };
+        app.notepad.swap_presentation(&mut saved_client);
+        assert!(!app.notepad.usage_collapsed);
+        app.notepad.swap_presentation(&mut saved_client);
+        assert!(app.notepad.usage_collapsed);
+        app.notepad.swap_presentation(&mut saved_client);
+        assert!(!app.notepad.usage_collapsed);
+    }
+
+    #[test]
     fn usage_collapse_state_round_trips_with_client_presentation() {
         let mut state = state_with("");
-        let mut saved = NotepadPresentationState::default();
+        let mut saved = NotepadPresentationState {
+            usage_collapsed: false,
+            ..Default::default()
+        };
         state.usage_collapsed = true;
 
         state.swap_presentation(&mut saved);
