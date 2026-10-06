@@ -1248,6 +1248,9 @@ fn ssh_host_key_probe_command(target: &str, options: &ManagedSshOptions) -> Comm
     command
         .arg("-o")
         .arg("PreferredAuthentications=none")
+        // A quiet user LogLevel would hide the rejection; ERROR still prints it.
+        .arg("-o")
+        .arg("LogLevel=ERROR")
         .arg("-T")
         .arg(target)
         .arg("exit")
@@ -4026,6 +4029,7 @@ mod tests {
             "BatchMode=yes",
             "StrictHostKeyChecking=yes",
             "PreferredAuthentications=none",
+            "LogLevel=ERROR",
         ] {
             assert!(args.iter().any(|arg| arg == required), "missing {required}");
         }

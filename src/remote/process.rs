@@ -28,6 +28,7 @@ pub(super) fn wait_with_output_timeout(
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
     let started = Instant::now();
+    // After a kill, detach the readers: descendants such as a ProxyCommand can hold the pipes open.
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -35,16 +36,14 @@ pub(super) fn wait_with_output_timeout(
             Err(error) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                let _ = stdout.join();
-                let _ = stderr.join();
+                drop((stdout, stderr));
                 return Err(error);
             }
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
             let _ = child.wait();
-            let _ = stdout.join();
-            let _ = stderr.join();
+            drop((stdout, stderr));
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 "noninteractive SSH command timed out",
@@ -83,5 +82,21 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn timeout_does_not_wait_for_descendants_holding_pipes() {
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("sleep 3 & exec sleep 10")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let started = Instant::now();
+        let error = wait_with_output_timeout(command.spawn().unwrap(), Duration::from_millis(25))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
     }
 }
