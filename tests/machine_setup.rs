@@ -10,14 +10,37 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 // No real SSH connection or server is started. Stop at startup after recording setup actions.
+// With FAKE_SHARED_MASTER=yes, invocations through `-S` model OpenSSH multiplexing over a
+// live master: they never re-verify the host key. Only fresh connections (no `-S`, or
+// `ControlPath=none`) can fail strict host-key checking. With FAKE_HOST_KEY_ACCEPT=persist,
+// the user accepts the unknown key on any non-strict connection and OpenSSH persists it.
+// FAKE_HOST_KEY_PROBE=transport makes the "none"-auth host-key probe inconclusive.
 const SSH: &str = r#"#!/bin/sh
 for arg do
     last=$arg
     if [ "$arg" = 'StrictHostKeyChecking=yes' ]; then strict_host_key_check=yes; fi
+    if [ "$arg" = '-S' ]; then control_socket=yes; fi
+    if [ "$arg" = 'ControlPath=none' ]; then control_path_none=yes; fi
+    if [ "$arg" = 'PreferredAuthentications=none' ]; then host_key_probe=yes; fi
 done
-if [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ] && [ "$strict_host_key_check" = yes ]; then
+if [ "$FAKE_HOST_KEY_ACCEPT" = persist ]; then
+    if [ "$strict_host_key_check" != yes ]; then touch "$FAKE_ROOT/known_host"; fi
+    if [ -f "$FAKE_ROOT/known_host" ]; then host_key_known=yes; fi
+fi
+if [ "$FAKE_SHARED_MASTER" = yes ] && [ "$control_socket" = yes ] && [ "$control_path_none" != yes ]; then
+    strict_host_key_check=
+fi
+if [ "$host_key_probe" = yes ] && [ "$FAKE_HOST_KEY_PROBE" = transport ]; then
+    echo 'ssh: connect to host fake-host port 22: Operation timed out' >&2
+    exit 255
+fi
+if [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ] && [ "$strict_host_key_check" = yes ] && [ "$host_key_known" != yes ]; then
     echo 'No RSA host key is known for fake-host and you have requested strict checking.' >&2
     echo 'Host key verification failed.' >&2
+    exit 255
+fi
+if [ "$host_key_probe" = yes ]; then
+    echo 'fake-user@fake-host: Permission denied (publickey).' >&2
     exit 255
 fi
 if [ "$last" = 'command -v herdr' ]; then
@@ -44,9 +67,11 @@ case "$script" in
             echo '{"version":"0.8.2","protocol":20}'
         fi ;;
     *'status server --json'*)
+        # Endpoint negotiation makes unmanaged setup run its strict probe bridge. That
+        # bridge always fails here, so accepted-key scenarios must not advertise it.
         if [ -f "$FAKE_ROOT/stopped" ]; then
             echo '{"running":false}'
-        elif [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ]; then
+        elif [ "$FAKE_STRICT_HOST_KEY_FAILURE" = yes ] && [ "$FAKE_HOST_KEY_ACCEPT" != persist ]; then
             echo '{"running":true,"version":"0.8.2","capabilities":{"live_handoff":true,"detached_server_daemon":true,"endpoint_protocol_generation":1,"surface_interest":true,"health_check":true}}'
         else
             echo '{"running":true,"version":"0.8.2","capabilities":{"live_handoff":true,"detached_server_daemon":true}}'
@@ -83,6 +108,9 @@ struct SetupOptions<'a> {
     selection: &'a [u8],
     explicit_session: Option<&'a str>,
     noninteractive: bool,
+    managed_ssh_config: bool,
+    host_key_accept_persist: bool,
+    inconclusive_host_key_probe: bool,
 }
 
 fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
@@ -134,7 +162,10 @@ fn setup_options(
     fs::set_permissions(root.join("bin/ssh"), fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(
         root.join("config").join(app).join("config.toml"),
-        "onboarding = false\n[remote]\nmanage_ssh_config = false\n",
+        format!(
+            "onboarding = false\n[remote]\nmanage_ssh_config = {}\n",
+            options.managed_ssh_config
+        ),
     )
     .unwrap();
     let status = Command::new(env!("CARGO_BIN_EXE_herdr"))
@@ -172,6 +203,30 @@ fn setup_options(
     command.env(
         "FAKE_STRICT_HOST_KEY_FAILURE",
         if strict_host_key_failure { "yes" } else { "no" },
+    );
+    command.env(
+        "FAKE_SHARED_MASTER",
+        if options.managed_ssh_config {
+            "yes"
+        } else {
+            "no"
+        },
+    );
+    command.env(
+        "FAKE_HOST_KEY_ACCEPT",
+        if options.host_key_accept_persist {
+            "persist"
+        } else {
+            "no"
+        },
+    );
+    command.env(
+        "FAKE_HOST_KEY_PROBE",
+        if options.inconclusive_host_key_probe {
+            "transport"
+        } else {
+            "no"
+        },
     );
     command.env(
         "FAKE_CLIENT_STATUS",
@@ -500,6 +555,130 @@ fn machine_add_reports_strict_host_key_failure() {
         "{}",
         result.output
     );
+}
+
+#[test]
+fn machine_add_reports_strict_host_key_failure_with_shared_ssh_transport() {
+    // Managed SSH shares one OpenSSH master. Commands multiplexed over it never
+    // re-verify the host key, so after interactive platform detection a fresh
+    // strict check must refuse the host before further setup, or the machine is
+    // saved with an untrusted key.
+    let result = setup_options(
+        "new",
+        "",
+        false,
+        true,
+        SetupOptions {
+            managed_ssh_config: true,
+            ..Default::default()
+        },
+    );
+    assert!(!result.success, "{}", result.output);
+    assert_eq!(result.prompts, 0, "{}", result.output);
+    assert!(
+        result.output.contains("Host key verification failed"),
+        "{}",
+        result.output
+    );
+    assert!(
+        result
+            .output
+            .contains("saved machines use strict host-key checking"),
+        "{}",
+        result.output
+    );
+    assert!(
+        !result.output.contains("lost connection to server"),
+        "{}",
+        result.output
+    );
+    assert_eq!(result.probes, "platform\n", "{}", result.output);
+    assert!(result.actions.is_empty(), "{}", result.output);
+}
+
+#[test]
+fn machine_add_with_shared_ssh_transport_proceeds_for_trusted_host_keys() {
+    let result = setup_options(
+        "new",
+        "y\n",
+        false,
+        false,
+        SetupOptions {
+            managed_ssh_config: true,
+            ..Default::default()
+        },
+    );
+    assert!(!result.success, "{}", result.output);
+    assert!(
+        !result.output.contains("Host key verification failed"),
+        "{}",
+        result.output
+    );
+    assert_eq!(
+        result.probes, "platform\ncandidates\nsessions\n",
+        "{}",
+        result.output
+    );
+    assert_eq!(result.prompts, 1, "{}", result.output);
+    assert_eq!(result.actions, "stop\nstart\n", "{}", result.output);
+}
+
+#[test]
+fn machine_add_with_shared_ssh_transport_accepts_first_use_host_key() {
+    // The user accepts the unknown key on the interactive connection, OpenSSH
+    // persists it, and the fresh strict check then passes.
+    let result = setup_options(
+        "new",
+        "y\n",
+        false,
+        true,
+        SetupOptions {
+            managed_ssh_config: true,
+            host_key_accept_persist: true,
+            ..Default::default()
+        },
+    );
+    assert!(!result.success, "{}", result.output);
+    assert!(
+        !result.output.contains("Host key verification failed"),
+        "{}",
+        result.output
+    );
+    assert_eq!(
+        result.probes, "platform\ncandidates\nsessions\n",
+        "{}",
+        result.output
+    );
+    assert_eq!(result.prompts, 1, "{}", result.output);
+    assert_eq!(result.actions, "stop\nstart\n", "{}", result.output);
+}
+
+#[test]
+fn machine_add_with_shared_ssh_transport_continues_after_inconclusive_host_key_probe() {
+    let result = setup_options(
+        "new",
+        "y\n",
+        false,
+        false,
+        SetupOptions {
+            managed_ssh_config: true,
+            inconclusive_host_key_probe: true,
+            ..Default::default()
+        },
+    );
+    assert!(!result.success, "{}", result.output);
+    assert!(
+        !result.output.contains("Host key verification failed"),
+        "{}",
+        result.output
+    );
+    assert_eq!(
+        result.probes, "platform\ncandidates\nsessions\n",
+        "{}",
+        result.output
+    );
+    assert_eq!(result.prompts, 1, "{}", result.output);
+    assert_eq!(result.actions, "stop\nstart\n", "{}", result.output);
 }
 
 #[test]

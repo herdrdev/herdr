@@ -144,8 +144,16 @@ impl SavedSshSetup {
             manage,
             crate::session::DEFAULT_SESSION_NAME.to_owned(),
         );
-        let remote_herdr =
-            RemoteHerdr::for_platform(detect_remote_platform(&ssh)?.into_setup_platform());
+        let platform = detect_remote_platform(&ssh)?;
+        // The interactive connection may have accepted and persisted an unknown key;
+        // a fresh strict check confirms OpenSSH trusts it again without the shared master.
+        if let Some(options) = ssh
+            .options()
+            .filter(|options| options.control_path.is_some())
+        {
+            check_ssh_host_key(ssh.target(), options)?;
+        }
+        let remote_herdr = RemoteHerdr::for_platform(platform.into_setup_platform());
         let candidates = remote_binary_candidates(&ssh, &remote_herdr)?;
         Ok(Self {
             ssh,
@@ -1222,6 +1230,54 @@ fn apply_noninteractive_ssh_options(command: &mut Command) {
         .arg("ServerAliveInterval=15")
         .arg("-o")
         .arg("ServerAliveCountMax=4");
+}
+
+// Sessions multiplexed over a shared master never re-verify the host key, so
+// the strict check needs its own connection. `none` auth reaches host-key
+// verification without authenticating to the target or prompting for it.
+fn ssh_host_key_probe_command(target: &str, options: &ManagedSshOptions) -> Command {
+    let mut command = Command::new("ssh");
+    command
+        .arg("-F")
+        .arg(&options.config_path)
+        .arg("-o")
+        .arg("ControlMaster=no")
+        .arg("-o")
+        .arg("ControlPath=none");
+    apply_noninteractive_ssh_options(&mut command);
+    command
+        .arg("-o")
+        .arg("PreferredAuthentications=none")
+        .arg("-T")
+        .arg(target)
+        .arg("exit")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command
+}
+
+/// Fail only on a strict host-key rejection; later setup reports any other failure.
+fn check_ssh_host_key(target: &str, options: &ManagedSshOptions) -> io::Result<()> {
+    let output = match ssh_host_key_probe_command(target, options)
+        .spawn()
+        .and_then(|child| wait_with_output_timeout(child, NONINTERACTIVE_SSH_COMMAND_TIMEOUT))
+    {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::debug!(%error, "could not run SSH host-key check");
+            return Ok(());
+        }
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let error = command_failed("remote SSH host-key check failed", &output);
+    if super::is_remote_host_key_error(&error) {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshOptions>) {
@@ -3951,6 +4007,35 @@ mod tests {
         assert!(env
             .iter()
             .any(|(key, value)| *key == std::ffi::OsStr::new("SSH_ASKPASS") && value.is_none()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn host_key_probe_command_uses_fresh_strict_connection_without_authentication() {
+        let config = write_managed_ssh_config("example").unwrap();
+        let command = ssh_host_key_probe_command("example", &config.options);
+        assert_eq!(command.get_program(), "ssh");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect::<Vec<_>>();
+        for required in [
+            "-F",
+            "ControlMaster=no",
+            "ControlPath=none",
+            "BatchMode=yes",
+            "StrictHostKeyChecking=yes",
+            "PreferredAuthentications=none",
+        ] {
+            assert!(args.iter().any(|arg| arg == required), "missing {required}");
+        }
+        for forbidden in ["-S", "-C", "ControlMaster=auto"] {
+            assert!(
+                !args.iter().any(|arg| arg == forbidden),
+                "unexpected {forbidden}"
+            );
+        }
+        assert_eq!(&args[args.len() - 3..], &["-T", "example", "exit"]);
     }
 
     #[test]

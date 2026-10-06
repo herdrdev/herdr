@@ -196,7 +196,7 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
     }
     let mut authentication = crate::remote::ssh_authentication_command(&profile.target)?;
     if !authentication.command.status()?.success() {
-        eprintln!("SSH authentication failed; the saved machine was not changed.");
+        eprintln!("SSH connection failed; the saved machine was not changed.");
         return Ok(1);
     }
     crate::remote::check_saved_ssh(&profile.target, &profile.session)?;
