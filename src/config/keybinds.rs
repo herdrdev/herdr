@@ -1279,6 +1279,15 @@ fn parse_modifier_combo(s: &str) -> Option<KeyModifiers> {
 }
 
 pub(crate) fn parse_key_combo(s: &str) -> Option<KeyCombo> {
+    let s = s.trim();
+    // Labels are also used in endpoint profiles and command manifests. A literal
+    // plus is the key after the final separator, not an empty key token.
+    if s == "+" {
+        return Some((KeyCode::Char('+'), KeyModifiers::empty()));
+    }
+    if let Some(modifiers) = s.strip_suffix("++") {
+        return Some((KeyCode::Char('+'), parse_modifier_combo(modifiers)?));
+    }
     let parts: Vec<&str> = s.split('+').collect();
     let mut modifiers = KeyModifiers::empty();
     let mut key_str: Option<&str> = None;
@@ -1846,6 +1855,73 @@ close_tab = "X"
         assert_eq!(
             format_key_combo((KeyCode::BackTab, KeyModifiers::CONTROL | KeyModifiers::ALT)),
             "ctrl+alt+shift+tab"
+        );
+    }
+
+    #[test]
+    fn supported_key_labels_round_trip_through_the_combo_parser() {
+        let keys = [
+            "a",
+            "A",
+            "ğ",
+            "Ğ",
+            "space",
+            "enter",
+            "escape",
+            "tab",
+            "backspace",
+            "left",
+            "right",
+            "up",
+            "down",
+            "f1",
+            "f12",
+            "minus",
+            "comma",
+            "period",
+            "slash",
+            "backslash",
+            "quote",
+            "double_quote",
+            "semicolon",
+            "colon",
+            "percent",
+            "ampersand",
+            "backtick",
+            "plus",
+            "(",
+            ")",
+            "{",
+            "}",
+            "?",
+        ];
+        let modifiers = ["ctrl", "alt", "shift", "super", "hyper"];
+        for mask in 0..(1 << modifiers.len()) {
+            for key in keys {
+                let mut parts: Vec<_> = modifiers
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, modifier)| (mask & (1 << index) != 0).then_some(*modifier))
+                    .collect();
+                parts.push(key);
+                let input = parts.join("+");
+                let combo = parse_key_combo(&input).expect("supported key combo");
+                let label = format_key_combo(combo);
+                assert_eq!(parse_key_combo(&label), Some(combo), "{input} -> {label}");
+            }
+        }
+    }
+
+    #[test]
+    fn literal_plus_does_not_accept_missing_or_extra_key_tokens() {
+        for invalid in ["", "ctrl+", "++", "ctrl+++", "ctrl++x", "x++", "unknown++"] {
+            assert_eq!(parse_key_combo(invalid), None, "{invalid}");
+        }
+        assert!(parse_binding_string("prefix+++").is_none());
+        assert_eq!(parse_key_combo(" + "), parse_key_combo("plus"));
+        assert_eq!(
+            parse_key_combo("ctrl + alt ++"),
+            parse_key_combo("ctrl+alt+plus")
         );
     }
 
