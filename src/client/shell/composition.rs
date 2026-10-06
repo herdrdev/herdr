@@ -115,7 +115,12 @@ impl ClientShellState {
         } else {
             Rect::new(0, 0, cols, 1)
         };
-        if local_snapshot.is_none() || self.endpoint_error.is_some() {
+        // The message is for a machine that cannot be used; a healthy machine
+        // only waiting for resized panes (say, after collapsing the sidebar)
+        // keeps a quiet pane area.
+        let active_online = self.snapshot.is_some()
+            && self.endpoint_status(&self.active_endpoint_id) == Some(ClientEndpointStatus::Online);
+        if !active_online || self.endpoint_error.is_some() {
             render::put_text(
                 &mut buffer,
                 message_area.x,

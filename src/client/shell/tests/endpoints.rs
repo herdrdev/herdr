@@ -2839,3 +2839,18 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }
+
+#[test]
+fn collapsing_the_sidebar_does_not_report_a_healthy_machine_unavailable() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.compose(120, 40).expect("frame");
+    state.handle_input_bytes(&[0x02]);
+    let collapse = state.handle_input_bytes(b"b");
+    assert!(collapse.resize);
+    assert!(state.sidebar_collapsed);
+    // The pane area waits for panes redrawn at the new width.
+    let rows = frame_rows(&state.compose(120, 40).expect("frame")).join("\n");
+    assert!(!rows.contains("Select a connected machine"), "{rows}");
+}
