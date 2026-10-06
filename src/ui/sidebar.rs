@@ -303,8 +303,8 @@ pub(crate) fn compact_dot_for_state(
         AgentState::Blocked => "○",
         AgentState::Idle if !seen => "◉",
         AgentState::Idle => "○",
-        // Unknown agent state: a solid grey dot, not an empty one.
-        _ => "●",
+        // Unknown agent state: a grey `?`, so it never reads as working.
+        _ => "?",
     }
 }
 
@@ -2879,7 +2879,7 @@ fn collect_sidebar_thread_entries_with_runtimes(
     entries.retain(|entry| {
         entry
             .local_target()
-            .is_none_or(|target| !app.workspaces[target.ws_idx].is_fleet)
+            .is_none_or(|target| !app.hidden_fleet_workspace(target.ws_idx))
     });
     let mut previous_tab = None;
     for entry in &mut entries {
@@ -5913,7 +5913,7 @@ fn blocker_group_rows(
             continue;
         };
         if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
-            && workspace.is_fleet
+            && app.hidden_fleet_workspace(target.ws_idx)
         {
             continue;
         }
@@ -8034,7 +8034,7 @@ fn workspace_list_entries_inner(
         // Spaces are the top level here: every Space is its own row, with no
         // repository grouping and no worktree indentation above it.
         SidebarGroupMode::Spaces => (0..app.workspaces.len())
-            .filter(|ws_idx| !app.workspaces[*ws_idx].is_fleet)
+            .filter(|ws_idx| !app.hidden_fleet_workspace(*ws_idx))
             .map(|ws_idx| WorkspaceListEntry::Workspace {
                 ws_idx,
                 indented: false,
@@ -8097,7 +8097,7 @@ fn workspace_list_entries_inner(
 fn workspace_list_entries_repo(app: &AppState, force_expanded: bool) -> Vec<WorkspaceListEntry> {
     let keys = (0..app.workspaces.len())
         .map(|ws_idx| {
-            if app.workspaces[ws_idx].is_fleet {
+            if app.hidden_fleet_workspace(ws_idx) {
                 None
             } else {
                 workspace_group_ident(app, ws_idx).map(|(ident, home)| (ident.key(), home))
@@ -8135,7 +8135,7 @@ fn workspace_list_entries_repo(app: &AppState, force_expanded: bool) -> Vec<Work
     let mut emitted_groups = std::collections::HashSet::<String>::new();
     let mut entries = Vec::new();
     for ws_idx in 0..app.workspaces.len() {
-        if app.workspaces[ws_idx].is_fleet {
+        if app.hidden_fleet_workspace(ws_idx) {
             continue;
         }
         let Some(group_key) = keys
@@ -15314,7 +15314,7 @@ pub(crate) mod tests {
             compact_row_dot(&entry.entry)
         };
         assert_eq!(dot("pane/side"), "·");
-        assert_eq!(dot("pane/agent"), "●");
+        assert_eq!(dot("pane/agent"), "?");
     }
 
     #[test]
@@ -17278,7 +17278,7 @@ pub(crate) mod tests {
             let rendered = row_text(terminal.backend().buffer(), 0, 40);
             let dot_count = rendered
                 .chars()
-                .filter(|character| matches!(character, '●' | '○' | '◆' | '·'))
+                .filter(|character| matches!(character, '●' | '?' | '○' | '◆' | '·'))
                 .count();
             assert_eq!(
                 dot_count, 1,
@@ -24235,10 +24235,10 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(workspace_area.x, first_row)].symbol(), "1");
         assert_eq!(buffer[(workspace_area.x + 1, first_row)].symbol(), " ");
-        assert_eq!(buffer[(workspace_area.x + 2, first_row)].symbol(), "●");
+        assert_eq!(buffer[(workspace_area.x + 2, first_row)].symbol(), "?");
         assert_eq!(buffer[(workspace_area.x, tenth_row)].symbol(), "1");
         assert_eq!(buffer[(workspace_area.x + 1, tenth_row)].symbol(), "0");
-        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "●");
+        assert_eq!(buffer[(workspace_area.x + 2, tenth_row)].symbol(), "?");
     }
 
     #[test]
@@ -26730,6 +26730,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     fn fleet_workspace_ac2_is_omitted_from_upper_workspace_list_modes() {
         let mut app = app_with_agents(&["local-one", "fleet", "local-two"]);
         app.workspaces[1].is_fleet = true;
+        for tab in &app.workspaces[1].tabs {
+            for pane in tab.panes.values() {
+                app.terminals
+                    .get_mut(&pane.attached_terminal_id)
+                    .unwrap()
+                    .remote_proxy_host = Some("ub2".into());
+            }
+        }
 
         for mode in SidebarGroupMode::ALL {
             let entries = workspace_list_entries_for_mode(&app, false, mode);
@@ -26753,12 +26761,43 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .local_target()
             .is_some_and(|target| target.ws_idx == 1)));
         app.workspaces[1].is_fleet = true;
+        for tab in &app.workspaces[1].tabs {
+            for pane in tab.panes.values() {
+                app.terminals
+                    .get_mut(&pane.attached_terminal_id)
+                    .unwrap()
+                    .remote_proxy_host = Some("ub2".into());
+            }
+        }
 
         let entries = sidebar_thread_entries(&app);
         assert!(entries
             .iter()
             .all(|entry| entry.local_target().is_none_or(|target| target.ws_idx != 1)));
         assert!(!entries.is_empty());
+    }
+
+    #[test]
+    fn fleet_workspace_with_local_pane_is_listed() {
+        let mut app = app_with_agents(&["local", "fleet"]);
+        app.workspaces[1].is_fleet = true;
+        let entries = workspace_list_entries_for_mode(&app, false, SidebarGroupMode::Repo);
+        assert!(entries
+            .iter()
+            .any(|entry| matches!(entry, WorkspaceListEntry::Workspace { ws_idx: 1, .. })));
+
+        let terminal_id = app.workspaces[1]
+            .terminal_id(app.workspaces[1].tabs[0].root_pane)
+            .unwrap()
+            .clone();
+        app.terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .remote_proxy_host = Some("ub2".into());
+        let entries = workspace_list_entries_for_mode(&app, false, SidebarGroupMode::Repo);
+        assert!(entries
+            .iter()
+            .all(|entry| !matches!(entry, WorkspaceListEntry::Workspace { ws_idx: 1, .. })));
     }
 
     #[test]
@@ -26947,9 +26986,9 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
             let child_text = row_text(terminal.backend().buffer(), child.rect.y, child.rect.width);
             if width == 18 {
-                assert!(child_text.contains('●'), "{child_text:?}");
+                assert!(child_text.contains('?'), "{child_text:?}");
                 let title = child_text
-                    .split_once('●')
+                    .split_once('?')
                     .and_then(|(_, rest)| rest.split_once("cx"))
                     .map(|(title, _)| title.trim())
                     .expect("title before Codex provider");
@@ -29869,10 +29908,10 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn agent_dot_unknown_state_is_a_solid_grey_dot_with_question_tooltip() {
+    fn agent_dot_unknown_state_is_a_grey_question_mark() {
         assert_eq!(
             compact_dot_for_state(AgentState::Unknown, false, true, false, false, false),
-            "●"
+            "?"
         );
         assert_eq!(
             state_label_color(AgentState::Unknown, false, &Palette::catppuccin()),

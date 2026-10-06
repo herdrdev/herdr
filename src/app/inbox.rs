@@ -106,16 +106,17 @@ impl crate::app::AppState {
         let mut working = 0usize;
         let mut blocked = 0usize;
         for workspace in &self.workspaces {
-            if self.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
-                && workspace.is_fleet
-            {
-                continue;
-            }
             for tab in &workspace.tabs {
                 for pane in tab.panes.values() {
                     let Some(terminal) = self.terminals.get(&pane.attached_terminal_id) else {
                         continue;
                     };
+                    // Remote proxies are counted on their own host, not this one.
+                    if self.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
+                        && terminal.remote_proxy_host.is_some()
+                    {
+                        continue;
+                    }
                     if terminal.detected_agent.is_none() {
                         continue;
                     }
@@ -210,6 +211,33 @@ mod tests {
             seq,
             attention_tier: crate::terminal::state::AttentionTier::Blocked,
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn this_device_counts_local_panes_in_a_fleet_workspace_but_not_proxies() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("fleet")];
+        app.workspaces[0].is_fleet = true;
+        app.active = Some(0);
+        app.ensure_test_terminals();
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::ThisDevice;
+        let pane_id = app.workspaces[0].focused_pane_id().expect("focused pane");
+        let terminal_id = app.workspaces[0]
+            .terminal_id(pane_id)
+            .expect("terminal")
+            .clone();
+        {
+            let terminal = app.terminals.get_mut(&terminal_id).expect("terminal state");
+            terminal.detected_agent = Some(crate::detect::Agent::Claude);
+            terminal.set_raw_agent_state_for_test(AgentState::Blocked);
+        }
+        assert_eq!(app.agent_dot_counts().1, 1);
+
+        app.terminals
+            .get_mut(&terminal_id)
+            .expect("terminal state")
+            .remote_proxy_host = Some("ub2".into());
+        assert_eq!(app.agent_dot_counts().1, 0);
     }
 
     #[tokio::test(flavor = "current_thread")]

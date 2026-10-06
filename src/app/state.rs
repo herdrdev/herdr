@@ -5255,6 +5255,22 @@ impl ClientInputOwnerState {
 }
 
 impl AppState {
+    pub(crate) fn hidden_fleet_workspace(&self, ws_idx: usize) -> bool {
+        let Some(workspace) = self.workspaces.get(ws_idx) else {
+            return false;
+        };
+        workspace.is_fleet
+            && workspace
+                .tabs
+                .iter()
+                .flat_map(|tab| tab.panes.values())
+                .all(|pane| {
+                    self.terminals
+                        .get(&pane.attached_terminal_id)
+                        .is_some_and(|terminal| terminal.remote_proxy_host.is_some())
+                })
+    }
+
     pub(crate) fn planning_lock_tab_projection(&self) -> Vec<(String, String)> {
         let mut tabs = Vec::new();
         for workspace in &self.workspaces {

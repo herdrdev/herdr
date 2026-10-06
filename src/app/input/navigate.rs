@@ -2342,7 +2342,7 @@ fn cycle_space_order(state: &AppState) -> Vec<usize> {
             })
         })
         .chain(0..state.workspaces.len())
-        .filter(|ws_idx| !state.workspaces[*ws_idx].is_fleet && seen.insert(*ws_idx))
+        .filter(|ws_idx| !state.hidden_fleet_workspace(*ws_idx) && seen.insert(*ws_idx))
         .collect()
 }
 
@@ -2397,10 +2397,13 @@ fn window_navigation_order(state: &AppState) -> Vec<WindowCycleTarget> {
 
 fn window_cycle_target_exists(state: &AppState, target: &WindowCycleTarget) -> bool {
     match target {
-        WindowCycleTarget::Local { ws_idx, tab_idx } => state
-            .workspaces
-            .get(*ws_idx)
-            .is_some_and(|workspace| !workspace.is_fleet && *tab_idx < workspace.tabs.len()),
+        WindowCycleTarget::Local { ws_idx, tab_idx } => {
+            state
+                .workspaces
+                .get(*ws_idx)
+                .is_some_and(|workspace| *tab_idx < workspace.tabs.len())
+                && !state.hidden_fleet_workspace(*ws_idx)
+        }
         WindowCycleTarget::Remote(agent_ref) => state
             .remote_agent_panel_entries
             .iter()
@@ -2445,7 +2448,7 @@ fn current_window_cycle_target(state: &AppState) -> Option<WindowCycleTarget> {
         .or_else(|| {
             let ws_idx = state.active?;
             let workspace = state.workspaces.get(ws_idx)?;
-            (!workspace.is_fleet).then_some(WindowCycleTarget::Local {
+            (!state.hidden_fleet_workspace(ws_idx)).then_some(WindowCycleTarget::Local {
                 ws_idx,
                 tab_idx: workspace.active_tab_index(),
             })
@@ -2552,7 +2555,7 @@ fn blocked_pane_cycle_in_order(state: &AppState) -> Vec<(BlockedPaneTarget, bool
             if state
                 .workspaces
                 .get(target.ws_idx)
-                .is_none_or(|workspace| workspace.is_fleet)
+                .is_none_or(|_| state.hidden_fleet_workspace(target.ws_idx))
             {
                 return None;
             }
@@ -4860,6 +4863,15 @@ mod tests {
         fleet.is_fleet = true;
         state.workspaces = vec![local, Workspace::test_new("other-local"), fleet];
         state.ensure_test_terminals();
+        let fleet_terminal_id = state.workspaces[2]
+            .terminal_id(state.workspaces[2].tabs[0].root_pane)
+            .unwrap()
+            .clone();
+        state
+            .terminals
+            .get_mut(&fleet_terminal_id)
+            .unwrap()
+            .remote_proxy_host = Some("ub2".into());
         state.active = Some(0);
         state.selected = 0;
         let remote = remote_blocker("ub2", "fleet-agent");
@@ -4878,6 +4890,34 @@ mod tests {
         assert!(!fleet_order
             .iter()
             .any(|target| matches!(target, WindowCycleTarget::Local { ws_idx: 2, .. })));
+    }
+
+    #[test]
+    fn fleet_workspace_with_local_pane_is_navigable_but_proxy_only_is_not() {
+        let mut state = AppState::test_new();
+        let mut fleet = Workspace::test_new("fleet");
+        fleet.is_fleet = true;
+        state.workspaces = vec![Workspace::test_new("local"), fleet];
+        state.ensure_test_terminals();
+        state.active = Some(0);
+        state.selected = 0;
+
+        let local_target = WindowCycleTarget::Local {
+            ws_idx: 1,
+            tab_idx: 0,
+        };
+        assert!(window_navigation_order(&state).contains(&local_target));
+
+        let terminal_id = state.workspaces[1]
+            .terminal_id(state.workspaces[1].tabs[0].root_pane)
+            .unwrap()
+            .clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .remote_proxy_host = Some("ub2".into());
+        assert!(!window_navigation_order(&state).contains(&local_target));
     }
 
     #[test]

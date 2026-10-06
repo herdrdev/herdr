@@ -499,7 +499,10 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
             let on_this_device = entry.local_target().is_some_and(|target| {
                 app.workspaces
                     .get(target.ws_idx)
-                    .is_some_and(|workspace| !workspace.is_fleet)
+                    .and_then(|workspace| workspace.tabs.get(target.tab_idx))
+                    .and_then(|tab| tab.panes.get(&target.pane_id))
+                    .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
+                    .is_some_and(|terminal| terminal.remote_proxy_host.is_none())
             });
             if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
                 && !on_this_device
@@ -2553,6 +2556,9 @@ mod tests {
             let terminal = app.terminals.get_mut(&terminal_id).expect("test terminal");
             terminal.detected_agent = Some(crate::detect::Agent::Claude);
             terminal.set_raw_agent_state_for_test(AgentState::Blocked);
+            if workspace.is_fleet {
+                terminal.remote_proxy_host = Some("capture-remote".into());
+            }
         }
         let remote_host = crate::fleet::HostSnapshot {
             name: "capture-remote".into(),

@@ -2362,7 +2362,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .filter(|cell| matches!(cell.symbol(), "●" | "○" | "·"))
+            .filter(|cell| matches!(cell.symbol(), "●" | "?" | "○" | "·"))
             .collect();
         assert!(dots.iter().any(|cell| cell.fg == app.palette.overlay0));
         assert!(dots
@@ -2405,7 +2405,7 @@ mod tests {
             .buffer()
             .content()
             .iter()
-            .filter(|cell| matches!(cell.symbol(), "●" | "○" | "·"))
+            .filter(|cell| matches!(cell.symbol(), "●" | "?" | "○" | "·"))
             .collect::<Vec<_>>();
         assert!(!dots.is_empty());
         assert!(dots.iter().all(|cell| {

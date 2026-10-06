@@ -1496,9 +1496,7 @@ impl AppState {
                     _ => None,
                 };
                 if let Some(ws_idx) = ws_idx.filter(|ws_idx| {
-                    self.workspaces
-                        .get(*ws_idx)
-                        .is_some_and(|workspace| !workspace.is_fleet)
+                    *ws_idx < self.workspaces.len() && !self.hidden_fleet_workspace(*ws_idx)
                 }) {
                     if seen.insert(ws_idx) {
                         order.push(ws_idx);
@@ -1524,7 +1522,7 @@ impl AppState {
             .collect::<Vec<_>>();
         if order.is_empty() {
             (0..self.workspaces.len())
-                .filter(|idx| !self.workspaces[*idx].is_fleet)
+                .filter(|idx| !self.hidden_fleet_workspace(*idx))
                 .collect()
         } else {
             order

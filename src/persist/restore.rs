@@ -2698,6 +2698,16 @@ mod tests {
         state.workspaces = workspaces;
         state.active = Some(0);
         state.selected = 0;
+        state.ensure_test_terminals();
+        let terminal_id = state.workspaces[0]
+            .terminal_id(state.workspaces[0].tabs[0].root_pane)
+            .unwrap()
+            .clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .remote_proxy_host = Some("ub2".into());
 
         assert!(crate::ui::sidebar::workspace_list_entries(&state).is_empty());
     }
