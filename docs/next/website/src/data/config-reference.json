@@ -584,6 +584,18 @@
           "description": "Focus the pane to the right in navigate mode. Right arrow is always an alias."
         },
         {
+          "key": "keys.navigate_insert",
+          "type": "keybinding",
+          "default": "\"i\"",
+          "description": "With ui.modal_navigation, leave navigate mode and type into the focused pane. Ignored otherwise."
+        },
+        {
+          "key": "keys.navigate_mode",
+          "type": "keybinding",
+          "default": "\"alt+space\"",
+          "description": "With ui.modal_navigation, toggle between typing in the pane and navigate mode. Ignored otherwise."
+        },
+        {
           "key": "keys.detach",
           "type": "keybinding",
           "default": "\"prefix+q\"",
@@ -957,6 +969,12 @@
           "type": "boolean",
           "default": "true",
           "description": "Ask for a tab name before creating a new tab."
+        },
+        {
+          "key": "ui.modal_navigation",
+          "type": "boolean",
+          "default": "false",
+          "description": "Vim-style modal input. Start in navigate (normal) mode and stay there after running keybindings; press keys.navigate_insert to type into the pane and keys.navigate_mode to return. Navigate mode shows a one-row status bar beneath the panes."
         },
         {
           "key": "ui.prompt_new_workspace_name",

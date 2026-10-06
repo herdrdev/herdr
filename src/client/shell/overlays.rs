@@ -40,6 +40,7 @@ pub(crate) fn render_client_overlay(
     endpoints: &[ClientShellEndpoint],
     active_endpoint_id: &ClientEndpointId,
     k: &LiveKeybindConfig,
+    modal_navigation: bool,
     p: &Palette,
 ) -> Option<OverlayRender> {
     if !matches!(
@@ -63,7 +64,7 @@ pub(crate) fn render_client_overlay(
         }
         ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
         ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
-        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
+        ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, modal_navigation, p),
         ClientShellOverlay::Navigator(v) => {
             render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
         }
@@ -1052,13 +1053,14 @@ fn render_navigator_overlay(
 
 fn help_lines(
     keybinds: &LiveKeybindConfig,
+    modal_navigation: bool,
     query: &str,
     palette: &Palette,
 ) -> Vec<(usize, ratatui::text::Line<'static>)> {
     use ratatui::text::{Line, Span};
 
     let groups = crate::input::filter_keybind_help_groups(
-        crate::input::keybind_help_groups(&keybinds.keybinds, &keybinds.prefix),
+        crate::input::keybind_help_groups(&keybinds.keybinds, &keybinds.prefix, modal_navigation),
         query,
     );
     let key_width = groups
@@ -1118,6 +1120,7 @@ fn render_help_overlay(
     b: &mut Buffer,
     h: &ClientHelpOverlay,
     k: &LiveKeybindConfig,
+    modal_navigation: bool,
     p: &Palette,
 ) -> Option<OverlayRender> {
     use ratatui::widgets::{Paragraph, Widget, Wrap};
@@ -1179,7 +1182,7 @@ fn render_help_overlay(
     };
 
     let body = Rect::new(i.x, i.y + 3, i.width, i.height.saturating_sub(5));
-    let lines = help_lines(k, &h.query, p);
+    let lines = help_lines(k, modal_navigation, &h.query, p);
     let viewport_rows = usize::from(body.height.max(1));
     let wrapped_rows = |width: u16| {
         let width = usize::from(width.max(1));

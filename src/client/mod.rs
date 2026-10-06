@@ -1245,6 +1245,7 @@ async fn run_client_loop(
                 if let Some(shell) = state.shell.as_mut() {
                     shell.set_graphics_cell_size(cell_width_px, cell_height_px);
                     shell.invalidate_pane_surface();
+                    shell.set_composed_size(new_cols, new_rows);
                 }
                 let msg = if let Some(shell) = &state.shell {
                     client_shell_resize_message(

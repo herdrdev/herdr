@@ -107,7 +107,7 @@ impl ClientShellState {
     pub(crate) fn select_unavailable_local(&mut self) {
         self.reset_endpoint_projection();
         self.active_endpoint_id = ClientEndpointId::Local;
-        self.mode = ClientShellMode::Terminal;
+        self.mode = self.base_mode();
         self.snapshot = None;
         self.graphics.set_scope("local:unavailable");
         self.reconcile_input_source();

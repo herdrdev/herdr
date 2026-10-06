@@ -201,6 +201,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # navigate_pane_down = "j"
 # navigate_pane_up = "k"
 # navigate_pane_right = "l"     # right arrow always focuses the pane to the right
+# navigate_insert = "i"         # with ui.modal_navigation, leave navigate mode to type
+# navigate_mode = "alt+space"   # with ui.modal_navigation, toggle typing and navigate mode
 
 # Custom commands use the same binding syntax.
 # type = "shell" runs detached in the background.
@@ -287,6 +289,11 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Ask for a tab name before creating a new tab.
 # Set false to create tabs immediately with generated names.
 # prompt_new_tab_name = true
+
+# Vim-style modal input. Start in navigate (normal) mode and stay there after
+# running keybindings; press keys.navigate_insert ("i") to type into the pane,
+# and keys.navigate_mode ("alt+space") to return to navigate mode.
+# modal_navigation = false
 
 # Ask for a workspace name before interactive creation.
 # prompt_new_workspace_name = false

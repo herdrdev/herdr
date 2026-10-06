@@ -683,13 +683,17 @@ impl ClientShellState {
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent, outcome: &mut ClientShellInput) {
         self.update_link_hover(mouse, outcome);
         let point = (mouse.column, mouse.row);
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) && self.workspace_list_focused() {
+            self.workspace_list_focus = false;
+            outcome.repaint = true;
+        }
         if self.mode == ClientShellMode::Navigate
             && self.workspace_preview_action_blocked()
             && self.overlay.is_none()
             && !self.mobile_layout_active()
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)
         {
-            self.mode = self.copy_or_terminal_mode();
+            self.mode = self.resting_mode();
             self.navigate_workspace_id = None;
             outcome.repaint = true;
         }
@@ -948,7 +952,7 @@ impl ClientShellState {
         if self.config.mouse_capture
             && !self.replaying_url_click
             && self.overlay.is_none()
-            && self.mode == ClientShellMode::Terminal
+            && self.pane_clicks_active()
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)
             && mouse
                 .modifiers
@@ -1006,7 +1010,7 @@ impl ClientShellState {
             return;
         }
         if self.overlay.is_none()
-            && self.mode == ClientShellMode::Terminal
+            && self.pane_clicks_active()
             && self
                 .visible_notification
                 .as_ref()
@@ -2172,7 +2176,7 @@ impl ClientShellState {
                     })
                     .cloned();
                 if let Some(hit) = scrollbar_hit {
-                    self.mode = ClientShellMode::Terminal;
+                    self.mode = self.base_mode();
                     self.push_endpoint_method(
                         crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
                             pane_id: hit.pane_id.clone(),

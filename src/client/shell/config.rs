@@ -72,6 +72,7 @@ impl ClientShellState {
         match crate::config::load_live_config() {
             Ok(loaded) => {
                 let agent_panel_sort = self.config.agent_panel_sort;
+                let was_modal = self.config.modal_navigation;
                 let diagnostics = self.config.apply_live_config(
                     &loaded.config,
                     &loaded.diagnostics,
@@ -88,6 +89,9 @@ impl ClientShellState {
                 }
                 if self.agent_panel_sort_manual {
                     self.config.agent_panel_sort = agent_panel_sort;
+                }
+                if was_modal != self.config.modal_navigation {
+                    self.sync_modal_navigation();
                 }
                 self.set_local_config_diagnostic(self.config.local_config_diagnostic(&diagnostics));
                 if let Some(snapshot) = self.snapshot.as_deref() {
@@ -145,6 +149,7 @@ impl ClientShellConfig {
             local_keys: config.keys.clone(),
             keybinding_source: ClientShellKeybindingSource::Local,
             prompt_new_tab_name: config.ui.prompt_new_tab_name,
+            modal_navigation: config.ui.modal_navigation,
             prompt_new_workspace_name: config.ui.prompt_new_workspace_name,
             confirm_close: config.ui.confirm_close,
             mouse_capture: config.ui.mouse_capture,
@@ -360,6 +365,7 @@ impl ClientShellConfig {
                 self.clipboard_toast_enabled = ui.toast.clipboard.enabled;
                 self.clipboard_toast_position = ui.toast.clipboard.position;
                 self.prompt_new_tab_name = ui.prompt_new_tab_name;
+                self.modal_navigation = ui.modal_navigation;
                 self.prompt_new_workspace_name = ui.prompt_new_workspace_name;
                 self.confirm_close = ui.confirm_close;
                 self.mouse_capture = ui.mouse_capture;
@@ -389,6 +395,7 @@ impl ClientShellConfig {
         sidebar_collapsed: bool,
         tab_count: usize,
         sidebar_width: u16,
+        mode_bar_rows: u16,
     ) -> ClientShellLayout {
         if cols <= self.mobile_width_threshold {
             let header_height = rows.min(2);
@@ -397,6 +404,7 @@ impl ClientShellConfig {
                 tab_bar: Rect::default(),
                 mobile_header: Rect::new(0, 0, cols, header_height),
                 pane_surface: Rect::new(0, header_height, cols, rows.saturating_sub(header_height)),
+                mode_bar: Rect::default(),
             };
         }
 
@@ -438,11 +446,27 @@ impl ClientShellConfig {
             ),
         };
 
+        let mode_bar_rows = if pane_surface.height > mode_bar_rows {
+            mode_bar_rows
+        } else {
+            0
+        };
+        let pane_surface = Rect {
+            height: pane_surface.height - mode_bar_rows,
+            ..pane_surface
+        };
+        let mode_bar = Rect {
+            y: pane_surface.bottom(),
+            height: mode_bar_rows,
+            ..pane_surface
+        };
+
         ClientShellLayout {
             sidebar: Rect::new(0, 0, sidebar_width, rows),
             tab_bar,
             mobile_header: Rect::default(),
             pane_surface,
+            mode_bar,
         }
     }
 
@@ -460,7 +484,15 @@ impl ClientShellConfig {
             .unwrap_or(self.sidebar_width)
             .clamp(min_width, max_width);
         let surface = self
-            .layout(cols, rows, sidebar_collapsed, 0, sidebar_width)
+            // Modal navigation starts in navigate mode, which shows the mode row.
+            .layout(
+                cols,
+                rows,
+                sidebar_collapsed,
+                0,
+                sidebar_width,
+                u16::from(self.modal_navigation),
+            )
             .pane_surface;
         ClientSurfaceSize {
             cols: surface.width.max(1),

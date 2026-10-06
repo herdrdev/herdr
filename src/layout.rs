@@ -365,6 +365,24 @@ impl TileLayout {
 
 // --- Directional pane navigation ---
 
+/// Whether `candidate` is a directional-navigation target from `from`: wholly
+/// past `from`'s edge in `direction` and overlapping it on the cross axis.
+pub fn lies_in_direction(from: Rect, candidate: Rect, direction: NavDirection) -> bool {
+    let (fr, r) = (from, candidate);
+    match direction {
+        NavDirection::Left => {
+            r.x + r.width <= fr.x && ranges_overlap(r.y, r.height, fr.y, fr.height)
+        }
+        NavDirection::Right => {
+            r.x >= fr.x + fr.width && ranges_overlap(r.y, r.height, fr.y, fr.height)
+        }
+        NavDirection::Up => r.y + r.height <= fr.y && ranges_overlap(r.x, r.width, fr.x, fr.width),
+        NavDirection::Down => {
+            r.y >= fr.y + fr.height && ranges_overlap(r.x, r.width, fr.x, fr.width)
+        }
+    }
+}
+
 /// Find the nearest pane in the given direction from `focused`.
 pub fn find_in_direction(
     focused: &PaneInfo,
@@ -377,23 +395,7 @@ pub fn find_in_direction(
         .iter()
         .enumerate()
         .filter(|(_, p)| p.id != focused.id)
-        .filter(|(_, p)| {
-            let r = p.rect;
-            match direction {
-                NavDirection::Left => {
-                    r.x + r.width <= fr.x && ranges_overlap(r.y, r.height, fr.y, fr.height)
-                }
-                NavDirection::Right => {
-                    r.x >= fr.x + fr.width && ranges_overlap(r.y, r.height, fr.y, fr.height)
-                }
-                NavDirection::Up => {
-                    r.y + r.height <= fr.y && ranges_overlap(r.x, r.width, fr.x, fr.width)
-                }
-                NavDirection::Down => {
-                    r.y >= fr.y + fr.height && ranges_overlap(r.x, r.width, fr.x, fr.width)
-                }
-            }
-        })
+        .filter(|(_, p)| lies_in_direction(fr, p.rect, direction))
         .min_by_key(|(index, p)| {
             let r = p.rect;
             let edge_distance = match direction {

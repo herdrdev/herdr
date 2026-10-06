@@ -28,6 +28,108 @@ pub(in crate::client::shell) fn render_sidebar_background(
     }
 }
 
+/// Marks the sidebar section holding navigate focus (the workspace list, or
+/// the agents panel when `agents`) with an accent divider rule and title.
+pub(super) fn render_sidebar_focus(
+    buffer: &mut Buffer,
+    hits: &ShellHitMap,
+    agents: bool,
+    palette: &Palette,
+) {
+    let edge = hits.sidebar_divider;
+    let rule = hits.sidebar_section_divider;
+    if edge.is_empty() || rule.is_empty() {
+        return;
+    }
+    let title = if agents {
+        rule.y.saturating_add(1)
+    } else {
+        edge.y
+    };
+    let accent = Style::default().fg(palette.accent);
+    buffer.set_style(rule, accent);
+    if title < edge.bottom() {
+        buffer.set_style(
+            Rect::new(rule.x, title, rule.width, 1),
+            accent.add_modifier(Modifier::BOLD),
+        );
+    }
+}
+
+/// Draws the slim status row on the bottom line of `area`, leaving any lines
+/// above it as blank padding. While `navigating`, a NAVIGATE flag sits at its
+/// left edge and short key hints at its right; otherwise the row stays blank.
+pub(super) fn render_navigate_bar(
+    buffer: &mut Buffer,
+    area: Rect,
+    navigating: bool,
+    update_available: bool,
+    keybinds: &LiveKeybindConfig,
+    palette: &Palette,
+) {
+    let base = Style::default().fg(palette.overlay0).bg(palette.panel_bg);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            buffer[(x, y)].set_symbol(" ").set_style(Style::reset());
+        }
+    }
+    let area = Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1);
+    buffer.set_style(area, base);
+    if !navigating {
+        return;
+    }
+    let key = Style::default()
+        .fg(palette.accent)
+        .bg(palette.panel_bg)
+        .add_modifier(Modifier::BOLD);
+    let flag = Style::default()
+        .fg(match palette.panel_bg {
+            ratatui::style::Color::Reset => palette.surface_dim,
+            color => color,
+        })
+        .bg(palette.accent)
+        .add_modifier(Modifier::BOLD);
+    let flag_end = buffer
+        .set_stringn(area.x, area.y, " NAVIGATE ", usize::from(area.width), flag)
+        .0;
+    let insert = keybinds
+        .keybinds
+        .navigate
+        .insert
+        .label()
+        .unwrap_or_else(|| "unset".to_owned());
+    let help = keybinds
+        .keybinds
+        .help
+        .prefix_rhs_label()
+        .unwrap_or_else(|| "unset".to_owned());
+    let mut hints = vec![
+        (insert, key),
+        (" type  ".to_owned(), base),
+        (help, key),
+        (" keybinds ".to_owned(), base),
+    ];
+    if update_available {
+        hints.push(("update ready ".to_owned(), key));
+    }
+    let width = hints
+        .iter()
+        .map(|(text, _)| UnicodeWidthStr::width(text.as_str()))
+        .sum::<usize>();
+    let mut x = area
+        .right()
+        .saturating_sub(u16::try_from(width).unwrap_or(u16::MAX))
+        .max(flag_end.saturating_add(1));
+    for (text, style) in hints {
+        if x >= area.right() {
+            break;
+        }
+        x = buffer
+            .set_stringn(x, area.y, &text, usize::from(area.right() - x), style)
+            .0;
+    }
+}
+
 pub(super) fn render_mode_bar(
     buffer: &mut Buffer,
     pane_area: Rect,

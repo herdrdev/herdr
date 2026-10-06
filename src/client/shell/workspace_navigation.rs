@@ -96,7 +96,8 @@ impl ClientShellState {
         })
     }
 
-    pub(super) fn move_navigate_workspace(&mut self, delta: isize) {
+    /// Workspaces navigate mode steps through, in workspace-list order.
+    pub(super) fn navigation_workspace_targets(&self) -> Vec<WorkspaceNavigationTarget> {
         let mobile = self.mobile_layout_active();
         let surface_available = self.snapshot.is_some() && self.pane_surface.is_some();
         let empty_collapsed_groups = HashSet::new();
@@ -137,6 +138,12 @@ impl ClientShellState {
                 });
             }
         }
+        targets
+    }
+
+    pub(super) fn move_navigate_workspace(&mut self, delta: isize) {
+        let mobile = self.mobile_layout_active();
+        let mut targets = self.navigation_workspace_targets();
         if targets.is_empty() {
             return;
         }
@@ -165,7 +172,7 @@ impl ClientShellState {
 
     pub(super) fn accept_navigate_workspace(&mut self, outcome: &mut ClientShellInput) {
         let Some(target) = self.navigate_workspace_id.clone() else {
-            self.mode = self.copy_or_terminal_mode();
+            self.mode = self.resting_mode();
             outcome.repaint = true;
             return;
         };
@@ -197,6 +204,7 @@ impl ClientShellState {
             }
             self.mode = ClientShellMode::Terminal;
             self.navigate_workspace_id = None;
+            self.return_to_resting_navigate();
         }
         outcome.repaint = true;
     }

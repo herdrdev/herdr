@@ -345,6 +345,9 @@ pub struct NavigateKeybinds {
     pub pane_down: ActionKeybinds,
     pub pane_up: ActionKeybinds,
     pub pane_right: ActionKeybinds,
+    pub insert: ActionKeybinds,
+    /// Toggles typing and navigate mode under modal navigation.
+    pub toggle: ActionKeybinds,
 }
 
 /// Parsed keybinds for Herdr actions.
@@ -533,6 +536,8 @@ impl Config {
                 pane_down: empty_action!(),
                 pane_up: empty_action!(),
                 pane_right: empty_action!(),
+                insert: empty_action!(),
+                toggle: empty_action!(),
             },
             help: empty_action!(),
             settings: empty_action!(),
@@ -663,6 +668,8 @@ impl Config {
             apply_navigate!(keybinds.navigate.pane_down, navigate_pane_down, source);
             apply_navigate!(keybinds.navigate.pane_up, navigate_pane_up, source);
             apply_navigate!(keybinds.navigate.pane_right, navigate_pane_right, source);
+            apply_navigate!(keybinds.navigate.insert, navigate_insert, source);
+            apply_navigate!(keybinds.navigate.toggle, navigate_mode, source);
             apply_action!(keybinds.help, help, source);
             apply_action!(keybinds.settings, settings, source);
             apply_action!(keybinds.new_workspace, new_workspace, source);
@@ -771,6 +778,24 @@ impl Config {
                 );
             }
         }
+
+        // navigate_mode is matched as a direct key while typing, so it must not
+        // shadow the prefix or a direct binding; those keep the key.
+        let toggle_source = field_source!(navigate_mode);
+        keybinds.navigate.toggle.bindings.retain(|binding| {
+            let Some(first) = registry.conflict(binding) else {
+                return true;
+            };
+            if !(toggle_source == BindingSource::Default && first.source == BindingSource::User) {
+                let diag = format!(
+                    "{}: kept {}, disabled keys.navigate_mode",
+                    binding.label, first.field
+                );
+                warn!(message = %diag, "config diagnostic");
+                diagnostics.push(diag);
+            }
+            false
+        });
 
         (prefix_diag, prefix, diagnostics, keybinds)
     }
@@ -2112,6 +2137,36 @@ navigate_pane_down = "ctrl+j"
             diag.contains("kept keys.navigate_workspace_up")
                 && diag.contains("disabled keys.navigate_workspace_down")
         }));
+    }
+
+    #[test]
+    fn navigate_mode_yields_to_the_prefix_and_direct_bindings() {
+        let space = TerminalKey::new(KeyCode::Char(' '), KeyModifiers::ALT);
+
+        let config: Config = toml::from_str("[keys]\nprefix = \"alt+space\"\n").unwrap();
+        assert!(!config.keybinds().navigate.toggle.matches_direct_key(&space));
+
+        // A default displaced by user config is dropped silently, like other defaults.
+        let config: Config = toml::from_str("[keys]\nzoom = \"alt+space\"\n").unwrap();
+        assert!(!config.keybinds().navigate.toggle.matches_direct_key(&space));
+        assert!(!config
+            .collect_diagnostics()
+            .iter()
+            .any(|diag| diag.contains("keys.navigate_mode")));
+
+        let config: Config =
+            toml::from_str("[keys]\nzoom = \"alt+space\"\nnavigate_mode = \"alt+space\"\n")
+                .unwrap();
+        assert!(!config.keybinds().navigate.toggle.matches_direct_key(&space));
+        assert!(config.collect_diagnostics().iter().any(|diag| {
+            diag.contains("kept keys.zoom") && diag.contains("disabled keys.navigate_mode")
+        }));
+
+        assert!(Config::default()
+            .keybinds()
+            .navigate
+            .toggle
+            .matches_direct_key(&space));
     }
 
     #[test]

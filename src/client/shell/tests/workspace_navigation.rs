@@ -1026,3 +1026,648 @@ fn kitty_ctrl_bracket_cancels_a_blocked_foreign_preview() {
     assert_ne!(state.mode, ClientShellMode::Navigate);
     assert!(state.navigate_workspace_id.is_none());
 }
+
+fn modal_state() -> ClientShellState {
+    let mut config = Config::default();
+    config.ui.modal_navigation = true;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(workspaces(2)));
+    state.set_pane_surface(surface());
+    state
+}
+
+#[test]
+fn modal_navigation_starts_in_navigate_and_toggles_with_navigate_mode_key() {
+    let mut state = modal_state();
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    // Unbound keys are swallowed in normal mode instead of reaching the pane.
+    let typed = state.handle_input_bytes(b"q");
+    assert!(typed.actions.is_empty() && typed.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    preview_key(&mut state, b"i");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    assert!(state.navigate_workspace_id.is_none());
+
+    // alt+space returns to normal mode; alt+space again goes back to typing.
+    preview_key(&mut state, b"\x1b ");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    // Esc stays in normal mode.
+    preview_key(&mut state, b"\x1b");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    preview_key(&mut state, b"\x1b ");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn modal_navigation_keeps_the_prefix_paradigm() {
+    let mut state = modal_state();
+    preview_key(&mut state, b"i");
+
+    // While typing, ctrl+b is still the one-shot prefix.
+    preview_key(&mut state, &[0x02]);
+    assert_eq!(state.mode, ClientShellMode::Prefix);
+    let split = state.handle_input_bytes(b"v");
+    assert!(!split.actions.is_empty() || !split.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+
+    // In normal mode the prefix is inert, so prefix+key behaves like key.
+    preview_key(&mut state, b"\x1b ");
+    let prefix = state.handle_input_bytes(&[0x02]);
+    assert!(prefix.actions.is_empty() && prefix.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    let split = state.handle_input_bytes(b"v");
+    assert!(!split.actions.is_empty() || !split.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn modal_navigation_creates_and_renames_from_normal_mode() {
+    let mut state = modal_state();
+    let new_workspace = state.handle_input_bytes(b"N");
+    assert!(!new_workspace.actions.is_empty() || !new_workspace.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    for rename in [&b"W"[..], b"P"] {
+        let mut state = modal_state();
+        state.handle_input_bytes(rename);
+        assert_eq!(
+            state.overlay.as_ref().map(ClientShellOverlay::kind),
+            Some(ClientShellOverlayKind::Rename)
+        );
+        assert_eq!(state.mode, ClientShellMode::Navigate);
+    }
+}
+
+#[test]
+fn navigate_mode_key_is_inert_without_modal_navigation() {
+    let (mut state, _) = state_with_remote();
+    state.handle_input_bytes(b"\x1b ");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn modal_navigation_stays_in_navigate_after_bindings_and_transient_modes() {
+    let mut state = modal_state();
+
+    let split = state.handle_input_bytes(b"v");
+    assert!(!split.actions.is_empty() || !split.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    let switch = state.handle_input_bytes(b"2");
+    assert!(!switch.actions.is_empty() || !switch.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    preview_key(&mut state, b"r");
+    assert_eq!(state.mode, ClientShellMode::Resize);
+    preview_key(&mut state, b"\x1b");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn navigate_insert_key_is_inert_without_modal_navigation() {
+    let (mut state, _) = state_with_remote();
+    enter_navigation(&mut state);
+    let insert = state.handle_input_bytes(b"i");
+    assert!(insert.actions.is_empty() && insert.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn modal_navigation_honors_a_configured_navigate_mode_key() {
+    let config: Config =
+        toml::from_str("[ui]\nmodal_navigation = true\n[keys]\nnavigate_mode = \"alt+space\"\n")
+            .expect("config");
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(workspaces(2)));
+    state.set_pane_surface(surface());
+
+    preview_key(&mut state, b"i");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    preview_key(&mut state, b"\x1b ");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    preview_key(&mut state, b"\x1b ");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+fn side_by_side_state(focused: &str) -> ClientShellState {
+    let mut state = modal_state();
+    let mut projected = workspaces(2);
+    let mut right = projected.panes[0].clone();
+    right.pane_id = "pane_2".into();
+    projected.panes.push(right);
+    for pane in &mut projected.panes {
+        pane.focused = pane.pane_id == focused;
+    }
+    projected.focused_pane_id = Some(focused.into());
+    state.set_snapshot(Box::new(projected));
+    let mut split = surface();
+    let mut right = split.panes[0].clone();
+    split.panes[0].rect.width = 2;
+    split.panes[0].inner_rect.width = 2;
+    split.panes[0].focused = focused == "pane_1";
+    right.pane_id = "pane_2".into();
+    right.rect.x = 2;
+    right.rect.width = 2;
+    right.inner_rect.x = 2;
+    right.inner_rect.width = 2;
+    right.focused = focused == "pane_2";
+    split.panes.push(right);
+    state.set_pane_surface(split);
+    state.compose(100, 28).expect("frame");
+    state
+}
+
+#[test]
+fn left_from_the_leftmost_pane_focuses_the_workspace_list() {
+    let mut state = side_by_side_state("pane_1");
+    for left in [&b"h"[..], b"\x1b[D"] {
+        preview_key(&mut state, left);
+        assert!(state.workspace_list_focus, "{left:?}");
+        assert_eq!(state.mode, ClientShellMode::Navigate);
+        assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+        preview_key(&mut state, b"\x1b");
+        assert!(!state.workspace_list_focus);
+    }
+
+    preview_key(&mut state, b"h");
+    // j/k move through the list instead of between panes; h stays put.
+    preview_key(&mut state, b"j");
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+    preview_key(&mut state, b"h");
+    assert!(state.workspace_list_focus);
+    preview_key(&mut state, b"k");
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    // l on another workspace returns to the panes without opening it.
+    preview_key(&mut state, b"j");
+    preview_key(&mut state, b"l");
+    assert!(!state.workspace_list_focus);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    // Enter on another workspace opens it and stays in navigate mode.
+    preview_key(&mut state, b"h");
+    preview_key(&mut state, b"j");
+    let open = state.handle_input_bytes(b"\r");
+    assert!(!open.actions.is_empty() || !open.requests.is_empty());
+    assert!(!state.workspace_list_focus);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn left_from_the_leftmost_pane_needs_modal_navigation() {
+    let mut state = side_by_side_state("pane_1");
+    state.config.modal_navigation = false;
+    state.sync_modal_navigation();
+    enter_navigation(&mut state);
+    state.handle_input_bytes(b"h");
+    assert!(!state.workspace_list_focus);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn left_from_a_pane_with_a_left_neighbor_moves_pane_focus() {
+    let mut state = side_by_side_state("pane_2");
+    let left = state.handle_input_bytes(b"h");
+    assert!(!left.actions.is_empty() || !left.requests.is_empty());
+    assert!(!state.workspace_list_focus);
+}
+
+#[test]
+fn workspace_list_focus_ends_on_other_bindings_and_insert() {
+    let mut state = side_by_side_state("pane_1");
+    preview_key(&mut state, b"h");
+    let split = state.handle_input_bytes(b"v");
+    assert!(!split.actions.is_empty() || !split.requests.is_empty());
+    assert!(!state.workspace_list_focus);
+
+    preview_key(&mut state, b"h");
+    preview_key(&mut state, b"i");
+    assert!(!state.workspace_list_focus);
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn only_a_visible_workspace_list_is_a_focus_target() {
+    // The compact collapsed list still shows clickable workspaces.
+    let mut state = side_by_side_state("pane_1");
+    state.sidebar_collapsed = true;
+    state.compose(100, 28).expect("frame");
+    preview_key(&mut state, b"h");
+    assert!(state.workspace_list_focus);
+
+    let mut state = side_by_side_state("pane_1");
+    state.sidebar_collapsed = true;
+    state.config.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Hidden;
+    state.compose(100, 28).expect("frame");
+    assert!(state.hits.workspaces.is_empty());
+    let left = state.handle_input_bytes(b"h");
+    assert!(!left.actions.is_empty() || !left.requests.is_empty());
+    assert!(!state.workspace_list_focus);
+}
+
+#[test]
+fn help_opens_from_modal_navigate_and_returns_there() {
+    let mut state = modal_state();
+    preview_key(&mut state, b"?");
+    assert_eq!(
+        state.overlay.as_ref().map(ClientShellOverlay::kind),
+        Some(ClientShellOverlayKind::Help)
+    );
+    let frame = state.compose(120, 40).expect("frame");
+    let rows = frame_rows(&frame).join("\n");
+    assert!(rows.contains("switch typing / navigate"), "{rows}");
+    preview_key(&mut state, b"\x1b");
+    assert!(state.overlay.is_none());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn modal_navigation_highlight_follows_focus_after_an_intermediate_snapshot() {
+    let mut state = modal_state();
+    let switch = state.handle_input_bytes(b"2");
+    assert!(!switch.actions.is_empty() || !switch.requests.is_empty());
+
+    // An unrelated snapshot lands before the focus change does.
+    let mut unchanged = workspaces(2);
+    unchanged.revision = 2;
+    state.set_snapshot(Box::new(unchanged));
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    let mut focused = workspaces(2);
+    focused.revision = 3;
+    focused.focused_workspace_id = Some("ws_2".into());
+    for workspace in &mut focused.workspaces {
+        workspace.focused = workspace.workspace_id == "ws_2";
+    }
+    state.set_snapshot(Box::new(focused));
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+}
+
+#[test]
+fn modal_navigation_keeps_an_explicit_preview_across_focus_changes() {
+    let mut state = side_by_side_state("pane_1");
+    preview_key(&mut state, b"w");
+    preview_key(&mut state, b"\x1b[B");
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+    let mut focused = workspaces(2);
+    focused.revision = 2;
+    state.set_snapshot(Box::new(focused));
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+}
+
+#[test]
+fn workspace_list_focus_ends_when_the_list_leaves_the_screen() {
+    let mut state = side_by_side_state("pane_1");
+    preview_key(&mut state, b"h");
+    assert!(state.workspace_list_focus);
+    state.sidebar_collapsed = true;
+    state.config.sidebar_collapsed_mode = crate::config::SidebarCollapsedModeConfig::Hidden;
+    state.compose(100, 28).expect("frame");
+    let down = state.handle_input_bytes(b"j");
+    assert!(!state.workspace_list_focus);
+    assert!(!down.actions.is_empty() || !down.requests.is_empty());
+}
+
+#[test]
+fn modes_opened_while_typing_return_to_typing() {
+    let mut state = modal_state();
+    preview_key(&mut state, b"i");
+    preview_key(&mut state, &[0x02]);
+    preview_key(&mut state, b"r");
+    assert_eq!(state.mode, ClientShellMode::Resize);
+    preview_key(&mut state, b"\x1b");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+
+    // prefix+w from typing is the one-shot picker: Enter goes back to typing.
+    preview_key(&mut state, &[0x02]);
+    preview_key(&mut state, b"w");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    preview_key(&mut state, b"\x1b[B");
+    let open = state.handle_input_bytes(b"\r");
+    assert!(!open.actions.is_empty() || !open.requests.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn left_from_a_zoomed_pane_moves_pane_focus() {
+    let mut state = side_by_side_state("pane_2");
+    let mut zoomed = state.snapshot.as_deref().cloned().expect("snapshot");
+    zoomed.tabs[0].zoomed = true;
+    state.set_snapshot(Box::new(zoomed));
+    let mut surface = surface();
+    surface.panes[0].pane_id = "pane_2".into();
+    state.set_pane_surface(surface);
+    state.compose(100, 28).expect("frame");
+
+    let left = state.handle_input_bytes(b"h");
+    assert!(!left.actions.is_empty() || !left.requests.is_empty());
+    assert!(!state.workspace_list_focus);
+}
+
+#[test]
+fn navigate_insert_wins_over_a_prefix_binding() {
+    let mut config = Config::default();
+    config.ui.modal_navigation = true;
+    config.keys = toml::from_str("zoom = \"prefix+i\"\n").expect("keys");
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(workspaces(2)));
+    state.set_pane_surface(surface());
+
+    preview_key(&mut state, b"i");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn mobile_layout_suspends_resting_modal_navigation() {
+    let mut state = modal_state();
+    state.compose(40, 20).expect("frame");
+    assert!(state.mobile_layout_active());
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    // A terminal resize sizes the panes for the mode the new layout restores.
+    state.set_composed_size(120, 40);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    let layout = state.layout(120, 40);
+    assert!(!layout.mode_bar.is_empty());
+    assert_eq!(state.surface_size(120, 40).rows, layout.pane_surface.height);
+    state.compose(120, 40).expect("frame");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+
+    // Typing stays typing across layouts.
+    preview_key(&mut state, b"i");
+    state.compose(40, 20).expect("frame");
+    state.compose(120, 40).expect("frame");
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn paste_in_resting_modal_navigation_reaches_the_pane() {
+    let mut state = modal_state();
+    let paste = state.handle_input_bytes(b"\x1b[200~hello\x1b[201~");
+    assert!(!paste.requests.is_empty() || !paste.actions.is_empty());
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+#[test]
+fn reloading_modal_navigation_moves_the_current_mode() {
+    let mut state = modal_state();
+    state.config.modal_navigation = false;
+    state.sync_modal_navigation();
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    state.config.modal_navigation = true;
+    state.sync_modal_navigation();
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn pane_clicks_follow_resting_modal_navigation_only() {
+    let mut state = modal_state();
+    assert!(state.pane_clicks_active());
+    preview_key(&mut state, b"i");
+    assert!(state.pane_clicks_active());
+    preview_key(&mut state, &[0x02]);
+    preview_key(&mut state, b"w");
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert!(!state.pane_clicks_active());
+}
+
+#[test]
+fn arrows_move_between_panes_in_resting_modal_navigation() {
+    let mut state = modal_state();
+    for arrow in [&b"\x1b[A"[..], b"\x1b[B"] {
+        let moved = state.handle_input_bytes(arrow);
+        assert!(
+            !moved.actions.is_empty() || !moved.requests.is_empty(),
+            "{arrow:?}"
+        );
+        assert_eq!(state.mode, ClientShellMode::Navigate);
+        assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+    }
+}
+
+#[test]
+fn workspace_picker_in_resting_modal_navigation_focuses_the_workspace_list() {
+    let mut state = side_by_side_state("pane_2");
+    preview_key(&mut state, b"w");
+    assert!(state.workspace_list_focused());
+    preview_key(&mut state, b"\x1b[B");
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+}
+
+#[test]
+fn arrows_still_pick_workspaces_in_one_shot_navigation() {
+    let (mut state, _) = state_with_remote();
+    enter_navigation(&mut state);
+    let before = state.navigate_workspace_id.clone();
+    preview_key(&mut state, b"\x1b[B");
+    assert_ne!(state.navigate_workspace_id, before);
+}
+
+fn agents_state() -> ClientShellState {
+    let mut state = side_by_side_state("pane_1");
+    let mut projected = state.snapshot.as_deref().cloned().expect("snapshot");
+    for pane in ["pane_1", "pane_2"] {
+        let mut agent = agent(pane, AgentStatus::Idle, 1);
+        agent.pane_id = pane.into();
+        agent.focused = pane == "pane_1";
+        projected.agents.push(agent);
+    }
+    state.set_snapshot(Box::new(projected));
+    state.compose(100, 28).expect("frame");
+    state
+}
+
+fn selected_agent(state: &ClientShellState) -> Option<&str> {
+    state
+        .agent_list_selection
+        .as_ref()
+        .filter(|_| state.agent_list_focused())
+        .map(|(_, pane)| pane.as_str())
+}
+
+#[test]
+fn workspace_list_continues_into_the_agents_panel() {
+    let mut state = agents_state();
+    preview_key(&mut state, b"h");
+    preview_key(&mut state, b"j");
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+    assert_eq!(selected_agent(&state), None);
+
+    // Down past the last workspace moves into the agents panel and stops at
+    // its last agent.
+    preview_key(&mut state, b"j");
+    assert_eq!(selected_agent(&state), Some("pane_1"));
+    let rows = frame_rows(&state.compose(100, 28).expect("frame")).join("\n");
+    assert!(rows.contains(" NAVIGATE "), "{rows}");
+    preview_key(&mut state, b"\x1b[B");
+    assert_eq!(selected_agent(&state), Some("pane_2"));
+    preview_key(&mut state, b"j");
+    assert_eq!(selected_agent(&state), Some("pane_2"));
+
+    // Up from the first agent returns to the last workspace.
+    preview_key(&mut state, b"k");
+    preview_key(&mut state, b"k");
+    assert_eq!(selected_agent(&state), None);
+    assert!(state.workspace_list_focused());
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+
+    // Esc returns to the panes.
+    preview_key(&mut state, b"j");
+    preview_key(&mut state, b"\x1b");
+    assert!(!state.workspace_list_focused());
+    assert_eq!(selected_agent(&state), None);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn opening_an_agent_from_the_agents_panel_focuses_its_pane() {
+    let mut state = agents_state();
+    for key in [&b"h"[..], b"j", b"j", b"j"] {
+        preview_key(&mut state, key);
+    }
+    assert_eq!(selected_agent(&state), Some("pane_2"));
+    let open = state.handle_input_bytes(b"\r");
+    assert!(
+        open.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(&request.method, crate::api::schema::Method::PaneFocus(params)
+                    if params.pane_id == "pane_2")
+        )),
+        "{:?}",
+        open.actions
+    );
+    assert!(!state.workspace_list_focused());
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+}
+
+#[test]
+fn sidebar_focus_dims_the_focused_pane_border() {
+    let mut state = modal_state();
+    let accent = crate::protocol::color_to_u32(state.config.palette.accent);
+    let mut bordered = surface();
+    bordered.panes[0].inner_rect.y = 1;
+    bordered.panes[0].inner_rect.height = 1;
+    bordered.frame.cells[0].fg = accent;
+    state.set_pane_surface(bordered);
+    let border_fg = |state: &mut ClientShellState| {
+        let frame = state.compose(100, 28).expect("frame");
+        let rect = state.hits.panes[0].rect;
+        frame.cells[(rect.y * frame.width + rect.x) as usize].fg
+    };
+
+    assert_eq!(border_fg(&mut state), accent);
+    preview_key(&mut state, b"w");
+    assert!(state.workspace_list_focused());
+    assert_eq!(
+        border_fg(&mut state),
+        crate::protocol::color_to_u32(state.config.palette.overlay0)
+    );
+    preview_key(&mut state, b"\x1b");
+    assert_eq!(border_fg(&mut state), accent);
+}
+
+/// Text of the bottom line of `area`, where the mode row draws.
+fn row_from(frame: &crate::protocol::FrameData, area: Rect) -> String {
+    frame_rows(frame)[usize::from(area.bottom() - 1)]
+        .chars()
+        .skip(usize::from(area.x))
+        .take(usize::from(area.width))
+        .collect()
+}
+
+#[test]
+fn modal_navigation_reserves_a_status_row_beneath_the_panes() {
+    for position in [
+        crate::config::TabBarPositionConfig::Top,
+        crate::config::TabBarPositionConfig::Bottom,
+    ] {
+        let mut state = modal_state();
+        state.config.tab_bar_position = position;
+        let frame = state.compose(120, 40).expect("frame");
+        let layout = state.layout(120, 40);
+        assert_eq!(
+            layout.mode_bar.y,
+            layout.pane_surface.bottom(),
+            "{position:?}"
+        );
+        assert_eq!(layout.mode_bar.x, layout.pane_surface.x, "{position:?}");
+        let row = row_from(&frame, layout.mode_bar);
+        assert!(row.starts_with(" NAVIGATE "), "{position:?}: {row}");
+        assert!(row.trim_end().ends_with("keybinds"), "{position:?}: {row}");
+
+        // Typing drops the row so the panes fill the space, and back.
+        let typing = state.handle_input_bytes(b"i");
+        assert!(typing.resize && typing.repaint);
+        let typing_layout = state.layout(120, 40);
+        assert!(typing_layout.mode_bar.is_empty());
+        assert_eq!(
+            typing_layout.pane_surface.height,
+            layout.pane_surface.height + layout.mode_bar.height
+        );
+        let navigating = state.handle_input_bytes(b"\x1b ");
+        assert!(navigating.resize);
+        assert_eq!(state.layout(120, 40), layout);
+    }
+}
+
+#[test]
+fn collapsing_the_sidebar_keeps_the_slim_mode_row() {
+    let mut state = modal_state();
+    state.compose(120, 40).expect("frame");
+    let collapse = state.handle_input_bytes(b"b");
+    assert!(collapse.resize);
+    assert!(state.sidebar_collapsed);
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    // The pane surface is redrawn at the new width; the frame shown meanwhile
+    // keeps the slim row instead of the full navigate hint bar.
+    let frame = state.compose(120, 40).expect("frame");
+    let rows = frame_rows(&frame).join("\n");
+    assert!(!rows.contains("esc back"), "{rows}");
+    let layout = state.layout(120, 40);
+    assert!(
+        row_from(&frame, layout.mode_bar).starts_with(" NAVIGATE "),
+        "{rows}"
+    ); // A healthy machine waiting for resized panes is not "unavailable".
+    assert!(!rows.contains("Select a connected machine"), "{rows}");
+}
+
+#[test]
+fn collapsed_sidebar_keeps_the_navigate_flag_at_the_panes_left_edge() {
+    let mut state = modal_state();
+    state.sidebar_collapsed = true;
+    let frame = state.compose(120, 40).expect("frame");
+    let layout = state.layout(120, 40);
+    assert!(row_from(&frame, layout.mode_bar).starts_with(" NAVIGATE "));
+}
+
+#[test]
+fn status_row_is_only_reserved_with_modal_navigation() {
+    let (state, _) = state_with_remote();
+    assert!(state.layout(120, 40).mode_bar.is_empty());
+}
+
+#[test]
+fn an_unsplit_pane_gets_a_padding_row_above_the_mode_row() {
+    let mut state = modal_state();
+    let frame = state.compose(120, 40).expect("frame");
+    let unsplit = state.layout(120, 40);
+    assert_eq!(unsplit.mode_bar.height, 2);
+    let padding: String = frame_rows(&frame)[usize::from(unsplit.mode_bar.y)]
+        .chars()
+        .skip(usize::from(unsplit.mode_bar.x))
+        .take(usize::from(unsplit.mode_bar.width))
+        .collect();
+    assert!(padding.trim().is_empty(), "{padding}");
+    assert!(row_from(&frame, unsplit.mode_bar).starts_with(" NAVIGATE "));
+
+    let split = side_by_side_state("pane_1").layout(120, 40);
+    assert_eq!(split.mode_bar.height, 1);
+}

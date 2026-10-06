@@ -215,6 +215,7 @@ impl ClientShellState {
 
     pub(crate) fn handle_raw_events(&mut self, events: Vec<RawInputEvent>) -> ClientShellInput {
         let mut outcome = ClientShellInput::default();
+        let mode_bar_rows = self.mode_bar_rows();
         if !events.is_empty() && self.endpoint_error.take().is_some() {
             self.endpoint_error_deadline = None;
             outcome.repaint = true;
@@ -273,6 +274,12 @@ impl ClientShellState {
                     }
                 }
                 RawInputEvent::Paste(text) => {
+                    if self.overlay.is_none()
+                        && !self.popup_pending
+                        && self.popup_input_target().is_none()
+                    {
+                        self.paste_leaves_navigate(&mut outcome);
+                    }
                     if matches!(
                         self.overlay,
                         Some(
@@ -365,6 +372,10 @@ impl ClientShellState {
             self.reconcile_input_source();
         }
         outcome.repaint |= self.resume_mobile_switcher_if_ready();
+        if self.mode_bar_rows() != mode_bar_rows {
+            outcome.resize = true;
+            outcome.repaint = true;
+        }
         outcome
     }
 
@@ -669,6 +680,19 @@ impl ClientShellState {
                     self.record_binding(binding, outcome);
                     return None;
                 }
+                if self.config.modal_navigation
+                    && self
+                        .config
+                        .keybinds
+                        .keybinds
+                        .navigate
+                        .toggle
+                        .matches_direct_key(key)
+                {
+                    self.enter_navigate();
+                    outcome.repaint = true;
+                    return None;
+                }
                 if self.config.keybinds.matches_prefix(key) {
                     self.mode = ClientShellMode::Prefix;
                     outcome.repaint = true;
@@ -741,6 +765,45 @@ impl ClientShellState {
         }
     }
 
+    /// Rows navigate mode's status row takes beneath the panes under modal
+    /// navigation; 0 lets the panes fill that space. An unsplit pane has no
+    /// border above the row, so it gets a blank padding row. Reads only the
+    /// mode and snapshot, since the layout depends on it.
+    pub(super) fn mode_bar_rows(&self) -> u16 {
+        if !self.config.modal_navigation || self.mode != ClientShellMode::Navigate {
+            return 0;
+        }
+        let unsplit = self.snapshot.as_deref().is_some_and(|snapshot| {
+            let tab = snapshot.tabs.iter().find(|tab| tab.focused);
+            tab.is_some_and(|tab| {
+                let panes = snapshot.panes.iter();
+                panes.filter(|pane| pane.tab_id == tab.tab_id).count() == 1
+            })
+        });
+        1 + u16::from(unsplit)
+    }
+
+    /// Mode input settles in when no copy session is involved: navigate under
+    /// modal navigation, otherwise the terminal.
+    pub(super) fn base_mode(&self) -> ClientShellMode {
+        // The mobile layout draws navigate mode as a full-screen switcher.
+        if self.config.modal_navigation && self.resting_in_navigate && !self.mobile_layout_active()
+        {
+            ClientShellMode::Navigate
+        } else {
+            ClientShellMode::Terminal
+        }
+    }
+
+    /// Mode input returns to when a transient mode (prefix, resize, navigate
+    /// actions) ends.
+    pub(super) fn resting_mode(&self) -> ClientShellMode {
+        match self.copy_or_terminal_mode() {
+            ClientShellMode::Copy => ClientShellMode::Copy,
+            _ => self.base_mode(),
+        }
+    }
+
     fn route_navigate_key(
         &mut self,
         key: &crate::input::TerminalKey,
@@ -749,37 +812,65 @@ impl ClientShellState {
         use crate::input::{KeybindAction, KeybindDispatch, KeybindMatch};
 
         self.pending_workspace_highlight = None;
-        if key.code == KeyCode::Esc || self.config.keybinds.matches_prefix(key) {
+        if self.workspace_list_focused() && self.route_sidebar_key(key, outcome) {
+            return;
+        }
+        self.workspace_list_focus = false;
+        if key.code == KeyCode::Esc {
             self.cancel_navigate(outcome);
             return;
         }
+        let navigate_keys = &self.config.keybinds.keybinds.navigate;
+        let modal = self.config.modal_navigation;
+        if modal
+            && (navigate_keys.insert.matches_direct_key(key)
+                || navigate_keys.toggle.matches_direct_key(key))
+        {
+            self.insert_from_navigate(outcome);
+            return;
+        }
+        if self.config.keybinds.matches_prefix(key) {
+            // Bindings already run without the prefix in modal navigation, so
+            // the prefix is inert there and prefix+key behaves like key.
+            if !modal {
+                self.insert_from_navigate(outcome);
+            }
+            return;
+        }
 
-        if self
-            .config
-            .keybinds
-            .keybinds
-            .navigate
-            .workspace_up
-            .matches_direct_key(key)
+        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
+        // Resting modal navigation moves between panes with every arrow, like
+        // h/j/k/l; workspaces are picked from the workspace list instead.
+        let pane_arrow = self.resting_navigate()
+            && modifiers.is_empty()
+            && matches!(code, KeyCode::Up | KeyCode::Down);
+        if !pane_arrow
+            && self
+                .config
+                .keybinds
+                .keybinds
+                .navigate
+                .workspace_up
+                .matches_direct_key(key)
         {
             self.move_navigate_workspace(-1);
             outcome.repaint = true;
             return;
         }
-        if self
-            .config
-            .keybinds
-            .keybinds
-            .navigate
-            .workspace_down
-            .matches_direct_key(key)
+        if !pane_arrow
+            && self
+                .config
+                .keybinds
+                .keybinds
+                .navigate
+                .workspace_down
+                .matches_direct_key(key)
         {
             self.move_navigate_workspace(1);
             outcome.repaint = true;
             return;
         }
 
-        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
         if code == KeyCode::Enter && modifiers.is_empty() {
             self.accept_navigate_workspace(outcome);
             return;
@@ -819,6 +910,7 @@ impl ClientShellState {
                     KeybindMatch::Action(KeybindAction::SwitchWorkspace(index)),
                     outcome,
                 );
+                self.return_to_resting_navigate();
                 outcome.repaint = true;
             }
             return;
@@ -842,6 +934,10 @@ impl ClientShellState {
                     );
                     return;
                 }
+                KeyCode::Left if self.focus_sidebar_from_leftmost_pane() => {
+                    outcome.repaint = true;
+                    return;
+                }
                 KeyCode::Left => {
                     self.record_navigate_binding(
                         KeybindMatch::Action(KeybindAction::FocusPaneLeft),
@@ -856,6 +952,15 @@ impl ClientShellState {
                         true,
                         outcome,
                     );
+                    return;
+                }
+                KeyCode::Up | KeyCode::Down if pane_arrow => {
+                    let action = if code == KeyCode::Up {
+                        KeybindAction::FocusPaneUp
+                    } else {
+                        KeybindAction::FocusPaneDown
+                    };
+                    self.record_navigate_binding(KeybindMatch::Action(action), true, outcome);
                     return;
                 }
                 _ => {}
@@ -882,6 +987,12 @@ impl ClientShellState {
         ]
         .into_iter()
         .find_map(|(bindings, action)| bindings.matches_direct_key(key).then_some(action));
+        if pane_action == Some(KeybindAction::FocusPaneLeft)
+            && self.focus_sidebar_from_leftmost_pane()
+        {
+            outcome.repaint = true;
+            return;
+        }
         if let Some(action) = pane_action {
             self.record_navigate_binding(KeybindMatch::Action(action), true, outcome);
             return;
@@ -919,16 +1030,275 @@ impl ClientShellState {
             .map(KeybindMatch::Action)
         });
         if let Some(binding) = binding {
-            self.record_navigate_binding(binding, false, outcome);
+            // In resting modal navigation the picker focuses the workspace
+            // list in place rather than ending navigate mode.
+            let preserve = self.resting_navigate()
+                && matches!(
+                    binding,
+                    KeybindMatch::Action(KeybindAction::WorkspacePicker)
+                );
+            self.record_navigate_binding(binding, preserve, outcome);
         } else if is_ctrl_bracket_key(key) {
             self.cancel_navigate(outcome);
         }
     }
 
+    /// Under modal navigation, moves navigate focus onto the workspace list
+    /// when the focused pane is the leftmost one and the list is on screen.
+    fn focus_sidebar_from_leftmost_pane(&mut self) -> bool {
+        if !self.config.modal_navigation
+            || self.hits.workspaces.is_empty()
+            || self.mobile_layout_active()
+        {
+            return false;
+        }
+        let Some(snapshot) = self.snapshot.as_deref() else {
+            return false;
+        };
+        let zoomed = snapshot.tabs.iter().any(|tab| tab.focused && tab.zoomed);
+        // A zoomed pane hides its neighbours, but focus-left still reaches them.
+        let Some(focused_id) = snapshot.focused_pane_id.clone().filter(|_| !zoomed) else {
+            return false;
+        };
+        let panes = || self.hits.panes.iter().filter(|hit| !hit.popup);
+        let Some(focused) = panes()
+            .find(|hit| hit.pane_id == focused_id)
+            .map(|hit| hit.rect)
+        else {
+            return false;
+        };
+        let has_left_neighbor = panes().any(|hit| {
+            hit.pane_id != focused_id
+                && crate::layout::lies_in_direction(
+                    focused,
+                    hit.rect,
+                    crate::layout::NavDirection::Left,
+                )
+        });
+        if has_left_neighbor {
+            return false;
+        }
+        self.workspace_list_focus = true;
+        self.agent_list_selection = None;
+        if self.navigate_workspace_id.is_none() {
+            self.navigate_workspace_id = self.focused_navigation_target();
+        }
+        self.reveal_navigation_workspace = true;
+        true
+    }
+
+    /// Keys while navigate focus is on the workspace list. Returns false for
+    /// keys the list does not own, which then run as normal navigate bindings.
+    fn route_sidebar_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        let navigate = &self.config.keybinds.keybinds.navigate;
+        let (code, modifiers) = crate::config::normalize_key_combo((key.code, key.modifiers));
+        let plain = modifiers.is_empty();
+        let up = navigate.workspace_up.matches_direct_key(key)
+            || navigate.pane_up.matches_direct_key(key);
+        let down = navigate.workspace_down.matches_direct_key(key)
+            || navigate.pane_down.matches_direct_key(key);
+        let left = navigate.pane_left.matches_direct_key(key) || (plain && code == KeyCode::Left);
+        let right =
+            navigate.pane_right.matches_direct_key(key) || (plain && code == KeyCode::Right);
+        let enter = plain && code == KeyCode::Enter;
+        let in_agents = self.agent_list_focused();
+        if up || down {
+            if in_agents {
+                self.move_agent_list_selection(up);
+            } else if !(down && self.last_workspace_selected() && self.enter_agent_list()) {
+                self.move_navigate_workspace(if up { -1 } else { 1 });
+            }
+        } else if left {
+            // Already at the left edge.
+        } else if enter {
+            self.workspace_list_focus = false;
+            if let Some((endpoint_id, pane_id)) =
+                self.agent_list_selection.take().filter(|_| in_agents)
+            {
+                self.focus_or_activate(
+                    endpoint_id,
+                    ClientEndpointFocusTarget::Pane(pane_id),
+                    outcome,
+                );
+            } else {
+                self.accept_navigate_workspace(outcome);
+            }
+        } else if right || code == KeyCode::Esc {
+            // Only Enter opens the selection; these return to the panes.
+            self.workspace_list_focus = false;
+            self.agent_list_selection = None;
+            self.navigate_workspace_id = self.focused_navigation_target();
+        } else {
+            return false;
+        }
+        outcome.repaint = true;
+        true
+    }
+
+    fn last_workspace_selected(&self) -> bool {
+        self.navigate_workspace_id.is_some()
+            && self.navigation_workspace_targets().last() == self.navigate_workspace_id.as_ref()
+    }
+
+    /// Moves workspace-list focus down into the agents panel, onto its first
+    /// agent. False when the panel is off screen or empty.
+    fn enter_agent_list(&mut self) -> bool {
+        let entries = self.agent_list_entries();
+        if self.hits.agent_body.is_empty() || entries.is_empty() {
+            return false;
+        }
+        self.select_agent_list_entry(entries, 0);
+        self.navigate_workspace_id = self.focused_navigation_target();
+        true
+    }
+
+    /// Steps through the agents panel; up from the first agent returns to the
+    /// last workspace.
+    fn move_agent_list_selection(&mut self, up: bool) {
+        let entries = self.agent_list_entries();
+        let current = self
+            .agent_list_selection
+            .as_ref()
+            .and_then(|(endpoint, pane)| {
+                entries.iter().position(|(entry_endpoint, entry_pane, _)| {
+                    entry_endpoint == endpoint && entry_pane == pane
+                })
+            });
+        let next = match current {
+            Some(index) if up => index.checked_sub(1),
+            Some(index) => Some((index + 1).min(entries.len() - 1)),
+            None if up || entries.is_empty() => None,
+            None => Some(0),
+        };
+        match next {
+            Some(index) => self.select_agent_list_entry(entries, index),
+            None => {
+                self.agent_list_selection = None;
+                self.navigate_workspace_id = self.navigation_workspace_targets().pop();
+            }
+        }
+    }
+
+    /// Agents-panel focus: workspace-list focus that moved down past the last
+    /// workspace.
+    pub(super) fn agent_list_focused(&self) -> bool {
+        self.agent_list_selection.is_some() && self.workspace_list_focused()
+    }
+
+    /// Workspace-list focus only exists in navigate mode while the list is on
+    /// screen, so a flag left over from an earlier navigate session or a layout
+    /// change never steers keys.
+    pub(super) fn workspace_list_focused(&self) -> bool {
+        self.workspace_list_focus
+            && self.mode == ClientShellMode::Navigate
+            && !self.hits.workspaces.is_empty()
+            && !self.mobile_layout_active()
+    }
+
+    /// Applies a reloaded `ui.modal_navigation` to the current mode.
+    pub(super) fn sync_modal_navigation(&mut self) {
+        self.resting_in_navigate = self.config.modal_navigation;
+        match self.mode {
+            ClientShellMode::Terminal if self.base_mode() == ClientShellMode::Navigate => {
+                self.enter_navigate();
+            }
+            ClientShellMode::Navigate if !self.config.modal_navigation => self.leave_navigate(),
+            _ => {}
+        }
+    }
+
+    /// Records the terminal size the next frame is composed at. Call it before
+    /// sizing panes for a new terminal size: crossing into the mobile layout,
+    /// where navigate mode is a full-screen switcher, drops resting modal
+    /// navigation to the terminal, and crossing back restores it, which
+    /// changes the pane area. Explicitly opened modes are left alone.
+    pub(crate) fn set_composed_size(&mut self, cols: u16, rows: u16) {
+        if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
+            self.reveal_navigation_workspace = true;
+            self.reveal_mobile_workspace = true;
+        }
+        let previous = self.base_mode();
+        self.last_composed_size = Some((cols, rows));
+        let current = self.base_mode();
+        if previous == current || self.mode != previous {
+            return;
+        }
+        let focused_workspace = self
+            .snapshot
+            .as_deref()
+            .is_some_and(|snapshot| snapshot.focused_workspace_id.is_some());
+        if !focused_workspace {
+            return;
+        }
+        self.workspace_list_focus = false;
+        self.mode = current;
+        self.navigate_workspace_id = None;
+    }
+
+    /// Link and notification clicks act in the terminal and in resting modal
+    /// navigation, but not while the one-shot workspace picker is open.
+    pub(super) fn pane_clicks_active(&self) -> bool {
+        self.mode == ClientShellMode::Terminal || self.resting_navigate()
+    }
+
+    /// Input sits in modal navigation's normal mode rather than a navigate
+    /// mode opened for one action.
+    pub(super) fn resting_navigate(&self) -> bool {
+        self.mode == ClientShellMode::Navigate && self.base_mode() == ClientShellMode::Navigate
+    }
+
+    /// In resting modal navigation a paste is typing: leave for the pane and
+    /// deliver it there instead of dropping it.
+    pub(super) fn paste_leaves_navigate(&mut self, outcome: &mut ClientShellInput) {
+        if self.resting_navigate() && !self.workspace_preview_action_blocked() {
+            self.insert_from_navigate(outcome);
+        }
+    }
+
+    /// Modal navigation has no mode to go back to, so cancelling only drops a
+    /// workspace preview there.
     fn cancel_navigate(&mut self, outcome: &mut ClientShellInput) {
+        if self.base_mode() == ClientShellMode::Navigate {
+            self.navigate_workspace_id = self.focused_navigation_target();
+            outcome.repaint = true;
+        } else {
+            self.insert_from_navigate(outcome);
+        }
+    }
+
+    /// Leaves navigate mode for the focused pane, or the copy session on it.
+    fn insert_from_navigate(&mut self, outcome: &mut ClientShellInput) {
+        self.leave_navigate();
+        outcome.repaint = true;
+    }
+
+    fn leave_navigate(&mut self) {
+        self.workspace_list_focus = false;
+        self.resting_in_navigate = false;
         self.mode = self.copy_or_terminal_mode();
         self.navigate_workspace_id = None;
-        outcome.repaint = true;
+    }
+
+    fn enter_navigate(&mut self) {
+        self.workspace_list_focus = false;
+        self.resting_in_navigate = true;
+        self.mode = ClientShellMode::Navigate;
+        self.navigate_workspace_id = self.focused_navigation_target();
+    }
+
+    /// After a binding ran from navigate mode, modal navigation stays in
+    /// navigate unless the binding opened another mode (resize, copy, ...).
+    /// The workspace highlight is reseeded from the next snapshot, after any
+    /// focus change the binding requested has landed.
+    pub(super) fn return_to_resting_navigate(&mut self) {
+        if self.mode == ClientShellMode::Terminal && self.base_mode() == ClientShellMode::Navigate {
+            self.mode = ClientShellMode::Navigate;
+            self.navigate_workspace_id = None;
+        }
     }
 
     fn record_navigate_binding(
@@ -957,6 +1327,7 @@ impl ClientShellState {
                 self.mode = self.copy_or_terminal_mode();
             }
             self.navigate_workspace_id = None;
+            self.return_to_resting_navigate();
         }
         outcome.repaint = true;
     }
@@ -1043,7 +1414,7 @@ impl ClientShellState {
             || resize_bindings.matches_prefix_key(key)
             || resize_bindings.matches_direct_key(key)
         {
-            self.mode = self.copy_or_terminal_mode();
+            self.mode = self.resting_mode();
             outcome.repaint = true;
             return;
         }

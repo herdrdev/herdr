@@ -20,6 +20,49 @@ fn restore_mode_bar(
 }
 
 impl ClientShellState {
+    /// Draws the mode indicator into the slim row beneath the panes when the
+    /// layout has one, otherwise as a bar over `fallback`. `show_bar` false
+    /// keeps only the slim row. Returns a bar drawn over other content.
+    fn render_mode_row(
+        &self,
+        buffer: &mut Buffer,
+        layout: &ClientShellLayout,
+        fallback: Rect,
+        show_bar: bool,
+        copy_mode: Option<&ClientCopyModeState>,
+        update_available: bool,
+    ) -> Option<Rect> {
+        let resting = self.resting_navigate() && self.endpoint_error.is_none();
+        if !layout.mode_bar.is_empty() {
+            render::render_navigate_bar(
+                buffer,
+                layout.mode_bar,
+                resting,
+                update_available,
+                &self.config.keybinds,
+                &self.config.palette,
+            );
+        }
+        if !show_bar || resting {
+            return None;
+        }
+        let area = if layout.mode_bar.is_empty() {
+            fallback
+        } else {
+            layout.mode_bar
+        };
+        render::render_mode_bar(
+            buffer,
+            area,
+            self.mode,
+            copy_mode,
+            self.endpoint_error.as_deref(),
+            update_available,
+            &self.config.keybinds,
+            &self.config.palette,
+        )
+    }
+
     fn compose_unavailable(&mut self, cols: u16, rows: u16) -> FrameData {
         let layout = self.layout(cols, rows);
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
@@ -130,15 +173,13 @@ impl ClientShellState {
                 Style::default().fg(self.config.palette.overlay0),
             );
         }
-        render::render_mode_bar(
+        self.render_mode_row(
             &mut buffer,
+            &layout,
             Rect::new(0, 0, cols, rows),
-            self.mode,
+            true,
             None,
-            self.endpoint_error.as_deref(),
             false,
-            &self.config.keybinds,
-            &self.config.palette,
         );
         if let Some(notice) = &self.visible_endpoint_notice {
             self.hits.notification_toast = endpoint_notices::render_notice(
@@ -159,11 +200,7 @@ impl ClientShellState {
     ) -> Option<crate::client::frame_output::ComposedFrame> {
         self.last_composed_at = Some(std::time::Instant::now());
         self.selection_repaint_deadline = None;
-        if self.last_composed_size != Some((cols, rows)) && self.mode == ClientShellMode::Navigate {
-            self.reveal_navigation_workspace = true;
-            self.reveal_mobile_workspace = true;
-        }
-        self.last_composed_size = Some((cols, rows));
+        self.set_composed_size(cols, rows);
         let valid_navigation_target = self.mode == ClientShellMode::Navigate
             && self
                 .navigate_workspace_id
@@ -240,6 +277,17 @@ impl ClientShellState {
                 workspace_drop_indicator_row,
             },
         );
+        if self.workspace_list_focused() {
+            render::render_sidebar_focus(
+                &mut buffer,
+                &self.hits,
+                self.agent_list_focused(),
+                &self.config.palette,
+            );
+        }
+        if let Some(rect) = self.selected_agent_rect() {
+            buffer.set_style(rect, Style::default().bg(self.config.palette.selection_bg));
+        }
         self.hits.panes = surface
             .panes
             .iter()
@@ -323,20 +371,14 @@ impl ClientShellState {
         let mobile_navigate_panel = !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate
             && self.endpoint_error.is_none();
-        let mode_bar = if mobile_navigate_panel || self.overlay.is_some() {
-            None
-        } else {
-            render::render_mode_bar(
-                &mut buffer,
-                mode_bar_area,
-                self.mode,
-                self.copy_mode.as_ref(),
-                self.endpoint_error.as_deref(),
-                snapshot.update_available.is_some(),
-                &self.config.keybinds,
-                &self.config.palette,
-            )
-        };
+        let mode_bar = self.render_mode_row(
+            &mut buffer,
+            &layout,
+            mode_bar_area,
+            !mobile_navigate_panel && self.overlay.is_none(),
+            self.copy_mode.as_ref(),
+            snapshot.update_available.is_some(),
+        );
         if mode_bar == Some(layout.tab_bar) {
             self.hits.tabs.clear();
             self.hits.new_tab = Rect::default();
@@ -349,6 +391,23 @@ impl ClientShellState {
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
         blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
+        // With the sidebar focused, only the sidebar is highlighted.
+        if self.workspace_list_focused() {
+            let focused = snapshot.focused_pane_id.as_deref();
+            if let Some(pane) = self
+                .hits
+                .panes
+                .iter()
+                .find(|pane| !pane.popup && Some(pane.pane_id.as_str()) == focused)
+            {
+                dim_pane_border(
+                    &mut frame,
+                    pane,
+                    crate::protocol::color_to_u32(self.config.palette.accent),
+                    crate::protocol::color_to_u32(self.config.palette.overlay0),
+                );
+            }
+        }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let mut occlusion = crate::kitty_graphics::surface::Occlusion::default();
         let has_selection = self
@@ -674,6 +733,7 @@ impl ClientShellState {
                     &self.endpoints,
                     &self.active_endpoint_id,
                     &self.config.keybinds,
+                    self.config.modal_navigation,
                     &self.config.palette,
                 )?;
                 occlusion.cover(rendered.area);

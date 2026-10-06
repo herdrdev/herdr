@@ -850,7 +850,7 @@ impl ClientShellState {
             copy_mode.entry_offset_from_bottom,
             outcome,
         );
-        self.mode = ClientShellMode::Terminal;
+        self.mode = self.base_mode();
         outcome.repaint = true;
     }
 }

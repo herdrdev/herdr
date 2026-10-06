@@ -75,7 +75,61 @@ fn indexed_range_prefix(bindings: &[IndexedKeybind]) -> Option<&str> {
 pub(crate) fn keybind_help_groups(
     keybinds: &Keybinds,
     prefixes: &[crate::config::KeyCombo],
+    modal_navigation: bool,
 ) -> Vec<KeybindHelpGroup> {
+    let navigate = &keybinds.navigate;
+    let shared = [
+        entry("esc", "back"),
+        entry(
+            format!(
+                "{} / {}",
+                binding_label(&navigate.workspace_up),
+                binding_label(&navigate.workspace_down)
+            ),
+            "workspace list",
+        ),
+        entry(
+            format!(
+                "{} / {} / {} / {} / left / right",
+                binding_label(&navigate.pane_left),
+                binding_label(&navigate.pane_down),
+                binding_label(&navigate.pane_up),
+                binding_label(&navigate.pane_right)
+            ),
+            "move focus",
+        ),
+        entry("tab / shift+tab", "cycle pane"),
+        entry("enter", "open workspace"),
+        entry("1..9", "switch workspace"),
+    ];
+    // Modal-only entries come first so the help overlay opens on them.
+    let mut navigation = Vec::new();
+    if modal_navigation {
+        navigation.extend([
+            entry(binding_label(&navigate.toggle), "switch typing / navigate"),
+            entry(binding_label(&navigate.insert), "type in pane"),
+            entry("prefix+key → key", "prefix bindings run without the prefix"),
+            entry(
+                binding_label(&navigate.pane_left),
+                "from leftmost pane: focus workspace list",
+            ),
+            entry(
+                format!(
+                    "{} / {}",
+                    binding_label(&navigate.pane_down),
+                    binding_label(&navigate.pane_up)
+                ),
+                "workspace / agent list: select",
+            ),
+            entry("enter", "workspace / agent list: open"),
+            entry(
+                format!("esc / {}", binding_label(&navigate.pane_right)),
+                "workspace / agent list: back to panes",
+            ),
+        ]);
+    }
+    navigation.extend(shared);
+
     let mut groups = vec![
         (
             "global",
@@ -91,33 +145,7 @@ pub(crate) fn keybind_help_groups(
                 ),
             ],
         ),
-        (
-            "navigation",
-            vec![
-                entry("esc", "back"),
-                entry(
-                    format!(
-                        "{} / {}",
-                        binding_label(&keybinds.navigate.workspace_up),
-                        binding_label(&keybinds.navigate.workspace_down)
-                    ),
-                    "workspace list",
-                ),
-                entry(
-                    format!(
-                        "{} / {} / {} / {} / left / right",
-                        binding_label(&keybinds.navigate.pane_left),
-                        binding_label(&keybinds.navigate.pane_down),
-                        binding_label(&keybinds.navigate.pane_up),
-                        binding_label(&keybinds.navigate.pane_right)
-                    ),
-                    "move focus",
-                ),
-                entry("tab / shift+tab", "cycle pane"),
-                entry("enter", "open workspace"),
-                entry("1..9", "switch workspace"),
-            ],
-        ),
+        ("navigation", navigation),
         (
             "workspaces / tabs",
             vec![
@@ -309,9 +337,49 @@ mod tests {
                 (KeyCode::Char(' '), KeyModifiers::CONTROL),
                 (KeyCode::Char('s'), KeyModifiers::CONTROL),
             ],
+            false,
         );
         let global = &groups[0].1;
         assert_eq!(global[0].0, "ctrl+space / ctrl+s");
         assert_eq!(global[0].1, "prefix mode");
+    }
+
+    fn navigation(modal: bool) -> Vec<KeybindHelpEntry> {
+        let keybinds = crate::config::Config::default().keybinds();
+        keybind_help_groups(&keybinds, &[], modal)
+            .into_iter()
+            .find(|(group, _)| *group == "navigation")
+            .expect("navigation group")
+            .1
+    }
+
+    fn label_for<'a>(entries: &'a [KeybindHelpEntry], label: &str) -> Option<&'a str> {
+        entries
+            .iter()
+            .find(|(_, entry)| entry == label)
+            .map(|(key, _)| key.as_str())
+    }
+
+    #[test]
+    fn navigate_help_matches_modal_navigation() {
+        let modal = navigation(true);
+        assert_eq!(
+            label_for(&modal, "switch typing / navigate"),
+            Some("alt+space")
+        );
+        assert_eq!(label_for(&modal, "type in pane"), Some("i"));
+        assert_eq!(
+            label_for(&modal, "from leftmost pane: focus workspace list"),
+            Some("h")
+        );
+        assert_eq!(
+            label_for(&modal, "workspace / agent list: select"),
+            Some("j / k")
+        );
+
+        // Without modal navigation the group is only the shared entries.
+        let one_shot = navigation(false);
+        assert_eq!(one_shot.len(), 6);
+        assert_eq!(modal[modal.len() - 6..], one_shot[..]);
     }
 }

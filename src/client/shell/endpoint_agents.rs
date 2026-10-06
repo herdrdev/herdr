@@ -88,6 +88,83 @@ pub(super) fn render_expanded(
 }
 
 impl ClientShellState {
+    /// Agents panel rows in display order, as endpoint, pane and row height.
+    pub(super) fn agent_list_entries(&self) -> Vec<(ClientEndpointId, String, u16)> {
+        let height = |lines: usize| lines.max(1).min(u16::MAX as usize) as u16;
+        if self.endpoints.len() > 1 {
+            agent_rows(&self.endpoints, &self.active_endpoint_id, &self.config)
+                .into_iter()
+                .map(|row| {
+                    let lines = height(row.agent.rows.len());
+                    (row.endpoint_id, row.agent.pane_id, lines)
+                })
+                .collect()
+        } else {
+            self.snapshot
+                .as_deref()
+                .map(|snapshot| super::agent_sidebar::agent_rows(snapshot, &self.config, None))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|row| {
+                    (
+                        self.active_endpoint_id.clone(),
+                        row.pane_id,
+                        height(row.rows.len()),
+                    )
+                })
+                .collect()
+        }
+    }
+
+    /// On-screen row of the agent selected with agents-panel focus.
+    pub(super) fn selected_agent_rect(&self) -> Option<Rect> {
+        let (endpoint_id, pane_id) = self
+            .agent_list_selection
+            .as_ref()
+            .filter(|_| self.agent_list_focused())?;
+        self.hits
+            .endpoint_agents
+            .iter()
+            .find(|(_, endpoint, pane)| endpoint == endpoint_id && pane == pane_id)
+            .map(|(rect, _, _)| *rect)
+            .or_else(|| {
+                self.hits
+                    .agents
+                    .iter()
+                    .find(|(_, pane)| *endpoint_id == self.active_endpoint_id && pane == pane_id)
+                    .map(|(rect, _)| *rect)
+            })
+    }
+
+    /// Selects the agents panel row at `index` and scrolls it into view.
+    pub(super) fn select_agent_list_entry(
+        &mut self,
+        entries: Vec<(ClientEndpointId, String, u16)>,
+        index: usize,
+    ) {
+        let heights = entries
+            .iter()
+            .map(|(_, _, height)| *height)
+            .collect::<Vec<_>>();
+        let mut gaps = vec![self.config.agents.row_gap; heights.len()];
+        if let Some(last) = gaps.last_mut() {
+            *last = 0;
+        }
+        if self.hits.agent_body.height > 0 {
+            self.agent_scroll = super::scroll::list_scroll_start_to_reveal(
+                &heights,
+                &gaps,
+                self.hits.agent_body.height,
+                self.agent_scroll,
+                index,
+            );
+        }
+        self.agent_list_selection = entries
+            .into_iter()
+            .nth(index)
+            .map(|(endpoint_id, pane_id, _)| (endpoint_id, pane_id));
+    }
+
     pub(super) fn reveal_endpoint_agent(
         &mut self,
         endpoint_id: &ClientEndpointId,
