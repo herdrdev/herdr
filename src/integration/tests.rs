@@ -2927,6 +2927,283 @@ fn install_hermes_converts_inline_enabled_list_to_block_list() {
 }
 
 #[test]
+fn install_hermes_preserves_indentless_enabled_list() {
+    let input = "plugins:\n  enabled:\n  - example-plugin\n  disabled:\n  - other-plugin\n";
+    let actual = update_hermes_enabled_plugin(input, true);
+    assert_eq!(
+        actual,
+        "plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n",
+        "new plugin must share the existing sequence indentation"
+    );
+}
+
+#[test]
+fn hermes_block_sequences_preserve_indentation_comments_and_siblings() {
+    for key_indent in [2, 4] {
+        for item_indent in [key_indent, key_indent + 2, key_indent + 4] {
+            let key_padding = " ".repeat(key_indent);
+            let item_padding = " ".repeat(item_indent);
+            let header = format!("plugins:\n{key_padding}enabled: # selected plugins\n");
+            let tail = format!(
+                "{item_padding}# existing plugin\n{item_padding}- 'example-plugin' # keep\n\n{key_padding}disabled:\n{key_padding}- herdr-agent-state\nmodel: example"
+            );
+            let input = format!("{header}{tail}");
+            let expected = format!("{header}{item_padding}- herdr-agent-state\n{tail}");
+            let installed = update_hermes_enabled_plugin(&input, true);
+            assert_eq!(installed, expected);
+            assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
+            assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
+            assert_eq!(update_hermes_enabled_plugin(&input, false), input);
+        }
+    }
+    for indent in [0, 2, 4] {
+        let padding = " ".repeat(indent);
+        let input = format!(
+            "plugins: # selected\n# keep comment\n{padding}- other-plugin\nmodel: example\n"
+        );
+        let installed = update_hermes_enabled_plugin(&input, true);
+        assert_eq!(installed, format!("plugins: # selected\n{padding}- herdr-agent-state\n# keep comment\n{padding}- other-plugin\nmodel: example\n"));
+        assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
+        assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
+    }
+}
+
+#[test]
+fn hermes_sequence_membership_is_scoped_to_direct_enabled_items() {
+    for input in [
+        "plugins:\n  disabled:\n  - herdr-agent-state\n  enabled:\n  - other\n",
+        "plugins:\n  enabled:\n    - options:\n        - herdr-agent-state\n",
+    ] {
+        let expected = input.replacen(
+            "  enabled:\n",
+            if input.contains("options:") {
+                "  enabled:\n    - herdr-agent-state\n"
+            } else {
+                "  enabled:\n  - herdr-agent-state\n"
+            },
+            1,
+        );
+        let installed = update_hermes_enabled_plugin(input, true);
+        assert_eq!(installed, expected);
+        assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
+        assert_eq!(update_hermes_enabled_plugin(input, false), input);
+    }
+}
+
+#[test]
+fn install_hermes_does_not_treat_disabled_as_a_flat_plugin_list() {
+    let input = "plugins:\n    disabled:\n    - herdr-agent-state\nmodel: example\n";
+    let installed = update_hermes_enabled_plugin(input, true);
+    assert_eq!(installed, "plugins:\n    enabled:\n      - herdr-agent-state\n    disabled:\n    - herdr-agent-state\nmodel: example\n");
+    assert_eq!(update_hermes_enabled_plugin(&installed, true), installed);
+    let uninstalled = update_hermes_enabled_plugin(&installed, false);
+    assert_eq!(
+        uninstalled,
+        "plugins:\n    enabled: []\n    disabled:\n    - herdr-agent-state\nmodel: example\n"
+    );
+    assert_eq!(
+        update_hermes_enabled_plugin(&uninstalled, false),
+        uninstalled
+    );
+}
+
+#[test]
+fn uninstall_hermes_keeps_empty_sequences_and_removes_duplicate_direct_items() {
+    for (input, expected) in [
+        ("plugins:\n  enabled: # keep\n  - 'herdr-agent-state'\n  - herdr-agent-state # duplicate\n  disabled: []\n", "plugins:\n  enabled: [] # keep\n  disabled: []\n"),
+        ("plugins: # keep\n- herdr-agent-state\n", "plugins: [] # keep\n"),
+        ("plugins:\n    enabled: [herdr-agent-state, herdr-agent-state] # keep\n", "plugins:\n    enabled: [] # keep\n"),
+    ] {
+        let uninstalled = update_hermes_enabled_plugin(input, false);
+        assert_eq!(uninstalled, expected);
+        assert_eq!(update_hermes_enabled_plugin(&uninstalled, false), uninstalled);
+    }
+}
+
+#[test]
+fn uninstall_hermes_preserves_bare_sequence_items() {
+    for (header, indent) in [
+        ("plugins:\n", ""),
+        ("plugins:\n", "  "),
+        ("plugins:\n  enabled:\n", "  "),
+        ("plugins:\n  enabled:\n", "    "),
+    ] {
+        for indicator in ["-", "-   ", "- # keep"] {
+            let remaining = format!("{indent}{indicator}\n{indent}  other-plugin\n");
+            for plugin_first in [true, false] {
+                let plugin = format!("{indent}- herdr-agent-state\n");
+                let input = if plugin_first {
+                    format!("{header}{plugin}{remaining}model: example\n")
+                } else {
+                    format!("{header}{remaining}{plugin}model: example\n")
+                };
+                let expected = format!("{header}{remaining}model: example\n");
+                let uninstalled = update_hermes_enabled_plugin(&input, false);
+                assert_eq!(uninstalled, expected, "input: {input}");
+                assert_eq!(update_hermes_enabled_plugin(&uninstalled, false), expected);
+                let installed = update_hermes_enabled_plugin(&uninstalled, true);
+                assert_eq!(
+                    installed,
+                    format!("{header}{plugin}{remaining}model: example\n")
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn uninstall_hermes_preserves_bare_item_in_config_file() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    fs::create_dir_all(&base).unwrap();
+    std::env::set_var(HERMES_HOME_ENV_VAR, &base);
+    let config_path = base.join("config.yaml");
+    let remaining =
+        "plugins:\n  enabled:\n  -\n    other-plugin\n  disabled:\n  - disabled-plugin\n";
+    fs::write(&config_path, remaining).unwrap();
+    install_hermes().unwrap();
+
+    let result = uninstall_hermes().unwrap();
+    assert!(result.removed_plugin_dir);
+    assert!(result.updated_config);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), remaining);
+    assert!(!uninstall_hermes().unwrap().updated_config);
+
+    std::env::remove_var(HERMES_HOME_ENV_VAR);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
+fn uninstall_hermes_preserves_empty_sequence_node_properties() {
+    for properties in [
+        "&selected",
+        "!!seq &selected",
+        "&selected !!seq",
+        "!<tag:yaml.org,2002:seq> &selected",
+    ] {
+        for (header, indent, alias) in [
+            ("plugins:", "  ", "other: *selected\n"),
+            ("plugins:\n  enabled:", "    ", "  disabled: *selected\n"),
+        ] {
+            let input =
+                format!("{header} {properties} # keep\n{indent}- herdr-agent-state\n{alias}");
+            let expected = format!("{header} {properties} [] # keep\n{alias}");
+            let uninstalled = update_hermes_enabled_plugin(&input, false);
+            assert_eq!(uninstalled, expected);
+            assert_eq!(update_hermes_enabled_plugin(&uninstalled, false), expected);
+            assert_eq!(update_hermes_enabled_plugin(&uninstalled, true), input);
+
+            let flow =
+                format!("{header} {properties} [herdr-agent-state, other-plugin] # keep\n{alias}");
+            assert_eq!(
+                update_hermes_enabled_plugin(&flow, false),
+                format!("{header} {properties} # keep\n{indent}- other-plugin\n{alias}")
+            );
+        }
+    }
+}
+
+#[test]
+fn hermes_bare_plugin_items_use_the_continued_scalar() {
+    for (header, indent) in [
+        ("plugins:\n", ""),
+        ("plugins:\n", "  "),
+        ("plugins:\n  enabled:\n", "  "),
+        ("plugins:\n  enabled:\n", "    "),
+    ] {
+        for indicator in ["-", "-   ", "- # plugin"] {
+            for value in [
+                "herdr-agent-state",
+                "'herdr-agent-state'",
+                "\"herdr-agent-state\" # installed",
+            ] {
+                let plugin = format!("{indent}{indicator}\n{indent}  {value}\n");
+                let other = format!("{indent}-\n{indent}  other-plugin\n");
+                for plugin_first in [true, false] {
+                    let items = if plugin_first {
+                        format!("{plugin}{other}")
+                    } else {
+                        format!("{other}{plugin}")
+                    };
+                    let input = format!("{header}{items}model: example\n");
+                    assert_eq!(update_hermes_enabled_plugin(&input, true), input);
+                    let expected = format!("{header}{other}model: example\n");
+                    assert_eq!(update_hermes_enabled_plugin(&input, false), expected);
+                    assert_eq!(update_hermes_enabled_plugin(&expected, false), expected);
+                }
+            }
+        }
+    }
+    let input = "plugins:\n  enabled:\n  - # plugin\n    # keep comment\n\n    herdr-agent-state\n  - herdr-agent-state # duplicate\n  # keep trailing comment\n  disabled: []\n";
+    assert_eq!(
+        update_hermes_enabled_plugin(input, false),
+        "plugins:\n  enabled: []\n    # keep comment\n\n  # keep trailing comment\n  disabled: []\n"
+    );
+}
+
+#[test]
+fn hermes_does_not_match_scalar_prefixes_or_nested_continuations() {
+    for item in [
+        "  - herdr-agent-state\n    other\n",
+        "  -\n    herdr-agent-state\n    other\n",
+        "  -\n    - herdr-agent-state\n",
+    ] {
+        let input = format!("plugins:\n  enabled:\n{item}  disabled: []\n");
+        assert_eq!(update_hermes_enabled_plugin(&input, false), input);
+        let installed = update_hermes_enabled_plugin(&input, true);
+        assert_eq!(
+            installed,
+            format!("plugins:\n  enabled:\n  - herdr-agent-state\n{item}  disabled: []\n")
+        );
+        assert_eq!(update_hermes_enabled_plugin(&installed, false), input);
+    }
+}
+
+#[test]
+fn hermes_flow_sequence_edits_keep_following_comments() {
+    for (input, expected) in [
+        ("plugins: [other] # selected\n# keep following comment\nmodel: example\n", "plugins: # selected\n  - herdr-agent-state\n  - other\n# keep following comment\nmodel: example\n"),
+        ("plugins:\n    enabled: [other] # selected\n    # keep following comment\n    disabled: []\n", "plugins:\n    enabled: # selected\n      - herdr-agent-state\n      - other\n    # keep following comment\n    disabled: []\n"),
+    ] {
+        assert_eq!(update_hermes_enabled_plugin(input, true), expected);
+        assert_eq!(update_hermes_enabled_plugin(expected, true), expected);
+    }
+}
+
+#[test]
+fn hermes_install_and_uninstall_are_idempotent_with_indentless_config() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    fs::create_dir_all(&base).unwrap();
+    std::env::set_var(HERMES_HOME_ENV_VAR, &base);
+    let input = "plugins:\n  enabled:\n  - example-plugin\n  disabled:\n  - other-plugin\n";
+    let config_path = base.join("config.yaml");
+    fs::write(&config_path, input).unwrap();
+
+    let installed = install_hermes().unwrap();
+    let first = fs::read_to_string(&config_path).unwrap();
+    assert_eq!(first, "plugins:\n  enabled:\n  - herdr-agent-state\n  - example-plugin\n  disabled:\n  - other-plugin\n");
+    assert!(installed
+        .plugin_dir
+        .join(HERMES_PLUGIN_INIT_INSTALL_NAME)
+        .is_file());
+    install_hermes().unwrap();
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), first);
+
+    let uninstalled = uninstall_hermes().unwrap();
+    assert!(uninstalled.removed_plugin_dir);
+    assert!(uninstalled.updated_config);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), input);
+    let again = uninstall_hermes().unwrap();
+    assert!(!again.removed_plugin_dir);
+    assert!(!again.updated_config);
+    assert_eq!(fs::read_to_string(&config_path).unwrap(), input);
+
+    std::env::remove_var(HERMES_HOME_ENV_VAR);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn install_hermes_preserves_quoted_inline_enabled_items() {
     let config =
         update_hermes_enabled_plugin("plugins:\n  enabled: [\"null\", 'foo: bar']\n", true);
