@@ -1946,6 +1946,9 @@ impl App {
             Ok(bytes) => bytes,
             Err(key) => return encode_error(id, "invalid_key", format!("unsupported key {key}")),
         };
+        if let Err(err) = runtime.validate_input_submission(&bytes) {
+            return encode_error(id, "pane_send_failed", err.to_string());
+        }
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             return encode_error(id, "pane_send_failed", err.to_string());
         }

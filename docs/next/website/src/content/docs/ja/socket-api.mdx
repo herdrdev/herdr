@@ -119,6 +119,8 @@ CLI の `herdr api snapshot` は、クライアントやエージェントが簡
 
 `pane.send_keys` と `pane.send_input.keys` は Herdr のキーコンボ文字列を受け付けます: 通常の印字可能キー、`enter` や `esc` のような特殊キー、`ctrl+h`、`control+j`、`alt+x`、`shift+tab` のような修飾キーコード、`f1` のようなファンクションキー、`minus` や `plus` のような名前付き記号です。`prefix+` のバインド文字列は受け付けません。
 
+macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は、コマンドを入力キューに受け入れる前に、ターミナルの現在のカノニカルモードの入力上限を確認します。Enter を含むエンコード済みの行が上限を超える場合、入力全体を拒否します。シェルプロンプトが表示されてから再試行してください。複数の短い行と raw モードの入力は引き続き使用できます。成功応答はキューへの受け入れを示し、コマンドの実行完了を意味しません。この確認は今回の送信だけを対象とし、以前の未完了行を検査したり、キューで待機中にターミナルモードが変わらないことを保証したりするものではありません。
+
 ```json
 {"id":"req_current","method":"pane.current","params":{"caller_pane_id":"w1:p1"}}
 {"id":"req_layout","method":"pane.layout","params":{"pane_id":"w1:p1"}}
