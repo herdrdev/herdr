@@ -1651,6 +1651,119 @@ mod tests {
     }
 
     #[test]
+    fn agent_wait_finishes_when_its_tab_or_workspace_closes() {
+        use crate::api::schema::{AgentInfo, EventData, EventEnvelope, EventKind};
+
+        for closure in [
+            EventEnvelope {
+                event: EventKind::TabClosed,
+                data: EventData::TabClosed {
+                    tab_id: "ws_1:t3".into(),
+                    workspace_id: "ws_1".into(),
+                },
+            },
+            EventEnvelope {
+                event: EventKind::WorkspaceClosed,
+                data: EventData::WorkspaceClosed {
+                    workspace_id: "ws_1".into(),
+                    workspace: None,
+                },
+            },
+        ] {
+            let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+            let event_hub = EventHub::default();
+            let server_events = event_hub.clone();
+            let running = Arc::new(AtomicBool::new(true));
+            let server_running = Arc::clone(&running);
+            let (mut client, server, path) = local_stream_pair("wait-close");
+            let (done_tx, done_rx) = std::sync::mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result =
+                    handle_connection(server, &api_tx, &server_events, &server_running, None);
+                let _ = done_tx.send(result);
+            });
+            writeln!(
+                client,
+                "{}",
+                serde_json::json!({
+                    "id": "wait_container",
+                    "method": "agent.wait",
+                    "params": {"target": "worker", "timeout_ms": 30_000}
+                })
+            )
+            .unwrap();
+            let initial_get = api_rx.blocking_recv().unwrap();
+            assert!(matches!(initial_get.request.method, Method::AgentGet(_)));
+            let agent: AgentInfo = serde_json::from_value(serde_json::json!({
+                "terminal_id": "term-original", "name": "worker", "agent": "pi",
+                "agent_status": "working", "workspace_id": "ws_1",
+                "tab_id": "ws_1:t3", "pane_id": "ws_1:p7", "focused": false,
+                "revision": 1
+            }))
+            .unwrap();
+            initial_get
+                .respond_to
+                .send(
+                    serde_json::to_string(&SuccessResponse {
+                        id: initial_get.request.id,
+                        result: ResponseResult::AgentInfo { agent },
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+
+            // The initial lookup is the synchronization barrier: the waiter has
+            // already captured its event cursor, including events emitted now.
+            for (workspace_id, tab_id) in [("ws_other", "ws_1:t3"), ("ws_1", "ws_1:t30")] {
+                event_hub.push(EventEnvelope {
+                    event: EventKind::TabClosed,
+                    data: EventData::TabClosed {
+                        tab_id: tab_id.into(),
+                        workspace_id: workspace_id.into(),
+                    },
+                });
+            }
+            event_hub.push(EventEnvelope {
+                event: EventKind::WorkspaceClosed,
+                data: EventData::WorkspaceClosed {
+                    workspace_id: "ws_other".into(),
+                    workspace: None,
+                },
+            });
+            let ignored_unrelated = matches!(
+                done_rx.recv_timeout(Duration::from_millis(200)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+            );
+            event_hub.push(closure);
+            let completed = done_rx.recv_timeout(Duration::from_secs(3));
+            let response = if matches!(&completed, Ok(Ok(()))) {
+                read_line(&mut client)
+            } else {
+                String::new()
+            };
+            running.store(false, std::sync::atomic::Ordering::Release);
+            drop(client);
+            worker.join().unwrap();
+            fs::remove_file(path).unwrap();
+
+            assert!(
+                ignored_unrelated,
+                "unrelated container closure ended the wait"
+            );
+            completed
+                .expect("container closure must end the wait before its deadline")
+                .unwrap();
+            let response: ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(response.id, "wait_container");
+            assert_eq!(response.error.code, "agent_not_running");
+            assert!(
+                api_rx.try_recv().is_err(),
+                "closure must not wait for another agent probe"
+            );
+        }
+    }
+
+    #[test]
     fn events_wait_agent_status_times_out_server_side() {
         let (api_tx, responder) =
             spawn_pane_get_responder(crate::api::schema::AgentStatus::Unknown);

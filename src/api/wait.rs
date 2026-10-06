@@ -450,6 +450,21 @@ fn wait_for_resolved_agent(
                         .map(AgentWaitOutcome::Response)
                         .map(Some);
                 }
+                EventData::TabClosed {
+                    tab_id,
+                    workspace_id,
+                } if tab_id == wait.initial.tab_id && workspace_id == wait.initial.workspace_id => {
+                    return agent_wait_not_running(request_id)
+                        .map(AgentWaitOutcome::Response)
+                        .map(Some);
+                }
+                EventData::WorkspaceClosed { workspace_id, .. }
+                    if workspace_id == wait.initial.workspace_id =>
+                {
+                    return agent_wait_not_running(request_id)
+                        .map(AgentWaitOutcome::Response)
+                        .map(Some);
+                }
                 _ => {}
             }
         }
