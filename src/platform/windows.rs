@@ -644,11 +644,21 @@ fn standard_windows_path(path: &std::path::Path) -> Option<PathBuf> {
 /// Resolves against the current foreground layout because asynchronous console
 /// records do not retain the layout that was active when the key was pressed.
 pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
+    // SAFETY: the foreground window and its layout are owned by Win32.
+    let layout = unsafe {
+        let thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        GetKeyboardLayout(thread_id)
+    };
+    resolve_base_printable_key_in_layout(vk, scan, layout)
+}
+
+pub(crate) fn resolve_base_printable_key_in_layout(
+    vk: u16,
+    scan: u16,
+    layout: windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL,
+) -> Option<char> {
     // SAFETY: Win32 owns the handles; the fixed buffers match the API lengths.
     unsafe {
-        let thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
-        let layout = GetKeyboardLayout(thread_id);
-
         let key_state = [0u8; 256];
         let mut output = [0u16; 2];
         let written = ToUnicodeEx(
@@ -660,7 +670,9 @@ pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
             0x4,
             layout,
         );
-        let units = output.get(..usize::try_from(written).ok()?)?;
+        // A negative result identifies a dead key; its spacing accent is still
+        // the key's identity. Flag 0x4 above keeps composition state unchanged.
+        let units = output.get(..usize::try_from(written.unsigned_abs()).ok()?)?;
         let mut chars = char::decode_utf16(units.iter().copied());
         let ch = chars.next()?.ok()?;
         (chars.next().is_none() && !ch.is_control()).then_some(ch)

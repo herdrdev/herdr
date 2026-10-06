@@ -791,11 +791,26 @@ pub(crate) struct TestWindowsInput(WindowsInputTranslator);
 
 #[cfg(all(test, windows))]
 impl TestWindowsInput {
-    pub(crate) fn key(
+    pub(crate) fn key_in_layout(
         &mut self,
         record: crate::input::WindowsKeyRecord,
+        layout: windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL,
     ) -> Vec<crate::protocol::ClientInputEvent> {
-        self.0.translate(WindowsInputRecord::Key(record))
+        let oem_char = (is_oem_virtual_key(record.virtual_key_code) && record.unicode == 0)
+            .then(|| {
+                crate::platform::resolve_base_printable_key_in_layout(
+                    record.virtual_key_code,
+                    record.virtual_scan_code,
+                    layout,
+                )
+            })
+            .flatten();
+        self.0
+            .mapper
+            .translate_key_with_oem_char(record, oem_char)
+            .into_iter()
+            .flat_map(|item| self.0.pump.process(item))
+            .collect()
     }
 
     pub(crate) fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
@@ -869,6 +884,14 @@ impl WindowsInputMapper {
     }
 
     fn translate_key(&mut self, key: WindowsKeyRecord) -> Vec<PlatformInputItem> {
+        self.translate_key_with_oem_char(key, resolve_ctrl_oem_char(key))
+    }
+
+    fn translate_key_with_oem_char(
+        &mut self,
+        key: WindowsKeyRecord,
+        oem_char: Option<char>,
+    ) -> Vec<PlatformInputItem> {
         if !self.key_record_can_emit_event(key) {
             return Vec::new();
         }
@@ -905,7 +928,7 @@ impl WindowsInputMapper {
             };
         }
 
-        let events = self.translate_semantic_key_events(key, resolve_ctrl_oem_char(key));
+        let events = self.translate_semantic_key_events(key, oem_char);
         let items = if let Some(bytes) = self.paste_payload_bytes_for_key(key) {
             vec![PlatformInputItem::PasteAwareKey {
                 win32_paste_bytes: bytes.clone(),

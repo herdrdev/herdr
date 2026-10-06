@@ -1464,7 +1464,7 @@ mod windows_records {
     }
 
     /// The press and release records Windows produces for `vk` under `chord`,
-    /// or None for dead keys and multi-unit output.
+    /// or None for multi-unit output.
     fn key_records(
         layout: HKL,
         vk: u16,
@@ -1515,6 +1515,8 @@ mod windows_records {
         let unicode = match written {
             0 => 0,
             1 => buf[0],
+            // A dead key has not committed a character yet.
+            n if n < 0 => 0,
             _ => return None,
         };
         let press = crate::input::WindowsKeyRecord {
@@ -1551,8 +1553,11 @@ mod windows_records {
         herdr: &mut HerdrPath,
         input: &mut crate::client::input::windows_vti::TestWindowsInput,
         record: crate::input::WindowsKeyRecord,
+        layout: HKL,
     ) -> Option<Vec<u8>> {
-        let mut events = input.key(record);
+        // The generated record belongs to this layout, independently of the
+        // foreground window's layout while the test runs.
+        let mut events = input.key_in_layout(record, layout);
         events.extend(input.idle());
         let outcome = herdr.state.handle_client_events(&events);
         herdr.deliver(vec![outcome])
@@ -1584,8 +1589,8 @@ mod windows_records {
                         continue;
                     };
                     let expected = [win32_input_mode(press), win32_input_mode(release)].concat();
-                    let pressed = deliver_record(&mut herdr, &mut input, press);
-                    let released = deliver_record(&mut herdr, &mut input, release);
+                    let pressed = deliver_record(&mut herdr, &mut input, press, layout);
+                    let released = deliver_record(&mut herdr, &mut input, release, layout);
                     let page_key_scrolls_herdr = chord.name == "plain"
                         && matches!(key_name.as_str(), "pageup" | "pagedown")
                         && herdr.runtime.plain_page_keys_use_host_scrollback() == Some(true);
