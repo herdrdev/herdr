@@ -297,6 +297,7 @@ fn connect_once(
         options.endpoint_keybindings,
         options.mouse_capture,
         false,
+        false,
     )
     .map_err(handshake_error)?;
     if handshake.encoding != RenderEncoding::SemanticFrame {

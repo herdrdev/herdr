@@ -1070,34 +1070,227 @@ fn direct_graphics_profile_values(
     kitty_window: bool,
     blocked_transport: bool,
     terminals: bool,
+    probed_kitty: bool,
 ) -> bool {
     let supported = term_program.eq_ignore_ascii_case("ghostty")
         || term_program.eq_ignore_ascii_case("wezterm")
         || matches!(term, "xterm-ghostty" | "xterm-kitty" | "xterm-wezterm")
-        || kitty_window;
+        || kitty_window
+        || probed_kitty;
     supported && !blocked_transport && terminals
 }
 
+#[cfg(any(unix, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectGraphicsOverride {
+    Unset,
+    On,
+    Off,
+}
+
+#[cfg(any(unix, test))]
+fn parse_direct_graphics_override(value: Option<&str>) -> DirectGraphicsOverride {
+    match value {
+        Some("on") => DirectGraphicsOverride::On,
+        Some("off") => DirectGraphicsOverride::Off,
+        _ => DirectGraphicsOverride::Unset,
+    }
+}
+
 #[cfg(unix)]
-fn direct_graphics_profile_allowed(direct_attach: bool) -> bool {
-    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
-    let term = std::env::var("TERM").unwrap_or_default();
+fn terminal_profile_is_known(term_program: &str, term: &str, kitty_window: bool) -> bool {
+    term_program.eq_ignore_ascii_case("ghostty")
+        || term_program.eq_ignore_ascii_case("wezterm")
+        || matches!(term, "xterm-ghostty" | "xterm-kitty" | "xterm-wezterm")
+        || kitty_window
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+struct DirectGraphicsEnvSnapshot<'a> {
+    term_program: &'a str,
+    term: &'a str,
+    ssh: bool,
+    mosh: bool,
+    tmux: bool,
+    screen: bool,
+    remote_client_process: bool,
+    kitty_window: bool,
+    probed_kitty: bool,
+}
+
+#[cfg(test)]
+fn direct_graphics_snapshot_values(snapshot: DirectGraphicsEnvSnapshot<'_>) -> bool {
+    // SSH is only a transport marker; unlike mosh, tmux, and screen it relays APC bytes.
+    let _plain_ssh = snapshot.ssh;
     direct_graphics_profile_values(
-        &term_program,
-        &term,
+        snapshot.term_program,
+        snapshot.term,
+        snapshot.kitty_window,
+        snapshot.mosh || snapshot.tmux || snapshot.screen || snapshot.remote_client_process,
+        true,
+        snapshot.probed_kitty,
+    )
+}
+
+#[cfg(unix)]
+fn should_probe_kitty_graphics(direct_attach: bool) -> bool {
+    if direct_attach
+        || is_remote_client_process()
+        || std::env::var_os("MOSH_IP").is_some()
+        || std::env::var_os("MOSH_PORT").is_some()
+        || std::env::var_os("TMUX").is_some()
+        || std::env::var_os("STY").is_some()
+        || parse_direct_graphics_override(std::env::var("HERDR_DIRECT_GRAPHICS").ok().as_deref())
+            != DirectGraphicsOverride::Unset
+    {
+        return false;
+    }
+    !terminal_profile_is_known(
+        &std::env::var("TERM_PROGRAM").unwrap_or_default(),
+        &std::env::var("TERM").unwrap_or_default(),
         std::env::var_os("KITTY_WINDOW_ID").is_some(),
-        direct_attach
-            || is_remote_client_process()
-            || is_ssh_session()
-            || std::env::var_os("TMUX").is_some()
-            || std::env::var_os("STY").is_some(),
-        io::stdin().is_terminal() && io::stdout().is_terminal(),
     )
 }
 
 #[cfg(not(unix))]
-fn direct_graphics_profile_allowed(_direct_attach: bool) -> bool {
+fn should_probe_kitty_graphics(_direct_attach: bool) -> bool {
     false
+}
+
+#[cfg(unix)]
+fn probe_kitty_graphics() -> bool {
+    use std::os::fd::AsRawFd as _;
+
+    const QUERY: &[u8] = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c";
+    const KITTY_OK: &[u8] = b"\x1b_Gi=31;OK\x1b\\";
+    const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+
+    let stdin = io::stdin();
+    let fd = stdin.as_raw_fd();
+    if !stdin.is_terminal() || !io::stdout().is_terminal() {
+        return false;
+    }
+    if crossterm::terminal::enable_raw_mode().is_err() {
+        return false;
+    }
+
+    let result: io::Result<bool> = (|| {
+        let mut stdout = io::stdout().lock();
+        stdout.write_all(QUERY)?;
+        stdout.flush()?;
+        drop(stdout);
+
+        let deadline = std::time::Instant::now() + PROBE_TIMEOUT;
+        let mut response = Vec::new();
+        let mut buffer = [0u8; 128];
+        loop {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let timeout_ms = deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(i32::MAX as u128) as i32;
+            let mut descriptor = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: descriptor points to one initialized pollfd for the duration of poll.
+            let ready = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if ready <= 0 {
+                break;
+            }
+            use std::io::Read as _;
+            let count = stdin.lock().read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            response.extend_from_slice(&buffer[..count]);
+            let has_da1 = response
+                .windows(2)
+                .enumerate()
+                .any(|(index, part)| part == b"\x1b[" && response[index + 2..].contains(&b'c'));
+            if response
+                .windows(KITTY_OK.len())
+                .any(|part| part == KITTY_OK)
+                && has_da1
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })();
+    let restored = crossterm::terminal::disable_raw_mode();
+    result.unwrap_or(false) && restored.is_ok()
+}
+
+#[cfg(not(unix))]
+fn probe_kitty_graphics() -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn direct_graphics_profile_allowed(
+    direct_attach: bool,
+    probed_kitty: bool,
+) -> (bool, &'static str) {
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+    let term = std::env::var("TERM").unwrap_or_default();
+    let blocked_reason = if direct_attach {
+        Some("direct_attach")
+    } else if is_remote_client_process() {
+        Some("remote_client_process")
+    } else if std::env::var_os("MOSH_IP").is_some() || std::env::var_os("MOSH_PORT").is_some() {
+        Some("mosh")
+    } else if std::env::var_os("TMUX").is_some() {
+        Some("tmux")
+    } else if std::env::var_os("STY").is_some() {
+        Some("screen")
+    } else {
+        None
+    };
+    let terminals = io::stdin().is_terminal() && io::stdout().is_terminal();
+    let supported = direct_graphics_profile_values(
+        &term_program,
+        &term,
+        std::env::var_os("KITTY_WINDOW_ID").is_some(),
+        false,
+        terminals,
+        probed_kitty,
+    );
+    let override_value = std::env::var("HERDR_DIRECT_GRAPHICS").ok();
+    let override_setting = parse_direct_graphics_override(override_value.as_deref());
+    let (allowed, reason) = if let Some(reason) = blocked_reason {
+        (false, reason)
+    } else if !terminals {
+        (false, "not_a_terminal")
+    } else {
+        match override_setting {
+            DirectGraphicsOverride::On => (true, "environment_on"),
+            DirectGraphicsOverride::Off => (false, "environment_off"),
+            DirectGraphicsOverride::Unset if supported => (
+                true,
+                if probed_kitty {
+                    "kitty_probe"
+                } else {
+                    "terminal_profile"
+                },
+            ),
+            DirectGraphicsOverride::Unset => (false, "unsupported_terminal"),
+        }
+    };
+    (allowed, reason)
+}
+
+#[cfg(not(unix))]
+fn direct_graphics_profile_allowed(
+    _direct_attach: bool,
+    _probed_kitty: bool,
+) -> (bool, &'static str) {
+    (false, "unsupported_platform")
 }
 
 fn requested_keybindings() -> ClientKeybindings {
@@ -1146,17 +1339,36 @@ fn client_launch_mode(
     exact_cell_size: bool,
     cell_width_px: u32,
     cell_height_px: u32,
+    direct_graphics_allowed: bool,
 ) -> ClientLaunchMode {
     if direct_attach_requested {
         ClientLaunchMode::TerminalAttach
-    } else if exact_cell_size
-        && cell_width_px > 0
-        && cell_height_px > 0
-        && direct_graphics_profile_allowed(false)
+    } else if exact_cell_size && cell_width_px > 0 && cell_height_px > 0 && direct_graphics_allowed
     {
         ClientLaunchMode::AppDirectGraphics
     } else {
         ClientLaunchMode::App
+    }
+}
+
+fn build_client_hello(
+    cols: u16,
+    rows: u16,
+    cell_width_px: u32,
+    cell_height_px: u32,
+    requested_encoding: RenderEncoding,
+    launch_mode: ClientLaunchMode,
+) -> ClientMessage {
+    ClientMessage::Hello {
+        version: PROTOCOL_VERSION,
+        build_version: crate::build_info::version(),
+        cols,
+        rows,
+        cell_width_px,
+        cell_height_px,
+        requested_encoding,
+        keybindings: requested_keybindings(),
+        launch_mode,
     }
 }
 
@@ -1174,28 +1386,27 @@ fn do_handshake(
     requested_encoding: RenderEncoding,
     direct_attach_requested: bool,
     dock_width: u16,
+    direct_graphics_allowed: bool,
 ) -> Result<RenderEncoding, ClientError> {
     stream
         .set_nonblocking(false)
         .map_err(ClientError::ConnectionFailed)?;
 
     // Send Hello.
-    let hello = ClientMessage::Hello {
-        version: PROTOCOL_VERSION,
-        build_version: crate::build_info::version(),
+    let hello = build_client_hello(
         cols,
         rows,
         cell_width_px,
         cell_height_px,
         requested_encoding,
-        keybindings: requested_keybindings(),
-        launch_mode: client_launch_mode(
+        client_launch_mode(
             direct_attach_requested,
             exact_cell_size,
             cell_width_px,
             cell_height_px,
+            direct_graphics_allowed,
         ),
-    };
+    );
     protocol::write_message(stream, &hello)
         .map_err(|e| ClientError::ConnectionFailed(io::Error::other(e.to_string())))?;
 
@@ -1392,6 +1603,7 @@ fn connect_terminal_session_stream(
         RenderEncoding::TerminalAnsi,
         true,
         crate::ui::DOCK_DEFAULT_WIDTH,
+        false,
     ) {
         Ok(RenderEncoding::TerminalAnsi) => {}
         Ok(encoding) => {
@@ -1620,6 +1832,29 @@ fn run_client_with_mode(
     let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) =
         initial_terminal_geometry(kitty_graphics_enabled);
 
+    let probed_kitty = kitty_graphics_enabled
+        && should_probe_kitty_graphics(direct_attach_requested)
+        && probe_kitty_graphics();
+    let (profile_allowed, profile_reason) =
+        direct_graphics_profile_allowed(direct_attach_requested, probed_kitty);
+    let direct_graphics_allowed = !direct_attach_requested
+        && exact_cell_size
+        && cell_width_px > 0
+        && cell_height_px > 0
+        && profile_allowed;
+    let direct_graphics_reason = if direct_attach_requested {
+        "direct_attach"
+    } else if !exact_cell_size || cell_width_px == 0 || cell_height_px == 0 {
+        "cell_geometry_unavailable"
+    } else {
+        profile_reason
+    };
+    info!(
+        direct_graphics = direct_graphics_allowed,
+        reason = direct_graphics_reason,
+        "direct graphics profile resolved"
+    );
+
     // Perform handshake while the stream is still in blocking mode.
     let negotiated_encoding = match do_handshake(
         &mut stream,
@@ -1631,6 +1866,7 @@ fn run_client_with_mode(
         requested_encoding,
         direct_attach_requested,
         dock_width,
+        direct_graphics_allowed,
     ) {
         Ok(encoding) => encoding,
         Err(err) => {
@@ -3457,11 +3693,11 @@ mod tests {
     #[test]
     fn approximate_cell_size_never_enables_direct_graphics() {
         assert_eq!(
-            client_launch_mode(false, false, 8, 16),
+            client_launch_mode(false, false, 8, 16, false),
             ClientLaunchMode::App
         );
         assert_eq!(
-            client_launch_mode(true, false, 8, 16),
+            client_launch_mode(true, false, 8, 16, false),
             ClientLaunchMode::TerminalAttach
         );
     }
@@ -3476,15 +3712,159 @@ mod tests {
             ("", "xterm-256color", false, false),
         ] {
             assert_eq!(
-                direct_graphics_profile_values(program, term, kitty, false, true),
+                direct_graphics_profile_values(program, term, kitty, false, true, false),
                 expected
             );
         }
         assert!(!direct_graphics_profile_values(
-            "ghostty", "", false, true, true
+            "ghostty", "", false, true, true, false
         ));
         assert!(!direct_graphics_profile_values(
-            "ghostty", "", false, false, false
+            "ghostty", "", false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn direct_graphics_env_snapshot_regressions() {
+        let cases = [
+            (
+                "2026-10-07 plain SSH WezTerm probe",
+                DirectGraphicsEnvSnapshot {
+                    term_program: "",
+                    term: "xterm-256color",
+                    ssh: true,
+                    mosh: false,
+                    tmux: false,
+                    screen: false,
+                    remote_client_process: false,
+                    kitty_window: false,
+                    probed_kitty: true,
+                },
+                true,
+            ),
+            (
+                "plain SSH without a supported terminal signal",
+                DirectGraphicsEnvSnapshot {
+                    term_program: "",
+                    term: "xterm-256color",
+                    ssh: true,
+                    mosh: false,
+                    tmux: false,
+                    screen: false,
+                    remote_client_process: false,
+                    kitty_window: false,
+                    probed_kitty: false,
+                },
+                false,
+            ),
+            (
+                "mosh relay",
+                DirectGraphicsEnvSnapshot {
+                    term_program: "WezTerm",
+                    term: "",
+                    ssh: false,
+                    mosh: true,
+                    tmux: false,
+                    screen: false,
+                    remote_client_process: false,
+                    kitty_window: false,
+                    probed_kitty: true,
+                },
+                false,
+            ),
+            (
+                "tmux relay",
+                DirectGraphicsEnvSnapshot {
+                    term_program: "WezTerm",
+                    term: "",
+                    ssh: false,
+                    mosh: false,
+                    tmux: true,
+                    screen: false,
+                    remote_client_process: false,
+                    kitty_window: false,
+                    probed_kitty: true,
+                },
+                false,
+            ),
+            (
+                "local WezTerm",
+                DirectGraphicsEnvSnapshot {
+                    term_program: "WezTerm",
+                    term: "",
+                    ssh: false,
+                    mosh: false,
+                    tmux: false,
+                    screen: false,
+                    remote_client_process: false,
+                    kitty_window: false,
+                    probed_kitty: false,
+                },
+                true,
+            ),
+        ];
+        for (name, snapshot, expected) in cases {
+            assert_eq!(
+                direct_graphics_snapshot_values(snapshot),
+                expected,
+                "{name}"
+            );
+        }
+        for (screen, remote_client_process) in [(true, false), (false, true)] {
+            assert!(!direct_graphics_snapshot_values(
+                DirectGraphicsEnvSnapshot {
+                    term_program: "WezTerm",
+                    term: "",
+                    ssh: false,
+                    mosh: false,
+                    tmux: false,
+                    screen,
+                    remote_client_process,
+                    kitty_window: false,
+                    probed_kitty: true,
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn direct_graphics_environment_override_values() {
+        assert_eq!(
+            parse_direct_graphics_override(Some("on")),
+            DirectGraphicsOverride::On
+        );
+        assert_eq!(
+            parse_direct_graphics_override(Some("off")),
+            DirectGraphicsOverride::Off
+        );
+        assert_eq!(
+            parse_direct_graphics_override(Some("invalid")),
+            DirectGraphicsOverride::Unset
+        );
+    }
+
+    #[test]
+    fn handshake_hello_enables_direct_graphics_for_the_2026_10_07_fixture() {
+        let fixture = DirectGraphicsEnvSnapshot {
+            term_program: "",
+            term: "xterm-256color",
+            ssh: true,
+            mosh: false,
+            tmux: false,
+            screen: false,
+            remote_client_process: false,
+            kitty_window: false,
+            probed_kitty: true,
+        };
+        let launch_mode =
+            client_launch_mode(false, true, 8, 16, direct_graphics_snapshot_values(fixture));
+        let hello = build_client_hello(80, 24, 8, 16, RenderEncoding::TerminalAnsi, launch_mode);
+        assert!(matches!(
+            hello,
+            ClientMessage::Hello {
+                launch_mode: ClientLaunchMode::AppDirectGraphics,
+                ..
+            }
         ));
     }
 

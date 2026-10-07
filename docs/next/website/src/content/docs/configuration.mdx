@@ -580,6 +580,8 @@ The legacy `experimental.kitty_graphics` setting remains accepted for existing c
 
 Changing this setting requires restarting the affected Herdr server or reattaching the client. In remote sessions, the server's setting controls pane graphics parsing and API availability, while the local client's setting controls output to the outer terminal.
 
+The client detects compatible outer terminals from their environment and, when that is inconclusive, probes Kitty graphics support at startup. Set `HERDR_DIRECT_GRAPHICS=on` or `HERDR_DIRECT_GRAPHICS=off` to override that detection. Mosh, tmux, screen, remote client processes, and direct terminal attach remain ineligible.
+
 ## Agent session restore
 
 Herdr resumes supported Agent conversations after a server restart by default:
