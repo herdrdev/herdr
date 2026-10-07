@@ -213,8 +213,8 @@ pub(crate) fn save_sidebar_group_mode(mode: crate::app::state::SidebarGroupMode)
 
 pub(crate) fn load_sidebar_work_filter() -> crate::app::state::SidebarWorkFilter {
     let path = presentation_path();
-    match load_from_path(&path) {
-        Ok(state) => state.sidebar_work_filter.unwrap_or_default(),
+    match load_sidebar_work_filter_from_path(&path) {
+        Ok(filter) => filter,
         Err(err) => {
             warn!(path = %path.display(), err = %err, "failed to load client presentation state");
             crate::app::state::SidebarWorkFilter::default()
@@ -224,9 +224,27 @@ pub(crate) fn load_sidebar_work_filter() -> crate::app::state::SidebarWorkFilter
 
 pub(crate) fn save_sidebar_work_filter(filter: crate::app::state::SidebarWorkFilter) {
     let path = presentation_path();
-    if let Err(err) = update_path(&path, |state| state.sidebar_work_filter = Some(filter)) {
+    if let Err(err) = save_sidebar_work_filter_to_path(&path, filter) {
         warn!(path = %path.display(), err = %err, "failed to save client presentation state");
     }
+}
+
+fn load_sidebar_work_filter_from_path(
+    path: &Path,
+) -> std::io::Result<crate::app::state::SidebarWorkFilter> {
+    let mut filter = load_from_path(path)?
+        .sidebar_work_filter
+        .unwrap_or_default();
+    filter.query.clear();
+    Ok(filter)
+}
+
+fn save_sidebar_work_filter_to_path(
+    path: &Path,
+    mut filter: crate::app::state::SidebarWorkFilter,
+) -> std::io::Result<()> {
+    filter.query.clear();
+    update_path(path, |state| state.sidebar_work_filter = Some(filter))
 }
 
 #[cfg(not(test))]
@@ -440,8 +458,10 @@ mod tests {
     fn per_view_sidebar_filters_round_trip_with_the_group_mode() {
         let path = temp_path();
         let mut filters = crate::app::state::SidebarWorkFilter {
-            query: "label:billing pricing".into(),
+            query: "f".into(),
             only_this_machine: false,
+            agent_finder_history: vec!["claude".into(), "codex".into()],
+            project: Some("project-a".into()),
             team: Some("ENG".into()),
             assignee: None,
             ..Default::default()
@@ -455,17 +475,22 @@ mod tests {
         filters.missive.team = Some("Support".into());
         filters.missive.assignee = None;
         filters.missive.show_closed = true;
+        save_sidebar_work_filter_to_path(&path, filters.clone()).expect("save sidebar work filter");
         update_path(&path, |state| {
             state.sidebar_group_mode = Some(crate::app::state::SidebarGroupMode::LinearTeam);
-            state.sidebar_work_filter = Some(filters.clone());
         })
-        .expect("save sidebar work filter");
+        .expect("save sidebar group mode");
         let state = load_from_path(&path).expect("load client presentation state");
         assert_eq!(
             state.sidebar_group_mode,
             Some(crate::app::state::SidebarGroupMode::LinearTeam)
         );
-        assert_eq!(state.sidebar_work_filter, Some(filters));
+        filters.query.clear();
+        assert_eq!(state.sidebar_work_filter, Some(filters.clone()));
+        assert_eq!(
+            load_sidebar_work_filter_from_path(&path).expect("load filter"),
+            filters
+        );
         // A filter that narrows nothing round trips as the default, not as a
         // missing key that would resurrect an older narrowing.
         update_path(&path, |state| {
@@ -478,6 +503,25 @@ mod tests {
                 .sidebar_work_filter,
             Some(crate::app::state::SidebarWorkFilter::default())
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn loading_stale_sidebar_query_clears_only_the_query() {
+        let path = temp_path();
+        std::fs::write(
+            &path,
+            r#"{"sidebar_work_filter":{"query":"f","only_this_machine":false,"project":"repo","team":"OPS","assignee":"Ada","github":{"show_drafts":true}}}"#,
+        )
+        .expect("write stale sidebar query");
+
+        let filter = load_sidebar_work_filter_from_path(&path).expect("load filter");
+        assert!(filter.query.is_empty());
+        assert!(!filter.only_this_machine);
+        assert_eq!(filter.project.as_deref(), Some("repo"));
+        assert_eq!(filter.team.as_deref(), Some("OPS"));
+        assert_eq!(filter.assignee.as_deref(), Some("Ada"));
+        assert!(filter.github.show_drafts);
         let _ = std::fs::remove_file(path);
     }
 
