@@ -55,6 +55,8 @@ These agents report their own state to Herdr. There is nothing to install; run t
   <li><a href="https://github.com/PrimeIntellect-ai/prime-agent"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/prime-agent.svg')" }} aria-hidden="true"></span>Prime Agent</a></li>
 </ul>
 
+Omo (`omo`, tested with 5.1.21) also includes a built-in Herdr reporter; no `herdr integration install` step is needed. It reports state automatically in a Herdr TUI pane. The current reporter uses the `pi` agent label, so an Omo pane may appear as Pi. If you restrict built-in extensions with `enabledBuiltinExtensions`, include `herdr`, and do not disable it with `disabledBuiltinExtensions`.
+
 An agent that also reports its resume command comes back in the same session after a Herdr server restart.
 
 If you build a coding agent, [Add Herdr support to your agent](/docs/add-herdr-support/) shows how to join this list. It takes a few calls to Herdr's CLI or socket, and no change to Herdr.

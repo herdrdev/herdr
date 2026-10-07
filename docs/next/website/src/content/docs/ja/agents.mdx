@@ -55,6 +55,8 @@ Herdr はこれらのエージェントを認識し、画面の表示から状�
   <li><a href="https://github.com/PrimeIntellect-ai/prime-agent"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/prime-agent.svg')" }} aria-hidden="true"></span>Prime Agent</a></li>
 </ul>
 
+Omo (`omo`、5.1.21 で確認) にも Herdr レポーターが組み込まれており、`herdr integration install` は不要です。Herdr の TUI ペインで状態を自動報告します。現在のレポーターは `pi` エージェントラベルを使うため、Omo のペインが Pi と表示されることがあります。`enabledBuiltinExtensions` で組み込み拡張を制限する場合は `herdr` を含め、`disabledBuiltinExtensions` で無効にしないでください。
+
 resume コマンドも報告するエージェントは、Herdr サーバーの再起動後に同じセッションで戻ります。
 
 コーディングエージェントを開発している場合は、[エージェントに Herdr 対応を追加する](/ja/docs/add-herdr-support/)でこの一覧に加わる方法を確認できます。Herdr の CLI かソケットを数回呼ぶだけで、Herdr 側の変更は不要です。

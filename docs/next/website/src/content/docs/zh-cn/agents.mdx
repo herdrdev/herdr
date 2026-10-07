@@ -55,6 +55,8 @@ Herdr 能识别这些智能体,并从它们在屏幕上绘制的内容读取状�
   <li><a href="https://github.com/PrimeIntellect-ai/prime-agent"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/prime-agent.svg')" }} aria-hidden="true"></span>Prime Agent</a></li>
 </ul>
 
+Omo (`omo`,已使用 5.1.21 验证) 也内置了 Herdr 状态上报器,无需运行 `herdr integration install`。它会在 Herdr TUI 窗格中自动上报状态。当前上报器使用 `pi` 智能体标签,因此 Omo 窗格可能显示为 Pi。如果通过 `enabledBuiltinExtensions` 限制内置扩展,请包含 `herdr`,并且不要通过 `disabledBuiltinExtensions` 禁用它。
+
 同时上报恢复命令的智能体,会在 Herdr 服务器重启后回到同一个会话。
 
 如果你在开发编程智能体,[为你的智能体添加 Herdr 支持](/zh-cn/docs/add-herdr-support/)介绍了如何加入这个列表。只需调用几次 Herdr 的 CLI 或 socket,不需要修改 Herdr。
