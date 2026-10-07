@@ -3,6 +3,19 @@ use std::process::Command;
 
 use super::{ClipboardImage, ForegroundJob, Signal};
 
+pub(crate) fn binary_file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    std::fs::metadata(path)?;
+    Ok((0, 0))
+}
+
+pub(crate) fn process_executable_deleted() -> bool {
+    false
+}
+
+pub(crate) fn installed_executable_path(current: &Path, _proc_deleted: bool) -> PathBuf {
+    current.to_path_buf()
+}
+
 pub(crate) fn effective_user_name() -> Option<String> {
     None
 }

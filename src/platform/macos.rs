@@ -14,6 +14,21 @@ use super::{
     LimitedRead, Signal,
 };
 
+pub(crate) fn binary_file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+pub(crate) fn process_executable_deleted() -> bool {
+    false
+}
+
+pub(crate) fn installed_executable_path(current: &Path, _proc_deleted: bool) -> PathBuf {
+    current.to_path_buf()
+}
+
 /// Resolve the server's effective UID through the kernel user database.
 /// Environment variables are deliberately not consulted for identity checks.
 pub(crate) fn effective_user_name() -> Option<String> {

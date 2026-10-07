@@ -408,6 +408,12 @@ the build behind the *server* (`lsof -p <server-pid> | awk '$4=="txt"{print $NF}
 not the file in `~/.local/bin`. A stale preview session looks identical to a current
 one from the outside.
 
+Attached local semantic-frame clients now show a right-aligned restart warning when
+the installed binary differs from the one running their server. Remote terminal-ANSI
+and direct-attach clients log the replacement instead. To use the new build, upgrade
+through `herdr-session-rescue upgrade --binary <artifact>` so the session is restored
+under the installed binary.
+
 ### Deploying a fork build
 
 Use `herdr-session-rescue upgrade --binary <artifact>` (from `matthias-scale/dotfiles`,

@@ -13,6 +13,27 @@ fn sync_parent_dir(path: &Path) -> std::io::Result<()> {
     std::fs::File::open(path)?.sync_all()
 }
 
+pub(crate) fn binary_file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+pub(crate) fn process_executable_deleted() -> bool {
+    std::fs::read_link("/proc/self/exe")
+        .ok()
+        .is_some_and(|path| path.to_string_lossy().ends_with(" (deleted)"))
+}
+
+pub(crate) fn installed_executable_path(current: &Path, proc_deleted: bool) -> PathBuf {
+    if !proc_deleted {
+        return current.to_path_buf();
+    }
+    let current = current.to_string_lossy();
+    PathBuf::from(current.strip_suffix(" (deleted)").unwrap_or(&current))
+}
+
 pub(crate) fn replace_file_durably(source: &Path, target: &Path) -> std::io::Result<()> {
     std::fs::rename(source, target)?;
     sync_parent_dir(

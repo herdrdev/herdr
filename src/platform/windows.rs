@@ -46,6 +46,23 @@ pub(crate) fn windows_file_identity(file: &std::fs::File) -> std::io::Result<Win
     })
 }
 
+pub(crate) fn binary_file_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    let file = std::fs::File::open(path)?;
+    let identity = windows_file_identity(&file)?;
+    Ok((
+        u64::from(identity.volume_serial_number),
+        identity.file_index,
+    ))
+}
+
+pub(crate) fn process_executable_deleted() -> bool {
+    false
+}
+
+pub(crate) fn installed_executable_path(current: &Path, _proc_deleted: bool) -> PathBuf {
+    current.to_path_buf()
+}
+
 pub(crate) fn replace_file_durably(source: &Path, target: &Path) -> std::io::Result<()> {
     move_file_write_through(source, target)
 }

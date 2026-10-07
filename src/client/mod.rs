@@ -12,6 +12,7 @@
 //! - Forwards OSC 52 clipboard writes from server to its own stdout
 //! - Displays sound/toast notifications forwarded from server
 
+mod binary_drift;
 #[cfg(unix)]
 mod direct_graphics;
 pub(crate) mod endpoint;
@@ -2011,6 +2012,11 @@ async fn run_client_loop(
 ) -> Result<(), ClientError> {
     #[cfg(windows)]
     let _ = config.mouse_scroll_lines;
+    let draw_binary_drift_badge =
+        attach_escape.is_none() && negotiated_encoding == RenderEncoding::SemanticFrame;
+    let mut binary_drift_badge = None;
+    let drift_notice = Arc::new(Mutex::new(None));
+    binary_drift::start_monitor(crate::build_info::version(), drift_notice.clone());
     let draw_host_cursor = attach_escape.is_none() && should_draw_host_cursor(config.host_cursor);
     let is_remote_client = is_remote_client_process();
 
@@ -2198,6 +2204,34 @@ async fn run_client_loop(
             ev = event_rx.recv() => ev.unwrap_or(ClientLoopEvent::Timer),
             _ = tokio::time::sleep(Duration::from_millis(100)) => ClientLoopEvent::Timer,
         };
+
+        if binary_drift_badge.is_none() {
+            let notice = drift_notice
+                .lock()
+                .ok()
+                .and_then(|mut shared| shared.take());
+            if let Some(notice) = notice {
+                binary_drift_badge = Some(notice);
+                if draw_binary_drift_badge {
+                    if let Some((frame, encoded)) = encode_last_frame_repaint_with_badge(
+                        &state.blit_encoder,
+                        state.draw_host_cursor,
+                        binary_drift_badge.as_deref(),
+                    ) {
+                        let mut stdout = io::stdout();
+                        if stdout
+                            .write_all(&encoded.bytes)
+                            .and_then(|()| stdout.flush())
+                            .is_ok()
+                        {
+                            state.blit_encoder.commit(frame, encoded);
+                        } else {
+                            state.request_repaint();
+                        }
+                    }
+                }
+            }
+        }
 
         let appearance_query_deadline_due = appearance_query_due_after_event_loop_iteration(
             &appearance_query_schedule,
@@ -2409,13 +2443,19 @@ async fn run_client_loop(
             ClientLoopEvent::ServerMessage(msg) => match msg {
                 ServerMessage::Frame(frame_data) => {
                     let mut stdout = io::stdout();
-                    if let Err(err) = write_semantic_frame(
+                    let badge = if draw_binary_drift_badge {
+                        binary_drift_badge.as_deref()
+                    } else {
+                        None
+                    };
+                    if let Err(err) = write_semantic_frame_with_badge(
                         &mut stdout,
                         &mut state.blit_encoder,
                         frame_data,
                         &mut state.repaint_pending,
                         state.draw_host_cursor,
                         state.kitty_graphics_enabled,
+                        badge,
                     ) {
                         warn!(%err, "failed to write semantic frame to host terminal");
                     }
@@ -3194,7 +3234,18 @@ fn encode_last_frame_repaint(
     encoder: &render_ansi::BlitEncoder,
     suppress_visible_cursor: bool,
 ) -> Option<(protocol::FrameData, render_ansi::EncodedBlit)> {
-    let frame = encoder.last_frame()?.clone();
+    encode_last_frame_repaint_with_badge(encoder, suppress_visible_cursor, None)
+}
+
+fn encode_last_frame_repaint_with_badge(
+    encoder: &render_ansi::BlitEncoder,
+    suppress_visible_cursor: bool,
+    badge: Option<&str>,
+) -> Option<(protocol::FrameData, render_ansi::EncodedBlit)> {
+    let mut frame = encoder.last_frame()?.clone();
+    if let Some(badge) = badge {
+        binary_drift::overlay_badge(&mut frame, badge);
+    }
     let encoded = if suppress_visible_cursor {
         encoder.encode_with_suppressed_visible_cursor(&frame, true)
     } else {
@@ -3222,6 +3273,7 @@ fn write_encoded_frame_with_graphics(
     writer.write_all(&encoded[insertion..])
 }
 
+#[cfg(test)]
 fn write_semantic_frame(
     writer: &mut impl io::Write,
     encoder: &mut render_ansi::BlitEncoder,
@@ -3230,6 +3282,30 @@ fn write_semantic_frame(
     draw_host_cursor: bool,
     kitty_graphics_enabled: bool,
 ) -> io::Result<()> {
+    write_semantic_frame_with_badge(
+        writer,
+        encoder,
+        frame,
+        repaint_pending,
+        draw_host_cursor,
+        kitty_graphics_enabled,
+        None,
+    )
+}
+
+fn write_semantic_frame_with_badge(
+    writer: &mut impl io::Write,
+    encoder: &mut render_ansi::BlitEncoder,
+    frame: protocol::FrameData,
+    repaint_pending: &mut bool,
+    draw_host_cursor: bool,
+    kitty_graphics_enabled: bool,
+    badge: Option<&str>,
+) -> io::Result<()> {
+    let mut frame = frame;
+    if let Some(badge) = badge {
+        binary_drift::overlay_badge(&mut frame, badge);
+    }
     let frame = if draw_host_cursor {
         render_ansi::frame_with_drawn_cursor(frame)
     } else {
