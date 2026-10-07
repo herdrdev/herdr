@@ -268,6 +268,11 @@ fn compact_row_dot(entry: &AgentPanelEntry) -> &'static str {
     if entry.waiting_on_agents && entry_attention_tier(entry) == AttentionTier::None {
         return "◌";
     }
+    // Sidebar rows paint done-unread full green, so a solid dot reads louder
+    // than `◉` and stays apart from idle-seen `○`.
+    if entry.has_agent && entry_is_done_unread(entry) {
+        return "●";
+    }
     compact_dot_for_state(
         sidebar_entry_display_state(entry),
         entry.seen,
@@ -806,6 +811,11 @@ fn compact_row_widths_with_machine(
     }
 }
 
+/// Done and not yet read: idle after work, cleared on read or when it resumes.
+fn entry_is_done_unread(entry: &AgentPanelEntry) -> bool {
+    sidebar_entry_display_state(entry) == AgentState::Idle && !entry.seen
+}
+
 fn compact_row_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
     if entry_is_blocked(entry) {
         return p.red;
@@ -821,6 +831,9 @@ fn compact_row_color(entry: &AgentPanelEntry, p: &Palette) -> Color {
     }
     if entry.waiting_on_agents {
         return p.yellow;
+    }
+    if entry_is_done_unread(entry) {
+        return p.green;
     }
     state_label_color(sidebar_entry_display_state(entry), entry.seen, p)
 }
@@ -999,6 +1012,88 @@ pub(super) fn sidebar_workspace_labels(
     labels
 }
 
+/// Selected-row treatment: a faint accent tint behind the row plus a left
+/// accent bar. Text colours stay untouched so contrast holds in both themes.
+fn selected_row_tint(p: &Palette) -> Color {
+    let bg = p.sidebar_background();
+    match (
+        crate::app::state::color_rgb(p.accent),
+        crate::app::state::color_rgb(bg),
+    ) {
+        (Some(a), Some(b)) => {
+            let mix = |a: u8, b: u8| ((u16::from(a) * 14 + u16::from(b) * 86 + 50) / 100) as u8;
+            Color::Rgb(mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b))
+        }
+        _ => p.surface1,
+    }
+}
+
+fn paint_selected_row(app: &AppState, frame: &mut Frame, rect: Rect) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
+    let tint = selected_row_tint(&app.palette);
+    let row = Rect::new(rect.x, rect.y, rect.width, 1);
+    frame.buffer_mut().set_style(row, Style::default().bg(tint));
+    // Narrow rows put the dot in column 0; never paint over content.
+    let cell = &mut frame.buffer_mut()[(rect.x, rect.y)];
+    if cell.symbol() == " " {
+        cell.set_symbol("▎")
+            .set_style(Style::default().fg(app.palette.accent).bg(tint));
+    }
+}
+
+fn local_row_is_selected(app: &AppState, entry: &AgentPanelEntry) -> bool {
+    entry
+        .local_target()
+        .is_some_and(|target| app.is_active_pane(target.ws_idx, target.tab_idx, target.pane_id))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_compact_agent_row_with_prefix(
+    app: &AppState,
+    frame: &mut Frame,
+    entry: &AgentPanelEntry,
+    rect: Rect,
+    depth: u16,
+    tab: bool,
+    bg: Option<Color>,
+    prefix_override: Option<usize>,
+) {
+    render_compact_agent_row_body(app, frame, entry, rect, depth, tab, bg, prefix_override);
+    if local_row_is_selected(app, entry) {
+        paint_selected_row(app, frame, rect);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_remote_compact_agent_row_with_prefix(
+    app: &AppState,
+    frame: &mut Frame,
+    remote: &RemoteAgentPanelEntry,
+    rect: Rect,
+    depth: u16,
+    bg: Option<Color>,
+    prefix_override: Option<usize>,
+    show_host_identity: bool,
+    working_shelf: bool,
+) {
+    render_remote_compact_agent_row_body(
+        app,
+        frame,
+        remote,
+        rect,
+        depth,
+        bg,
+        prefix_override,
+        show_host_identity,
+        working_shelf,
+    );
+    if app.sidebar_selected_remote_agent.as_ref() == Some(&remote.agent_ref) {
+        paint_selected_row(app, frame, rect);
+    }
+}
+
 pub(super) fn render_compact_agent_row(
     app: &AppState,
     frame: &mut Frame,
@@ -1097,7 +1192,7 @@ fn remote_sidebar_title<'a>(app: &AppState, remote: &'a RemoteAgentPanelEntry) -
     }
 }
 
-fn render_remote_compact_agent_row_with_prefix(
+fn render_remote_compact_agent_row_body(
     app: &AppState,
     frame: &mut Frame,
     remote: &RemoteAgentPanelEntry,
@@ -1237,10 +1332,15 @@ fn render_remote_compact_agent_row_with_prefix(
             } else {
                 " ✓"
             };
+            let glyph_color = if entry_is_done_unread(remote) && glyph == " ✓" {
+                p.green
+            } else {
+                p.overlay0
+            };
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     glyph,
-                    row_style(Style::default().fg(p.overlay0)),
+                    row_style(Style::default().fg(glyph_color)),
                 )),
                 Rect::new(x, rect.y, SIDEBAR_SETTLE_CONTROL_WIDTH as u16, rect.height),
             );
@@ -1314,7 +1414,7 @@ fn render_remote_compact_agent_row_with_prefix(
     }
 }
 
-fn render_compact_agent_row_with_prefix(
+fn render_compact_agent_row_body(
     app: &AppState,
     frame: &mut Frame,
     entry: &AgentPanelEntry,
@@ -1448,7 +1548,15 @@ fn render_compact_agent_row_with_prefix(
                 Some(control) if control.show_settle && !snoozed => " ✓",
                 _ => "",
             },
-            row_style(Style::default().fg(p.overlay0)),
+            row_style(Style::default().fg(
+                if entry_is_done_unread(entry)
+                    && visible_control_pane.is_some_and(|c| !c.show_unsettle)
+                {
+                    p.green
+                } else {
+                    p.overlay0
+                },
+            )),
         ),
     ]);
     if pin_width > 0 {
@@ -17534,11 +17642,11 @@ pub(crate) mod tests {
                     Color::Rgb(243, 139, 168),
                 ),
                 (
-                    "◉".into(),
+                    "●".into(),
                     "done title".into(),
                     "pi".into(),
                     Some("2m".into()),
-                    Color::Rgb(137, 180, 250),
+                    Color::Rgb(166, 227, 161),
                     Color::Rgb(137, 180, 250),
                 ),
                 (
@@ -19349,7 +19457,7 @@ pub(crate) mod tests {
         let mut entry = aggregation_entry(AgentState::Idle, false, None, "done");
 
         let done_unread = compact_row_color(&entry, &palette);
-        assert_eq!(compact_row_dot(&entry), "\u{25c9}");
+        assert_eq!(compact_row_dot(&entry), "●");
 
         entry.completion_tier = Some(CompletionTier::ContractSatisfied);
         assert_eq!(
@@ -19364,7 +19472,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             compact_row_dot(&entry),
-            "\u{25c9}",
+            "●",
             "still unread done: same shape, colour carries the tier"
         );
 
@@ -20076,9 +20184,9 @@ pub(crate) mod tests {
             .map(|row| row_text(terminal.backend().buffer(), row, area.width - 1))
             .collect::<Vec<_>>();
 
-        // Done-unread has its own `◉` so it reads apart from blocked and idle `○`.
+        // Done-unread is a solid green `●` so it reads apart from blocked and idle `○`.
         assert!(text.iter().any(|line| line.contains('○')), "{text:?}");
-        assert!(text.iter().any(|line| line.contains('◉')), "{text:?}");
+        assert!(text.iter().any(|line| line.contains('●')), "{text:?}");
     }
 
     #[test]
@@ -21490,7 +21598,7 @@ row_gap = 1
         let title_style = buffer[(title_x, tab_row)].style();
         assert_eq!(title_style.fg, Some(Color::Rgb(37, 38, 44)));
         assert!(title_style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(title_style.bg, Some(app.palette.sidebar_background()));
+        assert_eq!(title_style.bg, Some(selected_row_tint(&app.palette)));
     }
 
     #[test]
@@ -21558,7 +21666,7 @@ row_gap = 1
         idle.draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
             .unwrap();
         let idle_text = row_text(idle.backend().buffer(), tab_row, 49);
-        assert!(idle_text.contains("◉"), "{idle_text:?}");
+        assert!(idle_text.contains("●"), "{idle_text:?}");
         assert!(
             idle_text.contains('✓'),
             "unread completion marker: {idle_text:?}"
@@ -23174,7 +23282,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             assert!(!row.contains("SCA-3165 ·"), "{row:?}");
             assert!(!row.contains("#159 ·"), "{row:?}");
             assert!(row.contains("samp"), "{row:?}");
-            assert_eq!(row.find('●'), Some(3), "{row:?}");
+            assert_eq!(row.chars().position(|c| c == '●'), Some(3), "{row:?}");
         }
     }
 
@@ -30080,8 +30188,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .find(|line| line.contains("pi"))
             .unwrap_or_else(|| panic!("{text:?}"));
         assert_eq!(
-            job_line.find('\u{25cf}'),
-            agent_line.find('\u{25cf}'),
+            job_line.chars().position(|c| c == '\u{25cf}'),
+            agent_line.chars().position(|c| c == '\u{25cf}'),
             "{job_line:?} vs {agent_line:?}"
         );
         // Same dot vocabulary as an agent row: running is a filled dot.
@@ -30222,7 +30330,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         entry.state = AgentState::Idle;
         entry.seen = false;
-        assert_eq!(compact_row_dot(&entry), "◉");
+        assert_eq!(compact_row_dot(&entry), "●");
     }
 
     #[test]
