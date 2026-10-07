@@ -546,13 +546,26 @@ impl ClientState {
         &mut self,
         frame_data: impl Into<frame_output::ComposedFrame>,
     ) -> bool {
+        self.try_present_frame_to(&mut io::stdout(), frame_data)
+    }
+
+    pub(super) fn try_present_frame_to(
+        &mut self,
+        writer: &mut impl io::Write,
+        frame_data: impl Into<frame_output::ComposedFrame>,
+    ) -> bool {
         if self.presentation_frozen {
             return false;
         }
         let frame_output::ComposedFrame {
-            frame: frame_data,
+            frame: mut frame_data,
             graphics,
         } = frame_data.into();
+        // With capture enabled, host OSC 8 can intercept Ctrl-click before plugins.
+        // Keep semantic links internally and restore native links when capture is off.
+        if self.shell_mouse_capture_preference {
+            frame_data.hyperlinks.clear();
+        }
         let frame_data = if self.draw_host_cursor {
             render_ansi::frame_with_drawn_cursor(frame_data)
         } else {
@@ -564,8 +577,7 @@ impl ClientState {
         } else {
             self.blit_encoder.encode(&frame_data, self.repaint_pending)
         };
-        let mut stdout = io::stdout();
-        if let Err(error) = self.write_composed_output(&mut stdout, &encoded.bytes, graphics) {
+        if let Err(error) = self.write_composed_output(writer, &encoded.bytes, graphics) {
             tracing::warn!(%error, "failed to present client frame");
             self.repaint_pending = true;
             return false;

@@ -276,6 +276,17 @@ fn ctrl_hover_ignores_late_reply_after_pointer_leaves() {
     })]);
     assert!(!resolve_hover(&mut state, &id));
     assert!(state.link_hover.is_none());
+
+    let mouse = hover_mouse(&state, 1, 0);
+    let id = hover_request(&state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]));
+    state.config.mouse_capture = false;
+    assert!(!resolve_hover(&mut state, &id));
+    let ignored = state.handle_raw_events(vec![RawInputEvent::Mouse(mouse)]);
+    assert!(
+        ignored.actions.is_empty(),
+        "native links must not request Herdr hover"
+    );
+    assert!(state.link_hover.is_none());
 }
 
 #[test]

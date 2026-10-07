@@ -240,35 +240,55 @@ fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility(
 
 #[test]
 fn delayed_link_fallback_does_not_replay_against_changed_geometry() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    state.compose(106, 20).expect("pane frame");
-    let pane = state.hits.panes[0].clone();
-    let down = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: pane.inner_rect.x + 2,
-        row: pane.inner_rect.y + 1,
-        modifiers: KeyModifiers::CONTROL,
-    };
-    let activate = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
-    let request_id = match &activate.actions[..] {
-        [ClientShellAction::Endpoint { request, .. }] => request.id.clone(),
-        _ => panic!("expected link activation request"),
-    };
-    state.hits.panes[0].inner_rect.x = state.hits.panes[0].inner_rect.x.saturating_add(1);
-
-    let (_, actions) = state.handle_endpoint_result(
-        "boot-1",
-        &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-            url: None,
-            handled: false,
-        }),
-    );
-
-    assert!(actions.is_empty());
-    assert!(state.url_click_consumes_until_up);
+    for url in [
+        None,
+        Some("https://example.test"),
+        Some("file:///C:/Code/note.md"),
+    ] {
+        for changed in 0..4 {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_snapshot(Box::new(snapshot()));
+            state.set_pane_surface(surface());
+            state.compose(106, 20).expect("pane frame");
+            let pane = state.hits.panes[0].clone();
+            let down = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: pane.inner_rect.x + 2,
+                row: pane.inner_rect.y + 1,
+                modifiers: KeyModifiers::CONTROL,
+            };
+            let activate = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+            let [ClientShellAction::Endpoint { request, .. }] = &activate.actions[..] else {
+                panic!("expected link activation request");
+            };
+            match changed {
+                0 => state.hits.panes[0].inner_rect.x += 1,
+                1 => state.mode = ClientShellMode::Navigate,
+                2 => state.config.mouse_capture = false,
+                _ => {
+                    state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
+                        query: TextEditor::default(),
+                        search_focused: false,
+                        scroll: 0,
+                    }))
+                }
+            }
+            let (_, actions) = state.handle_endpoint_result(
+                "boot-1",
+                &request.id,
+                Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+                    url: url.map(str::to_owned),
+                    handled: false,
+                }),
+            );
+            assert!(
+                actions.is_empty(),
+                "late replies must not replay or open links"
+            );
+            assert!(state.url_click_consumes_until_up);
+        }
+    }
 }
 
 #[test]
@@ -839,26 +859,79 @@ fn rename_pane_empty_value_is_preserved_as_a_clear_request() {
 
 #[test]
 fn styled_client_composition_preserves_pane_hyperlinks() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    let mut pane_surface = surface();
-    let linked = Buffer::with_lines(["LIVE", "PANE"]);
-    pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
-        &linked,
-        None,
-        &[((0, 0), "L".into(), "https://example.test".into())],
-    );
-    state.set_pane_surface(pane_surface);
-    let mut selection =
-        crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
-    assert!(selection.finish());
-    state.selection = Some(selection);
-    let frame = state.compose(106, 20).expect("composed frame");
-    let hit = &state.hits.panes[0];
-    let index =
-        usize::from(hit.inner_rect.y) * usize::from(frame.width) + usize::from(hit.inner_rect.x);
-    let link = frame.cells[index].hyperlink.expect("linked cell") as usize;
-    assert_eq!(frame.hyperlinks[link], "https://example.test");
+    for uri in [
+        "https://example.test",
+        "obsidian://open?vault=meta&file=note.md",
+    ] {
+        for draw_host_cursor in [false, true] {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_snapshot(Box::new(snapshot()));
+            let mut pane_surface = surface();
+            let linked = Buffer::with_lines(["LIVE", "PANE"]);
+            pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+                &linked,
+                None,
+                &[((0, 0), "L".into(), uri.into())],
+            );
+            state.set_pane_surface(pane_surface);
+            let mut selection =
+                crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
+            assert!(selection.finish());
+            state.selection = Some(selection);
+            let frame = state.compose(106, 20).expect("composed frame");
+            let hit = &state.hits.panes[0];
+            let index = usize::from(hit.inner_rect.y) * usize::from(frame.width)
+                + usize::from(hit.inner_rect.x);
+            let link = frame.cells[index].hyperlink.expect("linked cell") as usize;
+            assert_eq!(frame.hyperlinks[link], uri);
+            let x = hit.inner_rect.x;
+            let y = hit.inner_rect.y;
+            let mut client = crate::client::state::ClientState::test_new();
+            client.draw_host_cursor = draw_host_cursor;
+            let mut terminal = crate::ghostty::Terminal::new(106, 20, 0).unwrap();
+            for (phase, (capture, repaint)) in [
+                (false, false),
+                (true, false),
+                (false, false),
+                (true, true),
+                (true, false),
+                (false, true),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                client.shell_mouse_capture_preference = capture;
+                // Effective mouse reporting may still be requested by a pane app.
+                client.mouse_capture_active = true;
+                client.repaint_pending = repaint;
+                let mut frame = state.compose(106, 20).expect("linked semantic frame");
+                let link = frame.cells[index].hyperlink.expect("retained link") as usize;
+                assert_eq!(frame.hyperlinks[link], uri);
+                // Change the linked cell on the diff pass so it must be painted again.
+                if phase == 4 {
+                    frame.frame.cells[index].symbol = "D".into();
+                }
+                frame.frame.cursor = Some(crate::protocol::CursorState {
+                    x: x + 1,
+                    y,
+                    visible: true,
+                    shape: Default::default(),
+                });
+                let expected = frame.cells[index].symbol.clone();
+                let mut output = Vec::new();
+                assert!(client.try_present_frame_to(&mut output, frame));
+                terminal.write(&output);
+                assert_eq!(
+                    terminal.viewport_hyperlink_uri(x, u32::from(y)).unwrap(),
+                    (!capture).then_some(uri.to_owned()),
+                    "host link ownership must follow configured capture for {uri}"
+                );
+                let (_, label) = terminal.screen_cell(x, u32::from(y)).unwrap();
+                assert_eq!(label, expected.chars().map(u32::from).collect::<Vec<_>>());
+            }
+        }
+    }
 }
 
 #[test]
