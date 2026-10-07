@@ -4038,6 +4038,14 @@ impl App {
                 self.handle_dock_key_for_owner_headless(owner, &key);
             }
             state::InputOwner::Sidebar => {
+                if self.state.server_mode() == state::Mode::Prefix {
+                    self.handle_prefix_key(key);
+                    return;
+                }
+                if self.state.is_prefix_key(&key) {
+                    self.state.set_server_mode(state::Mode::Prefix);
+                    return;
+                }
                 if self.state.handle_sidebar_search_key(key_event) {
                     return;
                 }

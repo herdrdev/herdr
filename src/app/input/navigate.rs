@@ -2388,7 +2388,50 @@ fn relative_window_target_index(
     } else if windows.is_empty() {
         None
     } else {
-        Some(if forward { 0 } else { windows.len() - 1 })
+        let Some(WindowCycleTarget::Local {
+            ws_idx: current_ws,
+            tab_idx: current_tab,
+        }) = current_window_cycle_target(state)
+        else {
+            return Some(if forward { 0 } else { windows.len() - 1 });
+        };
+        // A collapsed Space keeps its workspace header in the sidebar but
+        // hides its tab rows. Use the full workspace order to place that tab
+        // between the visible rows on either side of its Space.
+        let workspace_order = state.visible_workspace_order();
+        let Some(current_position) = workspace_order.iter().position(|idx| *idx == current_ws)
+        else {
+            return Some(if forward { 0 } else { windows.len() - 1 });
+        };
+        let positions = windows
+            .iter()
+            .map(|target| match target {
+                WindowCycleTarget::Local { ws_idx, tab_idx } => workspace_order
+                    .iter()
+                    .position(|idx| idx == ws_idx)
+                    .map(|position| (position, *tab_idx)),
+                WindowCycleTarget::Remote(_) => None,
+            })
+            .collect::<Vec<_>>();
+        if forward {
+            positions
+                .iter()
+                .position(|position| {
+                    position.is_some_and(|(workspace, tab)| {
+                        (workspace, tab) > (current_position, current_tab)
+                    })
+                })
+                .or(Some(0))
+        } else {
+            positions
+                .iter()
+                .rposition(|position| {
+                    position.is_some_and(|(workspace, tab)| {
+                        (workspace, tab) < (current_position, current_tab)
+                    })
+                })
+                .or(Some(windows.len() - 1))
+        }
     }
 }
 
@@ -4342,6 +4385,92 @@ mod tests {
     fn active_window(state: &AppState) -> (usize, usize) {
         let workspace = state.active.expect("active workspace");
         (workspace, state.workspaces[workspace].active_tab_index())
+    }
+
+    #[tokio::test]
+    async fn sidebar_focused_prefix_chord_cycles_from_collapsed_space_position() {
+        let mut app = app_with_test_workspaces(&["alpha", "beta", "gamma"]);
+        app.state
+            .set_sidebar_group_mode(crate::app::state::SidebarGroupMode::Spaces);
+        for workspace in &mut app.state.workspaces {
+            workspace.test_add_tab(Some("t2"));
+            workspace.test_add_tab(Some("t3"));
+        }
+        app.state.ensure_test_terminals();
+
+        let workspace_ids = app
+            .state
+            .workspaces
+            .iter()
+            .map(|workspace| workspace.id.clone())
+            .collect::<Vec<_>>();
+        app.state
+            .sidebar_presentation
+            .known_workspace_ids
+            .extend(workspace_ids.iter().cloned());
+        app.state
+            .sidebar_presentation
+            .expanded_workspace_ids
+            .extend(workspace_ids.iter().cloned());
+        app.state
+            .sidebar_presentation
+            .expanded_workspace_ids
+            .remove(&workspace_ids[1]);
+        app.state.active = Some(1);
+        app.state.workspaces[1].active_tab = 1;
+        app.state.sidebar_focused = true;
+        app.state.prefix_code = KeyCode::Char('b');
+        app.state.prefix_mods = KeyModifiers::CONTROL;
+
+        assert!(!app.state.workspace_agents_expanded(1));
+        assert_eq!(
+            window_cycle_order(&app.state),
+            vec![(0, 0), (0, 1), (0, 2), (2, 0), (2, 1), (2, 2)]
+        );
+
+        let prefix = TerminalKey::new(app.state.prefix_code, app.state.prefix_mods);
+        app.handle_key(prefix.clone()).await;
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::empty()))
+            .await;
+        assert_eq!(active_window(&app.state), (2, 0));
+
+        app.state.active = Some(1);
+        app.state.workspaces[1].active_tab = 1;
+        app.state.sidebar_focused = true;
+        app.handle_key(prefix.clone()).await;
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('p'), KeyModifiers::empty()))
+            .await;
+        assert_eq!(active_window(&app.state), (0, 2));
+
+        fn route_client_key(app: &mut App, key: TerminalKey) {
+            let release = key
+                .clone()
+                .with_kind(crossterm::event::KeyEventKind::Release);
+            app.route_client_events(
+                vec![
+                    crate::raw_input::RawInputEvent::Key(key),
+                    crate::raw_input::RawInputEvent::Key(release),
+                ],
+                false,
+            );
+        }
+
+        for (key, expected) in [('n', (2, 0)), ('p', (0, 2))] {
+            app.state.active = Some(1);
+            app.state.workspaces[1].active_tab = 1;
+            app.state.sidebar_focused = true;
+            app.invalidate_window_cycle_snapshot();
+
+            route_client_key(&mut app, prefix.clone());
+            assert_eq!(app.state.server_mode(), Mode::Prefix);
+            route_client_key(
+                &mut app,
+                TerminalKey::new(KeyCode::Char(key), KeyModifiers::empty()),
+            );
+            assert_eq!(active_window(&app.state), expected);
+        }
     }
 
     fn assert_tui_window_cycle(app: &mut App, action: NavigateAction, expected: &[(usize, usize)]) {

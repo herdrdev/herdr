@@ -449,6 +449,14 @@ impl App {
                 }
             }
             InputOwner::Sidebar => {
+                if self.state.server_mode() == Mode::Prefix {
+                    self.handle_prefix_key(key);
+                    return None;
+                }
+                if self.state.is_prefix_key(&key) {
+                    self.state.set_server_mode(Mode::Prefix);
+                    return None;
+                }
                 if self.state.agent_finder_saved_query.is_some()
                     && key_event.code == KeyCode::Enter
                     && !key_event.modifiers.contains(KeyModifiers::CONTROL)
