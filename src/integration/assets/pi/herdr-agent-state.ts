@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=pi
-// HERDR_INTEGRATION_VERSION=9
+// HERDR_INTEGRATION_VERSION=10
 // @ts-nocheck
 
 import net from "node:net";
@@ -223,6 +223,37 @@ export default function (pi) {
 
     blockedCount += 1;
     blockedMessage = data.label;
+    publishState();
+  });
+
+  // Pi core fires ui_prompt_start/end around every blocking extension UI
+  // dialog (ctx.ui.confirm/select/input/...), e.g. approval prompts like
+  // "Command touches secret material ... Run it?". Without this, herdr
+  // keeps showing "working" while the agent waits for the user, because
+  // nothing emits "herdr:blocked" for those prompts. Pi only fires these
+  // events for the outermost prompt, so start/end pair up 1:1 with the
+  // blockedCount above.
+  pi.on("ui_prompt_start", (event) => {
+    if (!rootSession) {
+      return;
+    }
+    blockedCount += 1;
+    const title = event?.title;
+    blockedMessage =
+      typeof title === "string" && title.length > 0
+        ? title
+        : `input: ${typeof event?.kind === "string" ? event.kind : "prompt"}`;
+    publishState();
+  });
+
+  pi.on("ui_prompt_end", () => {
+    if (!rootSession) {
+      return;
+    }
+    blockedCount = Math.max(0, blockedCount - 1);
+    if (blockedCount === 0) {
+      blockedMessage = undefined;
+    }
     publishState();
   });
 
