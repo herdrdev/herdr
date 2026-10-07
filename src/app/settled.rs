@@ -438,14 +438,27 @@ impl AppState {
         snapshot: &str,
         now: Instant,
     ) -> bool {
-        let Some((_, pane)) = self.pane_state_mut(pane_id) else {
+        let Some((activity, terminal_id)) = self.pane_state_mut(pane_id).map(|(_, pane)| {
+            let activity = pane
+                .activity
+                .observe_detection_snapshot(revision, agent, snapshot, now);
+            (activity, pane.attached_terminal_id.clone())
+        }) else {
             return false;
         };
-        let activity = pane
-            .activity
-            .observe_detection_snapshot(revision, agent, snapshot, now);
+        let is_working = activity
+            && self.terminals.get(&terminal_id).is_some_and(|terminal| {
+                terminal.raw_agent_state() == crate::detect::AgentState::Working
+            });
         if activity {
             self.mark_session_dirty();
+        }
+        if is_working {
+            let elapsed = Instant::now().saturating_duration_since(now);
+            let observed_at = std::time::SystemTime::now()
+                .checked_sub(elapsed)
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            self.agent_states.observe_working(pane_id, observed_at);
         }
         // Detection snapshots can change because settling stopped the agent and
         // its resume stub repainted the pane. Only input or an agent state
@@ -2385,6 +2398,57 @@ mod tests {
                 .activity
                 .inactive_for(now),
             Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn working_detection_output_advances_notepad_activity_until_work_stops() {
+        let (mut state, pane_id) = state_with_context(Default::default());
+        let terminal_id = state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("root terminal")
+            .set_raw_agent_state_for_test(crate::detect::AgentState::Working);
+
+        let started = Instant::now();
+        assert!(!state.observe_pane_detection_snapshot_at(pane_id, 1, None, "before", started));
+        let observed = started + Duration::from_secs(60);
+        assert!(!state.observe_pane_detection_snapshot_at(
+            pane_id,
+            2,
+            None,
+            "working output",
+            observed
+        ));
+        let latest_activity = state
+            .agent_states
+            .snapshot(pane_id, crate::api::schema::AgentStatus::Working)
+            .last_acted_at
+            .expect("working output observation");
+
+        state
+            .terminals
+            .get_mut(&terminal_id)
+            .expect("root terminal")
+            .set_raw_agent_state_for_test(crate::detect::AgentState::Idle);
+        assert!(!state.observe_pane_detection_snapshot_at(
+            pane_id,
+            3,
+            None,
+            "stopped output",
+            observed + Duration::from_secs(60),
+        ));
+        assert_eq!(
+            state
+                .agent_states
+                .snapshot(pane_id, crate::api::schema::AgentStatus::Idle)
+                .last_acted_at
+                .as_deref(),
+            Some(latest_activity.as_str()),
+            "after Working stops, the age source remains the last output while Working"
         );
     }
 

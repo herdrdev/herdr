@@ -711,6 +711,22 @@ mod tests {
     }
 
     #[test]
+    fn working_status_age_refreshes_from_the_latest_observation() {
+        let (mut app, pane_id) = app_with_agent();
+        let latest_activity = base() + Duration::from_secs(590);
+        app.agent_states.observe_working(pane_id, latest_activity);
+        app.view_observed_unix_s = BASE_SECS + 600;
+
+        let text = agent_rows(&app, 40)
+            .iter()
+            .map(row_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("working · 10s ago"), "{text}");
+    }
+
+    #[test]
     fn visible_agent_tab_ages_register_a_refresh_deadline() {
         let (mut app, pane_id) = app_with_agent();
         app.agent_states

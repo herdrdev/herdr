@@ -168,7 +168,17 @@ impl Tab {
                     stale: projection.stale,
                     reported_at: terminal.status_reported_at(),
                     last_agent_state_change_seq: terminal.last_agent_state_change_seq,
-                    activity_at: terminal.agent_activity_at(),
+                    activity_at: match (
+                        terminal.raw_agent_state() == AgentState::Working,
+                        pane.activity.detection_output_at(),
+                    ) {
+                        (true, output_at) => output_at
+                            .into_iter()
+                            .chain(terminal.agent_activity_at())
+                            .max(),
+                        (false, Some(output_at)) => Some(output_at),
+                        (false, None) => terminal.agent_activity_at(),
+                    },
                     state_labels: presentation.state_labels,
                     tokens: terminal.metadata_tokens.values(),
                 })
@@ -299,6 +309,57 @@ mod tests {
 
         assert_eq!(state, AgentState::Working);
         assert!(seen);
+    }
+
+    #[test]
+    fn pane_activity_age_keeps_last_output_when_working_stops() {
+        let mut ws = Workspace::test_new("test");
+        let pane_id = ws.tabs[0].root_pane;
+        let mut terminal = terminal_for_pane(&ws, pane_id);
+        let started = Instant::now();
+        terminal.set_detected_state_with_screen_signals_at(
+            Some(Agent::Codex),
+            AgentState::Working,
+            false,
+            false,
+            true,
+            false,
+            false,
+            started,
+        );
+        let output_at = started + std::time::Duration::from_secs(10);
+        let pane = ws.tabs[0].panes.get_mut(&pane_id).unwrap();
+        assert!(!pane.activity.observe_detection_snapshot(
+            1,
+            Some(Agent::Codex),
+            "initial output",
+            started,
+        ));
+        assert!(pane.activity.observe_detection_snapshot(
+            2,
+            Some(Agent::Codex),
+            "latest output",
+            output_at,
+        ));
+        let mut terminals = HashMap::from([(terminal.id.clone(), terminal)]);
+        assert_eq!(ws.pane_details(&terminals)[0].activity_at, Some(output_at));
+
+        let stopped_at = started + std::time::Duration::from_secs(20);
+        terminals
+            .get_mut(&ws.tabs[0].panes[&pane_id].attached_terminal_id)
+            .unwrap()
+            .set_detected_state_with_screen_signals_at(
+                Some(Agent::Codex),
+                AgentState::Idle,
+                false,
+                true,
+                false,
+                false,
+                false,
+                stopped_at,
+            );
+        let details = ws.pane_details(&terminals);
+        assert_eq!(details[0].activity_at, Some(output_at));
     }
 
     #[test]

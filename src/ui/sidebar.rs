@@ -439,8 +439,10 @@ fn compact_age(
     let instant = entry
         .last_turn_at
         .map(|timestamp| timestamp.instant)
-        .or(entry.reported_at)
-        .or(entry.activity_at);
+        .into_iter()
+        .chain(entry.reported_at)
+        .chain(entry.activity_at)
+        .max();
     let age = instant
         .and_then(|instant| status_report_age_compact_label(Some(instant), now))
         .unwrap_or_else(|| "—".to_string());
@@ -21856,7 +21858,7 @@ row_gap = 1
     }
 
     #[test]
-    fn agent_sidebar_age_prefers_last_turn_and_tooltip_explains_fallback() {
+    fn agent_sidebar_age_uses_latest_activity_and_tooltip_explains_reply() {
         let now = std::time::Instant::now();
         let entry = AgentPanelEntry::new(
             AgentPanelIdentity::Local(AgentPanelLocalTarget {
@@ -21897,9 +21899,9 @@ row_gap = 1
                 seen: true,
                 done_since: None,
                 stale: false,
-                reported_at: Some(now),
+                reported_at: Some(now - std::time::Duration::from_secs(4 * 60)),
                 last_agent_state_change_seq: None,
-                activity_at: Some(now),
+                activity_at: Some(now - std::time::Duration::from_secs(60)),
                 state_labels: Default::default(),
                 tokens: Default::default(),
                 tab_first_pane: false,
@@ -21913,7 +21915,7 @@ row_gap = 1
             instant: reply_instant,
             unix_seconds: reply_unix_seconds,
         });
-        assert_eq!(compact_age(&entry, now).0, "1h");
+        assert_eq!(compact_age(&entry, now).0, "1m");
         let local = crate::platform::local_datetime_at(reply_unix_seconds).expect("local time");
         assert_eq!(
             age_tooltip(entry.last_turn_at, entry.reported_at, now),

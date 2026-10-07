@@ -1634,6 +1634,30 @@ mod tests {
     }
 
     #[test]
+    fn last_working_observation_advances_during_a_working_stint_and_survives_stop() {
+        let pane_id = PaneId::from_raw(9);
+        let base = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_750_000_000);
+        let latest_activity = base + std::time::Duration::from_secs(90);
+        let mut store = AgentStateStore::default();
+
+        store.observe_working(pane_id, base);
+        store.observe_working(pane_id, latest_activity);
+
+        let working = store.snapshot(pane_id, AgentStatus::Working);
+        assert_eq!(
+            working.last_acted_at.as_deref(),
+            format_rfc3339(latest_activity).as_deref()
+        );
+
+        let stopped = store.snapshot(pane_id, AgentStatus::Idle);
+        assert_eq!(
+            stopped.last_acted_at.as_deref(),
+            format_rfc3339(latest_activity).as_deref(),
+            "after Working stops, age starts at its latest observation"
+        );
+    }
+
+    #[test]
     fn chunks_without_scheme_marker_do_not_trigger_link_extraction() {
         let gate = LinkExtractionGate::default();
         gate.observe_chunk(b"ordinary terminal output");
