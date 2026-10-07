@@ -920,6 +920,60 @@ impl AppState {
         let Some(selected) = self.sidebar_selected_work_group.clone() else {
             return SidebarWorkGroupKeyAction::Ignored;
         };
+        if key.code == KeyCode::Char(' ') && key.modifiers.is_empty() {
+            let toggle_key = if let Some(title) = selected.strip_prefix("section:") {
+                Some(title.to_string())
+            } else if let Some(group) = selected.strip_prefix("group:") {
+                crate::ui::sidebar::sidebar_rows(self)
+                    .iter()
+                    .find_map(|row| match row {
+                        crate::ui::SidebarRow::NestedHeader { key, dim, .. }
+                            if key == group && (!dim || key.starts_with("device:")) =>
+                        {
+                            Some(key.clone())
+                        }
+                        _ => None,
+                    })
+            } else if selected == "needs-you-more" {
+                Some(crate::ui::sidebar::NEEDS_YOU_SECTION_TITLE.to_string())
+            } else if let Some(key) = selected.strip_prefix("aloop:row:") {
+                Some(key.to_string())
+            } else if let Some(name) = selected.strip_prefix("aloop:") {
+                let loop_key = format!(
+                    "{}{}",
+                    crate::ui::sidebar::aloops::ALOOP_LOOP_KEY_PREFIX,
+                    name
+                );
+                crate::ui::sidebar::sidebar_rows(self)
+                    .iter()
+                    .any(|row| matches!(row, crate::ui::SidebarRow::AloopLoop { key, .. } if key == &loop_key))
+                    .then_some(loop_key)
+            } else {
+                crate::ui::sidebar::sidebar_rows(self)
+                    .iter()
+                    .find_map(|row| match row {
+                        crate::ui::SidebarRow::NestedHeader {
+                            key,
+                            action_key: Some(action_key),
+                            dim,
+                            ..
+                        } if action_key == &selected && (!dim || key.starts_with("device:")) => {
+                            Some(key.clone())
+                        }
+                        _ => None,
+                    })
+            };
+            if let Some(toggle_key) = toggle_key {
+                self.toggle_sidebar_group(&toggle_key);
+                return SidebarWorkGroupKeyAction::Consumed;
+            }
+        }
+        if let Some(title) = selected.strip_prefix("section:") {
+            if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                self.toggle_sidebar_group(title);
+                return SidebarWorkGroupKeyAction::Consumed;
+            }
+        }
         if (selected == "inbox"
             || selected == format!("section:{}", crate::ui::sidebar::INBOX_SECTION_TITLE))
             && key.code == KeyCode::Enter
