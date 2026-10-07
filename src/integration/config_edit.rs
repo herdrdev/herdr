@@ -70,19 +70,17 @@ pub(crate) fn ensure_command_hook(
         .as_array_mut()
         .ok_or_else(|| io::Error::other(format!("hook entries for {event} must be an array")))?;
 
-    let already_installed = entries.iter().any(|entry| {
-        entry
-            .get("hooks")
-            .and_then(Value::as_array)
-            .is_some_and(|hook_entries| {
-                hook_entries.iter().any(|hook| {
-                    hook.get("type").and_then(Value::as_str) == Some("command")
-                        && hook.get("command").and_then(Value::as_str) == Some(command.as_str())
-                })
-            })
-    });
-    if already_installed {
-        return Ok(());
+    for entry in entries.iter_mut() {
+        let Some(hook_entries) = entry.get_mut("hooks").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        if let Some(hook) = hook_entries
+            .iter_mut()
+            .find(|hook| is_matching_command_hook(hook, &command))
+        {
+            hook["timeout"] = json!(timeout);
+            return Ok(());
+        }
     }
 
     let mut entry = Map::new();
@@ -388,7 +386,32 @@ pub(crate) fn push_unique_command(commands: &mut Vec<String>, command: String) {
 
 pub(crate) fn is_matching_command_hook(hook: &Value, command: &str) -> bool {
     hook.get("type").and_then(Value::as_str) == Some("command")
-        && hook.get("command").and_then(Value::as_str) == Some(command)
+        && hook
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|existing| {
+                existing == command || equivalent_hook_commands(existing, command)
+            })
+}
+
+fn equivalent_hook_commands(existing: &str, target: &str) -> bool {
+    fn script_and_action(command: &str) -> Option<(std::path::PathBuf, &str)> {
+        let quoted = command
+            .strip_prefix("bash '")
+            .map(|rest| (rest, "'"))
+            .or_else(|| {
+                command
+                    .strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -File \"")
+                    .map(|rest| (rest, "\""))
+            })?;
+        let (path, action) = quoted.0.rsplit_once(quoted.1)?;
+        let path = path.replace("'\"'\"'", "'");
+        Some((std::fs::canonicalize(path).ok()?, action))
+    }
+    match (script_and_action(existing), script_and_action(target)) {
+        (Some(existing), Some(target)) => existing == target,
+        _ => false,
+    }
 }
 
 pub(crate) fn ensure_hermes_plugin_enabled(content: &str) -> String {

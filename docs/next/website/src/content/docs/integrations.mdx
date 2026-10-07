@@ -157,6 +157,8 @@ The Codex hook reports session identity through the same local socket API used b
 
 Herdr uses `~/.codex` by default, or `CODEX_HOME` when set. The Codex config directory must already exist. Install writes `herdr-agent-state.sh`, updates `hooks.json`, and ensures `[features] hooks = true` in `config.toml`. It also removes the deprecated top-level `codex_hooks` flag when present. Uninstall removes Herdr entries from `hooks.json` and deletes the hook script, but leaves `config.toml` unchanged.
 
+Reinstalling keeps existing active Herdr hooks at their group and hook positions so unchanged hooks retain Codex's trust. It updates timeouts in place, appends only missing hooks, and leaves an unchanged `hooks.json` untouched. A symlink alias of the same Codex directory reuses the existing hook commands rather than adding duplicates. Obsolete Herdr hooks are still removed during migration.
+
 ## GitHub Copilot CLI
 
 Install the GitHub Copilot CLI hook:

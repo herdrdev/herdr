@@ -1502,6 +1502,64 @@ fn install_codex_is_idempotent_for_hook_entries_and_feature_flag() {
 }
 
 #[test]
+fn install_codex_preserves_v9_hook_positions_and_bytes() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let dir = base.join("codex");
+    fs::create_dir_all(&dir).unwrap();
+    std::env::set_var(CODEX_HOME_ENV_VAR, &dir);
+    install_codex().unwrap();
+    let path = dir.join("hooks.json");
+    let mut original: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    for event in ["SessionStart", "UserPromptSubmit", "Stop"] {
+        let groups = original["hooks"][event].as_array_mut().unwrap();
+        groups.insert(
+            0,
+            json!({"hooks": [{"type": "command", "command": "echo before"}]}),
+        );
+        groups.push(json!({"hooks": [{"type": "command", "command": "echo after"}]}));
+        groups[1]["hooks"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, json!({"type": "command", "command": "echo nested"}));
+    }
+    let bytes = format!("{}\n\n", serde_json::to_string(&original).unwrap());
+    fs::write(&path, &bytes).unwrap();
+    let modified = fs::metadata(&path).unwrap().modified().unwrap();
+    install_codex().unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), bytes);
+    assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    original["hooks"]["UserPromptSubmit"][1]["hooks"][1]["timeout"] = json!(42);
+    fs::write(&path, serde_json::to_string(&original).unwrap()).unwrap();
+    install_codex().unwrap();
+    original["hooks"]["UserPromptSubmit"][1]["hooks"][1]["timeout"] = json!(10);
+    let updated: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(updated, original);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn install_codex_via_symlink_preserves_hook_commands_and_bytes() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let dir = base.join("codex's profile");
+    let alias = base.join("alias profile");
+    fs::create_dir_all(&dir).unwrap();
+    std::os::unix::fs::symlink(&dir, &alias).unwrap();
+    std::env::set_var(CODEX_HOME_ENV_VAR, &dir);
+    install_codex().unwrap();
+    let before = fs::read(dir.join("hooks.json")).unwrap();
+    std::env::set_var(CODEX_HOME_ENV_VAR, &alias);
+    install_codex().unwrap();
+    assert_eq!(fs::read(dir.join("hooks.json")).unwrap(), before);
+    std::env::set_var(CODEX_HOME_ENV_VAR, &dir);
+    install_codex().unwrap();
+    assert_eq!(fs::read(dir.join("hooks.json")).unwrap(), before);
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn install_codex_only_migrates_top_level_feature_flags() {
     let _lock = integration_env_lock();
     let base = unique_base();

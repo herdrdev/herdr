@@ -179,6 +179,7 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     } else {
         json!({})
     };
+    let original_hooks_file = hooks_file.clone();
 
     let hooks = ensure_hooks_object(
         &mut hooks_file,
@@ -189,10 +190,8 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     remove_hook_commands(hooks, "PermissionRequest", &hook_path, Some("blocked"))?;
     remove_hook_commands(hooks, "SessionStart", &hook_path, Some("idle"))?;
     remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("working"))?;
-    remove_hook_commands(hooks, "UserPromptSubmit", &hook_path, Some("title"))?;
     remove_hook_commands(hooks, "PreToolUse", &hook_path, Some("working"))?;
     remove_hook_commands(hooks, "Stop", &hook_path, Some("idle"))?;
-    remove_hook_commands(hooks, "SessionStart", &hook_path, Some("session"))?;
     ensure_command_hook(
         hooks,
         "SessionStart",
@@ -220,7 +219,9 @@ pub(crate) fn install_codex() -> io::Result<CodexInstallPaths> {
     }
     remove_legacy_bash_hook_file(&hook_path)?;
 
-    write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    if hooks_file != original_hooks_file {
+        write_config(&hooks_path, serde_json::to_string_pretty(&hooks_file)?)?;
+    }
 
     let config_path = dir.join("config.toml");
     let existing_config = if config_path.is_file() {
