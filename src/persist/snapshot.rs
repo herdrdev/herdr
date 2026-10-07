@@ -2170,6 +2170,25 @@ mod tests {
     }
 
     #[test]
+    fn capture_preserves_pin_toggle_and_legacy_default() {
+        let mut state = state_with_workspaces(&["pin"]);
+        state.toggle_pin_active_tab();
+        let snapshot = capture_from_state(&state);
+        let json = serde_json::to_value(&snapshot).unwrap();
+        let restored: SessionSnapshot = serde_json::from_value(json.clone()).unwrap();
+        assert!(restored.workspaces[0].tabs[0].pinned);
+        let mut legacy = json;
+        legacy["workspaces"][0]["tabs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("pinned");
+        let restored: SessionSnapshot = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.workspaces[0].tabs[0].pinned);
+        state.toggle_pin_active_tab();
+        assert!(!capture_from_state(&state).workspaces[0].tabs[0].pinned);
+    }
+
+    #[test]
     fn capture_contract_tracks_workspace_order_active_and_selected() {
         let mut state = state_with_workspaces(&["a", "b", "c"]);
         state.active = Some(1);

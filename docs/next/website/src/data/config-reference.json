@@ -1185,8 +1185,8 @@
         {
           "key": "keys.toggle_pin_tab",
           "type": "keybinding",
-          "default": "unset",
-          "description": "Pin or unpin the active tab into the sidebar's Pinned group. Unset by default."
+          "default": "\"prefix+ctrl+shift+p\"",
+          "description": "Pin or unpin the active tab into the sidebar's Pinned group."
         },
         {
           "key": "keys.symphony",

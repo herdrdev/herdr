@@ -1982,7 +1982,7 @@ mod tests {
                     )]),
                     zoomed: false,
                     prio: false,
-                    pinned: false,
+                    pinned: true,
                     starred: false,
                     parked: false,
                     subgroup: None,
@@ -2016,6 +2016,7 @@ mod tests {
             Arc::new(RenderSignal::new()),
         );
 
+        assert!(workspaces[0].tabs[0].pinned, "restore retains the tab pin");
         let terminal = terminals
             .values()
             .next()

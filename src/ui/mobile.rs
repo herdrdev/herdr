@@ -68,6 +68,10 @@ pub(crate) enum MobileSwitcherTarget {
     Snooze(crate::app::state::SidebarPaneLifecycleTarget),
     Settle(crate::app::state::SidebarPaneLifecycleTarget),
     Unsettle(crate::app::state::SidebarPaneLifecycleTarget),
+    Pin {
+        ws_idx: usize,
+        tab_idx: usize,
+    },
     NestedHeader(String),
     RemoteAgent(crate::api::schema::AgentRef),
     AgentRun {
@@ -179,6 +183,9 @@ fn mobile_switcher_target_for_row(
     };
     if let Some(control) = control {
         return Some(match control {
+            crate::app::state::SidebarHoverAction::Pin { ws_idx, tab_idx } => {
+                MobileSwitcherTarget::Pin { ws_idx, tab_idx }
+            }
             crate::app::state::SidebarHoverAction::Snooze { target } => {
                 MobileSwitcherTarget::Snooze(target)
             }

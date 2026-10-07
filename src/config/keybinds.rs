@@ -1989,6 +1989,26 @@ next_tab = "prefix+n"
     }
 
     #[test]
+    fn pin_tab_default_is_registered_without_navigation_conflicts() {
+        let config = Config::default();
+        let (_, _, diagnostics, kb) = config.validated_keybinds();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(
+            binding_triggers(&kb.toggle_pin_tab),
+            vec![BindingTrigger::Prefix((
+                KeyCode::Char('p'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ))]
+        );
+        assert!(kb
+            .previous_window
+            .matches_prefix_key(&crate::input::TerminalKey::new(
+                KeyCode::Char('p'),
+                KeyModifiers::empty(),
+            )));
+    }
+
+    #[test]
     fn copy_mode_uses_tmux_prefix_bracket_by_default() {
         let kb = Config::default().keybinds();
         assert_eq!(

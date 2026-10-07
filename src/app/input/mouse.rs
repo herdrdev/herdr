@@ -906,6 +906,10 @@ impl AppState {
                 .and_then(|target| target.action.clone())
             {
                 return Some(match action {
+                    crate::app::state::SidebarHoverAction::Pin { ws_idx, tab_idx } => {
+                        self.request_pin_toggle = Some((ws_idx, tab_idx));
+                        return None;
+                    }
                     crate::app::state::SidebarHoverAction::Snooze { target } => {
                         MouseAction::OpenSnoozeMenu {
                             target,
@@ -3051,6 +3055,10 @@ impl AppState {
             Some(crate::ui::MobileSwitcherTarget::Settle(target)) => {
                 self.close_workspace_picker();
                 return MobileMouseResult::Action(MouseAction::SettlePane(target));
+            }
+            Some(crate::ui::MobileSwitcherTarget::Pin { ws_idx, tab_idx }) => {
+                self.request_pin_toggle = Some((ws_idx, tab_idx));
+                return MobileMouseResult::Consumed;
             }
             Some(crate::ui::MobileSwitcherTarget::Unsettle(target)) => {
                 self.close_workspace_picker();
@@ -7087,6 +7095,48 @@ mod tests {
             Some(1_725_000_000),
             "opening the context menu must preserve settlement"
         );
+    }
+
+    #[test]
+    fn sidebar_pin_click_requests_the_rows_tab_without_changing_focus() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.set_server_mode(Mode::Terminal);
+        app.state.sidebar_width = 60;
+        // A pinned, unfocused row must still offer unpin without selecting it.
+        app.state.workspaces[1].tabs[0].pinned = true;
+        app.state
+            .sidebar_presentation
+            .expanded_workspace_ids
+            .insert(app.state.workspaces[1].id.clone());
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let pin = app
+            .state
+            .view
+            .sidebar_hover_targets
+            .iter()
+            .find(|target| {
+                matches!(
+                    target.action,
+                    Some(crate::app::state::SidebarHoverAction::Pin {
+                        ws_idx: 1,
+                        tab_idx: 0
+                    })
+                )
+            })
+            .expect("pin hit target")
+            .rect;
+        let action = app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
+        );
+        assert!(action.is_none());
+        assert_eq!(app.state.request_pin_toggle, Some((1, 0)));
+        assert_eq!(app.state.active, Some(0));
     }
 
     #[test]

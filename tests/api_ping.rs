@@ -102,7 +102,7 @@ fn wait_for_socket(path: &Path, timeout: Duration) {
     panic!("socket did not appear at {}", path.display());
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn wait_for_path(path: &Path, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -112,6 +112,23 @@ fn wait_for_path(path: &Path, timeout: Duration) {
         thread::sleep(Duration::from_millis(25));
     }
     panic!("path did not appear at {}", path.display());
+}
+
+#[cfg(target_os = "macos")]
+fn wait_for_file_contents(path: &Path, timeout: Duration) -> String {
+    // The shell creates a redirect target before the command writes to it, so
+    // existence alone can race an empty read.
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(path) {
+            let contents = contents.trim();
+            if !contents.is_empty() {
+                return contents.to_string();
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("file stayed empty at {}", path.display());
 }
 
 #[cfg(target_os = "macos")]
@@ -161,9 +178,7 @@ fn pane_process_info_reports_exact_shell_tty_on_macos() {
         )["result"]["type"],
         "ok"
     );
-    wait_for_path(&marker, Duration::from_secs(5));
-
-    let expected = fs::read_to_string(&marker).unwrap().trim().to_string();
+    let expected = wait_for_file_contents(&marker, Duration::from_secs(5));
     assert!(
         expected.starts_with("/dev/ttys"),
         "unexpected shell TTY {expected:?}"

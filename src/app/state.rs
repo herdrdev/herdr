@@ -1040,6 +1040,7 @@ pub struct SidebarHoverTarget {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarHoverAction {
+    Pin { ws_idx: usize, tab_idx: usize },
     Snooze { target: SidebarPaneLifecycleTarget },
     Settle { target: SidebarPaneLifecycleTarget },
     Unsettle { target: SidebarPaneLifecycleTarget },
