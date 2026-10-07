@@ -60,7 +60,7 @@ pub fn active_tab_suppresses_notifications(
     is_active_tab: bool,
     outer_terminal_focus: Option<bool>,
 ) -> bool {
-    is_active_tab && outer_terminal_focus != Some(false)
+    is_active_tab && outer_terminal_focus == Some(true)
 }
 
 #[cfg(test)]
@@ -3661,8 +3661,9 @@ impl AppState {
                 let claude_transcript_session_id = claude_transcript_path
                     .as_ref()
                     .and_then(|_| session_ref.as_ref().map(|session| session.value.clone()));
-                self.update_terminal_state(pane_id, |terminal| {
-                    let mutation = terminal.set_agent_session_ref_for_session_start(
+                let mut accepted_transcript_session = None;
+                let effects = self.update_terminal_state(pane_id, |terminal| {
+                    let mut mutation = terminal.set_agent_session_ref_for_session_start(
                         source,
                         agent_label,
                         session_ref,
@@ -3670,6 +3671,7 @@ impl AppState {
                         session_start_source,
                     );
                     if mutation.is_some() {
+                        accepted_transcript_session = claude_transcript_session_id.clone();
                         let session_replaced = mutation
                             .as_ref()
                             .is_some_and(|mutation| mutation.session_replaced);
@@ -3682,20 +3684,41 @@ impl AppState {
                         {
                             terminal.set_active_subagents(None);
                         }
-                        if claude_transcript_path.is_some() || session_replaced {
+                        if session_replaced
+                            || claude_transcript_path.as_ref().is_some_and(|path| {
+                                terminal.claude_transcript_path.as_ref() != Some(path)
+                                    || terminal.claude_transcript_session_id
+                                        != claude_transcript_session_id
+                            })
+                        {
                             terminal.set_claude_transcript_target(
-                                claude_transcript_session_id,
+                                claude_transcript_session_id.clone(),
                                 claude_transcript_path,
                             );
+                            if let Some(reset) = terminal.set_transcript_turn_state(
+                                claude_transcript_session_id
+                                    .as_ref()
+                                    .map(|_| crate::detect::AgentState::Idle),
+                                None,
+                                0,
+                                std::time::Instant::now(),
+                            ) {
+                                if let Some(mutation) = mutation.as_mut() {
+                                    mutation.effective_state_change = reset.effective_state_change;
+                                }
+                            }
                         }
                         if session_name_target_evaluated || session_replaced {
                             terminal.set_session_name_write_target(session_name_write_target);
                         }
                     }
                     mutation
-                })
-                .into_iter()
-                .collect()
+                });
+                if let Some(session_id) = accepted_transcript_session {
+                    self.agent_states
+                        .begin_transcript_session(pane_id, &session_id);
+                }
+                effects.into_iter().collect()
             }
             AppEvent::HookMetadataReported {
                 pane_id,
@@ -4029,7 +4052,12 @@ impl AppState {
             if let Some(tab_idx) = self.workspaces[ws_idx].find_tab_index_for_pane(pane_id) {
                 self.workspaces[ws_idx].tabs[tab_idx].expire_agent_scoped_name();
             }
-            if retired_scoped_closing_report {
+            if retired_scoped_closing_report
+                || self.terminals.get(&terminal_id).is_some_and(|terminal| {
+                    terminal.claude_transcript_session_id.is_some()
+                        && terminal.last_turn_at().is_none()
+                })
+            {
                 if let Some(pane) = self.workspaces[ws_idx].pane_state_mut(pane_id) {
                     pane.seen = true;
                     pane.done_since = None;
@@ -6657,6 +6685,59 @@ mod tests {
     }
 
     #[test]
+    fn transcript_session_start_clears_prior_turn_immediately_without_completion() {
+        for (agent, label) in [(Agent::Claude, "claude"), (Agent::Codex, "codex")] {
+            let mut state = app_with_workspaces(&["test"]);
+            let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
+            state.active = None;
+            state.handle_app_event(AppEvent::StateChanged {
+                pane_id,
+                agent: Some(agent),
+                state: AgentState::Idle,
+                visible_blocker: false,
+                visible_working: false,
+                usage_limited: false,
+                process_exited: false,
+                observed_at: Instant::now(),
+            });
+            let report = |id: &str, seq| AppEvent::AgentSessionReported {
+                pane_id,
+                source: format!("herdr:{label}"),
+                agent_label: label.into(),
+                seq: Some(seq),
+                session_ref: crate::agent_resume::AgentSessionRef::id(id),
+                claude_transcript_path: Some(std::path::PathBuf::from(format!("/tmp/{id}.jsonl"))),
+                session_name_write_target: None,
+                session_name_target_evaluated: false,
+                session_start_source: Some(if seq == 1 { "startup" } else { "clear" }.into()),
+            };
+            state.handle_app_event(report("one", 1));
+            let terminal_id = state.workspaces[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            state
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .set_transcript_turn_state(
+                    Some(AgentState::Working),
+                    Some(std::time::SystemTime::now()),
+                    1,
+                    Instant::now(),
+                );
+            state.workspaces[0].panes.get_mut(&pane_id).unwrap().seen = false;
+            state.handle_app_event(report("two", 2));
+            assert_eq!(
+                state.terminals[&terminal_id].raw_agent_state(),
+                AgentState::Idle
+            );
+            assert!(state.terminals[&terminal_id].last_turn_at().is_none());
+            assert!(state.workspaces[0].panes[&pane_id].seen, "{label}");
+            assert!(state.toast.is_none());
+        }
+    }
+
+    #[test]
     fn repro_a2_first_session_report_does_not_mark_unfocused_idle_pane_seen() {
         let mut state = app_with_workspaces(&["test"]);
         let pane_id = *state.workspaces[0].panes.keys().next().unwrap();
@@ -7085,6 +7166,7 @@ mod tests {
     #[test]
     fn delayed_background_waiting_is_suppressed_if_pane_becomes_active() {
         let mut state = app_with_workspaces(&["active", "background"]);
+        state.outer_terminal_focus = Some(true);
         state.active = Some(0);
         state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
         state.toast_config.delay_seconds = 1;
@@ -7944,8 +8026,8 @@ mod tests {
     }
 
     #[test]
-    fn active_tab_suppression_preserves_unknown_focus_behavior() {
-        assert!(active_tab_suppresses_notifications(true, None));
+    fn active_tab_suppression_requires_known_outer_focus() {
+        assert!(!active_tab_suppresses_notifications(true, None));
         assert!(active_tab_suppresses_notifications(true, Some(true)));
         assert!(!active_tab_suppresses_notifications(true, Some(false)));
         assert!(!active_tab_suppresses_notifications(false, None));

@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=9
+# HERDR_INTEGRATION_VERSION=10
 
 set -eu
 
@@ -87,6 +87,7 @@ if agent_session_id:
         "agent": "codex",
         "seq": report_seq,
         "agent_session_id": agent_session_id,
+        "agent_session_path": transcript_path,
     }
     if session_start_source:
         params["session_start_source"] = session_start_source

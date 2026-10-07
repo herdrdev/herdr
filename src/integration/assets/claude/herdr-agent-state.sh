@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=claude
-# HERDR_INTEGRATION_VERSION=10
+# HERDR_INTEGRATION_VERSION=11
 
 set -eu
 
@@ -13,7 +13,7 @@ trap 'rm -f "$hook_input_file"' EXIT HUP INT TERM
 cat >"$hook_input_file" 2>/dev/null || true
 
 case "$action" in
-  session|title|session-name) ;;
+  session|title|session-name|notification) ;;
   *) exit 0 ;;
 esac
 
@@ -43,6 +43,7 @@ import os
 import random
 import socket
 import time
+import tempfile
 
 source = "herdr:claude"
 action = os.environ.get("HERDR_ACTION", "")
@@ -66,7 +67,7 @@ if hook_input_file:
 if "CURSOR_VERSION" in os.environ or "cursor_version" in hook_input:
     raise SystemExit(0)
 hook_event_name = str(hook_input.get("hook_event_name") or "")
-if hook_event_name != "SessionStart":
+if hook_event_name not in ("SessionStart", "Notification"):
     raise SystemExit(0)
 is_subagent = bool(hook_input.get("agent_id"))
 if is_subagent:
@@ -81,6 +82,27 @@ session_start_source = hook_input.get("source") if hook_event_name == "SessionSt
 if not isinstance(session_start_source, str) or not session_start_source:
     session_start_source = None
 if agent_session_id:
+    if hook_event_name == "SessionStart":
+        # Pane-keyed mirrors must never retain a previous session's blocker.
+        try:
+            root = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+            directory = os.path.join(root, "herdr", "agent-status")
+            os.makedirs(directory, exist_ok=True)
+            mirror = os.path.join(directory, pane_id.replace(":", "_") + ".json")
+            try:
+                with open(mirror, encoding="utf-8") as handle:
+                    prior = json.load(handle)
+            except (OSError, ValueError):
+                prior = {}
+            if prior.get("session_id") != agent_session_id:
+                fd, staging = tempfile.mkstemp(dir=directory, prefix=".session-")
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump({"v": 2, "agent": "claude", "session_id": agent_session_id,
+                               "blocking": 0, "agents": 0, "gates": [], "items": [],
+                               "seq": report_seq, "transcript_path": agent_session_path}, handle)
+                os.replace(staging, mirror)
+        except (OSError, ValueError):
+            pass
     params = {
         "pane_id": pane_id,
         "source": source,
@@ -92,9 +114,14 @@ if agent_session_id:
         params["agent_session_path"] = agent_session_path
     if session_start_source:
         params["session_start_source"] = session_start_source
+    if hook_event_name == "Notification":
+        if hook_input.get("notification_type") not in ("permission_prompt", "idle_prompt"):
+            raise SystemExit(0)
+        params["state"] = "blocked"
+        params["message"] = "permission_prompt" if hook_input.get("notification_type") == "permission_prompt" else "idle_prompt"
     request = {
         "id": request_id,
-        "method": "pane.report_agent_session",
+        "method": "pane.report_agent" if hook_event_name == "Notification" else "pane.report_agent_session",
         "params": params,
     }
 else:

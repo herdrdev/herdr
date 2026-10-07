@@ -25,6 +25,10 @@ struct HookRemoval {
 
 const HOOK_REMOVALS: &[HookRemoval] = &[
     HookRemoval {
+        event: "Notification",
+        actions: &["notification"],
+    },
+    HookRemoval {
         event: "PostToolUse",
         actions: &["working"],
     },
@@ -99,6 +103,13 @@ fn install_inner(
         Some(SESSION_START_MATCHER),
     )?;
     if include_title_hook {
+        ensure_command_hook(
+            hooks,
+            "Notification",
+            hook_command(hook_path, Some("notification")),
+            10,
+            Some("permission_prompt|idle_prompt"),
+        )?;
         ensure_command_hook(
             hooks,
             "UserPromptSubmit",
@@ -209,13 +220,14 @@ fn remove_value_event_commands(
             return true;
         };
         let before = command_entries.len();
+        let prior_len = command_entries.len();
         command_entries.retain(|entry| {
             !commands
                 .iter()
                 .any(|command| is_matching_command_hook(entry, command))
         });
         removed |= command_entries.len() != before;
-        !command_entries.is_empty()
+        prior_len == command_entries.len() || !command_entries.is_empty()
     });
 
     if entries.is_empty() && canonical.is_none() {
@@ -321,6 +333,9 @@ fn rewrite(
     }
 
     if kind == EditKind::Install && include_title_hook {
+        append_event_hook(&hooks, "Notification", || {
+            notification_hook_input(hook_path)
+        })?;
         append_event_hook(&hooks, "UserPromptSubmit", || title_hook_input(hook_path))?;
         // Mirrors the desired document built in `install_inner`: the session
         // name is republished at turn start and at turn end.
@@ -367,6 +382,7 @@ fn remove_event_commands(
             continue;
         };
 
+        let mut removed = false;
         for command_entry in command_entries.elements() {
             let matches = command_entry.to_serde_value().is_some_and(|value| {
                 commands
@@ -375,10 +391,11 @@ fn remove_event_commands(
             });
             if matches {
                 command_entry.remove();
+                removed = true;
             }
         }
 
-        if command_entries.elements().is_empty() {
+        if removed && command_entries.elements().is_empty() {
             entry.remove();
         }
     }
@@ -442,6 +459,11 @@ fn append_event_hook(
         }
     }
     Ok(())
+}
+
+fn notification_hook_input(hook_path: &Path) -> CstInputValue {
+    let command = hook_command(hook_path, Some("notification"));
+    json!({ matcher: "permission_prompt|idle_prompt", hooks: [{ "type": "command", command: command, timeout: 10u64 }] })
 }
 
 fn session_name_hook_input(hook_path: &Path) -> CstInputValue {

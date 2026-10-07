@@ -1243,26 +1243,7 @@ fn read_bounded(reader: impl Read, max_bytes: usize) -> io::Result<Vec<u8>> {
 }
 
 fn redact_model_diagnostics(stderr: &str) -> String {
-    let mut safe = String::new();
-    for line in stderr.lines().take(80) {
-        let lower = line.to_ascii_lowercase();
-        if [
-            "api_key",
-            "access_token",
-            "refresh_token",
-            "authorization",
-            "bearer ",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker))
-        {
-            safe.push_str("[redacted credential diagnostic]\n");
-        } else {
-            safe.push_str(line);
-            safe.push('\n');
-        }
-    }
-    safe
+    crate::status_log::redact_credential_lines(stderr, 80)
 }
 
 #[cfg(test)]

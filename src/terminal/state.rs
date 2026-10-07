@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -817,6 +817,10 @@ pub struct TerminalState {
     /// Runtime-only Claude JSONL source. Never persisted or exposed through the
     /// API; the accepted session id remains the resume identity.
     pub(crate) claude_transcript_session_id: Option<String>,
+    transcript_turn_state: Option<AgentState>,
+    codex_completion_since: Option<Instant>,
+    transcript_turn_sequence: u64,
+    pub(crate) transcript_turn_flips: Vec<serde_json::Value>,
     pub(crate) claude_transcript_path: Option<PathBuf>,
     /// Runtime-only file target reported by the current Claude or Codex hook.
     /// It is rebound by hooks after restore rather than persisted as session identity.
@@ -939,6 +943,10 @@ impl TerminalState {
             closing_report: Some(ClosingReport::default()),
             persisted_agent_session: None,
             claude_transcript_session_id: None,
+            transcript_turn_state: None,
+            codex_completion_since: None,
+            transcript_turn_sequence: 0,
+            transcript_turn_flips: Vec::new(),
             claude_transcript_path: None,
             session_name_write_target: None,
             terminal_title: None,
@@ -2318,6 +2326,67 @@ impl TerminalState {
         changed
     }
 
+    pub(crate) fn completion_debounce_due(&self, now: Instant) -> bool {
+        self.codex_completion_since
+            .is_some_and(|since| now.saturating_duration_since(since) >= crate::turns::SETTLE)
+    }
+
+    pub(crate) fn refresh_completion_debounce_at(
+        &mut self,
+        now: Instant,
+    ) -> Option<TerminalStateMutation> {
+        if !self.completion_debounce_due(now) {
+            return None;
+        }
+        let previous = self.unchanged_effective_state_change_at(now);
+        self.recompute_effective_state(
+            previous.agent_label,
+            previous.known_agent,
+            previous.state,
+            previous.presentation,
+            now,
+        )
+        .map(|change| TerminalStateMutation {
+            effective_state_change: Some(change),
+            ..TerminalStateMutation::default()
+        })
+    }
+
+    pub(crate) fn set_transcript_turn_state(
+        &mut self,
+        state: Option<AgentState>,
+        last_at: Option<SystemTime>,
+        sequence: u64,
+        now: Instant,
+    ) -> Option<TerminalStateMutation> {
+        let previous = self.unchanged_effective_state_change_at(now);
+        if sequence != self.transcript_turn_sequence {
+            self.transcript_turn_sequence = sequence;
+            self.transcript_turn_flips.clear();
+        }
+        self.transcript_turn_state = state;
+        if state == Some(AgentState::Idle) && last_at.is_none() {
+            // An empty-session reset is not a completed model turn.
+            self.agent_process_acquisition_pending = true;
+        } else if state == Some(AgentState::Working) {
+            self.agent_process_acquisition_pending = false;
+        }
+        if let Some(at) = last_at.and_then(crate::agent_state::format_rfc3339) {
+            self.set_last_turn_at(Some(at));
+        }
+        self.recompute_effective_state(
+            previous.agent_label,
+            previous.known_agent,
+            previous.state,
+            previous.presentation,
+            now,
+        )
+        .map(|change| TerminalStateMutation {
+            effective_state_change: Some(change),
+            ..TerminalStateMutation::default()
+        })
+    }
+
     pub(crate) fn set_claude_transcript_target(
         &mut self,
         session_id: Option<String>,
@@ -2325,6 +2394,17 @@ impl TerminalState {
     ) {
         if self.claude_transcript_session_id != session_id || self.claude_transcript_path != path {
             self.clear_claude_subagent_transcript_activity();
+            self.transcript_turn_state = None;
+            self.transcript_turn_flips.clear();
+            self.transcript_turn_sequence = 0;
+            if self
+                .closing_report
+                .as_ref()
+                .is_some_and(|report| report.scope.session_id.as_deref() != session_id.as_deref())
+            {
+                self.closing_report = None;
+            }
+            self.blocked_state_hold = None;
         }
         self.claude_transcript_session_id = session_id;
         self.claude_transcript_path = path;
@@ -2689,6 +2769,7 @@ impl TerminalState {
         if process_exited {
             self.claude_transcript_session_id = None;
             self.claude_transcript_path = None;
+            self.transcript_turn_state = None;
             self.session_name_write_target = None;
             self.set_active_subagents(None);
             let mut reset_sources = Vec::new();
@@ -5313,6 +5394,24 @@ impl TerminalState {
     }
 
     fn effective_state_and_arbitration(&self) -> (AgentState, &'static str) {
+        if let Some(state) = self.transcript_turn_state {
+            let notification = self.hook_authority.as_ref().is_some_and(|authority| {
+                authority.source == "herdr:claude"
+                    && authority.state == AgentState::Blocked
+                    && matches!(
+                        authority.message.as_deref(),
+                        Some("permission_prompt" | "idle_prompt")
+                    )
+                    && authority.retired_at.is_none()
+            });
+            if notification
+                || (self.visible_blocker_overrides_hook()
+                    && (state == AgentState::Working || self.last_turn_at().is_none()))
+            {
+                return (AgentState::Blocked, "transcript_permission");
+            }
+            return (state, "transcript");
+        }
         let (state, arbitration) = self.lifecycle_state_and_arbitration();
         let (projected, task_arbitration) =
             self.closing_task_projection(state, self.has_pending_human_input());
@@ -5671,6 +5770,7 @@ impl TerminalState {
         self.persisted_agent_session = None;
         self.claude_transcript_session_id = None;
         self.claude_transcript_path = None;
+        self.transcript_turn_state = None;
         self.session_name_write_target = None;
         self.set_active_subagents(None);
         self.agent_metadata.clear();
@@ -5755,7 +5855,6 @@ impl TerminalState {
         previous_presentation: EffectivePresentation,
         now: Instant,
     ) -> Option<EffectiveStateChange> {
-        let state = self.effective_state_and_arbitration().0;
         let agent_label = self.effective_agent_label().map(str::to_string);
         let known_agent = self.effective_known_agent();
         let mut activity_owner = self.current_agent_activity_owner();
@@ -5769,6 +5868,26 @@ impl TerminalState {
                 _ => true,
             };
 
+        let (mut state, arbitration) = self.effective_state_and_arbitration();
+        if known_agent == Some(Agent::Codex)
+            && arbitration == "screen"
+            && !activity_owner_changed
+            && self.current_agent_session_id().is_some()
+            && self.transcript_turn_state.is_none()
+        {
+            if state == AgentState::Idle && previous_state == AgentState::Working {
+                let since = *self.codex_completion_since.get_or_insert(now);
+                if now.saturating_duration_since(since) < crate::turns::SETTLE {
+                    state = AgentState::Working;
+                } else {
+                    self.codex_completion_since = None;
+                }
+            } else if state != AgentState::Idle {
+                self.codex_completion_since = None;
+            }
+        } else {
+            self.codex_completion_since = None;
+        }
         let presentation = self.effective_presentation_for_state_at(state, now);
         self.clear_expiry_pending_for_hidden_metadata();
 
@@ -5805,6 +5924,16 @@ impl TerminalState {
             return None;
         }
 
+        if self.transcript_turn_state.is_some()
+            && previous_state != state
+            && self.transcript_turn_flips.len() < 128
+        {
+            self.transcript_turn_flips.push(serde_json::json!({
+                "at": crate::agent_state::format_rfc3339(SystemTime::now()),
+                "from": crate::detect::manifest::agent_state_label(previous_state),
+                "to": crate::detect::manifest::agent_state_label(state),
+            }));
+        }
         self.state = state;
         Some(EffectiveStateChange {
             previous_agent_label,
@@ -15013,5 +15142,78 @@ mod tests {
             AgentState::Blocked,
             "sustained new-turn output cannot answer a human gate"
         );
+    }
+}
+
+#[cfg(test)]
+mod transcript_turn_tests {
+    use super::*;
+    use crate::agent_resume::{AgentSessionRef, AgentSessionRefKind};
+
+    fn terminal() -> TerminalState {
+        TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    #[test]
+    fn transcript_ask_cannot_be_cleared_by_screen_spinner() {
+        let mut terminal = terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.set_claude_transcript_target(Some("one".into()), Some("/tmp/one.jsonl".into()));
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Blocked),
+            Some(SystemTime::now()),
+            1,
+            Instant::now(),
+        );
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        assert_eq!(terminal.raw_agent_state(), AgentState::Blocked);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Working),
+            Some(SystemTime::now()),
+            2,
+            Instant::now(),
+        );
+        assert_eq!(terminal.raw_agent_state(), AgentState::Working);
+    }
+
+    #[test]
+    fn changing_session_resets_transcript_latch_and_reply_age() {
+        let mut terminal = terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.set_claude_transcript_target(Some("one".into()), Some("/tmp/one.jsonl".into()));
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Blocked),
+            Some(SystemTime::now()),
+            1,
+            Instant::now(),
+        );
+        assert!(terminal.last_turn_at().is_some());
+        terminal.set_claude_transcript_target(Some("two".into()), Some("/tmp/two.jsonl".into()));
+        assert!(terminal.transcript_turn_state.is_none());
+        assert!(terminal.last_turn_at().is_none());
+        assert!(terminal.transcript_turn_flips.is_empty());
+    }
+
+    #[test]
+    fn codex_screen_completion_waits_three_seconds() {
+        let mut terminal = terminal();
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Working);
+        terminal.set_agent_session_ref(
+            "herdr:codex".into(),
+            "codex".into(),
+            Some(AgentSessionRef {
+                kind: AgentSessionRefKind::Id,
+                value: "codex-one".into(),
+            }),
+            Some(1),
+        );
+        let now = Instant::now();
+        terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
+        assert_eq!(terminal.raw_agent_state(), AgentState::Working);
+        assert!(terminal
+            .refresh_completion_debounce_at(now + Duration::from_secs(2))
+            .is_none());
+        terminal.refresh_completion_debounce_at(now + Duration::from_secs(4));
+        assert_eq!(terminal.raw_agent_state(), AgentState::Idle);
     }
 }

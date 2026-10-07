@@ -1829,7 +1829,7 @@ impl App {
                 if session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id =>
             {
                 if provider == crate::work_title::WorkTitleProvider::Codex
-                    && params.agent_session_path.is_none()
+                    && (params.agent_session_path.is_none() || claude_transcript_path.is_some())
                     && existing_write_target.as_ref().is_some_and(|target| {
                         target.matches_provider_session(provider, &session_ref.value)
                     })

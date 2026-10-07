@@ -1,0 +1,4 @@
+{"timestamp":"2026-10-07T00:00:00Z","sessionId":"old","type":"user","message":{"content":"work"}}
+{"timestamp":"2026-10-07T00:00:01Z","sessionId":"old","type":"assistant","message":{"stop_reason":"end_turn","content":"Done."}}
+{"timestamp":"2026-10-07T00:00:10Z","sessionId":"new","type":"user","message":{"content":"<command-name>/clear</command-name>"}}
+{"timestamp":"2026-10-07T00:00:11Z","sessionId":"new","type":"user","message":{"content":"<local-command-stdout>Cleared.</local-command-stdout>"}}

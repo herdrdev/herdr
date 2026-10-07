@@ -59,6 +59,7 @@ pub(crate) struct TranscriptCursor {
     pub(crate) tasks: Vec<TrackedTask>,
     pub(crate) links: Vec<TranscriptLink>,
     pub(crate) last_row_at: Option<SystemTime>,
+    pub(crate) turn: crate::turns::Turn,
     pub(crate) last_tasks_at: Option<SystemTime>,
     pub(crate) caught_up_once: bool,
     pub(crate) trustworthy: bool,
@@ -91,6 +92,7 @@ pub(crate) struct TranscriptTracker {
     pub(crate) session_id: String,
     pub(crate) path: PathBuf,
     pub(crate) target_generation: u64,
+    identity_generation: u64,
     pub(crate) cursor: TranscriptCursor,
     file_identity: Option<FileIdentity>,
     last_len: Option<u64>,
@@ -473,6 +475,7 @@ impl TranscriptCursor {
                     if !line.is_empty() {
                         match parse_transcript_row(line) {
                             Ok((value, event, observed_at)) => {
+                                self.turn.ingest(&value, observed_at, SystemTime::now());
                                 if let Some(event) = event {
                                     self.apply_event(event);
                                 }
@@ -534,6 +537,7 @@ impl TranscriptTracker {
             session_id,
             path,
             target_generation,
+            identity_generation: 0,
             cursor: TranscriptCursor::new(),
             file_identity: None,
             last_len: None,
@@ -644,6 +648,7 @@ impl TranscriptTracker {
             || metadata.len() < self.cursor.scan_offset;
         if replaced {
             self.cursor.reset();
+            self.identity_generation = self.identity_generation.saturating_add(1);
             self.transcript_paths_initialized = false;
             stats.identity_resets = 1;
         }
@@ -754,6 +759,19 @@ pub(crate) fn refresh_trackers(
         let transcript_activity = item
             .tracker
             .refresh_transcript_paths_and_activity(freshness_window, deadline);
+        let cursor = &mut item.tracker.cursor;
+        cursor.turn.projected = if !cursor.trustworthy {
+            cursor.turn.last_at.map(|_| AgentState::Unknown)
+        } else if stats.open_failures > 0
+            || item.tracker.last_len != Some(cursor.scan_offset)
+            || !cursor.line_buffer.is_empty()
+            || cursor.line_overflowed
+            || !cursor.caught_up_once
+        {
+            cursor.turn.last_at.map(|_| AgentState::Working)
+        } else {
+            cursor.turn.state(SystemTime::now())
+        };
         let count = item.tracker.count();
         let subagents = item.tracker.observations();
         observations.push(RefreshObservation {
@@ -777,6 +795,45 @@ impl crate::app::App {
         (!self.state.terminals.is_empty()).then_some(self.next_claude_subagent_refresh)
     }
 
+    fn refresh_completion_debounce(&mut self, now: Instant) {
+        let targets = self
+            .state
+            .workspaces
+            .iter()
+            .enumerate()
+            .flat_map(|(ws, workspace)| {
+                workspace.tabs.iter().flat_map(move |tab| {
+                    tab.panes
+                        .iter()
+                        .map(move |(id, pane)| (ws, *id, &pane.attached_terminal_id))
+                })
+            })
+            .filter(|(_, _, terminal_id)| {
+                self.state
+                    .terminals
+                    .get(*terminal_id)
+                    .is_some_and(|terminal| terminal.completion_debounce_due(now))
+            })
+            .map(|(ws, pane, _)| (ws, pane))
+            .collect::<Vec<_>>();
+        let previous_toast = self.state.toast.clone();
+        let mut updates = Vec::new();
+        for (ws, pane) in targets {
+            if let Some(update) = self.state.update_terminal_state_at(pane, now, |terminal| {
+                terminal.refresh_completion_debounce_at(now)
+            }) {
+                self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+                self.emit_pane_state_update(&update);
+                self.emit_pane_updated(ws, pane);
+                updates.push(update);
+            }
+        }
+        if !updates.is_empty() {
+            self.emit_terminal_or_system_agent_notifications(&updates);
+            self.sync_toast_deadline(previous_toast);
+        }
+    }
+
     pub(crate) fn start_claude_subagent_refresh_if_due(&mut self, now: Instant) {
         if self
             .claude_subagent_refresh_in_flight
@@ -791,6 +848,7 @@ impl crate::app::App {
             return;
         }
         self.next_claude_subagent_refresh = now + POLL_INTERVAL;
+        self.refresh_completion_debounce(now);
 
         let mut raw_targets = self
             .state
@@ -799,7 +857,12 @@ impl crate::app::App {
             .filter_map(|(terminal_id, terminal)| {
                 Some((
                     terminal_id.clone(),
-                    "herdr:claude".to_string(),
+                    if terminal.effective_known_agent() == Some(crate::detect::Agent::Codex) {
+                        "herdr:codex"
+                    } else {
+                        "herdr:claude"
+                    }
+                    .to_string(),
                     terminal.claude_transcript_session_id.clone()?,
                     terminal.claude_transcript_path.clone()?,
                     terminal.agent_turn_generation(),
@@ -914,9 +977,11 @@ impl crate::app::App {
                 .terminals
                 .get(&observation.target.terminal_id)
                 .is_some_and(|terminal| {
-                    observation.target.source == "herdr:claude"
-                        && terminal.claude_transcript_session_id.as_deref()
-                            == Some(observation.target.session_id.as_str())
+                    matches!(
+                        observation.target.source.as_str(),
+                        "herdr:claude" | "herdr:codex"
+                    ) && terminal.claude_transcript_session_id.as_deref()
+                        == Some(observation.target.session_id.as_str())
                         && terminal.claude_transcript_path.as_ref()
                             == Some(&observation.target.path)
                         && terminal.agent_turn_generation() == observation.target.turn_generation
@@ -1007,11 +1072,37 @@ impl crate::app::App {
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            let transcript_identity = self
+                .claude_subagent_trackers
+                .get(&terminal_id)
+                .map(|tracker| (tracker.target_generation, tracker.identity_generation))
+                .unwrap_or_default();
             let transcript_session_id = self
                 .claude_subagent_trackers
                 .get(&terminal_id)
                 .map(|tracker| tracker.session_id.clone());
             let transcript_activity = transcript_activities.remove(&terminal_id);
+            let (turn_state, turn_at, turn_sequence, turn_record, next_action) = self
+                .claude_subagent_trackers
+                .get_mut(&terminal_id)
+                .map(|tracker| {
+                    let cursor = &mut tracker.cursor;
+                    let state = cursor.turn.projected;
+                    let record = if cursor.turn.settled_at.is_some() && !cursor.turn.recorded {
+                        cursor.turn.recorded = true;
+                        cursor.turn.record()
+                    } else {
+                        None
+                    };
+                    (
+                        state,
+                        cursor.turn.last_at,
+                        cursor.turn.sequence,
+                        record,
+                        cursor.turn.next_action.take(),
+                    )
+                })
+                .unwrap_or_default();
             let location =
                 self.state
                     .workspaces
@@ -1025,6 +1116,9 @@ impl crate::app::App {
                             })
                         })
                     });
+            let state_at_next_action = self.state.terminals.get(&terminal_id).map(|terminal| {
+                crate::detect::manifest::agent_state_label(terminal.raw_agent_state())
+            });
             let mut count_changed = false;
             let mut observation_changed = false;
             let mut transcript_activity_changed = false;
@@ -1047,7 +1141,13 @@ impl crate::app::App {
                             transcript_activity_changed =
                                 terminal.set_claude_subagent_transcript_activity_at(activity, now);
                         }
-                        mutation
+                        let turn_mutation = terminal.set_transcript_turn_state(
+                            turn_state,
+                            turn_at,
+                            turn_sequence,
+                            now,
+                        );
+                        turn_mutation.or(mutation)
                     })
             } else {
                 if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
@@ -1096,9 +1196,11 @@ impl crate::app::App {
                     })
                     .collect();
                 let session_changed = transcript_session_id.as_deref().is_some_and(|session_id| {
-                    self.state
-                        .agent_states
-                        .observe_transcript_session(pane_id, session_id)
+                    self.state.agent_states.observe_transcript_session(
+                        pane_id,
+                        session_id,
+                        transcript_identity,
+                    )
                 });
                 let observation_changed = self.state.agent_states.observe_transcript(
                     pane_id,
@@ -1110,10 +1212,74 @@ impl crate::app::App {
                 );
                 session_changed || observation_changed
             });
+            if let Some((_, pane_id, _)) = location {
+                if let Some(session_id) = transcript_session_id.as_deref() {
+                    for mut record in turn_record.into_iter().chain(next_action) {
+                        if record["record"] == "settle" {
+                            if let Some(tracker) =
+                                self.claude_subagent_trackers.get_mut(&terminal_id)
+                            {
+                                tracker.cursor.turn.state_at_settle = self
+                                    .state
+                                    .terminals
+                                    .get(&terminal_id)
+                                    .map(|t| t.raw_agent_state());
+                            }
+                            record["state_at_settle"] = serde_json::json!(self
+                                .state
+                                .terminals
+                                .get(&terminal_id)
+                                .map(|t| {
+                                    crate::detect::manifest::agent_state_label(t.raw_agent_state())
+                                }));
+                        }
+                        if record["record"] == "next_action" {
+                            record["state_at_next_action"] =
+                                serde_json::json!(state_at_next_action);
+                        } else if record["record"] == "settle" {
+                            if let Some(terminal) = self.state.terminals.get_mut(&terminal_id) {
+                                if terminal.raw_agent_state() == AgentState::Blocked
+                                    && terminal.hook_authority.as_ref().is_some_and(|authority| {
+                                        authority.source == "herdr:claude"
+                                            && authority.message.as_deref()
+                                                == Some("permission_prompt")
+                                            && authority.retired_at.is_none()
+                                    })
+                                {
+                                    record["detected_kind"] = serde_json::json!("permission");
+                                    record["signal_source"] = serde_json::json!("notification");
+                                }
+                                record["flips_during_turn"] = serde_json::json!(std::mem::take(
+                                    &mut terminal.transcript_turn_flips
+                                ));
+                            }
+                        }
+                        crate::turns::append(
+                            record,
+                            &pane_id.raw().to_string(),
+                            session_id,
+                            if self
+                                .state
+                                .terminals
+                                .get(&terminal_id)
+                                .is_some_and(|terminal| {
+                                    terminal.effective_known_agent()
+                                        == Some(crate::detect::Agent::Codex)
+                                })
+                            {
+                                "codex"
+                            } else {
+                                "claude"
+                            },
+                        );
+                    }
+                }
+            }
             if !count_changed
                 && !observation_changed
                 && !transcript_activity_changed
                 && !transcript_changed
+                && state_update.is_none()
             {
                 continue;
             }
@@ -1238,7 +1404,10 @@ pub(crate) fn validated_transcript_path(
     session_ref: Option<&AgentSessionRef>,
     raw_path: Option<&str>,
 ) -> Option<PathBuf> {
-    if source != "herdr:claude" || agent_label != "claude" {
+    if !matches!(
+        (source, agent_label),
+        ("herdr:claude", "claude") | ("herdr:codex", "codex")
+    ) {
         return None;
     }
     let session_ref = session_ref?;
@@ -1260,6 +1429,14 @@ pub(crate) fn validated_transcript_path(
             .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
     {
         return None;
+    }
+    if source == "herdr:codex" {
+        let suffix = format!("-{}.jsonl", session_ref.value);
+        return path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|name| name.starts_with("rollout-") && name.ends_with(&suffix))
+            .map(|_| path.to_path_buf());
     }
     let expected_file = format!("{}.jsonl", session_ref.value);
     let mut components = path.components().rev();
@@ -2146,6 +2323,30 @@ mod tests {
     }
 
     #[test]
+    fn codex_rollout_binding_rejects_other_sessions_and_indexes() {
+        let session = AgentSessionRef::id("thread").unwrap();
+        let root = std::env::temp_dir();
+        let path = root.join("sessions").join("rollout-date-thread.jsonl");
+        assert_eq!(
+            validated_transcript_path("herdr:codex", "codex", Some(&session), path.to_str()),
+            Some(path)
+        );
+        for path in [
+            root.join("sessions").join("rollout-date-other.jsonl"),
+            root.join("session_index.jsonl"),
+            root.join("..").join("rollout-date-thread.jsonl"),
+        ] {
+            assert!(validated_transcript_path(
+                "herdr:codex",
+                "codex",
+                Some(&session),
+                path.to_str()
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
     fn claude_transcript_path_binds_profile_path_to_session_id() {
         let session = AgentSessionRef::id(SESSION_ID).unwrap();
         let default = absolute_fixture_path(format!(
@@ -2509,6 +2710,72 @@ mod tests {
         let terminal = &app.state.terminals[&terminal_id];
         assert!(terminal.supervisor_stale);
         assert_eq!(terminal.active_subagents, Some(1));
+    }
+
+    #[test]
+    fn quiet_transcript_settle_publishes_completion_once_without_new_bytes() {
+        let dir = TestDir::new("transcript-settle-notification");
+        let path = dir.transcript();
+        let (mut app, terminal_id) = app_with_claude_target(path.clone());
+        app.state.active = None;
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast_config.delay_seconds = 0;
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(crate::detect::Agent::Claude), AgentState::Working);
+        let mut tracker = TranscriptTracker::new(SESSION_ID.into(), path.clone(), 7);
+        tracker.cursor.ingest(
+            include_bytes!("../../tests/fixtures/transcript-turns/plain-done.jsonl"),
+            true,
+        );
+        tracker.cursor.turn.projected = Some(AgentState::Working);
+        tracker.cursor.turn.recorded = true;
+        app.claude_subagent_trackers
+            .insert(terminal_id.clone(), tracker.clone());
+        for generation in 1..=3 {
+            if generation > 1 {
+                tracker.cursor.turn.projected = Some(AgentState::Idle);
+            }
+            app.last_claude_subagent_refresh_generation = generation;
+            app.claude_subagent_refresh_in_flight = Some(RefreshInFlight {
+                generation,
+                deadline: Instant::now() + WORKER_TIMEOUT,
+            });
+            let refresh = RefreshObservation {
+                target: TargetIdentity {
+                    terminal_id: terminal_id.clone(),
+                    source: "herdr:claude".into(),
+                    session_id: SESSION_ID.into(),
+                    path: path.clone(),
+                    target_generation: 7,
+                    turn_generation: app.state.terminals[&terminal_id].agent_turn_generation(),
+                },
+                tracker: tracker.clone(),
+                count: Some(0),
+                observations: Some(Vec::new()),
+                transcript_activity: crate::terminal::state::SubagentTranscriptActivity::Unknown,
+                stats: ScanStats::default(),
+            };
+            app.handle_claude_subagents_refreshed(generation, vec![refresh], BatchStats::default());
+            if generation == 1 {
+                assert!(app.state.toast.is_none());
+            } else {
+                assert_eq!(
+                    app.state.terminals[&terminal_id].raw_agent_state(),
+                    AgentState::Idle
+                );
+                assert_eq!(
+                    app.state.toast.as_ref().unwrap().kind,
+                    crate::app::state::ToastKind::Finished
+                );
+                assert_eq!(
+                    app.state.next_agent_state_change_seq, 1,
+                    "one completion transition and notification"
+                );
+            }
+        }
     }
 
     #[test]

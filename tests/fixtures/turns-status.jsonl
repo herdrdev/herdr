@@ -1,0 +1,3 @@
+{"ts":"2026-10-07T00:00:02Z","session":"codex-done","to_state":"idle","expected_kind":"done"}
+{"ts":"2026-10-07T00:00:01Z","session":"codex-ask","to_state":"blocked","expected_kind":"ask"}
+{"ts":"2026-10-07T00:00:01Z","session":"old","to_state":"idle","expected_kind":"done"}

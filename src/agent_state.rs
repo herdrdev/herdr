@@ -1064,6 +1064,7 @@ struct PaneAgentState {
     reported_tasks: Vec<AgentTask>,
     reported_tasks_at: Option<SystemTime>,
     transcript_session_id: Option<String>,
+    transcript_identity: Option<(u64, u64)>,
     transcript_tasks: Option<Vec<AgentTask>>,
     transcript_tasks_at: Option<SystemTime>,
     reported_subagents: Vec<AgentSubagent>,
@@ -1209,14 +1210,53 @@ impl AgentStateStore {
             || links_changed
     }
 
-    pub(crate) fn observe_transcript_session(&mut self, pane_id: PaneId, session_id: &str) -> bool {
+    pub(crate) fn begin_transcript_session(&mut self, pane_id: PaneId, session_id: &str) {
         let pane = self.panes.entry(pane_id).or_default();
-        if pane.transcript_session_id.as_deref() == Some(session_id) {
+        if pane.transcript_session_id.as_deref() != Some(session_id) {
+            *pane = PaneAgentState {
+                transcript_session_id: Some(session_id.to_owned()),
+                ..PaneAgentState::default()
+            };
+        }
+    }
+
+    pub(crate) fn observe_transcript_session(
+        &mut self,
+        pane_id: PaneId,
+        session_id: &str,
+        identity: (u64, u64),
+    ) -> bool {
+        let pane = self.panes.entry(pane_id).or_default();
+        if pane.transcript_session_id.is_none() {
+            // Legacy/unscoped transcript observations cannot belong to the
+            // newly attached session. Native reports remain independently owned.
+            pane.last_transcript_at = None;
+            pane.transcript_tasks = Some(Vec::new());
+            pane.transcript_tasks_at = None;
+            pane.observed_subagents.clear();
+        }
+        // SessionStart already reset the scope. Attaching its first file cursor
+        // must preserve reports received between the hook and the next scan.
+        // Restored panes can also attach their first transcript without a new
+        // hook: no previous transcript identity exists to invalidate reports.
+        if (pane.transcript_session_id.is_none()
+            || pane.transcript_session_id.as_deref() == Some(session_id))
+            && pane.transcript_identity.is_none()
+        {
+            pane.transcript_session_id = Some(session_id.to_owned());
+            pane.transcript_identity = Some(identity);
+            return true;
+        }
+        if pane.transcript_session_id.as_deref() == Some(session_id)
+            && pane.transcript_identity == Some(identity)
+        {
             return false;
         }
-        pane.transcript_session_id = Some(session_id.to_owned());
-        pane.transcript_tasks = Some(Vec::new());
-        pane.transcript_tasks_at = None;
+        *pane = PaneAgentState {
+            transcript_session_id: Some(session_id.to_owned()),
+            transcript_identity: Some(identity),
+            ..PaneAgentState::default()
+        };
         true
     }
 

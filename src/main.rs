@@ -122,6 +122,7 @@ mod terminal_effects;
 mod terminal_modes;
 mod terminal_notify;
 mod terminal_theme;
+mod turns;
 mod ui;
 mod update;
 mod watchdog;

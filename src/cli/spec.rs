@@ -33,6 +33,21 @@ pub(super) fn command() -> Command {
         .subcommand(update_command())
         .subcommand(status_command())
         .subcommand(status_log_command())
+        .subcommand(
+            Command::new("turns")
+                .about("Inspect transcript turn evidence")
+                .subcommand(
+                    Command::new("replay")
+                        .about("Replay transcript settlement against status history")
+                        .arg(option("transcripts", "FILE_OR_DIR").required(true))
+                        .arg(option("status-log", "FILE").required(true)),
+                )
+                .subcommand(
+                    Command::new("report")
+                        .about("Print turn status misses")
+                        .arg(option("since", "YYYY-MM-DD")),
+                ),
+        )
         .subcommand(config_command())
         .subcommand(fleet_command())
         .subcommand(work_index_command())

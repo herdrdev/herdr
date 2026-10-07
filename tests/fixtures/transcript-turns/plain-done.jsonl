@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-10-07T10:00:00Z","message":{"content":"Finish the task."}}
+{"type":"assistant","timestamp":"2026-10-07T10:00:01Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Finished."}]}}

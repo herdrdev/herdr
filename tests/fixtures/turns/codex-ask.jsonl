@@ -1,0 +1,3 @@
+{"timestamp":"2026-10-07T00:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"work"}}
+{"timestamp":"2026-10-07T00:00:01Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"**Needs you (1):**\n1. **Decide** Pick.\n   a) A\n   b) B\nReply 1a / 1b. Silence holds."}}
+{"timestamp":"2026-10-07T00:00:10Z","type":"event_msg","payload":{"type":"user_message","message":"1a"}}

@@ -51,6 +51,10 @@ herdr api schema --output herdr-api.schema.json
 with the installed binary. Use `--json` for the full JSON Schema document, or
 `--output PATH` to write that document to a file.
 
+`herdr turns report [--since YYYY-MM-DD]` summarizes retained transcript turn evidence by detected kind, shown state, and next-action label. It reads the current turn ledger and its daily archives without connecting to a running server.
+
+`herdr turns replay --transcripts <file-or-directory> --status-log <file>` replays JSONL transcripts using their timestamps and the runtime settlement rules. It prints each settled turn’s classification and the historical state at settlement. Add independent `expected_kind` labels (`ask` or `done`) to matching status-log records to calculate ask/done accuracy; unlabelled history is reported as unverified. Directories are searched recursively for `.jsonl` files. Invalid JSONL is an error rather than silently omitted evidence.
+
 ## Saved SSH machines
 
 ```bash

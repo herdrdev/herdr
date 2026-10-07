@@ -2,7 +2,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=codex
-# HERDR_INTEGRATION_VERSION=9
+# HERDR_INTEGRATION_VERSION=10
 
 param([string]$Action = "")
 
@@ -54,7 +54,9 @@ try {
         "--seq",
         "$seq",
         "--agent-session-id",
-        "$sessionId"
+        "$sessionId",
+        "--agent-session-path",
+        "$($payload.transcript_path)"
     )
     if ($payload.hook_event_name -eq "SessionStart" -and $payload.source -is [string] -and -not [string]::IsNullOrWhiteSpace($payload.source)) {
         $args += @("--session-start-source", "$($payload.source)")

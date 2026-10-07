@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-10-07T10:00:00Z","message":{"content":"Propose options."}}
+{"type":"assistant","timestamp":"2026-10-07T10:00:01Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"**Needs you (1)**\n1. **Decide** Choose the option.\nReply 1a / 1b. Silence holds.\n**Now:** Waiting."}]}}

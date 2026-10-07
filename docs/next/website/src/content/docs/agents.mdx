@@ -42,6 +42,13 @@ Detected but less thoroughly tested: Gemini CLI and Cline. Unsupported agents st
 
 Herdr first detects the foreground process in each pane. After that, each pane has one status authority.
 
+When Claude's SessionStart integration supplies a readable transcript, Herdr follows its main-chain messages instead of ordinary screen status. A final `end_turn` reply settles after three seconds without another message. Stop-hook feedback cancels that pending settlement. A pending AskUserQuestion or ExitPlanMode, or a final closing block declaring `Needs you (N)` with N above zero, becomes blocked and remains blocked until the next real user prompt. Background Agent/Bash tasks launched during the turn hold completion until their task notifications arrive. Native permission controls and Notification hooks can still show blocked during a turn. Without transcript evidence, screen detection remains the fallback.
+
+The sidebar age follows the latest transcript message timestamp. Changing the session in a pane clears the previous session's timestamps and blocker latch. When Codex’s SessionStart hook supplies its rollout path, structured `user_message`, `task_started`, and `task_complete` events drive the same three-second settlement and closing-block latch. Screen detection remains the fallback when no readable rollout is bound. Explicit native closing reports keep their existing behavior.
+
+Settled Claude and Codex turns are appended to `~/.local/state/herdr/turn-ledger.jsonl`, with daily archives retained for 30 days. Records include the closing-block parse, state changes, Stop-hook rejection count, and a bounded, credential-redacted reply tail. A follow-up record captures the next real prompt's latency and whether it resembles an option answer such as `1a`. Run `herdr turns report --since 2026-10-07` to compare detected turn kinds, shown states, and next-action labels. These labels are evidence for investigation, not an independent correctness oracle.
+
+
 For agents with complete lifecycle hooks, a fresh accepted integration report is authoritative for ordinary `idle`, `working`, and `blocked` arbitration. Herdr still evaluates the screen manifest. A newer, structurally anchored native permission, trust, login, tool-approval, or question control can override a non-blocked hook report because those controls may not emit lifecycle events. Fresh hook state still wins over ordinary prompt and working-screen evidence.
 
 Full-lifecycle authority expires when no accepted report arrives within `agent_detection.full_lifecycle_hook_authority_timeout_seconds`. The default is 600 seconds and the valid range is 30–3600. A blocked full-lifecycle report keeps the pane blocked past the timeout until explicit input, a working report or stable visible working from the same agent, agent replacement, or process exit releases the hold. A later valid lifecycle report can take authority again. Turn-end `herdr:<agent>-closing-block` reports can carry a live gate without claiming the full lifecycle. A blocked closing gate remains authoritative across terminal output; explicit input, a fresh report that clears the gate, agent replacement, or process exit releases it.
@@ -52,7 +59,7 @@ For agents without complete lifecycle hooks, Herdr identifies the foreground pro
 
 The screen snapshot comes from the recent bottom of the pane buffer, not the scrolled viewport. If you scroll back in Herdr, detection still follows the live agent UI at the bottom.
 
-Integrations marked `session` in the table above are intentionally not lifecycle authorities. They provide native session identity for restore, but their hooks do not cover the whole lifecycle. They can miss permission approval results, escape interrupts, or other transitions. For those agents, Herdr still uses screen manifest detection.
+Integrations marked `session` in the table above are intentionally not lifecycle authorities. They provide native session identity for restore, but their hooks do not cover the whole lifecycle. They can miss permission approval results, escape interrupts, or other transitions. For those agents, Herdr uses screen manifest detection unless transcript authority is available as described above.
 
 Kimi running inside the Claude Code CLI is detected through the Claude process and Claude screen manifest. It does not require Kimi hooks, fleet closing-block tokens, or a particular model banner or status line.
 

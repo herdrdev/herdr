@@ -1,0 +1,3 @@
+{"timestamp":"2026-10-07T00:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"work"}}
+{"timestamp":"2026-10-07T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}}
+{"timestamp":"2026-10-07T00:00:02Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done."}}

@@ -127,6 +127,41 @@ pub(crate) enum AppendOutcome {
     Capped,
 }
 
+pub(crate) fn redact_credential_lines(stderr: &str, max_lines: usize) -> String {
+    let mut safe = String::new();
+    for line in stderr.lines().take(max_lines) {
+        let lower = line.to_ascii_lowercase();
+        if [
+            "api_key",
+            "access_token",
+            "refresh_token",
+            "authorization",
+            "bearer ",
+            "password",
+            "secret",
+            "sk-",
+            "ghp_",
+            "gho_",
+            "github_pat_",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+        {
+            safe.push_str("[redacted credential diagnostic]\n");
+        } else {
+            safe.push_str(line);
+            safe.push('\n');
+        }
+    }
+    safe
+}
+
+/// Bound and redact a persisted transcript tail using the diagnostic redactor.
+pub(crate) fn redact_tail(text: &str) -> String {
+    let tail = bound_tail(text).0;
+    bound_tail(&redact_credential_lines(&tail, 40)).0
+}
+
 impl StatusLog {
     pub(crate) fn new(dir: PathBuf) -> Self {
         Self {

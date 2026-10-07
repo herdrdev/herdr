@@ -1411,7 +1411,7 @@ fn agent_wait_tolerates_detection_uncertainty_and_pane_target_rename() {
                 "wait",
                 &wait_pane,
                 "--until",
-                "idle",
+                "done",
                 "--timeout",
                 "2000",
             ],
@@ -1446,7 +1446,8 @@ fn agent_wait_tolerates_detection_uncertainty_and_pane_target_rename() {
         String::from_utf8_lossy(&waited.stderr)
     );
     let waited: serde_json::Value = serde_json::from_slice(&waited.stdout).unwrap();
-    assert_eq!(waited["result"]["agent"]["agent_status"], "idle");
+    // Unknown outer focus leaves the completed turn unseen.
+    assert_eq!(waited["result"]["agent"]["agent_status"], "done");
     assert_eq!(waited["result"]["agent"]["name"], "reviewer");
 
     cleanup_spawned_herdr(herdr, base);
