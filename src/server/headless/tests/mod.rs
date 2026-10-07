@@ -128,6 +128,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         effective_size: headless_size,
         shutting_down: false,
         host_shutdown_requested: Arc::new(AtomicBool::new(false)),
+        host_shutdown_probe: crate::platform::host_shutdown_in_progress,
         handoff_in_progress: false,
         #[cfg(unix)]
         pending_handoff_repaint_nudge: false,
@@ -4747,6 +4748,216 @@ async fn host_shutdown_preserves_panes_from_queued_and_selected_death_events() {
     assert!(server.handle_internal_event_with_forwarding(event()));
     assert!(server.app.find_pane(pane_id).is_none());
     shutdown_test_runtimes(&mut server);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let _runtime = runtime.enter();
+    thread_local! {
+        static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn shutdown_after_api_entry() -> bool {
+        PROBES.with(|probes| {
+            let count = probes.get();
+            probes.set(count + 1);
+            count > 0
+        })
+    }
+    let _guard = crate::config::test_config_env_lock().lock().unwrap();
+    struct RestoreEnv([(&'static str, Option<std::ffi::OsString>); 2]);
+    impl Drop for RestoreEnv {
+        fn drop(&mut self) {
+            for (key, previous) in &self.0 {
+                match previous {
+                    Some(value) => std::env::set_var(key, value),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+    let _env = RestoreEnv(
+        ["XDG_CONFIG_HOME", crate::session::SESSION_ENV_VAR]
+            .map(|key| (key, std::env::var_os(key))),
+    );
+    let config_home = std::env::temp_dir().join(format!(
+        "herdr-shutdown-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+    ));
+    std::env::set_var("XDG_CONFIG_HOME", &config_home);
+    std::env::remove_var(crate::session::SESSION_ENV_VAR);
+
+    for entry in [
+        "queued-death",
+        "selected-death",
+        "agent-exit",
+        "autosave",
+        "api-drain",
+    ] {
+        let mut server = test_headless_server();
+        server.app.policy.persist_session = true;
+        let workspace = crate::workspace::Workspace::test_new("shutdown");
+        let pane_id = workspace.tabs[0].root_pane;
+        let terminal_id = workspace.terminal_id(pane_id).cloned().unwrap();
+        server.app.state.workspaces = vec![workspace];
+        server.app.state.ensure_test_terminals();
+        server.app.state.active = Some(0);
+        let terminal = server.app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.respawn_shell_on_exit = true;
+        terminal.set_agent_name("codex".into());
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:codex".into(),
+            agent: "codex".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("previous-session").unwrap(),
+        });
+        server.app.save_session_now();
+        // Leave both the extra pane and new resume identity unsaved. The real
+        // server loop must write them rather than merely retain the old file.
+        let other_pane =
+            server.app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        server.app.state.ensure_test_terminals();
+        server
+            .app
+            .state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id("shutdown-session").unwrap(),
+            });
+        server.host_shutdown_probe = || true;
+        let death = || AppEvent::PaneDied {
+            pane_id,
+            exit_reason: crate::platform::classify_child_exit(
+                &portable_pty::ExitStatus::with_exit_code(0x40010004),
+            ),
+        };
+        let agent_exit = || AppEvent::StateChanged {
+            pane_id,
+            agent: Some(crate::detect::Agent::Codex),
+            state: crate::detect::AgentState::Idle,
+            visible_blocker: false,
+            visible_working: false,
+            process_exited: true,
+            observed_at: Instant::now(),
+        };
+        match entry {
+            "queued-death" => {
+                server.app.event_tx.try_send(death()).unwrap();
+                assert_eq!(
+                    server.drain_internal_events_with_forwarding_up_to(16),
+                    (false, false)
+                );
+                assert!(server.app.event_rx.try_recv().is_ok());
+            }
+            "selected-death" => assert!(!server.handle_internal_event_with_forwarding(death())),
+            "agent-exit" => assert!(!server.handle_internal_event_with_forwarding(agent_exit())),
+            "autosave" => {
+                server.app.session_save_deadline = Some(Instant::now());
+                assert!(!server.handle_scheduled_tasks_headless(Instant::now(), false));
+            }
+            "api-drain" => {
+                PROBES.with(|probes| probes.set(0));
+                server.host_shutdown_probe = shutdown_after_api_entry;
+                server.app.event_tx.try_send(death()).unwrap();
+                let (respond_to, response_rx) = std::sync::mpsc::channel();
+                server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+                    request: api::schema::Request {
+                        id: "shutdown-race".into(),
+                        method: api::schema::Method::WorkspaceRename(
+                            api::schema::WorkspaceRenameParams {
+                                workspace_id: server.app.public_workspace_id(0),
+                                label: "must-not-be-saved".into(),
+                            },
+                        ),
+                    },
+                    respond_to,
+                    response_write_complete: None,
+                });
+                let response: api::schema::ErrorResponse =
+                    serde_json::from_str(&response_rx.recv().unwrap()).unwrap();
+                assert_eq!(response.error.code, "server_unavailable");
+            }
+            _ => unreachable!(),
+        }
+        // Latch the warning: later process exits and due autosaves must not
+        // erase resume identity or layout, even if the native probe changes.
+        server.host_shutdown_probe = || false;
+        assert!(!server.handle_internal_event_with_forwarding(agent_exit()));
+        assert!(!server.handle_internal_event_with_forwarding(death()));
+        assert!(
+            !server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+                pane_id: other_pane,
+                exit_reason: crate::platform::classify_child_exit(
+                    &portable_pty::ExitStatus::with_exit_code(0xC0000142),
+                ),
+            })
+        );
+        assert!(server.should_quit.load(Ordering::Acquire));
+        assert_eq!(
+            server.app.terminal_runtimes.len(),
+            0,
+            "shutdown must not respawn a shell"
+        );
+        server.app.session_save_deadline = Some(Instant::now());
+        assert!(
+            !server.handle_scheduled_tasks_headless(Instant::now() + Duration::from_secs(6), false)
+        );
+        assert!(server.app.session_save_thread.is_none());
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), server.run())
+                .await
+                .expect("host shutdown must stop the isolated server loop")
+                .expect("server loop shuts down cleanly");
+        });
+        let snapshot = crate::persist::load().expect("shutdown session should be saved");
+        let panes = &snapshot.workspaces[0].tabs[0].panes;
+        assert_eq!(panes.len(), 2);
+        assert_eq!(
+            snapshot.workspaces[0].custom_name.as_deref(),
+            Some("shutdown")
+        );
+        assert_eq!(
+            panes[&pane_id.raw()].agent_session.as_ref().unwrap().value,
+            "shutdown-session"
+        );
+        shutdown_test_runtimes(&mut server);
+    }
+
+    // The same code outside host shutdown must not stop unrelated panes.
+    for code in [0x40010004, 0xC0000142] {
+        let mut server = test_headless_server();
+        server.host_shutdown_probe = || false;
+        let mut workspace = crate::workspace::Workspace::test_new("ordinary-exit");
+        let pane_id = workspace.tabs[0].root_pane;
+        let other_pane = workspace.test_split(ratatui::layout::Direction::Horizontal);
+        server.app.state.workspaces = vec![workspace];
+        server.app.state.ensure_test_terminals();
+        assert!(
+            server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
+                pane_id,
+                exit_reason: crate::platform::classify_child_exit(
+                    &portable_pty::ExitStatus::with_exit_code(code)
+                ),
+            })
+        );
+        assert!(server.app.find_pane(pane_id).is_none());
+        assert!(server.app.find_pane(other_pane).is_some());
+        assert!(!server.should_quit.load(Ordering::Acquire));
+        shutdown_test_runtimes(&mut server);
+    }
+
+    std::fs::remove_dir_all(config_home).unwrap();
 }
 
 #[tokio::test]

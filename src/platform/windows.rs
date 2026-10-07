@@ -168,6 +168,14 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
+pub(crate) fn host_shutdown_in_progress() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+
+    // This describes the current Windows session, including logoff. Child exit
+    // codes alone cannot distinguish host shutdown from ordinary process failure.
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
 pub(crate) struct RemoteBridgeWake;
 
 impl RemoteBridgeWake {
