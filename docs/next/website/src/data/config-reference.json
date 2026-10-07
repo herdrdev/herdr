@@ -1322,7 +1322,7 @@
           "key": "ui.skip_collapsed_cycle",
           "type": "boolean",
           "default": "false",
-          "description": "Exclude collapsed spaces and sidebar sections from next/previous and next-blocked cycles."
+          "description": "Exclude collapsed spaces and sidebar sections from next-blocked cycling. Next/previous always follows visible sidebar rows."
         },
         {
           "key": "ui.sidebar_min_width",

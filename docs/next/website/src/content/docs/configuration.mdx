@@ -304,7 +304,7 @@ The active palette is applied in this order: built-in theme, `[theme.custom]`, t
 
 The sidebar is the main Herdr dashboard. Search `ui.` in the [Config reference](/docs/config-reference/) for sizing, collapsed mode, Agent panel ordering, mouse behavior, pane borders, and other presentation settings.
 
-The cycle control beside the notification icon sets `ui.window_cycle_mode` to `"this-machine"` or `"this-machine-and-fleet"`. Its `Skip collapsed` option is stored as `ui.skip_collapsed_cycle` and applies to next/previous and next-blocked navigation.
+The cycle control beside the notification icon sets `ui.window_cycle_mode` to `"this-machine"` or `"this-machine-and-fleet"`. Next/previous follows visible sidebar rows, including working and non-working rows. Next-blocked remains limited to attention targets; its `Skip collapsed` option is stored as `ui.skip_collapsed_cycle`.
 
 With `ui.nerd_font = true` (the default), agent badges, Space headers, usage providers, and file kinds use Nerd Font glyphs. Set it to `false` to restore text badges, bare Space names, and the `CC` / `CX` / `KI` / `AG` usage labels. Override a Space icon by repo name, `owner/repo` binding, or Space label:
 
