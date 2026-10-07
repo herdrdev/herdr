@@ -320,6 +320,39 @@ fn request_round_trips_for_server_stop() {
 }
 
 #[test]
+fn sidebar_coverage_response_has_public_ids_and_structured_placement() {
+    let response = SuccessResponse {
+        id: "req_sidebar_coverage".into(),
+        result: ResponseResult::SidebarCoverage {
+            panes: vec![PaneCoverage {
+                workspace_id: "w1".into(),
+                tab_id: "w1:t1".into(),
+                pane_id: "w1:p1".into(),
+                placement: Some(Placement {
+                    section: "main".into(),
+                    group: "ub2 · this device".into(),
+                    collapsed: false,
+                }),
+                dropped_by: None,
+            }],
+        },
+    };
+
+    let json = serde_json::to_value(response).unwrap();
+    assert_eq!(json["result"]["type"], "sidebar_coverage");
+    assert_eq!(json["result"]["panes"][0]["workspace_id"], "w1");
+    assert_eq!(json["result"]["panes"][0]["tab_id"], "w1:t1");
+    assert_eq!(json["result"]["panes"][0]["pane_id"], "w1:p1");
+    assert_eq!(json["result"]["panes"][0]["placement"]["section"], "main");
+    assert_eq!(
+        json["result"]["panes"][0]["placement"]["group"],
+        "ub2 · this device"
+    );
+    assert_eq!(json["result"]["panes"][0]["placement"]["collapsed"], false);
+    assert!(json["result"]["panes"][0]["dropped_by"].is_null());
+}
+
+#[test]
 fn request_round_trips_for_server_reload_config() {
     let request = Request {
         id: "req_reload".into(),

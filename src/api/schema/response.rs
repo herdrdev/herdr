@@ -58,6 +58,9 @@ pub enum ResponseResult {
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,
     },
+    SidebarCoverage {
+        panes: Vec<super::sidebar::PaneCoverage>,
+    },
     WorkspaceInfo {
         workspace: WorkspaceInfo,
     },

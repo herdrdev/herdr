@@ -163,7 +163,7 @@ pub(crate) use self::{
         compute_workspace_card_areas, expanded_sidebar_toggle_rect, needs_you_more_at,
         needs_you_row_at, normalized_workspace_scroll, relative_agent_navigation_entry,
         remote_agent_panel_entries, remote_agent_panel_entries_at, remote_agent_row_at,
-        repo_group_focus_plan, sidebar_agent_run_at, sidebar_aloop_target_at,
+        repo_group_focus_plan, sidebar_agent_run_at, sidebar_aloop_target_at, sidebar_coverage,
         sidebar_dim_header_at, sidebar_filter_anchor_rect, sidebar_filter_menu_layout,
         sidebar_filter_options, sidebar_group_menu_layout, sidebar_group_mode_anchor_rect_for_app,
         sidebar_header_new_menu_rect, sidebar_header_new_thread_rect, sidebar_header_overflow_rect,

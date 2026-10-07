@@ -1352,9 +1352,16 @@ impl AppState {
             let key = crate::ui::sidebar::devices::group_key(section, host);
             let local = host == self.agent_host_name;
             let reachable = crate::ui::sidebar::devices::host_reachable(self, host);
-            let collapsed = crate::ui::sidebar::devices::group_is_collapsed(
-                self, section, host, local, reachable,
-            );
+            let collapsed = if section == "coverage" {
+                self.collapsed_sidebar_groups.contains(&key)
+                    || !self
+                        .collapsed_sidebar_groups
+                        .contains(&format!("expanded:{key}"))
+            } else {
+                crate::ui::sidebar::devices::group_is_collapsed(
+                    self, section, host, local, reachable,
+                )
+            };
             self.collapsed_sidebar_groups.remove(&key);
             self.collapsed_sidebar_groups
                 .remove(&format!("expanded:{key}"));
@@ -3461,6 +3468,24 @@ mod tests {
             app.take_sidebar_group_collapsed_persistence_request(),
             Some(("repo:Runs".to_string(), true))
         );
+    }
+
+    #[test]
+    fn sidebar_coverage_device_group_expands_from_its_collapsed_default() {
+        let mut app = crate::app::state::AppState::test_new();
+        let key = crate::ui::sidebar::devices::group_key("coverage", &app.agent_host_name);
+
+        app.toggle_sidebar_group(&key);
+        assert!(app
+            .collapsed_sidebar_groups
+            .contains(&format!("expanded:{key}")));
+        assert!(!app.collapsed_sidebar_groups.contains(&key));
+
+        app.toggle_sidebar_group(&key);
+        assert!(app.collapsed_sidebar_groups.contains(&key));
+        assert!(!app
+            .collapsed_sidebar_groups
+            .contains(&format!("expanded:{key}")));
     }
 
     fn pod_keyboard_app() -> (crate::app::App, crate::groups::GroupRecord) {

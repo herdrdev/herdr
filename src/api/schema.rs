@@ -14,6 +14,7 @@ pub mod plugins;
 pub mod response;
 pub mod server;
 pub mod session;
+pub mod sidebar;
 pub mod symphony;
 pub mod tabs;
 pub mod workspaces;
@@ -33,6 +34,7 @@ pub use plugins::*;
 pub use response::*;
 pub use server::*;
 pub use session::*;
+pub use sidebar::*;
 pub use symphony::*;
 pub use tabs::*;
 pub use workspaces::*;
@@ -79,6 +81,8 @@ pub enum Method {
     ClientWindowTitleClear(EmptyParams),
     #[serde(rename = "session.snapshot")]
     SessionSnapshot(EmptyParams),
+    #[serde(rename = "sidebar.coverage")]
+    SidebarCoverage(EmptyParams),
     #[serde(rename = "workspace.create")]
     WorkspaceCreate(WorkspaceCreateParams),
     #[serde(rename = "workspace.list")]

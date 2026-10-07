@@ -8154,6 +8154,8 @@ pub fn run_server() -> io::Result<()> {
         );
         seed_startup_workspace_if_empty(&mut app);
         app.state.open_home_on_launch(&loaded_config.config);
+        #[cfg(debug_assertions)]
+        force_debug_sidebar_coverage_drop(&mut app.state);
 
         // The server runs headless — disable local notification side effects.
         // Sound and terminal notifications are forwarded to connected clients
@@ -8217,6 +8219,25 @@ fn seed_startup_workspace_if_empty(app: &mut app::App) {
         Err(err) => {
             warn!(cwd = %cwd.display(), err = %err, "failed to create startup workspace");
             app.state.set_server_mode(app::Mode::Navigate);
+        }
+    }
+}
+
+#[cfg(debug_assertions)]
+fn force_debug_sidebar_coverage_drop(state: &mut app::AppState) {
+    // Explicitly opt-in debug smoke hook; never present in release builds.
+    if std::env::var_os("HERDR_DEBUG_SIDEBAR_COVERAGE_DROP_FIRST_PANE").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        if let Some(pane_id) = state
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .flat_map(|tab| tab.panes.keys())
+            .next()
+            .copied()
+        {
+            state.remote_focus_proxy_panes.insert(pane_id);
         }
     }
 }

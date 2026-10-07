@@ -3072,12 +3072,29 @@ fn collect_sidebar_thread_entries_with_runtimes(
     // `Workspace::pane_details` is canonical workspace, tab and layout-pane
     // order and includes agentless terminals. Do not apply attention sorting:
     // lifecycle changes must never move sidebar rows.
+    collect_sidebar_thread_entries_with_coverage(app, terminal_runtimes, None)
+}
+
+fn collect_sidebar_thread_entries_with_coverage(
+    app: &AppState,
+    terminal_runtimes: Option<&TerminalRuntimeRegistry>,
+    mut coverage: Option<&mut SidebarCoverageRecorder>,
+) -> Vec<AgentPanelEntry> {
     let mut entries = collect_agent_panel_entries_with_runtimes(app, terminal_runtimes);
+    if let Some(coverage) = coverage.as_deref_mut() {
+        coverage.bind_entries_with_fallbacks(app, &entries);
+    }
     // Fleet tabs belong to the Fleet section only, never to local rows.
     entries.retain(|entry| {
-        entry
+        let hidden = entry
             .local_target()
-            .is_none_or(|target| !app.hidden_fleet_workspace(target.ws_idx))
+            .is_some_and(|target| app.hidden_fleet_workspace(target.ws_idx));
+        if hidden {
+            if let Some(coverage) = coverage.as_deref_mut() {
+                coverage.mark_dropped(entry, "fleet_workspace");
+            }
+        }
+        !hidden
     });
     let mut previous_tab = None;
     for entry in &mut entries {
@@ -3693,6 +3710,7 @@ const BLOCKERS_SECTION_TITLE: &str = "Blockers";
 pub(crate) const SPACES_SECTION_TITLE: &str = "Spaces";
 pub(crate) const FLEET_SECTION_TITLE: &str = "Fleet";
 pub(crate) const PODS_SECTION_TITLE: &str = "Pods";
+const SIDEBAR_COVERAGE_GROUP_PREFIX: &str = "device:coverage/";
 /// Symphony workflows run headless on a Temporal worker, so nothing in the
 /// pane list ever shows them. The section is the only ambient surface they get.
 pub(crate) const SYMPHONY_SECTION_TITLE: &str = "Symphony";
@@ -3707,6 +3725,10 @@ pub(crate) const NO_REPO_YET_SECTION_TITLE: &str = "No repo yet";
 pub(crate) const UNASSIGNED_PRS_SECTION_TITLE: &str = "Unassigned PRs";
 pub(crate) const UNASSIGNED_TICKETS_SECTION_TITLE: &str = "Unassigned tickets";
 pub(crate) const UNASSIGNED_THREADS_SECTION_TITLE: &str = "Unassigned threads";
+
+fn sidebar_coverage_group_key(host: &str) -> String {
+    devices::group_key("coverage", host)
+}
 
 pub(crate) fn unassigned_section_title(mode: SidebarGroupMode) -> Option<&'static str> {
     match mode {
@@ -3956,6 +3978,507 @@ pub(crate) fn sidebar_rows(app: &AppState) -> Vec<SidebarRow> {
     sidebar_rows_inner(app, None, false, false)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SidebarCoverageKey {
+    ws_idx: usize,
+    tab_idx: usize,
+    pane_id: crate::layout::PaneId,
+}
+
+struct TrackedPaneCoverage {
+    key: SidebarCoverageKey,
+    report: crate::api::schema::PaneCoverage,
+    entry: Option<AgentPanelEntry>,
+}
+
+struct SidebarCoverageRecorder {
+    records: Vec<TrackedPaneCoverage>,
+    index: std::collections::HashMap<SidebarCoverageKey, usize>,
+}
+
+impl SidebarCoverageRecorder {
+    fn new(app: &AppState) -> Self {
+        let mut records = Vec::new();
+        let mut index = std::collections::HashMap::new();
+        for (ws_idx, workspace) in app.workspaces.iter().enumerate() {
+            for (tab_idx, tab) in workspace.tabs.iter().enumerate() {
+                let tab_number = workspace.public_tab_number(tab_idx).unwrap_or(tab_idx + 1);
+                let tab_id = crate::workspace::public_tab_id_for_number(&workspace.id, tab_number);
+                let mut pane_ids = tab.panes.keys().copied().collect::<Vec<_>>();
+                pane_ids.sort_by_key(|pane_id| {
+                    workspace.public_pane_number(*pane_id).unwrap_or(usize::MAX)
+                });
+                for (pane_idx, pane_id) in pane_ids.into_iter().enumerate() {
+                    let pane_number = workspace.public_pane_number(pane_id);
+                    let report_pane_id = pane_number.map_or_else(
+                        || {
+                            format!(
+                                "{}:unknown-pane-{}-{}",
+                                workspace.id,
+                                tab_number,
+                                pane_idx + 1
+                            )
+                        },
+                        |number| crate::workspace::public_pane_id_for_number(&workspace.id, number),
+                    );
+                    let key = SidebarCoverageKey {
+                        ws_idx,
+                        tab_idx,
+                        pane_id,
+                    };
+                    let report = crate::api::schema::PaneCoverage {
+                        workspace_id: workspace.id.clone(),
+                        tab_id: tab_id.clone(),
+                        pane_id: report_pane_id,
+                        placement: None,
+                        dropped_by: pane_number
+                            .is_none()
+                            .then(|| "missing_public_id".to_string()),
+                    };
+                    index.insert(key, records.len());
+                    records.push(TrackedPaneCoverage {
+                        key,
+                        report,
+                        entry: None,
+                    });
+                }
+            }
+        }
+        Self { records, index }
+    }
+
+    fn bind_entries_with_fallbacks(&mut self, app: &AppState, entries: &[AgentPanelEntry]) {
+        for entry in entries {
+            let Some(target) = entry.local_target() else {
+                continue;
+            };
+            let key = SidebarCoverageKey {
+                ws_idx: target.ws_idx,
+                tab_idx: target.tab_idx,
+                pane_id: target.pane_id,
+            };
+            if let Some(index) = self.index.get(&key).copied() {
+                self.records[index].entry = Some(entry.clone());
+            }
+        }
+        for record in &mut self.records {
+            if record.entry.is_some() {
+                continue;
+            }
+            let Some((workspace, tab, pane)) = app
+                .workspaces
+                .get(record.key.ws_idx)
+                .and_then(|workspace| {
+                    workspace
+                        .tabs
+                        .get(record.key.tab_idx)
+                        .map(|tab| (workspace, tab))
+                })
+                .and_then(|(workspace, tab)| {
+                    tab.panes
+                        .get(&record.key.pane_id)
+                        .map(|pane| (workspace, tab, pane))
+                })
+            else {
+                record
+                    .report
+                    .dropped_by
+                    .get_or_insert_with(|| "missing_pane_state".into());
+                continue;
+            };
+            let pane_label = app
+                .workspaces
+                .get(record.key.ws_idx)
+                .and_then(|workspace| workspace.public_pane_number(record.key.pane_id))
+                .map_or_else(
+                    || "Unknown pane".to_string(),
+                    |number| format!("Pane {number}"),
+                );
+            let missing_terminal = !app.terminals.contains_key(&pane.attached_terminal_id);
+            record.report.dropped_by.get_or_insert_with(|| {
+                if missing_terminal {
+                    "no_terminal_state".into()
+                } else {
+                    "no_sidebar_entry".into()
+                }
+            });
+            let mut entry = AgentPanelEntry::new(
+                AgentPanelIdentity::Local(AgentPanelLocalTarget {
+                    ws_idx: record.key.ws_idx,
+                    tab_idx: record.key.tab_idx,
+                    pane_id: record.key.pane_id,
+                }),
+                AgentPanelEntryData {
+                    primary_label: workspace.id.clone(),
+                    space_label: workspace.id.clone(),
+                    primary_tab_label: tab
+                        .custom_name
+                        .clone()
+                        .or_else(|| Some("Unknown session".into())),
+                    tab_has_custom_name: tab.custom_name.is_some(),
+                    tab_label_leads_with_agent: false,
+                    tab_has_live_agent_title: false,
+                    pane_label: Some(pane_label),
+                    pane_label_is_agent_identity: false,
+                    terminal_title: None,
+                    terminal_title_stripped: None,
+                    agent_label: None,
+                    agent_kind_label: None,
+                    agent: None,
+                    foreground_process_name: None,
+                    agent_context: None,
+                    has_agent: false,
+                    prio: tab.prio,
+                    starred: tab.starred,
+                    state: AgentState::Unknown,
+                    attention_tier: Some(crate::terminal::state::AttentionTier::None),
+                    open_blockers: false,
+                    completion_tier: None,
+                    usage_limited: false,
+                    active_subagents: None,
+                    model_letter: None,
+                    waiting_on_agents: false,
+                    working_while_blocked: false,
+                    holds_shell: false,
+                    gate_count: 0,
+                    seen: pane.seen,
+                    done_since: pane.done_since,
+                    stale: false,
+                    reported_at: None,
+                    last_agent_state_change_seq: None,
+                    activity_at: None,
+                    state_labels: std::collections::HashMap::new(),
+                    tokens: std::collections::HashMap::new(),
+                    tab_first_pane: true,
+                    remote_host: None,
+                },
+            );
+            entry.pinned = tab.pinned;
+            entry.parked = tab.parked;
+            record.entry = Some(entry);
+        }
+    }
+
+    fn mark_dropped(&mut self, entry: &AgentPanelEntry, reason: &'static str) {
+        let Some(target) = entry.local_target() else {
+            return;
+        };
+        let key = SidebarCoverageKey {
+            ws_idx: target.ws_idx,
+            tab_idx: target.tab_idx,
+            pane_id: target.pane_id,
+        };
+        let Some(index) = self.index.get(&key).copied() else {
+            return;
+        };
+        let record = &mut self.records[index].report;
+        if record.placement.is_none() {
+            record.dropped_by.get_or_insert_with(|| reason.to_string());
+        }
+    }
+
+    fn record_placement(
+        &mut self,
+        entry: &AgentPanelEntry,
+        section: &str,
+        group: &str,
+        collapsed: bool,
+    ) {
+        let Some(target) = entry.local_target() else {
+            return;
+        };
+        let key = SidebarCoverageKey {
+            ws_idx: target.ws_idx,
+            tab_idx: target.tab_idx,
+            pane_id: target.pane_id,
+        };
+        let Some(index) = self.index.get(&key).copied() else {
+            return;
+        };
+        let report = &mut self.records[index].report;
+        report.placement = Some(crate::api::schema::Placement {
+            section: section.to_string(),
+            group: group.to_string(),
+            collapsed,
+        });
+        report.dropped_by = None;
+    }
+
+    fn finish(&mut self, app: &AppState, rows: &[SidebarRow]) {
+        let main_key = devices::group_key("main", &app.agent_host_name);
+        let working_key = devices::group_key("working", &app.agent_host_name);
+        let mut section = "main".to_string();
+        let mut group = devices::device_title(app, &app.agent_host_name, true);
+        for row in rows {
+            match row {
+                SidebarRow::SectionHeader { title, .. } => section = (*title).to_string(),
+                SidebarRow::NestedHeader { key, title, .. } => {
+                    if key == &main_key {
+                        section = "main".to_string();
+                    } else if key == &working_key {
+                        section = WORKING_SECTION_TITLE.to_string();
+                    }
+                    group.clone_from(title);
+                }
+                SidebarRow::Workspace { ws_idx, .. } => {
+                    if let Some(workspace) = app.workspaces.get(*ws_idx) {
+                        group.clone_from(&workspace.id);
+                    }
+                }
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                    if entry.local_target().is_some() =>
+                {
+                    self.record_placement(entry, &section, &group, false);
+                }
+                // Needs-you rows duplicate pane targets from the main tree.
+                _ => {}
+            }
+        }
+
+        let mut tab_status = std::collections::HashMap::new();
+        for record in &self.records {
+            if record.report.placement.is_some() {
+                tab_status.insert(
+                    (record.key.ws_idx, record.key.tab_idx),
+                    (record.report.placement.clone(), None),
+                );
+            }
+        }
+        for record in &self.records {
+            if record.report.dropped_by.is_some() {
+                tab_status
+                    .entry((record.key.ws_idx, record.key.tab_idx))
+                    .or_insert_with(|| (None, record.report.dropped_by.clone()));
+            }
+        }
+
+        for index in 0..self.records.len() {
+            if self.records[index].report.placement.is_some()
+                || self.records[index].report.dropped_by.is_some()
+            {
+                continue;
+            }
+            if let Some((placement, dropped_by)) = tab_status.get(&(
+                self.records[index].key.ws_idx,
+                self.records[index].key.tab_idx,
+            )) {
+                self.records[index].report.placement.clone_from(placement);
+                self.records[index].report.dropped_by.clone_from(dropped_by);
+                continue;
+            }
+            let Some(entry) = self.records[index].entry.clone() else {
+                self.records[index].report.dropped_by = Some("no_sidebar_entry".to_string());
+                continue;
+            };
+            let section = if entry.parked {
+                INBOX_NEW_SECTION_TITLE
+            } else if entry.pinned {
+                PINNED_SECTION_TITLE
+            } else if entry_is_past_done_hide_threshold(app, &entry) {
+                SETTLED_SECTION_TITLE
+            } else {
+                match sidebar_entry_lifecycle(app, &entry) {
+                    SidebarEntryLifecycle::Active => "main",
+                    SidebarEntryLifecycle::Snoozed => SNOOZED_SECTION_TITLE,
+                    SidebarEntryLifecycle::Settled => SETTLED_SECTION_TITLE,
+                }
+            };
+            if let Some((placement_section, group)) =
+                collapsed_sidebar_placement(app, &entry, section)
+            {
+                self.record_placement(&entry, &placement_section, &group, true);
+            } else {
+                self.records[index].report.dropped_by = Some("sidebar_projection".to_string());
+            }
+        }
+    }
+
+    fn append_guard_rows(&self, app: &AppState, rows: &mut Vec<SidebarRow>) {
+        let hidden = self
+            .records
+            .iter()
+            .filter(|record| {
+                record.report.dropped_by.is_some() || record.report.placement.is_none()
+            })
+            .filter_map(|record| {
+                record.entry.as_ref().map(|entry| {
+                    (
+                        entry.clone(),
+                        record.report.dropped_by.as_deref().unwrap_or("unknown"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        if hidden.is_empty() {
+            return;
+        }
+
+        let main_key = devices::group_key("main", &app.agent_host_name);
+        let root_index = rows.iter().position(
+            |row| matches!(row, SidebarRow::NestedHeader { key, .. } if key == &main_key),
+        );
+        let insert_at = match root_index {
+            Some(index) => index + 1,
+            None => {
+                let index = rows
+                    .iter()
+                    .position(|row| {
+                        matches!(
+                            row,
+                            SidebarRow::SectionHeader {
+                                title: WORKING_SECTION_TITLE,
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap_or(rows.len());
+                rows.insert(
+                    index,
+                    SidebarRow::NestedHeader {
+                        key: main_key,
+                        action_key: None,
+                        sort_key: None,
+                        sort_mode: SidebarSortMode::Default,
+                        title: devices::device_title(app, &app.agent_host_name, true),
+                        count: 0,
+                        activity_count: None,
+                        collapsed: devices::group_is_collapsed(
+                            app,
+                            "main",
+                            &app.agent_host_name,
+                            true,
+                            true,
+                        ),
+                        dim: false,
+                        status: None,
+                        spawn: false,
+                    },
+                );
+                index + 1
+            }
+        };
+        let coverage_key = sidebar_coverage_group_key(&app.agent_host_name);
+        let collapsed = !app
+            .collapsed_sidebar_groups
+            .contains(&format!("expanded:{coverage_key}"));
+        let count = hidden.len();
+        rows.insert(
+            insert_at,
+            SidebarRow::NestedHeader {
+                key: coverage_key,
+                action_key: None,
+                sort_key: None,
+                sort_mode: SidebarSortMode::Default,
+                title: format!("⚠ {count} sessions hidden"),
+                count,
+                activity_count: None,
+                collapsed,
+                dim: false,
+                status: None,
+                spawn: false,
+            },
+        );
+        if !collapsed {
+            for (offset, (mut entry, reason)) in hidden.into_iter().enumerate() {
+                let label = compact_row_title(&entry, true).trim().to_string();
+                let label = if label.is_empty() || label == DEFAULT_THREAD_TITLE {
+                    entry
+                        .pane_label
+                        .as_deref()
+                        .filter(|label| !label.trim().is_empty())
+                        .unwrap_or("Untitled session")
+                        .to_string()
+                } else {
+                    label
+                };
+                entry.terminal_title = None;
+                entry.terminal_title_stripped = None;
+                entry.tab_has_live_agent_title = false;
+                entry.tab_has_custom_name = true;
+                entry.tab_label_leads_with_agent = false;
+                entry.primary_tab_label = Some(format!("{label} · {reason}"));
+                rows.insert(
+                    insert_at + 1 + offset,
+                    SidebarRow::Tab {
+                        entry: Box::new(entry),
+                        depth: 1,
+                    },
+                );
+            }
+        }
+    }
+
+    fn into_records(self) -> Vec<crate::api::schema::PaneCoverage> {
+        self.records
+            .into_iter()
+            .map(|record| record.report)
+            .collect()
+    }
+}
+
+fn collapsed_sidebar_placement(
+    app: &AppState,
+    entry: &AgentPanelEntry,
+    section: &str,
+) -> Option<(String, String)> {
+    let target = entry.local_target()?;
+    let workspace = app.workspaces.get(target.ws_idx)?;
+    if section != "main" {
+        return section_is_collapsed(app, section)
+            .then(|| (section.to_string(), section.to_string()));
+    }
+
+    let working_shelf = app.sidebar_sections_layout
+        && !section_is_collapsed(app, WORKING_SECTION_TITLE)
+        && !entry.pinned
+        && sidebar_entry_has_working_state(entry);
+    if working_shelf {
+        if devices::group_is_collapsed(app, "working", &app.agent_host_name, true, true) {
+            return Some((
+                WORKING_SECTION_TITLE.to_string(),
+                devices::device_title(app, &app.agent_host_name, true),
+            ));
+        }
+    } else if app.sidebar_sections_layout
+        && devices::group_is_collapsed(app, "main", &app.agent_host_name, true, true)
+    {
+        return Some((
+            "main".to_string(),
+            devices::device_title(app, &app.agent_host_name, true),
+        ));
+    }
+
+    if !app.workspace_agents_expanded(target.ws_idx) {
+        return Some((section.to_string(), workspace.id.clone()));
+    }
+
+    if app.sidebar_sections_layout {
+        if let Some(subgroup) = sidebar_tab_subgroup(app, entry) {
+            let parent_key = space_sort_key_for(app, target.ws_idx)?;
+            let collapse_key = format!("{parent_key}:subgroup:{subgroup}");
+            if section_is_collapsed(app, &collapse_key) {
+                return Some((section.to_string(), subgroup.to_string()));
+            }
+        }
+    } else {
+        let group = entry_repo_group(app, entry)
+            .unwrap_or_else(|| unlinked_group_key_and_title(app, entry));
+        if section_is_collapsed(app, &group.0) {
+            return Some((section.to_string(), group.1));
+        }
+    }
+
+    for root_idx in 0..app.workspaces.len() {
+        let Some((key, true)) = workspace_parent_group_state(app, root_idx) else {
+            continue;
+        };
+        if sidebar_space_member_indices(app, root_idx).contains(&target.ws_idx) {
+            return Some((section.to_string(), key));
+        }
+    }
+    None
+}
+
 fn sidebar_query_parts(query: &str) -> (Vec<&str>, Vec<&str>) {
     query
         .split_whitespace()
@@ -4103,13 +4626,68 @@ fn sidebar_rows_inner(
     expand_worktrees: bool,
     expand_needs_you: bool,
 ) -> Vec<SidebarRow> {
-    compact_sidebar_rows_inner(
+    // The mobile picker lists tabs directly and keeps unknown panes reachable
+    // there; the coverage guard belongs to the device tree in the sidebar.
+    let mut coverage = (!expand_worktrees && sidebar_coverage_guard_might_be_needed(app))
+        .then(|| SidebarCoverageRecorder::new(app));
+    let mut rows = compact_sidebar_rows_inner(
         app,
         terminal_runtimes,
         expand_worktrees,
         true,
         expand_needs_you,
-    )
+        coverage.as_mut(),
+    );
+    if let Some(coverage) = coverage.as_mut() {
+        coverage.finish(app, &rows);
+        coverage.append_guard_rows(app, &mut rows);
+    }
+    rows
+}
+
+fn sidebar_coverage_guard_might_be_needed(app: &AppState) -> bool {
+    if !app.remote_focus_proxy_panes.is_empty()
+        || sidebar_rows_are_filtered(app)
+        || app.blocked_filter
+    {
+        return true;
+    }
+    app.workspaces
+        .iter()
+        .enumerate()
+        .any(|(ws_idx, workspace)| {
+            if app.hidden_fleet_workspace(ws_idx) {
+                return true;
+            }
+            workspace.tabs.iter().any(|tab| {
+                tab.panes.iter().any(|(pane_id, pane)| {
+                    !app.terminals.contains_key(&pane.attached_terminal_id)
+                        || workspace.public_pane_number(*pane_id).is_none()
+                        || pane.done_since.is_some_and(|done_since| {
+                            !pane.seen
+                                && app.view_observed_at.saturating_duration_since(done_since)
+                                    > app.hide_done_after
+                        })
+                })
+            })
+        })
+}
+
+pub(crate) fn sidebar_coverage(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+) -> Vec<crate::api::schema::PaneCoverage> {
+    let mut coverage = SidebarCoverageRecorder::new(app);
+    let rows = compact_sidebar_rows_inner(
+        app,
+        Some(terminal_runtimes),
+        false,
+        true,
+        false,
+        Some(&mut coverage),
+    );
+    coverage.finish(app, &rows);
+    coverage.into_records()
 }
 
 fn sidebar_filtered_agent_entries_from(
@@ -4135,21 +4713,45 @@ fn sidebar_entry_matches_filters(
         && scope.is_none_or(|scope| scope.holds(app, entry))
 }
 
+fn sidebar_entry_filter_reason(
+    app: &AppState,
+    scope: Option<&ProjectScope<'_>>,
+    entry: &AgentPanelEntry,
+) -> Option<&'static str> {
+    if app.sidebar_starred_only && !entry.starred {
+        Some("starred_only")
+    } else if !sidebar_entry_matches_query(app, entry) {
+        Some("query")
+    } else if scope.is_some_and(|scope| !scope.holds(app, entry)) {
+        Some("project_scope")
+    } else {
+        None
+    }
+}
+
 fn compact_sidebar_rows_inner(
     app: &AppState,
     terminal_runtimes: Option<&TerminalRuntimeRegistry>,
     expand_worktrees: bool,
     include_remote: bool,
     expand_needs_you: bool,
+    mut coverage: Option<&mut SidebarCoverageRecorder>,
 ) -> Vec<SidebarRow> {
-    let mut entries = match terminal_runtimes {
-        Some(runtimes) => sidebar_thread_entries_from(app, runtimes),
-        None => sidebar_thread_entries(app),
-    };
+    let mut entries = collect_sidebar_thread_entries_with_coverage(
+        app,
+        terminal_runtimes,
+        coverage.as_deref_mut(),
+    );
     entries.retain(|entry| {
-        entry
+        let hidden = entry
             .local_target()
-            .is_some_and(|target| !app.remote_focus_proxy_panes.contains(&target.pane_id))
+            .is_some_and(|target| app.remote_focus_proxy_panes.contains(&target.pane_id));
+        if hidden {
+            if let Some(coverage) = coverage.as_deref_mut() {
+                coverage.mark_dropped(entry, "remote_focus_proxy");
+            }
+        }
+        !hidden
     });
     let mut inbox_new_entries = ordered_tab_entries(
         app,
@@ -4175,9 +4777,17 @@ fn compact_sidebar_rows_inner(
             })
             .collect::<std::collections::HashSet<_>>();
         entries.retain(|entry| {
-            entry
+            let visible = entry
                 .local_target()
-                .is_some_and(|target| visible_tabs.contains(&(target.ws_idx, target.tab_idx)))
+                .is_some_and(|target| visible_tabs.contains(&(target.ws_idx, target.tab_idx)));
+            if !visible {
+                if let Some(reason) = sidebar_entry_filter_reason(app, scope.as_ref(), entry) {
+                    if let Some(coverage) = coverage.as_deref_mut() {
+                        coverage.mark_dropped(entry, reason);
+                    }
+                }
+            }
+            visible
         });
     }
     if app.sidebar_sections_layout && app.sidebar_show_ask_subtitles {
@@ -4239,7 +4849,15 @@ fn compact_sidebar_rows_inner(
         app,
         &classified
             .iter()
-            .filter(|(entry, _)| entry.pinned && (!app.blocked_filter || entry_has_red_dot(entry)))
+            .filter(|(entry, _)| {
+                let visible = !app.blocked_filter || entry_has_red_dot(entry);
+                if entry.pinned && !visible {
+                    if let Some(coverage) = coverage.as_deref_mut() {
+                        coverage.mark_dropped(entry, "blocked_filter");
+                    }
+                }
+                entry.pinned && visible
+            })
             .map(|(entry, _)| entry.clone())
             .collect::<Vec<_>>(),
     );
@@ -4290,24 +4908,31 @@ fn compact_sidebar_rows_inner(
         Vec::new()
     };
     let snoozed_entries = ordered_tab_entries(app, &snoozed_panes);
-    let mut snoozed_entries = if app.blocked_filter {
-        snoozed_entries
-            .into_iter()
-            .filter(entry_has_red_dot)
-            .collect()
-    } else {
-        snoozed_entries
-    };
+    let mut snoozed_entries = snoozed_entries;
+    if app.blocked_filter {
+        snoozed_entries.retain(|entry| {
+            let visible = entry_has_red_dot(entry);
+            if !visible {
+                if let Some(coverage) = coverage.as_deref_mut() {
+                    coverage.mark_dropped(entry, "blocked_filter");
+                }
+            }
+            visible
+        });
+    }
     let mut settled_entries = ordered_tab_entries(app, &settled_panes);
-    let visible_entries = if app.blocked_filter {
-        active_entries
-            .iter()
-            .filter(|entry| entry_has_red_dot(entry))
-            .cloned()
-            .collect::<Vec<_>>()
-    } else {
-        active_entries
-    };
+    let mut visible_entries = active_entries;
+    if app.blocked_filter {
+        visible_entries.retain(|entry| {
+            let visible = entry_has_red_dot(entry);
+            if !visible {
+                if let Some(coverage) = coverage.as_deref_mut() {
+                    coverage.mark_dropped(entry, "blocked_filter");
+                }
+            }
+            visible
+        });
+    }
     let (recently_done, visible_entries): (Vec<_>, Vec<_>) =
         visible_entries.into_iter().partition(|entry| {
             (!sections_layout || !entry.pinned) && entry_is_past_done_hide_threshold(app, entry)
@@ -4387,7 +5012,7 @@ fn compact_sidebar_rows_inner(
             rows.push(SidebarRow::Divider);
         }
         let workspace_activity = sidebar_workspace_activity(&space_entries);
-        let local_main_agent_count = space_entries.len();
+        let local_main_agent_count = ordered_tab_entries(app, &space_entries).len();
         if local_main_agent_count > 0 {
             let key = devices::group_key("main", &app.agent_host_name);
             let collapsed =
@@ -12461,7 +13086,7 @@ const SIDEBAR_SORT_GLYPH: &str = "⇅";
 
 fn nested_header_count_label(header: &NestedHeaderArea) -> Option<String> {
     // An expanded group lists its rows, so only a collapsed one needs the count.
-    if !header.collapsed {
+    if !header.collapsed || header.key.starts_with(SIDEBAR_COVERAGE_GROUP_PREFIX) {
         None
     } else if let Some((_, total)) = header.activity_count {
         Some(format!(" {total}"))
@@ -15104,6 +15729,30 @@ fn render_sidebar_toggle(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    fn sidebar_rows(app: &super::AppState) -> Vec<super::SidebarRow> {
+        let rows = super::sidebar_rows(app);
+        let has_coverage_guard = rows.iter().any(|row| {
+            matches!(row, super::SidebarRow::NestedHeader { key, .. }
+                if key.starts_with(super::SIDEBAR_COVERAGE_GROUP_PREFIX))
+        });
+        let synthetic_device_root = super::devices::group_key("main", &app.agent_host_name);
+        rows.into_iter()
+            .filter(|row| match row {
+                super::SidebarRow::NestedHeader { key, .. }
+                    if key.starts_with(super::SIDEBAR_COVERAGE_GROUP_PREFIX) =>
+                {
+                    false
+                }
+                super::SidebarRow::NestedHeader { key, .. }
+                    if has_coverage_guard && key == &synthetic_device_root =>
+                {
+                    false
+                }
+                _ => true,
+            })
+            .collect()
+    }
+
     fn remote_agent_info(
         pane_id: &str,
         name: &str,
@@ -15163,6 +15812,25 @@ pub(crate) mod tests {
                 app.collapsed_sidebar_groups
                     .remove(&format!("{namespace}:{section}"));
             }
+        }
+    }
+
+    fn assert_sidebar_coverage_complete(app: &AppState) {
+        let actual = sidebar_coverage(app, &TerminalRuntimeRegistry::new());
+        let expected = app
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.tabs)
+            .map(|tab| tab.panes.len())
+            .sum::<usize>();
+        assert_eq!(actual.len(), expected, "one coverage record per local pane");
+        for pane in actual {
+            assert_ne!(
+                pane.placement.is_some(),
+                pane.dropped_by.is_some(),
+                "pane {} must have exactly one placement or drop reason",
+                pane.pane_id
+            );
         }
     }
 
@@ -15742,6 +16410,166 @@ pub(crate) mod tests {
             row,
             SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
                 if entry.local_target().is_some_and(|target| target.pane_id == pane_id)
+        )));
+    }
+
+    #[test]
+    fn sidebar_coverage_reports_proxy_drop_and_expanded_guard_row() {
+        let mut app = app_with_agents(&["proxy"]);
+        app.sidebar_sections_layout = true;
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        app.remote_focus_proxy_panes.insert(pane_id);
+
+        let report = sidebar_coverage(&app, &TerminalRuntimeRegistry::new());
+        let pane_number = app.workspaces[0]
+            .public_pane_number(pane_id)
+            .expect("test pane has a public id");
+        let public_pane_id =
+            crate::workspace::public_pane_id_for_number(&app.workspaces[0].id, pane_number);
+        let hidden = report
+            .iter()
+            .find(|pane| pane.pane_id == public_pane_id)
+            .expect("proxy pane is included in coverage");
+        assert_eq!(hidden.dropped_by.as_deref(), Some("remote_focus_proxy"));
+        assert!(hidden.placement.is_none());
+
+        let coverage_key = sidebar_coverage_group_key(&app.agent_host_name);
+        app.collapsed_sidebar_groups
+            .insert(format!("expanded:{coverage_key}"));
+        let rows = super::sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::NestedHeader { title, .. } if title == "⚠ 1 sessions hidden"
+        )));
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.pane_id == pane_id)
+                    && entry.primary_tab_label.as_deref().is_some_and(|label| label.contains("remote_focus_proxy"))
+        )));
+    }
+
+    #[test]
+    fn local_device_header_counts_tabs_when_a_tab_has_two_panes() {
+        let mut app = app_with_agents(&["multi-pane"]);
+        let root_pane = app.workspaces[0].tabs[0].root_pane;
+        let split_pane = app.workspaces[0].test_split(Direction::Horizontal);
+        app.sidebar_sections_layout = true;
+        set_sections_group_collapsed(&mut app, WORKING_SECTION_TITLE, true);
+        app.ensure_test_terminals();
+        for pane_id in [root_pane, split_pane] {
+            app.workspaces[0].tabs[0]
+                .panes
+                .get_mut(&pane_id)
+                .expect("split pane")
+                .seen = true;
+        }
+
+        let rows = sidebar_rows(&app);
+        let main_key = devices::group_key("main", &app.agent_host_name);
+        let header_idx = rows
+            .iter()
+            .position(|row| matches!(row, SidebarRow::NestedHeader { key, .. } if key == &main_key))
+            .expect("local device header");
+        let header_count = match &rows[header_idx] {
+            SidebarRow::NestedHeader { count, .. } => *count,
+            _ => unreachable!(),
+        };
+        let visible_rows = rows[header_idx + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, SidebarRow::NestedHeader { .. }))
+            .filter(|row| matches!(row, SidebarRow::Tab { .. } | SidebarRow::Agent { .. }))
+            .count();
+
+        assert_eq!(header_count, visible_rows);
+        assert_eq!(visible_rows, 1, "one tab renders one session row");
+
+        let coverage = sidebar_coverage(&app, &TerminalRuntimeRegistry::new());
+        assert_eq!(coverage.len(), 2);
+        assert!(coverage.iter().all(|pane| pane.placement.is_some()));
+        assert!(coverage.iter().all(|pane| pane.dropped_by.is_none()));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::NestedHeader { title, .. }
+                if title.contains("sessions hidden")
+        )));
+    }
+
+    #[test]
+    fn sidebar_coverage_reports_query_drops_and_renders_guard_when_all_local_panes_are_filtered() {
+        let mut app = app_with_agents(&["alpha", "beta"]);
+        let split_tab_id = app.workspaces[0].id.clone();
+        app.workspaces[0].test_split(Direction::Horizontal);
+        app.ensure_test_terminals();
+        app.sidebar_sections_layout = true;
+        app.sidebar_work_filter.query = "f".into();
+        for workspace in &mut app.workspaces {
+            workspace.identity_cwd = "/tmp/alpha".into();
+            workspace.cached_identity_cwd = workspace.identity_cwd.clone();
+            for tab in &workspace.tabs {
+                for pane in tab.panes.values() {
+                    if let Some(terminal) = app.terminals.get_mut(&pane.attached_terminal_id) {
+                        terminal.cwd = "/tmp/alpha".into();
+                    }
+                }
+            }
+        }
+
+        let coverage = sidebar_coverage(&app, &TerminalRuntimeRegistry::new());
+        assert_eq!(coverage.len(), 3);
+        for pane in &coverage {
+            assert_eq!(pane.dropped_by.as_deref(), Some("query"));
+            assert!(pane.placement.is_none());
+        }
+        let split_tab_panes = coverage
+            .iter()
+            .filter(|pane| pane.workspace_id == split_tab_id)
+            .collect::<Vec<_>>();
+        assert_eq!(split_tab_panes.len(), 2);
+        assert!(split_tab_panes
+            .iter()
+            .all(|pane| pane.dropped_by.as_deref() == Some("query")));
+
+        let rows = super::sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::NestedHeader { title, count: 3, .. }
+                if title == "⚠ 3 sessions hidden"
+        )));
+        assert_sidebar_coverage_complete(&app);
+    }
+
+    #[test]
+    fn sidebar_coverage_keeps_a_pane_with_missing_terminal_state_reachable() {
+        let mut app = app_with_agents(&["unknown"]);
+        app.sidebar_sections_layout = true;
+        let pane_id = app.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.remove(&terminal_id);
+
+        let report = sidebar_coverage(&app, &TerminalRuntimeRegistry::new());
+        let pane_number = app.workspaces[0]
+            .public_pane_number(pane_id)
+            .expect("test pane has a public id");
+        let public_pane_id =
+            crate::workspace::public_pane_id_for_number(&app.workspaces[0].id, pane_number);
+        let hidden = report
+            .iter()
+            .find(|pane| pane.pane_id == public_pane_id)
+            .expect("pane with missing terminal state remains in coverage");
+        assert_eq!(hidden.dropped_by.as_deref(), Some("no_terminal_state"));
+
+        let coverage_key = sidebar_coverage_group_key(&app.agent_host_name);
+        app.collapsed_sidebar_groups
+            .insert(format!("expanded:{coverage_key}"));
+        let rows = super::sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.pane_id == pane_id)
+                    && entry.primary_tab_label.as_deref().is_some_and(|label| label.contains("no_terminal_state"))
         )));
     }
 
@@ -28356,6 +29184,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         for workspace in &mut app.workspaces {
             workspace.cached_git_branch = Some("main".into());
         }
+        app.ensure_test_terminals();
         app.collapsed_space_keys.insert("repo-key".into());
         app.active = None;
         app.set_server_mode(Mode::Terminal);
@@ -31948,6 +32777,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         }
 
         let rows = sidebar_rows(&app);
+        assert_sidebar_coverage_complete(&app);
         let mut actual = rows
             .iter()
             .filter_map(|row| match row {
@@ -32131,6 +32961,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         // their normal presentation defaults.
         app.reconcile_sidebar_presentation();
         let rows = sidebar_rows(&app);
+        assert_sidebar_coverage_complete(&app);
         let mut workspace_headers = rows
             .iter()
             .filter_map(|row| match row {

@@ -37,6 +37,7 @@ impl App {
             method,
             Method::Ping(_)
                 | Method::SessionSnapshot(_)
+                | Method::SidebarCoverage(_)
                 | Method::WorkspaceFocus(_)
                 | Method::TabFocus(_)
                 | Method::PaneFocus(_)
@@ -2352,6 +2353,12 @@ impl App {
                 );
             }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
+            Method::SidebarCoverage(_) => SuccessResponse {
+                id: request.id,
+                result: ResponseResult::SidebarCoverage {
+                    panes: crate::ui::sidebar_coverage(&self.state, &self.terminal_runtimes),
+                },
+            },
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),
             Method::LoopList(_) => return self.handle_loop_list(request.id),
@@ -2782,6 +2789,48 @@ pub(super) mod test_support {
 mod tests {
     use super::*;
     use crate::detect::{Agent, AgentState};
+
+    #[test]
+    fn sidebar_coverage_api_returns_public_ids_and_drop_reason() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state = crate::app::AppState::test_new();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("sidebar-coverage")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        app.state.remote_focus_proxy_panes.insert(pane_id);
+        let workspace_id = app.state.workspaces[0].id.clone();
+        let pane_number = app.state.workspaces[0]
+            .public_pane_number(pane_id)
+            .expect("test pane has a public id");
+        let pane_id = crate::workspace::public_pane_id_for_number(&workspace_id, pane_number);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "sidebar-coverage-test".into(),
+            method: crate::api::schema::Method::SidebarCoverage(
+                crate::api::schema::EmptyParams::default(),
+            ),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).expect("valid JSON");
+        assert_eq!(response["id"], "sidebar-coverage-test");
+        assert_eq!(response["result"]["type"], "sidebar_coverage");
+        let pane = response["result"]["panes"]
+            .as_array()
+            .expect("coverage panes array")
+            .iter()
+            .find(|pane| pane["pane_id"] == pane_id)
+            .expect("public pane id included");
+        assert_eq!(pane["workspace_id"], workspace_id);
+        assert_eq!(pane["dropped_by"], "remote_focus_proxy");
+        assert!(pane["placement"].is_null());
+    }
 
     #[test]
     fn agent_list_is_rejected_while_planning_lock_is_active() {

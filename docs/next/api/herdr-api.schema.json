@@ -7144,6 +7144,22 @@
         {
           "properties": {
             "method": {
+              "const": "sidebar.coverage",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "workspace.create",
               "type": "string"
             },
@@ -12960,6 +12976,41 @@
           ],
           "type": "object"
         },
+        "PaneCoverage": {
+          "properties": {
+            "dropped_by": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "placement": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/Placement"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "tab_id": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "workspace_id",
+            "tab_id",
+            "pane_id"
+          ],
+          "type": "object"
+        },
         "PaneDirection": {
           "enum": [
             "left",
@@ -13997,6 +14048,25 @@
           ],
           "type": "object"
         },
+        "Placement": {
+          "properties": {
+            "collapsed": {
+              "type": "boolean"
+            },
+            "group": {
+              "type": "string"
+            },
+            "section": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "section",
+            "group",
+            "collapsed"
+          ],
+          "type": "object"
+        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -14747,6 +14817,25 @@
               "required": [
                 "type",
                 "snapshot"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "panes": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PaneCoverage"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "sidebar_coverage",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "panes"
               ],
               "type": "object"
             },

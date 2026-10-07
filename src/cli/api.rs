@@ -11,6 +11,7 @@ pub(super) fn run_api_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "schema" => api_schema(&args[1..]),
         "snapshot" => api_snapshot(&args[1..]),
+        "sidebar-coverage" => api_sidebar_coverage(&args[1..]),
         "authority-snapshot" => api_authority_snapshot(&args[1..]),
         "relay" => api_relay(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -64,6 +65,18 @@ fn api_snapshot(args: &[String]) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:api:snapshot".into(),
         method: Method::SessionSnapshot(EmptyParams::default()),
+    })?)
+}
+
+fn api_sidebar_coverage(args: &[String]) -> std::io::Result<i32> {
+    if !args.is_empty() {
+        eprintln!("usage: herdr api sidebar-coverage");
+        return Ok(2);
+    }
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:api:sidebar-coverage".into(),
+        method: Method::SidebarCoverage(EmptyParams::default()),
     })?)
 }
 
@@ -132,6 +145,7 @@ fn schema_summary_text() -> std::io::Result<String> {
 fn print_api_help() {
     eprintln!("herdr api commands:");
     eprintln!("  herdr api snapshot");
+    eprintln!("  herdr api sidebar-coverage");
     eprintln!("  herdr api authority-snapshot");
     eprintln!("  herdr api relay < request.json");
     eprintln!("  herdr api relay --stream < subscription.json");
