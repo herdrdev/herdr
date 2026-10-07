@@ -7186,6 +7186,71 @@ mod tests {
     }
 
     #[test]
+    fn hovered_local_row_settle_control_dispatches_for_unselected_and_selected_rows() {
+        for selected in [false, true] {
+            let mut app = app_for_mouse_test();
+            app.state.workspaces = vec![Workspace::test_new("one")];
+            app.state.ensure_test_terminals();
+            app.state.active = selected.then_some(0);
+            app.state.selected = 0;
+            app.state.set_server_mode(Mode::Terminal);
+            let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+            let area = Rect::new(0, 0, 120, 40);
+            app.state.sidebar_width = 60;
+            crate::ui::compute_view(&mut app.state, area);
+            let row = crate::ui::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)
+                .into_iter()
+                .next()
+                .expect("local row");
+            let hover = crate::ui::hovered_control_at(&app.state, row.rect.right() - 1, row.rect.y)
+                .expect("row hover target");
+            app.state
+                .set_hovered_control_at(Some(hover), std::time::Instant::now());
+            crate::ui::compute_view(&mut app.state, area);
+            let control = app
+                .state
+                .view
+                .sidebar_hover_targets
+                .iter()
+                .find(|target| {
+                    matches!(
+                        target.action.as_ref(),
+                        Some(crate::app::state::SidebarHoverAction::Settle {
+                            target: crate::app::state::SidebarPaneLifecycleTarget::Local(pane),
+                        }) if pane.pane_id == pane_id
+                    )
+                })
+                .expect("hovered local Settle control")
+                .rect;
+            let mut terminal = Terminal::new(TestBackend::new(area.width, area.height))
+                .expect("sidebar test terminal");
+            terminal
+                .draw(|frame| crate::ui::render(&app.state, frame))
+                .expect("render sidebar");
+            assert!(
+                (control.x..control.right())
+                    .any(|x| { terminal.backend().buffer()[(x, control.y)].symbol() == "✓" }),
+                "hovered settle cell renders ✓ (selected={selected})"
+            );
+            let action = app.state.handle_mouse(
+                &mut app.terminal_runtimes,
+                crate::app::LOCAL_INPUT_SOURCE,
+                mouse(
+                    MouseEventKind::Down(MouseButton::Left),
+                    control.x,
+                    control.y,
+                ),
+            );
+            assert!(matches!(
+                action,
+                Some(MouseAction::SettlePane(
+                    crate::app::state::SidebarPaneLifecycleTarget::Local(pane)
+                )) if pane.pane_id == pane_id
+            ));
+        }
+    }
+
+    #[test]
     fn settled_remote_row_hover_control_dispatches_unsettle() {
         let mut app = app_for_mouse_test();
         let (remote, entry) = crate::ui::sidebar::tests::remote_control_fixture(

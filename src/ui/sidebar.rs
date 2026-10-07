@@ -1798,8 +1798,9 @@ pub(crate) fn selected_row_control_at(
     let title_width = title_width.saturating_sub(sidebar_pin_width(app, entry, rect, title_width));
     let selected = selected_local_row_pane(app, entry, tab).is_some();
     let mobile = app.view.layout == crate::app::state::ViewLayout::Mobile;
-    let control_pane =
-        row_control_pane(app, entry, tab).filter(|control| control.snoozed || selected || mobile);
+    let hovered = sidebar_row_is_hovered(app, rect.y);
+    let control_pane = row_control_pane(app, entry, tab)
+        .filter(|control| control.snoozed || selected || mobile || hovered);
     let controls_width =
         selected_row_controls_width(control_pane.as_ref(), title_width, rect.width);
     if controls_width == 0 {
