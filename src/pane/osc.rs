@@ -410,15 +410,22 @@ impl OscStreamCollector {
                         self.body.clear();
                         self.state = OscStreamState::Body;
                     }
-                    0x1b => self.state = OscStreamState::Escape,
+                    0x1b => {
+                        receive(Some(&[]), 0);
+                        self.state = OscStreamState::Escape;
+                    }
                     b'c' => {
                         receive(None, 2);
                         self.state = OscStreamState::Ground;
                     }
                     byte if is_ignored_string_intro(byte) => {
+                        receive(Some(&[]), 0);
                         self.state = OscStreamState::IgnoringString;
                     }
-                    _ => self.state = OscStreamState::Ground,
+                    _ => {
+                        receive(Some(&[]), 0);
+                        self.state = OscStreamState::Ground;
+                    }
                 },
                 OscStreamState::Body => match byte {
                     0x07 => self.finish(&mut receive, 3),
@@ -537,6 +544,7 @@ impl AgentOscStateTracker {
         let mut terminal_title_changed = false;
         collector.observe_events(bytes, |body, sequence_bytes| {
             let Some(body) = body else {
+                *skip_in_flight_program_status = false;
                 replace_program_status(program_status, None, true);
                 return;
             };
@@ -1387,6 +1395,32 @@ mod tests {
                 assert_eq!(reset.source_epoch, 1);
                 assert!(reset.revision >= 2);
             }
+        }
+    }
+
+    #[test]
+    fn program_status_replacement_pending_escape_does_not_drop_new_report() {
+        for boundary in [b"[?25l".as_slice(), b"7", b"Pignored\x1b\\", b"c", b"\x1b"] {
+            let mut tracker = AgentOscStateTracker::default();
+            tracker.observe(b"old output\x1b");
+            tracker.reset_program_status();
+            tracker.observe(boundary);
+            let report = if boundary == b"\x1b" {
+                b"]7501;state=idle:app=pi\x07".as_slice()
+            } else {
+                b"\x1b]7501;state=idle:app=pi\x07".as_slice()
+            };
+            tracker.observe(report);
+            assert_eq!(
+                tracker
+                    .program_status()
+                    .unwrap()
+                    .record
+                    .as_ref()
+                    .map(|record| record.state),
+                Some(ProgramStatusState::Idle),
+                "boundary={boundary:?}"
+            );
         }
     }
 
