@@ -168,3 +168,57 @@ pub enum AgentStatus {
 pub(crate) fn default_true() -> bool {
     true
 }
+
+/// Root OSC 7501 state. This is a program report, not task acceptance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramStatusState {
+    Idle,
+    Working,
+    Blocked,
+    Done,
+    Error,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramStatusKind {
+    Permission,
+    Question,
+    Auth,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgramStatusSource {
+    Osc7501,
+    #[serde(other)]
+    Unknown,
+}
+
+/// Text is validated at ingress but never included in this public projection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProgramStatusRecord {
+    pub state: ProgramStatusState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ProgramStatusKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+}
+
+/// Revision is monotonic for this terminal runtime, including clear operations.
+/// No heartbeat exists. updated_at_ms is receiver wall time, not an expiry time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProgramStatusSnapshot {
+    pub source_epoch: u64,
+    pub source: ProgramStatusSource,
+    pub revision: u64,
+    pub updated_at_ms: u64,
+    pub record: Option<ProgramStatusRecord>,
+}

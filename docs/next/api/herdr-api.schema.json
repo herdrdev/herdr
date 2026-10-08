@@ -808,6 +808,16 @@
             "pane_id": {
               "type": "string"
             },
+            "program_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ProgramStatusSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "restore_error": {
               "type": [
                 "string",
@@ -1027,6 +1037,111 @@
             "viewport_rows"
           ],
           "type": "object"
+        },
+        "ProgramStatusKind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusRecord": {
+          "description": "Text is validated at ingress but never included in this public projection.",
+          "properties": {
+            "app": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ProgramStatusKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "progress": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/schemas/event/$defs/ProgramStatusState"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusSnapshot": {
+          "description": "Revision is monotonic for this terminal runtime, including clear operations.\nNo heartbeat exists. updated_at_ms is receiver wall time, not an expiry time.",
+          "properties": {
+            "record": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ProgramStatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "$ref": "#/schemas/event/$defs/ProgramStatusSource"
+            },
+            "source_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "updated_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "source_epoch",
+            "source",
+            "revision",
+            "updated_at_ms"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusSource": {
+          "enum": [
+            "osc7501",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusState": {
+          "description": "Root OSC 7501 state. This is a program report, not task acceptance.",
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "error",
+            "unknown"
+          ],
+          "type": "string"
         },
         "SplitDirection": {
           "enum": [
@@ -7916,6 +8031,16 @@
             "pane_id": {
               "type": "string"
             },
+            "program_status": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ProgramStatusSnapshot"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "restore_error": {
               "type": [
                 "string",
@@ -9148,6 +9273,111 @@
               "type": "string"
             }
           ]
+        },
+        "ProgramStatusKind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusRecord": {
+          "description": "Text is validated at ingress but never included in this public projection.",
+          "properties": {
+            "app": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ProgramStatusKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "progress": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/ProgramStatusState"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusSnapshot": {
+          "description": "Revision is monotonic for this terminal runtime, including clear operations.\nNo heartbeat exists. updated_at_ms is receiver wall time, not an expiry time.",
+          "properties": {
+            "record": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ProgramStatusRecord"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/ProgramStatusSource"
+            },
+            "source_epoch": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "updated_at_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "source_epoch",
+            "source",
+            "revision",
+            "updated_at_ms"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusSource": {
+          "enum": [
+            "osc7501",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusState": {
+          "description": "Root OSC 7501 state. This is a program report, not task acceptance.",
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "error",
+            "unknown"
+          ],
+          "type": "string"
         },
         "ReadFormat": {
           "enum": [
@@ -10439,6 +10669,11 @@
               "type": "boolean"
             },
             "live_handoff": {
+              "type": "boolean"
+            },
+            "program_status_root_v1": {
+              "default": false,
+              "description": "Root OSC 7501 snapshots in pane.updated and pane list/session snapshots.",
               "type": "boolean"
             },
             "ssh_agent_registration": {

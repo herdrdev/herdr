@@ -376,6 +376,14 @@ impl TerminalRuntime {
         self.0.terminal_title()
     }
 
+    pub fn program_status(&self) -> Option<crate::api::schema::ProgramStatusSnapshot> {
+        self.0.program_status()
+    }
+
+    pub fn expire_program_status(&self) {
+        self.0.expire_program_status()
+    }
+
     pub fn agent_osc_title(&self) -> String {
         self.0.agent_osc_title()
     }

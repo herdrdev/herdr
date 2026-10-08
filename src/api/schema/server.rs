@@ -21,6 +21,9 @@ pub struct ServerSshAgentRegisterParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ServerCapabilities {
+    /// Root OSC 7501 snapshots in pane.updated and pane list/session snapshots.
+    #[serde(default)]
+    pub program_status_root_v1: bool,
     pub live_handoff: bool,
     #[serde(default)]
     pub detached_server_daemon: bool,

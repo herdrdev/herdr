@@ -338,6 +338,10 @@ impl App {
                 .is_some_and(|focused| focused == pane_id);
         let presentation = terminal.effective_presentation();
         Some(crate::api::schema::PaneInfo {
+            program_status: self
+                .terminal_runtimes
+                .get(&terminal.id)
+                .and_then(|runtime| runtime.program_status()),
             pane_id: self.public_pane_id(ws_idx, pane_id)?,
             terminal_id: terminal.id.to_string(),
             workspace_id: self.public_workspace_id(ws_idx),

@@ -166,6 +166,7 @@ pub(crate) struct ProcessBytesResult {
     pub request_render: bool,
     pub render_delay: Option<Duration>,
     pub terminal_title_changed: bool,
+    pub program_status_changed: bool,
     pub terminal_bells: u16,
     pub clipboard_writes: Vec<Vec<u8>>,
     pub reported_cwd: Option<std::path::PathBuf>,
@@ -609,6 +610,18 @@ impl PaneTerminal {
 
     pub fn terminal_title(&self) -> Option<String> {
         self.ghostty.terminal_title()
+    }
+
+    pub fn program_status(&self) -> Option<crate::api::schema::ProgramStatusSnapshot> {
+        self.ghostty.program_status()
+    }
+
+    pub fn expire_program_status(&self) {
+        self.ghostty.expire_program_status()
+    }
+
+    pub fn reset_program_status(&self) {
+        self.ghostty.reset_program_status()
     }
 
     pub fn agent_osc_title(&self) -> String {
@@ -1321,6 +1334,25 @@ impl GhosttyPaneTerminal {
 
     /// Returns the latest OSC 0/2 title retained for agent detection, or `""`
     /// if no title has been seen or the last update was an empty clear.
+    pub fn program_status(&self) -> Option<crate::api::schema::ProgramStatusSnapshot> {
+        self.core
+            .lock()
+            .ok()
+            .and_then(|core| core.agent_osc_state.program_status())
+    }
+
+    pub fn expire_program_status(&self) {
+        if let Ok(mut core) = self.core.lock() {
+            core.agent_osc_state.expire_program_status();
+        }
+    }
+
+    pub fn reset_program_status(&self) {
+        if let Ok(mut core) = self.core.lock() {
+            core.agent_osc_state.reset_program_status();
+        }
+    }
+
     pub fn agent_osc_title(&self) -> String {
         self.core
             .lock()
@@ -1359,6 +1391,7 @@ impl GhosttyPaneTerminal {
                 request_render: false,
                 render_delay: None,
                 terminal_title_changed: false,
+                program_status_changed: false,
                 terminal_bells: 0,
                 clipboard_writes: Vec::new(),
                 reported_cwd: None,
@@ -1391,10 +1424,16 @@ impl GhosttyPaneTerminal {
                 "agent OSC evidence observed"
             );
         }
+        let previous_program_status = core.agent_osc_state.program_status_revision();
         let terminal_title_changed = core.agent_osc_state.observe(bytes);
+        let program_status_changed =
+            previous_program_status != core.agent_osc_state.program_status_revision();
+        let query_replies = core.agent_osc_state.take_query_replies();
 
         core.kitty_keyboard.observe(bytes);
         let mut terminal_responses = Vec::new();
+        terminal_responses
+            .extend((0..query_replies).map(|_| Bytes::from_static(b"\x1b]7501;?\x1b\\")));
         core.default_color_event_tracker.observe(bytes);
         core.c1_xtgettcap_tracker.observe(bytes);
         let c1_xtgettcap_responses = core.c1_xtgettcap_tracker.drain_pending();
@@ -1476,6 +1515,7 @@ impl GhosttyPaneTerminal {
             request_render,
             render_delay,
             terminal_title_changed,
+            program_status_changed,
             terminal_bells,
             clipboard_writes,
             reported_cwd,
@@ -3650,6 +3690,159 @@ mod tests {
     use super::*;
     use ratatui::{layout::Rect, style::Color};
     use tokio::sync::mpsc;
+
+    /// Optional real-sender smoke. It never submits a prompt or loads user config.
+    #[test]
+    #[ignore = "set HERDR_TEST_PI_CLI to an installed Pi 1.1 CLI bundle"]
+    fn program_status_real_pi_startup_smoke() {
+        use std::io::{Read, Write};
+        let cli = std::env::var_os("HERDR_TEST_PI_CLI").expect("HERDR_TEST_PI_CLI");
+        let node = std::env::var_os("HERDR_TEST_NODE").expect("HERDR_TEST_NODE");
+        let home = std::env::temp_dir().join(format!(
+            "herdr-pi-smoke-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        let mut command = portable_pty::CommandBuilder::new(node);
+        command.env_clear();
+        command.env("HOME", &home);
+        command.env("TMPDIR", &home);
+        command.env("PI_CODING_AGENT_DIR", home.join("pi"));
+        command.env("TERM", "xterm-256color");
+        command.env("PATH", "/usr/bin:/bin:/opt/homebrew/bin");
+        command.env("PI_OFFLINE", "1");
+        command.cwd(&home);
+        command.arg(cli);
+        command.args([
+            "--offline",
+            "--no-session",
+            "--no-extensions",
+            "--no-mcp",
+            "--no-skills",
+            "--no-prompt-templates",
+            "--no-context-files",
+            "--no-themes",
+            "--no-tools",
+            "--no-approve",
+        ]);
+        let pair = portable_pty::native_pty_system()
+            .openpty(portable_pty::PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut child = pair.slave.spawn_command(command).unwrap();
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().unwrap();
+        let mut writer = pair.master.take_writer().unwrap();
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        let reader_handle = std::thread::spawn(move || {
+            let mut buffer = [0u8; 8192];
+            while let Ok(size) = reader.read(&mut buffer) {
+                if size == 0 || output_tx.send(buffer[..size].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        let terminal = crate::ghostty::Terminal::new(80, 24, 10000).unwrap();
+        let (tx, _rx) = mpsc::channel::<Bytes>(16);
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut captured = Vec::new();
+        let mut replied = false;
+        let mut idle = false;
+        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(bytes) = output_rx.recv_timeout(remaining) else {
+                break;
+            };
+            captured.extend_from_slice(&bytes);
+            if captured.len() > 1024 * 1024 {
+                break;
+            }
+            let result = pane.process_pty_bytes(PaneId::from_raw(1), 0, &bytes, &tx);
+            for response in result.terminal_responses {
+                replied |= response.as_ref() == b"\x1b]7501;?\x1b\\";
+                writer.write_all(&response).unwrap();
+            }
+            writer.flush().unwrap();
+            idle = pane
+                .program_status()
+                .and_then(|snapshot| snapshot.record)
+                .is_some_and(|record| {
+                    record.state == crate::api::schema::ProgramStatusState::Idle
+                        && record.app.as_deref() == Some("pi")
+                });
+            if idle {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        drop(writer);
+        drop(pair.master);
+        reader_handle.join().unwrap();
+        assert!(
+            captured
+                .windows(b"\x1b]7501;?".len())
+                .any(|bytes| bytes == b"\x1b]7501;?"),
+            "real Pi did not send a support query; captured {} bytes",
+            captured.len()
+        );
+        assert!(replied, "real receiver did not reply");
+        assert!(
+            idle,
+            "real Pi did not emit root idle after the receiver reply; captured {} bytes",
+            captured.len()
+        );
+        println!("real Pi startup: query received, Herdr reply written, root idle/app=pi parsed; bytes={}; no prompt submitted", captured.len());
+        println!(
+            "real Pi typed root: {}",
+            serde_json::to_string(&pane.program_status().unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn program_status_real_terminal_reply_and_lifetime() {
+        let terminal = crate::ghostty::Terminal::new(80, 24, 10000).unwrap();
+        let (tx, _rx) = mpsc::channel::<Bytes>(16);
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]7501;?\x1b", &tx);
+        assert!(result.terminal_responses.is_empty());
+        let result = pane.process_pty_bytes(
+            pane_id,
+            0,
+            b"\\\x1b]7501;state=blocked:kind=question:app=pi\x07",
+            &tx,
+        );
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]7501;?\x1b\\")]
+        );
+        assert!(result.program_status_changed);
+        assert_eq!(
+            pane.program_status().unwrap().record.unwrap().kind,
+            Some(crate::api::schema::ProgramStatusKind::Question)
+        );
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]133;A\x07", &tx);
+        assert!(result.program_status_changed);
+        assert_eq!(pane.program_status().unwrap().record, None);
+        pane.process_pty_bytes(pane_id, 0, b"\x1b]7501;state=done\x07", &tx);
+        pane.expire_program_status();
+        assert_eq!(
+            pane.program_status().unwrap().record.unwrap().state,
+            crate::api::schema::ProgramStatusState::Done
+        );
+        pane.reset_program_status();
+        assert_eq!(pane.program_status().unwrap().source_epoch, 1);
+        assert_eq!(pane.program_status().unwrap().record, None);
+    }
 
     #[test]
     fn plain_page_keys_host_scroll_for_shell_like_decckm_with_bracketed_paste() {

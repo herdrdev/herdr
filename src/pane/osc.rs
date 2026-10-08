@@ -1,5 +1,10 @@
 use std::path::PathBuf;
 
+use crate::api::schema::{
+    ProgramStatusKind, ProgramStatusRecord, ProgramStatusSnapshot, ProgramStatusSource,
+    ProgramStatusState,
+};
+use base64::Engine;
 use tracing::info;
 
 use crate::layout::PaneId;
@@ -371,6 +376,16 @@ impl OscStreamCollector {
     const MAX_BODY_BYTES: usize = 4096;
 
     fn observe(&mut self, bytes: &[u8], mut receive: impl FnMut(&[u8])) {
+        self.observe_events(bytes, |body, sequence_bytes| {
+            if sequence_bytes > 0 {
+                if let Some(body) = body {
+                    receive(body);
+                }
+            }
+        });
+    }
+
+    fn observe_events(&mut self, bytes: &[u8], mut receive: impl FnMut(Option<&[u8]>, usize)) {
         let mut cursor = 0;
         while cursor < bytes.len() {
             if matches!(
@@ -396,23 +411,28 @@ impl OscStreamCollector {
                         self.state = OscStreamState::Body;
                     }
                     0x1b => self.state = OscStreamState::Escape,
+                    b'c' => {
+                        receive(None, 2);
+                        self.state = OscStreamState::Ground;
+                    }
                     byte if is_ignored_string_intro(byte) => {
                         self.state = OscStreamState::IgnoringString;
                     }
                     _ => self.state = OscStreamState::Ground,
                 },
                 OscStreamState::Body => match byte {
-                    0x07 => self.finish(&mut receive),
+                    0x07 => self.finish(&mut receive, 3),
                     0x1b => self.state = OscStreamState::BodyEscape,
                     _ => self.push(byte),
                 },
                 OscStreamState::BodyEscape => match byte {
-                    b'\\' => self.finish(&mut receive),
+                    b'\\' => self.finish(&mut receive, 4),
                     0x07 => {
                         self.push(0x1b);
                         if matches!(self.state, OscStreamState::Body) {
-                            self.finish(&mut receive);
+                            self.finish(&mut receive, 3);
                         } else {
+                            receive(Some(&[]), 0);
                             self.state = OscStreamState::Ground;
                         }
                     }
@@ -438,6 +458,7 @@ impl OscStreamCollector {
                 }
                 OscStreamState::IgnoringStringEscape => {
                     if byte == b'\\' {
+                        receive(Some(&[]), 0);
                         self.state = OscStreamState::Ground;
                     } else if byte != 0x1b {
                         self.state = OscStreamState::IgnoringString;
@@ -445,6 +466,7 @@ impl OscStreamCollector {
                 }
                 OscStreamState::Discarding => {
                     if byte == 0x07 {
+                        receive(Some(&[]), 0);
                         self.state = OscStreamState::Ground;
                     } else if byte == 0x1b {
                         self.state = OscStreamState::DiscardingEscape;
@@ -452,6 +474,7 @@ impl OscStreamCollector {
                 }
                 OscStreamState::DiscardingEscape => {
                     if byte == b'\\' {
+                        receive(Some(&[]), 0);
                         self.state = OscStreamState::Ground;
                     } else if byte != 0x1b {
                         self.state = OscStreamState::Discarding;
@@ -471,8 +494,8 @@ impl OscStreamCollector {
         }
     }
 
-    fn finish(&mut self, receive: &mut impl FnMut(&[u8])) {
-        receive(&self.body);
+    fn finish(&mut self, receive: &mut impl FnMut(Option<&[u8]>, usize), framing: usize) {
+        receive(Some(&self.body), self.body.len() + framing);
         self.body.clear();
         self.state = OscStreamState::Ground;
     }
@@ -482,9 +505,8 @@ impl OscStreamCollector {
 /// Title text is untrusted model output; cap it to bound memory and log size.
 const AGENT_OSC_MAX_CHARS: usize = 256;
 
-/// Always-on tracker that retains the latest OSC 0/2 title and OSC 9 progress
-/// payload emitted by the child process. Nothing here affects rendering; this
-/// is pure passive capture for the detection engine (Stage C / Stage D).
+/// Always-on OSC observer. Title and progress remain detection evidence.
+/// Root program status is a separate read-only API fact, with a fixed query reply.
 ///
 /// - `latest_title` — last OSC 0 or OSC 2 payload, sanitized. An empty
 ///   payload (e.g. `\x1b]0;\x07`) clears the stored value.
@@ -496,21 +518,35 @@ pub(super) struct AgentOscStateTracker {
     latest_title: Option<String>,
     terminal_title: Option<String>,
     latest_progress: Option<String>,
+    program_status: Option<ProgramStatusSnapshot>,
+    query_replies: usize,
+    skip_in_flight_program_status: bool,
 }
 
 impl AgentOscStateTracker {
     pub(super) fn observe(&mut self, bytes: &[u8]) -> bool {
-        let (collector, latest_title, terminal_title, latest_progress) = (
-            &mut self.collector,
-            &mut self.latest_title,
-            &mut self.terminal_title,
-            &mut self.latest_progress,
-        );
+        let Self {
+            collector,
+            latest_title,
+            terminal_title,
+            latest_progress,
+            program_status,
+            query_replies,
+            skip_in_flight_program_status,
+        } = self;
         let mut terminal_title_changed = false;
-        collector.observe(bytes, |body| {
+        collector.observe_events(bytes, |body, sequence_bytes| {
+            let Some(body) = body else {
+                replace_program_status(program_status, None, true);
+                return;
+            };
+            let skip_status = std::mem::take(skip_in_flight_program_status);
             let Some((command, payload)) = parse_agent_osc_body(body) else {
                 return;
             };
+            if skip_status && command == b"7501" {
+                return;
+            }
             match command {
                 b"0" | b"2" => {
                     let title = sanitize_agent_osc_string(payload, AGENT_OSC_MAX_CHARS);
@@ -523,10 +559,48 @@ impl AgentOscStateTracker {
                     *latest_progress =
                         Some(sanitize_agent_osc_string(payload, AGENT_OSC_MAX_CHARS));
                 }
+                b"7501" if sequence_bytes <= 4096 => {
+                    if payload == b"?" {
+                        *query_replies = query_replies.saturating_add(1);
+                    } else if let Some(record) = parse_program_status(payload) {
+                        replace_program_status(program_status, record, false);
+                    }
+                }
+                b"133" if payload.split(|b| *b == b';').next() == Some(b"A".as_slice()) => {
+                    expire_program_status(program_status);
+                }
                 _ => {}
             }
         });
         terminal_title_changed
+    }
+
+    pub(super) fn program_status_revision(&self) -> u64 {
+        self.program_status
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.revision)
+    }
+
+    pub(super) fn program_status(&self) -> Option<ProgramStatusSnapshot> {
+        self.program_status.clone()
+    }
+
+    pub(super) fn take_query_replies(&mut self) -> usize {
+        std::mem::take(&mut self.query_replies)
+    }
+
+    pub(super) fn expire_program_status(&mut self) {
+        expire_program_status(&mut self.program_status);
+    }
+
+    pub(super) fn reset_program_status(&mut self) {
+        // Keep title/progress framing, but do not attribute a partial old report
+        // to the replacement process when its terminator arrives later.
+        self.skip_in_flight_program_status = matches!(
+            self.collector.state,
+            OscStreamState::Escape | OscStreamState::Body | OscStreamState::BodyEscape
+        );
+        replace_program_status(&mut self.program_status, None, true);
     }
 
     pub(super) fn terminal_title(&self) -> Option<&str> {
@@ -559,6 +633,161 @@ impl AgentOscStateTracker {
         self.latest_title = None;
         self.latest_progress = None;
     }
+}
+
+fn replace_program_status(
+    slot: &mut Option<ProgramStatusSnapshot>,
+    record: Option<ProgramStatusRecord>,
+    reset: bool,
+) {
+    if !reset
+        && slot
+            .as_ref()
+            .is_some_and(|current| current.record == record)
+    {
+        return;
+    }
+    let revision = slot
+        .as_ref()
+        .map_or(1, |current| current.revision.saturating_add(1));
+    let source_epoch = slot
+        .as_ref()
+        .map_or(0, |current| current.source_epoch)
+        .saturating_add(u64::from(reset));
+    let updated_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0);
+    *slot = Some(ProgramStatusSnapshot {
+        source: ProgramStatusSource::Osc7501,
+        source_epoch,
+        revision,
+        updated_at_ms,
+        record,
+    });
+}
+
+fn expire_program_status(slot: &mut Option<ProgramStatusSnapshot>) {
+    if slot
+        .as_ref()
+        .and_then(|snapshot| snapshot.record.as_ref())
+        .is_some_and(|record| {
+            matches!(
+                record.state,
+                ProgramStatusState::Working
+                    | ProgramStatusState::Blocked
+                    | ProgramStatusState::Idle
+            )
+        })
+    {
+        replace_program_status(slot, None, false);
+    }
+}
+
+/// None ignores the report. Some(None) is a root clear. Named records are not supported.
+fn parse_program_status(payload: &[u8]) -> Option<Option<ProgramStatusRecord>> {
+    let mut state = None;
+    let mut app = None;
+    let mut kind = None;
+    let mut progress = None;
+    for pair in payload.split(|byte| *byte == b':') {
+        let Some(separator) = pair.iter().position(|byte| *byte == b'=') else {
+            continue;
+        };
+        let key = pair[..separator].trim_ascii();
+        let value = pair[separator + 1..].trim_ascii();
+        if key == b"id" {
+            return None;
+        }
+        if key.len() > 16 {
+            return None;
+        }
+        // Check caps before parsing a malformed value or decoding text.
+        match key {
+            b"msg" if value.len() > 2732 => return None,
+            b"title" if value.len() > 256 => return None,
+            b"app" if value.len() > 32 => return None,
+            _ => {}
+        }
+        let (Ok(key), Ok(value)) = (std::str::from_utf8(key), std::str::from_utf8(value)) else {
+            continue;
+        };
+        if key.is_empty()
+            || !key.bytes().all(|b| b.is_ascii_lowercase())
+            || !value
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_.,+/=-".contains(&b))
+        {
+            continue;
+        }
+        match key {
+            "state" => state = Some(value),
+            "app" => app = Some(value),
+            "kind" => kind = Some(value),
+            "progress" => progress = Some(value),
+            "msg" | "title" => {
+                let engine = base64::engine::general_purpose::GeneralPurpose::new(
+                    &base64::alphabet::STANDARD,
+                    base64::engine::general_purpose::GeneralPurposeConfig::new()
+                        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent),
+                );
+                let decoded = engine.decode(value).ok()?;
+                let limit = if key == "msg" { 2048 } else { 192 };
+                if decoded.len() > limit {
+                    return None;
+                }
+                let text = std::str::from_utf8(&decoded).ok()?;
+                if text.chars().any(char::is_control) {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    let state = match state? {
+        "clear" => return Some(None),
+        "idle" => ProgramStatusState::Idle,
+        "working" => ProgramStatusState::Working,
+        "blocked" => ProgramStatusState::Blocked,
+        "done" => ProgramStatusState::Done,
+        "error" => ProgramStatusState::Error,
+        _ => return None,
+    };
+    let kind = if state == ProgramStatusState::Blocked {
+        match kind {
+            Some("permission") => Some(ProgramStatusKind::Permission),
+            Some("question") => Some(ProgramStatusKind::Question),
+            Some("auth") => Some(ProgramStatusKind::Auth),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let progress = if matches!(
+        state,
+        ProgramStatusState::Working | ProgramStatusState::Blocked
+    ) {
+        progress
+            .filter(|value| !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()))
+            .and_then(|value| value.parse::<u8>().ok())
+            .filter(|value| *value <= 100)
+    } else {
+        None
+    };
+    let app = app
+        .filter(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.+-".contains(&b))
+        })
+        .map(str::to_string);
+    Some(Some(ProgramStatusRecord {
+        state,
+        kind,
+        app,
+        progress,
+    }))
 }
 
 /// Splits an OSC body at the first `;`, returning `(command, payload)`.
@@ -1006,6 +1235,207 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn program_status_pi_wire_survives_every_byte_split() {
+        let bytes = b"\x1b]7501;state=blocked:app=pi:kind=permission:msg=QXBwcm92ZQ==\x1b\\";
+        for split in 0..=bytes.len() {
+            let mut tracker = AgentOscStateTracker::default();
+            tracker.observe(&bytes[..split]);
+            tracker.observe(&bytes[split..]);
+            let snapshot = tracker.program_status().unwrap();
+            assert_eq!(snapshot.revision, 1);
+            let record = snapshot.record.unwrap();
+            assert_eq!(record.state, ProgramStatusState::Blocked);
+            assert_eq!(record.kind, Some(ProgramStatusKind::Permission));
+            assert_eq!(record.app.as_deref(), Some("pi"));
+        }
+    }
+
+    #[test]
+    fn program_status_queries_are_fixed_replies_without_state() {
+        let mut tracker = AgentOscStateTracker::default();
+        for byte in b"\x1b]7501;?\x1b\\\x1b]7501;?\x07" {
+            tracker.observe(&[*byte]);
+        }
+        assert_eq!(tracker.take_query_replies(), 2);
+        assert_eq!(tracker.take_query_replies(), 0);
+        assert_eq!(tracker.program_status(), None);
+    }
+
+    #[test]
+    fn program_status_replaces_keys_and_clear_keeps_revision_fence() {
+        let mut tracker = AgentOscStateTracker::default();
+        tracker.observe(b"\x1b]7501;state=blocked:kind=auth:app=pi:progress=23\x07");
+        let first = tracker.program_status().unwrap();
+        assert_eq!(first.record.unwrap().kind, Some(ProgramStatusKind::Auth));
+        tracker.observe(b"\x1b]7501;state=working\x07");
+        let second = tracker.program_status().unwrap();
+        assert_eq!(second.revision, 2);
+        let record = second.record.unwrap();
+        assert_eq!(record.state, ProgramStatusState::Working);
+        assert_eq!(
+            (record.kind, record.app, record.progress),
+            (None, None, None)
+        );
+        tracker.observe(b"\x1b]7501;state=working\x07");
+        assert_eq!(tracker.program_status().unwrap().revision, 2);
+        tracker.observe(b"\x1b]7501;state=clear\x07");
+        assert_eq!(tracker.program_status().unwrap().revision, 3);
+        assert_eq!(tracker.program_status().unwrap().record, None);
+    }
+
+    #[test]
+    fn program_status_invalid_reports_leave_record_unchanged() {
+        let mut tracker = AgentOscStateTracker::default();
+        tracker.observe(b"\x1b]7501;state=working:app=pi\x07");
+        let original = tracker.program_status();
+        for payload in [
+            "state=oops",
+            "app=pi",
+            "state=done:id=child",
+            "state=clear:id=",
+            "state=done:id=bad!",
+            "state=done:msg=not_base64",
+            "state=done:msg=AA==",
+            "state=done:title=woA=",
+            "state=done:msg=/w==",
+        ] {
+            tracker.observe(format!("\x1b]7501;{payload}\x1b\\").as_bytes());
+            assert_eq!(tracker.program_status(), original, "{payload}");
+        }
+        for payload in [
+            format!("state=done:app={}", "a".repeat(33)),
+            format!("state=done:msg={}", "A".repeat(2733)),
+            format!("state=done:title={}", "A".repeat(257)),
+            format!("state=done:{}=a", "a".repeat(17)),
+            format!("state=done:{}", "x".repeat(4096)),
+        ] {
+            tracker.observe(format!("\x1b]7501;{payload}\x07").as_bytes());
+            assert_eq!(tracker.program_status(), original);
+        }
+        tracker.observe(b"\x1b]7501;state=done\x07");
+        assert_eq!(
+            tracker.program_status().unwrap().record.unwrap().state,
+            ProgramStatusState::Done
+        );
+    }
+
+    #[test]
+    fn program_status_sequence_cap_includes_framing_and_recovers() {
+        for terminator in ["\x07", "\x1b\\"] {
+            let prefix = "\x1b]7501;state=done:extension=";
+            let valid = format!(
+                "{prefix}{}{terminator}",
+                "x".repeat(4096 - prefix.len() - terminator.len())
+            );
+            let mut tracker = AgentOscStateTracker::default();
+            tracker.observe(valid.as_bytes());
+            assert_eq!(tracker.program_status().unwrap().revision, 1);
+            let oversized = format!(
+                "{prefix}{}{terminator}",
+                "x".repeat(4097 - prefix.len() - terminator.len())
+            );
+            tracker.observe(oversized.as_bytes());
+            assert_eq!(tracker.program_status().unwrap().revision, 1);
+        }
+    }
+
+    #[test]
+    fn program_status_malformed_pairs_unknown_keys_and_last_value() {
+        let record = parse_program_status(
+            b" bad :state=idle:state=blocked:kind=question:progress=100:future=okay:app=pi",
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(record.state, ProgramStatusState::Blocked);
+        assert_eq!(record.kind, Some(ProgramStatusKind::Question));
+        assert_eq!(record.progress, Some(100));
+        let record = parse_program_status(b"state=working:kind=auth:progress=101:app=bad,name")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (record.kind, record.progress, record.app),
+            (None, None, None)
+        );
+        assert!(parse_program_status(b"state=done:msg=YQ").is_some());
+        assert!(parse_program_status(b"state=done:bad=\xff").is_some());
+        assert!(parse_program_status(b"state=done:id=\xff").is_none());
+        assert!(parse_program_status(b"state=done:msg=YQ==").is_some());
+    }
+
+    #[test]
+    fn program_status_lifetime_prompt_exit_full_and_soft_reset() {
+        for state in ["idle", "working", "blocked", "done", "error"] {
+            for prompt in [false, true] {
+                let mut tracker = AgentOscStateTracker::default();
+                tracker.observe(format!("\x1b]7501;state={state}\x07").as_bytes());
+                // Alternate-screen switches and soft reset do not affect records.
+                tracker.observe(b"\x1b[?1049h\x1b[!p\x1b[?1049l");
+                assert!(tracker.program_status().unwrap().record.is_some());
+                if prompt {
+                    tracker.observe(b"\x1b]133;A;prompt=1\x07");
+                } else {
+                    tracker.expire_program_status();
+                }
+                let survives = matches!(state, "done" | "error");
+                assert_eq!(tracker.program_status().unwrap().record.is_some(), survives);
+                tracker.observe(b"\x1b");
+                tracker.observe(b"c");
+                let reset = tracker.program_status().unwrap();
+                assert_eq!(reset.record, None);
+                assert_eq!(reset.source_epoch, 1);
+                assert!(reset.revision >= 2);
+            }
+        }
+    }
+
+    #[test]
+    fn program_status_replacement_rejects_partial_old_report_but_keeps_title_framing() {
+        let mut tracker = AgentOscStateTracker::default();
+        tracker.observe(b"\x1b]7501;state=working");
+        tracker.reset_program_status();
+        tracker.observe(b":app=pi\x07");
+        assert_eq!(tracker.program_status().unwrap().record, None);
+        assert_eq!(tracker.program_status().unwrap().revision, 1);
+        tracker.observe(b"\x1b]7501;state=idle:app=pi\x07");
+        assert_eq!(
+            tracker.program_status().unwrap().record.unwrap().state,
+            ProgramStatusState::Idle
+        );
+        tracker.observe(b"\x1b]2;new title");
+        tracker.reset_program_status();
+        tracker.observe(b"\x07\x1b]7501;state=working\x07");
+        assert_eq!(tracker.terminal_title(), Some("new title"));
+        assert_eq!(
+            tracker.program_status().unwrap().record.unwrap().state,
+            ProgramStatusState::Working
+        );
+        let mut oversized = b"state=done:msg=".to_vec();
+        oversized.extend(vec![0xff; 2733]);
+        assert!(parse_program_status(&oversized).is_none());
+        tracker.observe(b"\x1b]7501;state=working:x=");
+        tracker.reset_program_status();
+        let suffix = format!("{}\x07\x1b]7501;state=done\x07", "x".repeat(5000));
+        tracker.observe(suffix.as_bytes());
+        assert_eq!(
+            tracker.program_status().unwrap().record.unwrap().state,
+            ProgramStatusState::Done
+        );
+    }
+
+    #[test]
+    fn program_status_ignored_strings_do_not_report_or_reset() {
+        let mut tracker = AgentOscStateTracker::default();
+        tracker.observe(b"\x1b]7501;state=working\x07");
+        let original = tracker.program_status();
+        tracker.observe(b"\x1bP\x1bc\x1b]7501;state=done\x07\x1b\\");
+        assert_eq!(tracker.program_status(), original);
+        tracker.reset_program_status();
+        assert_eq!(tracker.program_status().unwrap().source_epoch, 1);
+        assert_eq!(tracker.program_status().unwrap().record, None);
+    }
+
     // AgentOscStateTracker tests
     // -----------------------------------------------------------------------
 

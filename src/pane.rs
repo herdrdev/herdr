@@ -509,9 +509,18 @@ fn foreground_shell_agent_action(
 /// Drops retained OSC evidence when changing away from an identified agent.
 /// First acquisition keeps bytes that the newly identified process may have
 /// emitted before the process probe recognized it.
-fn clear_osc_evidence_for_agent_transition(terminal: &PaneTerminal, previous_agent: Option<Agent>) {
+fn clear_osc_evidence_for_agent_transition(
+    terminal: &PaneTerminal,
+    previous_agent: Option<Agent>,
+    replacement: bool,
+) {
     if previous_agent.is_some() {
         terminal.clear_agent_osc_state();
+        if replacement {
+            terminal.reset_program_status();
+        } else {
+            terminal.expire_program_status();
+        }
     }
 }
 
@@ -1105,7 +1114,11 @@ fn spawn_basic_detection_task(
                         // A replacement agent must not inherit OSC evidence
                         // from the previous process; a first acquisition keeps
                         // the evidence its own process already emitted.
-                        clear_osc_evidence_for_agent_transition(&terminal, previous_agent);
+                        clear_osc_evidence_for_agent_transition(
+                            &terminal,
+                            previous_agent,
+                            agent.is_some(),
+                        );
                         if let Some(agent) = agent {
                             agent_startup_grace_until = Some(now + AGENT_STARTUP_GRACE_WINDOW);
                             state = AgentState::Unknown;
@@ -2592,8 +2605,9 @@ impl PaneRuntime {
                 compression_wake.wake();
                 publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
                 observe_detection_content_change(bytes, &detection_content_seq);
-                let title_requested =
-                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let title_requested = (result.terminal_title_changed
+                    || result.program_status_changed)
+                    && render_dirty.request_terminal_title(pane_id);
                 let render_requested = result.request_render && render_dirty.request_pty(pane_id);
                 if title_requested || render_requested {
                     render_notify.notify_one();
@@ -2797,8 +2811,9 @@ impl PaneRuntime {
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
-                let title_requested =
-                    result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
+                let title_requested = (result.terminal_title_changed
+                    || result.program_status_changed)
+                    && render_dirty.request_terminal_title(pane_id);
                 let render_requested = result.request_render && render_dirty.request_pty(pane_id);
                 if title_requested || render_requested {
                     render_notify.notify_one();
@@ -3080,6 +3095,7 @@ impl PaneRuntime {
                                     clear_osc_evidence_for_agent_transition(
                                         &terminal,
                                         previous_agent,
+                                        agent.is_some(),
                                     );
                                     if let Some(agent) = agent {
                                         agent_startup_grace_until =
@@ -3531,6 +3547,14 @@ impl PaneRuntime {
 
     pub fn terminal_title(&self) -> Option<String> {
         self.terminal.terminal_title()
+    }
+
+    pub fn program_status(&self) -> Option<crate::api::schema::ProgramStatusSnapshot> {
+        self.terminal.program_status()
+    }
+
+    pub fn expire_program_status(&self) {
+        self.terminal.expire_program_status()
     }
 
     pub fn agent_osc_title(&self) -> String {
@@ -5828,15 +5852,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn program_status_foreground_replacement_and_exit_are_distinct() {
+        let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
+        runtime.test_process_pty_bytes(b"\x1b]7501;state=done:app=pi\x07");
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, None, false);
+        assert_eq!(runtime.program_status().unwrap().revision, 1);
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Pi), false);
+        assert_eq!(
+            runtime.program_status().unwrap().record.unwrap().state,
+            crate::api::schema::ProgramStatusState::Done
+        );
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Pi), true);
+        let replaced = runtime.program_status().unwrap();
+        assert_eq!(replaced.source_epoch, 1);
+        assert_eq!(replaced.revision, 2);
+        assert_eq!(replaced.record, None);
+        runtime.test_process_pty_bytes(b"\x1b]7501;state=blocked:app=pi\x07");
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Pi), false);
+        let exited = runtime.program_status().unwrap();
+        assert_eq!(exited.record, None);
+        assert_eq!(exited.source_epoch, 1);
+        assert_eq!(exited.revision, 4);
+    }
+
+    #[tokio::test]
     async fn first_agent_acquisition_keeps_osc_evidence_replacement_clears_it() {
         let runtime = PaneRuntime::test_with_screen_bytes(80, 24, b"");
         runtime.test_process_pty_bytes(b"\x1b]2;startup title\x1b\\\x1b]9;4;1;\x1b\\");
 
-        clear_osc_evidence_for_agent_transition(&runtime.terminal, None);
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, None, false);
         assert_eq!(runtime.agent_osc_title(), "startup title");
         assert_eq!(runtime.agent_osc_progress(), "4;1;");
 
-        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Claude));
+        clear_osc_evidence_for_agent_transition(&runtime.terminal, Some(Agent::Claude), true);
         assert_eq!(runtime.agent_osc_title(), "");
         assert_eq!(runtime.agent_osc_progress(), "");
     }

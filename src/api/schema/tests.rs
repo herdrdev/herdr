@@ -721,6 +721,7 @@ fn success_response_round_trips() {
             version: "0.1.2".into(),
             protocol: 6,
             capabilities: Some(ServerCapabilities {
+                program_status_root_v1: true,
                 live_handoff: true,
                 detached_server_daemon: true,
                 endpoint_protocol_generation: Some(1),
@@ -819,6 +820,7 @@ fn worktree_request_and_response_round_trip() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                program_status: None,
                 pane_id: "w_1-1".into(),
                 terminal_id: "term_1".into(),
                 workspace_id: "w_1".into(),
@@ -1248,6 +1250,7 @@ fn create_response_round_trips_with_root_pane() {
                 agent_status: AgentStatus::Unknown,
             },
             root_pane: PaneInfo {
+                program_status: None,
                 pane_id: "w_1-3".into(),
                 terminal_id: "term_example".into(),
                 workspace_id: "w_1".into(),
@@ -1458,4 +1461,14 @@ fn pane_link_resolve_round_trips() {
         serde_json::from_value::<ResponseResult>(json).unwrap(),
         result
     );
+}
+
+#[test]
+fn program_status_capability_is_additive_and_absent_on_legacy_servers() {
+    let legacy: ServerCapabilities = serde_json::from_str(r#"{"live_handoff":false}"#).unwrap();
+    assert!(!legacy.program_status_root_v1);
+    let record: ProgramStatusRecord =
+        serde_json::from_str(r#"{"state":"future_state","kind":"future_kind"}"#).unwrap();
+    assert_eq!(record.state, ProgramStatusState::Unknown);
+    assert_eq!(record.kind, Some(ProgramStatusKind::Unknown));
 }

@@ -447,6 +447,8 @@ pub struct PaneReleaseAgentParams {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_status: Option<super::common::ProgramStatusSnapshot>,
     pub pane_id: String,
     pub terminal_id: String,
     pub workspace_id: String,

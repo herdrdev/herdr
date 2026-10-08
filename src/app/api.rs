@@ -90,6 +90,24 @@ impl App {
         &mut self,
         ev: AppEvent,
     ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        if let AppEvent::PaneDied { pane_id, .. }
+        | AppEvent::StateChanged {
+            pane_id,
+            process_exited: true,
+            ..
+        }
+        | AppEvent::AgentProcessDetected { pane_id, .. } = &ev
+        {
+            if let Some((_, pane)) = self.find_pane(*pane_id) {
+                let terminal_id = pane.attached_terminal_id.clone();
+                if let Some(runtime) = self.terminal_runtimes.get(&terminal_id) {
+                    if !matches!(&ev, AppEvent::AgentProcessDetected { .. }) {
+                        runtime.expire_program_status();
+                    }
+                    self.sync_terminal_titles(&std::collections::HashSet::from([*pane_id]));
+                }
+            }
+        }
         let mut worktree_restore_failed = false;
         let ev = match ev {
             AppEvent::WorktreeRuntimeRestoreFailed {
