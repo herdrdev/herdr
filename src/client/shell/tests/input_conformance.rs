@@ -1349,6 +1349,10 @@ async fn goto_search_opens_only_for_a_typed_slash() {
         (&b"\x1b[>31u"[..], &b"\x1b[47u"[..], true),
         // Shift+/ typing `?` without a shifted alternate is not `/`.
         (b"\x1b[>31u", b"\x1b[47;2;63u", false),
+        // Shift+/ without text or alternate says nothing about `/`.
+        (b"\x1b[>31u", b"\x1b[47;2u", false),
+        // Shift+7 with a `/` alternate and no text is `/`.
+        (b"\x1b[>31u", b"\x1b[55:47;2u", true),
         // Ctrl+/ and Alt+/ are not text.
         (b"\x1b[>31u", b"\x1b[47;5u", false),
         (b"\x1b[>31u", b"\x1b[47;3u", false),
