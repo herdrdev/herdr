@@ -189,6 +189,8 @@ pub(crate) struct GhosttyPaneTerminal {
     pub core: Mutex<GhosttyPaneCore>,
     #[cfg(test)]
     pub(super) scroll_metrics_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(all(test, unix))]
+    pub(super) detection_text_reads: std::sync::atomic::AtomicUsize,
     key_encoder: Mutex<crate::ghostty::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
 }
@@ -1172,6 +1174,8 @@ impl GhosttyPaneTerminal {
         Ok(Self {
             #[cfg(test)]
             scroll_metrics_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(all(test, unix))]
+            detection_text_reads: std::sync::atomic::AtomicUsize::new(0),
             core: Mutex::new(GhosttyPaneCore {
                 #[cfg(test)]
                 dirty_collection_hook: None,
@@ -2167,6 +2171,9 @@ impl GhosttyPaneTerminal {
     }
 
     pub fn detection_text(&self) -> String {
+        #[cfg(all(test, unix))]
+        self.detection_text_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.core
             .lock()
             .ok()
