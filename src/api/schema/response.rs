@@ -46,6 +46,8 @@ pub enum ResponseResult {
         observation: super::InteractionObservation,
         supported: bool,
         unsupported_reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dialog: Option<super::InteractionDialog>,
     },
     AgentInteractionReceipt {
         receipt: super::InteractionReceipt,

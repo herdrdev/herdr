@@ -1,3 +1,4 @@
+use super::interaction_profiles as profiles;
 use super::responses::{encode_error, encode_success};
 use crate::api::{interaction_journal as journal, schema::*};
 use crate::app::App;
@@ -24,10 +25,10 @@ fn validate_observation(
 }
 
 impl App {
-    fn interaction_observation(
+    fn interaction_snapshot(
         &self,
         target: &str,
-    ) -> Result<InteractionObservation, &'static str> {
+    ) -> Result<(InteractionObservation, String), &'static str> {
         let resolved = self
             .resolve_agent_target(target)
             .map_err(|_| "agent_not_found")?;
@@ -37,27 +38,51 @@ impl App {
         let (runtime, _) = self
             .lookup_runtime(resolved.ws_idx, resolved.pane_id)
             .ok_or("agent_not_found")?;
-        Ok(InteractionObservation {
-            terminal_id: agent.terminal_id,
-            server_instance_id: journal::server_instance_id().into(),
-            runtime_pid: runtime.child_pid().ok_or("runtime_identity_unavailable")?,
-            agent: agent.agent.ok_or("agent_identity_unavailable")?,
-            agent_session: agent.agent_session.ok_or("agent_session_unavailable")?,
-            state_change_seq: agent.state_change_seq,
-            content_digest: journal::digest(runtime.detection_text().as_bytes()),
-        })
+        let text = runtime.detection_text();
+        Ok((
+            InteractionObservation {
+                terminal_id: agent.terminal_id,
+                server_instance_id: journal::server_instance_id().into(),
+                runtime_pid: runtime.child_pid().ok_or("runtime_identity_unavailable")?,
+                agent: agent.agent.ok_or("agent_identity_unavailable")?,
+                agent_session: agent.agent_session.ok_or("agent_session_unavailable")?,
+                state_change_seq: agent.state_change_seq,
+                content_digest: journal::digest(text.as_bytes()),
+            },
+            text,
+        ))
+    }
+
+    fn interaction_dialog(&self, target: &str, text: &str) -> Option<InteractionDialog> {
+        if !profiles::enabled() {
+            return None;
+        }
+        let resolved = self.resolve_agent_target(target).ok()?;
+        let agent = self.agent_info(resolved.ws_idx, resolved.pane_id)?;
+        if agent.agent.as_deref() != Some("claude") || agent.agent_status != AgentStatus::Blocked {
+            return None;
+        }
+        profiles::recognize(text)
     }
 
     pub(super) fn handle_interaction_get(&mut self, id: String, params: AgentTarget) -> String {
-        match self.interaction_observation(&params.target) {
-            Ok(observation) => encode_success(
-                id,
-                ResponseResult::AgentInteraction {
-                    observation,
-                    supported: false,
-                    unsupported_reason: "no_verified_native_interaction_profile".into(),
-                },
-            ),
+        match self.interaction_snapshot(&params.target) {
+            Ok((observation, text)) => {
+                let dialog = self.interaction_dialog(&params.target, &text);
+                encode_success(
+                    id,
+                    ResponseResult::AgentInteraction {
+                        observation,
+                        supported: dialog.is_some(),
+                        unsupported_reason: if dialog.is_some() {
+                            String::new()
+                        } else {
+                            "no_verified_native_interaction_profile".into()
+                        },
+                        dialog,
+                    },
+                )
+            }
             Err(code) => encode_error(
                 id,
                 code,
@@ -79,12 +104,12 @@ impl App {
                 // This handler runs on the app's serialized API dispatch. PTY output, humans and
                 // other terminal writers remain independent; this is an observation check, not
                 // a transaction with the external agent's input processing.
-                let current = self.interaction_observation(&params.expected.terminal_id)?;
+                let (current, text) = self.interaction_snapshot(&params.expected.terminal_id)?;
                 validate_observation(&params.expected, &current)?;
-                // No bundled agent provides a verified, typed dialog/options/custom-entry model.
-                // Do not translate labels, indexes, caller-supplied keys or text to speculative
-                // terminal input. Add a native profile only after real affordance verification.
-                Err("unsupported_interaction_profile")
+                let dialog = self
+                    .interaction_dialog(&params.expected.terminal_id, &text)
+                    .ok_or("unsupported_interaction_profile")?;
+                profiles::compile(&dialog, &params.action)
             },
             |bytes| {
                 let resolved = self

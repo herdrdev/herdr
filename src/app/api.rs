@@ -4,6 +4,7 @@ mod agent_view;
 mod agents;
 mod env;
 mod integrations;
+mod interaction_profiles;
 mod interactions;
 mod layouts;
 mod pane_graphics;

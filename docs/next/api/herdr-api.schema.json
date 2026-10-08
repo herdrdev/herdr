@@ -7975,6 +7975,43 @@
           ],
           "type": "object"
         },
+        "InteractionDialog": {
+          "properties": {
+            "options": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/InteractionOption"
+              },
+              "type": "array"
+            },
+            "phase": {
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "question": {
+              "type": "string"
+            },
+            "selected_option_id": {
+              "type": "string"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "profile",
+            "phase",
+            "question",
+            "options",
+            "selected_option_id",
+            "supported_actions"
+          ],
+          "type": "object"
+        },
         "InteractionObservation": {
           "additionalProperties": false,
           "description": "Exact runtime identity and bottom-buffer observation; names/pane aliases are not identity.",
@@ -8014,6 +8051,25 @@
             "agent_session",
             "state_change_seq",
             "content_digest"
+          ],
+          "type": "object"
+        },
+        "InteractionOption": {
+          "properties": {
+            "custom": {
+              "type": "boolean"
+            },
+            "label": {
+              "type": "string"
+            },
+            "option_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "option_id",
+            "label",
+            "custom"
           ],
           "type": "object"
         },
@@ -9556,6 +9612,16 @@
           "oneOf": [
             {
               "properties": {
+                "dialog": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/InteractionDialog"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "observation": {
                   "$ref": "#/schemas/success_response/$defs/InteractionObservation"
                 },

@@ -2,11 +2,7 @@
 //! from agent acceptance. A crash anywhere after claiming an operation leaves an unknown result.
 use crate::api::schema::{InteractionOutcome, InteractionReceipt, InteractionSubmitParams};
 use sha2::{Digest, Sha256};
-use std::{
-    fs,
-    io::{self, Write},
-    path::{Path, PathBuf},
-};
+use std::{fs, io, path::Path};
 
 /// Invalidates observations across process restart/handoff, even if IDs and sequence reset.
 pub(crate) fn server_instance_id() -> &'static str {
@@ -41,23 +37,26 @@ pub(crate) fn valid_operation_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
-fn operation_dir(root: &Path, id: &str) -> PathBuf {
+#[cfg(test)]
+fn operation_dir(root: &Path, id: &str) -> std::path::PathBuf {
     root.join(digest(id.as_bytes()))
 }
 
-pub(crate) fn lookup(root: &Path, id: &str) -> io::Result<Option<InteractionReceipt>> {
-    let dir = operation_dir(root, id);
-    match fs::metadata(&dir) {
+#[cfg(unix)]
+use crate::platform::interaction_journal_fs as trusted;
+
+#[cfg(unix)]
+fn lookup_in(root: &fs::File, id: &str) -> io::Result<Option<InteractionReceipt>> {
+    let dir = match trusted::operation(root, id) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e),
-        Ok(_) => {}
-    }
+        other => other?,
+    };
     let intent: InteractionReceipt =
-        serde_json::from_slice(&fs::read(dir.join("intent.json"))?).map_err(io::Error::other)?;
+        serde_json::from_slice(&trusted::read(&dir, "intent.json")?).map_err(io::Error::other)?;
     if intent.operation_id != id || intent.outcome != InteractionOutcome::UnknownDelivery {
         return Err(io::Error::other("invalid operation intent"));
     }
-    match fs::read(dir.join("receipt.json")) {
+    match trusted::read(&dir, "receipt.json") {
         Ok(bytes) => {
             let receipt: InteractionReceipt =
                 serde_json::from_slice(&bytes).map_err(io::Error::other)?;
@@ -70,12 +69,23 @@ pub(crate) fn lookup(root: &Path, id: &str) -> io::Result<Option<InteractionRece
         Err(e) => Err(e),
     }
 }
-
-fn write_new(path: &Path, value: &InteractionReceipt) -> io::Result<()> {
-    let bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
-    let mut file = crate::platform::create_private_state_file(path)?;
-    file.write_all(&bytes)?;
-    file.sync_all()
+pub(crate) fn lookup(root: &Path, id: &str) -> io::Result<Option<InteractionReceipt>> {
+    if !valid_operation_id(id) {
+        return Err(io::Error::other("invalid operation ID"));
+    }
+    #[cfg(unix)]
+    {
+        let root = match trusted::root(root, false) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            other => other?,
+        };
+        lookup_in(&root, id)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Err(io::Error::other("unsupported journal platform"))
+    }
 }
 
 /// Caller must serialize runtime validation and queue submission. No raw byte API is exposed
@@ -98,61 +108,58 @@ pub(crate) fn dispatch(
             "invalid operation ID or payload digest",
         ));
     }
-    if let Some(receipt) = lookup(root, &params.operation_id)? {
-        if receipt.payload_digest != params.payload_digest {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "operation ID already binds another payload",
-            ));
-        }
-        return Ok(receipt);
-    }
-    match crate::platform::create_private_state_directory(root) {
-        Ok(()) => crate::platform::sync_parent_directory(
-            root.parent()
-                .ok_or_else(|| io::Error::other("missing journal parent"))?,
-        )?,
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
-        Err(e) => return Err(e),
-    }
-    let dir = operation_dir(root, &params.operation_id);
-    // create_new directory prevents a second dispatcher from claiming the same operation.
-    // A concurrent claim, partial intent or corrupt receipt is an error, never a redispatch.
-    crate::platform::create_private_state_directory(&dir)?;
-    crate::platform::sync_parent_directory(root)?;
-    let intent = InteractionReceipt {
-        operation_id: params.operation_id.clone(),
-        payload_digest: params.payload_digest.clone(),
-        outcome: InteractionOutcome::UnknownDelivery,
-        code: Some("unresolved_intent".into()),
-    };
-    write_new(&dir.join("intent.json"), &intent)?;
-    crate::platform::sync_parent_directory(&dir)?;
-    let mut receipt = intent.clone();
-    match prepare() {
-        Err(code) => {
-            receipt.outcome = InteractionOutcome::Rejected;
-            receipt.code = Some(code.into());
-        }
-        Ok(bytes) => match send(bytes) {
-            Ok(()) => {
-                receipt.outcome = InteractionOutcome::Enqueued;
-                receipt.code = None;
+    #[cfg(not(unix))]
+    return Err(io::Error::other("unsupported journal platform"));
+    #[cfg(unix)]
+    {
+        let root = trusted::root(root, true)?;
+        if let Some(receipt) = lookup_in(&root, &params.operation_id)? {
+            if receipt.payload_digest != params.payload_digest {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "operation ID already binds another payload",
+                ));
             }
-            Err(_) => receipt.code = Some("queue_submission_failed".into()),
-        },
+            return Ok(receipt);
+        }
+        trusted::mkdir(
+            &root,
+            std::ffi::OsStr::new(&digest(params.operation_id.as_bytes())),
+        )?;
+        let dir = trusted::operation(&root, &params.operation_id)?;
+        let intent = InteractionReceipt {
+            operation_id: params.operation_id.clone(),
+            payload_digest: params.payload_digest.clone(),
+            outcome: InteractionOutcome::UnknownDelivery,
+            code: Some("unresolved_intent".into()),
+        };
+        trusted::write(&dir, "intent.json", &intent)?;
+        let mut receipt = intent.clone();
+        match prepare() {
+            Err(code) => {
+                receipt.outcome = InteractionOutcome::Rejected;
+                receipt.code = Some(code.into());
+            }
+            Ok(bytes) => match send(bytes) {
+                Ok(()) => {
+                    receipt.outcome = InteractionOutcome::Enqueued;
+                    receipt.code = None;
+                }
+                Err(_) => receipt.code = Some("queue_submission_failed".into()),
+            },
+        }
+        // Never overwrite a prior result. Even receipt-write failure leaves the durable intent,
+        // so the operation can only be queried/reconciled, never submitted again.
+        trusted::write(&dir, "receipt.json", &receipt)?;
+        Ok(receipt)
     }
-    // Never overwrite a prior result. Even receipt-write failure leaves the durable intent,
-    // so the operation can only be queried/reconciled, never submitted again.
-    write_new(&dir.join("receipt.json"), &receipt)?;
-    crate::platform::sync_parent_directory(&dir)?;
-    Ok(receipt)
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::api::schema::*;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     fn root() -> PathBuf {
@@ -258,8 +265,8 @@ mod tests {
     fn interaction_journal_partial_claim_and_queue_error_never_retry() {
         let root = root();
         let p = params();
-        fs::create_dir(&root).unwrap();
-        fs::create_dir(operation_dir(&root, "op1")).unwrap();
+        crate::platform::create_private_state_directory(&root).unwrap();
+        crate::platform::create_private_state_directory(&operation_dir(&root, "op1")).unwrap();
         assert!(dispatch(&root, &p, || panic!("prepare"), |_| panic!("send")).is_err());
         fs::remove_dir_all(&root).unwrap();
         let r = dispatch(
@@ -275,5 +282,59 @@ mod tests {
             r
         );
         fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interaction_journal_rejects_unsafe_roots_ancestors_and_linked_records() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let root = root();
+        let p = params();
+        fs::create_dir(&root).unwrap();
+        assert!(dispatch(&root, &p, || panic!("prepare"), |_| panic!("send")).is_err());
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        dispatch(&root, &p, || Err("test"), |_| panic!("send")).unwrap();
+        let receipt = operation_dir(&root, "op1").join("receipt.json");
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(lookup(&root, "op1").is_err());
+        fs::set_permissions(&receipt, fs::Permissions::from_mode(0o600)).unwrap();
+        let link = root.join("hardlink");
+        fs::hard_link(&receipt, &link).unwrap();
+        assert!(lookup(&root, "op1").is_err());
+        fs::remove_file(link).unwrap();
+        fs::remove_file(&receipt).unwrap();
+        symlink("intent.json", &receipt).unwrap();
+        assert!(lookup(&root, "op1").is_err());
+        fs::remove_file(&receipt).unwrap();
+        fs::set_permissions(
+            operation_dir(&root, "op1"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .unwrap();
+        assert!(lookup(&root, "op1").is_err());
+        fs::remove_dir_all(&root).unwrap();
+        let destination = root.with_extension("destination");
+        crate::platform::create_private_state_directory(&destination).unwrap();
+        symlink(&destination, &root).unwrap();
+        assert!(dispatch(&root, &p, || panic!("prepare"), |_| panic!("send")).is_err());
+        fs::remove_file(&root).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(dispatch(
+            &root.join("journal"),
+            &p,
+            || panic!("prepare"),
+            |_| panic!("send")
+        )
+        .is_err());
+        fs::remove_dir_all(&root).unwrap();
+        symlink(&destination, &root).unwrap();
+        assert!(dispatch(
+            &root.join("journal"),
+            &p,
+            || panic!("prepare"),
+            |_| panic!("send")
+        )
+        .is_err());
+        fs::remove_file(&root).unwrap();
+        fs::remove_dir_all(destination).unwrap();
     }
 }

@@ -66,3 +66,19 @@ pub struct InteractionReceipt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InteractionOption {
+    pub option_id: String,
+    pub label: String,
+    pub custom: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct InteractionDialog {
+    pub profile: String,
+    pub phase: String,
+    pub question: String,
+    pub options: Vec<InteractionOption>,
+    pub selected_option_id: String,
+    pub supported_actions: Vec<String>,
+}

@@ -299,7 +299,7 @@ pub(crate) use unix_common::{
 
 mod client_state;
 pub(crate) use client_state::{
-    create_private_state_directory, create_private_state_file, replace_file, sync_parent_directory,
+    create_private_state_file, replace_file, sync_parent_directory,
     DURABLE_INTERACTION_JOURNAL_SUPPORTED,
 };
 
@@ -682,3 +682,9 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+pub(crate) use client_state::create_private_state_directory;
+
+#[cfg(unix)]
+pub(crate) mod interaction_journal_fs;
