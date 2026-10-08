@@ -26,6 +26,9 @@ pub(crate) use super::unix_common::{
 mod bootstrap;
 pub(crate) use bootstrap::{configure_server_daemon_context, prepare_server_process};
 
+mod shutdown;
+pub(crate) use shutdown::monitor_host_shutdown;
+
 #[cfg(test)]
 mod config_file_tests;
 

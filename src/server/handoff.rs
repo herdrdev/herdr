@@ -47,6 +47,10 @@ pub(crate) struct HandoffManifest {
     /// Absent from manifests written before this field existed.
     #[serde(default)]
     pub api_window_title: Option<String>,
+    /// A host restart or shutdown announced to the old server but not yet
+    /// committed. Absent from manifests written before this field existed.
+    #[serde(default)]
+    pub host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
 }
 
 #[cfg(unix)]
@@ -307,6 +311,7 @@ pub(crate) fn manifest_for(
     expected_protocol: Option<u32>,
     expected_version: Option<String>,
     api_window_title: Option<String>,
+    host_shutdown_intent: Option<crate::platform::HostShutdownIntent>,
 ) -> HandoffManifest {
     HandoffManifest {
         version: HANDOFF_VERSION,
@@ -317,6 +322,7 @@ pub(crate) fn manifest_for(
         snapshot,
         panes,
         api_window_title,
+        host_shutdown_intent,
     }
 }
 
@@ -549,9 +555,76 @@ mod tests {
             None,
             None,
             Some("deploying".to_string()),
+            None,
         );
 
         assert_eq!(manifest.api_window_title.as_deref(), Some("deploying"));
+    }
+
+    #[test]
+    fn a_handoff_carries_an_announced_host_shutdown() {
+        let intent: crate::platform::HostShutdownIntent =
+            serde_json::from_value(serde_json::json!({ "announced_at_ns": 42 }))
+                .expect("intent should deserialize");
+        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, Some(intent));
+        let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
+        let decoded: HandoffManifest =
+            serde_json::from_slice(&encoded).expect("manifest should deserialize");
+
+        assert_eq!(decoded.host_shutdown_intent, Some(intent));
+    }
+
+    #[test]
+    fn a_manifest_written_before_the_host_shutdown_field_still_loads() {
+        let manifest = manifest_for(empty_snapshot(), Vec::new(), None, None, None, None);
+        let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
+        value
+            .as_object_mut()
+            .expect("manifest should be a json object")
+            .remove("host_shutdown_intent");
+
+        let older: HandoffManifest =
+            serde_json::from_value(value).expect("an older manifest should still load");
+
+        assert!(older.host_shutdown_intent.is_none());
+    }
+
+    #[test]
+    fn an_older_server_imports_a_manifest_with_an_announced_host_shutdown() {
+        /// The manifest as servers before `host_shutdown_intent` decode it,
+        /// frozen here so the new field stays ignorable by them.
+        #[derive(Deserialize)]
+        #[allow(dead_code)] // Only decoding is under test.
+        struct PreHostShutdownManifest {
+            version: u32,
+            source_version: String,
+            source_protocol: u32,
+            expected_version: Option<String>,
+            expected_protocol: Option<u32>,
+            snapshot: crate::persist::SessionSnapshot,
+            panes: Vec<crate::handoff_runtime::HandoffRuntimeState>,
+            #[serde(default)]
+            api_window_title: Option<String>,
+        }
+
+        let intent: crate::platform::HostShutdownIntent =
+            serde_json::from_value(serde_json::json!({ "announced_at_ns": 42 }))
+                .expect("intent should deserialize");
+        let manifest = manifest_for(
+            empty_snapshot(),
+            Vec::new(),
+            None,
+            None,
+            Some("deploying".to_string()),
+            Some(intent),
+        );
+        let encoded = serde_json::to_vec(&manifest).expect("manifest should serialize");
+
+        let older: PreHostShutdownManifest =
+            serde_json::from_slice(&encoded).expect("an older server should still load it");
+
+        assert_eq!(older.version, HANDOFF_VERSION);
+        assert_eq!(older.api_window_title.as_deref(), Some("deploying"));
     }
 
     #[test]
@@ -562,6 +635,7 @@ mod tests {
             None,
             None,
             Some("deploying".to_string()),
+            None,
         );
         let mut value = serde_json::to_value(&manifest).expect("manifest should serialize");
         value

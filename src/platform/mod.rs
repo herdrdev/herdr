@@ -13,9 +13,10 @@ pub(crate) struct HostShutdownMonitor {
 impl HostShutdownMonitor {
     pub(crate) fn start(
         requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        intent: HostShutdownIntentCell,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        let task = monitor_host_shutdown(requested, wake);
+        let task = monitor_host_shutdown(requested, intent, wake);
         Self { task }
     }
 }
@@ -28,9 +29,50 @@ impl Drop for HostShutdownMonitor {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// A restart or shutdown the host announced but has not committed to yet.
+///
+/// Live handoff carries it so a replacement server still recognizes the
+/// commit point. The value is captured when the old server builds its handoff
+/// manifest; announcements or cancellations that arrive after that and before
+/// the replacement starts its monitor reach only the old server. Each handoff
+/// phase may take up to 30 seconds, so that window can last tens of seconds.
+/// Only macOS reports an intent; the timestamp is in its boot-wide monotonic
+/// clock, which is shared by the old and new server processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HostShutdownIntent {
+    announced_at_ns: u64,
+}
+
+/// The pending host shutdown intent shared by the server and its monitor.
+// Windows has no live handoff and no announcement to record, so nothing reads it there.
+#[cfg_attr(windows, allow(dead_code))]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HostShutdownIntentCell(
+    std::sync::Arc<std::sync::Mutex<Option<HostShutdownIntent>>>,
+);
+
+// Windows has no live handoff and no announcement to record, so nothing reads it there.
+#[cfg_attr(windows, allow(dead_code))]
+impl HostShutdownIntentCell {
+    pub(crate) fn get(&self) -> Option<HostShutdownIntent> {
+        *self.lock()
+    }
+
+    pub(crate) fn set(&self, intent: Option<HostShutdownIntent>) {
+        *self.lock() = intent;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<HostShutdownIntent>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn monitor_host_shutdown(
     _requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _intent: HostShutdownIntentCell,
     _wake: impl Fn() + Send + Sync + 'static,
 ) -> Option<tokio::task::JoinHandle<()>> {
     None

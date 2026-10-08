@@ -6,6 +6,8 @@ use futures_util::StreamExt;
 
 pub(crate) fn monitor_host_shutdown(
     requested: Arc<AtomicBool>,
+    // logind has no cancellable announcement to carry across handoff.
+    _intent: crate::platform::HostShutdownIntentCell,
     wake: impl Fn() + Send + Sync + 'static,
 ) -> Option<tokio::task::JoinHandle<()>> {
     Some(tokio::spawn(async move {

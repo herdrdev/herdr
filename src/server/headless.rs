@@ -245,6 +245,8 @@ pub struct HeadlessServer {
     should_quit: Arc<AtomicBool>,
     server_stop: ServerStop,
     host_shutdown_requested: Arc<AtomicBool>,
+    /// An announced, still cancellable host shutdown; carried across live handoff.
+    host_shutdown_intent: crate::platform::HostShutdownIntentCell,
     #[cfg(test)]
     host_shutdown_probe: fn() -> bool,
     /// Channel for receiving server events from client connection threads.
@@ -376,6 +378,7 @@ impl HeadlessServer {
             effective_size: headless_size,
             shutting_down: false,
             host_shutdown_requested: Arc::new(AtomicBool::new(false)),
+            host_shutdown_intent: Default::default(),
             #[cfg(test)]
             host_shutdown_probe: crate::platform::host_shutdown_in_progress,
             handoff_in_progress: false,
@@ -409,6 +412,7 @@ impl HeadlessServer {
         let quit_notify = self.server_event_tx.clone();
         let _host_shutdown = crate::platform::HostShutdownMonitor::start(
             self.host_shutdown_requested.clone(),
+            self.host_shutdown_intent.clone(),
             move || {
                 let _ = quit_notify.try_send(ServerEvent::QuitSignal);
             },
