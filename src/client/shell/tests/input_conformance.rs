@@ -1604,6 +1604,95 @@ async fn layout_chord_releases_pair_when_modifiers_change_first() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn overlapping_layout_and_us_keys_release_exactly() {
+    // A US `w` held together with a Russian chord on the same physical key.
+    // Each release must end its own press, in either order, however the
+    // chord's modifiers changed in between.
+    use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
+    const PRESS: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
+    const RELEASE: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE;
+    let us_w = *KEYS.iter().find(|def| def.name == "w").unwrap();
+    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
+    type Step = (KeyDef, u16, ffi::GhosttyKeyAction);
+    // (case, steps, Ghostty direct, Herdr)
+    let cases: [(&str, Vec<Step>, &str, &str); 4] = [
+        (
+            "ctrl+shift+\u{446}, shift let go, \u{446} then w released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL | SHIFT, PRESS),
+                (ru_w, CTRL, RELEASE),
+                (us_w, CTRL, RELEASE),
+            ],
+            "w\\x1b[1094;6u\\x1b[1094;5:3u\\x1b[119;5:3u",
+            "w\\x1b[1094;6u\\x1b[1094;5:3u\\x1b[119;5:3u",
+        ),
+        (
+            "ctrl+shift+\u{446}, shift let go, w then \u{446} released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL | SHIFT, PRESS),
+                (us_w, CTRL, RELEASE),
+                (ru_w, CTRL, RELEASE),
+            ],
+            "w\\x1b[1094;6u\\x1b[119;5:3u\\x1b[1094;5:3u",
+            "w\\x1b[1094;6u\\x1b[119;5:3u\\x1b[1094;5:3u",
+        ),
+        // A Ctrl chord reaches Kitty apps as its physical key (see
+        // `layout_ctrl_chords_match_ghostty_direct`); its release follows.
+        (
+            "ctrl+\u{446}, ctrl let go, \u{446} then w released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL, PRESS),
+                (ru_w, 0, RELEASE),
+                (us_w, 0, RELEASE),
+            ],
+            "w\\x1b[1094;5u\\x1b[1094;1:3u\\x1b[119;1:3u",
+            "w\\x1b[119;5u\\x1b[119;1:3u\\x1b[119;1:3u",
+        ),
+        (
+            "ctrl+\u{446}, ctrl let go, w then \u{446} released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL, PRESS),
+                (us_w, 0, RELEASE),
+                (ru_w, 0, RELEASE),
+            ],
+            "w\\x1b[1094;5u\\x1b[119;1:3u\\x1b[1094;1:3u",
+            "w\\x1b[119;5u\\x1b[119;1:3u\\x1b[119;1:3u",
+        ),
+    ];
+    let pane_mode = b"\x1b[>3u";
+    for (name, steps, ghostty, want) in cases {
+        let mut host = Oracle::new(HostProfile::Kitty.setup(pane_mode));
+        let mut direct = Oracle::new(pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        let mut direct_bytes = Vec::new();
+        let mut pane_bytes = Vec::new();
+        let mut host_bytes = Vec::new();
+        for (def, mods, action) in steps {
+            let report = host.encode(def, mods, action);
+            direct_bytes.extend(direct.encode(def, mods, action));
+            pane_bytes.extend(herdr.feed(&report).expect("reaches the pane"));
+            host_bytes.push(show(&report));
+        }
+        assert_eq!(show(&direct_bytes), ghostty, "{name}: Ghostty direct");
+        assert_eq!(show(&pane_bytes), want, "{name}: host sent {host_bytes:?}");
+        // Nothing stays leased: losing focus releases no further key.
+        let after = herdr.feed(b"\x1b[O").unwrap_or_default();
+        assert!(
+            !show(&after).contains(":3u"),
+            "{name}: focus loss sent {}",
+            show(&after)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {
     let report = run_mouse_conformance();
     print_report(&report);

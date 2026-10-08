@@ -86,12 +86,8 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         modifiers |= KeyModifiers::SHIFT;
     }
 
-    let base_layout_key = base_layout_codepoint
-        .and_then(char::from_u32)
-        .filter(char::is_ascii_graphic);
     let mut key = TerminalKey::new(code, modifiers)
         .with_kind(kind)
-        .with_base_layout_key(base_layout_key)
         .with_layout_key(layout_key);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
@@ -959,14 +955,7 @@ mod tests {
             assert_ne!(*sequence, stripped);
             let key = parse_terminal_key_sequence(sequence).unwrap();
             let layout_key = parse_terminal_key_sequence(&stripped).unwrap();
-            // The base-layout key is kept only to pair releases; everything
-            // the pane and keybinds read must match the report without it.
-            assert!(key.base_layout_key().is_some(), "{sequence:?}");
-            assert_eq!(
-                key.clone().with_base_layout_key(None),
-                layout_key,
-                "{sequence:?}"
-            );
+            assert_eq!(key, layout_key, "{sequence:?}");
             for pane_mode in [&b""[..], b"\x1b[>1u", b"\x1b[>5u", b"\x1b[>31u"] {
                 assert_eq!(
                     crate::pane::test_encode_key_for_app(pane_mode, key.clone()),

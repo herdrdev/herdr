@@ -423,11 +423,8 @@ impl ClientShellState {
                 // the physical key, so a modifier let go before the key flips
                 // between the layout character and that key. It is released as
                 // the key the pane saw pressed.
-                let layout_chord = key.code != lease.key.code
-                    && [key.base_layout_key(), key.layout_key()]
-                        .into_iter()
-                        .flatten()
-                        .any(|alternate| KeyCode::Char(alternate) == lease.key.code);
+                let layout_chord =
+                    key.code != lease.key.code && key.identity() == lease.key.identity();
                 let release = if key.physical_key_id().is_some() || layout_chord {
                     lease
                         .key
@@ -1131,7 +1128,7 @@ impl ClientShellState {
         if let Some(lease) = self.input_leases.remove(lease_key) {
             return Some(lease);
         }
-        let KeyCode::Char(c) = key.code else {
+        let KeyCode::Char(c) = key.layout_key().map_or(key.code, KeyCode::Char) else {
             return None;
         };
         fn single(mut chars: impl Iterator<Item = char>) -> Option<char> {
@@ -1150,12 +1147,6 @@ impl ClientShellState {
             .and_then(char::from_u32)
             .into_iter()
             .chain(other_case)
-            // A Ctrl chord on a non-Latin layout was leased as its physical key;
-            // its release names the layout character if Ctrl was let go first.
-            // The other way round, a Ctrl+Shift or Ctrl+Alt chord was leased as
-            // the layout character and is released as Ctrl alone.
-            .chain(key.base_layout_key())
-            .chain(key.layout_key())
             .find_map(|candidate| {
                 self.input_leases.remove(&crate::input::InputLeaseKey::new(
                     LOCAL_INPUT_SOURCE,
