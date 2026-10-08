@@ -782,8 +782,8 @@ impl RawInputByteFramer {
                 continue;
             }
 
-            // A kitty key report can't be Alt-prefixed (Alt is in its
-            // modifiers), so ESC before one is always its own key. WezTerm
+            // Kitty key reports carry Alt in their modifiers and are never
+            // Alt-prefixed, so ESC before a complete report is its own key. WezTerm
             // sends an Escape press as bare ESC and the release as a report,
             // and a quick tap delivers both together (#1266).
             if self.buffer.starts_with(b"\x1b\x1b")
@@ -838,7 +838,10 @@ impl RawInputByteFramer {
 
 const MAX_DISCARDED_CONTROL_TAIL_BYTES: usize = 128;
 
-/// A complete kitty `CSI <code>[:alternates][;mods[:event][;text]] u` report.
+/// Whether `bytes` starts with a complete sequence shaped like a kitty key
+/// report, `CSI <code>[:alternates][;mods[:event][;text]] u`. Only the shape is
+/// checked: digit-led parameters made of digits, `;` and `:`, ending in `u`.
+/// That excludes `CSI u` (cursor restore) and private replies like `CSI ? 7 u`.
 fn starts_with_kitty_key_report(bytes: &[u8]) -> bool {
     let Some(rest) = bytes.strip_prefix(b"\x1b[") else {
         return false;
@@ -849,6 +852,7 @@ fn starts_with_kitty_key_report(bytes: &[u8]) -> bool {
         .count();
     rest.first().is_some_and(u8::is_ascii_digit) && rest.get(params) == Some(&b'u')
 }
+
 #[cfg(windows)]
 const HOST_COLOR_TAIL_RECOVERY_GRACE: Duration = Duration::from_millis(100);
 
@@ -2403,6 +2407,67 @@ mod tests {
         chunks.extend(framer.push(b"1:3u"));
         chunks.extend(framer.flush_timeout());
         assert_escape_press_then_release(chunks, 1);
+    }
+
+    #[test]
+    fn preserved_doubled_escape_policy_splits_the_tap_at_every_read_boundary() {
+        let (press, release) = WEZTERM_ESCAPE_TAP;
+        let tap = [press, release].concat();
+        for taps in [tap.clone(), [tap.clone(), tap.clone()].concat()] {
+            let count = taps.len() / tap.len();
+            for split in 1..taps.len() {
+                let mut framer = RawInputByteFramer::with_host_input_policy(true);
+                let mut chunks = framer.push(&taps[..split]);
+                chunks.extend(framer.push(&taps[split..]));
+                chunks.extend(framer.flush_timeout());
+                assert_escape_press_then_release(chunks, count);
+            }
+        }
+    }
+
+    #[test]
+    fn preserved_doubled_escape_policy_splits_escape_before_alt_kitty_report() {
+        // Escape, then Alt+a reported by a kitty host: two keys, not Alt+Alt+a.
+        let mut framer = RawInputByteFramer::with_host_input_policy(true);
+        let mut chunks = framer.push(b"\x1b\x1b[97;3u");
+        chunks.extend(framer.flush_timeout());
+        assert_eq!(chunks, vec![b"\x1b".to_vec(), b"\x1b[97;3u".to_vec()]);
+        let events = events_from_framed_chunks(chunks);
+        assert!(
+            matches!(&events[..], [RawInputEvent::Key(esc), RawInputEvent::Key(alt_a)]
+                if esc.code == KeyCode::Esc && esc.modifiers.is_empty()
+                    && alt_a.code == KeyCode::Char('a') && alt_a.modifiers == KeyModifiers::ALT),
+            "{events:?}"
+        );
+    }
+
+    #[test]
+    fn preserved_doubled_escape_policy_keeps_legacy_alt_sequences_whole() {
+        for bytes in [
+            &b"\x1b\x1b[D"[..],
+            b"\x1b\x1b[1;3D",
+            b"\x1b\x1b[3~",
+            b"\x1b\x1bOA",
+        ] {
+            let mut framer = RawInputByteFramer::with_host_input_policy(true);
+            let mut chunks = framer.push(bytes);
+            chunks.extend(framer.flush_timeout());
+            assert_eq!(chunks, vec![bytes.to_vec()], "{bytes:?}");
+        }
+        for bytes in [
+            &b"\x1b[u"[..],
+            b"\x1b[?7u",
+            b"\x1b[;3u",
+            b"\x1b[27;1:3",
+            b"\x1b[27;1:3~",
+            b"\x1b[D",
+            b"\x1bOA",
+        ] {
+            assert!(!starts_with_kitty_key_report(bytes), "{bytes:?}");
+        }
+        for bytes in [&b"\x1b[27u"[..], b"\x1b[27;1:3u", b"\x1b[55:47;2;47u"] {
+            assert!(starts_with_kitty_key_report(bytes), "{bytes:?}");
+        }
     }
 
     #[cfg(target_os = "macos")]
