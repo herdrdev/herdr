@@ -39,32 +39,8 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .and_then(|field| field.parse::<u32>().ok());
 
     let mut code = kitty_codepoint_to_keycode(codepoint)?;
-    // Ctrl chords on a non-Latin layout (Ctrl+\u{441} on Russian) are shortcuts
-    // for the physical key the host names in the base-layout field: Ctrl+C.
-    // Ghostty sends ^C to a plain shell for them, and the Kitty spec tells apps
-    // to match shortcuts on that key. Only what Ghostty maps is rewritten: Ctrl
-    // alone, on a key with a control byte. Shift, Alt and Super chords keep the
-    // layout character, Ctrl+Alt may be AltGr typing it, and Latin layouts
-    // (\u{f6}, \u{131}, \u{e5}) keep their own keys.
-    let mut shifted_codepoint = shifted_codepoint;
-    if let (KeyCode::Char(ch), Some(base)) = (code, base_layout_codepoint.and_then(char::from_u32))
-    {
-        let typed_text =
-            associated_text.is_some_and(|value| parse_kitty_associated_text(value).is_some());
-        // A shifted alternate means Shift was held, even if the modifier
-        // field leaves it out (normalized below).
-        let shifted = shifted_codepoint.is_some_and(|shifted| shifted != codepoint);
-        if key_modifiers_from_u8(modifier) == KeyModifiers::CONTROL
-            && !shifted
-            && is_non_latin_script(ch)
-            && ghostty_maps_ctrl_to_physical_key(base)
-            && !typed_text
-        {
-            code = KeyCode::Char(base);
-            // The shifted alternate belongs to the layout character.
-            shifted_codepoint = None;
-        }
-    }
+    // Control-code text only ever matches Enter/Backspace/Tab/Esc, never a
+    // character key, so it is checked against the reported key.
     let associated_text = match associated_text {
         Some(value) => match parse_kitty_associated_text(value) {
             Some(text) => Some(text),
@@ -73,6 +49,32 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         },
         None => None,
     };
+    // Ctrl chords on a non-Latin layout (Ctrl+\u{441} on Russian) are shortcuts
+    // for the physical key the host names in the base-layout field: Ctrl+C.
+    // Ghostty sends ^C to a plain shell for them, and the Kitty spec tells apps
+    // to match shortcuts on that key. Only what Ghostty maps is rewritten: Ctrl
+    // alone, on a key with a control byte. Shift, Alt and Super chords keep the
+    // layout character, Ctrl+Alt may be AltGr typing it, and Latin layouts
+    // (\u{f6}, \u{131}, \u{e5}) keep their own keys.
+    let mut shifted_codepoint = shifted_codepoint;
+    let mut layout_key = None;
+    if let (KeyCode::Char(ch), Some(base)) = (code, base_layout_codepoint.and_then(char::from_u32))
+    {
+        // A shifted alternate means Shift was held, even if the modifier
+        // field leaves it out (normalized below).
+        let shifted = shifted_codepoint.is_some_and(|shifted| shifted != codepoint);
+        if key_modifiers_from_u8(modifier) == KeyModifiers::CONTROL
+            && !shifted
+            && is_non_latin_script(ch)
+            && ghostty_maps_ctrl_to_physical_key(base)
+            && associated_text.is_none()
+        {
+            layout_key = Some(ch);
+            code = KeyCode::Char(base);
+            // The shifted alternate belongs to the layout character.
+            shifted_codepoint = None;
+        }
+    }
     let kind = parse_kitty_event_type(event_type)?;
     let mut modifiers = key_modifiers_from_u8(modifier);
     // Kitty permits the shifted alternate only while Shift is active. Normalize
@@ -89,7 +91,8 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .filter(char::is_ascii_graphic);
     let mut key = TerminalKey::new(code, modifiers)
         .with_kind(kind)
-        .with_base_layout_key(base_layout_key);
+        .with_base_layout_key(base_layout_key)
+        .with_layout_key(layout_key);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
     }

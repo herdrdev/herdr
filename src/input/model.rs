@@ -83,6 +83,11 @@ pub struct TerminalKey {
     /// side only: it pairs releases whose layout character differs from the
     /// press (Ctrl let go first on a non-Latin layout).
     base_layout_key: Option<char>,
+    /// The layout character a non-Latin Ctrl chord was reported with before it
+    /// was resolved to its base-layout key. Client side only: it pairs a
+    /// release reported as the base key with a press leased as the layout
+    /// character (Shift or Alt let go before the key).
+    layout_key: Option<char>,
     source: KeySource,
 }
 
@@ -98,6 +103,7 @@ impl TerminalKey {
             physical_identity_hint: false,
             windows_dead_key: false,
             base_layout_key: None,
+            layout_key: None,
             source: KeySource::Synthesized,
         }
     }
@@ -109,6 +115,15 @@ impl TerminalKey {
 
     pub(crate) fn base_layout_key(&self) -> Option<char> {
         self.base_layout_key
+    }
+
+    pub(crate) fn with_layout_key(mut self, key: Option<char>) -> Self {
+        self.layout_key = key;
+        self
+    }
+
+    pub(crate) fn layout_key(&self) -> Option<char> {
+        self.layout_key
     }
 
     pub fn with_kind(mut self, kind: crossterm::event::KeyEventKind) -> Self {

@@ -419,12 +419,16 @@ impl ClientShellState {
                 };
                 // A native record is released as the recorded key. A VT release
                 // report already names its key and shifted character exactly,
-                // except a non-Latin Ctrl chord pressed as its physical key: it
-                // is released as that key, matching the press the pane saw.
-                let physical_chord = key.base_layout_key().map(KeyCode::Char)
-                    == Some(lease.key.code)
-                    && key.code != lease.key.code;
-                let release = if key.physical_key_id().is_some() || physical_chord {
+                // except around a non-Latin Ctrl chord: Ctrl alone resolves to
+                // the physical key, so a modifier let go before the key flips
+                // between the layout character and that key. It is released as
+                // the key the pane saw pressed.
+                let layout_chord = key.code != lease.key.code
+                    && [key.base_layout_key(), key.layout_key()]
+                        .into_iter()
+                        .flatten()
+                        .any(|alternate| KeyCode::Char(alternate) == lease.key.code);
+                let release = if key.physical_key_id().is_some() || layout_chord {
                     lease
                         .key
                         .with_modifiers(key.modifiers)
@@ -1148,7 +1152,10 @@ impl ClientShellState {
             .chain(other_case)
             // A Ctrl chord on a non-Latin layout was leased as its physical key;
             // its release names the layout character if Ctrl was let go first.
+            // The other way round, a Ctrl+Shift or Ctrl+Alt chord was leased as
+            // the layout character and is released as Ctrl alone.
             .chain(key.base_layout_key())
+            .chain(key.layout_key())
             .find_map(|candidate| {
                 self.input_leases.remove(&crate::input::InputLeaseKey::new(
                     LOCAL_INPUT_SOURCE,

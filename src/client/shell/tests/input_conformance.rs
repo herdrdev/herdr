@@ -1517,6 +1517,93 @@ async fn layout_ctrl_chords_match_ghostty_direct() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn layout_chord_releases_pair_when_modifiers_change_first() {
+    // A modifier let go before the key changes whether the chord is Ctrl
+    // alone, so the press and the release can name different keys (the layout
+    // character or the physical key). The release must still reach the pane
+    // as the key it saw pressed, and must not stay leased.
+    use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const ALT: u16 = ghostty::MOD_ALT;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
+    const PRESS: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
+    const RELEASE: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE;
+    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
+    // (case, press mods, release mods, Ghostty direct, Herdr)
+    let cases = [
+        (
+            "ctrl+shift, shift let go first",
+            CTRL | SHIFT,
+            CTRL,
+            "\\x1b[1094;6u\\x1b[1094;5:3u",
+            "\\x1b[1094;6u\\x1b[1094;5:3u",
+        ),
+        (
+            "ctrl+alt, alt let go first",
+            CTRL | ALT,
+            CTRL,
+            "\\x1b[1094;7u\\x1b[1094;5:3u",
+            "\\x1b[1094;7u\\x1b[1094;5:3u",
+        ),
+        (
+            "ctrl+shift, ctrl let go first",
+            CTRL | SHIFT,
+            SHIFT,
+            "\\x1b[1094;6u\\x1b[1094;2:3u",
+            "\\x1b[1094;6u\\x1b[1094;2:3u",
+        ),
+        // A Ctrl chord reaches Kitty apps as its physical key (see
+        // `layout_ctrl_chords_match_ghostty_direct`); its release follows.
+        (
+            "ctrl, ctrl let go first",
+            CTRL,
+            0,
+            "\\x1b[1094;5u\\x1b[1094;1:3u",
+            "\\x1b[119;5u\\x1b[119;1:3u",
+        ),
+        (
+            "ctrl, shift added before release",
+            CTRL,
+            CTRL | SHIFT,
+            "\\x1b[1094;5u\\x1b[1094;6:3u",
+            "\\x1b[119;5u\\x1b[119;6:3u",
+        ),
+    ];
+    let pane_mode = b"\x1b[>3u";
+    for (name, press_mods, release_mods, ghostty, want) in cases {
+        let mut host = Oracle::new(HostProfile::Kitty.setup(pane_mode));
+        let host_press = host.encode(ru_w, press_mods, PRESS);
+        let host_release = host.encode(ru_w, release_mods, RELEASE);
+        let mut direct = Oracle::new(pane_mode);
+        let direct_bytes = [
+            direct.encode(ru_w, press_mods, PRESS),
+            direct.encode(ru_w, release_mods, RELEASE),
+        ]
+        .concat();
+        assert_eq!(show(&direct_bytes), ghostty, "{name}: Ghostty direct");
+
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        let press = herdr.feed(&host_press).expect("press reaches the pane");
+        let release = herdr.feed(&host_release).expect("release reaches the pane");
+        assert_eq!(
+            show(&[press, release].concat()),
+            want,
+            "{name}: host sent {} {}",
+            show(&host_press),
+            show(&host_release)
+        );
+        // Nothing stays leased: losing focus releases no further key.
+        let after = herdr.feed(b"\x1b[O").unwrap_or_default();
+        assert!(
+            !show(&after).contains(":3u"),
+            "{name}: focus loss sent {}",
+            show(&after)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {
     let report = run_mouse_conformance();
     print_report(&report);
