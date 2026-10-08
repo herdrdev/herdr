@@ -1342,6 +1342,31 @@ async fn goto_search_opens_on_shifted_slash_from_a_report_all_pane() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn goto_search_opens_only_for_a_typed_slash() {
+    // (pane mode, host bytes, whether goto search opens)
+    for (pane_mode, press, opens) in [
+        // Unshifted `/` reported as a kitty key.
+        (&b"\x1b[>31u"[..], &b"\x1b[47u"[..], true),
+        // Shift+/ typing `?` without a shifted alternate is not `/`.
+        (b"\x1b[>31u", b"\x1b[47;2;63u", false),
+        // Ctrl+/ and Alt+/ are not text.
+        (b"\x1b[>31u", b"\x1b[47;5u", false),
+        (b"\x1b[>31u", b"\x1b[47;3u", false),
+        (b"", b"\x1b/", false),
+    ] {
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        herdr.state.open_navigator_overlay();
+        let _ = herdr.feed(press);
+        let focused = matches!(
+            &herdr.state.overlay,
+            Some(ClientShellOverlay::Navigator(navigator)) if navigator.search_focused
+        );
+        assert_eq!(focused, opens, "{}", show(press));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {
     let report = run_mouse_conformance();
     print_report(&report);
