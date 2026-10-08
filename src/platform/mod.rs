@@ -382,6 +382,22 @@ mod remote_bridge;
 mod remote_bridge_tests;
 #[cfg(unix)]
 mod unix_common;
+/// Other Unix platforms keep their existing input admission policy.
+/// Their _PC_MAX_CANON values need not describe the actual queue capacity.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[derive(Clone, Default)]
+pub(crate) struct PtyInputGuard;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl PtyInputGuard {
+    pub(crate) fn new(_master: &std::sync::Arc<std::fs::File>) -> Self {
+        Self
+    }
+
+    pub(crate) fn validate(&self, _bytes: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 #[cfg(unix)]
 pub(crate) mod unix_image_files;
 #[cfg(unix)]

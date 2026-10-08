@@ -98,6 +98,7 @@ pub(crate) struct PtyIoActorHandle {
     user_writes: Arc<Mutex<UserWriteGate>>,
     controls: Arc<Mutex<SharedPtyControls>>,
     response_order: Arc<Mutex<()>>,
+    input_guard: crate::platform::PtyInputGuard,
 }
 
 #[derive(Debug)]
@@ -106,6 +107,10 @@ struct UserWriteGate {
 }
 
 impl PtyIoActorHandle {
+    pub(crate) fn validate_input_submission(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.input_guard.validate(bytes)
+    }
+
     pub(crate) fn try_write_user_input(
         &self,
         bytes: Bytes,
@@ -393,6 +398,7 @@ impl PtyIoActor {
         }));
         let controls = Arc::new(Mutex::new(SharedPtyControls::default()));
         let response_order = Arc::new(Mutex::new(()));
+        let file = Arc::new(std::fs::File::from(config.master_fd));
         let handle = PtyIoActorHandle {
             data_tx,
             control_tx,
@@ -400,11 +406,12 @@ impl PtyIoActor {
             user_writes,
             controls: Arc::clone(&controls),
             response_order: Arc::clone(&response_order),
+            input_guard: crate::platform::PtyInputGuard::new(&file),
         };
 
         let mut runner = PtyIoActorRunner {
             pane_id: config.pane_id,
-            file: std::fs::File::from(config.master_fd),
+            file,
             data_rx,
             control_rx,
             state: if config.initially_quiesced {
@@ -442,7 +449,7 @@ impl PtyIoActor {
 
 struct PtyIoActorRunner {
     pane_id: u32,
-    file: std::fs::File,
+    file: Arc<std::fs::File>,
     data_rx: mpsc::Receiver<PtyIoDataCommand>,
     control_rx: std_mpsc::Receiver<PtyIoControlCommand>,
     state: ActorState,
@@ -815,7 +822,7 @@ impl PtyIoActorRunner {
 
     fn read_once(&mut self) -> bool {
         let mut buf = [0u8; 8192];
-        match self.file.read(&mut buf) {
+        match self.file.as_ref().read(&mut buf) {
             Ok(0) => false,
             Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => true,
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => true,
@@ -931,7 +938,7 @@ impl PtyIoActorRunner {
     fn flush_pending_writes_once(&mut self) -> std::io::Result<Option<SubmissionBoundary>> {
         while let Some(write) = self.pending_writes.front() {
             let chunk = &write.bytes[self.current_write_offset..];
-            match self.file.write(chunk) {
+            match self.file.as_ref().write(chunk) {
                 Ok(0) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::WriteZero,
@@ -944,7 +951,7 @@ impl PtyIoActorRunner {
                         let completed = self.pending_writes.pop_front().unwrap();
                         self.current_write_offset = 0;
                         if let Some(boundary) = completed.boundary {
-                            self.file.flush()?;
+                            self.file.as_ref().flush()?;
                             return Ok(Some(boundary));
                         }
                     }
@@ -959,7 +966,7 @@ impl PtyIoActorRunner {
                 }
             }
         }
-        self.file.flush()?;
+        self.file.as_ref().flush()?;
         Ok(None)
     }
 
@@ -1098,7 +1105,7 @@ mod tests {
         let wake_pipe = fd::create_wake_pipe().expect("wake pipe");
         let runner = PtyIoActorRunner {
             pane_id: 1,
-            file: std::fs::File::from(owned),
+            file: Arc::new(std::fs::File::from(owned)),
             data_rx,
             control_rx,
             state: ActorState::Running,
@@ -1600,6 +1607,30 @@ mod tests {
         handle.shutdown();
     }
 
+    #[tokio::test]
+    async fn input_preflight_preserves_handoff_and_shutdown_write_gates() {
+        let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
+        let runtime = crate::terminal::TerminalRuntime::test_with_actor(handle.clone());
+        handle.begin_handoff(Duration::from_secs(1)).unwrap();
+        // A successful preflight is not permission to bypass the existing gate.
+        runtime.validate_input_submission(b"blocked").unwrap();
+        assert!(runtime
+            .try_send_bytes(Bytes::from_static(b"blocked"))
+            .is_err());
+        handle.rollback_handoff().unwrap();
+        runtime.validate_input_submission(b"after").unwrap();
+        runtime
+            .try_send_bytes(Bytes::from_static(b"after"))
+            .unwrap();
+        let mut bytes = [0; 5];
+        peer.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"after");
+        handle.shutdown();
+        assert!(runtime
+            .try_send_bytes(Bytes::from_static(b"closed"))
+            .is_err());
+    }
+
     #[test]
     fn resize_and_nudge_keep_latest_request_when_command_queue_is_full() {
         let (data_tx, _data_rx) = mpsc::channel(1);
@@ -1618,6 +1649,7 @@ mod tests {
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::clone(&controls),
             response_order: Arc::new(Mutex::new(())),
+            input_guard: Default::default(),
         };
 
         handle.resize(20, 80, 8, 16, vec![Bytes::from_static(b"old")]);
@@ -1669,7 +1701,7 @@ mod tests {
         let query_light = Arc::clone(&light);
         let runner = PtyIoActorRunner {
             pane_id: 1,
-            file: std::fs::File::from(owned),
+            file: Arc::new(std::fs::File::from(owned)),
             data_rx,
             control_rx,
             state: ActorState::Running,
@@ -1697,6 +1729,7 @@ mod tests {
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls,
             response_order,
+            input_guard: crate::platform::PtyInputGuard::new(&runner.file),
         };
         let (changed_tx, changed_rx) = std_mpsc::channel();
         let (continue_tx, continue_rx) = std_mpsc::channel();
@@ -1766,6 +1799,7 @@ mod tests {
             user_writes: Arc::new(Mutex::new(UserWriteGate { accepting: true })),
             controls: Arc::new(Mutex::new(SharedPtyControls::default())),
             response_order: Arc::new(Mutex::new(())),
+            input_guard: Default::default(),
         };
 
         let handoff = std::thread::spawn(move || handle.begin_handoff(Duration::from_secs(1)));
@@ -1802,7 +1836,9 @@ mod tests {
             .expect("queued write");
         let mut runner = PtyIoActorRunner {
             pane_id: 1,
-            file: std::fs::File::from(unsafe { OwnedFd::from_raw_fd(actor_socket.into_raw_fd()) }),
+            file: Arc::new(std::fs::File::from(unsafe {
+                OwnedFd::from_raw_fd(actor_socket.into_raw_fd())
+            })),
             data_rx,
             control_rx,
             state: ActorState::Running,

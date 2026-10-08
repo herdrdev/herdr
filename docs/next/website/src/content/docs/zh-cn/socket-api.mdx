@@ -119,6 +119,8 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 
 `pane.send_keys` 和 `pane.send_input.keys` 接受 Herdr 组合键字符串: 普通可打印键、`enter` 和 `esc` 这类特殊键、`ctrl+h`、`control+j`、`alt+x`、`shift+tab` 这类修饰组合键、`f1` 这类功能键,以及 `minus` 和 `plus` 这类命名标点。它们不接受 `prefix+` 绑定字符串。
 
+在 macOS 上,`pane.send_input`（由 `pane run` 使用）和 `agent.start` 会在命令进入输入队列前,检查终端当前规范模式的输入长度限制。编码后的行（包括 Enter）超限时,整条输入会被拒绝;请等待 shell 提示符出现后重试。多条短行和原始模式输入仍受支持。成功响应仍只表示已接受入队,不表示命令已执行。检查仅覆盖本次提交:它无法检查此前尚未完成的输入行,也无法保证排队期间终端模式不会改变。
+
 ```json
 {"id":"req_current","method":"pane.current","params":{"caller_pane_id":"w1:p1"}}
 {"id":"req_layout","method":"pane.layout","params":{"pane_id":"w1:p1"}}
