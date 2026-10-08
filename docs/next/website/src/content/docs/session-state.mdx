@@ -110,6 +110,8 @@ Native session restore requires these Herdr integration versions or newer:
 
 Run `herdr integration status` to check installed integration versions. Reinstall outdated integrations with `herdr integration install <agent>`.
 
+Pi integration version `10` and OMP version `11` also retain the current native session when a TUI receives `SIGTERM` or `SIGHUP` and can finish its shutdown hook. This covers graceful macOS shutdown even when the agent exits before Herdr. The exited agent disappears from live status, but its session remains eligible for the next server restart. Normal interactive quit does not retain it, and starting another agent or explicitly releasing it discards the old recovery reference. Forced termination without a shutdown hook (for example `SIGKILL`) cannot report an interruption.
+
 Unsupported, missing, invalid, duplicated, or stale session references restore as normal shells in the saved pane directory.
 
 If native agent session restore applies to a pane, Herdr resumes the agent session instead of replaying saved pane history for that pane.

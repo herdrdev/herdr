@@ -88,7 +88,7 @@ pub fn validate_resume_argv(argv: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PersistedAgentSession {
     pub source: String,
     pub agent: String,

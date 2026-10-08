@@ -14,6 +14,10 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
+#[path = "interruption.rs"]
+mod interruption;
+pub(crate) use interruption::InterruptedAgentSession;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HookAuthority {
     pub source: String,
@@ -137,6 +141,8 @@ pub struct TerminalState {
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
+    interrupted_agent_session: Option<InterruptedAgentSession>,
+    interrupted_session_revision: u64,
     reported_resume: Option<crate::agent_resume::ReportedAgentResume>,
     reported_resume_revision: u64,
     pub terminal_title: Option<String>,
@@ -177,6 +183,8 @@ impl TerminalState {
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
+            interrupted_agent_session: None,
+            interrupted_session_revision: 0,
             reported_resume: None,
             reported_resume_revision: 0,
             terminal_title: None,
@@ -223,6 +231,7 @@ impl TerminalState {
             now,
         );
         if starts_acquisition {
+            self.clear_interrupted_session_before_process(now);
             self.codex_prompt_ready = false;
             self.agent_process_acquisition_pending = true;
         }
@@ -424,6 +433,12 @@ impl TerminalState {
                     != self.current_session_identity_for_persistence(),
                 agent_released: false,
             };
+        }
+        if !process_exited
+            && agent.is_some()
+            && (replacement_process_detected || agent != previous_detected_agent)
+        {
+            self.clear_interrupted_session_before_process(now);
         }
         self.detected_agent = agent;
         if process_exited || agent != Some(Agent::Codex) || fallback_state == AgentState::Blocked {
@@ -800,6 +815,12 @@ impl TerminalState {
                 }
             }
         }
+        self.clear_interrupted_session_for_report(
+            &source,
+            &agent_label,
+            session_ref.as_ref(),
+            false,
+        );
         self.persisted_agent_session = None;
         self.hook_authority = Some(HookAuthority {
             source,
@@ -1238,6 +1259,7 @@ impl TerminalState {
         for (source, agent_label, session_ref, pending) in validated_replacement_sessions {
             self.forget_stale_full_lifecycle_hook_session(&source, &agent_label, &session_ref);
             self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+            self.clear_interrupted_session();
             self.persisted_agent_session = Some(crate::agent_resume::PersistedAgentSession {
                 source: source.clone(),
                 agent: agent_label,
@@ -1446,6 +1468,7 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.clear_interrupted_session();
         self.persisted_agent_session = Some(session);
     }
 
@@ -1453,6 +1476,7 @@ impl TerminalState {
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
     ) {
+        self.clear_interrupted_session();
         self.persisted_agent_session = Some(session.clone());
         self.managed_agent_launch_session = Some(session);
     }
@@ -1687,6 +1711,12 @@ impl TerminalState {
             self.hook_authority = None;
         }
         self.reconcile_agent_name_owner(&agent_label, Some(&session_ref));
+        self.clear_interrupted_session_for_report(
+            &source,
+            &agent_label,
+            Some(&session_ref),
+            session_replacement_allowed,
+        );
         let persisted_session = crate::agent_resume::PersistedAgentSession {
             source,
             agent: agent_label,
@@ -1813,6 +1843,7 @@ impl TerminalState {
         if let Some(authority) = self.hook_authority.take() {
             self.forget_reported_resume_of(&authority.source, &authority.agent_label);
         }
+        self.clear_interrupted_session();
         self.persisted_agent_session = None;
         Some(TerminalStateMutation {
             effective_state_change: self.recompute_effective_state(
@@ -1841,7 +1872,10 @@ impl TerminalState {
 
         let matches_current_agent = self.effective_agent_label() == Some(agent_label);
         let matches_persisted_session = self.persisted_agent_session_matches(source, agent_label);
-        if !matches_current_agent && !matches_persisted_session {
+        let matches_interrupted_session = self
+            .interrupted_agent_session()
+            .is_some_and(|session| session.source == source && session.agent == agent_label);
+        if !matches_current_agent && !matches_persisted_session && !matches_interrupted_session {
             return None;
         }
         if !self.accept_hook_report(source, seq) {
@@ -1876,6 +1910,7 @@ impl TerminalState {
         }
         self.hook_authority = None;
         self.forget_reported_resume_of(source, agent_label);
+        self.clear_interrupted_session_for_report(source, agent_label, None, true);
         if !preserve_foreign_persisted_session {
             self.persisted_agent_session = None;
         }

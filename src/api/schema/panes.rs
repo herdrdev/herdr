@@ -398,6 +398,24 @@ pub struct PaneReportAgentSessionParams {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneReportAgentInterruptionParams {
+    pub pane_id: String,
+    pub source: String,
+    pub agent: String,
+    pub seq: u64,
+    pub agent_session_path: String,
+    pub signal: AgentInterruptionSignal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub enum AgentInterruptionSignal {
+    #[serde(rename = "SIGTERM")]
+    Term,
+    #[serde(rename = "SIGHUP")]
+    Hup,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PaneReportMetadataParams {
     pub pane_id: String,
     pub source: String,

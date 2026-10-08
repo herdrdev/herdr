@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=10
+// HERDR_INTEGRATION_VERSION=11
 // @ts-nocheck
 
 import net from "node:net";
@@ -258,6 +258,60 @@ export default function (pi) {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let rootSession = false;
+  let interrupted: { signal: "SIGTERM" | "SIGHUP"; sessionPath: string } | undefined;
+  const signalObservers = new Map<string, () => void>();
+
+  function detachSignalObservers() {
+    for (const [signal, observer] of signalObservers) {
+      process.removeListener(signal, observer);
+    }
+    signalObservers.clear();
+  }
+
+  function armSignalObservers() {
+    detachSignalObservers();
+    interrupted = undefined;
+    if (process.platform === "win32") return;
+    // Supported TUI hosts install their native shutdown handlers before
+    // session_start. Observe first, but leave termination to those handlers.
+    for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+      if (process.listenerCount(signal) === 0) continue;
+      const observer = () => {
+        if (!interrupted && currentAgentSessionPath) {
+          interrupted = { signal, sessionPath: currentAgentSessionPath };
+        }
+      };
+      signalObservers.set(signal, observer);
+      process.prependListener(signal, observer);
+    }
+  }
+
+  async function reportInterruption() {
+    // Detach synchronously, including normal quit, reload and session switches.
+    detachSignalObservers();
+    const report = interrupted;
+    interrupted = undefined;
+    rootSession = false;
+    queuedState = undefined;
+    if (!report) return;
+    const request = {
+      id: `${source}:interruption:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.report_agent_interruption",
+      params: {
+        pane_id: paneId,
+        source,
+        agent: "omp",
+        seq: nextReportSeq(),
+        agent_session_path: report.sessionPath,
+        signal: report.signal,
+      },
+    };
+    // OMP limits shutdown hooks to two seconds. Bypass the normal state queue
+    // and await a bounded ACK while the native process is still alive.
+    if (!(await sendRequestAttempt(request, 750))) {
+      await sendRequestAttempt(request, 750);
+    }
+  }
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
     if (timer) {
@@ -376,6 +430,7 @@ export default function (pi) {
     if (!activateRootSession(ctx)) {
       return;
     }
+    armSignalObservers();
     // A reload can replace this extension mid-run without emitting another agent_start.
     agentActive = ctx?.isIdle?.() === false;
     publishState(true);
@@ -385,6 +440,7 @@ export default function (pi) {
     if (!activateRootSession(ctx, event?.reason || "resume")) {
       return;
     }
+    armSignalObservers();
     resetSessionState();
     publishState(true);
   });
@@ -463,9 +519,8 @@ export default function (pi) {
     scheduleIdle();
   });
 
-  pi.on("session_shutdown", () => {
-    if (rootSession) {
-      clearPendingTimers();
-    }
+  pi.on("session_shutdown", async () => {
+    clearPendingTimers();
+    await reportInterruption();
   });
 }

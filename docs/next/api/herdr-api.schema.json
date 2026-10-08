@@ -1228,6 +1228,13 @@
     },
     "request": {
       "$defs": {
+        "AgentInterruptionSignal": {
+          "enum": [
+            "SIGTERM",
+            "SIGHUP"
+          ],
+          "type": "string"
+        },
         "AgentPromptParams": {
           "properties": {
             "target": {
@@ -2880,6 +2887,39 @@
           },
           "required": [
             "pane_id"
+          ],
+          "type": "object"
+        },
+        "PaneReportAgentInterruptionParams": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "agent_session_path": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "signal": {
+              "$ref": "#/schemas/request/$defs/AgentInterruptionSignal"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "source",
+            "agent",
+            "seq",
+            "agent_session_path",
+            "signal"
           ],
           "type": "object"
         },
@@ -5953,6 +5993,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneReportAgentSessionParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.report_agent_interruption",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneReportAgentInterruptionParams"
             }
           },
           "required": [

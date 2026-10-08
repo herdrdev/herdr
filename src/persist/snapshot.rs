@@ -364,6 +364,7 @@ fn capture_tab(
             terminal
                 .persisted_agent_session
                 .as_ref()
+                .or_else(|| terminal.interrupted_agent_session())
                 .map(|session| PaneAgentSessionSnapshot {
                     source: session.source.clone(),
                     agent: session.agent.clone(),

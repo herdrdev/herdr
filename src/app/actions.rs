@@ -1710,10 +1710,13 @@ impl AppState {
             let previous_agent_name = terminal.agent_name.clone();
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
+            let interrupted_revision = terminal.interrupted_session_revision();
             let mutation = update(terminal);
             terminal.reconcile_reported_resume();
             // Resume-only changes return no mutation but must still be saved.
-            if terminal.reported_resume_revision() != resume_revision {
+            if terminal.reported_resume_revision() != resume_revision
+                || terminal.interrupted_session_revision() != interrupted_revision
+            {
                 self.session_dirty = true;
             }
             let mutation = mutation?;

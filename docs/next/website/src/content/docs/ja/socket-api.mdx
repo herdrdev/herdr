@@ -99,7 +99,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | ワークスペース | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | タブ | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
-| ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
+| ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_agent_interruption`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | ポップアップ | `popup.close` |
 | レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
 | エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
@@ -562,6 +562,8 @@ JSON のデコードまで到達したリクエスト行では、メソッドや
   }
 }
 ```
+
+公式 Pi と OMP インテグレーションは、シグナルによる終了の前に `pane.report_agent_interruption` を使います。`pane_id`、`source`、`agent`、より新しい `seq`、現在のセッションと一致する絶対パス `agent_session_path`、および `signal`（`SIGTERM` または `SIGHUP`）が必要です。他の送信元、古いシーケンス、一致しないセッションは拒否されます。終了後の参照はスナップショット復元だけに使われ、ライブのエージェント権限を保持せず、活動中の `agent_session` としても表示されません。通常の終了ではこの報告を送信しないでください。
 
 Herdr に保存されたネイティブセッション参照があるとき、`pane.get`、`pane.list`、`agent.get`、`agent.list` は読み取り専用の `agent_session` オブジェクトを公開します:
 

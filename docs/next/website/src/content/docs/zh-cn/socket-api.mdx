@@ -99,7 +99,7 @@ herdr pane read w1:p2 --source recent --lines 50
 | 工作区 | `workspace.create`、`workspace.list`、`workspace.get`、`workspace.focus`、`workspace.rename`、`workspace.move`、`workspace.move_block`、`workspace.report_metadata`、`workspace.close` |
 | Worktree | `worktree.list`、`worktree.create`、`worktree.open`、`worktree.remove` |
 | 标签页 | `tab.create`、`tab.list`、`tab.get`、`tab.focus`、`tab.rename`、`tab.move`、`tab.close` |
-| 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
+| 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_agent_interruption`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | 弹窗 | `popup.close` |
 | 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
 | 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
@@ -558,6 +558,8 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
   }
 }
 ```
+
+官方 Pi 和 OMP 集成在信号触发的关闭之前使用 `pane.report_agent_interruption`。请求必须包含 `pane_id`、`source`、`agent`、更新的 `seq`、与当前会话匹配的绝对路径 `agent_session_path`,以及 `signal`(`SIGTERM` 或 `SIGHUP`)。其他来源、过期序号和不匹配的会话会被拒绝。进程退出后,引用仅用于快照恢复,不会保留实时智能体控制权或显示为活动的 `agent_session`。正常退出不得发送此上报。
 
 Herdr 存有原生会话引用时,`pane.get`、`pane.list`、`agent.get` 和 `agent.list` 暴露一个只读的 `agent_session` 对象:
 

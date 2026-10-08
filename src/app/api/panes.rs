@@ -1642,6 +1642,47 @@ impl App {
         )
     }
 
+    pub(super) fn handle_pane_report_agent_interruption(
+        &mut self,
+        id: String,
+        params: crate::api::schema::PaneReportAgentInterruptionParams,
+    ) -> String {
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Some(session_ref) =
+            crate::agent_resume::AgentSessionRef::path(params.agent_session_path)
+        else {
+            return encode_error(
+                id,
+                "invalid_session_path",
+                "An absolute native session path is required",
+            );
+        };
+        let terminal_id = self.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .map(|pane| pane.attached_terminal_id.clone());
+        let accepted = terminal_id
+            .and_then(|id| self.state.terminals.get_mut(&id))
+            .is_some_and(|terminal| {
+                terminal.report_agent_interruption(
+                    &params.source,
+                    &params.agent,
+                    session_ref,
+                    params.seq,
+                )
+            });
+        if !accepted {
+            return encode_error(
+                id,
+                "interruption_not_accepted",
+                "Interruption must match the current Pi or OMP session and have a newer sequence",
+            );
+        }
+        self.state.mark_session_dirty();
+        encode_success(id, ResponseResult::Ok {})
+    }
+
     /// A resume command belongs to the session it was reported with, so it is
     /// kept only when Herdr accepted that session.
     fn session_report_applied(

@@ -104,7 +104,10 @@ function captureConnectionEndpoint() {
   return () => connectedEndpoint;
 }
 
-async function startRecordingServer(name: string): Promise<unknown[]> {
+async function startRecordingServer(
+  name: string,
+  acknowledge?: (request: any, socket: net.Socket) => boolean,
+): Promise<unknown[]> {
   const recordingSocketPath = join(tmpdir(), `herdr-${name}-${process.pid}.sock`);
   socketPath = recordingSocketPath;
   await rm(recordingSocketPath, { force: true });
@@ -119,7 +122,9 @@ async function startRecordingServer(name: string): Promise<unknown[]> {
       if (newline === -1) {
         return;
       }
-      requests.push(JSON.parse(input.slice(0, newline)));
+      const request = JSON.parse(input.slice(0, newline));
+      requests.push(request);
+      if (acknowledge && !acknowledge(request, socket)) return;
       socket.end("{}\n");
     });
   });
@@ -130,6 +135,111 @@ async function startRecordingServer(name: string): Promise<unknown[]> {
   });
   configureIntegrationEnvironment(recordingSocketPath);
   return requests;
+}
+
+async function nativeShutdownChild(integration: typeof integrations[number], scenario: string) {
+  let ready!: (message: any) => void;
+  const started = new Promise<any>((resolve) => { ready = resolve; });
+  const child = Bun.spawn([
+    process.execPath,
+    join(import.meta.dir, "test-fixtures/native-shutdown.ts"),
+    join(import.meta.dir, integration.modulePath),
+    scenario,
+  ], {
+    env: process.env,
+    stdout: "ignore",
+    stderr: "pipe",
+    ipc(message) { if (message.ready) ready(message); },
+  });
+  const status = await Promise.race([
+    started,
+    child.exited.then(async (code) => { throw new Error(`child exited before ready: ${code}: ${await new Response(child.stderr).text()}`); }),
+  ]);
+  return { child, status };
+}
+
+for (const integration of integrations) {
+  for (const signal of ["SIGTERM", "SIGHUP"] as const) {
+    test.skipIf(originalPlatform === "win32")(`${integration.name} awaits interruption ACK after ${signal}`, async () => {
+      let received!: (socket: net.Socket) => void;
+      const interruption = new Promise<net.Socket>((resolve) => { received = resolve; });
+      const requests = await startRecordingServer("native-shutdown", (request, socket) => {
+        if (request.method === "pane.report_agent_interruption") {
+          received(socket);
+          return false;
+        }
+        return true;
+      });
+      const { child } = await nativeShutdownChild(integration, "signal");
+      try {
+        child.kill(signal);
+        const socket = await interruption;
+        expect(child.exitCode).toBeNull();
+        const report = requests.find((request: any) => request.method === "pane.report_agent_interruption") as any;
+        expect(report.params.signal).toBe(signal);
+        expect(report.params.agent_session_path).toBe("/tmp/herdr-interrupted-a.jsonl");
+        socket.end("{}\n");
+        expect(await child.exited).toBe(0);
+      } finally {
+        if (child.exitCode === null) child.kill("SIGKILL");
+        await child.exited;
+      }
+    });
+  }
+
+  test.skipIf(originalPlatform === "win32")(`${integration.name} clean quit never reports interruption`, async () => {
+    const requests = await startRecordingServer("native-clean");
+    const { child } = await nativeShutdownChild(integration, "clean");
+    expect(await child.exited).toBe(0);
+    expect(requests.some((request: any) => request.method === "pane.report_agent_interruption")).toBe(false);
+  });
+
+  test.skipIf(originalPlatform === "win32")(`${integration.name} reload retires observers and reports only the new session`, async () => {
+    const requests = await startRecordingServer("native-reload");
+    const { child, status } = await nativeShutdownChild(integration, "reload");
+    try {
+      expect(status.termListeners).toBe(2);
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(0);
+      const reports = requests.filter((request: any) => request.method === "pane.report_agent_interruption") as any[];
+      expect(reports).toHaveLength(1);
+      expect(reports[0].params.agent_session_path).toBe("/tmp/herdr-interrupted-b.jsonl");
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
+  test.skipIf(originalPlatform === "win32")(`${integration.name} does not take over native signal termination`, async () => {
+    const requests = await startRecordingServer("native-absent");
+    const { child, status } = await nativeShutdownChild(integration, "no-native-handler");
+    try {
+      expect(status.termListeners).toBe(0);
+      child.kill("SIGTERM");
+      await child.exited;
+      expect(child.signalCode).toBe("SIGTERM");
+      expect(requests.some((request: any) => request.method === "pane.report_agent_interruption")).toBe(false);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
+  test.skipIf(originalPlatform === "win32")(`${integration.name} interruption bypasses stalled state reports and has a shutdown deadline`, async () => {
+    const requests = await startRecordingServer("native-timeout", (request) =>
+      request.method === "pane.report_agent_session");
+    const { child } = await nativeShutdownChild(integration, "signal");
+    try {
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(0);
+      const reports = requests.filter((request: any) => request.method === "pane.report_agent_interruption") as any[];
+      expect(reports.length).toBeGreaterThan(0);
+      expect(reports.at(-1).params.seq).toBe(reports[0].params.seq);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
 }
 
 for (const socketPlugin of socketPlugins) {

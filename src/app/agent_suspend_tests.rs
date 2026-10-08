@@ -184,6 +184,273 @@ fn real_exit_clears_pi_session_name_and_authority() {
     app.assert_invariants_for_test();
 }
 
+fn captured_agent_session(
+    app: &AppState,
+    pane_id: PaneId,
+) -> Option<crate::agent_resume::PersistedAgentSession> {
+    let snapshot = crate::persist::capture(
+        &app.workspaces,
+        &app.terminals,
+        &crate::terminal::TerminalRuntimeRegistry::new(),
+        app.active,
+        app.selected,
+    );
+    // Exercise the on-disk shape, not just the in-memory fallback accessor.
+    let saved: crate::persist::SessionSnapshot =
+        serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap();
+    saved
+        .workspaces
+        .into_iter()
+        .flat_map(|ws| ws.tabs)
+        .find_map(|mut tab| tab.panes.remove(&pane_id.raw()))
+        .and_then(|pane| pane.agent_session)
+        .map(|session| crate::agent_resume::PersistedAgentSession {
+            source: session.source,
+            agent: session.agent,
+            session_ref: AgentSessionRef {
+                kind: session.kind,
+                value: session.value,
+            },
+        })
+}
+
+#[test]
+fn interrupted_native_sessions_survive_exit_and_autosave_without_live_authority() {
+    for (agent, label) in [(Agent::Pi, "pi"), (Agent::Omp, "omp")] {
+        for with_hook in [false, true] {
+            let start = Instant::now();
+            let (mut app, pane_id, terminal_id) = adversarial_pane();
+            let source = format!("herdr:{label}");
+            let session = pi_session();
+            detect(&mut app, pane_id, agent, start);
+            app.handle_app_event(AppEvent::AgentSessionReported {
+                pane_id,
+                source: source.clone(),
+                agent_label: label.into(),
+                seq: Some(1),
+                session_ref: Some(session.clone()),
+                session_start_source: Some("startup".into()),
+            });
+            if with_hook {
+                app.handle_app_event(AppEvent::HookStateReported {
+                    pane_id,
+                    source: source.clone(),
+                    agent_label: label.into(),
+                    state: AgentState::Working,
+                    message: None,
+                    seq: Some(2),
+                    session_ref: Some(session.clone()),
+                });
+            }
+            name_agent(&mut app, &terminal_id, "worker");
+            assert!(app
+                .terminals
+                .get_mut(&terminal_id)
+                .unwrap()
+                .report_agent_interruption(&source, label, session.clone(), 3));
+            real_exit(&mut app, pane_id, agent, start + Duration::from_secs(1));
+            // A duplicate exit (including the pane death checkpoint path) and
+            // later shell detections must not erase the retained reference.
+            real_exit(&mut app, pane_id, agent, start + Duration::from_secs(2));
+            let terminal = &app.terminals[&terminal_id];
+            assert_eq!(terminal.effective_agent_label(), None);
+            assert!(terminal.hook_authority.is_none());
+            assert!(terminal.persisted_agent_session.is_none());
+            assert!(terminal.agent_name.is_none());
+            let saved = captured_agent_session(&app, pane_id).expect("recoverable session");
+            assert_eq!(saved.session_ref, session);
+            let plan = crate::agent_resume::plan(&saved.source, &saved.agent, &session).unwrap();
+            let expected = if label == "pi" {
+                vec![
+                    "pi".to_string(),
+                    "--session".to_string(),
+                    session.value.clone(),
+                ]
+            } else {
+                vec!["omp".to_string(), format!("--resume={}", session.value)]
+            };
+            assert_eq!(plan.argv, expected);
+            app.assert_invariants_for_test();
+        }
+    }
+}
+
+#[test]
+fn interruption_rejects_stale_foreign_and_unbound_reports() {
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(Instant::now());
+    let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+    assert!(!terminal.report_agent_interruption("herdr:pi", "pi", pi_session(), 99));
+    assert!(!terminal.report_agent_interruption("custom:pi", "pi", pi_session(), 101));
+    assert!(!terminal.report_agent_interruption("herdr:omp", "omp", pi_session(), 101));
+    assert!(!terminal.report_agent_interruption(
+        "herdr:pi",
+        "pi",
+        AgentSessionRef::path(
+            std::env::current_dir()
+                .unwrap()
+                .join("foreign.jsonl")
+                .display()
+                .to_string(),
+        )
+        .unwrap(),
+        101
+    ));
+    assert!(terminal.interrupted_agent_session().is_none());
+    real_exit(&mut app, pane_id, Agent::Pi, Instant::now());
+    assert!(!app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    assert!(captured_agent_session(&app, pane_id).is_none());
+    app.assert_invariants_for_test();
+}
+
+#[test]
+fn fresh_process_retires_interrupted_recovery_and_marks_session_dirty() {
+    for agent in [Agent::Pi, Agent::Omp, Agent::Codex] {
+        let start = Instant::now();
+        let (mut app, pane_id, terminal_id) = pi_with_live_authority(start);
+        assert!(app
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+        real_exit(&mut app, pane_id, Agent::Pi, start + Duration::from_secs(1));
+        app.session_dirty = false;
+        detect(&mut app, pane_id, agent, start + Duration::from_secs(2));
+        assert!(app.session_dirty);
+        assert!(app.terminals[&terminal_id]
+            .interrupted_agent_session()
+            .is_none());
+        assert!(captured_agent_session(&app, pane_id).is_none());
+        pi_report(&mut app, pane_id, AgentState::Working, 102);
+        assert!(captured_agent_session(&app, pane_id).is_none());
+        app.assert_invariants_for_test();
+    }
+}
+
+#[test]
+fn explicit_release_discards_only_matching_interrupted_recovery() {
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(Instant::now());
+    assert!(app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    real_exit(&mut app, pane_id, Agent::Pi, Instant::now());
+    let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+    assert!(terminal
+        .release_agent_with_mutation("foreign", "pi", Some(102))
+        .is_none());
+    assert!(terminal.interrupted_agent_session().is_some());
+    assert!(terminal
+        .release_agent_with_mutation("herdr:pi", "pi", Some(102))
+        .is_some());
+    assert!(captured_agent_session(&app, pane_id).is_none());
+    app.assert_invariants_for_test();
+}
+
+#[test]
+fn stale_process_observation_cannot_discard_interrupted_recovery() {
+    let start = Instant::now();
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(start);
+    assert!(app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    real_exit(&mut app, pane_id, Agent::Pi, Instant::now());
+    detect(&mut app, pane_id, Agent::Pi, start);
+    assert!(app.terminals[&terminal_id]
+        .interrupted_agent_session()
+        .is_some());
+    assert!(captured_agent_session(&app, pane_id).is_some());
+    app.assert_invariants_for_test();
+}
+
+#[test]
+fn buffered_resume_retires_interrupted_recovery_before_the_next_clean_exit() {
+    let start = Instant::now();
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(start);
+    assert!(app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    real_exit(&mut app, pane_id, Agent::Pi, start + Duration::from_secs(1));
+    // Native startup can report its explicit selection before process detection.
+    pi_session_report(&mut app, pane_id, Some("resume"), 102);
+    detect(&mut app, pane_id, Agent::Pi, start + Duration::from_secs(2));
+    pi_report(&mut app, pane_id, AgentState::Idle, 103);
+    assert!(app.terminals[&terminal_id]
+        .interrupted_agent_session()
+        .is_none());
+    assert!(captured_agent_session(&app, pane_id).is_some());
+    real_exit(&mut app, pane_id, Agent::Pi, start + Duration::from_secs(3));
+    assert!(captured_agent_session(&app, pane_id).is_none());
+    app.assert_invariants_for_test();
+}
+
+#[test]
+fn same_session_reports_preserve_interruption_until_a_new_session_starts() {
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(Instant::now());
+    assert!(app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    pi_report(&mut app, pane_id, AgentState::Idle, 102);
+    pi_session_report(&mut app, pane_id, None, 103);
+    assert!(app.terminals[&terminal_id]
+        .interrupted_agent_session()
+        .is_some());
+    pi_session_report(&mut app, pane_id, Some("resume"), 104);
+    assert!(app.terminals[&terminal_id]
+        .interrupted_agent_session()
+        .is_none());
+    real_exit(&mut app, pane_id, Agent::Pi, Instant::now());
+    assert!(captured_agent_session(&app, pane_id).is_none());
+    app.assert_invariants_for_test();
+}
+
+#[cfg(unix)]
+#[test]
+fn interrupted_recovery_handoff_does_not_revive_authority_or_hide_a_new_process() {
+    let (mut app, pane_id, terminal_id) = pi_with_live_authority(Instant::now());
+    assert!(app
+        .terminals
+        .get_mut(&terminal_id)
+        .unwrap()
+        .report_agent_interruption("herdr:pi", "pi", pi_session(), 101));
+    real_exit(&mut app, pane_id, Agent::Pi, Instant::now());
+    let encoded = serde_json::to_string(
+        &app.terminals[&terminal_id]
+            .handoff_interrupted_agent_session()
+            .unwrap(),
+    )
+    .unwrap();
+    let imported = serde_json::from_str(&encoded).unwrap();
+    let queued_process_observation = Instant::now();
+    let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+    terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+        source: "herdr:pi".into(),
+        agent: "pi".into(),
+        session_ref: pi_session(),
+    });
+    terminal.restore_interrupted_agent_session(imported);
+    assert!(terminal.persisted_agent_session.is_none());
+    assert!(terminal.effective_agent_label().is_none());
+    pi_report(&mut app, pane_id, AgentState::Working, 102);
+    assert!(app.terminals[&terminal_id].hook_authority.is_none());
+    assert!(captured_agent_session(&app, pane_id).is_some());
+    detect(&mut app, pane_id, Agent::Pi, queued_process_observation);
+    assert!(app.terminals[&terminal_id]
+        .interrupted_agent_session()
+        .is_none());
+    app.assert_invariants_for_test();
+}
+
 #[test]
 fn exit_then_different_agent_relaunch_drops_previous_identity() {
     let start = Instant::now();
