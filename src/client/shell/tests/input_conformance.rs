@@ -1316,6 +1316,44 @@ async fn reporter_text_key_release_reaches_kitty_event_pane() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn wezterm_escape_tap_reaches_the_pane_with_doubled_escape_preserved() {
+    // #1266: WezTerm with `enable_kitty_keyboard` sends an Escape press as a
+    // bare ESC and its release as `CSI 27;1:3u`. The macOS host policy keeps
+    // legacy `ESC ESC` whole, which used to swallow quick taps.
+    const PRESS: &[u8] = b"\x1b";
+    const RELEASE: &[u8] = b"\x1b[27;1:3u";
+    let mouse: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+    for (pane_mode, want) in [
+        (&b""[..], &b"\x1b"[..]),
+        (mouse, b"\x1b"),
+        (b"\x1b[>1u", b"\x1b[27u"),
+    ] {
+        for (reads, label) in [
+            (vec![[PRESS, RELEASE].concat()], "one read"),
+            (vec![PRESS.to_vec(), RELEASE.to_vec()], "two reads"),
+        ] {
+            let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+            herdr.framer = crate::raw_input::RawInputByteFramer::with_host_input_policy(true);
+            herdr.framer.set_host_escape_disambiguation_active(true);
+            let mut chunks = Vec::new();
+            for read in &reads {
+                chunks.extend(herdr.framer.push(read));
+            }
+            for _ in 0..3 {
+                chunks.extend(herdr.framer.flush_timeout());
+            }
+            let outcomes = chunks
+                .iter()
+                .map(|chunk| herdr.state.handle_input_bytes(chunk))
+                .collect();
+            let got = herdr.deliver(outcomes).expect("escape reaches the pane");
+            assert_eq!(show(&got), show(want), "{label}, pane {}", show(pane_mode));
+        }
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {
     let report = run_mouse_conformance();
     print_report(&report);
