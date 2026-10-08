@@ -19,7 +19,8 @@ function enabled() {
   return HERDR_ENV === "1" && !!socketPath && !!paneId;
 }
 
-function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {
+function sendRequestAttempt(request: unknown, timeoutMs: number, requireSuccess = false): Promise<boolean> {
+  if (timeoutMs <= 0) return Promise.resolve(false);
   if (!enabled()) {
     return Promise.resolve(true);
   }
@@ -40,7 +41,20 @@ function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolea
     const socket = net.createConnection(socketEndpoint!);
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-    socket.on("data", () => finish(true));
+    let response = "";
+    socket.on("data", (data) => {
+      if (!requireSuccess) return finish(true);
+      response += data.toString();
+      if (response.length > 65536) return finish(false);
+      const newline = response.indexOf("\n");
+      if (newline < 0) return;
+      try {
+        const reply = JSON.parse(response.slice(0, newline));
+        finish(reply.id === (request as any).id && reply.result?.type === "ok");
+      } catch {
+        finish(false);
+      }
+    });
     socket.on("end", () => finish(false));
     timeout = setTimeout(() => finish(false), timeoutMs);
     timeout.unref?.();
@@ -65,6 +79,7 @@ type QueuedState = {
 let reportSeq = Date.now() * 1000;
 let currentAgentSessionId: string | undefined;
 let currentAgentSessionPath: string | undefined;
+let currentSessionStartSource: string | undefined;
 
 function nextReportSeq(): number {
   reportSeq += 1;
@@ -112,6 +127,7 @@ function currentSessionRef(): Record<string, unknown> | undefined {
 }
 
 function reportSession(sessionStartSource?: string): Promise<void> {
+  if (sessionStartSource !== undefined) currentSessionStartSource = sessionStartSource;
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
     return Promise.resolve();
@@ -187,7 +203,8 @@ export default function (pi) {
   let lastState: AgentState | undefined;
   let lastMessage: string | undefined;
   let rootSession = false;
-  let interrupted: { signal: "SIGTERM" | "SIGHUP"; sessionPath: string } | undefined;
+  let sessionShuttingDown = false;
+  let interrupted: { signal: "SIGTERM" | "SIGHUP"; sessionPath: string; sessionStartSource?: string } | undefined;
   const signalObservers = new Map<string, () => void>();
 
   function detachSignalObservers() {
@@ -207,7 +224,7 @@ export default function (pi) {
       if (process.listenerCount(signal) === 0) continue;
       const observer = () => {
         if (!interrupted && currentAgentSessionPath) {
-          interrupted = { signal, sessionPath: currentAgentSessionPath };
+          interrupted = { signal, sessionPath: currentAgentSessionPath, sessionStartSource: currentSessionStartSource };
         }
       };
       signalObservers.set(signal, observer);
@@ -221,8 +238,21 @@ export default function (pi) {
     const report = interrupted;
     interrupted = undefined;
     rootSession = false;
+    sessionShuttingDown = true;
     queuedState = undefined;
     if (!report) return;
+    const sessionRequest = {
+      id: `${source}:shutdown-session:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.report_agent_session",
+      params: {
+        pane_id: paneId,
+        source,
+        agent: "pi",
+        seq: nextReportSeq(),
+        agent_session_path: report.sessionPath,
+        session_start_source: report.sessionStartSource,
+      },
+    };
     const request = {
       id: `${source}:interruption:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       method: "pane.report_agent_interruption",
@@ -235,10 +265,13 @@ export default function (pi) {
         signal: report.signal,
       },
     };
-    // OMP limits shutdown hooks to two seconds. Bypass the normal state queue
-    // and await a bounded ACK while the native process is still alive.
-    if (!(await sendRequestAttempt(request, 750))) {
-      await sendRequestAttempt(request, 750);
+    // A session switch may still be queued behind a stalled state request.
+    // Confirm that selection directly before retaining it, and distinguish a
+    // successful ACK from a rejection. Keep both attempts within OMP's 2s hook.
+    const deadline = Date.now() + 1500;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!(await sendRequestAttempt(sessionRequest, Math.min(500, deadline - Date.now()), true))) continue;
+      if (await sendRequestAttempt(request, Math.min(750, deadline - Date.now()), true)) return;
     }
   }
 
@@ -253,6 +286,7 @@ export default function (pi) {
   }
 
   function publishState(force = false) {
+    if (sessionShuttingDown) return;
     const next = desiredState();
     if (!force && next.state === lastState && next.message === lastMessage) {
       return;
@@ -286,6 +320,7 @@ export default function (pi) {
     if (ctx?.mode !== "tui") {
       return;
     }
+    sessionShuttingDown = false;
     rootSession = true;
     updateSessionRef(ctx);
     armSignalObservers();

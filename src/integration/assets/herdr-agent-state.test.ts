@@ -125,7 +125,7 @@ async function startRecordingServer(
       const request = JSON.parse(input.slice(0, newline));
       requests.push(request);
       if (acknowledge && !acknowledge(request, socket)) return;
-      socket.end("{}\n");
+      socket.end(`${JSON.stringify({ id: request.id, result: { type: "ok" } })}\n`);
     });
   });
   server = recordingServer;
@@ -178,7 +178,7 @@ for (const integration of integrations) {
         const report = requests.find((request: any) => request.method === "pane.report_agent_interruption") as any;
         expect(report.params.signal).toBe(signal);
         expect(report.params.agent_session_path).toBe("/tmp/herdr-interrupted-a.jsonl");
-        socket.end("{}\n");
+        socket.end(`${JSON.stringify({ id: report.id, result: { type: "ok" } })}\n`);
         expect(await child.exited).toBe(0);
       } finally {
         if (child.exitCode === null) child.kill("SIGKILL");
@@ -235,6 +235,36 @@ for (const integration of integrations) {
       const reports = requests.filter((request: any) => request.method === "pane.report_agent_interruption") as any[];
       expect(reports.length).toBeGreaterThan(0);
       expect(reports.at(-1).params.seq).toBe(reports[0].params.seq);
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+      await child.exited;
+    }
+  });
+
+  test.skipIf(originalPlatform === "win32")(`${integration.name} confirms a switched session before interruption despite a stalled state queue`, async () => {
+    let acceptedPath: string | undefined;
+    let recoveredPath: string | undefined;
+    let rejections = 0;
+    await startRecordingServer("native-switch", (request, socket) => {
+      if (request.method === "pane.report_agent") return false;
+      if (request.method === "pane.report_agent_session") {
+        acceptedPath = request.params.agent_session_path;
+      }
+      if (request.method === "pane.report_agent_interruption") {
+        // Also prove an error response isn't mistaken for a successful ACK.
+        if (acceptedPath !== request.params.agent_session_path || rejections++ === 0) {
+          socket.end(`${JSON.stringify({ id: request.id, error: { code: "interruption_not_accepted" } })}\n`);
+          return false;
+        }
+        recoveredPath = request.params.agent_session_path;
+      }
+      return true;
+    });
+    const { child } = await nativeShutdownChild(integration, "switch");
+    try {
+      child.kill("SIGTERM");
+      expect(await child.exited).toBe(0);
+      expect(recoveredPath).toBe("/tmp/herdr-interrupted-b.jsonl");
     } finally {
       if (child.exitCode === null) child.kill("SIGKILL");
       await child.exited;

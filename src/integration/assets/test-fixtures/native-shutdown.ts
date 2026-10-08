@@ -32,6 +32,11 @@ if (scenario === "reload") {
   sessionPath = "/tmp/herdr-interrupted-b.jsonl";
   await handlers.get("session_start")?.({ reason: "reload" }, ctx);
 }
+if (scenario === "switch") {
+  sessionPath = "/tmp/herdr-interrupted-b.jsonl";
+  const select = handlers.get("session_switch") ?? handlers.get("session_start");
+  await select?.({ reason: "resume" }, ctx);
+}
 process.send?.({ ready: true, termListeners: process.listenerCount("SIGTERM") });
 if (scenario === "clean") await shutdown();
 setInterval(() => {}, 1000);

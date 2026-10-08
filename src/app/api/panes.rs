@@ -1659,8 +1659,11 @@ impl App {
                 "An absolute native session path is required",
             );
         };
-        let terminal_id = self.state.workspaces[ws_idx]
-            .pane_state(pane_id)
+        let terminal_id = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.pane_state(pane_id))
             .map(|pane| pane.attached_terminal_id.clone());
         let accepted = terminal_id
             .and_then(|id| self.state.terminals.get_mut(&id))
