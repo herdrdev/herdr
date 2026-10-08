@@ -51,7 +51,11 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     {
         let typed_text =
             associated_text.is_some_and(|value| parse_kitty_associated_text(value).is_some());
+        // A shifted alternate means Shift was held, even if the modifier
+        // field leaves it out (normalized below).
+        let shifted = shifted_codepoint.is_some_and(|shifted| shifted != codepoint);
         if key_modifiers_from_u8(modifier) == KeyModifiers::CONTROL
+            && !shifted
             && is_non_latin_script(ch)
             && ghostty_maps_ctrl_to_physical_key(base)
             && !typed_text
@@ -837,6 +841,12 @@ mod tests {
             // Ctrl+Shift keeps the layout character, as Ghostty sends it.
             (
                 "\x1b[1089:1057:99;6u",
+                KeyCode::Char('\u{441}'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            // Shift implied only by the shifted alternate.
+            (
+                "\x1b[1089:1057:99;5u",
                 KeyCode::Char('\u{441}'),
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             ),
