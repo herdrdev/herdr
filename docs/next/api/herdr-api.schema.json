@@ -1332,6 +1332,36 @@
           ],
           "type": "object"
         },
+        "AgentSessionInfo": {
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/request/$defs/AgentSessionRefKind"
+            },
+            "source": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "agent",
+            "kind",
+            "value"
+          ],
+          "type": "object"
+        },
+        "AgentSessionRefKind": {
+          "enum": [
+            "id",
+            "path"
+          ],
+          "type": "string"
+        },
         "AgentStartParams": {
           "properties": {
             "args": {
@@ -2186,6 +2216,161 @@
           },
           "required": [
             "target"
+          ],
+          "type": "object"
+        },
+        "InteractionAction": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "option_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "choose",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "option_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "free_text",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "option_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "begin_custom",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "option_id"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "parent_operation_id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "submit_custom",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text",
+                "parent_operation_id"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "InteractionObservation": {
+          "additionalProperties": false,
+          "description": "Exact runtime identity and bottom-buffer observation; names/pane aliases are not identity.",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "agent_session": {
+              "$ref": "#/schemas/request/$defs/AgentSessionInfo"
+            },
+            "content_digest": {
+              "description": "SHA-256 of the complete UTF-8 detection buffer, without trimming or normalization.",
+              "type": "string"
+            },
+            "runtime_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "server_instance_id": {
+              "type": "string"
+            },
+            "state_change_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "server_instance_id",
+            "runtime_pid",
+            "agent",
+            "agent_session",
+            "state_change_seq",
+            "content_digest"
+          ],
+          "type": "object"
+        },
+        "InteractionReceiptParams": {
+          "additionalProperties": false,
+          "properties": {
+            "operation_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id"
+          ],
+          "type": "object"
+        },
+        "InteractionSubmitParams": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "$ref": "#/schemas/request/$defs/InteractionAction"
+            },
+            "expected": {
+              "$ref": "#/schemas/request/$defs/InteractionObservation"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "payload_digest": {
+              "description": "SHA-256 of compact serde JSON for [operation_id, expected, action], in that order.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "payload_digest",
+            "expected",
+            "action"
           ],
           "type": "object"
         },
@@ -4747,6 +4932,54 @@
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "oneOf": [
+        {
+          "properties": {
+            "method": {
+              "const": "agent.interaction.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTarget"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.interaction.submit",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/InteractionSubmitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.interaction.receipt",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/InteractionReceiptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
         {
           "properties": {
             "method": {
@@ -7742,6 +7975,93 @@
           ],
           "type": "object"
         },
+        "InteractionObservation": {
+          "additionalProperties": false,
+          "description": "Exact runtime identity and bottom-buffer observation; names/pane aliases are not identity.",
+          "properties": {
+            "agent": {
+              "type": "string"
+            },
+            "agent_session": {
+              "$ref": "#/schemas/success_response/$defs/AgentSessionInfo"
+            },
+            "content_digest": {
+              "description": "SHA-256 of the complete UTF-8 detection buffer, without trimming or normalization.",
+              "type": "string"
+            },
+            "runtime_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "server_instance_id": {
+              "type": "string"
+            },
+            "state_change_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "terminal_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "terminal_id",
+            "server_instance_id",
+            "runtime_pid",
+            "agent",
+            "agent_session",
+            "state_change_seq",
+            "content_digest"
+          ],
+          "type": "object"
+        },
+        "InteractionOutcome": {
+          "oneOf": [
+            {
+              "enum": [
+                "rejected"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "enqueued",
+              "description": "Accepted by the PTY queue; no assertion about delivery or application acceptance.",
+              "type": "string"
+            },
+            {
+              "const": "unknown_delivery",
+              "description": "An intent exists without a reliable receipt; retry must never dispatch again.",
+              "type": "string"
+            }
+          ]
+        },
+        "InteractionReceipt": {
+          "properties": {
+            "code": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "outcome": {
+              "$ref": "#/schemas/success_response/$defs/InteractionOutcome"
+            },
+            "payload_digest": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_id",
+            "payload_digest",
+            "outcome"
+          ],
+          "type": "object"
+        },
         "LayoutDescription": {
           "properties": {
             "focused_pane_id": {
@@ -9234,6 +9554,46 @@
         },
         "ResponseResult": {
           "oneOf": [
+            {
+              "properties": {
+                "observation": {
+                  "$ref": "#/schemas/success_response/$defs/InteractionObservation"
+                },
+                "supported": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "agent_interaction",
+                  "type": "string"
+                },
+                "unsupported_reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "observation",
+                "supported",
+                "unsupported_reason"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "receipt": {
+                  "$ref": "#/schemas/success_response/$defs/InteractionReceipt"
+                },
+                "type": {
+                  "const": "agent_interaction_receipt",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "receipt"
+              ],
+              "type": "object"
+            },
             {
               "properties": {
                 "capabilities": {

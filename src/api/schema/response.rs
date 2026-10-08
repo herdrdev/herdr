@@ -42,6 +42,14 @@ pub struct ErrorBody {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseResult {
+    AgentInteraction {
+        observation: super::InteractionObservation,
+        supported: bool,
+        unsupported_reason: String,
+    },
+    AgentInteractionReceipt {
+        receipt: super::InteractionReceipt,
+    },
     Pong {
         version: String,
         protocol: u32,

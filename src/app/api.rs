@@ -4,6 +4,7 @@ mod agent_view;
 mod agents;
 mod env;
 mod integrations;
+mod interactions;
 mod layouts;
 mod pane_graphics;
 mod panes;
@@ -1168,6 +1169,15 @@ impl App {
             }
             Method::PaneReleaseAgent(params) => {
                 return self.handle_pane_release_agent(request.id, params);
+            }
+            Method::AgentInteractionGet(params) => {
+                return self.handle_interaction_get(request.id, params)
+            }
+            Method::AgentInteractionSubmit(params) => {
+                return self.handle_interaction_submit(request.id, params)
+            }
+            Method::AgentInteractionReceipt(params) => {
+                return self.handle_interaction_receipt(request.id, params)
             }
             Method::PaneSendText(params) => return self.handle_pane_send_text(request.id, params),
             Method::PaneSendInput(params) => {

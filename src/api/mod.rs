@@ -1,5 +1,6 @@
 pub mod client;
 mod event_hub;
+pub(crate) mod interaction_journal;
 pub mod schema;
 mod server;
 mod status;
