@@ -114,7 +114,10 @@ use frame_output::{
     write_encoded_frame_with_graphics,
 };
 pub(crate) use handshake::probe_endpoint_negotiation;
-use handshake::{client_shell_keybinding_source, do_handshake, is_remote_client_process};
+use handshake::{
+    client_shell_keybinding_source, do_handshake, is_remote_client_process,
+    HandshakePixelCapabilities,
+};
 #[cfg(test)]
 use handshake::{
     direct_graphics_profile_values, handshake_read_timeout, REMOTE_HANDSHAKE_READ_TIMEOUT,
@@ -238,9 +241,24 @@ fn run_client_with_mode(
         }
     };
 
-    // Get the terminal geometry before handshake (before raw mode).
+    // Get one coherent geometry snapshot before raw mode changes the terminal.
     let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) =
         initial_terminal_geometry(pixel_geometry_enabled, kitty_graphics_enabled)?;
+
+    let direct_attach = attach_escape.is_some();
+    let mut terminal_guard = if direct_attach {
+        setup_direct_attach_terminal(mouse_capture)
+    } else {
+        setup_terminal(mouse_capture)
+    }
+    .map_err(|err| {
+        eprintln!("herdr: failed to set up terminal: {err}");
+        err
+    })?;
+    loop_config.host_escape_disambiguation_active =
+        terminal_guard.host_escape_disambiguation_active();
+    loop_config.host_sgr_pixel_mouse = terminal_guard.host_sgr_pixel_mouse();
+    loop_config.initial_host_input = terminal_guard.take_buffered_host_input();
 
     let shell_surface_size = loop_config
         .shell_config
@@ -255,7 +273,10 @@ fn run_client_with_mode(
                 rows,
                 cell_width_px,
                 cell_height_px,
-                exact_cell_size,
+                HandshakePixelCapabilities {
+                    exact_geometry: exact_cell_size,
+                    sgr_mouse: loop_config.host_sgr_pixel_mouse == Some(true),
+                },
                 shell_surface_size,
                 endpoint_keybindings,
                 loop_config.mouse_capture_active,
@@ -295,22 +316,6 @@ fn run_client_with_mode(
         }
         Err(error) => return Err(error),
     };
-
-    // The federated shell can show connection notices without any server snapshot.
-    let direct_attach = attach_escape.is_some();
-    let mut terminal_guard = if direct_attach {
-        setup_direct_attach_terminal(mouse_capture)
-    } else {
-        setup_terminal(mouse_capture)
-    }
-    .map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
-        err
-    })?;
-    loop_config.host_escape_disambiguation_active =
-        terminal_guard.host_escape_disambiguation_active();
-    loop_config.host_sgr_pixel_mouse = terminal_guard.host_sgr_pixel_mouse();
-    loop_config.initial_host_input = terminal_guard.take_buffered_host_input();
 
     // Install a panic hook so the foreground client always restores its terminal.
     let panic_restore = terminal_guard.panic_restore();
@@ -755,6 +760,7 @@ async fn run_client_loop(
                     cell_width_px: state.reported_cell_size.0,
                     cell_height_px: state.reported_cell_size.1,
                     pixel_geometry_exact: state.pixel_geometry_exact,
+                    pixel_mouse: state.pixel_mouse_available(),
                     surface_size: shell.surface_size(state.reported_size.0, state.reported_size.1),
                     endpoint_keybindings: config.endpoint_keybindings,
                     mouse_capture: state.shell_mouse_capture_preference,
@@ -1227,7 +1233,9 @@ async fn run_client_loop(
                     host_theme_query_pending.fetch_add(1, Ordering::AcqRel);
                     query_host_terminal_theme();
                 }
-                if !pixel_geometry_exact && host_sgr_pixels_active.load(Ordering::Acquire) {
+                let pixel_mouse_available =
+                    pixel_geometry_exact && state.host_sgr_pixel_mouse == Some(true);
+                if !pixel_mouse_available && host_sgr_pixels_active.load(Ordering::Acquire) {
                     set_mouse_capture(state.mouse_capture_active, false)
                         .map_err(ClientError::ConnectionFailed)?;
                     host_sgr_pixels_active.store(false, Ordering::Release);
@@ -1253,7 +1261,7 @@ async fn run_client_loop(
                         new_rows,
                         cell_width_px,
                         cell_height_px,
-                        pixel_geometry_exact,
+                        pixel_mouse_available,
                     )
                 } else {
                     ClientMessage::Resize {
@@ -1261,7 +1269,7 @@ async fn run_client_loop(
                         rows: new_rows,
                         cell_width_px,
                         cell_height_px,
-                        pixel_mouse: pixel_geometry_exact,
+                        pixel_mouse: pixel_mouse_available,
                     }
                 };
                 if let Some(activation) = pending_activation.as_mut() {
@@ -1983,8 +1991,7 @@ async fn run_client_loop(
                         let next_sgr_pixels = effective_sgr_pixel_mouse(
                             enabled,
                             sgr_pixels,
-                            state.pixel_geometry_exact,
-                            state.host_sgr_pixel_mouse,
+                            state.pixel_mouse_available(),
                         );
                         let mouse_mode_changed = enabled != state.mouse_capture_active
                             || next_sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire);

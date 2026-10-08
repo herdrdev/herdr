@@ -40,8 +40,7 @@ pub(super) fn apply_reload(
         let sgr_pixels = effective_sgr_pixel_mouse(
             enabled,
             state.endpoint_sgr_pixels_requested,
-            state.pixel_geometry_exact,
-            state.host_sgr_pixel_mouse,
+            state.pixel_mouse_available(),
         );
         if enabled != state.mouse_capture_active
             || sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire)
@@ -52,6 +51,7 @@ pub(super) fn apply_reload(
         host_mouse_capture_active.store(enabled, Ordering::Release);
         host_sgr_pixels_active.store(sgr_pixels, Ordering::Release);
     }
+    let pixel_mouse_available = state.pixel_mouse_available();
     let (frame, resize) = if let Some(shell) = state.shell.as_mut() {
         let previous_size = shell.surface_size(state.reported_size.0, state.reported_size.1);
         shell.reload_client_config();
@@ -64,7 +64,7 @@ pub(super) fn apply_reload(
                 state.reported_size.1,
                 state.reported_cell_size.0,
                 state.reported_cell_size.1,
-                state.pixel_geometry_exact,
+                pixel_mouse_available,
             )
         });
         (

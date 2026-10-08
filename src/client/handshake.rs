@@ -144,7 +144,10 @@ pub(crate) fn probe_endpoint_negotiation(
         24,
         0,
         0,
-        false,
+        HandshakePixelCapabilities {
+            exact_geometry: false,
+            sgr_mouse: false,
+        },
         Some(crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 }),
         false,
         false,
@@ -156,6 +159,11 @@ pub(crate) fn probe_endpoint_negotiation(
         handshake.endpoint_methods.unwrap_or_default(),
         handshake.endpoint_capabilities.unwrap_or_default(),
     ))
+}
+
+pub(super) struct HandshakePixelCapabilities {
+    pub(super) exact_geometry: bool,
+    pub(super) sgr_mouse: bool,
 }
 
 /// Performs the client→server handshake.
@@ -170,7 +178,7 @@ pub(super) fn do_handshake(
     rows: u16,
     cell_width_px: u32,
     cell_height_px: u32,
-    exact_cell_size: bool,
+    pixel_capabilities: HandshakePixelCapabilities,
     shell_surface_size: Option<crate::protocol::ClientSurfaceSize>,
     endpoint_keybindings: bool,
     mouse_capture: bool,
@@ -188,10 +196,10 @@ pub(super) fn do_handshake(
             cell_width_px,
             cell_height_px,
             surface_size,
-            pixel_mouse: exact_cell_size && cfg!(unix),
+            pixel_mouse: pixel_capabilities.exact_geometry && pixel_capabilities.sgr_mouse,
             direct_graphics: direct_graphics_capability(
                 local_transport,
-                exact_cell_size,
+                pixel_capabilities.exact_geometry,
                 (cell_width_px, cell_height_px),
                 direct_graphics_profile_allowed(),
             ),
@@ -219,7 +227,7 @@ pub(super) fn do_handshake(
             rows,
             cell_width_px,
             cell_height_px,
-            pixel_mouse: exact_cell_size && cfg!(unix),
+            pixel_mouse: pixel_capabilities.exact_geometry && pixel_capabilities.sgr_mouse,
         }
     };
     protocol::write_message(stream, &hello)

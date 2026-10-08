@@ -76,7 +76,7 @@ pub(super) fn setup_terminal_with_capabilities(
     let (host_probe, buffered_host_input) = if enable_client_protocols {
         terminal_guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
-        let (probe, buffered_input) = query_host_escape_disambiguation();
+        let (probe, buffered_input) = query_host_capabilities(true)?;
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
@@ -88,9 +88,10 @@ pub(super) fn setup_terminal_with_capabilities(
         if should_enable_host_color_scheme_reports(true) {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
+        let (probe, buffered_input) = query_host_capabilities(false)?;
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste)?;
-        (HostTerminalProbe::default(), Vec::new())
+        (probe, buffered_input)
     };
 
     #[cfg(windows)]
@@ -145,7 +146,7 @@ pub(super) struct TerminalGuard {
 }
 
 #[cfg(not(windows))]
-const HOST_KEYBOARD_QUERY_TIMEOUT: Duration = Duration::from_millis(250);
+const HOST_CAPABILITY_QUERY_TIMEOUT: Duration = Duration::from_millis(250);
 #[cfg(not(windows))]
 const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 
@@ -153,9 +154,7 @@ const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 #[derive(Default)]
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
-    /// DECRPM for SGR pixel mouse (1016): Some(true) when the host knows the
-    /// mode, Some(false) when it reports it unsupported.
-    sgr_pixel_mouse: Option<bool>,
+    sgr_pixel_mouse_status: Option<u8>,
     primary_device_attributes: bool,
 }
 
@@ -163,27 +162,33 @@ struct HostKeyboardProbeResponses {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct HostTerminalProbe {
     pub(super) escape_disambiguation: bool,
-    /// None when the host did not answer: keep assuming support.
+    /// None when the host did not answer; exact pixel input stays disabled.
     pub(super) sgr_pixel_mouse: Option<bool>,
 }
 
 #[cfg(not(windows))]
-fn query_host_escape_disambiguation() -> (HostTerminalProbe, Vec<u8>) {
-    const QUERY: &[u8] = b"\x1b[?u\x1b[?1016$p\x1b[c";
+fn query_host_capabilities(query_keyboard: bool) -> io::Result<(HostTerminalProbe, Vec<u8>)> {
+    const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[c";
+    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[c";
 
     let mut buffered_input = Vec::new();
+    let query = if query_keyboard {
+        FULL_QUERY
+    } else {
+        PIXEL_MOUSE_QUERY
+    };
     if let Err(err) = io::stdout()
-        .write_all(QUERY)
+        .write_all(query)
         .and_then(|()| io::stdout().flush())
     {
-        tracing::debug!(%err, "host keyboard enhancement query unavailable");
-        return (HostTerminalProbe::default(), buffered_input);
+        tracing::debug!(%err, "host capability query unavailable");
+        return Ok((HostTerminalProbe::default(), buffered_input));
     }
 
     // Bypass StdinLock's shared buffer so poll and read observe the same bytes.
     let stdin = io::stdin();
     let stdin_fd = stdin.as_raw_fd();
-    let deadline = Instant::now() + HOST_KEYBOARD_QUERY_TIMEOUT;
+    let deadline = Instant::now() + HOST_CAPABILITY_QUERY_TIMEOUT;
     let mut responses = HostKeyboardProbeResponses::default();
     while !responses.primary_device_attributes && buffered_input.len() < MAX_BUFFERED_HOST_INPUT {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
@@ -217,16 +222,28 @@ fn query_host_escape_disambiguation() -> (HostTerminalProbe, Vec<u8>) {
         }
     }
 
-    (host_terminal_probe(&responses), buffered_input)
+    Ok((host_terminal_probe(&responses)?, buffered_input))
 }
 
 #[cfg(not(windows))]
-fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalProbe {
-    HostTerminalProbe {
+fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> io::Result<HostTerminalProbe> {
+    let sgr_pixel_mouse = match responses.sgr_pixel_mouse_status {
+        // The query follows an explicit reset. A host that remains SET would
+        // send pixels whenever capture starts, even while Herdr expects cells.
+        Some(1 | 3) => {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "host SGR pixel mouse mode cannot be disabled",
+            ));
+        }
+        Some(2) => Some(true),
+        Some(0 | 4) => Some(false),
+        _ => None,
+    };
+    Ok(HostTerminalProbe {
         escape_disambiguation: host_escape_disambiguation_confirmed(responses),
-        // An explicit mode answer stands even if the probe timed out later.
-        sgr_pixel_mouse: responses.sgr_pixel_mouse,
-    }
+        sgr_pixel_mouse,
+    })
 }
 
 #[cfg(not(windows))]
@@ -281,19 +298,14 @@ fn consume_host_keyboard_probe_responses(
             break;
         }
         let body = &buffered_input[start + 3..end];
-        // DECRPM: CSI ? 1016 ; Ps $ y (0 = not recognized, 4 = permanently reset).
+        // DECRPM: CSI ? 1016 ; Ps $ y.
         if buffered_input[end] == b'$' {
             let Some(&final_byte) = buffered_input.get(end + 1) else {
                 break;
             };
-            let reply = std::str::from_utf8(body)
-                .ok()
-                .and_then(|body| body.split_once(';'))
-                .filter(|(mode, _)| *mode == "1016")
-                .and_then(|(_, state)| state.parse::<u8>().ok());
             if final_byte == b'y' {
-                if let Some(state) = reply {
-                    responses.sgr_pixel_mouse = Some(matches!(state, 1..=3));
+                if let Some(status) = parse_sgr_pixel_mouse_status(body) {
+                    responses.sgr_pixel_mouse_status = Some(status);
                     buffered_input.drain(start..=end + 1);
                     continue;
                 }
@@ -332,6 +344,14 @@ fn consume_host_keyboard_probe_responses(
 }
 
 #[cfg(not(windows))]
+fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
+    let mut fields = body.split(|byte| *byte == b';');
+    (fields.next()? == b"1016").then_some(())?;
+    let status = std::str::from_utf8(fields.next()?).ok()?.parse().ok()?;
+    (fields.next().is_none() && status <= 4).then_some(status)
+}
+
+#[cfg(not(windows))]
 fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
     if bytes.first() != Some(&0x1b) {
         return None;
@@ -360,8 +380,8 @@ fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
 }
 
 #[cfg(windows)]
-fn query_host_escape_disambiguation() -> (HostTerminalProbe, Vec<u8>) {
-    (HostTerminalProbe::default(), Vec::new())
+fn query_host_capabilities(_query_keyboard: bool) -> io::Result<(HostTerminalProbe, Vec<u8>)> {
+    Ok((HostTerminalProbe::default(), Vec::new()))
 }
 
 pub(super) fn write_host_color_scheme_report_mode(
@@ -559,16 +579,12 @@ pub(super) fn effective_mouse_capture(
     server_enabled || direct_attach_preference
 }
 
-/// Host SGR pixel reports are used only when exact cell geometry maps them to
-/// cells and the host did not report the mode unsupported (`host_support`
-/// None means it never answered the probe).
 pub(super) fn effective_sgr_pixel_mouse(
     enabled: bool,
     requested: bool,
-    exact_geometry: bool,
-    host_support: Option<bool>,
+    pixel_mouse_available: bool,
 ) -> bool {
-    enabled && requested && exact_geometry && host_support != Some(false)
+    enabled && requested && pixel_mouse_available
 }
 
 #[cfg(any(windows, test))]
@@ -889,8 +905,8 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn host_keyboard_probe_consumes_fragmented_responses_and_preserves_input() {
-        let stream = b"before\x1b[?7u-middle-\x1b[?1;2cafter";
+    fn host_capability_probe_consumes_fragmented_responses_and_preserves_input() {
+        let stream = b"before\x1b[?1016;2$y-middle-\x1b[?7u-\x1b[?1;2cafter";
 
         for split in 1..stream.len() {
             let mut buffered = Vec::new();
@@ -900,37 +916,29 @@ mod tests {
             buffered.extend_from_slice(&stream[split..]);
             consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
+            assert_eq!(responses.sgr_pixel_mouse_status, Some(2), "split {split}");
             assert_eq!(responses.flags, Some(7), "split {split}");
             assert!(responses.primary_device_attributes, "split {split}");
-            assert_eq!(buffered, b"before-middle-after", "split {split}");
+            assert_eq!(buffered, b"before-middle--after", "split {split}");
         }
     }
 
     #[cfg(not(windows))]
     #[test]
-    fn host_probe_reads_sgr_pixel_mouse_support_at_any_split() {
-        // kitty/Ghostty answer 2 (reset, supported); Alacritty answers 0 (unknown).
-        for (reply, expected) in [
-            (&b"\x1b[?1016;2$y"[..], Some(true)),
-            (b"\x1b[?1016;1$y", Some(true)),
-            (b"\x1b[?1016;0$y", Some(false)),
-            (b"\x1b[?1016;4$y", Some(false)),
-            (b"", None),
-        ] {
-            let stream = [&b"x\x1b[?7u"[..], reply, b"\x1b[?1;2cy"].concat();
-            for split in 1..stream.len() {
-                let mut buffered = stream[..split].to_vec();
-                let mut responses = HostKeyboardProbeResponses::default();
-                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
-                buffered.extend_from_slice(&stream[split..]);
-                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+    fn host_capability_probe_accepts_only_usable_sgr_pixel_mouse_states() {
+        for status in 0..=4 {
+            let mut buffered = format!("\x1b[?1016;{status}$y").into_bytes();
+            let mut responses = HostKeyboardProbeResponses::default();
 
-                assert_eq!(
-                    responses.sgr_pixel_mouse, expected,
-                    "{reply:?} split {split}"
-                );
-                assert_eq!(buffered, b"xy", "{reply:?} split {split}");
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+            let probe = host_terminal_probe(&responses);
+            if matches!(status, 1 | 3) {
+                assert_eq!(probe.unwrap_err().kind(), io::ErrorKind::Unsupported);
+            } else {
+                assert_eq!(probe.unwrap().sgr_pixel_mouse, Some(status == 2));
             }
+            assert!(buffered.is_empty());
         }
     }
 
@@ -942,18 +950,25 @@ mod tests {
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(!responses.primary_device_attributes);
-        assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(false));
+        assert_eq!(
+            host_terminal_probe(&responses).unwrap().sgr_pixel_mouse,
+            Some(false)
+        );
     }
 
     #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_preserves_typed_input_before_responses() {
-        let mut buffered = b"aPtyped\x1b[?7u\x1b[?1;2c".to_vec();
+        let mut buffered = b"aPtyped\x1b[?1016;2$y\x1b[?7u\x1b[?1;2c".to_vec();
         let mut responses = HostKeyboardProbeResponses::default();
 
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(host_escape_disambiguation_confirmed(&responses));
+        assert_eq!(
+            host_terminal_probe(&responses).unwrap().sgr_pixel_mouse,
+            Some(true)
+        );
         assert_eq!(buffered, b"aPtyped");
     }
 
@@ -987,27 +1002,36 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_preserves_response_shaped_payloads() {
-        let opaque = b"\x1b[200~paste \x1b[?1u \x1b[?1;2c\x1b[201~-\x1bPdata \x1b[?7u\x1b\\";
-        let mut buffered = [opaque.as_slice(), b"\x1b[?7u\x1b[?1;2c"].concat();
+        let opaque =
+            b"\x1b[200~paste \x1b[?1016;2$y \x1b[?1u \x1b[?1;2c\x1b[201~-\x1bPdata \x1b[?7u\x1b\\";
+        let mut buffered = [opaque.as_slice(), b"\x1b[?1016;2$y\x1b[?7u\x1b[?1;2c"].concat();
         let mut responses = HostKeyboardProbeResponses::default();
 
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(host_escape_disambiguation_confirmed(&responses));
+        assert_eq!(
+            host_terminal_probe(&responses).unwrap().sgr_pixel_mouse,
+            Some(true)
+        );
         assert_eq!(buffered, opaque);
     }
 
     #[cfg(not(windows))]
     #[test]
     fn host_keyboard_probe_preserves_malformed_responses() {
-        let mut buffered = b"a\x1b[?7;1ub\x1b[?65536uc".to_vec();
+        let mut buffered = b"a\x1b[?7;1ub\x1b[?65536uc\x1b[?1016;5$y\x1b[?1006;2$y".to_vec();
         let mut responses = HostKeyboardProbeResponses::default();
 
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert_eq!(responses.flags, None);
+        assert_eq!(responses.sgr_pixel_mouse_status, None);
         assert!(!responses.primary_device_attributes);
-        assert_eq!(buffered, b"a\x1b[?7;1ub\x1b[?65536uc");
+        assert_eq!(
+            buffered,
+            b"a\x1b[?7;1ub\x1b[?65536uc\x1b[?1016;5$y\x1b[?1006;2$y"
+        );
     }
 
     #[test]

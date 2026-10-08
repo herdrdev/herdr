@@ -512,6 +512,12 @@ mod tests {
         };
         assert_eq!(data, report);
         assert_eq!(captured, geometry);
+        let Some(ClientLoopEvent::StdinInput(cell_report)) =
+            classify_unix_input(report.clone(), false, Some(geometry))
+        else {
+            panic!("unconfirmed host pixel mode must keep cell reports on the raw path");
+        };
+        assert_eq!(cell_report, report);
         assert!(classify_unix_input(report, true, None).is_none());
 
         for raw in [

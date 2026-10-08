@@ -5348,6 +5348,43 @@ fn client_pane_pixel_mouse_uses_runtime_pixel_encoding() {
 }
 
 #[test]
+fn client_pane_cell_mouse_uses_pixel_units_when_sgr_pixels_is_set() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime");
+    let _runtime_guard = rt.enter();
+    let (runtime, mut input_rx) =
+        crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+            20,
+            5,
+            0,
+            b"\x1b[?1003h\x1b[?1006h\x1b[?1016h",
+            4,
+        );
+    runtime.resize(5, 20, 10, 20);
+
+    apply_client_pane_input_events(
+        &runtime,
+        &[crate::protocol::ClientPaneInputEvent::Mouse {
+            kind: crate::protocol::ClientMouseKind::Moved,
+            position: crate::protocol::ClientMousePosition::Cell { column: 2, row: 1 },
+            geometry: None,
+            modifiers: 0,
+            lines: 3,
+        }],
+    )
+    .expect("cell-aligned pixel mouse input");
+    assert_eq!(
+        input_rx.try_recv().expect("encoded pixel-unit mouse"),
+        Bytes::from_static(b"\x1b[<35;25;30M")
+    );
+    drop(runtime);
+    drop(_runtime_guard);
+    rt.shutdown_timeout(Duration::from_millis(100));
+}
+
+#[test]
 fn client_pane_pixel_mouse_stays_pixel_scaled_when_sgr_is_reasserted() {
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()

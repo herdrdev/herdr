@@ -620,3 +620,24 @@ async fn pixel_mouse_activation_follows_child_1016_without_graphics_demand() {
         }
     ));
 }
+
+#[tokio::test]
+async fn mouse_capture_stays_cell_based_without_host_pixel_capability() {
+    let (mut server, _client_rx, _pane_id) =
+        retained_test_server(b"\x1b[?1003h\x1b[?1006h\x1b[?1016h");
+    let (writer, control_rx, _render_rx) = test_client_writer();
+    let client = server.clients.get_mut(&1).unwrap();
+    client.writer = Some(writer);
+    client.pixel_mouse = false;
+    client.host_mouse_capture_active = None;
+    client.host_sgr_pixels_active = None;
+
+    server.stream_host_mouse_capture_mode();
+    assert!(matches!(
+        read_server_message(control_rx.recv_timeout(Duration::from_millis(100)).unwrap()),
+        ServerMessage::MouseCapture {
+            enabled: true,
+            sgr_pixels: false
+        }
+    ));
+}

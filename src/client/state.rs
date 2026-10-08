@@ -96,6 +96,10 @@ impl Drop for ClientState {
 }
 
 impl ClientState {
+    pub(super) fn pixel_mouse_available(&self) -> bool {
+        self.pixel_geometry_exact && self.host_sgr_pixel_mouse == Some(true)
+    }
+
     #[cfg(test)]
     pub(super) fn test_new() -> Self {
         Self {
