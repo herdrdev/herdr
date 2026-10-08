@@ -718,7 +718,9 @@ impl ClientShellState {
                 outcome.repaint = true;
                 return;
             }
-            if code == KeyCode::Char('/') && modifiers.is_empty() {
+            // Match the typed character so layouts where `/` needs Shift work
+            // when the host reports it as a shifted key (report-all panes).
+            if crate::input::keybind_help_text_char(key) == Some('/') {
                 if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
                     navigator.search_focused = true;
                     navigator.filter = None;

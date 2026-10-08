@@ -1316,6 +1316,32 @@ async fn reporter_text_key_release_reaches_kitty_event_pane() {
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
+async fn goto_search_opens_on_shifted_slash_from_a_report_all_pane() {
+    // #4963, recorded from Ghostty 1.3.1 with a Portuguese layout, where `/` is
+    // Shift+7. With a plain pane Herdr keeps the host at flags 7 and the press
+    // arrives as text; when the focused pane asks for all keys Herdr pushes 31
+    // and the press arrives as a report carrying the shifted key and its text.
+    for (pane_mode, press, release) in [
+        (&b""[..], &b"/"[..], &b"\x1b[55:47;2:3u"[..]),
+        (b"\x1b[>31u", b"\x1b[55:47;2;47u", b"\x1b[55:47;2:3u"),
+    ] {
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        herdr.state.open_navigator_overlay();
+        assert_eq!(herdr.feed(press), None, "{}", show(pane_mode));
+        assert_eq!(herdr.feed(release), None, "{}", show(pane_mode));
+        assert!(
+            matches!(
+                &herdr.state.overlay,
+                Some(ClientShellOverlay::Navigator(navigator)) if navigator.search_focused
+            ),
+            "goto search did not activate for pane {}",
+            show(pane_mode)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {
     let report = run_mouse_conformance();
     print_report(&report);
