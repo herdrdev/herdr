@@ -937,47 +937,4 @@ mod windows_tests {
             }
         );
     }
-
-    #[test]
-    fn windows_vt_ctrl_shift_punctuation_keeps_shifted_symbol_for_keybinds() {
-        let config: crate::config::Config = toml::from_str(
-            r#"
-[keys]
-navigate_pane_down = "ctrl+shift+{"
-"#,
-        )
-        .unwrap();
-        let keybinds = config.keybinds();
-
-        // US Ctrl+Shift+[ and Russian Ctrl+Shift+\u{445} on the same key.
-        for sequence in [
-            b"\x1b[91:123;6u".as_slice(),
-            "\x1b[1093:1061:91;6u".as_bytes(),
-        ] {
-            let mut framer = crate::raw_input::RawInputFramer::default();
-            let events = framer.push(sequence);
-            assert_eq!(events.len(), 1);
-            let event = windows_client_input_event_from_raw(events.into_iter().next().unwrap())
-                .expect("raw key converts");
-
-            let config = bincode::config::standard();
-            let wire = bincode::serde::encode_to_vec(&event, config).unwrap();
-            let (event, _): (crate::protocol::ClientInputEvent, usize) =
-                bincode::serde::decode_from_slice(&wire, config).unwrap();
-
-            let crate::raw_input::RawInputEvent::Key(key) = event.to_raw_input_event() else {
-                panic!("expected key");
-            };
-            assert_eq!(
-                key.code,
-                crossterm::event::KeyCode::Char('['),
-                "{sequence:?}"
-            );
-            assert_eq!(key.shifted_codepoint, Some('{' as u32), "{sequence:?}");
-            assert!(
-                keybinds.navigate.pane_down.matches_direct_key(&key),
-                "{sequence:?}"
-            );
-        }
-    }
 }

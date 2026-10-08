@@ -1320,214 +1320,174 @@ const fn layout_key(key: ffi::GhosttyKey, base: char, shifted: char) -> KeyDef {
     text("layout", key, base, shifted)
 }
 
-const CTRL: u16 = ghostty::MOD_CTRL;
-const ALT: u16 = ghostty::MOD_ALT;
-const SHIFT: u16 = ghostty::MOD_SHIFT;
-const CTRL_ALT: u16 = ghostty::MOD_CTRL | ghostty::MOD_ALT;
-const CTRL_SHIFT: u16 = ghostty::MOD_CTRL | ghostty::MOD_SHIFT;
-
-/// Panes for the layout checks: a plain shell, a Kitty app (nvim, Claude
-/// Code), and a Kitty app that also asks for event types.
-const LAYOUT_PANES: &[(&str, &[u8])] = &[
-    ("legacy", b""),
-    ("kitty1", b"\x1b[>1u"),
-    ("kitty3", b"\x1b[>3u"),
-    ("kitty5", b"\x1b[>5u"),
-];
-
-/// Host bytes for one keystroke from a Kitty host, built by libghostty the way
-/// Ghostty builds them (Herdr pushes flags 7, so they name the base-layout key).
-fn kitty_host_keystroke(pane_mode: &[u8], def: KeyDef, mods: u16) -> HostKeystroke {
-    Oracle::new(HostProfile::Kitty.setup(pane_mode)).keystroke(def, mods)
-}
-
-fn herdr_keystroke(host: HostProfile, pane_mode: &[u8], keystroke: &HostKeystroke) -> String {
-    let mut herdr = HerdrPath::new(host, pane_mode);
-    let press = herdr.feed(&keystroke.0).expect("press reaches the pane");
-    let release = herdr.feed(&keystroke.1).expect("release reaches the pane");
-    show(&[press, release].concat())
-}
-
-/// The same report without the base-layout field: what a host that names no
-/// physical key sends, so nothing can be rewritten.
-fn without_base_layout_key(bytes: &[u8]) -> Vec<u8> {
-    let text = std::str::from_utf8(bytes).expect("utf8 report");
-    let Some(body) = text.strip_prefix("\x1b[") else {
-        return bytes.to_vec();
-    };
-    let (key, rest) = body.split_once(';').unwrap_or((body, ""));
-    let mut fields = key.split(':');
-    let codepoint = fields.next().unwrap_or_default();
-    let key = match fields.next() {
-        Some(shifted) if !shifted.is_empty() => format!("{codepoint}:{shifted}"),
-        _ => codepoint.to_string(),
-    };
-    let rest = if rest.is_empty() {
-        String::new()
+fn layout_keystroke_through_herdr(
+    host: HostProfile,
+    pane_mode: &[u8],
+    def: KeyDef,
+    mods: u16,
+) -> (HostKeystroke, String, String) {
+    let keystroke = Oracle::new(host.setup(pane_mode)).keystroke(def, mods);
+    let (press, release) = Oracle::new(pane_mode).keystroke(def, mods);
+    let direct = if keystroke.1.is_empty() {
+        press
     } else {
-        format!(";{rest}")
+        [press, release].concat()
     };
-    format!("\x1b[{key}{rest}").into_bytes()
+    let mut herdr = HerdrPath::new(host, pane_mode);
+    let pane_press = herdr.feed(&keystroke.0).expect("press reaches the pane");
+    let pane_release = herdr.feed(&keystroke.1).expect("release reaches the pane");
+    (
+        keystroke,
+        show(&direct),
+        show(&[pane_press, pane_release].concat()),
+    )
 }
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
-async fn non_latin_layout_command_chords_reach_the_pane_as_their_physical_key() {
-    // #1079: on a Russian layout Ctrl+W must delete a word and Ctrl+C must
-    // interrupt, exactly as on a US layout. Each chord must reach every pane as
-    // the same bytes the US key sends through Herdr.
+async fn layout_ctrl_chords_match_ghostty_direct() {
+    // #1079. Keystrokes from a Kitty host on Russian, German, Turkish, French,
+    // Nordic and Polish layouts, built like Ghostty builds them. `ghostty` is
+    // what Ghostty sends the app directly (recorded from libghostty, and
+    // checked against it below); `herdr` is what the pane gets through Herdr.
     use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const ALT: u16 = ghostty::MOD_ALT;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
     let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
     let ru_c = layout_key(GhosttyKey_GHOSTTY_KEY_C, '\u{441}', '\u{421}');
+    let ru_i = layout_key(GhosttyKey_GHOSTTY_KEY_I, '\u{448}', '\u{428}');
     let ru_bracket = layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{445}', '\u{425}');
-    let us = |name: &str| *KEYS.iter().find(|def| def.name == name).unwrap();
-    let chords = [
-        ("ctrl+w", ru_w, us("w"), CTRL),
-        ("ctrl+c", ru_c, us("c"), CTRL),
-        ("ctrl+shift+[", ru_bracket, us("["), CTRL_SHIFT),
-        ("alt+w", ru_w, us("w"), ALT),
+    let de = layout_key(GhosttyKey_GHOSTTY_KEY_SEMICOLON, '\u{f6}', '\u{d6}');
+    let tr = layout_key(GhosttyKey_GHOSTTY_KEY_I, '\u{131}', 'I');
+    let fr = layout_key(GhosttyKey_GHOSTTY_KEY_DIGIT_2, '\u{e9}', '2');
+    let no = layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{e5}', '\u{c5}');
+    let pl = layout_key(GhosttyKey_GHOSTTY_KEY_E, '\u{119}', '\u{118}');
+    let keys = [
+        ("ru ctrl+w", ru_w, CTRL),
+        ("ru ctrl+c", ru_c, CTRL),
+        ("ru ctrl+i", ru_i, CTRL),
+        ("ru ctrl+[", ru_bracket, CTRL),
+        ("ru ctrl+shift+[", ru_bracket, CTRL | SHIFT),
+        ("ru alt+w", ru_w, ALT),
+        ("ru ctrl+alt+w", ru_w, CTRL | ALT),
+        ("ru w", ru_w, 0),
+        ("ru shift+w", ru_w, SHIFT),
+        ("de ctrl+\u{f6}", de, CTRL),
+        ("tr ctrl+\u{131}", tr, CTRL),
+        ("fr ctrl+\u{e9}", fr, CTRL),
+        ("no ctrl+\u{e5}", no, CTRL),
+        ("pl altgr \u{119}", pl, CTRL | ALT),
     ];
-    let mut checked = BTreeMap::new();
-    for &(pane_name, pane_mode) in LAYOUT_PANES {
-        for (name, ru, us, mods) in chords {
-            let host = kitty_host_keystroke(pane_mode, ru, mods);
-            assert!(
-                show(&host.0).contains("::") || show(&host.0).contains(":1061:"),
-                "{name}: host names the base key: {}",
-                show(&host.0)
-            );
-            let got = herdr_keystroke(HostProfile::Kitty, pane_mode, &host);
-            let want = herdr_keystroke(
-                HostProfile::Kitty,
-                pane_mode,
-                &kitty_host_keystroke(pane_mode, us, mods),
-            );
-            assert_eq!(got, want, "{pane_name} ru {name}: {}", show(&host.0));
-            checked.insert((pane_name, name), got);
-        }
-    }
-    // The bytes themselves, for the cases the issue is about.
-    for (pane, name, want) in [
-        ("legacy", "ctrl+w", "\\x17"),
-        ("legacy", "ctrl+c", "\\x03"),
-        ("legacy", "ctrl+shift+[", "\\x1b[123;5u"),
-        ("legacy", "alt+w", "\\x1bw"),
-        ("kitty1", "ctrl+w", "\\x1b[119;5u"),
-        ("kitty1", "ctrl+c", "\\x1b[99;5u"),
-        ("kitty1", "alt+w", "\\x1b[119;3u"),
-        ("kitty3", "ctrl+w", "\\x1b[119;5u\\x1b[119;5:3u"),
-        ("kitty5", "ctrl+shift+[", "\\x1b[91:123;6u"),
-    ] {
-        assert_eq!(checked[&(pane, name)], want, "{pane} ru {name}");
-    }
-
-    // Ctrl let go before the key: the release names the layout character
-    // without Ctrl, and is paired with the physical-key press.
-    let mut herdr = HerdrPath::new(HostProfile::Kitty, b"\x1b[>3u");
-    let press = herdr.feed(b"\x1b[1094::119;5u").expect("press");
-    let release = herdr.feed(b"\x1b[1094::119;1:3u").expect("release");
-    assert_eq!(
-        show(&[press, release].concat()),
-        "\\x1b[119;5u\\x1b[119;1:3u"
-    );
-}
-
-#[cfg(unix)]
-#[tokio::test(flavor = "multi_thread")]
-async fn latin_layout_altgr_and_text_keys_keep_their_layout_character() {
-    // Latin layouts keep their own keys: Ctrl+\u{131} on Turkish is not Ctrl+I
-    // (Tab), Ctrl+\u{e5} on Nordic is not Ctrl+[ (Esc). Ctrl+Alt may be AltGr
-    // on Windows, so it is never rewritten either. Each must reach the pane as
-    // the same report without the base-layout key would.
-    use ffi::*;
-    let cases = [
+    // (pane, key, ghostty, herdr)
+    let table: &[(&str, &str, &str, &str)] = &[
+        // Plain shell. Ctrl alone maps to the physical key's control byte
+        // when Ghostty has one; Ctrl+I and Ctrl+[ keep the layout character.
+        ("legacy", "ru ctrl+w", "\\x17", "\\x17"),
+        ("legacy", "ru ctrl+c", "\\x03", "\\x03"),
+        ("legacy", "ru ctrl+i", "\\x1b[1096;5u", "\\x1b[1096;5u"),
+        ("legacy", "ru ctrl+[", "\\x1b[1093;5u", "\\x1b[1093;5u"),
         (
+            "legacy",
+            "ru ctrl+shift+[",
+            "\\x1b[1061;5u",
+            "\\x1b[1061;5u",
+        ),
+        ("legacy", "ru alt+w", "\\x1b\\xd1\\x86", "\\x1b\\xd1\\x86"),
+        ("legacy", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        ("legacy", "ru shift+w", "\\xd0\\xa6", "\\xd0\\xa6"),
+        ("legacy", "de ctrl+\u{f6}", "\\x1b[246;5u", "\\x1b[246;5u"),
+        ("legacy", "tr ctrl+\u{131}", "\\x1b[305;5u", "\\x1b[305;5u"),
+        ("legacy", "no ctrl+\u{e5}", "\\x1b[229;5u", "\\x1b[229;5u"),
+        // Ghostty maps these by physical key too, but Ctrl+Alt can be AltGr
+        // on Windows hosts and Latin keys are shortcuts of their own, so
+        // Herdr keeps the layout character.
+        ("legacy", "ru ctrl+alt+w", "\\x1b\\x17", "\\x1b[1094;7u"),
+        ("legacy", "fr ctrl+\u{e9}", "\\x00", "\\x1b[233;5u"),
+        ("legacy", "pl altgr \u{119}", "\\x1b\\x05", "\\x1b[281;7u"),
+        // Kitty apps. A rewritten chord reaches them as the physical key, the
+        // key the Kitty spec says to match shortcuts on.
+        ("kitty1", "ru ctrl+w", "\\x1b[1094;5u", "\\x1b[119;5u"),
+        ("kitty1", "ru ctrl+c", "\\x1b[1089;5u", "\\x1b[99;5u"),
+        ("kitty1", "ru ctrl+i", "\\x1b[1096;5u", "\\x1b[1096;5u"),
+        ("kitty1", "ru ctrl+[", "\\x1b[1093;5u", "\\x1b[1093;5u"),
+        (
+            "kitty1",
+            "ru ctrl+shift+[",
+            "\\x1b[1093;6u",
+            "\\x1b[1093;6u",
+        ),
+        ("kitty1", "ru alt+w", "\\x1b[1094;3u", "\\x1b[1094;3u"),
+        ("kitty1", "ru ctrl+alt+w", "\\x1b[1094;7u", "\\x1b[1094;7u"),
+        ("kitty1", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        ("kitty1", "ru shift+w", "\\xd0\\xa6", "\\xd0\\xa6"),
+        ("kitty1", "de ctrl+\u{f6}", "\\x1b[246;5u", "\\x1b[246;5u"),
+        ("kitty1", "tr ctrl+\u{131}", "\\x1b[305;5u", "\\x1b[305;5u"),
+        ("kitty1", "fr ctrl+\u{e9}", "\\x1b[233;5u", "\\x1b[233;5u"),
+        ("kitty1", "no ctrl+\u{e5}", "\\x1b[229;5u", "\\x1b[229;5u"),
+        ("kitty1", "pl altgr \u{119}", "\\x1b[281;7u", "\\x1b[281;7u"),
+        (
+            "kitty3",
+            "ru ctrl+w",
+            "\\x1b[1094;5u\\x1b[1094;5:3u",
+            "\\x1b[119;5u\\x1b[119;5:3u",
+        ),
+        (
+            "kitty3",
+            "ru w",
+            "\\xd1\\x86\\x1b[1094;1:3u",
+            "\\xd1\\x86\\x1b[1094;1:3u",
+        ),
+        // Alternate keys: the pane input wire has no base-layout slot, so
+        // Herdr drops that field for every non-ASCII key (as on master).
+        ("kitty5", "ru ctrl+w", "\\x1b[1094::119;5u", "\\x1b[119;5u"),
+        ("kitty5", "ru ctrl+c", "\\x1b[1089::99;5u", "\\x1b[99;5u"),
+        (
+            "kitty5",
+            "ru ctrl+shift+[",
+            "\\x1b[1093:1061:91;6u",
+            "\\x1b[1093:1061;6u",
+        ),
+        ("kitty5", "ru alt+w", "\\x1b[1094::119;3u", "\\x1b[1094;3u"),
+        ("kitty5", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        (
+            "kitty5",
             "de ctrl+\u{f6}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_SEMICOLON, '\u{f6}', '\u{d6}'),
-            CTRL,
-        ),
-        (
-            "tr ctrl+\u{131}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_I, '\u{131}', 'I'),
-            CTRL,
-        ),
-        (
-            "fr ctrl+\u{e9}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_DIGIT_2, '\u{e9}', '2'),
-            CTRL,
-        ),
-        (
-            "no ctrl+\u{e5}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{e5}', '\u{c5}'),
-            CTRL,
-        ),
-        (
-            "no ctrl+shift+\u{e5}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{e5}', '\u{c5}'),
-            CTRL_SHIFT,
-        ),
-        (
-            "de alt+\u{f6}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_SEMICOLON, '\u{f6}', '\u{d6}'),
-            ALT,
-        ),
-        (
-            "pl altgr \u{119}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_E, '\u{119}', '\u{118}'),
-            CTRL_ALT,
-        ),
-        (
-            "ru ctrl+alt+\u{446}",
-            layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}'),
-            CTRL_ALT,
+            "\\x1b[246::59;5u",
+            "\\x1b[246;5u",
         ),
     ];
-    let mut checked = BTreeMap::new();
-    for &(pane_name, pane_mode) in LAYOUT_PANES {
-        for (name, def, mods) in cases {
-            let host = kitty_host_keystroke(pane_mode, def, mods);
-            let stripped = (
-                without_base_layout_key(&host.0),
-                without_base_layout_key(&host.1),
+    let panes: HashMap<&str, &[u8]> = [
+        ("legacy", &b""[..]),
+        ("kitty1", b"\x1b[>1u"),
+        ("kitty3", b"\x1b[>3u"),
+        ("kitty5", b"\x1b[>5u"),
+    ]
+    .into_iter()
+    .collect();
+    for &(pane, name, ghostty, want) in table {
+        let &(_, def, mods) = keys.iter().find(|(key, ..)| *key == name).unwrap();
+        let (host, direct, got) =
+            layout_keystroke_through_herdr(HostProfile::Kitty, panes[pane], def, mods);
+        assert_eq!(direct, ghostty, "{pane} {name}: Ghostty direct");
+        assert_eq!(got, want, "{pane} {name}: host sent {}", show(&host.0));
+    }
+    // Every key is covered in the plain shell and a Kitty app.
+    for (name, ..) in keys {
+        for pane in ["legacy", "kitty1"] {
+            assert!(
+                table.iter().any(|row| row.0 == pane && row.1 == name),
+                "{pane} {name}"
             );
-            assert_ne!(host.0, stripped.0, "{name}: host names the base key");
-            let got = herdr_keystroke(HostProfile::Kitty, pane_mode, &host);
-            let want = herdr_keystroke(HostProfile::Kitty, pane_mode, &stripped);
-            assert_eq!(got, want, "{pane_name} {name}: {}", show(&host.0));
-            checked.insert((pane_name, name), got);
         }
     }
-    for (pane, name, want) in [
-        ("legacy", "de ctrl+\u{f6}", "\\x1b[246;5u"),
-        ("legacy", "tr ctrl+\u{131}", "\\x1b[305;5u"),
-        ("legacy", "no ctrl+\u{e5}", "\\x1b[229;5u"),
-        ("legacy", "pl altgr \u{119}", "\\x1b[281;7u"),
-        ("kitty1", "fr ctrl+\u{e9}", "\\x1b[233;5u"),
-        ("kitty1", "ru ctrl+alt+\u{446}", "\\x1b[1094;7u"),
-    ] {
-        assert_eq!(checked[&(pane, name)], want, "{pane} {name}");
-    }
 
-    // Plain Cyrillic typing reaches every pane as the text, from both hosts.
-    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
-    for host in [HostProfile::Kitty, HostProfile::Legacy] {
-        for &(pane_name, pane_mode) in LAYOUT_PANES {
-            for mods in [0, SHIFT] {
-                let keystroke = Oracle::new(host.setup(pane_mode)).keystroke(ru_w, mods);
-                let direct = Oracle::new(pane_mode).keystroke(ru_w, mods);
-                let want = if keystroke.1.is_empty() {
-                    direct.0
-                } else {
-                    [direct.0, direct.1].concat()
-                };
-                assert_eq!(
-                    herdr_keystroke(host, pane_mode, &keystroke),
-                    show(&want),
-                    "{} {pane_name} {}",
-                    host.name(),
-                    mods_name(mods)
-                );
-            }
+    // Plain Cyrillic typing from a host without the Kitty protocol.
+    for (pane, pane_mode) in [("legacy", &b""[..]), ("kitty1", b"\x1b[>1u")] {
+        for mods in [0, SHIFT] {
+            let (_, direct, got) =
+                layout_keystroke_through_herdr(HostProfile::Legacy, pane_mode, ru_w, mods);
+            assert_eq!(got, direct, "legacy host {pane} {}", mods_name(mods));
         }
     }
 
@@ -1543,6 +1503,16 @@ async fn latin_layout_altgr_and_text_keys_keep_their_layout_character() {
         let got = herdr.feed(host_bytes).expect("reaches the pane");
         assert_eq!(show(&got), want, "{}", show(host_bytes));
     }
+
+    // Ctrl let go before the key: the release names the layout character
+    // without Ctrl, and is paired with the physical-key press.
+    let mut herdr = HerdrPath::new(HostProfile::Kitty, b"\x1b[>3u");
+    let press = herdr.feed(b"\x1b[1094::119;5u").expect("press");
+    let release = herdr.feed(b"\x1b[1094::119;1:3u").expect("release");
+    assert_eq!(
+        show(&[press, release].concat()),
+        "\\x1b[119;5u\\x1b[119;1:3u"
+    );
 }
 
 #[cfg(unix)]

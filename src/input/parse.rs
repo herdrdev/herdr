@@ -29,7 +29,7 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
 
     let mut key_fields = key_part.split(':');
     let codepoint = key_fields.next()?.parse::<u32>().ok()?;
-    let mut shifted_codepoint = key_fields
+    let shifted_codepoint = key_fields
         .next()
         .filter(|field| !field.is_empty())
         .and_then(|field| field.parse::<u32>().ok());
@@ -39,6 +39,28 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         .and_then(|field| field.parse::<u32>().ok());
 
     let mut code = kitty_codepoint_to_keycode(codepoint)?;
+    // Ctrl chords on a non-Latin layout (Ctrl+\u{441} on Russian) are shortcuts
+    // for the physical key the host names in the base-layout field: Ctrl+C.
+    // Ghostty sends ^C to a plain shell for them, and the Kitty spec tells apps
+    // to match shortcuts on that key. Only what Ghostty maps is rewritten: Ctrl
+    // alone, on a key with a control byte. Shift, Alt and Super chords keep the
+    // layout character, Ctrl+Alt may be AltGr typing it, and Latin layouts
+    // (\u{f6}, \u{131}, \u{e5}) keep their own keys.
+    let mut shifted_codepoint = shifted_codepoint;
+    if let (KeyCode::Char(ch), Some(base)) = (code, base_layout_codepoint.and_then(char::from_u32))
+    {
+        let typed_text =
+            associated_text.is_some_and(|value| parse_kitty_associated_text(value).is_some());
+        if key_modifiers_from_u8(modifier) == KeyModifiers::CONTROL
+            && is_non_latin_script(ch)
+            && ghostty_maps_ctrl_to_physical_key(base)
+            && !typed_text
+        {
+            code = KeyCode::Char(base);
+            // The shifted alternate belongs to the layout character.
+            shifted_codepoint = None;
+        }
+    }
     let associated_text = match associated_text {
         Some(value) => match parse_kitty_associated_text(value) {
             Some(text) => Some(text),
@@ -49,18 +71,6 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     };
     let kind = parse_kitty_event_type(event_type)?;
     let mut modifiers = key_modifiers_from_u8(modifier);
-    if let Some(base) = command_chord_base_layout_key(
-        code,
-        modifiers,
-        base_layout_codepoint,
-        associated_text.is_some(),
-    ) {
-        // Downstream (keybinds, legacy C0 bytes, CSI-u panes) only understands
-        // the US-layout key, so resolve the chord here as a US terminal would
-        // report it. The layout's shifted character means nothing for that key.
-        code = KeyCode::Char(base);
-        shifted_codepoint = shifted_codepoint.and(us_shifted_char(base).map(u32::from));
-    }
     // Kitty permits the shifted alternate only while Shift is active. Normalize
     // contradictory reports here so they cannot dispatch an unshifted command.
     if matches!(code, KeyCode::Char(_))
@@ -82,35 +92,16 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
     Some(key.with_generated_text(associated_text))
 }
 
-/// Ctrl/Alt/Super chords on a non-Latin layout (`ESC[1094::119;5u` is Ctrl+ц
-/// on the key where US `w` sits) resolve to the base-layout key. Plain typing,
-/// IME, and AltGr produce text without command modifiers and stay untouched.
-/// Latin-script layouts (ö, å, ı, ...) keep their own keys so existing
-/// bindings on those characters still match.
-fn command_chord_base_layout_key(
-    code: KeyCode,
-    modifiers: KeyModifiers,
-    base_layout_codepoint: Option<u32>,
-    has_text: bool,
-) -> Option<char> {
-    let KeyCode::Char(primary) = code else {
-        return None;
-    };
-    // Ctrl+Alt is how Windows-style AltGr arrives, and our host flags do not
-    // request associated text, so the chord may be a typed character.
-    let altgr_like = modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    if !is_non_latin_script(primary)
-        || has_text
-        || altgr_like
-        || !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
-    {
-        return None;
-    }
-    base_layout_codepoint
-        .and_then(char::from_u32)
-        .filter(char::is_ascii_graphic)
+/// Physical keys Ghostty sends a control byte for when Ctrl is held on a
+/// non-Latin layout. Ctrl+I, Ctrl+M and Ctrl+[ are left out on purpose
+/// (fixterms), so Ctrl+\u{448} is not Tab and Ctrl+\u{445} is not Esc.
+fn ghostty_maps_ctrl_to_physical_key(base: char) -> bool {
+    matches!(base, 'a'..='z' | '0'..='9' | '/' | '\\' | ']') && !matches!(base, 'i' | 'm')
 }
 
+/// Scripts whose layouts put their own letters on the US letter keys, so a
+/// Ctrl chord names the physical key. Latin scripts are excluded: their keys
+/// are shortcuts of their own (Ctrl+\u{f6} is not Ctrl+;).
 fn is_non_latin_script(ch: char) -> bool {
     matches!(
         u32::from(ch),
@@ -140,35 +131,6 @@ fn is_non_latin_script(ch: char) -> bool {
             | 0xAB70..=0xABBF // Cherokee supplement (lowercase)
             | 0xAC00..=0xD7AF // Hangul syllables
     )
-}
-
-fn us_shifted_char(base: char) -> Option<char> {
-    let shifted = match base {
-        'a'..='z' => base.to_ascii_uppercase(),
-        '1' => '!',
-        '2' => '@',
-        '3' => '#',
-        '4' => '$',
-        '5' => '%',
-        '6' => '^',
-        '7' => '&',
-        '8' => '*',
-        '9' => '(',
-        '0' => ')',
-        '`' => '~',
-        '-' => '_',
-        '=' => '+',
-        '[' => '{',
-        ']' => '}',
-        '\\' => '|',
-        ';' => ':',
-        '\'' => '"',
-        ',' => '<',
-        '.' => '>',
-        '/' => '?',
-        _ => return None,
-    };
-    Some(shifted)
 }
 
 fn parse_kitty_associated_text(value: &str) -> Option<String> {
@@ -783,192 +745,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_kitty_non_latin_command_chord_resolves_to_base_layout_key() {
-        // Greek, Hebrew, Arabic, Thai, Georgian, Hangul, Cherokee, Canadian
-        // Syllabics, Mongolian.
-        for codepoint in [945, 1513, 1588, 3615, 4304, 12609, 5024, 5121, 6176] {
-            let key = parse_terminal_key_sequence(&format!("\x1b[{codepoint}::97;5u")).unwrap();
-            assert_eq!(key.code, KeyCode::Char('a'), "U+{codepoint:04X}");
-        }
-
-        // Kitty reports the lowercase primary: Cherokee \u{ab70} (upper \u{13a0}),
-        // Greek \u{3b1}, Cyrillic \u{444}, plain and shifted.
-        for (lower, upper) in [(0xAB70, 0x13A0), (945, 913), (1092, 1060)] {
-            let key = parse_terminal_key_sequence(&format!("\x1b[{lower}::97;5u")).unwrap();
-            assert_eq!(key.code, KeyCode::Char('a'), "U+{lower:04X}");
-            let key = parse_terminal_key_sequence(&format!("\x1b[{lower}:{upper}:97;6u")).unwrap();
-            assert_terminal_key_eq(
-                key,
-                KeyCode::Char('a'),
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-                crossterm::event::KeyEventKind::Press,
-                Some('A' as u32),
-            );
-        }
-
-        let cases = [
-            ("\x1b[1094::119;5u", KeyModifiers::CONTROL, None),
-            ("\x1b[1094::119;3u", KeyModifiers::ALT, None),
-            ("\x1b[1094::119;9u", KeyModifiers::SUPER, None),
-            (
-                "\x1b[1094:1062:119;6u",
-                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-                Some('W' as u32),
-            ),
-        ];
-        for (sequence, modifiers, shifted) in cases {
-            let key = parse_terminal_key_sequence(sequence).unwrap();
-            assert_terminal_key_eq(
-                key,
-                KeyCode::Char('w'),
-                modifiers,
-                crossterm::event::KeyEventKind::Press,
-                shifted,
-            );
-        }
-
-        // Punctuation and digit base keys take the US shifted symbol.
-        let ctrl_shift = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
-        for (sequence, base, shifted) in [
-            ("\x1b[1093:1061:91;6u", '[', '{'),
-            ("\x1b[1078:1046:59;6u", ';', ':'),
-            ("\x1b[1102:1070:46;6u", '.', '>'),
-            ("\x1b[1105:1025:96;6u", '`', '~'),
-            ("\x1b[1093:1061:50;6u", '2', '@'),
-        ] {
-            let key = parse_terminal_key_sequence(sequence).unwrap();
-            assert_terminal_key_eq(
-                key,
-                KeyCode::Char(base),
-                ctrl_shift,
-                crossterm::event::KeyEventKind::Press,
-                Some(shifted as u32),
-            );
-        }
-    }
-
-    #[test]
-    fn parse_kitty_non_latin_key_without_command_chord_keeps_layout_key() {
-        let cases = [
-            // Plain and shifted typing.
-            ("\x1b[1094::119u", '\u{0446}', KeyModifiers::empty()),
-            ("\x1b[1094:1062:119;2u", '\u{0446}', KeyModifiers::SHIFT),
-            // No base-layout key reported.
-            ("\x1b[1094;5u", '\u{0446}', KeyModifiers::CONTROL),
-            // Chord that generated text (AltGr-style).
-            (
-                "\x1b[281::101;7;281u",
-                '\u{0119}',
-                KeyModifiers::CONTROL | KeyModifiers::ALT,
-            ),
-        ];
-        for (sequence, ch, modifiers) in cases {
-            let key = parse_terminal_key_sequence(sequence).unwrap();
-            assert_eq!(key.code, KeyCode::Char(ch), "{sequence:?}");
-            assert_eq!(key.modifiers, modifiers, "{sequence:?}");
-        }
-        // Latin keys are never rewritten, even with a differing base key.
-        let key = parse_terminal_key_sequence("\x1b[122::121;5u").unwrap();
-        assert_eq!(key.code, KeyCode::Char('z'));
-    }
-
-    /// Without a base-layout field nothing can be rewritten, so stripping it
-    /// gives the report as the layout key.
-    fn without_base_layout_field(sequence: &str) -> String {
-        let (key_part, rest) = sequence.split_once(';').unwrap_or((sequence, ""));
-        let mut fields = key_part.splitn(3, ':');
-        let codepoint = fields.next().unwrap_or_default();
-        let stripped = match fields.next() {
-            Some(shifted) if !shifted.is_empty() => format!("{codepoint}:{shifted}"),
-            _ => codepoint.to_string(),
-        };
-        if rest.is_empty() {
-            stripped
-        } else {
-            format!("{stripped};{rest}")
-        }
-    }
-
-    fn base_field(sequence: &str) -> u32 {
-        let key_part = sequence
-            .trim_start_matches("\x1b[")
-            .split(';')
-            .next()
-            .unwrap();
-        key_part.split(':').nth(2).unwrap().parse().unwrap()
-    }
-
-    const LATIN_AND_ALTGR_CHORDS: &[&str] = &[
-        // German \u{f6} on `;`, French \u{e9} on `2`, Turkish \u{131} on `i`,
-        // Nordic \u{e5} on `[`: Ctrl, Alt, Super, Ctrl+Shift, press and release.
-        "\x1b[246::59;5u",
-        "\x1b[246::59;5:3u",
-        "\x1b[246:214:59;6u",
-        "\x1b[233::50;5u",
-        "\x1b[233::50;3u",
-        "\x1b[305::105;5u",
-        "\x1b[305:73:105;6u",
-        "\x1b[229::91;5u",
-        "\x1b[229::91;9u",
-        "\x1b[229:197:91;6:3u",
-        // Textless AltGr (Ctrl+Alt), Latin and non-Latin.
-        "\x1b[281::101;7u",
-        "\x1b[281::101;7:3u",
-        "\x1b[1094::119;7u",
-        // macOS Option-generated characters reported with Alt.
-        "\x1b[248::111;3u",
-        "\x1b[8721::119;3u",
-        "\x1b[8721::119;3:3u",
-    ];
-
-    #[test]
-    fn parse_latin_layout_and_altgr_chords_keep_layout_key() {
-        for sequence in LATIN_AND_ALTGR_CHORDS {
-            let stripped = without_base_layout_field(sequence);
-            assert_ne!(*sequence, stripped);
-            let key = parse_terminal_key_sequence(sequence).unwrap();
-            let layout_key = parse_terminal_key_sequence(&stripped).unwrap();
-            // The base-layout key is kept only to pair releases; everything
-            // the pane and keybinds read must match the report without it.
-            assert_eq!(key.base_layout_key(), char::from_u32(base_field(sequence)));
-            assert_eq!(
-                key.clone().with_base_layout_key(None),
-                layout_key,
-                "{sequence:?}"
-            );
-            for pane_mode in [&b""[..], b"\x1b[>1u", b"\x1b[>5u", b"\x1b[>31u"] {
-                assert_eq!(
-                    crate::pane::test_encode_key_for_app(pane_mode, key.clone()),
-                    crate::pane::test_encode_key_for_app(pane_mode, layout_key.clone()),
-                    "{sequence:?} {pane_mode:?}"
-                );
-            }
-        }
-        let key = parse_terminal_key_sequence("\x1b[246::59;5u").unwrap();
-        assert_eq!(key.code, KeyCode::Char('\u{f6}'));
-        let key = parse_terminal_key_sequence("\x1b[281::101;7u").unwrap();
-        assert_eq!(key.code, KeyCode::Char('\u{119}'));
-    }
-
-    #[test]
-    fn parse_non_latin_chord_press_and_release_resolve_alike() {
-        for (sequence, kind) in [
-            ("\x1b[1094::119;5u", crossterm::event::KeyEventKind::Press),
-            (
-                "\x1b[1094::119;5:2u",
-                crossterm::event::KeyEventKind::Repeat,
-            ),
-            (
-                "\x1b[1094::119;5:3u",
-                crossterm::event::KeyEventKind::Release,
-            ),
-        ] {
-            let key = parse_terminal_key_sequence(sequence).unwrap();
-            assert_terminal_key_eq(key, KeyCode::Char('w'), KeyModifiers::CONTROL, kind, None);
-        }
-    }
-
-    #[test]
     fn parse_kitty_sequence_preserves_shifted_symbol_pair() {
         let key = parse_terminal_key_sequence("\x1b[49:33;2:1u").unwrap();
         assert_eq!(key.code, KeyCode::Char('1'));
@@ -1058,9 +834,10 @@ mod tests {
                 KeyCode::Char('c'),
                 KeyModifiers::CONTROL,
             ),
+            // Ctrl+Shift keeps the layout character, as Ghostty sends it.
             (
                 "\x1b[1089:1057:99;6u",
-                KeyCode::Char('c'),
+                KeyCode::Char('\u{441}'),
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT,
             ),
             (
@@ -1083,6 +860,107 @@ mod tests {
         ] {
             let key = parse_terminal_key_sequence(sequence).expect(sequence);
             assert_eq!((key.code, key.modifiers), (code, modifiers), "{sequence:?}");
+        }
+    }
+
+    #[test]
+    fn parse_ctrl_chords_on_every_non_latin_script_as_their_base_layout_key() {
+        // Greek, Cyrillic, Hebrew, Arabic, Thai, Georgian, Hangul, Cherokee
+        // (and its lowercase supplement), Canadian Syllabics, Mongolian.
+        for codepoint in [
+            945, 1092, 1513, 1588, 3615, 4304, 12609, 5024, 0xAB70, 5121, 6176,
+        ] {
+            for (event, kind) in [
+                ("", crossterm::event::KeyEventKind::Press),
+                (":2", crossterm::event::KeyEventKind::Repeat),
+                (":3", crossterm::event::KeyEventKind::Release),
+            ] {
+                let sequence = format!("\x1b[{codepoint}::97;5{event}u");
+                let key = parse_terminal_key_sequence(&sequence).unwrap();
+                assert_terminal_key_eq(key, KeyCode::Char('a'), KeyModifiers::CONTROL, kind, None);
+            }
+        }
+    }
+
+    /// Without a base-layout field nothing can be rewritten, so stripping it
+    /// gives the report as the layout key.
+    fn without_base_layout_field(sequence: &str) -> String {
+        let (key_part, rest) = sequence.split_once(';').unwrap_or((sequence, ""));
+        let mut fields = key_part.splitn(3, ':');
+        let codepoint = fields.next().unwrap_or_default();
+        let stripped = match fields.next() {
+            Some(shifted) if !shifted.is_empty() => format!("{codepoint}:{shifted}"),
+            _ => codepoint.to_string(),
+        };
+        if rest.is_empty() {
+            stripped
+        } else {
+            format!("{stripped};{rest}")
+        }
+    }
+
+    const LAYOUT_KEY_CHORDS: &[&str] = &[
+        // German \u{f6} on `;`, French \u{e9} on `2`, Turkish \u{131} on `i`,
+        // Nordic \u{e5} on `[`: Ctrl, Alt, Super, Ctrl+Shift, press and release.
+        "\x1b[246::59;5u",
+        "\x1b[246::59;5:3u",
+        "\x1b[246:214:59;6u",
+        "\x1b[233::50;5u",
+        "\x1b[233::50;3u",
+        "\x1b[305::105;5u",
+        "\x1b[305:73:105;6u",
+        "\x1b[229::91;5u",
+        "\x1b[229::91;9u",
+        "\x1b[229:197:91;6:3u",
+        // Textless AltGr (Ctrl+Alt), Latin and non-Latin.
+        "\x1b[281::101;7u",
+        "\x1b[281::101;7:3u",
+        "\x1b[1094::119;7u",
+        // Non-Latin chords other than Ctrl alone: plain, Shift, Ctrl+Shift,
+        // Alt, Super, Ctrl+Super. Ghostty sends the layout character for them.
+        "\x1b[1094::119;1u",
+        "\x1b[1094:1062:119;2u",
+        "\x1b[1093:1061:91;6u",
+        "\x1b[1094:1062:119;6:3u",
+        "\x1b[1094::119;3u",
+        "\x1b[1094::119;9u",
+        "\x1b[1094::119;13u",
+        // A chord that generated text is typing.
+        "\x1b[1094::119;5;1094u",
+        // Keys Ghostty sends no control byte for: Russian \u{448} on `i`,
+        // \u{44c} on `m`, \u{445} on `[`, \u{436} on `;`.
+        "\x1b[1096::105;5u",
+        "\x1b[1100::109;5u",
+        "\x1b[1093::91;5u",
+        "\x1b[1078::59;5u",
+        // macOS Option-generated characters reported with Alt.
+        "\x1b[248::111;3u",
+        "\x1b[8721::119;3u",
+        "\x1b[8721::119;3:3u",
+    ];
+
+    #[test]
+    fn parse_chords_other_than_non_latin_ctrl_keep_layout_key() {
+        for sequence in LAYOUT_KEY_CHORDS {
+            let stripped = without_base_layout_field(sequence);
+            assert_ne!(*sequence, stripped);
+            let key = parse_terminal_key_sequence(sequence).unwrap();
+            let layout_key = parse_terminal_key_sequence(&stripped).unwrap();
+            // The base-layout key is kept only to pair releases; everything
+            // the pane and keybinds read must match the report without it.
+            assert!(key.base_layout_key().is_some(), "{sequence:?}");
+            assert_eq!(
+                key.clone().with_base_layout_key(None),
+                layout_key,
+                "{sequence:?}"
+            );
+            for pane_mode in [&b""[..], b"\x1b[>1u", b"\x1b[>5u", b"\x1b[>31u"] {
+                assert_eq!(
+                    crate::pane::test_encode_key_for_app(pane_mode, key.clone()),
+                    crate::pane::test_encode_key_for_app(pane_mode, layout_key.clone()),
+                    "{sequence:?} {pane_mode:?}"
+                );
+            }
         }
     }
 

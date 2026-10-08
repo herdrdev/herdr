@@ -2086,22 +2086,6 @@ navigate_pane_down = "ctrl+\u00f6"
     }
 
     #[test]
-    fn ctrl_shift_punctuation_keybind_matches_non_latin_layout_chord() {
-        let config: Config = toml::from_str(
-            r#"
-[keys]
-navigate_pane_down = "ctrl+shift+{"
-"#,
-        )
-        .unwrap();
-        let keybinds = config.keybinds();
-
-        // Russian layout: "\u{0445}" on the physical `[` key, Ctrl+Shift held.
-        let key = crate::input::parse_terminal_key_sequence("\x1b[1093:1061:91;6u").unwrap();
-        assert!(keybinds.navigate.pane_down.matches_direct_key(&key));
-    }
-
-    #[test]
     fn navigate_bindings_allow_plain_keys_and_reject_local_conflicts() {
         let config: Config = toml::from_str(
             r#"
