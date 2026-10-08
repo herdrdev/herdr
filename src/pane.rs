@@ -25,6 +25,7 @@ use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadR
 use crate::render_signal::RenderSignal;
 
 mod agent_detection;
+mod background_agent;
 mod cursor;
 mod input;
 mod kitty_keyboard;
@@ -40,6 +41,9 @@ use self::agent_detection::{
     DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
     AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
 };
+use self::background_agent::{AgentJobStatus, AgentJobTracker};
+#[cfg(test)]
+pub(crate) use self::terminal::test_encode_key_for_app;
 #[cfg(unix)]
 pub use self::terminal::InputState;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
@@ -70,6 +74,7 @@ pub(crate) const PANE_TERM: &str = crate::ghostty::TERM;
 pub(crate) const MIN_PANE_ROWS: u16 = 2;
 pub(crate) const MIN_PANE_COLS: u16 = 4;
 const PANE_COLORTERM: &str = "truecolor";
+const FISH_HANDLE_REFLOW_ENV_VAR: &str = "fish_handle_reflow";
 
 fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
     static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -101,6 +106,16 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", PANE_COLORTERM);
     cmd.env("TERM_PROGRAM", "herdr");
     cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
+    // fish only skips its own resize repaint for terminals it recognizes as
+    // reflowing. Herdr reflows too, and the competing repaint glues prompt copies.
+    // Match the exact casing: Windows env keys are case-insensitive here, but
+    // MSYS/Cygwin fish only reads the lowercase name.
+    if !cmd
+        .iter_full_env_as_str()
+        .any(|(key, _)| key == FISH_HANDLE_REFLOW_ENV_VAR)
+    {
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "0");
+    }
     // Host handles refer to the outer terminal, never to this pane.
     for key in [
         "ITERM_SESSION_ID",
@@ -443,6 +458,7 @@ fn foreground_member_cwd_different_from_shell(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ForegroundShellAgentAction {
     ObserveProbe,
+    HoldBackgroundAgent,
     ReportProcessExit,
     ReportReplacementProcess,
     ClearAgent,
@@ -453,6 +469,7 @@ fn foreground_shell_agent_action(
     new_agent: Option<Agent>,
     foreground_is_pane_shell: bool,
     process_exit_reported: bool,
+    agent_job: AgentJobStatus,
 ) -> ForegroundShellAgentAction {
     let Some(previous_agent) = previous_agent else {
         return ForegroundShellAgentAction::ObserveProbe;
@@ -466,8 +483,17 @@ fn foreground_shell_agent_action(
             ForegroundShellAgentAction::ObserveProbe
         };
     }
+    if agent_job == AgentJobStatus::ReplacedInFront {
+        // The held agent's identity must not pass to the new process.
+        return ForegroundShellAgentAction::ReportProcessExit;
+    }
     if new_agent.is_some() {
         return ForegroundShellAgentAction::ObserveProbe;
+    }
+    match agent_job {
+        AgentJobStatus::Background => return ForegroundShellAgentAction::HoldBackgroundAgent,
+        AgentJobStatus::ExitedInBackground => return ForegroundShellAgentAction::ReportProcessExit,
+        AgentJobStatus::Unknown | AgentJobStatus::ReplacedInFront => {}
     }
 
     if foreground_is_pane_shell {
@@ -504,6 +530,11 @@ fn apply_foreground_shell_agent_action(
             agent_presence.observe_process_probe(previous_agent);
             true
         }
+        ForegroundShellAgentAction::HoldBackgroundAgent => {
+            *pending_foreground_shell_clear = false;
+            *foreground_shell_exit_reported = false;
+            agent_presence.observe_process_probe(previous_agent)
+        }
         ForegroundShellAgentAction::ReportProcessExit => {
             *pending_foreground_shell_clear = true;
             false
@@ -519,6 +550,109 @@ fn apply_foreground_shell_agent_action(
             agent_presence.observe_process_probe(new_agent)
         }
     }
+}
+
+/// Process facts used to tell a backgrounded agent from an exited one.
+trait AgentProcessLiveness {
+    fn start_token(&self, pid: u32) -> Option<u64>;
+    fn live_process_group(&self, shell_pid: u32, pid: u32, start_token: u64) -> Option<u32>;
+}
+
+struct PlatformAgentProcesses;
+
+impl AgentProcessLiveness for PlatformAgentProcesses {
+    fn start_token(&self, pid: u32) -> Option<u64> {
+        crate::platform::process_start_token(pid)
+    }
+
+    fn live_process_group(&self, shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+        crate::platform::live_pane_process_group(shell_pid, pid, start_token)
+    }
+}
+
+/// One foreground probe result, after a suppressed agent has been filtered out.
+#[derive(Debug, Clone, Copy)]
+struct ForegroundAgentObservation {
+    shell_pid: u32,
+    agent: Option<Agent>,
+    agent_pid: Option<u32>,
+    process_group_id: Option<u32>,
+    foreground_is_pane_shell: bool,
+}
+
+/// Applies one foreground probe to the pane's agent presence. Returns the
+/// chosen action and whether the current agent changed.
+fn observe_foreground_agent(
+    agent_presence: &mut AgentDetectionPresence,
+    agent_job: &mut AgentJobTracker,
+    pending_foreground_shell_clear: &mut bool,
+    foreground_shell_exit_reported: &mut bool,
+    observation: ForegroundAgentObservation,
+    processes: &impl AgentProcessLiveness,
+    pane_id: PaneId,
+) -> (ForegroundShellAgentAction, bool) {
+    let previous_agent = agent_presence.current_agent();
+    let same_agent_in_front = previous_agent.is_some()
+        && observation.agent == previous_agent
+        && !*foreground_shell_exit_reported;
+    let agent_job_status = if same_agent_in_front
+        && agent_job.replaced_in_front(observation.agent_pid, |pid| processes.start_token(pid))
+    {
+        AgentJobStatus::ReplacedInFront
+    } else {
+        agent_job.status(
+            previous_agent.is_some()
+                && observation.agent.is_none()
+                && !*foreground_shell_exit_reported,
+            observation.shell_pid,
+            observation.process_group_id,
+            |shell_pid, pid, start_token| processes.live_process_group(shell_pid, pid, start_token),
+        )
+    };
+    let action = foreground_shell_agent_action(
+        previous_agent,
+        observation.agent,
+        observation.foreground_is_pane_shell,
+        *foreground_shell_exit_reported,
+        agent_job_status,
+    );
+    let changed = apply_foreground_shell_agent_action(
+        agent_presence,
+        action,
+        previous_agent,
+        observation.agent,
+        pending_foreground_shell_clear,
+        foreground_shell_exit_reported,
+    );
+    let was_in_background = agent_job.in_background();
+    agent_job.observe(
+        agent_job_status,
+        agent_presence.current_agent(),
+        observation.agent,
+        observation.agent_pid,
+        |pid| processes.start_token(pid),
+    );
+    if was_in_background != agent_job.in_background() {
+        info!(
+            pane = pane_id.raw(),
+            agent = ?agent_presence.current_agent(),
+            in_background = agent_job.in_background(),
+            "agent job foreground changed"
+        );
+    }
+    (action, changed)
+}
+
+/// Lifecycle-hook authority normally skips steady-state probes, but a held
+/// agent is invisible to its hooks once killed, so it keeps the probe cadence.
+fn should_check_foreground_process(
+    lifecycle_authority_active: bool,
+    agent_held_in_background: bool,
+    input: ProcessProbeInput,
+) -> bool {
+    (agent_held_in_background
+        || !should_skip_process_probe_for_lifecycle_authority(lifecycle_authority_active, input))
+        && should_probe_foreground_job(input)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -663,25 +797,28 @@ struct ProcessProbeResult {
     process_group_id: Option<u32>,
     foreground_is_pane_shell: bool,
     agent: Option<Agent>,
+    /// The process that identified as `agent`, which need not lead its job.
+    agent_pid: Option<u32>,
     process_name: Option<String>,
 }
 
 fn agent_hint_for_foreground_job_members(
     job: &crate::platform::ForegroundJob,
     read_hint: impl Fn(u32) -> Option<Agent>,
-) -> Option<Agent> {
+) -> Option<(Agent, u32)> {
     read_hint(job.process_group_id)
+        .map(|agent| (agent, job.process_group_id))
         .or_else(|| agent_hint_for_non_leader_foreground_job_members(job, read_hint))
 }
 
 fn agent_hint_for_non_leader_foreground_job_members(
     job: &crate::platform::ForegroundJob,
     read_hint: impl Fn(u32) -> Option<Agent>,
-) -> Option<Agent> {
+) -> Option<(Agent, u32)> {
     job.processes
         .iter()
         .filter(|process| process.pid != job.process_group_id)
-        .find_map(|process| read_hint(process.pid))
+        .find_map(|process| read_hint(process.pid).map(|agent| (agent, process.pid)))
 }
 
 fn identify_process_group_leader_in_job(
@@ -701,13 +838,13 @@ fn identify_process_group_leader_in_job(
 fn process_probe_result(
     job: &crate::platform::ForegroundJob,
     pid: u32,
-    agent: Agent,
-    process_name: String,
+    (agent, process_name, agent_pid): (Agent, String, u32),
 ) -> ProcessProbeResult {
     ProcessProbeResult {
         process_group_id: Some(job.process_group_id),
         foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
         agent: Some(agent),
+        agent_pid: Some(agent_pid),
         process_name: Some(process_name),
     }
 }
@@ -715,15 +852,17 @@ fn process_probe_result(
 fn hinted_process_probe_result(
     job: &crate::platform::ForegroundJob,
     pid: u32,
-    read_hint: impl Fn(u32) -> Option<Agent>,
-) -> Option<ProcessProbeResult> {
-    let agent = agent_hint_for_foreground_job_members(job, read_hint)?;
-    Some(process_probe_result(
+    (agent, agent_pid): (Agent, u32),
+) -> ProcessProbeResult {
+    process_probe_result(
         job,
         pid,
-        agent,
-        crate::detect::agent_label(agent).to_string(),
-    ))
+        (
+            agent,
+            crate::detect::agent_label(agent).to_string(),
+            agent_pid,
+        ),
+    )
 }
 
 fn probe_foreground_process_from_jobs(
@@ -734,42 +873,34 @@ fn probe_foreground_process_from_jobs(
     read_hint: impl Fn(u32) -> Option<Agent> + Copy,
 ) -> ProcessProbeResult {
     if let Some(job) = leader_job.as_ref() {
-        if let Some(hinted) = hinted_process_probe_result(job, pid, read_hint) {
-            return hinted;
+        if let Some(hinted) = agent_hint_for_foreground_job_members(job, read_hint) {
+            return hinted_process_probe_result(job, pid, hinted);
         }
-        if let Some((agent, process_name)) = crate::detect::identify_agent_in_job(job) {
-            return process_probe_result(job, pid, agent, process_name);
+        if let Some(identified) = crate::detect::identify_agent_process_in_job(job) {
+            return process_probe_result(job, pid, identified);
         }
     }
 
     let foreground_job = foreground_job();
     if let Some(job) = foreground_job.as_ref() {
         if let Some(agent) = read_hint(job.process_group_id) {
-            return process_probe_result(
-                job,
-                pid,
-                agent,
-                crate::detect::agent_label(agent).to_string(),
-            );
+            return hinted_process_probe_result(job, pid, (agent, job.process_group_id));
         }
         if let Some((agent, process_name)) = identify_process_group_leader_in_job(job) {
-            return process_probe_result(job, pid, agent, process_name);
+            return process_probe_result(job, pid, (agent, process_name, job.process_group_id));
         }
-        if let Some(agent) = agent_hint_for_non_leader_foreground_job_members(job, read_hint) {
-            return process_probe_result(
-                job,
-                pid,
-                agent,
-                crate::detect::agent_label(agent).to_string(),
-            );
+        if let Some(hinted) = agent_hint_for_non_leader_foreground_job_members(job, read_hint) {
+            return hinted_process_probe_result(job, pid, hinted);
         }
-
-        let identified = crate::detect::identify_agent_in_job(job);
+        if let Some(identified) = crate::detect::identify_agent_process_in_job(job) {
+            return process_probe_result(job, pid, identified);
+        }
         return ProcessProbeResult {
             process_group_id: Some(job.process_group_id),
             foreground_is_pane_shell: job.processes.iter().any(|process| process.pid == pid),
-            agent: identified.as_ref().map(|(agent, _)| *agent),
-            process_name: identified.map(|(_, process_name)| process_name),
+            agent: None,
+            agent_pid: None,
+            process_name: None,
         };
     }
 
@@ -777,6 +908,7 @@ fn probe_foreground_process_from_jobs(
         process_group_id: foreground_pgid,
         foreground_is_pane_shell: false,
         agent: None,
+        agent_pid: None,
         process_name: None,
     }
 }
@@ -831,6 +963,7 @@ fn spawn_basic_detection_task(
         let mut pending_idle = PendingIdleConfirmation::default();
         let mut last_codex_prompt_ready = false;
         let mut last_self_reported_shell_check = None;
+        let mut agent_job = AgentJobTracker::default();
 
         loop {
             let sleep_duration = if pending_idle.active() {
@@ -863,6 +996,7 @@ fn spawn_basic_detection_task(
                     last_screen_scan_detection_content_seq = None;
                     agent_startup_grace_until = None;
                     pending_idle.clear();
+                    agent_job = AgentJobTracker::default();
                 }
             }
 
@@ -906,10 +1040,11 @@ fn spawn_basic_detection_task(
                     pending_restore_probe: false,
                     elapsed_since_process_check: now.duration_since(last_process_check),
                 };
-                !should_skip_process_probe_for_lifecycle_authority(
+                should_check_foreground_process(
                     lifecycle_authority_active,
+                    agent_job.in_background(),
                     process_probe_input,
-                ) && should_probe_foreground_job(process_probe_input)
+                )
             };
 
             if should_check_process {
@@ -930,19 +1065,20 @@ fn spawn_basic_detection_task(
                     }
                 }
                 let previous_agent = agent_presence.current_agent();
-                let foreground_action = foreground_shell_agent_action(
-                    previous_agent,
-                    new_agent,
-                    foreground_is_pane_shell,
-                    foreground_shell_exit_reported,
-                );
-                let changed = apply_foreground_shell_agent_action(
+                let (foreground_action, changed) = observe_foreground_agent(
                     &mut agent_presence,
-                    foreground_action,
-                    previous_agent,
-                    new_agent,
+                    &mut agent_job,
                     &mut pending_foreground_shell_clear,
                     &mut foreground_shell_exit_reported,
+                    ForegroundAgentObservation {
+                        shell_pid: pid,
+                        agent: new_agent,
+                        agent_pid: new_agent.and(probe.agent_pid),
+                        process_group_id,
+                        foreground_is_pane_shell,
+                    },
+                    &PlatformAgentProcesses,
+                    pane_id,
                 );
                 last_foreground_pgid = tracked_process_group_id;
                 if new_agent.is_some() {
@@ -992,7 +1128,9 @@ fn spawn_basic_detection_task(
                 && agent.is_some()
                 && !foreground_shell_exit_reported;
 
-            if lifecycle_authority_active && !process_exited {
+            // The visible screen belongs to another job while the agent waits
+            // in the background, so it says nothing about the agent's state.
+            if (lifecycle_authority_active || agent_job.in_background()) && !process_exited {
                 pending_idle.clear();
                 continue;
             }
@@ -2748,6 +2886,7 @@ impl PaneRuntime {
                 let mut pending_idle = PendingIdleConfirmation::default();
                 let mut last_codex_prompt_ready = false;
                 let mut last_self_reported_shell_check = None;
+                let mut agent_job = AgentJobTracker::default();
 
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -2790,6 +2929,7 @@ impl PaneRuntime {
                             last_screen_scan_detection_content_seq = None;
                             agent_startup_grace_until = None;
                             pending_idle.clear();
+                            agent_job = AgentJobTracker::default();
                         }
                     }
 
@@ -2859,10 +2999,11 @@ impl PaneRuntime {
                             foreground_pgid,
                             ..process_probe_input
                         };
-                        !should_skip_process_probe_for_lifecycle_authority(
+                        should_check_foreground_process(
                             lifecycle_authority_active,
+                            agent_job.in_background(),
                             process_probe_input,
-                        ) && should_probe_foreground_job(process_probe_input)
+                        )
                     };
 
                     let mut agent_changed = false;
@@ -2892,19 +3033,20 @@ impl PaneRuntime {
                             }
 
                             let previous_agent = agent_presence.current_agent();
-                            let foreground_action = foreground_shell_agent_action(
-                                previous_agent,
-                                new_agent,
-                                foreground_is_pane_shell,
-                                foreground_shell_exit_reported,
-                            );
-                            let changed = apply_foreground_shell_agent_action(
+                            let (foreground_action, changed) = observe_foreground_agent(
                                 &mut agent_presence,
-                                foreground_action,
-                                previous_agent,
-                                new_agent,
+                                &mut agent_job,
                                 &mut pending_foreground_shell_clear,
                                 &mut foreground_shell_exit_reported,
+                                ForegroundAgentObservation {
+                                    shell_pid: pid,
+                                    agent: new_agent,
+                                    agent_pid: new_agent.and(probe.agent_pid),
+                                    process_group_id,
+                                    foreground_is_pane_shell,
+                                },
+                                &PlatformAgentProcesses,
+                                pane_id,
                             );
                             last_foreground_pgid = tracked_process_group_id;
                             if new_agent.is_some() {
@@ -2989,7 +3131,10 @@ impl PaneRuntime {
                         && agent.is_some()
                         && !foreground_shell_exit_reported;
 
-                    if lifecycle_authority_active && !process_exited {
+                    // The visible screen belongs to another job while the agent
+                    // waits in the background, so it says nothing about its state.
+                    if (lifecycle_authority_active || agent_job.in_background()) && !process_exited
+                    {
                         pending_idle.clear();
                         continue;
                     }
@@ -3515,8 +3660,7 @@ impl PaneRuntime {
     }
 
     pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
-        self.terminal
-            .encode_terminal_key(key, self.keyboard_protocol())
+        self.terminal.encode_terminal_key(key)
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
@@ -3649,14 +3793,14 @@ impl PaneRuntime {
         }
 
         let pid = self.child_pid.load(Ordering::Relaxed);
-        crate::platform::process_cwd(pid)
+        crate::platform::pane_process_cwd(pid)
     }
 
     pub fn cwd_for_persistence(&self) -> Option<std::path::PathBuf> {
         let pid = self.child_pid.load(Ordering::Acquire);
         let exited = self.cwd_process_exited.load(Ordering::Acquire);
         if let Some(cwd) = (!exited)
-            .then(|| crate::platform::process_cwd(pid))
+            .then(|| crate::platform::pane_process_cwd(pid))
             .flatten()
             .filter(|cwd| cwd.is_absolute())
         {
@@ -3839,6 +3983,8 @@ impl PaneRuntime {
         let (resize_tx, _resize_rx) = watch::channel((rows, cols, 0, 0));
         let mut terminal =
             crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes).unwrap();
+        // Runtime fixtures model the default config, which enables graphics.
+        terminal.enable_kitty_graphics().unwrap();
         terminal.write(bytes);
         let pane_id = PaneId::from_raw(0);
         let terminal = Arc::new(PaneTerminal::new(
@@ -4050,6 +4196,55 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_tells_fish_that_herdr_reflows() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_keeps_existing_fish_handle_reflow_entry() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "1");
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_sets_lowercase_fish_handle_reflow_beside_other_casing() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        cmd.env("FISH_HANDLE_REFLOW", "1");
+        apply_pane_terminal_env(&mut cmd);
+        assert!(cmd
+            .iter_full_env_as_str()
+            .any(|entry| entry == (FISH_HANDLE_REFLOW_ENV_VAR, "0")));
+    }
+
+    #[test]
+    fn pane_launch_env_explicit_fish_handle_reflow_wins() {
+        let mut explicit = CommandBuilder::new("shell");
+        explicit.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut explicit);
+        apply_pane_launch_env(
+            &mut explicit,
+            &PaneLaunchEnv::from_extra(vec![(FISH_HANDLE_REFLOW_ENV_VAR.into(), "1".into())]),
+        );
+        assert_eq!(
+            explicit.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
         );
     }
 
@@ -5104,11 +5299,23 @@ mod tests {
     #[test]
     fn foreground_shell_reports_process_exit_before_clearing_agent() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Codex), None, true, false),
+            foreground_shell_agent_action(
+                Some(Agent::Codex),
+                None,
+                true,
+                false,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ReportProcessExit
         );
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Codex), None, true, true),
+            foreground_shell_agent_action(
+                Some(Agent::Codex),
+                None,
+                true,
+                true,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ClearAgent
         );
     }
@@ -5116,7 +5323,13 @@ mod tests {
     #[test]
     fn same_agent_after_reported_exit_is_a_replacement_process() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Pi), Some(Agent::Pi), false, true),
+            foreground_shell_agent_action(
+                Some(Agent::Pi),
+                Some(Agent::Pi),
+                false,
+                true,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ReportReplacementProcess
         );
     }
@@ -5124,9 +5337,314 @@ mod tests {
     #[test]
     fn unknown_non_shell_foreground_job_is_not_immediate_clear_signal() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), None, false, false),
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                None,
+                false,
+                false,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ObserveProbe
         );
+    }
+
+    #[test]
+    fn shell_in_front_of_a_live_agent_job_holds_the_agent() {
+        for foreground_is_pane_shell in [true, false] {
+            assert_eq!(
+                foreground_shell_agent_action(
+                    Some(Agent::Claude),
+                    None,
+                    foreground_is_pane_shell,
+                    false,
+                    AgentJobStatus::Background
+                ),
+                ForegroundShellAgentAction::HoldBackgroundAgent
+            );
+        }
+    }
+
+    #[test]
+    fn held_agent_job_exit_is_reported_behind_any_foreground_job() {
+        for foreground_is_pane_shell in [true, false] {
+            assert_eq!(
+                foreground_shell_agent_action(
+                    Some(Agent::Pi),
+                    None,
+                    foreground_is_pane_shell,
+                    false,
+                    AgentJobStatus::ExitedInBackground
+                ),
+                ForegroundShellAgentAction::ReportProcessExit
+            );
+        }
+    }
+
+    /// Drives `observe_foreground_agent` the way the detection loops do, against
+    /// a fake process table of `pid -> (start token, process group)`.
+    mod held_agent {
+        use super::*;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+
+        pub(super) const SHELL: u32 = 10;
+        pub(super) const WRAPPER_JOB: u32 = 20;
+        pub(super) const AGENT_PID: u32 = 21;
+        const AGENT_START: u64 = 7_000;
+
+        #[derive(Default)]
+        pub(super) struct FakeProcesses(RefCell<HashMap<u32, (u64, u32)>>);
+
+        impl FakeProcesses {
+            pub(super) fn spawn(&self, pid: u32, start_token: u64, group: u32) {
+                self.0.borrow_mut().insert(pid, (start_token, group));
+            }
+
+            pub(super) fn exit(&self, pid: u32) {
+                self.0.borrow_mut().remove(&pid);
+            }
+        }
+
+        impl AgentProcessLiveness for FakeProcesses {
+            fn start_token(&self, pid: u32) -> Option<u64> {
+                self.0
+                    .borrow()
+                    .get(&pid)
+                    .map(|(start_token, _)| *start_token)
+            }
+
+            fn live_process_group(
+                &self,
+                shell_pid: u32,
+                pid: u32,
+                start_token: u64,
+            ) -> Option<u32> {
+                assert_eq!(shell_pid, SHELL);
+                self.0
+                    .borrow()
+                    .get(&pid)
+                    .filter(|(token, _)| *token == start_token)
+                    .map(|(_, group)| *group)
+            }
+        }
+
+        pub(super) struct Pane {
+            pub(super) presence: AgentDetectionPresence,
+            pub(super) job: AgentJobTracker,
+            pub(super) processes: FakeProcesses,
+            pending_clear: bool,
+            exit_reported: bool,
+        }
+
+        impl Pane {
+            /// An agent process `AGENT_PID` under a wrapper that leads its job.
+            pub(super) fn with_agent(agent: Agent) -> Self {
+                let processes = FakeProcesses::default();
+                processes.spawn(WRAPPER_JOB, 6_000, WRAPPER_JOB);
+                processes.spawn(AGENT_PID, AGENT_START, WRAPPER_JOB);
+                let mut pane = Self {
+                    presence: AgentDetectionPresence::from_agent(None),
+                    job: AgentJobTracker::default(),
+                    processes,
+                    pending_clear: false,
+                    exit_reported: false,
+                };
+                let (_, acquired) = pane.probe(Some(agent), WRAPPER_JOB);
+                assert!(acquired);
+                pane
+            }
+
+            pub(super) fn probe(
+                &mut self,
+                agent: Option<Agent>,
+                foreground_group: u32,
+            ) -> (ForegroundShellAgentAction, bool) {
+                self.probe_process(agent, AGENT_PID, foreground_group)
+            }
+
+            pub(super) fn probe_process(
+                &mut self,
+                agent: Option<Agent>,
+                agent_pid: u32,
+                foreground_group: u32,
+            ) -> (ForegroundShellAgentAction, bool) {
+                let result = observe_foreground_agent(
+                    &mut self.presence,
+                    &mut self.job,
+                    &mut self.pending_clear,
+                    &mut self.exit_reported,
+                    ForegroundAgentObservation {
+                        shell_pid: SHELL,
+                        agent,
+                        agent_pid: agent.map(|_| agent_pid),
+                        process_group_id: Some(foreground_group),
+                        foreground_is_pane_shell: foreground_group == SHELL,
+                    },
+                    &self.processes,
+                    PaneId::from_raw(1),
+                );
+                // The loop publishes the pending exit before the next probe.
+                if self.pending_clear {
+                    self.exit_reported = true;
+                }
+                result
+            }
+
+            pub(super) fn assert_held_while_shell_in_front(&mut self) {
+                for _ in 0..(AGENT_MISS_CONFIRMATION_ATTEMPTS + 2) {
+                    assert_eq!(
+                        self.probe(None, SHELL),
+                        (ForegroundShellAgentAction::HoldBackgroundAgent, false)
+                    );
+                }
+                assert!(self.job.in_background());
+            }
+
+            pub(super) fn assert_exit_reported_then_cleared(&mut self) {
+                assert_eq!(
+                    self.probe(None, SHELL),
+                    (ForegroundShellAgentAction::ReportProcessExit, false)
+                );
+                assert_eq!(
+                    self.probe(None, SHELL),
+                    (ForegroundShellAgentAction::ClearAgent, true)
+                );
+                assert_eq!(self.presence.current_agent(), None);
+                assert!(!self.job.in_background());
+            }
+        }
+    }
+
+    #[test]
+    fn suspend_command_and_resume_publish_no_agent_transition() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+
+        // ctrl-z: the shell is in front, the stopped agent is alive.
+        pane.assert_held_while_shell_in_front();
+        // A plain command runs in front of the stopped agent.
+        for _ in 0..(AGENT_MISS_CONFIRMATION_ATTEMPTS + 2) {
+            assert_eq!(
+                pane.probe(None, 30),
+                (ForegroundShellAgentAction::HoldBackgroundAgent, false)
+            );
+        }
+        // fg: the same agent is back in front.
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), held_agent::WRAPPER_JOB),
+            (ForegroundShellAgentAction::ObserveProbe, false)
+        );
+        assert_eq!(pane.presence.current_agent(), Some(Agent::Claude));
+        assert!(!pane.job.in_background());
+
+        // A real exit afterwards still reports and clears.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn agent_killed_while_suspended_reports_its_exit() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+
+        // `kill -9 %1`: the whole stopped job is gone.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn held_agent_exit_is_reported_while_its_wrapper_survives() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+
+        // The agent dies; the wrapper that leads its job lives on.
+        pane.processes.exit(held_agent::AGENT_PID);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn held_agent_pid_reused_by_another_process_reports_exit() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        // The agent exits and an unrelated process in the same job gets its pid.
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes
+            .spawn(held_agent::AGENT_PID, 9_000, held_agent::WRAPPER_JOB);
+
+        pane.assert_exit_reported_then_cleared();
+    }
+
+    #[test]
+    fn same_kind_agent_started_in_front_of_a_held_one_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        // A second Claude starts in front of the suspended one.
+        pane.processes.spawn(31, 9_000, 30);
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe_process(Some(Agent::Claude), 31, 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
+        assert!(!pane.job.in_background());
+    }
+
+    #[test]
+    fn same_kind_agent_reusing_the_held_pid_replaces_it() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Claude);
+        pane.assert_held_while_shell_in_front();
+
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.spawn(held_agent::AGENT_PID, 9_000, 30);
+
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportProcessExit, false)
+        );
+        assert_eq!(
+            pane.probe(Some(Agent::Claude), 30),
+            (ForegroundShellAgentAction::ReportReplacementProcess, true)
+        );
+    }
+
+    #[test]
+    fn held_agent_under_hook_authority_is_reprobed_on_the_identified_cadence() {
+        let mut pane = held_agent::Pane::with_agent(Agent::Pi);
+        pane.assert_held_while_shell_in_front();
+        pane.processes.exit(held_agent::AGENT_PID);
+        pane.processes.exit(held_agent::WRAPPER_JOB);
+
+        // Detection ticks every 300 ms; lifecycle hooks own the pane, and the
+        // foreground group stays the shell's, so only the cadence can probe.
+        let tick = std::time::Duration::from_millis(300);
+        let mut since_check = std::time::Duration::ZERO;
+        loop {
+            since_check += tick;
+            assert!(
+                since_check <= PROCESS_RECHECK_IDENTIFIED + tick,
+                "never reprobed"
+            );
+            let input = ProcessProbeInput {
+                current_agent: pane.presence.current_agent(),
+                foreground_pgid: Some(held_agent::SHELL),
+                last_foreground_pgid: Some(held_agent::SHELL),
+                elapsed_since_process_check: since_check,
+                ..process_probe_input()
+            };
+            if should_check_foreground_process(true, pane.job.in_background(), input) {
+                break;
+            }
+        }
+
+        assert!(since_check >= PROCESS_RECHECK_IDENTIFIED);
+        pane.assert_exit_reported_then_cleared();
     }
 
     #[tokio::test]
@@ -5146,7 +5664,13 @@ mod tests {
     #[test]
     fn reported_process_exit_clears_before_unknown_foreground_probe() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), None, false, true),
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                None,
+                false,
+                true,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ClearAgent
         );
     }
@@ -5154,7 +5678,13 @@ mod tests {
     #[test]
     fn foreground_agent_job_is_not_clear_signal() {
         assert_eq!(
-            foreground_shell_agent_action(Some(Agent::Claude), Some(Agent::OpenCode), true, false,),
+            foreground_shell_agent_action(
+                Some(Agent::Claude),
+                Some(Agent::OpenCode),
+                true,
+                false,
+                AgentJobStatus::Unknown
+            ),
             ForegroundShellAgentAction::ObserveProbe
         );
     }
@@ -5180,7 +5710,7 @@ mod tests {
             agent_hint_for_foreground_job_members(&job, |pid| {
                 (pid == 42).then_some(Agent::Claude)
             }),
-            Some(Agent::Claude)
+            Some((Agent::Claude, 42))
         );
     }
 
@@ -5198,7 +5728,7 @@ mod tests {
             agent_hint_for_foreground_job_members(&job, |pid| {
                 (pid == 100).then_some(Agent::Codex)
             }),
-            Some(Agent::Codex)
+            Some((Agent::Codex, 100))
         );
     }
 
@@ -5259,7 +5789,25 @@ mod tests {
         );
 
         assert_eq!(result.agent, Some(Agent::Codex));
+        assert_eq!(result.agent_pid, Some(99));
         assert_eq!(result.process_name.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn probe_reports_the_agent_process_behind_an_unrecognized_job_leader() {
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 99,
+            processes: vec![
+                foreground_process(99, "some_wrapper"),
+                foreground_process(100, "claude"),
+            ],
+        };
+
+        let result = probe_foreground_process_from_jobs(42, Some(99), None, || Some(job), |_| None);
+
+        assert_eq!(result.agent, Some(Agent::Claude));
+        assert_eq!(result.agent_pid, Some(100));
+        assert_eq!(result.process_group_id, Some(99));
     }
 
     #[test]
@@ -5836,6 +6384,57 @@ mod tests {
         )
         .await
         .expect("re-entering active authority should notify detection reset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pane_process_sees_fish_handle_reflow() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "herdr-fish-handle-reflow-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&output_dir).unwrap();
+        let output_path = output_dir.join("out.txt");
+        let (events, _event_rx) = mpsc::channel(8);
+        // The cwd keeps the temp path out of the shell command line.
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(42),
+            24,
+            80,
+            output_dir.clone(),
+            "printf '%s\\n' \"$fish_handle_reflow\" > out.txt",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Ok(output) = std::fs::read_to_string(&output_path) {
+                    if output.ends_with('\n') {
+                        break output;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pane process should write its env");
+        runtime.shutdown();
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let expected = std::env::var(FISH_HANDLE_REFLOW_ENV_VAR).unwrap_or_else(|_| "0".into());
+        assert_eq!(output, format!("{expected}\n"));
     }
 
     #[cfg(unix)]

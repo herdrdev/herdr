@@ -41,6 +41,19 @@ pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     registry.insert(pid);
 }
 
+/// Asks a spawned herdr process to exit. portable-pty's `kill` sends SIGHUP,
+/// which the server deliberately ignores.
+pub fn stop_spawned_herdr(child: &mut (dyn portable_pty::Child + Send + Sync)) {
+    match child.process_id() {
+        Some(pid) => unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        },
+        None => {
+            let _ = child.kill();
+        }
+    }
+}
+
 pub fn unregister_spawned_herdr_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;

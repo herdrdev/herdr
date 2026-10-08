@@ -912,6 +912,50 @@ fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
     child.wait().map(|status| status.success()).unwrap_or(false)
 }
 
+/// Start time of `pid` in microseconds. It tells a process apart from a later
+/// one that reuses its pid.
+pub fn process_start_token(pid: u32) -> Option<u64> {
+    process_bsdinfo(pid).map(|info| bsdinfo_start_token(&info))
+}
+
+/// Process group of `pid` while that same process, matched by its start
+/// token, is alive on the terminal of the pane shell `shell_pid`. A stopped or
+/// backgrounded job still counts.
+pub fn live_pane_process_group(shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+    let process = process_bsdinfo(pid)?;
+    let shell = process_bsdinfo(shell_pid)?;
+    (process.pbi_status != libc::SZOMB
+        && bsdinfo_start_token(&process) == start_token
+        && process.e_tdev == shell.e_tdev)
+        .then_some(process.pbi_pgid)
+}
+
+fn bsdinfo_start_token(info: &libc::proc_bsdinfo) -> u64 {
+    info.pbi_start_tvsec
+        .saturating_mul(1_000_000)
+        .saturating_add(info.pbi_start_tvusec)
+}
+
+pub(super) fn socket_peer_pid(fd: RawFd) -> Option<u32> {
+    let mut pid: libc::pid_t = 0;
+    let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_LOCAL,
+            libc::LOCAL_PEERPID,
+            (&mut pid as *mut libc::pid_t).cast(),
+            &mut len,
+        )
+    };
+    (result == 0 && pid > 0).then_some(pid as u32)
+}
+
+pub(super) fn process_name_and_parent(pid: u32) -> Option<(String, u32)> {
+    let info = process_bsdinfo(pid)?;
+    Some((comm_from_bsdinfo(&info)?, info.pbi_ppid))
+}
+
 fn process_bsdinfo(pid: u32) -> Option<libc::proc_bsdinfo> {
     let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;

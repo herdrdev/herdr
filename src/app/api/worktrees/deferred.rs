@@ -190,32 +190,56 @@ impl App {
             focus: params.focus,
             respond_to,
         };
-        let path = checkout_path;
         let source_checkout_path = api_request.source_checkout_path.clone();
         let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
-            let result = if let Some(parent_dir) = parent_dir {
-                std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
-            } else {
-                Ok(())
+        let finished = crate::events::WorktreeAddResult {
+            path: checkout_path,
+            api_request: Some(api_request),
+            result: Ok(()),
+        };
+        let spawned = crate::thread_spawn::spawn_named_with(
+            "herdr-worktree-add",
+            finished,
+            move |mut finished| {
+                finished.result = if let Some(parent_dir) = parent_dir {
+                    std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
+                } else {
+                    Ok(())
+                }
+                .and_then(|()| {
+                    crate::worktree::run_worktree_add_command(
+                        &source_checkout_path,
+                        &finished.path,
+                        &branch,
+                        &base,
+                        params.trust_repository,
+                    )
+                });
+                let _ = event_tx.blocking_send(AppEvent::WorktreeAddFinished(Box::new(finished)));
+            },
+        );
+        if let Err((mut finished, err)) = spawned {
+            finished.result = Err(format!("could not start worktree creation: {err}"));
+            self.queue_worktree_spawn_failure(AppEvent::WorktreeAddFinished(Box::new(finished)));
+        }
+    }
+
+    /// Reports a worker that never started through the normal completion path,
+    /// so pending-operation and runtime cleanup stay in one place.
+    fn queue_worktree_spawn_failure(&self, finished: AppEvent) {
+        tracing::warn!("failed to spawn worktree operation thread");
+        match self.event_tx.try_send(finished) {
+            Ok(()) => {}
+            // The event loop drains this channel, so wait for room on a task
+            // instead of dropping the only completion for this request.
+            Err(tokio::sync::mpsc::error::TrySendError::Full(finished)) => {
+                let event_tx = self.event_tx.clone();
+                tokio::spawn(async move {
+                    let _ = event_tx.send(finished).await;
+                });
             }
-            .and_then(|()| {
-                crate::worktree::run_worktree_add_command(
-                    &source_checkout_path,
-                    &path,
-                    &branch,
-                    &base,
-                    params.trust_repository,
-                )
-            });
-            let _ = event_tx.blocking_send(AppEvent::WorktreeAddFinished(Box::new(
-                crate::events::WorktreeAddResult {
-                    path,
-                    api_request: Some(api_request),
-                    result,
-                },
-            )));
-        });
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {}
+        }
     }
 
     fn start_api_worktree_remove(
@@ -347,30 +371,36 @@ impl App {
             respond_to,
         };
         let repo_root = space.repo_root;
-        let path = space.checkout_path;
-        let force = params.force;
         let trust_repository = params.trust_repository;
         let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
-            let result = crate::worktree::run_worktree_remove_command_with_recovery(
-                &command,
-                &repo_root,
-                &path,
-                force,
-                trust_repository,
-            );
-            let _ = event_tx.blocking_send(AppEvent::WorktreeRemoveFinished(Box::new(
-                crate::events::WorktreeRemoveResult {
-                    workspace_id: workspace_internal_id,
-                    path,
-                    workspace: Some(Box::new(workspace_snapshot)),
-                    worktree: Some(Box::new(worktree)),
-                    forced: force,
-                    api_request: Some(api_request),
-                    result,
-                },
-            )));
-        });
+        let finished = crate::events::WorktreeRemoveResult {
+            workspace_id: workspace_internal_id,
+            path: space.checkout_path,
+            workspace: Some(Box::new(workspace_snapshot)),
+            worktree: Some(Box::new(worktree)),
+            forced: params.force,
+            api_request: Some(api_request),
+            result: Ok(()),
+        };
+        let spawned = crate::thread_spawn::spawn_named_with(
+            "herdr-worktree-remove",
+            finished,
+            move |mut finished| {
+                finished.result = crate::worktree::run_worktree_remove_command_with_recovery(
+                    &command,
+                    &repo_root,
+                    &finished.path,
+                    finished.forced,
+                    trust_repository,
+                );
+                let _ =
+                    event_tx.blocking_send(AppEvent::WorktreeRemoveFinished(Box::new(finished)));
+            },
+        );
+        if let Err((mut finished, err)) = spawned {
+            finished.result = Err(format!("could not start worktree removal: {err}"));
+            self.queue_worktree_spawn_failure(AppEvent::WorktreeRemoveFinished(Box::new(finished)));
+        }
     }
 
     pub(crate) fn handle_api_worktree_add_finished(

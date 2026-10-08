@@ -44,7 +44,7 @@ impl SpawnedHerdr {
 impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
+        support::stop_spawned_herdr(&mut *self.child);
         self.close_master();
 
         if let Some(pid) = pid {
@@ -249,8 +249,8 @@ fn server_removes_client_socket_on_exit() {
     wait_for_socket(&api_socket, Duration::from_secs(10));
     wait_for_file(&client_socket, Duration::from_secs(10));
 
-    // Kill the server.
-    let _ = spawned.child.kill();
+    // Stop the server.
+    support::stop_spawned_herdr(&mut *spawned.child);
     spawned.close_master();
     let _ = spawned.child.wait();
 
@@ -534,6 +534,117 @@ fn no_hello_client_closed_within_five_seconds() {
         response.contains("pong"),
         "server should still respond to ping: {response}"
     );
+
+    cleanup_spawned_herdr(spawned, base);
+}
+
+fn server_log_path(config_home: &Path) -> PathBuf {
+    let app_dir_name = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    config_home.join(app_dir_name).join("herdr-server.log")
+}
+
+fn wait_for_exit(child: &mut Box<dyn Child + Send + Sync>, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if child.try_wait().ok().flatten().is_some() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    false
+}
+
+fn wait_for_log_line(path: &Path, needle: &str, timeout: Duration) -> String {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let content = fs::read_to_string(path).unwrap_or_default();
+        if let Some(line) = content.lines().find(|line| line.contains(needle)) {
+            return line.to_string();
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!(
+        "log {} did not contain {needle:?}:\n{}",
+        path.display(),
+        fs::read_to_string(path).unwrap_or_default()
+    );
+}
+
+#[test]
+fn server_survives_hangup_and_logs_why_it_stops() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+    let pid = spawned.child.process_id().expect("server pid") as libc::pid_t;
+
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGHUP) }, 0);
+    // Closing the terminal hangs up the server's whole session too.
+    spawned.close_master();
+    assert!(
+        !wait_for_exit(&mut spawned.child, Duration::from_millis(500)),
+        "server must not stop on SIGHUP"
+    );
+    assert!(ping_socket(&api_socket).contains("pong"));
+
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGTERM) }, 0);
+    assert!(
+        wait_for_exit(&mut spawned.child, Duration::from_secs(10)),
+        "server must stop on SIGTERM"
+    );
+    let line = wait_for_log_line(
+        &server_log_path(&config_home),
+        "server shutdown initiated",
+        Duration::from_secs(5),
+    );
+    assert!(line.contains("reason=SIGTERM"), "{line}");
+
+    cleanup_spawned_herdr(spawned, base);
+}
+
+#[test]
+fn server_stop_request_logs_its_caller() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let client_socket = runtime_dir.join("herdr-client.sock");
+
+    let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+    wait_for_socket(&api_socket, Duration::from_secs(10));
+
+    let mut stream = UnixStream::connect(&api_socket).unwrap();
+    writeln!(
+        stream,
+        r#"{{"id":"stop","method":"server.stop","params":{{}}}}"#
+    )
+    .unwrap();
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response).unwrap();
+    assert!(response.contains("\"ok\""), "{response}");
+
+    assert!(wait_for_exit(&mut spawned.child, Duration::from_secs(10)));
+    let line = wait_for_log_line(
+        &server_log_path(&config_home),
+        "server shutdown initiated",
+        Duration::from_secs(5),
+    );
+    let expected = if cfg!(any(target_os = "linux", target_os = "macos")) {
+        format!("server.stop request from pid {}", std::process::id())
+    } else {
+        "server.stop request".to_string()
+    };
+    assert!(line.contains(&expected), "{line}");
 
     cleanup_spawned_herdr(spawned, base);
 }

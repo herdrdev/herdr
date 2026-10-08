@@ -79,6 +79,10 @@ pub struct TerminalKey {
     pub generated_text: Option<String>,
     physical_identity_hint: bool,
     windows_dead_key: bool,
+    /// The base-layout (physical) key a Kitty host named for this key. Client
+    /// side only: it pairs releases whose layout character differs from the
+    /// press (Ctrl let go first on a non-Latin layout).
+    base_layout_key: Option<char>,
     source: KeySource,
 }
 
@@ -93,8 +97,18 @@ impl TerminalKey {
             generated_text: None,
             physical_identity_hint: false,
             windows_dead_key: false,
+            base_layout_key: None,
             source: KeySource::Synthesized,
         }
+    }
+
+    pub(crate) fn with_base_layout_key(mut self, key: Option<char>) -> Self {
+        self.base_layout_key = key;
+        self
+    }
+
+    pub(crate) fn base_layout_key(&self) -> Option<char> {
+        self.base_layout_key
     }
 
     pub fn with_kind(mut self, kind: crossterm::event::KeyEventKind) -> Self {
@@ -173,11 +187,10 @@ impl TerminalKey {
         self
     }
 
-    #[cfg(any(windows, test))]
     pub(crate) fn vt_bytes(&self) -> Option<&[u8]> {
         match &self.source {
             KeySource::Vt { bytes } => Some(bytes),
-            KeySource::Synthesized | KeySource::WindowsConsole { .. } => None,
+            _ => None,
         }
     }
 
@@ -358,6 +371,7 @@ impl MouseProtocolMode {
     }
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MouseProtocolEncoding {

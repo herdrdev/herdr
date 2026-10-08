@@ -247,6 +247,13 @@ pub fn identify_agent(process_name: &str) -> Option<Agent> {
 }
 
 pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Agent, String)> {
+    identify_agent_process_in_job(job).map(|(agent, name, _)| (agent, name))
+}
+
+/// Like [`identify_agent_in_job`], plus the pid of the process that matched.
+pub fn identify_agent_process_in_job(
+    job: &crate::platform::ForegroundJob,
+) -> Option<(Agent, String, u32)> {
     if let Some(process) = job
         .processes
         .iter()
@@ -255,12 +262,12 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         let candidate = normalized_process_name(process);
         if let Some(agent) = identify_agent(&candidate) {
             if agent != Agent::Letta || is_interactive_letta_process(process) {
-                return Some((agent, candidate));
+                return Some((agent, candidate, process.pid));
             }
         }
     }
 
-    let mut best: Option<(u8, Agent, String)> = None;
+    let mut best: Option<(u8, Agent, String, u32)> = None;
 
     for process in &job.processes {
         let candidate = normalized_process_name(process);
@@ -273,12 +280,12 @@ pub fn identify_agent_in_job(job: &crate::platform::ForegroundJob) -> Option<(Ag
         let score = process_priority(process, &candidate);
 
         match &best {
-            Some((best_score, _, _)) if *best_score >= score => {}
-            _ => best = Some((score, agent, candidate)),
+            Some((best_score, ..)) if *best_score >= score => {}
+            _ => best = Some((score, agent, candidate, process.pid)),
         }
     }
 
-    best.map(|(_, agent, name)| (agent, name))
+    best.map(|(_, agent, name, pid)| (agent, name, pid))
 }
 
 /// Detect the state of an agent from the live terminal tail snapshot.

@@ -2044,7 +2044,7 @@ impl App {
             Ok(encoded_keys) => encoded_keys,
             Err(key) => return encode_error(id, "invalid_key", format!("unsupported key {key}")),
         };
-        for bytes in encoded_keys {
+        for bytes in encoded_keys.into_iter().filter(|bytes| !bytes.is_empty()) {
             if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
                 return encode_error(id, "pane_send_failed", err.to_string());
             }
@@ -2835,7 +2835,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_pane_send_keys_preserves_super_chord_in_legacy_pane() {
+    async fn api_pane_send_keys_does_not_type_super_chord_into_legacy_pane() {
         let (mut app, pane_id, mut rx) = app_with_send_key_runtime(1);
         let internal_pane_id = app.state.workspaces[0].tabs[0].root_pane;
         assert_eq!(
@@ -2856,11 +2856,38 @@ mod tests {
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.id, "req");
         assert_eq!(success.result, ResponseResult::Ok {});
+        // Neither a bare "c" (#3710) nor a Kitty report the shell prints (#4356).
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn api_pane_send_keys_reports_super_chord_to_kitty_pane() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let internal_pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                b"\x1b[>1u",
+                1,
+            );
+        app.state.insert_test_runtime(internal_pane_id, runtime);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: vec!["cmd+c".into()],
+            }),
+        });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
         assert_eq!(
             rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"\x1b[99;9u")
         );
-        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

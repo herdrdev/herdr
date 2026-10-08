@@ -114,7 +114,11 @@ impl App {
         }
 
         let update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::update::auto_update(update_tx));
+        if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
+            crate::update::auto_update(update_tx)
+        }) {
+            tracing::warn!(err = %err, "failed to spawn update check thread");
+        }
     }
 
     pub(crate) fn run_agent_manifest_update_check(&mut self) {
@@ -129,7 +133,11 @@ impl App {
         self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
 
         let manifest_update_tx = self.event_tx.clone();
-        std::thread::spawn(move || crate::detect::manifest_update::auto_update(manifest_update_tx));
+        if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
+            crate::detect::manifest_update::auto_update(manifest_update_tx)
+        }) {
+            tracing::warn!(err = %err, "failed to spawn agent manifest check thread");
+        }
     }
 
     pub(crate) fn next_headless_loop_deadline_with_git_refresh(
@@ -154,6 +162,7 @@ impl App {
             include_git_refresh
                 .then(|| self.git_refresh_deadline())
                 .flatten(),
+            self.restored_worktree_validation_retry_at,
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,

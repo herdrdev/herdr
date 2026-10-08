@@ -73,6 +73,107 @@ fn state_with_remote() -> (ClientShellState, ClientEndpointId) {
     (state, endpoint_id)
 }
 
+#[test]
+fn workspace_navigation_waits_for_the_target_presentation_fence() {
+    use crate::client::endpoint::{EndpointNegotiation, EndpointRegistry};
+    use crate::client::endpoint_commands::EndpointCommands;
+
+    struct Capture(std::sync::Arc<std::sync::Mutex<Vec<ClientMessage>>>);
+    impl crate::client::endpoint::EndpointTransport for Capture {
+        fn send(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+            self.0.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+    }
+
+    for (key, focused, expected, surface_active) in [
+        (KeyCode::Down, "ws_1", "ws_2", true),
+        (KeyCode::Up, "ws_2", "ws_1", true),
+        (KeyCode::Down, "ws_1", "ws_2", false),
+    ] {
+        let (mut state, remote) = state_with_remote();
+        let config: Config =
+            toml::from_str("[keys]\nnext_workspace = 'ctrl+down'\nprevious_workspace = 'ctrl+up'")
+                .unwrap();
+        state.config = ClientShellConfig::from_config(&config);
+        let mut projection = snapshot();
+        projection.boot_id = "remote-boot".into();
+        let mut second = projection.workspaces[0].clone();
+        second.workspace_id = "ws_2".into();
+        second.number = 2;
+        projection.workspaces.push(second);
+        projection.focused_workspace_id = Some(focused.into());
+        for workspace in &mut projection.workspaces {
+            workspace.focused = workspace.workspace_id == focused;
+        }
+        state.set_endpoint_snapshot(&remote, Box::new(projection));
+        assert!(state.activate_endpoint_projection(&remote));
+
+        let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut endpoints = EndpointRegistry::empty();
+        endpoints.insert(
+            remote.clone(),
+            Capture(sent.clone()),
+            7,
+            EndpointNegotiation::default(),
+            true,
+        );
+        assert!(endpoints.set_active(&remote));
+        endpoints.set_surface_active(&remote, surface_active);
+        // Activation publishes this coherent target before releasing its effects fence.
+        endpoints.freeze_input();
+        let outcome = state.handle_raw_events(vec![RawInputEvent::Key(
+            crate::input::TerminalKey::new(key, KeyModifiers::CONTROL),
+        )]);
+        assert!(matches!(outcome.actions.as_slice(),
+            [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method, crate::api::schema::Method::WorkspaceFocus(target)
+                if target.workspace_id == expected)));
+        let mut commands = EndpointCommands::default();
+        let mut scheduled = None;
+        crate::client::shell_runtime::dispatch_client_shell_actions(
+            outcome.actions,
+            &mut commands,
+            &mut endpoints,
+            Some(&mut state),
+            &mut Vec::new(),
+            &mut scheduled,
+        )
+        .unwrap();
+        if !surface_active {
+            assert!(state
+                .visible_endpoint_notice
+                .as_ref()
+                .is_some_and(|notice| notice.title == "Action interrupted"));
+            assert!(commands.disconnect(&remote).is_empty());
+            assert!(sent.lock().unwrap().is_empty());
+            continue;
+        }
+        assert!(
+            state.visible_endpoint_notice.is_none(),
+            "navigation was cancelled"
+        );
+        assert!(
+            sent.lock().unwrap().is_empty(),
+            "the fence must still block sends"
+        );
+        assert!(!endpoints.active_surface_available());
+
+        endpoints.unfreeze_input();
+        assert!(commands.send_next(&remote, &mut endpoints).is_empty());
+        let messages = sent.lock().unwrap();
+        let [ClientMessage::ClientShellEndpointRequest { request, .. }] = messages.as_slice()
+        else {
+            panic!("queued navigation must reach the target after the fence");
+        };
+        let request: crate::api::schema::Request = serde_json::from_str(request).unwrap();
+        assert!(
+            matches!(request.method, crate::api::schema::Method::WorkspaceFocus(target)
+            if target.workspace_id == expected)
+        );
+    }
+}
+
 #[cfg(windows)]
 #[test]
 fn system_notification_clicks_keep_endpoint_and_boot_identity() {

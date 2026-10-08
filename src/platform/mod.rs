@@ -36,6 +36,11 @@ fn monitor_host_shutdown(
     None
 }
 
+#[cfg(not(windows))]
+pub(crate) fn host_shutdown_in_progress() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForegroundProcess {
     pub pid: u32,
@@ -49,6 +54,47 @@ pub struct ForegroundProcess {
 pub struct ForegroundJob {
     pub process_group_id: u32,
     pub processes: Vec<ForegroundProcess>,
+}
+
+/// A request from outside the process to stop the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerQuitSignal {
+    #[cfg(unix)]
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+    #[cfg(not(unix))]
+    ConsoleControl,
+}
+
+impl std::fmt::Display for ServerQuitSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            #[cfg(unix)]
+            Self::Interrupt => "SIGINT",
+            #[cfg(unix)]
+            Self::Terminate => "SIGTERM",
+            #[cfg(not(unix))]
+            Self::ConsoleControl => "console control event",
+        })
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn spawn_server_signal_monitor(
+    on_quit: impl Fn(ServerQuitSignal) + Send + Sync + 'static,
+) {
+    if let Err(err) = ctrlc::set_handler(move || on_quit(ServerQuitSignal::ConsoleControl)) {
+        tracing::warn!(%err, "failed to install server stop handler");
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn ignore_server_hangup() {}
+
+#[cfg(not(unix))]
+pub(crate) fn local_stream_peer_description(_stream: &crate::ipc::LocalStream) -> Option<String> {
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,6 +210,15 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
         direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
+}
+
+/// The byte the host terminal sends for Backspace according to the tty's erase
+/// setting (e.g. `^H` for MobaXterm and PuTTY-style terminals), when known.
+pub(crate) fn terminal_erase_byte() -> Option<u8> {
+    #[cfg(unix)]
+    return unix_common::terminal_erase_byte();
+    #[cfg(not(unix))]
+    None
 }
 
 pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
@@ -331,7 +386,8 @@ mod unix_common;
 pub(crate) mod unix_image_files;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, ignore_server_hangup,
+    local_stream_peer_description, spawn_server_signal_monitor, RemoteBridgeWake,
 };
 
 mod client_state;
@@ -357,6 +413,9 @@ pub use macos::*;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
+
+#[cfg(not(windows))]
+pub(crate) use process_cwd as pane_process_cwd;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
@@ -564,6 +623,102 @@ fn child_exit_classification_only_checkpoints_interruptions() {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_pane_process_group_rejects_processes_outside_the_pane_session() {
+        use std::os::unix::process::CommandExt;
+
+        let mut detached = std::process::Command::new("sleep");
+        detached.arg("30");
+        // SAFETY: setsid is async-signal-safe and touches only the child.
+        unsafe {
+            detached.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut detached = detached.spawn().expect("spawn detached");
+        let token = process_start_token(detached.id()).expect("start token");
+        let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+        let gone_pid = gone.id();
+        gone.wait().expect("reap");
+
+        assert_eq!(
+            live_pane_process_group(std::process::id(), detached.id(), token),
+            None,
+            "a live process in another terminal session"
+        );
+        assert_eq!(
+            live_pane_process_group(gone_pid, detached.id(), token),
+            None,
+            "a pane shell that is gone"
+        );
+        let _ = detached.kill();
+        let _ = detached.wait();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn live_pane_process_group_follows_the_agent_process_not_its_job() {
+        use std::os::unix::process::CommandExt;
+
+        let shell_pid = std::process::id();
+        let mut wrapper = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn wrapper");
+        let job = wrapper.id();
+        let mut agent = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(job as i32)
+            .spawn()
+            .expect("spawn agent");
+        let agent_pid = agent.id();
+        let token = process_start_token(agent_pid).expect("agent start token");
+        let wrapper_token = process_start_token(job).expect("wrapper start token");
+
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token + 1),
+            None,
+            "a reused pid has a different start token"
+        );
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGSTOP);
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGKILL);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while live_pane_process_group(shell_pid, agent_pid, token).is_some()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            None,
+            "an unreaped agent must not count as alive while its wrapper lives"
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, job, wrapper_token),
+            Some(job)
+        );
+        agent.wait().expect("reap agent");
+        assert_eq!(live_pane_process_group(shell_pid, agent_pid, token), None);
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+    }
 
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {

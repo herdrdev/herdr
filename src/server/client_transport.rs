@@ -864,9 +864,9 @@ pub(crate) fn handle_client_handshake(
     // Spawn a writer thread that forwards messages from the channels to the stream.
     let write_stream = stream.try_clone()?;
     let writer_event_tx = server_event_tx.clone();
-    std::thread::spawn(move || {
+    crate::thread_spawn::spawn_named("herdr-client-writer", move || {
         client_writer_loop(write_stream, client_id, writer_queue, writer_event_tx);
-    });
+    })?;
 
     if should_quit.load(Ordering::Acquire) {
         send_shutdown_to_unregistered_client(&writer);

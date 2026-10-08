@@ -70,7 +70,12 @@ fn parse_kitty_key_sequence(data: &str) -> Option<TerminalKey> {
         modifiers |= KeyModifiers::SHIFT;
     }
 
-    let mut key = TerminalKey::new(code, modifiers).with_kind(kind);
+    let base_layout_key = base_layout_codepoint
+        .and_then(char::from_u32)
+        .filter(char::is_ascii_graphic);
+    let mut key = TerminalKey::new(code, modifiers)
+        .with_kind(kind)
+        .with_base_layout_key(base_layout_key);
     if let Some(shifted_codepoint) = shifted_codepoint {
         key = key.with_shifted_codepoint(shifted_codepoint);
     }
@@ -302,10 +307,18 @@ fn parse_legacy_special_sequence(data: &str) -> Option<TerminalKey> {
         "\x1bOj" => Some(TerminalKey::new(KeyCode::Char('*'), KeyModifiers::empty())),
         "\x1bOo" => Some(TerminalKey::new(KeyCode::Char('/'), KeyModifiers::empty())),
         "\x1bOM" => Some(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty())),
-        "\x1bOP" | "\x1b[11~" => Some(TerminalKey::new(KeyCode::F(1), KeyModifiers::empty())),
-        "\x1bOQ" | "\x1b[12~" => Some(TerminalKey::new(KeyCode::F(2), KeyModifiers::empty())),
+        // Kitty keyboard hosts send unmodified F1, F2 and F4 as bare `CSI P/Q/S`
+        // (#4403). F3 stays `CSI 13~` there: a bare `CSI R` is a cursor report.
+        "\x1bOP" | "\x1b[11~" | "\x1b[P" => {
+            Some(TerminalKey::new(KeyCode::F(1), KeyModifiers::empty()))
+        }
+        "\x1bOQ" | "\x1b[12~" | "\x1b[Q" => {
+            Some(TerminalKey::new(KeyCode::F(2), KeyModifiers::empty()))
+        }
         "\x1bOR" | "\x1b[13~" => Some(TerminalKey::new(KeyCode::F(3), KeyModifiers::empty())),
-        "\x1bOS" | "\x1b[14~" => Some(TerminalKey::new(KeyCode::F(4), KeyModifiers::empty())),
+        "\x1bOS" | "\x1b[14~" | "\x1b[S" => {
+            Some(TerminalKey::new(KeyCode::F(4), KeyModifiers::empty()))
+        }
         "\x1b[15~" => Some(TerminalKey::new(KeyCode::F(5), KeyModifiers::empty())),
         "\x1b[17~" => Some(TerminalKey::new(KeyCode::F(6), KeyModifiers::empty())),
         "\x1b[18~" => Some(TerminalKey::new(KeyCode::F(7), KeyModifiers::empty())),
@@ -510,7 +523,6 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers, ModifierKeyCode};
 
     use super::*;
-    use crate::input::{encode_terminal_key, KeyboardProtocol};
 
     fn assert_terminal_key_eq(
         actual: TerminalKey,
@@ -691,7 +703,7 @@ mod tests {
             crossterm::event::KeyEventKind::Press,
             None,
         );
-        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"\x1bA");
+        assert_eq!(crate::pane::test_encode_key_for_app(b"", key), b"\x1bA");
     }
 
     #[test]
@@ -705,10 +717,7 @@ mod tests {
             crossterm::event::KeyEventKind::Press,
             None,
         );
-        assert_eq!(
-            encode_terminal_key(key, KeyboardProtocol::Legacy),
-            b"\x1b\x06"
-        );
+        assert_eq!(crate::pane::test_encode_key_for_app(b"", key), b"\x1b\x06");
     }
 
     #[test]
@@ -863,7 +872,8 @@ mod tests {
         assert_eq!(key.code, KeyCode::Char('z'));
     }
 
-    /// Master ignored the base-layout field, so stripping it gives master's result.
+    /// Without a base-layout field nothing can be rewritten, so stripping it
+    /// gives the report as the layout key.
     fn without_base_layout_field(sequence: &str) -> String {
         let (key_part, rest) = sequence.split_once(';').unwrap_or((sequence, ""));
         let mut fields = key_part.splitn(3, ':');
@@ -877,6 +887,15 @@ mod tests {
         } else {
             format!("{stripped};{rest}")
         }
+    }
+
+    fn base_field(sequence: &str) -> u32 {
+        let key_part = sequence
+            .trim_start_matches("\x1b[")
+            .split(';')
+            .next()
+            .unwrap();
+        key_part.split(':').nth(2).unwrap().parse().unwrap()
     }
 
     const LATIN_AND_ALTGR_CHORDS: &[&str] = &[
@@ -903,23 +922,25 @@ mod tests {
     ];
 
     #[test]
-    fn parse_latin_layout_and_altgr_chords_match_master() {
+    fn parse_latin_layout_and_altgr_chords_keep_layout_key() {
         for sequence in LATIN_AND_ALTGR_CHORDS {
-            let master = without_base_layout_field(sequence);
-            assert_ne!(*sequence, master);
+            let stripped = without_base_layout_field(sequence);
+            assert_ne!(*sequence, stripped);
             let key = parse_terminal_key_sequence(sequence).unwrap();
-            let master_key = parse_terminal_key_sequence(&master).unwrap();
-            assert_eq!(key, master_key, "{sequence:?}");
-            for protocol in [
-                crate::input::KeyboardProtocol::Legacy,
-                crate::input::KeyboardProtocol::Kitty { flags: 1 },
-                crate::input::KeyboardProtocol::Kitty { flags: 5 },
-                crate::input::KeyboardProtocol::Kitty { flags: 31 },
-            ] {
+            let layout_key = parse_terminal_key_sequence(&stripped).unwrap();
+            // The base-layout key is kept only to pair releases; everything
+            // the pane and keybinds read must match the report without it.
+            assert_eq!(key.base_layout_key(), char::from_u32(base_field(sequence)));
+            assert_eq!(
+                key.clone().with_base_layout_key(None),
+                layout_key,
+                "{sequence:?}"
+            );
+            for pane_mode in [&b""[..], b"\x1b[>1u", b"\x1b[>5u", b"\x1b[>31u"] {
                 assert_eq!(
-                    crate::input::encode_terminal_key(key.clone(), protocol),
-                    crate::input::encode_terminal_key(master_key.clone(), protocol),
-                    "{sequence:?} {protocol:?}"
+                    crate::pane::test_encode_key_for_app(pane_mode, key.clone()),
+                    crate::pane::test_encode_key_for_app(pane_mode, layout_key.clone()),
+                    "{sequence:?} {pane_mode:?}"
                 );
             }
         }
@@ -1026,6 +1047,43 @@ mod tests {
         assert_eq!(key.modifiers, KeyModifiers::empty());
         assert_eq!(key.kind, crossterm::event::KeyEventKind::Press);
         assert_eq!(key.generated_text.as_deref(), Some("你好"));
+    }
+
+    #[test]
+    fn parse_ctrl_chords_on_non_latin_layouts_as_their_base_layout_key() {
+        // Lab capture, kitty on a Russian layout: Ctrl+\u{441} is the C key.
+        for (sequence, code, modifiers) in [
+            (
+                "\x1b[1089::99;5u",
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ),
+            (
+                "\x1b[1089:1057:99;6u",
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            ),
+            (
+                "\x1b[1089::99;5:3u",
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ),
+            // Without Ctrl it is text on that layout; without a base key
+            // nothing is known about the physical key.
+            (
+                "\x1b[1089::99u",
+                KeyCode::Char('\u{441}'),
+                KeyModifiers::empty(),
+            ),
+            (
+                "\x1b[1089;5u",
+                KeyCode::Char('\u{441}'),
+                KeyModifiers::CONTROL,
+            ),
+        ] {
+            let key = parse_terminal_key_sequence(sequence).expect(sequence);
+            assert_eq!((key.code, key.modifiers), (code, modifiers), "{sequence:?}");
+        }
     }
 
     #[test]
@@ -1233,7 +1291,7 @@ mod tests {
     #[test]
     fn legacy_lf_roundtrips_as_lf() {
         let key = parse_terminal_key_sequence("\n").unwrap();
-        assert_eq!(encode_terminal_key(key, KeyboardProtocol::Legacy), b"\n");
+        assert_eq!(crate::pane::test_encode_key_for_app(b"", key), b"\n");
     }
 
     #[test]

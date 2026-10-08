@@ -168,6 +168,14 @@ pub(crate) fn classify_child_exit(status: &portable_pty::ExitStatus) -> super::C
     }
 }
 
+pub(crate) fn host_shutdown_in_progress() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_SHUTTINGDOWN};
+
+    // This describes the current Windows session, including logoff. Child exit
+    // codes alone cannot distinguish host shutdown from ordinary process failure.
+    unsafe { GetSystemMetrics(SM_SHUTTINGDOWN) != 0 }
+}
+
 pub(crate) struct RemoteBridgeWake;
 
 impl RemoteBridgeWake {
@@ -438,6 +446,11 @@ pub(crate) fn set_default_plugin_pane_pwd(
 ) {
 }
 
+#[cfg(target_pointer_width = "64")]
+use windows_sys::{
+    Wdk::System::Threading::ProcessWow64Information, Win32::System::Kernel::STRING32,
+};
+
 use windows_sys::{
     Wdk::System::Threading::ProcessCommandLineInformation,
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
@@ -644,11 +657,21 @@ fn standard_windows_path(path: &std::path::Path) -> Option<PathBuf> {
 /// Resolves against the current foreground layout because asynchronous console
 /// records do not retain the layout that was active when the key was pressed.
 pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
+    // SAFETY: the foreground window and its layout are owned by Win32.
+    let layout = unsafe {
+        let thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        GetKeyboardLayout(thread_id)
+    };
+    resolve_base_printable_key_in_layout(vk, scan, layout)
+}
+
+pub(crate) fn resolve_base_printable_key_in_layout(
+    vk: u16,
+    scan: u16,
+    layout: windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL,
+) -> Option<char> {
     // SAFETY: Win32 owns the handles; the fixed buffers match the API lengths.
     unsafe {
-        let thread_id = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
-        let layout = GetKeyboardLayout(thread_id);
-
         let key_state = [0u8; 256];
         let mut output = [0u16; 2];
         let written = ToUnicodeEx(
@@ -660,7 +683,9 @@ pub(crate) fn resolve_base_printable_key(vk: u16, scan: u16) -> Option<char> {
             0x4,
             layout,
         );
-        let units = output.get(..usize::try_from(written).ok()?)?;
+        // A negative result identifies a dead key; its spacing accent is still
+        // the key's identity. Flag 0x4 above keeps composition state unchanged.
+        let units = output.get(..usize::try_from(written.unsigned_abs()).ok()?)?;
         let mut chars = char::decode_utf16(units.iter().copied());
         let ch = chars.next()?.ok()?;
         (chars.next().is_none() && !ch.is_control()).then_some(ch)
@@ -1560,10 +1585,78 @@ pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
 
 pub fn process_cwd(pid: u32) -> Option<PathBuf> {
     let process = ProcessHandle::open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)?;
-    let process_parameters = read_process_parameters(process.0)?;
-    read_unicode_string(process.0, process_parameters.current_directory.dos_path)
+    process_cwd_from_handle(process.0)
+}
+
+pub(crate) fn pane_process_cwd(child_pid: u32) -> Option<PathBuf> {
+    let process = ProcessHandle::open(
+        child_pid,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+    )?;
+    let executable = PathBuf::from(process_executable_path(process.0)?);
+    if executable.with_extension("shim").is_file() {
+        // A Scoop shim keeps its launch cwd while the real shell can change directories.
+        // Never replace the saved shell directory with that launcher directory on exit.
+        let snapshot = cached_foreground_processes();
+        return process_cwd(shim_shell_pid(child_pid, &snapshot)?);
+    }
+    process_cwd_from_handle(process.0)
+}
+
+fn process_cwd_from_handle(process: HANDLE) -> Option<PathBuf> {
+    read_unicode_string(process, process_cwd_descriptor(process)?)
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
+}
+
+fn process_cwd_descriptor(process: HANDLE) -> Option<UNICODE_STRING> {
+    #[cfg(target_pointer_width = "64")]
+    {
+        let mut peb32_address = 0_usize;
+        // SAFETY: the output is a writable ULONG_PTR with its exact buffer size.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                process,
+                ProcessWow64Information,
+                (&mut peb32_address as *mut usize).cast(),
+                size_of::<usize>() as u32,
+                null_mut(),
+            )
+        };
+        if status != STATUS_SUCCESS as NTSTATUS {
+            return None;
+        }
+        if peb32_address != 0 {
+            // WoW64's native PEB can report C:\Windows while the x86 shell uses
+            // another directory. Read its own pointer-width layout instead.
+            let peb = read_process_value::<Peb32>(process, peb32_address as *const c_void)?;
+            let parameters = read_process_value::<ProcessCwdParameters32>(
+                process,
+                peb.process_parameters as usize as *const c_void,
+            )?;
+            let cwd = parameters.current_directory;
+            return Some(UNICODE_STRING {
+                Length: cwd.Length,
+                MaximumLength: cwd.MaximumLength,
+                Buffer: cwd.Buffer as usize as *mut u16,
+            });
+        }
+    }
+    Some(read_process_parameters(process)?.current_directory.dos_path)
+}
+
+fn shim_shell_pid(child_pid: u32, snapshot: &ProcessSnapshot) -> Option<u32> {
+    snapshot.entry(child_pid)?;
+    let mut shells = snapshot
+        .children_by_parent
+        .get(&child_pid)?
+        .iter()
+        .filter_map(|&index| {
+            let entry = &snapshot.entries[index];
+            super::is_pane_shell_process_name(&entry.name).then_some(entry.pid)
+        });
+    let shell_pid = shells.next()?;
+    shells.next().is_none().then_some(shell_pid)
 }
 
 fn select_pane_foreground_job_cached(shell_pid: u32) -> Option<ForegroundJob> {
@@ -1640,14 +1733,15 @@ fn select_pane_foreground_job_from_snapshot_with_runtime_inspection(
         return Some(foreground_job_from_entry(shell));
     }
 
-    let Some(shell_runtime_marker) = runtime_marker(shell).filter(|marker| !marker.is_empty())
-    else {
+    let Some(shell_runtime_marker) = pane_runtime_marker(shell, &mut runtime_marker) else {
         return Some(foreground_job_from_entry(shell));
     };
     let matching_candidates: Vec<_> = escaped_agent_indices
         .iter()
         .map(|&index| &entries[index])
-        .filter(|entry| runtime_marker(entry).as_deref() == Some(shell_runtime_marker.as_str()))
+        .filter(|entry| {
+            carries_pane_runtime_marker(entry, &shell_runtime_marker, &mut runtime_marker)
+        })
         .collect();
     let selected =
         select_topmost_agent_chain_candidate(&matching_candidates, snapshot).unwrap_or(shell);
@@ -1663,6 +1757,69 @@ fn select_pane_foreground_job(
         shell_pid,
         &ProcessSnapshot::new(entries.to_vec()),
     )
+}
+
+/// Git Bash can start agents outside the pane shell's process tree. Those
+/// belong to the pane when they carry the runtime marker the shell got.
+fn pane_runtime_marker(
+    shell: &WindowsProcessEntry,
+    runtime_marker: &mut impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> Option<String> {
+    runtime_marker(shell).filter(|marker| !marker.is_empty())
+}
+
+fn carries_pane_runtime_marker(
+    entry: &WindowsProcessEntry,
+    pane_marker: &str,
+    runtime_marker: &mut impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> bool {
+    runtime_marker(entry).as_deref() == Some(pane_marker)
+}
+
+/// Whether foreground selection could pick `pid` for this pane: a descendant
+/// of the pane shell, or an escaped Git Bash agent with the pane's marker.
+fn process_belongs_to_pane(
+    shell_pid: u32,
+    pid: u32,
+    snapshot: &ProcessSnapshot,
+    shell_is_git_bash: impl FnOnce(&WindowsProcessEntry) -> bool,
+    mut runtime_marker: impl FnMut(&WindowsProcessEntry) -> Option<String>,
+) -> bool {
+    if process_is_ancestor(shell_pid, pid, snapshot) {
+        return true;
+    }
+    let (Some(shell), Some(entry)) = (snapshot.entry(shell_pid), snapshot.entry(pid)) else {
+        return false;
+    };
+    shell_is_git_bash(shell)
+        && process_entry_identifies_agent(entry)
+        && pane_runtime_marker(shell, &mut runtime_marker).is_some_and(|pane_marker| {
+            carries_pane_runtime_marker(entry, &pane_marker, &mut runtime_marker)
+        })
+}
+
+/// Creation time of `pid`. It tells a process apart from a later one that
+/// reuses its pid.
+pub fn process_start_token(pid: u32) -> Option<u64> {
+    ProcessIdentity::open(pid)?.creation_time()
+}
+
+/// Returns `pid` while that same process, matched by its creation time, is
+/// still running for the pane shell `shell_pid`. Windows has no job control,
+/// so the process stands in for its own group.
+pub fn live_pane_process_group(shell_pid: u32, pid: u32, start_token: u64) -> Option<u32> {
+    let identity = ProcessIdentity::open(pid)?;
+    if !identity.running() || identity.creation_time() != Some(start_token) {
+        return None;
+    }
+    process_belongs_to_pane(
+        shell_pid,
+        pid,
+        &cached_foreground_processes(),
+        |shell| process_is_git_bash(shell.pid),
+        |entry| process_runtime_marker(entry.pid),
+    )
+    .then_some(pid)
 }
 
 fn process_entry_identifies_agent(entry: &WindowsProcessEntry) -> bool {
@@ -2778,6 +2935,24 @@ struct Peb {
     reserved3: [*mut c_void; 2],
     ldr: *mut c_void,
     process_parameters: *mut RtlUserProcessParameters,
+}
+
+// Prefixes of the x86 PEB and RTL_USER_PROCESS_PARAMETERS through the fields
+// needed for cwd; remote pointers must stay 32-bit on a 64-bit reader.
+#[cfg(target_pointer_width = "64")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Peb32 {
+    reserved: [u32; 4],
+    process_parameters: u32,
+}
+
+#[cfg(target_pointer_width = "64")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ProcessCwdParameters32 {
+    reserved: [u32; 9],
+    current_directory: STRING32,
 }
 
 #[repr(C)]
@@ -3938,40 +4113,108 @@ mod tests {
 
     #[test]
     fn windows_process_cwd_reads_normalized_child_launch_directory() {
+        use std::path::PathBuf;
+
         let name = format!("Herdr-Cwd-Case-{}", std::process::id());
         let cwd = std::env::temp_dir().join(&name);
         fs::create_dir_all(&cwd).expect("create cwd fixture");
+        let cwd = super::normalize_cwd_for_launch_platform(&cwd);
         let launch_cwd = cwd.with_file_name(name.to_ascii_lowercase());
-
-        let shell =
-            std::env::var_os("ComSpec").unwrap_or_else(|| r"C:\Windows\System32\cmd.exe".into());
-        let mut child = Command::new(shell)
-            .args(["/D", "/Q", "/C", "ping -n 11 127.0.0.1 > NUL"])
-            .current_dir(super::normalize_cwd_for_launch_platform(&launch_cwd))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("spawn cmd");
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut observed = None;
-        while Instant::now() < deadline {
-            observed = super::process_cwd(child.id());
-            if observed.as_ref().and_then(|path| path.file_name()) == Some(name.as_ref()) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(100));
+        let changed = cwd.join("Changed");
+        fs::create_dir(&changed).expect("create changed cwd");
+        let windows = PathBuf::from(std::env::var_os("SystemRoot").expect("Windows SystemRoot"));
+        let shells = [
+            windows.join("System32").join("cmd.exe"),
+            #[cfg(target_pointer_width = "64")]
+            windows.join("SysWOW64").join("cmd.exe"),
+        ];
+        let mut observations = Vec::new();
+        for shell in shells {
+            let mut child = Command::new(&shell)
+                .args(["/D", "/Q", "/K"])
+                .current_dir(super::normalize_cwd_for_launch_platform(&launch_cwd))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn cmd");
+            let observe = |expected: &PathBuf| {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                loop {
+                    let observed = super::process_cwd(child.id());
+                    if observed.as_ref() == Some(expected) || Instant::now() >= deadline {
+                        break observed;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            };
+            let initial = observe(&cwd);
+            use std::io::Write;
+            writeln!(
+                child.stdin.as_ref().unwrap(),
+                "cd /d \"{}\"\r",
+                changed.display()
+            )
+            .expect("change cmd cwd");
+            let after_cd = observe(&changed);
+            let pane_cwd = super::pane_process_cwd(child.id());
+            let _ = child.kill();
+            let _ = child.wait();
+            observations.push((shell, initial, after_cd, pane_cwd));
         }
-
-        let _ = child.kill();
-        let _ = child.wait();
         let _ = fs::remove_dir_all(&cwd);
+        for (shell, initial, after_cd, pane_cwd) in observations {
+            assert_eq!(initial, Some(cwd.clone()), "{} launch cwd", shell.display());
+            assert_eq!(
+                after_cd,
+                Some(changed.clone()),
+                "{} live cd",
+                shell.display()
+            );
+            assert_eq!(pane_cwd, Some(changed.clone()), "ordinary shell owns cwd");
+        }
+    }
 
-        assert_eq!(
-            observed.as_ref().and_then(|path| path.file_name()),
-            Some(name.as_ref())
-        );
+    #[test]
+    fn windows_shim_cwd_uses_only_an_unambiguous_direct_shell() {
+        let cases = [
+            ("cmdx.exe", vec![(11, 10, "cmd.exe")], Some(11)),
+            ("pwsh.exe", vec![(11, 10, "pwsh.exe")], Some(11)),
+            (
+                "cmdx.exe",
+                vec![
+                    (11, 10, "cmd.exe"),
+                    (12, 11, "pwsh.exe"),
+                    (13, 11, "node.exe"),
+                ],
+                Some(11),
+            ),
+            (
+                "cmdx.exe",
+                vec![(11, 10, "node.exe"), (12, 11, "cmd.exe")],
+                None,
+            ),
+            ("cmdx.exe", vec![], None),
+            (
+                "cmdx.exe",
+                vec![(11, 10, "cmd.exe"), (12, 10, "pwsh.exe")],
+                None,
+            ),
+        ];
+        for (root_name, children, expected) in cases {
+            let mut entries = vec![test_entry(10, 1, root_name, &[root_name])];
+            entries.extend(
+                children
+                    .iter()
+                    .map(|&(pid, parent, name)| test_entry(pid, parent, name, &[name])),
+            );
+            let snapshot = super::ProcessSnapshot::new(entries);
+            assert_eq!(
+                super::shim_shell_pid(10, &snapshot),
+                expected,
+                "{root_name}: {children:?}"
+            );
+        }
     }
 
     #[test]
@@ -4260,6 +4503,50 @@ mod tests {
 
         assert_eq!(job.process_group_id, 10);
         assert_eq!(job.processes[0].name, "bash.exe");
+    }
+
+    #[test]
+    fn windows_held_agent_must_still_belong_to_the_pane() {
+        let entries = vec![
+            test_entry(10, 1, "bash.exe", &[r"C:\Program Files\Git\bin\bash.exe"]),
+            test_entry(11, 10, "claude.exe", &["claude.exe"]),
+            test_entry(20, 99, "codex.exe", &["codex.exe"]),
+            test_entry(30, 98, "vim.exe", &["vim.exe"]),
+            test_entry(50, 77, "claude.exe", &["claude.exe"]),
+        ];
+        let snapshot = super::ProcessSnapshot::new(entries);
+        let marker = |pane: &'static str| {
+            move |entry: &super::WindowsProcessEntry| {
+                Some(if entry.pid == 10 { "pane-a" } else { pane }.to_string())
+            }
+        };
+        let belongs = |pid, git_bash, pane| {
+            super::process_belongs_to_pane(10, pid, &snapshot, |_| git_bash, marker(pane))
+        };
+
+        assert!(belongs(11, false, "pane-b"), "descendant of the shell");
+        assert!(
+            belongs(20, true, "pane-a"),
+            "escaped agent with the pane marker"
+        );
+        assert!(!belongs(20, true, "pane-b"), "marker from another pane");
+        assert!(
+            !belongs(20, false, "pane-a"),
+            "escape only applies to Git Bash"
+        );
+        assert!(!belongs(30, true, "pane-a"), "escaped non-agent process");
+        assert!(
+            !belongs(40, true, "pane-a"),
+            "process gone from the snapshot"
+        );
+        assert!(
+            !belongs(50, false, "pane-a"),
+            "agent whose parent chain no longer reaches the shell"
+        );
+        assert!(
+            !super::process_belongs_to_pane(60, 11, &snapshot, |_| true, marker("pane-a")),
+            "pane shell gone"
+        );
     }
 
     #[test]

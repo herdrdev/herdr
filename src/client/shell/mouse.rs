@@ -945,7 +945,8 @@ impl ClientShellState {
         if self.popup_terminal_id.is_some() {
             return;
         }
-        if !self.replaying_url_click
+        if self.config.mouse_capture
+            && !self.replaying_url_click
             && self.overlay.is_none()
             && self.mode == ClientShellMode::Terminal
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)

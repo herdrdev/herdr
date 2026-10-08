@@ -112,6 +112,77 @@ fn ctrl_click_routes_link_activation_through_endpoint_then_client_host() {
         [ClientShellAction::OpenSafeWebUrl(url)] if url == "https://example.test"
     ));
     assert!(!state.url_click_consumes_until_up);
+
+    let activate = |state: &mut ClientShellState, url: &str, handled| {
+        let click = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+        let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+            panic!("expected link activation request");
+        };
+        state.handle_raw_events(vec![RawInputEvent::Mouse(up)]);
+        state
+            .handle_endpoint_result(
+                "boot-1",
+                &request.id,
+                Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+                    url: Some(url.into()),
+                    handled,
+                }),
+            )
+            .1
+    };
+    for url in [
+        "https://example.test",
+        "file:///C:/Code/note.md",
+        "obsidian://open?vault=meta",
+    ] {
+        assert!(
+            activate(&mut state, url, true).is_empty(),
+            "claimed links belong to plugins"
+        );
+        if !url.starts_with("https:") {
+            assert!(
+                matches!(
+                    &activate(&mut state, url, false)[..],
+                    [ClientShellAction::ReplayMouse(_)]
+                ),
+                "unclaimed non-web links must not open externally"
+            );
+        }
+    }
+    let click = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+    let [ClientShellAction::Endpoint { request, .. }] = &click.actions[..] else {
+        panic!("expected link activation request");
+    };
+    let (_, actions) = state.handle_endpoint_result(
+        "boot-1",
+        &request.id,
+        Err(ClientShellEndpointError {
+            code: Some("plugin_link_failed".into()),
+            message: "Plugin could not start".into(),
+        }),
+    );
+    assert!(
+        actions.is_empty(),
+        "claimed-link errors must not fall through"
+    );
+    assert!(state.visible_endpoint_notice.is_some());
+    state.handle_raw_events(vec![RawInputEvent::Mouse(up)]);
+
+    // Pane apps can still request mouse reporting when Herdr capture is off.
+    state.config.mouse_capture = false;
+    let mut pane_surface = surface();
+    pane_surface.panes[0].mouse_reporting = true;
+    state.set_pane_surface(pane_surface);
+    state.compose(106, 20).expect("capture-off pane frame");
+    let native = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+    assert!(!native.actions.iter().any(|action| matches!(action,
+        ClientShellAction::Endpoint { request, .. }
+            if matches!(request.method, crate::api::schema::Method::PaneLinkActivate(_)))));
+    assert!(matches!(&native.requests[..],
+        [ClientMessage::ClientShellPaneInput { events, .. }]
+            if matches!(&events[..], [ClientPaneInputEvent::Mouse { modifiers, .. }]
+                if *modifiers == KeyModifiers::CONTROL.bits())));
+    assert!(state.selection.is_none());
 }
 
 #[test]

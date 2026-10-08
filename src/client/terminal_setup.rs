@@ -48,6 +48,7 @@ pub(super) fn setup_terminal_with_capabilities(
     ratatui::init();
     let mut terminal_guard = TerminalGuard {
         host_escape_disambiguation_active: false,
+        host_sgr_pixel_mouse: None,
         buffered_host_input: Vec::new(),
         reset_keyboard_enhancements: false,
         reset_modify_other_keys: false,
@@ -63,38 +64,37 @@ pub(super) fn setup_terminal_with_capabilities(
     #[cfg(windows)]
     let windows_ssh_session = is_ssh_session();
     #[cfg(windows)]
-    let mut windows_virtual_terminal_input =
-        if windows_vti_input_backend_enabled() && windows_ssh_session {
-            enable_windows_virtual_terminal_input(
-                &terminal_guard.restore_claimed,
-                &terminal_guard.restore_windows_input_mode,
-            )
-        } else {
-            WindowsVirtualTerminalInputSetup::default()
-        };
+    let mut windows_virtual_terminal_input = if windows_ssh_session {
+        enable_windows_virtual_terminal_input(
+            &terminal_guard.restore_claimed,
+            &terminal_guard.restore_windows_input_mode,
+        )
+    } else {
+        WindowsVirtualTerminalInputSetup::default()
+    };
 
-    let (host_escape_disambiguation_active, buffered_host_input) = if enable_client_protocols {
+    let (host_probe, buffered_host_input) = if enable_client_protocols {
         terminal_guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
-        let (active, buffered_input) = query_host_escape_disambiguation();
+        let (probe, buffered_input) = query_host_escape_disambiguation();
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
             terminal_guard.reset_host_color_scheme_reports = true;
             write_host_color_scheme_report_mode(&mut io::stdout(), true)?;
         }
-        (active, buffered_input)
+        (probe, buffered_input)
     } else {
         if should_enable_host_color_scheme_reports(true) {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste)?;
-        (false, Vec::new())
+        (HostTerminalProbe::default(), Vec::new())
     };
 
     #[cfg(windows)]
-    if enable_client_protocols && windows_vti_input_backend_enabled() && !windows_ssh_session {
+    if enable_client_protocols && !windows_ssh_session {
         windows_virtual_terminal_input = enable_windows_virtual_terminal_input(
             &terminal_guard.restore_claimed,
             &terminal_guard.restore_windows_input_mode,
@@ -103,7 +103,6 @@ pub(super) fn setup_terminal_with_capabilities(
 
     #[cfg(windows)]
     if enable_client_protocols
-        && windows_vti_input_backend_enabled()
         && windows_virtual_terminal_input.active
         && windows_win32_input_mode_enabled()
     {
@@ -121,7 +120,8 @@ pub(super) fn setup_terminal_with_capabilities(
 
     execute!(io::stdout(), DisableLineWrap)?;
 
-    terminal_guard.host_escape_disambiguation_active = host_escape_disambiguation_active;
+    terminal_guard.host_escape_disambiguation_active = host_probe.escape_disambiguation;
+    terminal_guard.host_sgr_pixel_mouse = host_probe.sgr_pixel_mouse;
     terminal_guard.buffered_host_input = buffered_host_input;
     Ok(terminal_guard)
 }
@@ -133,6 +133,7 @@ pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: b
 /// Guard that restores the terminal when dropped.
 pub(super) struct TerminalGuard {
     host_escape_disambiguation_active: bool,
+    host_sgr_pixel_mouse: Option<bool>,
     buffered_host_input: Vec<u8>,
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
@@ -152,12 +153,23 @@ const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 #[derive(Default)]
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
+    /// DECRPM for SGR pixel mouse (1016): Some(true) when the host knows the
+    /// mode, Some(false) when it reports it unsupported.
+    sgr_pixel_mouse: Option<bool>,
     primary_device_attributes: bool,
 }
 
+/// What the startup probe learned about the host terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct HostTerminalProbe {
+    pub(super) escape_disambiguation: bool,
+    /// None when the host did not answer: keep assuming support.
+    pub(super) sgr_pixel_mouse: Option<bool>,
+}
+
 #[cfg(not(windows))]
-fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
-    const QUERY: &[u8] = b"\x1b[?u\x1b[c";
+fn query_host_escape_disambiguation() -> (HostTerminalProbe, Vec<u8>) {
+    const QUERY: &[u8] = b"\x1b[?u\x1b[?1016$p\x1b[c";
 
     let mut buffered_input = Vec::new();
     if let Err(err) = io::stdout()
@@ -165,7 +177,7 @@ fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
         .and_then(|()| io::stdout().flush())
     {
         tracing::debug!(%err, "host keyboard enhancement query unavailable");
-        return (false, buffered_input);
+        return (HostTerminalProbe::default(), buffered_input);
     }
 
     // Bypass StdinLock's shared buffer so poll and read observe the same bytes.
@@ -205,10 +217,16 @@ fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
         }
     }
 
-    (
-        host_escape_disambiguation_confirmed(&responses),
-        buffered_input,
-    )
+    (host_terminal_probe(&responses), buffered_input)
+}
+
+#[cfg(not(windows))]
+fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalProbe {
+    HostTerminalProbe {
+        escape_disambiguation: host_escape_disambiguation_confirmed(responses),
+        // An explicit mode answer stands even if the probe timed out later.
+        sgr_pixel_mouse: responses.sgr_pixel_mouse,
+    }
 }
 
 #[cfg(not(windows))]
@@ -263,6 +281,26 @@ fn consume_host_keyboard_probe_responses(
             break;
         }
         let body = &buffered_input[start + 3..end];
+        // DECRPM: CSI ? 1016 ; Ps $ y (0 = not recognized, 4 = permanently reset).
+        if buffered_input[end] == b'$' {
+            let Some(&final_byte) = buffered_input.get(end + 1) else {
+                break;
+            };
+            let reply = std::str::from_utf8(body)
+                .ok()
+                .and_then(|body| body.split_once(';'))
+                .filter(|(mode, _)| *mode == "1016")
+                .and_then(|(_, state)| state.parse::<u8>().ok());
+            if final_byte == b'y' {
+                if let Some(state) = reply {
+                    responses.sgr_pixel_mouse = Some(matches!(state, 1..=3));
+                    buffered_input.drain(start..=end + 1);
+                    continue;
+                }
+            }
+            offset += 1;
+            continue;
+        }
         let recognized = match buffered_input[end] {
             b'u' if !body.is_empty() && body.iter().all(u8::is_ascii_digit) => {
                 std::str::from_utf8(body)
@@ -322,8 +360,8 @@ fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
 }
 
 #[cfg(windows)]
-fn query_host_escape_disambiguation() -> (bool, Vec<u8>) {
-    (false, Vec::new())
+fn query_host_escape_disambiguation() -> (HostTerminalProbe, Vec<u8>) {
+    (HostTerminalProbe::default(), Vec::new())
 }
 
 pub(super) fn write_host_color_scheme_report_mode(
@@ -495,13 +533,6 @@ pub(super) fn is_ssh_session() -> bool {
     std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some()
 }
 
-#[cfg(windows)]
-pub(super) fn windows_vti_input_backend_enabled() -> bool {
-    std::env::var("HERDR_WINDOWS_INPUT_BACKEND")
-        .map(|backend| !backend.eq_ignore_ascii_case("crossterm"))
-        .unwrap_or(true)
-}
-
 #[cfg(any(windows, test))]
 pub(super) fn windows_virtual_terminal_input_mode(mode: u32) -> u32 {
     mode | 0x0200
@@ -528,12 +559,16 @@ pub(super) fn effective_mouse_capture(
     server_enabled || direct_attach_preference
 }
 
+/// Host SGR pixel reports are used only when exact cell geometry maps them to
+/// cells and the host did not report the mode unsupported (`host_support`
+/// None means it never answered the probe).
 pub(super) fn effective_sgr_pixel_mouse(
     enabled: bool,
     requested: bool,
     exact_geometry: bool,
+    host_support: Option<bool>,
 ) -> bool {
-    enabled && requested && exact_geometry
+    enabled && requested && exact_geometry && host_support != Some(false)
 }
 
 #[cfg(any(windows, test))]
@@ -555,8 +590,7 @@ fn set_windows_native_mouse_capture<W: io::Write>(
 
 #[cfg(windows)]
 fn windows_uses_vt_mouse_reporting() -> bool {
-    windows_vti_input_backend_enabled()
-        && (is_ssh_session() || crate::platform::windows_virtual_terminal_input_active())
+    is_ssh_session() || crate::platform::windows_virtual_terminal_input_active()
 }
 
 pub(super) fn set_mouse_capture(enabled: bool, sgr_pixels: bool) -> io::Result<()> {
@@ -666,7 +700,7 @@ fn restore_terminal_state(
         write_terminal_restore_postlude(&mut io::stdout(), reset_host_color_scheme_reports);
 
     #[cfg(windows)]
-    if windows_vti_input_backend_enabled() && windows_win32_input_mode_enabled() {
+    if windows_win32_input_mode_enabled() {
         let _ = disable_windows_win32_input_mode(&mut io::stdout());
     }
 
@@ -718,6 +752,11 @@ fn disable_windows_win32_input_mode(writer: &mut impl std::io::Write) -> io::Res
 impl TerminalGuard {
     pub(super) fn host_escape_disambiguation_active(&self) -> bool {
         self.host_escape_disambiguation_active
+    }
+
+    /// Whether the host answered that it supports SGR pixel mouse reports.
+    pub(super) fn host_sgr_pixel_mouse(&self) -> Option<bool> {
+        self.host_sgr_pixel_mouse
     }
 
     pub(super) fn take_buffered_host_input(&mut self) -> Vec<u8> {
@@ -865,6 +904,45 @@ mod tests {
             assert!(responses.primary_device_attributes, "split {split}");
             assert_eq!(buffered, b"before-middle-after", "split {split}");
         }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_probe_reads_sgr_pixel_mouse_support_at_any_split() {
+        // kitty/Ghostty answer 2 (reset, supported); Alacritty answers 0 (unknown).
+        for (reply, expected) in [
+            (&b"\x1b[?1016;2$y"[..], Some(true)),
+            (b"\x1b[?1016;1$y", Some(true)),
+            (b"\x1b[?1016;0$y", Some(false)),
+            (b"\x1b[?1016;4$y", Some(false)),
+            (b"", None),
+        ] {
+            let stream = [&b"x\x1b[?7u"[..], reply, b"\x1b[?1;2cy"].concat();
+            for split in 1..stream.len() {
+                let mut buffered = stream[..split].to_vec();
+                let mut responses = HostKeyboardProbeResponses::default();
+                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+                buffered.extend_from_slice(&stream[split..]);
+                consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+                assert_eq!(
+                    responses.sgr_pixel_mouse, expected,
+                    "{reply:?} split {split}"
+                );
+                assert_eq!(buffered, b"xy", "{reply:?} split {split}");
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_probe_keeps_a_pixel_mouse_answer_without_device_attributes() {
+        let mut buffered = b"\x1b[?1016;0$y".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+
+        assert!(!responses.primary_device_attributes);
+        assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(false));
     }
 
     #[cfg(not(windows))]
