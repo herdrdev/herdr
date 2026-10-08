@@ -251,6 +251,7 @@ impl RawInputByteFramer {
     }
 
     pub(crate) fn push(&mut self, data: &[u8]) -> Vec<Vec<u8>> {
+        self.drop_stale_host_color_reply(data);
         self.buffer.extend_from_slice(data);
         #[cfg(unix)]
         if let Some(prefix_len) = self.awaiting_mouse_tail_after.take() {
@@ -282,6 +283,30 @@ impl RawInputByteFramer {
         self.host_color_replies_awaited = self.host_color_replies_awaited.saturating_add(replies);
         self.held_pending_host_reply_esc = false;
         self.host_reply_activity_at = Some(Instant::now());
+    }
+
+    /// An unfinished OSC 10/11 reply is held only while a reply is expected.
+    /// Once the host has gone quiet, bytes that cannot finish that reply are
+    /// new input, so drop the stale reply instead of swallowing them (#5052).
+    fn drop_stale_host_color_reply(&mut self, data: &[u8]) {
+        if data.is_empty() || !starts_with_incomplete_default_color_response(&self.buffer) {
+            return;
+        }
+        // The Windows default color query keeps its own reply deadline.
+        #[cfg(windows)]
+        if self.host_default_color_query_deadline.is_some() {
+            return;
+        }
+        if self.awaiting_host_reply()
+            || continues_host_color_reply(self.buffer.last() == Some(&ESC), data)
+        {
+            return;
+        }
+        tracing::debug!(
+            len = self.buffer.len(),
+            "dropping unfinished host color reply before new input"
+        );
+        self.buffer.clear();
     }
 
     #[cfg(windows)]
@@ -544,11 +569,19 @@ impl RawInputByteFramer {
         }
 
         if starts_with_incomplete_default_color_response(&self.buffer) {
-            tracing::trace!(
+            // Hold the reply for its terminator only while one is expected, so a
+            // reply cut off by the link cannot hold all later input (#5052).
+            if self.awaiting_host_reply() && self.buffer.len() <= MAX_DISCARDED_CONTROL_TAIL_BYTES {
+                tracing::trace!(
+                    len = self.buffer.len(),
+                    "waiting for host color response terminator"
+                );
+                return chunks;
+            }
+            tracing::debug!(
                 len = self.buffer.len(),
-                "waiting for host color response terminator"
+                "giving up on unfinished host color response"
             );
-            return chunks;
         }
 
         if (self.host_cell_size_replies_awaited > 0 || self.host_appearance_reply_awaited)
@@ -834,7 +867,6 @@ const MAX_DISCARDED_CONTROL_TAIL_BYTES: usize = 128;
 #[cfg(windows)]
 const HOST_COLOR_TAIL_RECOVERY_GRACE: Duration = Duration::from_millis(100);
 
-#[cfg(windows)]
 fn plausible_host_color_tail_byte(byte: u8) -> bool {
     byte.is_ascii_hexdigit()
         || matches!(
@@ -855,6 +887,23 @@ fn plausible_host_color_tail_byte(byte: u8) -> bool {
                 | b'B'
                 | ESC
         )
+}
+
+/// Whether `data` can be the rest of an unfinished OSC 10/11 reply: color
+/// body bytes, optionally followed by the reply terminator.
+fn continues_host_color_reply(after_split_st: bool, data: &[u8]) -> bool {
+    if after_split_st {
+        return data.first() == Some(&b'\\');
+    }
+    for (index, &byte) in data.iter().enumerate() {
+        match byte {
+            0x07 => return true,
+            ESC => return matches!(data.get(index + 1), None | Some(b'\\')),
+            byte if plausible_host_color_tail_byte(byte) => {}
+            _ => return false,
+        }
+    }
+    true
 }
 
 fn plausible_control_string_tail(family: ControlStringFamily, buffer: &[u8]) -> bool {
@@ -3064,6 +3113,110 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn concat(chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        chunks.concat()
+    }
+
+    #[test]
+    fn truncated_host_color_reply_does_not_hold_later_input() {
+        // #5052: the link cut an OSC 11 reply and nothing else arrived.
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+        assert!(framer.push(b"\x1b]11;rgb:1e1e/1e1e").is_empty());
+        // Like the client loop: two idle flushes inside the reply window.
+        assert!(framer.flush_timeout().is_empty());
+        assert!(framer.flush_timeout().is_empty());
+
+        framer.age_host_reply_activity(HOST_REPLY_QUIET_WINDOW);
+        assert_eq!(
+            concat(framer.push(b"echo ok\r")),
+            b"echo ok\r",
+            "typed input after the reply window reaches the pane"
+        );
+        assert!(!framer.has_pending_input());
+        assert_eq!(concat(framer.push(b"ls")), b"ls");
+    }
+
+    #[test]
+    fn truncated_host_color_reply_is_abandoned_on_idle_after_reply_window() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+        assert!(framer.push(b"\x1b]11;rgb:1e1e/1e1e").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+
+        framer.age_host_reply_activity(HOST_REPLY_QUIET_WINDOW);
+        assert!(framer.flush_timeout().is_empty());
+        assert!(
+            !framer.has_pending_input(),
+            "the unfinished reply is no longer held after the window"
+        );
+        // The bounded tail discard may take one more read; input then flows.
+        let mut typed = framer.push(b"echo");
+        typed.extend(framer.flush_timeout());
+        typed.extend(framer.push(b"ls\r"));
+        assert_eq!(concat(typed), b"ls\r");
+    }
+
+    #[test]
+    fn host_color_reply_hold_is_bounded_in_size() {
+        let mut framer = RawInputByteFramer::default();
+        framer.host_color_query_sent();
+        let mut reply = b"\x1b]11;rgb:".to_vec();
+        reply.extend(std::iter::repeat_n(b'1', MAX_DISCARDED_CONTROL_TAIL_BYTES));
+        assert!(framer.push(&reply).is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert!(!framer.has_pending_input());
+    }
+
+    #[test]
+    fn host_color_reply_split_across_reads_still_assembles() {
+        let reply = b"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\";
+        for cut in 1..reply.len() {
+            let mut framer = RawInputByteFramer::default();
+            framer.host_color_query_sent();
+            let mut chunks = framer.push(&reply[..cut]);
+            // Once the OSC 10/11 prefix is in, idle flushes keep holding it.
+            if cut >= b"\x1b]11;".len() {
+                chunks.extend(framer.flush_timeout());
+                chunks.extend(framer.flush_timeout());
+            }
+            chunks.extend(framer.push(&reply[cut..]));
+            assert_eq!(chunks, vec![reply.to_vec()], "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn late_host_color_reply_tail_still_assembles_after_reply_window() {
+        for (head, tail) in [
+            (b"\x1b]11;rgb:1e1e/".as_slice(), b"1e1e/2e2e\x07".as_slice()),
+            (b"\x1b]10;rgb:ffff/ffff/ffff\x1b", b"\\"),
+        ] {
+            let mut framer = RawInputByteFramer::default();
+            framer.host_color_query_sent();
+            assert!(framer.push(head).is_empty());
+            assert!(framer.flush_timeout().is_empty());
+            framer.age_host_reply_activity(HOST_REPLY_QUIET_WINDOW);
+            let chunks = framer.push(tail);
+            assert_eq!(chunks.len(), 1, "tail {tail:?}");
+            assert!(matches!(
+                extract_one_event(&chunks[0]),
+                Some((RawInputEvent::HostDefaultColor { .. }, _))
+            ));
+        }
+    }
+
+    #[test]
+    fn unsolicited_partial_host_color_osc_does_not_hold_input() {
+        let mut framer = RawInputByteFramer::default();
+        assert!(framer.push(b"\x1b]11;rgb:1e1e/1e1e").is_empty());
+        assert!(framer.flush_timeout().is_empty());
+        assert!(!framer.has_pending_input());
+        let mut typed = framer.push(b"echo");
+        typed.extend(framer.flush_timeout());
+        typed.extend(framer.push(b"ls\r"));
+        assert_eq!(concat(typed), b"ls\r");
     }
 
     #[test]
