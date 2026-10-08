@@ -85,6 +85,20 @@ fn refresh_host_mouse_capture(enabled: bool, sgr_pixels: bool) {
     }
 }
 
+fn refresh_host_keyboard_protocol(
+    terminal_guard: &TerminalGuard,
+    report_all_keys: bool,
+    focus_reporting: bool,
+) {
+    if let Err(err) = terminal_guard.refresh_host_keyboard_protocol(
+        &mut io::stdout(),
+        report_all_keys,
+        focus_reporting,
+    ) {
+        warn!(err = %err, "failed to re-assert host keyboard protocol");
+    }
+}
+
 #[cfg(windows)]
 use terminal_setup::is_ssh_session;
 #[cfg(test)]
@@ -861,6 +875,11 @@ async fn run_client_loop(
                             state.mouse_capture_active,
                             host_sgr_pixels_active.load(Ordering::Acquire),
                         );
+                        refresh_host_keyboard_protocol(
+                            _terminal_guard,
+                            state.keyboard_report_all_active,
+                            false,
+                        );
                     }
                     let (outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
@@ -1122,6 +1141,11 @@ async fn run_client_loop(
                             state.mouse_capture_active,
                             host_sgr_pixels_active.load(Ordering::Acquire),
                         );
+                        refresh_host_keyboard_protocol(
+                            _terminal_guard,
+                            state.keyboard_report_all_active,
+                            false,
+                        );
                     }
                     let image_target = state
                         .shell
@@ -1237,6 +1261,14 @@ async fn run_client_loop(
                         host_sgr_pixels_active.load(Ordering::Acquire),
                     );
                 }
+                // A host that reset its modes (a reconnect or window reload)
+                // stops sending focus reports, so a resize is the one
+                // dependable trigger to restore them.
+                refresh_host_keyboard_protocol(
+                    _terminal_guard,
+                    state.keyboard_report_all_active,
+                    true,
+                );
                 state.reported_size = (new_cols, new_rows);
                 state.reported_cell_size = (cell_width_px, cell_height_px);
                 state.pixel_geometry_exact = pixel_geometry_exact;
