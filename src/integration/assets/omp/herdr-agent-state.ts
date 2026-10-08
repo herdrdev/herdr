@@ -160,6 +160,7 @@ function currentSessionRef(): Record<string, unknown> | undefined {
 }
 
 function reportSession(sessionStartSource = "startup"): Promise<void> {
+  currentSessionStartSource = sessionStartSource;
   const sessionRef = currentSessionRef();
   if (!sessionRef) {
     return Promise.resolve();

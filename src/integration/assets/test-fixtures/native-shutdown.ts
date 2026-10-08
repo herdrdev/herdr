@@ -1,5 +1,8 @@
 // Runs only in an owned test subprocess: real OS signals never reach bun:test.
 const [modulePath, scenario] = process.argv.slice(2);
+const switchRequested = new Promise<void>((resolve) => {
+  process.on("message", (message: any) => { if (message?.action === "switch") resolve(); });
+});
 const handlers = new Map<string, (event: any, ctx?: any) => unknown>();
 const { default: install } = await import(modulePath);
 install({ on: (name, handler) => handlers.set(name, handler), events: { on() {} } });
@@ -33,6 +36,7 @@ if (scenario === "reload") {
   await handlers.get("session_start")?.({ reason: "reload" }, ctx);
 }
 if (scenario === "switch") {
+  await switchRequested;
   sessionPath = "/tmp/herdr-interrupted-b.jsonl";
   const select = handlers.get("session_switch") ?? handlers.get("session_start");
   await select?.({ reason: "resume" }, ctx);

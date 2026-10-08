@@ -307,6 +307,67 @@ fn interruption_rejects_stale_foreign_and_unbound_reports() {
 }
 
 #[test]
+fn interrupted_session_switch_requires_explicit_selection_before_recovery() {
+    for (agent, label) in [(Agent::Pi, "pi"), (Agent::Omp, "omp")] {
+        let (mut app, pane_id, terminal_id) = adversarial_pane();
+        let source = format!("herdr:{label}");
+        let next_session = AgentSessionRef::path(
+            std::env::current_dir()
+                .unwrap()
+                .join("switched-session.jsonl")
+                .display()
+                .to_string(),
+        )
+        .unwrap();
+        detect(&mut app, pane_id, agent, Instant::now());
+        app.handle_app_event(AppEvent::AgentSessionReported {
+            pane_id,
+            source: source.clone(),
+            agent_label: label.into(),
+            seq: Some(99),
+            session_ref: Some(pi_session()),
+            session_start_source: Some("startup".into()),
+        });
+        app.handle_app_event(AppEvent::HookStateReported {
+            pane_id,
+            source: source.clone(),
+            agent_label: label.into(),
+            state: AgentState::Working,
+            message: None,
+            seq: Some(100),
+            session_ref: Some(pi_session()),
+        });
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                source.clone(),
+                label.into(),
+                Some(next_session.clone()),
+                Some(101),
+                None,
+            )
+            .is_none());
+        assert!(!terminal.report_agent_interruption(&source, label, next_session.clone(), 102));
+        assert!(terminal
+            .set_agent_session_ref_for_session_start(
+                source.clone(),
+                label.into(),
+                Some(next_session.clone()),
+                Some(103),
+                Some("resume".into()),
+            )
+            .is_some());
+        assert!(terminal.report_agent_interruption(&source, label, next_session.clone(), 104));
+        real_exit(&mut app, pane_id, agent, Instant::now());
+        assert_eq!(
+            captured_agent_session(&app, pane_id).unwrap().session_ref,
+            next_session
+        );
+        app.assert_invariants_for_test();
+    }
+}
+
+#[test]
 fn fresh_process_retires_interrupted_recovery_and_marks_session_dirty() {
     for agent in [Agent::Pi, Agent::Omp, Agent::Codex] {
         let start = Instant::now();

@@ -137,7 +137,7 @@ async function startRecordingServer(
   return requests;
 }
 
-async function nativeShutdownChild(integration: typeof integrations[number], scenario: string) {
+async function nativeShutdownChild(integration: typeof integrations[number], scenario: string, switchReady?: Promise<void>) {
   let ready!: (message: any) => void;
   const started = new Promise<any>((resolve) => { ready = resolve; });
   const child = Bun.spawn([
@@ -150,6 +150,9 @@ async function nativeShutdownChild(integration: typeof integrations[number], sce
     stdout: "ignore",
     stderr: "pipe",
     ipc(message) { if (message.ready) ready(message); },
+  });
+  void switchReady?.then(() => {
+    if (child.exitCode === null) child.send({ action: "switch" });
   });
   const status = await Promise.race([
     started,
@@ -245,10 +248,23 @@ for (const integration of integrations) {
     let acceptedPath: string | undefined;
     let recoveredPath: string | undefined;
     let rejections = 0;
+    let selectionSequence = 0;
+    let releaseSwitch!: () => void;
+    const staleStateSeen = new Promise<void>((resolve) => { releaseSwitch = resolve; });
     await startRecordingServer("native-switch", (request, socket) => {
-      if (request.method === "pane.report_agent") return false;
+      if (request.method === "pane.report_agent") {
+        releaseSwitch();
+        return false;
+      }
       if (request.method === "pane.report_agent_session") {
-        acceptedPath = request.params.agent_session_path;
+        // A live native hook requires an explicit selection to replace A
+        // with B; a bare session report may be acknowledged without applying.
+        const explicitSelection = ["startup", "new", "resume", "fork"].includes(request.params.session_start_source);
+        if (request.params.seq > selectionSequence &&
+            (acceptedPath === undefined || acceptedPath === request.params.agent_session_path || explicitSelection)) {
+          acceptedPath = request.params.agent_session_path;
+          selectionSequence = request.params.seq;
+        }
       }
       if (request.method === "pane.report_agent_interruption") {
         // Also prove an error response isn't mistaken for a successful ACK.
@@ -260,7 +276,7 @@ for (const integration of integrations) {
       }
       return true;
     });
-    const { child } = await nativeShutdownChild(integration, "switch");
+    const { child } = await nativeShutdownChild(integration, "switch", staleStateSeen);
     try {
       child.kill("SIGTERM");
       expect(await child.exited).toBe(0);
