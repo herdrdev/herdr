@@ -65,10 +65,12 @@ pub enum Agent {
     Letta,
     Maki,
     Muse,
+    Kcode,
+    Jcode,
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 26] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -93,9 +95,11 @@ impl Agent {
         Self::Letta,
         Self::Maki,
         Self::Muse,
+        Self::Kcode,
+        Self::Jcode,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 22] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -118,6 +122,8 @@ impl Agent {
         Self::Letta,
         Self::Maki,
         Self::Muse,
+        Self::Kcode,
+        Self::Jcode,
     ];
 }
 
@@ -147,6 +153,8 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Kcode => "kcode",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -182,6 +190,8 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Letta => "letta",
         Agent::Maki => "maki",
         Agent::Muse => "muse",
+        Agent::Kcode => "kcode",
+        Agent::Jcode => "jcode",
     }
 }
 
@@ -222,6 +232,8 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "letta" | "letta-code" | "letta code" => Some(Agent::Letta),
         "maki" => Some(Agent::Maki),
         "muse" | "muse-code" | "muse-cli" => Some(Agent::Muse),
+        "kcode" | "kcode-cli" | "kcode code" => Some(Agent::Kcode),
+        "jcode" | "jcode-cli" | "jcode code" => Some(Agent::Jcode),
         _ if is_muse_versioned_binary(name) => Some(Agent::Muse),
         _ => None,
     }

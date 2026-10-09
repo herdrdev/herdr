@@ -146,6 +146,8 @@ impl AgentSoundOverrides {
             Some(Agent::Letta) => self.letta,
             Some(Agent::Maki) => self.maki,
             Some(Agent::Muse) => self.muse,
+            Some(Agent::Kcode) => AgentSoundSetting::Default,
+            Some(Agent::Jcode) => AgentSoundSetting::Default,
             None => AgentSoundSetting::Default,
         }
     }
