@@ -30,7 +30,7 @@ impl App {
         target: &str,
     ) -> Result<(InteractionObservation, String), &'static str> {
         let resolved = self
-            .resolve_agent_target(target)
+            .resolve_terminal_target(target)
             .map_err(|_| "agent_not_found")?;
         let agent = self
             .agent_info(resolved.ws_idx, resolved.pane_id)
@@ -57,7 +57,7 @@ impl App {
         if !profiles::enabled() {
             return None;
         }
-        let resolved = self.resolve_agent_target(target).ok()?;
+        let resolved = self.resolve_terminal_target(target).ok()?;
         let agent = self.agent_info(resolved.ws_idx, resolved.pane_id)?;
         if agent.agent.as_deref() != Some("claude") || agent.agent_status != AgentStatus::Blocked {
             return None;
@@ -113,7 +113,7 @@ impl App {
             },
             |bytes| {
                 let resolved = self
-                    .resolve_agent_target(&params.expected.terminal_id)
+                    .resolve_terminal_target(&params.expected.terminal_id)
                     .map_err(|_| std::io::Error::other("agent target disappeared"))?;
                 let runtime = self
                     .lookup_runtime_sender(resolved.ws_idx, resolved.pane_id)

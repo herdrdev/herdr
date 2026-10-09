@@ -982,6 +982,8 @@ impl App {
 }
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod guarded_interaction;
     use super::*;
     use crate::config::Config;
     use crate::detect::{Agent, AgentState};
