@@ -486,6 +486,10 @@ impl PaneTerminal {
         self.ghostty.visible_ansi()
     }
 
+    pub(crate) fn interaction_snapshot(&self) -> Option<(String, String)> {
+        self.ghostty.interaction_snapshot()
+    }
+
     pub fn detection_text(&self) -> String {
         self.ghostty.detection_text()
     }
@@ -2149,6 +2153,20 @@ impl GhosttyPaneTerminal {
             .ok()
             .and_then(|core| ghostty_visible_ansi(&core).ok())
             .unwrap_or_default()
+    }
+
+    /// Bottom-buffer text and styles are read under one parser lock, independent of scroll.
+    pub(crate) fn interaction_snapshot(&self) -> Option<(String, String)> {
+        let mut core = self.core.lock().ok()?;
+        let text = ghostty_detection_text(&mut core).ok()?;
+        let lines = core
+            .terminal
+            .rows()
+            .ok()
+            .map(|r| usize::from(r).max(1))
+            .unwrap_or(DEFAULT_DETECTION_ROWS);
+        let ansi = ghostty_recent_ansi(&mut core, lines, false).ok()?;
+        Some((text, ansi))
     }
 
     pub fn detection_text(&self) -> String {

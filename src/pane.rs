@@ -3076,6 +3076,10 @@ impl PaneRuntime {
         self.terminal.visible_ansi()
     }
 
+    pub(crate) fn interaction_snapshot(&self) -> Option<(String, String)> {
+        self.terminal.interaction_snapshot()
+    }
+
     pub fn detection_text(&self) -> String {
         self.terminal.detection_text()
     }

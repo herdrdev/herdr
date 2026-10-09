@@ -1,152 +1,167 @@
-# Guarded agent interactions (prerequisite)
+# Guarded agent interactions (experimental prerequisite)
 
 The JSON runtime API adds `agent.interaction.get`, `agent.interaction.submit`,
-and `agent.interaction.receipt`. These methods are independent from raw
-`agent.send_keys` / `pane.send_text`, whose guarantees remain unchanged.
-The default configuration has no enabled native profile. An experimental
-Claude Code2.1.284 custom-entry profile can be enabled in an isolated test server with
-`HERDR_GUARDED_CLAUDE_PROFILE=2.1.284-numeric-v1-experimental`. This profile was derived from
-an owned real AskUserQuestion capture; terminal dispatch and the later custom
-entry phase still require controlled live verification.
+and `agent.interaction.receipt`. Default configuration enables no native
+interaction profile. Codex and unverified agent/version/layout combinations
+remain unsupported. Raw `agent.send_keys` and `pane.send_text` retain their
+existing guarantees.
 
-## Observation
+The opt-in `HERDR_GUARDED_CLAUDE_PROFILE=2.1.284-custom-v1-experimental` token
+is scoped to the owned Claude Code 2.1.284/default-style captures described below.
+Old `2.1.284-experimental` and `2.1.284-numeric-v1-experimental` tokens are disabled.
+This is an experimental profile, not a claim of general production readiness.
 
-`get` accepts `{ "target": "<terminal id or agent target>" }`. Its result type
-is `agent_interaction`, with an `observation`, `supported`, and
-`unsupported_reason`. Observation requires every field below:
+## Observation and payload binding
+
+`get` accepts `{ "target": "<terminal id or pane target>" }`. Result type
+`agent_interaction` contains `observation`, `supported`, `unsupported_reason`,
+and an optional typed `dialog` with profile, phase, question, option identities,
+selected option and supported actions.
 
 ```json
 {
   "terminal_id": "<exact terminal id>",
-  "server_instance_id": "<process incarnation>",
+  "server_instance_id": "<native server process incarnation>",
   "runtime_pid": 123,
-  "agent": "codex",
-  "agent_session": {"source":"<source>","agent":"codex","kind":"id","value":"<session id>"},
+  "agent": "claude",
+  "agent_session": {"source":"<source>","agent":"claude","kind":"id","value":"<session id>"},
   "state_change_seq": 42,
-  "content_digest": "<sha256 of full UTF-8 detection buffer>"
+  "content_digest": "<sha256 of complete UTF-8 detection text>",
+  "style_digest": "<sha256 of paired bottom-buffer ANSI>"
 }
 ```
 
-The digest covers the complete bottom-buffer detection text returned by the
-runtime, without line limit, trimming or normalization. It is not a semantic
-dialog digest. Missing runtime, agent or session identity returns an error.
-Process incarnation makes observations stale after cold restart or live handoff;
-runtime PID detects PTY replacement within one server process.
+Text and ANSI are collected under the same terminal-core mutex from the bottom
+buffer, independent of viewport scrolling. `content_digest` retains its text-only
+meaning. The additive `style_digest` field is optional for schema compatibility;
+this enabled profile requires it to equal the current style digest. Missing
+runtime/agent/session identity or snapshot access returns an error. Server
+incarnation and runtime PID invalidate observations across server or PTY changes.
 
-## Submit and payload binding
-
-`submit` accepts `operation_id`, `payload_digest`, `expected` (the exact
-observation), and one typed `action`:
+`submit` requires `operation_id`, `payload_digest`, the exact `expected`
+observation and one typed `action`:
 
 ```json
 {"type":"choose","option_id":"<native option id>"}
 {"type":"free_text","text":"<answer>"}
-{"type":"begin_custom","option_id":"<native custom-entry option id>"}
+{"type":"begin_custom","option_id":"choice-4"}
 {"type":"submit_custom","text":"<answer>","parent_operation_id":"<begin operation>"}
 ```
 
-Unknown action/parameter fields and raw keys are rejected. Operation IDs contain
-1..128 ASCII letters, digits, underscores or hyphens. Compute `payload_digest`
-as lowercase SHA-256 of compact UTF-8 serde JSON for
-`[operation_id, expected, action]`. Object key order must match the Rust
-structures (JSON Schema describes types but does not prescribe key order): observation keys appear in the order shown above; action
-starts with `type`, then `option_id`, or `text`, or `text` followed by
-`parent_operation_id`. Preserve strings exactly; do not normalize answers.
+The enum is shared; a profile admits only its explicitly supported actions.
+Unknown fields and raw keys are rejected. Operation IDs contain 1..128 ASCII
+letters, digits, underscores or hyphens. `payload_digest` is lowercase SHA-256
+of compact UTF-8 serde JSON `[operation_id, expected, action]`. Preserve the
+Rust declaration order shown above; optional `style_digest`, when present,
+follows `content_digest`. An absent optional field is omitted. Action order
+is `type`, then `option_id`, or `text`, or `text` then `parent_operation_id`.
+Do not normalize answer strings.
 
-The serialized app handler checks terminal/process/agent/session identity,
-`state_change_seq`, and current buffer digest before profile preparation and queue
-submission. The experimental Claude profile requires a blocked Claude agent,
-version banner2.1.284, a single checkbox question header, contiguous numbered
-rows1..4, exactly one selected row, the exact `Type something.` custom row,
-`5. Chat about this`, and the exact captured Enter/arrow/Escape footer.
-Unrecognized or altered layouts fail closed. `get` returns an optional `dialog`
-with profile, phase, question, option IDs/labels/custom flags, selected option,
-and supported actions. `begin_custom` only accepts the empty, unfocused custom
-row. The handler encodes one numeric4 key with the runtime keyboard encoder.
-Choose, free text and custom submission remain unsupported pending separate
-owned native consumption evidence and reviewed custom-phase dispatch.
+## Claude custom-entry contract
 
-## Persistent receipts and recovery
+The profile requires a blocked Claude agent and exact 2.1.284 banner, one checkbox
+question header, contiguous rows 1..4, one selected row, three suggestions,
+`Type something.` as custom row 4, lower rule, `5. Chat about this`, and exact
+captured footer. Wrapped, remapped, multi-question or unknown layouts reject.
+
+Initial phase `choose` supports only `begin_custom`. The empty, unfocused
+placeholder must have the captured inactive RGB 153/153/153 foreground. This
+styles check rejects a nonempty draft literally equal to `Type something.`,
+which is indistinguishable in plain text alone. Compilation produces exactly
+one numeric 4 key event through the runtime keyboard encoder, without Enter,
+arrows, waiting or retries.
+
+Phase `custom_entry` supports only `submit_custom`. It requires selected row 4,
+the captured `ctrl+g to edit in nano` footer, inverse first placeholder character
+and dim remaining placeholder characters. Filled, missing, indexed/altered or
+unknown placeholder styles reject. The current row is checked; an older empty
+row cannot supply style authority. These exact styles are version/theme scoped;
+other themes remain unsupported.
+
+Submission requires a successful `enqueued` parent receipt and its complete
+validated BeginCustom 4 request/dialog/input digest. Parent and child must have
+the same terminal, native server incarnation, runtime PID, agent/session,
+profile, question/options and exact blocked state sequence. The child expected
+text/style digests must match the current locked snapshot. Unknown, rejected,
+legacy, corrupt, wrong-owner, earlier-episode or changed-dialog parents reject.
+A server restart requires a fresh parent; there is no cross-incarnation shortcut.
+
+Custom text must be nonempty after trimming, at most 4096 UTF-8 bytes, and contain
+no control characters, including escape, newline, carriage return and DEL.
+The original text is preserved. Runtime bracketed paste must be enabled.
+Compilation uses native bracketed paste followed by one runtime-encoded Enter
+in one queue submission. Choose and FreeText remain unsupported. Queue acceptance
+is not answer acceptance; actual question resolution and literal transcript
+answer still require owned live verification for each candidate gate.
+
+## Durable receipts and one-child recovery
 
 `receipt` accepts `{ "operation_id": "<original operation id>" }`. Submit and
-receipt return result type `agent_interaction_receipt` with `receipt` containing
-`operation_id`, `payload_digest`, `outcome`, and optional `code`:
+receipt return `agent_interaction_receipt` with operation ID, payload digest,
+outcome and optional code:
 
-- `rejected`: validation/profile preparation refused; no queue submission.
-- `enqueued`: the PTY queue accepted one byte batch; not proof of delivery or agent acceptance.
-- `unknown_delivery`: a durable intent exists without reliable resolution, or queue submission failed.
+- `rejected`: validation refused before queue submission.
+- `enqueued`: one batch accepted by the PTY queue; no delivery/agent acceptance assertion.
+- `unknown_delivery`: durable intent without reliable resolution; never redispatch.
 
-An operation ID permanently binds one payload. Every later submit of that same
-payload returns its stored receipt or unresolved intent without validation or
-input. Another payload with the same ID is refused. Partial/corrupt journals and
-intent claims without valid data produce `interaction_journal_error` and must
-never be retried as a new dispatch. Missing receipt writes after input leave the
-prewritten intent. A client timeout must be reconciled using the original ID;
-creating another operation can duplicate the effect and is not recovery.
+An operation ID permanently binds one payload. Later identical submits return
+its stored receipt/intent without preparation or input; another payload with
+that ID is refused. A timeout must be reconciled with the original ID. Creating
+another operation ID is not recovery.
 
-Private journals live in the server session data directory under
-`interaction-operations-v1`, with directory entries and the prewrite intent
-synced before any send. This durability implementation is enabled on Unix only;
-other platforms reject dispatch until equivalent durable directory semantics are
-implemented. Journal path traversal uses descriptor-relative nofollow opens.
-Ancestors must belong to the current user or root and prohibit group/other
-writes, apart from root-owned sticky temporary directories. Root/operation
-directories require current-user ownership and mode0700; regular intent and
-receipt files require mode0600 and one link. Existing unsafe objects reject
-without being adopted or chmodded. Claims/files are created exclusively and
-reads reject symlinks and special files. No automatic journal expiry/deletion is provided because removing
-intents would permit retries to redispatch.
+Private Unix journals live under session data `interaction-operations-v1`.
+Exclusive directories/records are synced in this order: intent, complete
+`request.json` before preparation, then recognized request/dialog/input digest
+in `validated.json` before any queue submission. A custom child also exclusively
+claims `custom-child.json` in the parent's directory, containing the complete
+child request and synced before the child validated record and queue. Each
+parent can authorize at most one child. Partial claims consume the parent;
+unknown children and different child IDs cannot replay its input. Legacy intents
+cannot be retrofitted with validated context. Old journals are retained.
 
-The guard is **not atomic with external terminal writers or the agent**. PTY
-output can change asynchronously after observation, other clients/humans/raw
-write methods can interleave, and queue acceptance does not prove which dialog
-the agent consumed. Do not describe this as a transaction with agent intent.
+Filesystem access uses descriptor-relative nofollow opens. Ancestors must belong
+to the current user or root and prohibit group/other writes, apart from root-owned
+sticky temporary directories. Journal/operation directories require current-user
+ownership and 0700; regular records require 0600 and one link. Existing unsafe
+objects reject without chmod adoption. Symlinks, hardlinks and special files
+reject. Other platforms remain unsupported until equivalent durable semantics
+exist. No automatic expiry/deletion is provided because removing intents could
+permit dispatch again.
 
-## Native profile evidence still required
+## Evidence and limits
 
-Monster's installed Codex is 0.162.0 and Claude Code is 2.1.284. The matching
-official Codex source tag `rust-v0.162.0` resolves to
-`1f3f93473394b620b35580859b7e6864f7a9f948`.
-`codex-rs/tui/src/bottom_pane/request_user_input/mod.rs` provides a feasible narrow
-profile: single-question options, freeform composer and notes/custom entry.
-Source proves digit shortcuts immediately commit/advance, including the
-`None of the above` digit; that digit alone does not enter custom text.
-Navigating to that row and Enter/Tab enters notes. Submit bindings can be
-remapped, so any recognizer must require the exact supported footer.
+The old combined CSI-arrow/Enter batch was enqueued in an owned fixture but
+Claude reported that the user declined the question. That operation was never
+resent. Installed Select source shows empty custom input submission can call
+cancel; this is consistent with the decline, but prior key consumption is not
+proven.
 
-Before enabling this profile, capture owned real Codex detection buffers for
-choice/freeform/custom entry, verify native parsing against those buffers, verify
-exact input batching/paste boundaries against the running owned TUI, persist and
-check custom parent lineage, and confirm the agent actually receives the custom
-answer. Repository/source fixtures alone do not satisfy this evidence.
-Unverified Claude phases and all unverified shapes (multi-question, remapped, truncated menus, existing
-drafts, confirmation overlays) remain unsupported.
+The separate numeric 4 repair at `efd6a6181c61cb305361a13f6b5b8f8ec29d0bcb`
+passed independent native tests and one fresh owned live focus-only gate. A real
+custom row and editor footer were observed with the same Claude session; no text
+was submitted at that precursor. Native state sequence remained 3 while content
+changed, motivating exact sequence binding and paired style observation.
 
-### Experimental Claude custom-entry consumption repair
+Private installed Claude ELF evidence was read from version 2.1.284, SHA-256
+`5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f`:
+Select handler near 221679130 focuses an empty input on its numeric index;
+Epe near 221672585 renders placeholder/draft differently in styles;
+AskUserQuestion row near 226956446 defines its custom input; TextInput near
+214831325 and paste handler MWe defer Return while bracketed paste is pending.
+No proprietary source excerpt or live transcript is included in this repository.
+These source facts support compilation design; they are not live answer proof.
 
-The previous `2.1.284-experimental` enrollment token is disabled. Its combined
-CSI-arrow/Enter input was accepted by the PTY queue in an owned Claude fixture,
-but Claude then reported that the user declined the question. The exact cause
-of cancellation is uncertain; that operation must never be resent.
+Banner recognition is not native process-binary attestation. Native session
+metadata is recorded identity, and an earlier owned restore exposed stale
+session metadata; this patch does not fix that restore behavior. Enrollment
+therefore remains scoped to fresh owned fixtures with independently checked
+process/version/session lineage and no prior input. Generic draft safety and
+production readiness must not be inferred from the earlier text-only profile.
+`--source detection --format ansi` currently returns plain detection text in the
+existing read API; it cannot supply style proof. This handler's paired snapshot
+is a distinct internal path; real styled evidence used recent-unwrapped ANSI.
 
-The distinct `2.1.284-numeric-v1-experimental` token enables only `begin_custom`
-for the narrowly recognized initial menu with an empty, unfocused fourth
-`Type something.` row. Compilation produces one numeric `4` key event, encoded
-by the runtime's current keyboard protocol. It includes no Enter, arrows,
-waiting, or retries. The installed Claude Code 2.1.284 Select handler focuses
-an empty input row on its numeric index without submitting it. Source evidence
-was read privately from the exact owned installation (ELF SHA-256
-`5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f`,
-Select handler byte offset 221679130; AskUserQuestion input row near 226956446).
-Private evidence is supporting rationale, not native consumption acceptance.
-The new token remains experimental and requires an independent candidate gate
-and fresh owned live transition capture before any readiness claim.
-
-A validated request, complete recognized dialog, and encoded input digest are
-written exclusively and synced in `validated.json` before queue submission.
-This context is distinct from the durable intent and receipt; it proves only
-preflight validation. A crash leaves an unknown operation that cannot dispatch
-again, and a legacy intent cannot be retrofitted with validated context.
-`choose`, `free_text`, and `submit_custom` remain unsupported in this profile.
-Custom submission still requires a separately reviewed notes-phase recognizer,
-exact parent identity/question binding, and a durable one-child claim.
+The handler serializes native validation/journaling/queue submission, but PTY
+output and other terminal writers remain independent. They can change input
+state after the checked snapshot. No transaction with external agent intent,
+exact physical delivery, or exclusion of human/raw writers is claimed.

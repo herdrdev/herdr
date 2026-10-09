@@ -12,6 +12,9 @@ pub struct InteractionObservation {
     pub state_change_seq: u64,
     /// SHA-256 of the complete UTF-8 detection buffer, without trimming or normalization.
     pub content_digest: String,
+    /// SHA-256 of the paired locked bottom-buffer ANSI snapshot; required by styled profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

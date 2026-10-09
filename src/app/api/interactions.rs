@@ -21,6 +21,39 @@ fn validate_observation(
     if expected.content_digest != current.content_digest {
         return Err("stale_content");
     }
+    if expected.style_digest != current.style_digest {
+        return Err("stale_style");
+    }
+    Ok(())
+}
+
+fn validate_custom_parent(
+    parent: &journal::ValidatedLineage,
+    current: &InteractionObservation,
+    dialog: &InteractionDialog,
+) -> Result<(), &'static str> {
+    let expected = &parent.request.expected;
+    if expected.server_instance_id != current.server_instance_id
+        || expected.runtime_pid != current.runtime_pid
+        || expected.terminal_id != current.terminal_id
+        || expected.agent != current.agent
+        || expected.agent_session != current.agent_session
+    {
+        return Err("stale_custom_parent_identity");
+    }
+    if expected.state_change_seq != current.state_change_seq {
+        return Err("stale_custom_parent_state");
+    }
+    if expected.style_digest.is_none()
+        || !matches!(&parent.request.action,InteractionAction::BeginCustom { option_id } if option_id == "choice-4")
+        || parent.dialog.profile != dialog.profile
+        || parent.dialog.phase != "choose"
+        || dialog.phase != "custom_entry"
+        || parent.dialog.question != dialog.question
+        || parent.dialog.options != dialog.options
+    {
+        return Err("custom_parent_dialog_mismatch");
+    }
     Ok(())
 }
 
@@ -28,7 +61,7 @@ impl App {
     fn interaction_snapshot(
         &self,
         target: &str,
-    ) -> Result<(InteractionObservation, String), &'static str> {
+    ) -> Result<(InteractionObservation, String, String), &'static str> {
         let resolved = self
             .resolve_terminal_target(target)
             .map_err(|_| "agent_not_found")?;
@@ -38,7 +71,9 @@ impl App {
         let (runtime, _) = self
             .lookup_runtime(resolved.ws_idx, resolved.pane_id)
             .ok_or("agent_not_found")?;
-        let text = runtime.detection_text();
+        let (text, ansi) = runtime
+            .interaction_snapshot()
+            .ok_or("runtime_snapshot_unavailable")?;
         Ok((
             InteractionObservation {
                 terminal_id: agent.terminal_id,
@@ -48,12 +83,19 @@ impl App {
                 agent_session: agent.agent_session.ok_or("agent_session_unavailable")?,
                 state_change_seq: agent.state_change_seq,
                 content_digest: journal::digest(text.as_bytes()),
+                style_digest: Some(journal::digest(ansi.as_bytes())),
             },
             text,
+            ansi,
         ))
     }
 
-    fn interaction_dialog(&self, target: &str, text: &str) -> Option<InteractionDialog> {
+    fn interaction_dialog(
+        &self,
+        target: &str,
+        text: &str,
+        ansi: &str,
+    ) -> Option<InteractionDialog> {
         if !profiles::enabled() {
             return None;
         }
@@ -62,13 +104,13 @@ impl App {
         if agent.agent.as_deref() != Some("claude") || agent.agent_status != AgentStatus::Blocked {
             return None;
         }
-        profiles::recognize(text)
+        profiles::recognize(text, ansi)
     }
 
     pub(super) fn handle_interaction_get(&mut self, id: String, params: AgentTarget) -> String {
         match self.interaction_snapshot(&params.target) {
-            Ok((observation, text)) => {
-                let dialog = self.interaction_dialog(&params.target, &text);
+            Ok((observation, text, ansi)) => {
+                let dialog = self.interaction_dialog(&params.target, &text, &ansi);
                 encode_success(
                     id,
                     ResponseResult::AgentInteraction {
@@ -104,19 +146,51 @@ impl App {
                 // This handler runs on the app's serialized API dispatch. PTY output, humans and
                 // other terminal writers remain independent; this is an observation check, not
                 // a transaction with the external agent's input processing.
-                let (current, text) = self.interaction_snapshot(&params.expected.terminal_id)?;
+                let (current, text, ansi) =
+                    self.interaction_snapshot(&params.expected.terminal_id)?;
                 validate_observation(&params.expected, &current)?;
                 let dialog = self
-                    .interaction_dialog(&params.expected.terminal_id, &text)
+                    .interaction_dialog(&params.expected.terminal_id, &text, &ansi)
                     .ok_or("unsupported_interaction_profile")?;
-                let key = profiles::compile(&dialog, &params.action)?;
+                let compiled = profiles::compile(&dialog, &params.action)?;
                 let resolved = self
                     .resolve_terminal_target(&params.expected.terminal_id)
                     .map_err(|_| "agent_not_found")?;
                 let (runtime, _) = self
                     .lookup_runtime(resolved.ws_idx, resolved.pane_id)
                     .ok_or("agent_not_found")?;
-                Ok((runtime.encode_terminal_key(key.into()), dialog))
+                let bytes = match compiled {
+                    profiles::CompiledInteraction::Key(key) => {
+                        runtime.encode_terminal_key(key.into())
+                    }
+                    profiles::CompiledInteraction::CustomText(text) => {
+                        if !runtime.bracketed_paste_enabled() {
+                            return Err("bracketed_paste_required");
+                        }
+                        let InteractionAction::SubmitCustom {
+                            parent_operation_id,
+                            ..
+                        } = &params.action
+                        else {
+                            return Err("unsupported_interaction_phase");
+                        };
+                        let parent = journal::validated_lineage(&root, parent_operation_id)
+                            .map_err(|_| "invalid_custom_parent")?
+                            .ok_or("invalid_custom_parent")?;
+                        let receipt = journal::lookup(&root, parent_operation_id)
+                            .map_err(|_| "invalid_custom_parent")?
+                            .ok_or("invalid_custom_parent")?;
+                        if receipt.outcome != InteractionOutcome::Enqueued {
+                            return Err("unresolved_custom_parent");
+                        }
+                        validate_custom_parent(&parent, &current, &dialog)?;
+                        let bytes = crate::app::api_helpers::encode_api_submission(runtime, &text);
+                        journal::claim_custom_child(&root, parent_operation_id, &params)
+                            .map_err(|_| "custom_parent_consumed")?;
+                        bytes
+                    }
+                };
+                Ok((bytes, dialog))
             },
             |bytes| {
                 let resolved = self
@@ -172,6 +246,7 @@ mod tests {
             agent: "codex".into(),
             state_change_seq: 7,
             content_digest: journal::digest(b"dialog"),
+            style_digest: None,
             agent_session: AgentSessionInfo {
                 source: "hook".into(),
                 agent: "codex".into(),

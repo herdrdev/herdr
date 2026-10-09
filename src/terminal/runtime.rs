@@ -356,6 +356,10 @@ impl TerminalRuntime {
         self.0.visible_ansi()
     }
 
+    pub(crate) fn interaction_snapshot(&self) -> Option<(String, String)> {
+        self.0.interaction_snapshot()
+    }
+
     pub fn detection_text(&self) -> String {
         self.0.detection_text()
     }

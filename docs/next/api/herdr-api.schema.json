@@ -2322,6 +2322,13 @@
               "minimum": 0,
               "type": "integer"
             },
+            "style_digest": {
+              "description": "SHA-256 of the paired locked bottom-buffer ANSI snapshot; required by styled profiles.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "terminal_id": {
               "type": "string"
             }
@@ -8038,6 +8045,13 @@
               "format": "uint64",
               "minimum": 0,
               "type": "integer"
+            },
+            "style_digest": {
+              "description": "SHA-256 of the paired locked bottom-buffer ANSI snapshot; required by styled profiles.",
+              "type": [
+                "string",
+                "null"
+              ]
             },
             "terminal_id": {
               "type": "string"

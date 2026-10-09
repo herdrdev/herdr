@@ -105,8 +105,11 @@ struct PreparedInput {
     dialog: Option<InteractionDialog>,
 }
 
-#[cfg(all(test, unix))]
+#[cfg(unix)]
 pub(crate) fn validated_lineage(root: &Path, id: &str) -> io::Result<Option<ValidatedLineage>> {
+    if !valid_operation_id(id) {
+        return Err(io::Error::other("invalid parent operation ID"));
+    }
     let root = trusted::root(root, false)?;
     let Some(receipt) = lookup_in(&root, id)? else {
         return Ok(None);
@@ -117,6 +120,13 @@ pub(crate) fn validated_lineage(root: &Path, id: &str) -> io::Result<Option<Vali
         other => other?,
     };
     let lineage: ValidatedLineage = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    let request: InteractionSubmitParams =
+        serde_json::from_slice(&trusted::read(&dir, "request.json")?).map_err(io::Error::other)?;
+    if request != lineage.request {
+        return Err(io::Error::other(
+            "validated request does not match durable request",
+        ));
+    }
     if lineage.request.operation_id != id
         || lineage.request.payload_digest != receipt.payload_digest
         || payload_digest(&lineage.request)? != receipt.payload_digest
@@ -124,6 +134,37 @@ pub(crate) fn validated_lineage(root: &Path, id: &str) -> io::Result<Option<Vali
         return Err(io::Error::other("validated context does not match intent"));
     }
     Ok(Some(lineage))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn validated_lineage(_: &Path, _: &str) -> io::Result<Option<ValidatedLineage>> {
+    Err(io::Error::other("unsupported journal platform"))
+}
+
+/// The exclusive parent claim contains the complete child request and is synced before any
+/// child input. Partial failures permanently consume the parent and cannot authorize retries.
+pub(crate) fn claim_custom_child(
+    root: &Path,
+    parent_id: &str,
+    child: &InteractionSubmitParams,
+) -> io::Result<()> {
+    if !valid_operation_id(parent_id)
+        || parent_id == child.operation_id
+        || payload_digest(child)? != child.payload_digest
+    {
+        return Err(io::Error::other("invalid custom child request"));
+    }
+    #[cfg(unix)]
+    {
+        let root = trusted::root(root, false)?;
+        let dir = trusted::operation(&root, parent_id)?;
+        trusted::write(&dir, "custom-child.json", child)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        Err(io::Error::other("unsupported journal platform"))
+    }
 }
 
 pub(crate) fn dispatch_guarded(
@@ -135,6 +176,7 @@ pub(crate) fn dispatch_guarded(
     dispatch_inner(
         root,
         params,
+        true,
         || {
             prepare().map(|(bytes, dialog)| PreparedInput {
                 bytes,
@@ -155,6 +197,7 @@ pub(crate) fn dispatch(
     dispatch_inner(
         root,
         params,
+        false,
         || {
             prepare().map(|bytes| PreparedInput {
                 bytes,
@@ -170,6 +213,7 @@ pub(crate) fn dispatch(
 fn dispatch_inner(
     root: &Path,
     params: &InteractionSubmitParams,
+    retain_request: bool,
     prepare: impl FnOnce() -> Result<PreparedInput, &'static str>,
     send: impl FnOnce(Vec<u8>) -> io::Result<()>,
 ) -> io::Result<InteractionReceipt> {
@@ -211,6 +255,9 @@ fn dispatch_inner(
             code: Some("unresolved_intent".into()),
         };
         trusted::write(&dir, "intent.json", &intent)?;
+        if retain_request {
+            trusted::write(&dir, "request.json", params)?;
+        }
         let mut receipt = intent.clone();
         match prepare() {
             Err(code) => {
@@ -271,6 +318,7 @@ mod tests {
                 agent: "codex".into(),
                 state_change_seq: 1,
                 content_digest: digest(b"dialog"),
+                style_digest: None,
                 agent_session: AgentSessionInfo {
                     source: "hook".into(),
                     agent: "codex".into(),
@@ -380,6 +428,146 @@ mod tests {
                 .outcome,
             InteractionOutcome::UnknownDelivery
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interaction_custom_child_complete_request_and_parent_claim_precede_queue_and_survive_crash()
+    {
+        let root = root();
+        let mut parent = params();
+        parent.operation_id = "parent".into();
+        parent.action = InteractionAction::BeginCustom {
+            option_id: "choice-4".into(),
+        };
+        parent.payload_digest = payload_digest(&parent).unwrap();
+        let dialog = InteractionDialog {
+            profile: "test".into(),
+            phase: "choose".into(),
+            question: "Format?".into(),
+            options: vec![],
+            selected_option_id: "choice-1".into(),
+            supported_actions: vec![],
+        };
+        dispatch_guarded(
+            &root,
+            &parent,
+            || Ok((b"4".to_vec(), dialog.clone())),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let mut child = params();
+        child.operation_id = "child".into();
+        child.action = InteractionAction::SubmitCustom {
+            text: "A library circle.".into(),
+            parent_operation_id: "parent".into(),
+        };
+        child.payload_digest = payload_digest(&child).unwrap();
+        let crash = std::panic::catch_unwind(|| {
+            dispatch_guarded(
+                &root,
+                &child,
+                || {
+                    let dir =
+                        trusted::operation(&trusted::root(&root, false).unwrap(), "child").unwrap();
+                    let stored: InteractionSubmitParams =
+                        serde_json::from_slice(&trusted::read(&dir, "request.json").unwrap())
+                            .unwrap();
+                    assert_eq!(
+                        stored, child,
+                        "complete child request must exist even before parent claim"
+                    );
+                    claim_custom_child(&root, "parent", &child).unwrap();
+                    Ok((b"answer-paste-and-enter".to_vec(), dialog.clone()))
+                },
+                |bytes| {
+                    let dir = trusted::operation(&trusted::root(&root, false).unwrap(), "parent")
+                        .unwrap();
+                    let claim: InteractionSubmitParams =
+                        serde_json::from_slice(&trusted::read(&dir, "custom-child.json").unwrap())
+                            .unwrap();
+                    assert_eq!(claim, child);
+                    assert_eq!(
+                        validated_lineage(&root, "child")
+                            .unwrap()
+                            .unwrap()
+                            .encoded_input_digest,
+                        digest(&bytes)
+                    );
+                    panic!("crash after child queue marker");
+                },
+            )
+        });
+        assert!(crash.is_err());
+        assert_eq!(
+            dispatch_guarded(&root, &child, || panic!("prepare"), |_| panic!("resend"))
+                .unwrap()
+                .outcome,
+            InteractionOutcome::UnknownDelivery
+        );
+        child.operation_id = "other-child".into();
+        child.payload_digest = payload_digest(&child).unwrap();
+        let rejected = dispatch_guarded(
+            &root,
+            &child,
+            || {
+                claim_custom_child(&root, "parent", &child)
+                    .map_err(|_| "custom_parent_consumed")?;
+                panic!("claimed twice")
+            },
+            |_| panic!("second child queue"),
+        )
+        .unwrap();
+        assert_eq!(rejected.outcome, InteractionOutcome::Rejected);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interaction_partial_parent_claim_prevents_every_child_queue() {
+        let root = root();
+        let parent = params();
+        dispatch_guarded(
+            &root,
+            &parent,
+            || {
+                Ok((
+                    b"4".to_vec(),
+                    InteractionDialog {
+                        profile: "test".into(),
+                        phase: "choose".into(),
+                        question: "Format?".into(),
+                        options: vec![],
+                        selected_option_id: "choice-1".into(),
+                        supported_actions: vec![],
+                    },
+                ))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let dir = trusted::operation(&trusted::root(&root, false).unwrap(), &parent.operation_id)
+            .unwrap();
+        trusted::write(
+            &dir,
+            "custom-child.json",
+            &serde_json::json!({"partial":true}),
+        )
+        .unwrap();
+        let mut child = params();
+        child.operation_id = "child".into();
+        child.payload_digest = payload_digest(&child).unwrap();
+        let result = dispatch_guarded(
+            &root,
+            &child,
+            || {
+                assert!(operation_dir(&root, "child").join("request.json").exists());
+                claim_custom_child(&root, &parent.operation_id, &child)
+                    .map_err(|_| "custom_parent_consumed")?;
+                panic!("claimed partial parent")
+            },
+            |_| panic!("queued partial parent"),
+        )
+        .unwrap();
+        assert_eq!(result.outcome, InteractionOutcome::Rejected);
+        assert!(validated_lineage(&root, "child").unwrap().is_none());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
