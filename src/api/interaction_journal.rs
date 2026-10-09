@@ -1,6 +1,8 @@
 //! Durable, at-most-once dispatch intent. Receipts deliberately distinguish queue acceptance
 //! from agent acceptance. A crash anywhere after claiming an operation leaves an unknown result.
-use crate::api::schema::{InteractionOutcome, InteractionReceipt, InteractionSubmitParams};
+use crate::api::schema::{
+    InteractionDialog, InteractionOutcome, InteractionReceipt, InteractionSubmitParams,
+};
 use sha2::{Digest, Sha256};
 use std::{fs, io, path::Path};
 
@@ -88,12 +90,87 @@ pub(crate) fn lookup(root: &Path, id: &str) -> io::Result<Option<InteractionRece
     }
 }
 
-/// Caller must serialize runtime validation and queue submission. No raw byte API is exposed
-/// publicly: `prepare` must verify a native profile and compile a typed action itself.
+/// Validated preflight context is a separate durable record, written only after the exact
+/// observation and native dialog have been checked and before any queue submission. It is
+/// not delivery proof. Old intents cannot be upgraded into parent custom-entry authority.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ValidatedLineage {
+    pub request: InteractionSubmitParams,
+    pub dialog: InteractionDialog,
+    pub encoded_input_digest: String,
+}
+struct PreparedInput {
+    bytes: Vec<u8>,
+    dialog: Option<InteractionDialog>,
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn validated_lineage(root: &Path, id: &str) -> io::Result<Option<ValidatedLineage>> {
+    let root = trusted::root(root, false)?;
+    let Some(receipt) = lookup_in(&root, id)? else {
+        return Ok(None);
+    };
+    let dir = trusted::operation(&root, id)?;
+    let bytes = match trusted::read(&dir, "validated.json") {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        other => other?,
+    };
+    let lineage: ValidatedLineage = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if lineage.request.operation_id != id
+        || lineage.request.payload_digest != receipt.payload_digest
+        || payload_digest(&lineage.request)? != receipt.payload_digest
+    {
+        return Err(io::Error::other("validated context does not match intent"));
+    }
+    Ok(Some(lineage))
+}
+
+pub(crate) fn dispatch_guarded(
+    root: &Path,
+    params: &InteractionSubmitParams,
+    prepare: impl FnOnce() -> Result<(Vec<u8>, InteractionDialog), &'static str>,
+    send: impl FnOnce(Vec<u8>) -> io::Result<()>,
+) -> io::Result<InteractionReceipt> {
+    dispatch_inner(
+        root,
+        params,
+        || {
+            prepare().map(|(bytes, dialog)| PreparedInput {
+                bytes,
+                dialog: Some(dialog),
+            })
+        },
+        send,
+    )
+}
+
+#[cfg(test)]
 pub(crate) fn dispatch(
     root: &Path,
     params: &InteractionSubmitParams,
     prepare: impl FnOnce() -> Result<Vec<u8>, &'static str>,
+    send: impl FnOnce(Vec<u8>) -> io::Result<()>,
+) -> io::Result<InteractionReceipt> {
+    dispatch_inner(
+        root,
+        params,
+        || {
+            prepare().map(|bytes| PreparedInput {
+                bytes,
+                dialog: None,
+            })
+        },
+        send,
+    )
+}
+
+/// Caller must serialize runtime validation and queue submission. No raw byte API is exposed
+/// publicly: `prepare` must verify a native profile and compile a typed action itself.
+fn dispatch_inner(
+    root: &Path,
+    params: &InteractionSubmitParams,
+    prepare: impl FnOnce() -> Result<PreparedInput, &'static str>,
     send: impl FnOnce(Vec<u8>) -> io::Result<()>,
 ) -> io::Result<InteractionReceipt> {
     if !crate::platform::DURABLE_INTERACTION_JOURNAL_SUPPORTED {
@@ -140,13 +217,27 @@ pub(crate) fn dispatch(
                 receipt.outcome = InteractionOutcome::Rejected;
                 receipt.code = Some(code.into());
             }
-            Ok(bytes) => match send(bytes) {
-                Ok(()) => {
-                    receipt.outcome = InteractionOutcome::Enqueued;
-                    receipt.code = None;
+            Ok(prepared) => {
+                if let Some(dialog) = prepared.dialog {
+                    // Exclusive durable write: failure leaves unknown intent and sends nothing.
+                    trusted::write(
+                        &dir,
+                        "validated.json",
+                        &ValidatedLineage {
+                            request: params.clone(),
+                            dialog,
+                            encoded_input_digest: digest(&prepared.bytes),
+                        },
+                    )?;
                 }
-                Err(_) => receipt.code = Some("queue_submission_failed".into()),
-            },
+                match send(prepared.bytes) {
+                    Ok(()) => {
+                        receipt.outcome = InteractionOutcome::Enqueued;
+                        receipt.code = None;
+                    }
+                    Err(_) => receipt.code = Some("queue_submission_failed".into()),
+                }
+            }
         }
         // Never overwrite a prior result. Even receipt-write failure leaves the durable intent,
         // so the operation can only be queried/reconciled, never submitted again.
@@ -193,6 +284,103 @@ mod tests {
         };
         p.payload_digest = payload_digest(&p).unwrap();
         p
+    }
+    #[test]
+    fn interaction_guarded_lineage_precedes_queue_and_crash_cannot_retrofit_or_resend() {
+        let root = root();
+        let p = params();
+        let dialog = InteractionDialog {
+            profile: "test-native".into(),
+            phase: "choose".into(),
+            question: "What format?".into(),
+            options: vec![],
+            selected_option_id: "choice-1".into(),
+            supported_actions: vec![],
+        };
+        let crash = std::panic::catch_unwind(|| {
+            dispatch_guarded(
+                &root,
+                &p,
+                || Ok((b"4".to_vec(), dialog.clone())),
+                |_| {
+                    let saved = validated_lineage(&root, &p.operation_id).unwrap().unwrap();
+                    assert_eq!(saved.request, p);
+                    assert_eq!(saved.dialog, dialog);
+                    assert_eq!(saved.encoded_input_digest, digest(b"4"));
+                    assert_eq!(
+                        lookup(&root, &p.operation_id).unwrap().unwrap().outcome,
+                        InteractionOutcome::UnknownDelivery
+                    );
+                    panic!("crash after validated prewrite");
+                },
+            )
+        });
+        assert!(crash.is_err());
+        assert_eq!(
+            dispatch_guarded(&root, &p, || panic!("prepare"), |_| panic!("resend"))
+                .unwrap()
+                .outcome,
+            InteractionOutcome::UnknownDelivery
+        );
+        fs::remove_dir_all(root).unwrap();
+        let old_root = self::root();
+        let _ = std::panic::catch_unwind(|| {
+            dispatch(&old_root, &p, || Ok(vec![13]), |_| panic!("legacy intent"))
+        });
+        assert!(validated_lineage(&old_root, &p.operation_id)
+            .unwrap()
+            .is_none());
+        let _ =
+            dispatch_guarded(&old_root, &p, || panic!("retrofit"), |_| panic!("resend")).unwrap();
+        assert!(validated_lineage(&old_root, &p.operation_id)
+            .unwrap()
+            .is_none());
+        fs::remove_dir_all(old_root).unwrap();
+    }
+    #[test]
+    fn interaction_preexisting_validated_record_prevents_queue_and_remains_unknown() {
+        let root = root();
+        let p = params();
+        let result = dispatch_guarded(
+            &root,
+            &p,
+            || {
+                let dir =
+                    trusted::operation(&trusted::root(&root, false).unwrap(), &p.operation_id)
+                        .unwrap();
+                trusted::write(
+                    &dir,
+                    "validated.json",
+                    &serde_json::json!({"malformed":true}),
+                )
+                .unwrap();
+                Ok((
+                    b"4".to_vec(),
+                    InteractionDialog {
+                        profile: "test-native".into(),
+                        phase: "choose".into(),
+                        question: "What format?".into(),
+                        options: vec![],
+                        selected_option_id: "choice-1".into(),
+                        supported_actions: vec![],
+                    },
+                ))
+            },
+            |_| panic!("queue after existing record"),
+        );
+        assert!(result.is_err());
+        assert!(validated_lineage(&root, &p.operation_id).is_err());
+        assert_eq!(
+            lookup(&root, &p.operation_id).unwrap().unwrap().outcome,
+            InteractionOutcome::UnknownDelivery
+        );
+        assert_eq!(
+            dispatch_guarded(&root, &p, || panic!("prepare"), |_| panic!("resend"))
+                .unwrap()
+                .outcome,
+            InteractionOutcome::UnknownDelivery
+        );
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn interaction_journal_intent_precedes_send_and_retry_never_sends() {

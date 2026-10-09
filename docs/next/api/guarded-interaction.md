@@ -4,8 +4,8 @@ The JSON runtime API adds `agent.interaction.get`, `agent.interaction.submit`,
 and `agent.interaction.receipt`. These methods are independent from raw
 `agent.send_keys` / `pane.send_text`, whose guarantees remain unchanged.
 The default configuration has no enabled native profile. An experimental
-Claude Code2.1.284 choice profile can be enabled in an isolated test server with
-`HERDR_GUARDED_CLAUDE_PROFILE=2.1.284-experimental`. This profile was derived from
+Claude Code2.1.284 custom-entry profile can be enabled in an isolated test server with
+`HERDR_GUARDED_CLAUDE_PROFILE=2.1.284-numeric-v1-experimental`. This profile was derived from
 an owned real AskUserQuestion capture; terminal dispatch and the later custom
 entry phase still require controlled live verification.
 
@@ -61,10 +61,10 @@ rows1..4, exactly one selected row, the exact `Type something.` custom row,
 `5. Chat about this`, and the exact captured Enter/arrow/Escape footer.
 Unrecognized or altered layouts fail closed. `get` returns an optional `dialog`
 with profile, phase, question, option IDs/labels/custom flags, selected option,
-and supported actions. `choose` only accepts a suggestion; `begin_custom` only
-accepts the custom row. The handler compiles arrow navigation and Enter as one
-queue batch. Free text and custom submission remain unsupported pending an
-owned custom-phase capture and durable parent-lineage validation.
+and supported actions. `begin_custom` only accepts the empty, unfocused custom
+row. The handler encodes one numeric4 key with the runtime keyboard encoder.
+Choose, free text and custom submission remain unsupported pending separate
+owned native consumption evidence and reviewed custom-phase dispatch.
 
 ## Persistent receipts and recovery
 
@@ -121,3 +121,32 @@ check custom parent lineage, and confirm the agent actually receives the custom
 answer. Repository/source fixtures alone do not satisfy this evidence.
 Unverified Claude phases and all unverified shapes (multi-question, remapped, truncated menus, existing
 drafts, confirmation overlays) remain unsupported.
+
+### Experimental Claude custom-entry consumption repair
+
+The previous `2.1.284-experimental` enrollment token is disabled. Its combined
+CSI-arrow/Enter input was accepted by the PTY queue in an owned Claude fixture,
+but Claude then reported that the user declined the question. The exact cause
+of cancellation is uncertain; that operation must never be resent.
+
+The distinct `2.1.284-numeric-v1-experimental` token enables only `begin_custom`
+for the narrowly recognized initial menu with an empty, unfocused fourth
+`Type something.` row. Compilation produces one numeric `4` key event, encoded
+by the runtime's current keyboard protocol. It includes no Enter, arrows,
+waiting, or retries. The installed Claude Code 2.1.284 Select handler focuses
+an empty input row on its numeric index without submitting it. Source evidence
+was read privately from the exact owned installation (ELF SHA-256
+`5cd90aabd83f8a15136c35aa37bb1d92b348993573316643dc3fe4e04afbf88f`,
+Select handler byte offset 221679130; AskUserQuestion input row near 226956446).
+Private evidence is supporting rationale, not native consumption acceptance.
+The new token remains experimental and requires an independent candidate gate
+and fresh owned live transition capture before any readiness claim.
+
+A validated request, complete recognized dialog, and encoded input digest are
+written exclusively and synced in `validated.json` before queue submission.
+This context is distinct from the durable intent and receipt; it proves only
+preflight validation. A crash leaves an unknown operation that cannot dispatch
+again, and a legacy intent cannot be retrofitted with validated context.
+`choose`, `free_text`, and `submit_custom` remain unsupported in this profile.
+Custom submission still requires a separately reviewed notes-phase recognizer,
+exact parent identity/question binding, and a durable one-child claim.

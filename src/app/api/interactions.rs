@@ -97,7 +97,7 @@ impl App {
         params: InteractionSubmitParams,
     ) -> String {
         let root = crate::session::data_dir().join("interaction-operations-v1");
-        let receipt = journal::dispatch(
+        let receipt = journal::dispatch_guarded(
             &root,
             &params,
             || {
@@ -109,7 +109,14 @@ impl App {
                 let dialog = self
                     .interaction_dialog(&params.expected.terminal_id, &text)
                     .ok_or("unsupported_interaction_profile")?;
-                profiles::compile(&dialog, &params.action)
+                let key = profiles::compile(&dialog, &params.action)?;
+                let resolved = self
+                    .resolve_terminal_target(&params.expected.terminal_id)
+                    .map_err(|_| "agent_not_found")?;
+                let (runtime, _) = self
+                    .lookup_runtime(resolved.ws_idx, resolved.pane_id)
+                    .ok_or("agent_not_found")?;
+                Ok((runtime.encode_terminal_key(key.into()), dialog))
             },
             |bytes| {
                 let resolved = self

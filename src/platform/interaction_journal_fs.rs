@@ -1,5 +1,4 @@
 use crate::api::interaction_journal::digest;
-use crate::api::schema::InteractionReceipt;
 use std::ffi::CString;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::fs::MetadataExt;
@@ -111,7 +110,11 @@ pub(crate) fn read(dir: &fs::File, filename: &str) -> io::Result<Vec<u8>> {
     file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
     Ok(bytes)
 }
-pub(crate) fn write(dir: &fs::File, filename: &str, value: &InteractionReceipt) -> io::Result<()> {
+pub(crate) fn write(
+    dir: &fs::File,
+    filename: &str,
+    value: &impl serde::Serialize,
+) -> io::Result<()> {
     let mut file = open(dir, filename.as_ref(), false, true)?;
     validate(&file, false, true)?;
     file.write_all(&serde_json::to_vec(value).map_err(io::Error::other)?)?;

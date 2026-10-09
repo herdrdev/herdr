@@ -4,7 +4,8 @@ use crate::api::schema::{InteractionAction, InteractionDialog, InteractionOption
 const FOOTER: &str = "Enter to select · ↑/↓ to navigate · Esc to cancel";
 
 pub(super) fn enabled() -> bool {
-    std::env::var("HERDR_GUARDED_CLAUDE_PROFILE").as_deref() == Ok("2.1.284-experimental")
+    std::env::var("HERDR_GUARDED_CLAUDE_PROFILE").as_deref()
+        == Ok("2.1.284-numeric-v1-experimental")
 }
 fn rule(line: &str) -> bool {
     let line = line.trim();
@@ -101,23 +102,25 @@ pub(super) fn recognize(text: &str) -> Option<InteractionDialog> {
     if options.len() != 4 || !lower_rule || !chat {
         return None;
     }
+    if selected == Some(4) {
+        // A focused custom row is a different phase, not an empty initial menu.
+        return None;
+    }
     Some(InteractionDialog {
-        profile: "claude-2.1.284-experimental".into(),
+        profile: "claude-2.1.284-numeric-v1-experimental".into(),
         phase: "choose".into(),
         question: question.into(),
         options,
         selected_option_id: format!("choice-{}", selected?),
-        supported_actions: vec!["choose".into(), "begin_custom".into()],
+        supported_actions: vec!["begin_custom".into()],
     })
 }
 pub(super) fn compile(
     dialog: &InteractionDialog,
     action: &InteractionAction,
-) -> Result<Vec<u8>, &'static str> {
+) -> Result<crossterm::event::KeyEvent, &'static str> {
     let option_id = match action {
-        InteractionAction::Choose { option_id } | InteractionAction::BeginCustom { option_id } => {
-            option_id
-        }
+        InteractionAction::BeginCustom { option_id } => option_id,
         _ => return Err("unsupported_interaction_phase"),
     };
     let target = dialog
@@ -128,22 +131,16 @@ pub(super) fn compile(
     if dialog.options[target].custom != matches!(action, InteractionAction::BeginCustom { .. }) {
         return Err("wrong_option_kind");
     }
-    let selected = dialog
-        .options
-        .iter()
-        .position(|o| o.option_id == dialog.selected_option_id)
-        .ok_or("unknown_selection")?;
-    let mut bytes = Vec::new();
-    let key = if target < selected {
-        b"\x1b[A"
-    } else {
-        b"\x1b[B"
-    };
-    for _ in 0..target.abs_diff(selected) {
-        bytes.extend_from_slice(key);
+    // Claude 2.1.284's Select handler recognizes a numeric index directly. Empty input
+    // rows focus instead of submitting. Never add Enter: it would submit/cancel the input.
+    // The runtime encoder applies the current terminal keyboard protocol to this one key.
+    if dialog.phase != "choose" || dialog.selected_option_id == "choice-4" {
+        return Err("unsupported_interaction_phase");
     }
-    bytes.push(b'\r');
-    Ok(bytes)
+    Ok(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char(char::from(b'1' + target as u8)),
+        crossterm::event::KeyModifiers::NONE,
+    ))
 }
 #[cfg(test)]
 mod tests {
@@ -162,7 +159,10 @@ mod tests {
                 }
             )
             .unwrap(),
-            b"\x1b[B\x1b[B\x1b[B\r"
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('4'),
+                crossterm::event::KeyModifiers::NONE
+            )
         );
         assert_eq!(
             compile(
@@ -170,9 +170,8 @@ mod tests {
                 &InteractionAction::Choose {
                     option_id: "choice-2".into()
                 }
-            )
-            .unwrap(),
-            b"\x1b[B\r"
+            ),
+            Err("unsupported_interaction_phase")
         );
         assert!(compile(
             &dialog,
@@ -201,6 +200,7 @@ mod tests {
             format!("{c}❯ user prompt"),
             c.replace("What format?", "What format?\nextra prompt"),
             c.replace("  5. Chat about this", "❯ 5. Chat about this"),
+            c.replace("❯ 1.", "  1.").replace("  4.", "❯ 4."),
         ] {
             assert!(recognize(&bad).is_none(), "accepted {bad}");
         }
