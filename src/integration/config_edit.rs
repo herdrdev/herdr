@@ -399,6 +399,9 @@ pub(crate) fn remove_hermes_plugin_enabled(content: &str) -> String {
     update_hermes_enabled_plugin(content, false)
 }
 
+/// Edits supported flat `plugins` and mapped `plugins.enabled` sequences.
+/// Unrelated sibling entries and comments are retained, and repeating the same
+/// enable or disable operation leaves the result unchanged.
 pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> String {
     let trailing_newline = content.ends_with('\n');
     let mut lines: Vec<String> = content.lines().map(str::to_string).collect();
@@ -416,126 +419,167 @@ pub(crate) fn update_hermes_enabled_plugin(content: &str, enabled: bool) -> Stri
 
     let plugins_end =
         next_top_level_yaml_key_index(&lines, plugins_index + 1).unwrap_or(lines.len());
-    let plugins_inline_items = yaml_key_value_at_indent(&lines[plugins_index], 0, "plugins")
+    let first_child =
+        (plugins_index + 1..plugins_end).find(|&index| yaml_indent(&lines[index]).is_some());
+    // A list under disabled (or another mapping member) is not the flat plugins
+    // list. Classify the owner's first child before looking for sequence items.
+    let flat_sequence =
+        first_child.is_some_and(|index| yaml_list_item_value(&lines[index]).is_some());
+    let mapping_indent = first_child
+        .and_then(|index| yaml_indent(&lines[index]))
+        .filter(|&indent| indent > 0)
+        .unwrap_or(2);
+    let enabled_index = (!flat_sequence)
+        .then(|| {
+            (plugins_index + 1..plugins_end)
+                .find(|&index| yaml_key_at_indent(&lines[index], mapping_indent) == Some("enabled"))
+        })
+        .flatten();
+    let plugins_flow = yaml_key_value_at_indent(&lines[plugins_index], 0, "plugins")
         .and_then(yaml_flow_sequence_items);
-    let enabled_index = lines[plugins_index + 1..plugins_end]
-        .iter()
-        .position(|line| yaml_key_at_indent(line, 2) == Some("enabled"))
-        .map(|offset| plugins_index + 1 + offset);
-    let flat_list_start = lines[plugins_index + 1..plugins_end]
-        .iter()
-        .position(|line| yaml_list_item_value_at_indent(line, 2).is_some())
-        .map(|offset| plugins_index + 1 + offset);
 
-    if let Some(enabled_index) = enabled_index {
-        if let Some(mut items) = yaml_key_value_at_indent(&lines[enabled_index], 2, "enabled")
-            .and_then(yaml_flow_sequence_items)
-        {
-            let existing_item_index = items
-                .iter()
-                .position(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
-
-            match (enabled, existing_item_index) {
-                (true, Some(_)) | (false, None) => return content.to_string(),
-                (true, None) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
-                (false, Some(index)) => {
-                    items.remove(index);
-                }
-            }
-
-            let comment = yaml_inline_comment(&lines[enabled_index]);
-            let replacement = hermes_enabled_plugin_lines(&items, comment);
-            lines.splice(enabled_index..enabled_index + 1, replacement);
+    let (key_index, key_indent, key, flow_items) = if let Some(index) = enabled_index {
+        let items = yaml_key_value_at_indent(&lines[index], mapping_indent, "enabled")
+            .and_then(yaml_flow_sequence_items);
+        (index, mapping_indent, "enabled", items)
+    } else if flat_sequence || plugins_flow.is_some() {
+        (plugins_index, 0, "plugins", plugins_flow)
+    } else {
+        if enabled {
+            let indent = " ".repeat(mapping_indent);
+            lines.insert(plugins_index + 1, format!("{indent}enabled:"));
+            lines.insert(
+                plugins_index + 2,
+                format!("{indent}  - {HERMES_PLUGIN_INSTALL_NAME}"),
+            );
             return join_yaml_lines(lines, trailing_newline);
         }
+        return content.to_string();
+    };
 
-        let list_start = enabled_index + 1;
-        let list_end = lines[list_start..plugins_end]
+    if let Some(mut items) = flow_items {
+        let contains_plugin = items
             .iter()
-            .position(|line| {
-                yaml_indent(line).is_some_and(|indent| indent <= 2) && yaml_key_name(line).is_some()
+            .any(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
+        match (enabled, contains_plugin) {
+            (true, true) | (false, false) => return content.to_string(),
+            (true, false) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
+            (false, true) => {
+                items.retain(|item| yaml_scalar_value(item) != HERMES_PLUGIN_INSTALL_NAME)
+            }
+        }
+        let comment = yaml_inline_comment(&lines[key_index]);
+        let header = strip_yaml_inline_comment(&lines[key_index]).trim_end();
+        let content = yaml_key_value_at_indent(header, key_indent, key)
+            .map(yaml_node_content)
+            .unwrap_or_default();
+        let prefix = header[..header.len() - content.len()].trim_end();
+        let replacement = yaml_sequence_lines(prefix, key_indent, &items, comment);
+        // Only the header belongs to a flow sequence. Keep following comments.
+        lines.splice(key_index..key_index + 1, replacement);
+    } else {
+        let sequence = YamlBlockSequence::new(&lines, key_index, key_indent, plugins_end);
+        let matches: Vec<_> = sequence
+            .items
+            .iter()
+            .filter(|item| {
+                yaml_list_item_matches_at_indent(
+                    &lines[(*item).clone()],
+                    sequence.indent,
+                    HERMES_PLUGIN_INSTALL_NAME,
+                )
             })
-            .map(|offset| list_start + offset)
-            .unwrap_or(plugins_end);
-        let existing_item_index = lines[list_start..list_end]
-            .iter()
-            .position(|line| yaml_list_item_matches(line, HERMES_PLUGIN_INSTALL_NAME))
-            .map(|offset| list_start + offset);
-
-        match (enabled, existing_item_index) {
-            (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(list_start, "    - herdr-agent-state".to_string()),
-            (false, Some(index)) => {
-                lines.remove(index);
+            .cloned()
+            .collect();
+        match (enabled, matches.is_empty()) {
+            (true, false) | (false, true) => return content.to_string(),
+            (true, true) => lines.insert(
+                key_index + 1,
+                format!(
+                    "{}- {HERMES_PLUGIN_INSTALL_NAME}",
+                    " ".repeat(sequence.indent)
+                ),
+            ),
+            (false, false) => {
+                // Preserve both node properties and the sequence type, so aliases
+                // still refer to an empty list and reinstall can reuse the header.
+                if matches.len() == sequence.items.len()
+                    && yaml_key_value_at_indent(&lines[key_index], key_indent, key)
+                        .is_some_and(|value| yaml_node_content(value).is_empty())
+                {
+                    lines[key_index] = with_yaml_inline_comment(
+                        format!(
+                            "{} []",
+                            strip_yaml_inline_comment(&lines[key_index]).trim_end()
+                        ),
+                        yaml_inline_comment(&lines[key_index]),
+                    );
+                }
+                for item in matches.into_iter().rev() {
+                    for index in item.rev() {
+                        // Remove the indicator and scalar, retaining standalone
+                        // comments and blank lines surrounding the matched item.
+                        if yaml_indent(&lines[index]).is_some() {
+                            lines.remove(index);
+                        }
+                    }
+                }
             }
         }
-        return join_yaml_lines(lines, trailing_newline);
     }
-
-    if let Some(mut items) = plugins_inline_items {
-        let existing_item_index = items
-            .iter()
-            .position(|item| yaml_scalar_value(item) == HERMES_PLUGIN_INSTALL_NAME);
-
-        match (enabled, existing_item_index) {
-            (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => items.insert(0, HERMES_PLUGIN_INSTALL_NAME.to_string()),
-            (false, Some(index)) => {
-                items.remove(index);
-            }
-        }
-
-        let comment = yaml_inline_comment(&lines[plugins_index]);
-        let replacement = hermes_flat_plugin_lines(&items, comment);
-        lines.splice(plugins_index..plugins_end, replacement);
-        return join_yaml_lines(lines, trailing_newline);
-    }
-
-    if let Some(flat_list_start) = flat_list_start {
-        let existing_item_index = lines[plugins_index + 1..plugins_end]
-            .iter()
-            .position(|line| yaml_list_item_matches_at_indent(line, 2, HERMES_PLUGIN_INSTALL_NAME))
-            .map(|offset| plugins_index + 1 + offset);
-
-        match (enabled, existing_item_index) {
-            (true, Some(_)) | (false, None) => return content.to_string(),
-            (true, None) => lines.insert(flat_list_start, "  - herdr-agent-state".to_string()),
-            (false, Some(index)) => {
-                lines.remove(index);
-            }
-        }
-        return join_yaml_lines(lines, trailing_newline);
-    }
-
-    if enabled {
-        lines.insert(plugins_index + 1, "  enabled:".to_string());
-        lines.insert(plugins_index + 2, "    - herdr-agent-state".to_string());
-        return join_yaml_lines(lines, trailing_newline);
-    }
-
-    content.to_string()
+    join_yaml_lines(lines, trailing_newline)
 }
 
-pub(crate) fn hermes_flat_plugin_lines(items: &[String], comment: Option<&str>) -> Vec<String> {
-    if items.is_empty() {
-        return vec![with_yaml_inline_comment("plugins: []".to_string(), comment)];
-    }
-
-    let mut lines = vec![with_yaml_inline_comment("plugins:".to_string(), comment)];
-    lines.extend(items.iter().map(|item| format!("  - {item}")));
-    lines
+/// Direct items of one block sequence, including YAML's indentless form.
+/// Sibling keys bound the range before indentation or membership is inferred.
+struct YamlBlockSequence {
+    indent: usize,
+    items: Vec<std::ops::Range<usize>>,
 }
 
-pub(crate) fn hermes_enabled_plugin_lines(items: &[String], comment: Option<&str>) -> Vec<String> {
-    if items.is_empty() {
-        return vec![with_yaml_inline_comment(
-            "  enabled: []".to_string(),
-            comment,
-        )];
+impl YamlBlockSequence {
+    /// Finds direct items before the next sibling or ancestor key.
+    /// Empty sequences default to two spaces beyond the owner key.
+    fn new(lines: &[String], key_index: usize, key_indent: usize, parent_end: usize) -> Self {
+        let start = key_index + 1;
+        let end = (start..parent_end)
+            .find(|&index| {
+                yaml_indent(&lines[index]).is_some_and(|indent| {
+                    indent < key_indent
+                        || indent == key_indent && yaml_list_item_value(&lines[index]).is_none()
+                })
+            })
+            .unwrap_or(parent_end);
+        let indent = (start..end)
+            .find(|&index| yaml_indent(&lines[index]).is_some())
+            .and_then(|index| yaml_indent(&lines[index]))
+            .unwrap_or(key_indent + 2);
+        let starts: Vec<_> = (start..end)
+            .filter(|&index| yaml_list_item_value_at_indent(&lines[index], indent).is_some())
+            .collect();
+        let items = starts
+            .iter()
+            .enumerate()
+            .map(|(index, &start)| start..starts.get(index + 1).copied().unwrap_or(end))
+            .collect();
+        Self { indent, items }
     }
+}
 
-    let mut lines = vec![with_yaml_inline_comment("  enabled:".to_string(), comment)];
-    lines.extend(items.iter().map(|item| format!("    - {item}")));
+/// Renders parsed flow items under the existing key and node properties.
+/// Empty sequences stay inline as `[]`, retaining the header comment.
+fn yaml_sequence_lines(
+    header: &str,
+    indent: usize,
+    items: &[String],
+    comment: Option<&str>,
+) -> Vec<String> {
+    let padding = " ".repeat(indent);
+    if items.is_empty() {
+        return vec![with_yaml_inline_comment(format!("{header} []"), comment)];
+    }
+    let mut lines = vec![with_yaml_inline_comment(header.to_string(), comment)];
+    lines.extend(items.iter().map(|item| format!("{padding}  - {item}")));
     lines
 }
 
@@ -602,11 +646,9 @@ pub(crate) fn yaml_indent(line: &str) -> Option<usize> {
 }
 
 pub(crate) fn yaml_list_item_value(line: &str) -> Option<&str> {
-    line.trim().strip_prefix("- ").map(str::trim)
-}
-
-pub(crate) fn yaml_list_item_matches(line: &str, value: &str) -> bool {
-    yaml_list_item_value(line).is_some_and(|item| yaml_scalar_value(item) == value)
+    let value = line.trim().strip_prefix('-')?;
+    // A bare indicator is still a list item; its value may be on the next line.
+    (value.is_empty() || value.starts_with(' ')).then(|| value.trim())
 }
 
 pub(crate) fn yaml_list_item_value_at_indent(line: &str, indent: usize) -> Option<&str> {
@@ -616,13 +658,44 @@ pub(crate) fn yaml_list_item_value_at_indent(line: &str, indent: usize) -> Optio
     yaml_list_item_value(line)
 }
 
-pub(crate) fn yaml_list_item_matches_at_indent(line: &str, indent: usize, value: &str) -> bool {
-    yaml_list_item_value_at_indent(line, indent)
-        .is_some_and(|item| yaml_scalar_value(item) == value)
+/// Matches a direct scalar, either inline or below a bare indicator. Additional
+/// content makes it a multiline scalar or collection, not the requested plugin.
+fn yaml_list_item_matches_at_indent(lines: &[String], indent: usize, value: &str) -> bool {
+    let Some(item) = lines
+        .first()
+        .and_then(|line| yaml_list_item_value_at_indent(line, indent))
+    else {
+        return false;
+    };
+    let mut continuation = lines[1..].iter().filter(|line| yaml_indent(line).is_some());
+    let scalar = if strip_yaml_inline_comment(item).is_empty() {
+        let Some(line) = continuation.next() else {
+            return false;
+        };
+        if yaml_indent(line).is_none_or(|depth| depth <= indent) {
+            return false;
+        }
+        line.trim()
+    } else {
+        item
+    };
+    continuation.next().is_none() && yaml_scalar_value(scalar) == value
+}
+
+/// Separates leading anchor/tag properties from a node's actual content.
+fn yaml_node_content(value: &str) -> &str {
+    let mut value = strip_yaml_inline_comment(value).trim();
+    while value.starts_with('&') || value.starts_with('!') {
+        value = value
+            .find(char::is_whitespace)
+            .map(|index| value[index..].trim_start())
+            .unwrap_or_default();
+    }
+    value
 }
 
 pub(crate) fn yaml_flow_sequence_items(value: &str) -> Option<Vec<String>> {
-    let value = strip_yaml_inline_comment(value).trim();
+    let value = yaml_node_content(value);
     let inner = value.strip_prefix('[')?.strip_suffix(']')?.trim();
     if inner.is_empty() {
         return Some(Vec::new());
