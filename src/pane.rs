@@ -38,10 +38,12 @@ use self::agent_detection::{
     codex_prompt_ready, decide_detection_screen_read, decide_screen_detection_publish,
     detection_update_for_publish_with_osc, mark_detection_content_changed,
     observe_detection_content_change, DetectionPublishDecision, DetectionScreenReadDecision,
-    DetectionScreenReadInput, PendingIdleConfirmation, ScreenDetectionPublishInput,
-    AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
+    DetectionScreenReadInput, DetectionTextCache, PendingIdleConfirmation,
+    ScreenDetectionPublishInput, AGENT_PENDING_IDLE_RECHECK, AGENT_STARTUP_GRACE_WINDOW,
 };
 use self::background_agent::{AgentJobStatus, AgentJobTracker};
+#[cfg(test)]
+pub(crate) use self::terminal::test_encode_key_for_app;
 #[cfg(unix)]
 pub use self::terminal::InputState;
 use self::terminal::{GhosttyPaneTerminal, PaneTerminal};
@@ -72,6 +74,7 @@ pub(crate) const PANE_TERM: &str = crate::ghostty::TERM;
 pub(crate) const MIN_PANE_ROWS: u16 = 2;
 pub(crate) const MIN_PANE_COLS: u16 = 4;
 const PANE_COLORTERM: &str = "truecolor";
+const FISH_HANDLE_REFLOW_ENV_VAR: &str = "fish_handle_reflow";
 
 fn terminal_compression_permits() -> Arc<tokio::sync::Semaphore> {
     static PERMITS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -103,6 +106,16 @@ fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("COLORTERM", PANE_COLORTERM);
     cmd.env("TERM_PROGRAM", "herdr");
     cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
+    // fish only skips its own resize repaint for terminals it recognizes as
+    // reflowing. Herdr reflows too, and the competing repaint glues prompt copies.
+    // Match the exact casing: Windows env keys are case-insensitive here, but
+    // MSYS/Cygwin fish only reads the lowercase name.
+    if !cmd
+        .iter_full_env_as_str()
+        .any(|(key, _)| key == FISH_HANDLE_REFLOW_ENV_VAR)
+    {
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "0");
+    }
     // Host handles refer to the outer terminal, never to this pane.
     for key in [
         "ITERM_SESSION_ID",
@@ -911,10 +924,13 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
 }
 
 #[cfg(unix)]
+// Handoff detection needs both the write-bracketed text revision and detection epoch.
+#[allow(clippy::too_many_arguments)]
 fn spawn_basic_detection_task(
     pane_id: PaneId,
     child_pid: Arc<AtomicU32>,
     terminal: Arc<PaneTerminal>,
+    content_seq: Arc<AtomicU64>,
     detection_content_seq: Arc<AtomicU64>,
     full_lifecycle_authority_active: Arc<AtomicBool>,
     self_reported_agent_active: Arc<AtomicBool>,
@@ -944,7 +960,7 @@ fn spawn_basic_detection_task(
         let mut pending_foreground_shell_clear = false;
         let mut foreground_shell_exit_reported = false;
         let mut release_was_active = false;
-        let mut last_detection_text = String::new();
+        let mut last_detection_text = DetectionTextCache::default();
         let mut last_screen_scan_detection_content_seq = None;
         let mut agent_startup_grace_until = None;
         let mut pending_idle = PendingIdleConfirmation::default();
@@ -1156,15 +1172,15 @@ fn spawn_basic_detection_task(
                 DetectionScreenReadDecision::Skip => continue,
             }
 
-            let content = terminal.detection_text();
+            let content_changed = last_detection_text
+                .refresh(agent, &content_seq, || terminal.detection_text_for_cache());
+            let content = &last_detection_text.text;
             last_screen_scan_detection_content_seq = current_detection_content_seq;
-            let content_changed = content != last_detection_text;
-            last_detection_text.clone_from(&content);
             let osc_title = terminal.agent_osc_title();
             let osc_progress = terminal.agent_osc_progress();
             let screen_detection = detection_update_for_publish_with_osc(
                 agent,
-                &content,
+                content,
                 &osc_title,
                 &osc_progress,
                 process_exited,
@@ -1173,7 +1189,7 @@ fn spawn_basic_detection_task(
                 &state_events,
                 pane_id,
                 agent,
-                &content,
+                content,
                 screen_detection.as_ref(),
                 process_exited,
                 &mut last_codex_prompt_ready,
@@ -2635,6 +2651,7 @@ impl PaneRuntime {
             pane_id,
             child_pid.clone(),
             terminal.clone(),
+            content_seq.clone(),
             detection_content_seq.clone(),
             full_lifecycle_authority_active.clone(),
             self_reported_agent_active.clone(),
@@ -2838,6 +2855,7 @@ impl PaneRuntime {
             let child_pid = child_pid.clone();
             let terminal = terminal.clone();
             let state_events = events.clone();
+            let text_content_seq = content_seq.clone();
             let detection_content_seq = detection_content_seq.clone();
             let full_lifecycle_authority_active_for_task = full_lifecycle_authority_active.clone();
             let self_reported_agent_active_for_task = self_reported_agent_active.clone();
@@ -2867,7 +2885,7 @@ impl PaneRuntime {
                 let mut last_visible_blocker = false;
                 let mut last_visible_working = false;
                 let mut last_visible_signal_refresh = None;
-                let mut last_detection_text = String::new();
+                let mut last_detection_text = DetectionTextCache::default();
                 let mut last_screen_scan_detection_content_seq = None;
                 let mut agent_startup_grace_until = None;
                 let mut pending_idle = PendingIdleConfirmation::default();
@@ -3160,15 +3178,17 @@ impl PaneRuntime {
                         DetectionScreenReadDecision::Skip => continue,
                     }
 
-                    let content = terminal.detection_text();
+                    let content_changed =
+                        last_detection_text.refresh(agent, &text_content_seq, || {
+                            terminal.detection_text_for_cache()
+                        });
+                    let content = &last_detection_text.text;
                     last_screen_scan_detection_content_seq = current_detection_content_seq;
-                    let content_changed = content != last_detection_text;
-                    last_detection_text.clone_from(&content);
                     let osc_title = terminal.agent_osc_title();
                     let osc_progress = terminal.agent_osc_progress();
                     let screen_detection = detection_update_for_publish_with_osc(
                         agent,
-                        &content,
+                        content,
                         &osc_title,
                         &osc_progress,
                         process_exited,
@@ -3177,7 +3197,7 @@ impl PaneRuntime {
                         &state_events,
                         pane_id,
                         agent,
-                        &content,
+                        content,
                         screen_detection.as_ref(),
                         process_exited,
                         &mut last_codex_prompt_ready,
@@ -3647,8 +3667,7 @@ impl PaneRuntime {
     }
 
     pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
-        self.terminal
-            .encode_terminal_key(key, self.keyboard_protocol())
+        self.terminal.encode_terminal_key(key)
     }
 
     pub fn try_send_bytes(&self, bytes: Bytes) -> Result<(), mpsc::error::TrySendError<Bytes>> {
@@ -3781,14 +3800,14 @@ impl PaneRuntime {
         }
 
         let pid = self.child_pid.load(Ordering::Relaxed);
-        crate::platform::process_cwd(pid)
+        crate::platform::pane_process_cwd(pid)
     }
 
     pub fn cwd_for_persistence(&self) -> Option<std::path::PathBuf> {
         let pid = self.child_pid.load(Ordering::Acquire);
         let exited = self.cwd_process_exited.load(Ordering::Acquire);
         if let Some(cwd) = (!exited)
-            .then(|| crate::platform::process_cwd(pid))
+            .then(|| crate::platform::pane_process_cwd(pid))
             .flatten()
             .filter(|cwd| cwd.is_absolute())
         {
@@ -3876,6 +3895,45 @@ impl PaneRuntime {
 
     pub(crate) fn test_with_screen_bytes(cols: u16, rows: u16, bytes: &[u8]) -> Self {
         Self::test_with_scrollback_bytes(cols, rows, 0, bytes)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn test_start_basic_detection(&mut self) -> mpsc::Receiver<AppEvent> {
+        if let Some(handle) = self.detect_handle.take() {
+            handle.abort();
+        }
+        let (events, receiver) = mpsc::channel(8);
+        let (handle, reset, release) = spawn_basic_detection_task(
+            self.pane_id,
+            self.child_pid.clone(),
+            self.terminal.clone(),
+            self.content_seq.clone(),
+            self.detection_content_seq.clone(),
+            self.full_lifecycle_authority_active.clone(),
+            self.self_reported_agent_active.clone(),
+            events,
+        );
+        self.detect_handle = Some(handle);
+        self.detect_reset_notify = reset;
+        self.pending_release = release;
+        receiver
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn test_wait_for_detection_reads(&self, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while self
+                .terminal
+                .ghostty
+                .detection_text_reads
+                .load(Ordering::Relaxed)
+                < expected
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("detection task should extract fresh text");
     }
 
     pub(crate) fn test_scroll_metrics_reads(&self) -> usize {
@@ -3971,6 +4029,8 @@ impl PaneRuntime {
         let (resize_tx, _resize_rx) = watch::channel((rows, cols, 0, 0));
         let mut terminal =
             crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes).unwrap();
+        // Runtime fixtures model the default config, which enables graphics.
+        terminal.enable_kitty_graphics().unwrap();
         terminal.write(bytes);
         let pane_id = PaneId::from_raw(0);
         let terminal = Arc::new(PaneTerminal::new(
@@ -4013,6 +4073,140 @@ impl PaneRuntime {
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+
+    #[tokio::test]
+    async fn unidentified_text_cache_tracks_runtime_mutations_not_viewport_scroll() {
+        let runtime = PaneRuntime::test_with_scrollback_bytes(
+            12,
+            3,
+            100_000,
+            b"old\r\nold\r\nabcdefghijklmnop\r\nprompt",
+        );
+        let mut cache = DetectionTextCache::default();
+        let reads = Cell::new(0);
+        let refresh = |cache: &mut DetectionTextCache| {
+            cache.refresh(None, &runtime.content_seq, || {
+                reads.set(reads.get() + 1);
+                runtime.terminal.detection_text_for_cache()
+            })
+        };
+        assert!(
+            refresh(&mut cache),
+            "seeded history must be read at revision zero"
+        );
+        assert_eq!(reads.get(), 1);
+        runtime.scroll_up(2);
+        assert!(!refresh(&mut cache));
+        assert_eq!(
+            reads.get(),
+            1,
+            "viewport scrolling must not rebuild bottom text"
+        );
+        assert_eq!(cache.text, runtime.detection_text());
+
+        // Control-only and fragmented output still invalidate the physical read,
+        // but do not manufacture a text change for acquisition scheduling.
+        runtime.test_process_pty_bytes(b"\x1b]0;title\x07\x1b[");
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 2);
+        runtime.test_process_pty_bytes(b"2J\x1b[Hupdated");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 3);
+        assert_eq!(cache.text, runtime.detection_text());
+
+        runtime.resize(4, 8, 0, 0);
+        refresh(&mut cache);
+        assert_eq!(reads.get(), 4);
+        assert_eq!(cache.text, runtime.detection_text());
+        runtime.clear_screen().unwrap();
+        refresh(&mut cache);
+        assert_eq!(reads.get(), 5);
+        assert_eq!(cache.text, runtime.detection_text());
+        runtime.test_process_pty_bytes(b"\x1b[?1049halt");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 6);
+        assert_eq!(cache.text, runtime.detection_text());
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 6);
+        runtime.test_process_pty_bytes(b"\x1b[?1049l");
+        assert!(refresh(&mut cache));
+        assert_eq!(reads.get(), 7);
+        assert_eq!(cache.text, runtime.detection_text());
+        assert!(!cache.text.contains("alt"));
+        assert!(!refresh(&mut cache));
+        assert_eq!(reads.get(), 7);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unidentified_text_cache_resets_with_adopted_runtime_and_recreation() {
+        let mut runtime = PaneRuntime::test_with_screen_bytes(20, 4, b"first runtime");
+        let _events = runtime.test_start_basic_detection();
+        runtime.test_wait_for_detection_reads(1).await;
+        let revision = runtime.content_seq();
+        runtime.reset_agent_detection();
+        runtime.test_wait_for_detection_reads(2).await;
+        assert_eq!(
+            runtime.content_seq(),
+            revision,
+            "reset does not require output"
+        );
+        drop(runtime);
+
+        // A new runtime can reuse both the pane identity and revision zero. Its
+        // detector must not inherit the previous runtime's text or revision.
+        let mut recreated = PaneRuntime::test_with_screen_bytes(20, 4, b"second runtime");
+        assert_eq!(recreated.content_seq(), revision);
+        let _events = recreated.test_start_basic_detection();
+        recreated.test_wait_for_detection_reads(1).await;
+        assert!(recreated.visible_text().contains("second runtime"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unidentified_text_cache_resets_in_spawned_runtime_without_output() {
+        let (events, _event_rx) = mpsc::channel(8);
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(42),
+            4,
+            20,
+            std::env::temp_dir(),
+            "printf 'cache-ready'; exec sleep 30",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Enabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !runtime.visible_text().contains("cache-ready") {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("shell should populate the terminal");
+        // The first reset guarantees a populated read even if the initial tick
+        // preceded shell output. The second proves that a warm cache is cleared.
+        let revision = {
+            let _write = runtime.content_write_lock.lock().unwrap();
+            runtime.content_seq()
+        };
+        for _ in 0..2 {
+            let reads = runtime
+                .terminal
+                .ghostty
+                .detection_text_reads
+                .load(Ordering::Relaxed);
+            runtime.reset_agent_detection();
+            runtime.test_wait_for_detection_reads(reads + 1).await;
+        }
+        assert_eq!(runtime.content_seq(), revision);
+        runtime.shutdown();
+    }
 
     #[tokio::test]
     async fn clear_pane_preserves_wrapped_input_and_unfinished_vt_sequence() {
@@ -4182,6 +4376,55 @@ mod tests {
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_tells_fish_that_herdr_reflows() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut cmd);
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("0"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_keeps_existing_fish_handle_reflow_entry() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env(FISH_HANDLE_REFLOW_ENV_VAR, "1");
+        apply_pane_terminal_env(&mut cmd);
+        apply_pane_launch_env(&mut cmd, &PaneLaunchEnv::default());
+        assert_eq!(
+            cmd.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
+        );
+    }
+
+    #[test]
+    fn pane_terminal_env_sets_lowercase_fish_handle_reflow_beside_other_casing() {
+        let mut cmd = CommandBuilder::new("shell");
+        cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        cmd.env("FISH_HANDLE_REFLOW", "1");
+        apply_pane_terminal_env(&mut cmd);
+        assert!(cmd
+            .iter_full_env_as_str()
+            .any(|entry| entry == (FISH_HANDLE_REFLOW_ENV_VAR, "0")));
+    }
+
+    #[test]
+    fn pane_launch_env_explicit_fish_handle_reflow_wins() {
+        let mut explicit = CommandBuilder::new("shell");
+        explicit.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
+        apply_pane_terminal_env(&mut explicit);
+        apply_pane_launch_env(
+            &mut explicit,
+            &PaneLaunchEnv::from_extra(vec![(FISH_HANDLE_REFLOW_ENV_VAR.into(), "1".into())]),
+        );
+        assert_eq!(
+            explicit.get_env(FISH_HANDLE_REFLOW_ENV_VAR),
+            Some(OsStr::new("1"))
         );
     }
 
@@ -6321,6 +6564,57 @@ mod tests {
         )
         .await
         .expect("re-entering active authority should notify detection reset");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawned_pane_process_sees_fish_handle_reflow() {
+        let output_dir = std::env::temp_dir().join(format!(
+            "herdr-fish-handle-reflow-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&output_dir).unwrap();
+        let output_path = output_dir.join("out.txt");
+        let (events, _event_rx) = mpsc::channel(8);
+        // The cwd keeps the temp path out of the shell command line.
+        let runtime = PaneRuntime::spawn_shell_command(
+            PaneId::from_raw(42),
+            24,
+            80,
+            output_dir.clone(),
+            "printf '%s\\n' \"$fish_handle_reflow\" > out.txt",
+            &PaneLaunchEnv::default(),
+            AgentDetection::Disabled,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            events,
+            Arc::new(Notify::new()),
+            Arc::new(RenderSignal::new()),
+        )
+        .unwrap();
+
+        let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Ok(output) = std::fs::read_to_string(&output_path) {
+                    if output.ends_with('\n') {
+                        break output;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("pane process should write its env");
+        runtime.shutdown();
+        let _ = std::fs::remove_dir_all(&output_dir);
+
+        let expected = std::env::var(FISH_HANDLE_REFLOW_ENV_VAR).unwrap_or_else(|_| "0".into());
+        assert_eq!(output, format!("{expected}\n"));
     }
 
     #[cfg(unix)]

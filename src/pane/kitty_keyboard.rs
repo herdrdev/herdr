@@ -1,3 +1,7 @@
+/// Handoff-only record of the keyboard modes a pane's app requested, so an
+/// update handoff can replay the full Kitty keyboard stack into the new server.
+/// It is never consulted for live input: libghostty owns keyboard state and
+/// encoding. Remove once handoff restores panes from libghostty snapshots.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KittyKeyboardTracker {
     pending: Vec<u8>,
@@ -67,13 +71,9 @@ impl KittyKeyboardTracker {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn modify_other_keys_level(&self) -> u8 {
         self.modify_other_keys_level
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn modify_other_keys_enabled(&self) -> bool {
-        self.modify_other_keys_level > 0
     }
 
     fn observe_modify_other_keys(&mut self, params: &[u8]) {
@@ -173,14 +173,10 @@ mod tests {
         assert_eq!(tracker.flags, 1);
         assert_eq!(tracker.stack, vec![0]);
         assert_eq!(tracker.modify_other_keys_level(), 1);
-        #[cfg(windows)]
-        {
-            assert!(tracker.modify_other_keys_enabled());
-            tracker.observe(b"\x1b[>1m");
-            assert!(tracker.modify_other_keys_enabled());
-            tracker.observe(b"\x1b[>04n");
-            assert!(!tracker.modify_other_keys_enabled());
-        }
+        tracker.observe(b"\x1b[>1m");
+        assert_eq!(tracker.modify_other_keys_level(), 1);
+        tracker.observe(b"\x1b[>04n");
+        assert_eq!(tracker.modify_other_keys_level(), 0);
     }
 
     #[test]

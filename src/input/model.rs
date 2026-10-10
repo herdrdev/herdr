@@ -79,6 +79,11 @@ pub struct TerminalKey {
     pub generated_text: Option<String>,
     physical_identity_hint: bool,
     windows_dead_key: bool,
+    /// The layout character a non-Latin Ctrl chord was reported with before it
+    /// was resolved to its base-layout key. Client side only: the key's
+    /// identity, so a press and its release pair exactly even when a modifier
+    /// let go first changes which of the two the host report resolves to.
+    layout_key: Option<char>,
     source: KeySource,
 }
 
@@ -93,8 +98,18 @@ impl TerminalKey {
             generated_text: None,
             physical_identity_hint: false,
             windows_dead_key: false,
+            layout_key: None,
             source: KeySource::Synthesized,
         }
+    }
+
+    pub(crate) fn with_layout_key(mut self, key: Option<char>) -> Self {
+        self.layout_key = key;
+        self
+    }
+
+    pub(crate) fn layout_key(&self) -> Option<char> {
+        self.layout_key
     }
 
     pub fn with_kind(mut self, kind: crossterm::event::KeyEventKind) -> Self {
@@ -173,11 +188,10 @@ impl TerminalKey {
         self
     }
 
-    #[cfg(any(windows, test))]
     pub(crate) fn vt_bytes(&self) -> Option<&[u8]> {
         match &self.source {
             KeySource::Vt { bytes } => Some(bytes),
-            KeySource::Synthesized | KeySource::WindowsConsole { .. } => None,
+            _ => None,
         }
     }
 
@@ -206,7 +220,9 @@ impl TerminalKey {
             KeySource::WindowsConsole {
                 physical_key: None, ..
             } => KeyIdentity::Semantic(self.code),
-            KeySource::Synthesized | KeySource::Vt { .. } => KeyIdentity::Semantic(self.code),
+            KeySource::Synthesized | KeySource::Vt { .. } => {
+                KeyIdentity::Semantic(self.layout_key.map_or(self.code, KeyCode::Char))
+            }
         }
     }
 
@@ -358,6 +374,7 @@ impl MouseProtocolMode {
     }
 }
 
+#[cfg(any(unix, test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MouseProtocolEncoding {

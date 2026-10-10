@@ -38,6 +38,10 @@ def catalogue():
 
     key("letter-a", 65, "a")
     key("shift-letter", 65, "A", (16,))
+    # xterm modifyOtherKeys level 2 keeps Shift on printable keys and treats
+    # 0x40-0x7f as control input, so Shift+A is CSI 27;2;65~ (xterm input.c,
+    # ModifyOtherKeys and IsControlInput).
+    cases[-1]["expected"]["mok2"] = {"hex": [hex_of("\x1b[27;2;65~")]}
     key("enter", 13, "\r")
     key("shift-enter", 13, None, (16,), 13)
     cases[-1]["expected"]["legacy"] = {"loss": "enter", "hex": ["0d"]}

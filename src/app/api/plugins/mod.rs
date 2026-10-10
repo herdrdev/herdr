@@ -345,7 +345,7 @@ impl App {
                 Ok(handled) => handled,
                 Err(err) => {
                     tracing::warn!(err = %err, url = %url, "failed to invoke plugin link handler");
-                    false
+                    return encode_error(id, "plugin_link_failed", err);
                 }
             },
             None => false,
@@ -876,6 +876,71 @@ mod tests {
         let response: serde_json::Value =
             serde_json::from_str(&app.handle_pane_link_resolve("hover".into(), params)).unwrap();
         assert_eq!(response["error"]["code"], "stale_target");
+    }
+
+    #[tokio::test]
+    async fn pane_link_activation_reports_claimed_plugin_launch_failure() {
+        let mut app = test_app();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("link-failure")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let public_id = app.public_pane_id(0, pane_id).unwrap();
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 4);
+        runtime.test_process_pty_bytes(
+            b"\x1b]8;;obsidian://open?vault=meta\x1b\\Open note\x1b]8;;\x1b\\",
+        );
+        app.terminal_runtimes.insert(terminal_id, runtime);
+        let root = unique_temp_path("claimed-plugin-link-failure");
+        write_manifest_content(
+            &root,
+            r#"
+id = "example.failed-link"
+name = "Failed link"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+platforms = ["linux", "macos", "windows"]
+[[actions]]
+id = "open"
+title = "Open note"
+command = ["never-launched"]
+[[link_handlers]]
+id = "note"
+title = "Note"
+pattern = "^obsidian://"
+action = "open"
+"#,
+        );
+        link_manifest(&mut app, &root);
+        app.state.plugin_commands_in_flight = runtime::MAX_PLUGIN_COMMANDS_IN_FLIGHT;
+        let response = app.handle_pane_link_activate(
+            "click".into(),
+            PaneLinkActivateParams {
+                pane_id: public_id,
+                viewport_row: 0,
+                col: 1,
+                content_revision: None,
+                offset_from_bottom: None,
+            },
+        );
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["error"]["code"], "plugin_link_failed");
+        assert!(response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("maximum concurrent plugin commands"));
+        assert!(
+            response.get("result").is_none(),
+            "a claim failure is not an unhandled link"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "activation must not write to the PTY"
+        );
+        std::fs::remove_dir_all(root).expect("remove test plugin");
     }
 
     fn test_app() -> App {

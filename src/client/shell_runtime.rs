@@ -17,8 +17,16 @@ pub(super) fn dispatch_client_shell_actions(
                 boot_id,
                 request,
             } => {
-                if let Some(connection) = endpoints.connection(&endpoint_id).filter(|_| {
-                    endpoints.active_id() == &endpoint_id && endpoints.active_surface_available()
+                if let Some(connection) = endpoints.connection(&endpoint_id).filter(|connection| {
+                    endpoints.active_id() == &endpoint_id
+                        && (endpoints.active_surface_available()
+                            // The coherent target is visible before its input fence opens.
+                            // Retain workspace navigation; sending remains gated below.
+                            || (connection.surface_active
+                                && matches!(
+                                    request.method,
+                                    crate::api::schema::Method::WorkspaceFocus(_)
+                                )))
                 }) {
                     endpoint_commands.enqueue(endpoint_id, connection.generation, boot_id, request);
                 } else if let Some(shell) = shell.as_deref_mut() {
@@ -100,6 +108,9 @@ pub(super) fn sync_client_shell_keyboard_report_all(
     crate::terminal_modes::set_host_kitty_keyboard_report_all(&mut io::stdout(), desired)
         .map_err(ClientError::ConnectionFailed)?;
     state.keyboard_report_all_active = desired;
+    if let Some(shell) = state.shell.as_mut() {
+        shell.set_host_reports_all_keys(desired);
+    }
     Ok(())
 }
 
@@ -115,7 +126,12 @@ pub(super) fn clear_endpoint_host_effects(
     } else {
         state.direct_mouse_capture_preference
     };
-    let sgr_pixels = super::effective_sgr_pixel_mouse(enabled, false, state.pixel_geometry_exact);
+    let sgr_pixels = super::effective_sgr_pixel_mouse(
+        enabled,
+        false,
+        state.pixel_geometry_exact,
+        state.host_sgr_pixel_mouse,
+    );
     if enabled != state.mouse_capture_active
         || sgr_pixels != host_sgr_pixels_active.load(std::sync::atomic::Ordering::Acquire)
     {
@@ -155,10 +171,11 @@ fn install_pending_activation(
     next_surface_serial: &mut u64,
     activation: endpoint::PendingEndpointActivation,
 ) {
-    let retired = activation
-        .source_command_lane()
-        .map(|source| endpoint_commands.retire_lane(source))
-        .unwrap_or_default();
+    // A fresh target epoch must not replay navigation retained by an abandoned handoff.
+    let mut retired = endpoint_commands.retire_lane(activation.target());
+    if let Some(source) = activation.source_command_lane() {
+        retired.extend(endpoint_commands.retire_lane(source));
+    }
     if let Some(shell) = state.shell.as_mut() {
         for request_id in retired {
             shell.cancel_endpoint_request(&request_id);

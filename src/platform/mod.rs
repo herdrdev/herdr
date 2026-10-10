@@ -36,6 +36,11 @@ fn monitor_host_shutdown(
     None
 }
 
+#[cfg(not(windows))]
+pub(crate) fn host_shutdown_in_progress() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForegroundProcess {
     pub pid: u32,
@@ -205,6 +210,15 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
         direct_terminal_attach: cfg!(unix),
         preserve_legacy_doubled_escape_input: cfg!(target_os = "macos"),
     }
+}
+
+/// The byte the host terminal sends for Backspace according to the tty's erase
+/// setting (e.g. `^H` for MobaXterm and PuTTY-style terminals), when known.
+pub(crate) fn terminal_erase_byte() -> Option<u8> {
+    #[cfg(unix)]
+    return unix_common::terminal_erase_byte();
+    #[cfg(not(unix))]
+    None
 }
 
 pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
@@ -399,6 +413,9 @@ pub use macos::*;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
+
+#[cfg(not(windows))]
+pub(crate) use process_cwd as pane_process_cwd;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;

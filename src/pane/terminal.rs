@@ -9,7 +9,7 @@ use ratatui::{layout::Rect, Frame};
 #[cfg(any(unix, test))]
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 use unicode_width::UnicodeWidthStr;
 
 use crate::layout::PaneId;
@@ -25,10 +25,10 @@ use super::cursor::CURSOR_POSITION_SETTLE;
 use super::cursor::{CursorPositionSettleState, DecscusrTracker};
 use super::{
     input::{
-        ghostty_key_event_from_terminal_key, ghostty_mouse_encoder_for_terminal,
-        ghostty_mouse_event_from_button_kind, ghostty_mouse_event_from_motion_kind,
-        ghostty_mouse_event_from_wheel_kind, ghostty_mouse_position_for_terminal,
-        ghostty_prefers_herdr_text_encoding,
+        configure_key_encoder, ghostty_key_event_from_terminal_key,
+        ghostty_mouse_encoder_for_terminal, ghostty_mouse_event_from_button_kind,
+        ghostty_mouse_event_from_motion_kind, ghostty_mouse_event_from_wheel_kind,
+        ghostty_mouse_position_for_terminal, legacy_shell_key, legacy_super_chord,
     },
     kitty_keyboard::KittyKeyboardTracker,
     osc::{
@@ -189,6 +189,8 @@ pub(crate) struct GhosttyPaneTerminal {
     pub core: Mutex<GhosttyPaneCore>,
     #[cfg(test)]
     pub(super) scroll_metrics_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(all(test, unix))]
+    pub(super) detection_text_reads: std::sync::atomic::AtomicUsize,
     key_encoder: Mutex<crate::ghostty::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
 }
@@ -501,6 +503,11 @@ impl PaneTerminal {
         self.ghostty.detection_text()
     }
 
+    /// The flag permits reuse only when a later read cannot refresh Windows fallback text.
+    pub(crate) fn detection_text_for_cache(&self) -> (String, bool) {
+        self.ghostty.detection_text_for_cache()
+    }
+
     pub(crate) fn try_compression_activity(&self) -> Result<Option<u64>, crate::ghostty::Error> {
         self.ghostty.try_compression_activity()
     }
@@ -636,12 +643,8 @@ impl PaneTerminal {
             .filter(|ansi| !ansi.is_empty())
     }
 
-    pub fn encode_terminal_key(
-        &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
-    ) -> Vec<u8> {
-        self.ghostty.encode_terminal_key(key, protocol)
+    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+        self.ghostty.encode_terminal_key(key)
     }
 
     pub(crate) fn encode_mouse_button(
@@ -1172,10 +1175,12 @@ impl GhosttyPaneTerminal {
         let initial_default_background = initial_colors.map(|colors| colors.background);
         let mut key_encoder =
             crate::ghostty::KeyEncoder::new().map_err(|e| std::io::Error::other(e.to_string()))?;
-        key_encoder.set_from_terminal(&terminal);
+        configure_key_encoder(&mut key_encoder, &terminal);
         Ok(Self {
             #[cfg(test)]
             scroll_metrics_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(all(test, unix))]
+            detection_text_reads: std::sync::atomic::AtomicUsize::new(0),
             core: Mutex::new(GhosttyPaneCore {
                 #[cfg(test)]
                 dirty_collection_hook: None,
@@ -1432,7 +1437,7 @@ impl GhosttyPaneTerminal {
             debug!(pane = pane_id.raw(), "processed kitty graphics sequence");
         }
         if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
+            configure_key_encoder(&mut key_encoder, &core.terminal);
         }
         let synchronized_output = core
             .terminal
@@ -1582,7 +1587,7 @@ impl GhosttyPaneTerminal {
         #[cfg(windows)]
         windows_recent_fallback::update(&mut core);
         if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
+            configure_key_encoder(&mut key_encoder, &core.terminal);
         }
     }
 
@@ -1646,7 +1651,7 @@ impl GhosttyPaneTerminal {
         }
 
         if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
+            configure_key_encoder(&mut key_encoder, &core.terminal);
         }
     }
 
@@ -1669,7 +1674,7 @@ impl GhosttyPaneTerminal {
         core.kitty_keyboard.observe(ansi.as_bytes());
         core.terminal.write(ansi.as_bytes());
         if let Ok(mut key_encoder) = self.key_encoder.lock() {
-            key_encoder.set_from_terminal(&core.terminal);
+            configure_key_encoder(&mut key_encoder, &core.terminal);
         }
     }
 
@@ -1854,10 +1859,16 @@ impl GhosttyPaneTerminal {
             .is_ok_and(|core| core.terminal.mouse_tracking_enabled().unwrap_or(false))
     }
 
+    /// libghostty tracks only level 2; like Ghostty, level 1 behaves as if the
+    /// app negotiated nothing.
     pub fn modify_other_keys_level(&self) -> u8 {
-        self.core
-            .lock()
-            .map_or(0, |core| core.kitty_keyboard.modify_other_keys_level())
+        self.core.lock().map_or(0, |core| {
+            if core.terminal.modify_other_keys_enabled().unwrap_or(false) {
+                2
+            } else {
+                0
+            }
+        })
     }
 
     pub fn sgr_pixel_mouse_enabled(&self) -> bool {
@@ -2020,90 +2031,59 @@ impl GhosttyPaneTerminal {
             .unwrap_or((true, 0))
     }
 
-    pub fn encode_terminal_key(
-        &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
-    ) -> Vec<u8> {
+    /// libghostty encodes every key for the pane's live keyboard modes. The only
+    /// Herdr policy is the legacy shell table for panes that negotiated nothing.
+    ///
+    /// The terminal lock is held until the key and its grouped repeats are
+    /// encoded, so a mode change from the PTY reader cannot split the decision
+    /// (legacy table) from the encoder's configuration. Lock order matches
+    /// output processing: terminal core, then key encoder.
+    pub fn encode_terminal_key(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+        let Ok(core) = self.core.lock() else {
+            return Vec::new();
+        };
+        let negotiated_nothing = keyboard_negotiated_nothing(&core.terminal);
+        // Before the Windows record fallback too: a remote client can report
+        // Super, and a record would deliver the bare key (#3710).
+        if negotiated_nothing && legacy_super_chord(&key) {
+            debug!(code = ?key.code, "super chord in a pane without keyboard protocol; not forwarded");
+            return Vec::new();
+        }
         #[cfg(windows)]
-        if self.core.lock().is_ok_and(|core| {
-            core.terminal
-                .kitty_keyboard_flags()
-                .is_ok_and(|flags| flags == 0)
-                && !core.kitty_keyboard.modify_other_keys_enabled()
-                && core
-                    .terminal
-                    .modify_other_keys_enabled()
-                    .is_ok_and(|enabled| !enabled)
-        }) {
+        if negotiated_nothing {
             if let Some(bytes) = crate::platform::encode_windows_conpty_fallback(&key) {
                 return bytes;
             }
         }
+        let Ok(mut encoder) = self.key_encoder.lock() else {
+            return Vec::new();
+        };
 
         let repeat_count = key.repeat_count;
         let first = key.with_repeat_count(1);
-        let mut bytes = self.encode_terminal_key_once(first.clone(), protocol);
+        let mut bytes = encode_key_with(&mut encoder, negotiated_nothing, first.clone());
         if repeat_count > 1 && first.kind != crossterm::event::KeyEventKind::Release {
             let repeated = first.with_kind(crossterm::event::KeyEventKind::Repeat);
-            let repeated_bytes = self.encode_terminal_key_once(repeated, protocol);
+            let repeated_bytes = encode_key_with(&mut encoder, negotiated_nothing, repeated);
             for _ in 1..repeat_count {
                 bytes.extend_from_slice(&repeated_bytes);
             }
         }
+        drop(encoder);
+        drop(core);
         bytes
     }
 
-    fn encode_terminal_key_once(
-        &self,
-        key: crate::input::TerminalKey,
-        protocol: crate::input::KeyboardProtocol,
-    ) -> Vec<u8> {
-        // Ghostty emits extended Enter sequences even without negotiation.
-        // Ordinary shells need legacy input unless the child enabled an extension.
-        if key.code == crossterm::event::KeyCode::Enter
-            && !key.modifiers.is_empty()
-            && self.core.lock().is_ok_and(|core| {
-                core.terminal
-                    .kitty_keyboard_flags()
-                    .is_ok_and(|flags| flags == 0)
-                    && core.kitty_keyboard.modify_other_keys_level() == 0
-                    && core
-                        .terminal
-                        .modify_other_keys_enabled()
-                        .is_ok_and(|enabled| !enabled)
-            })
-        {
-            return crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy);
-        }
-
-        if matches!(protocol, crate::input::KeyboardProtocol::Legacy)
-            && key.code == crossterm::event::KeyCode::Tab
-            && key.modifiers == crossterm::event::KeyModifiers::CONTROL
-        {
-            return crate::input::encode_terminal_key(key, protocol);
-        }
-
-        if ghostty_prefers_herdr_text_encoding(&key) {
-            return crate::input::encode_terminal_key(key, protocol);
-        }
-
-        let Some(event) = ghostty_key_event_from_terminal_key(&key) else {
-            return crate::input::encode_terminal_key(key, protocol);
+    #[cfg(test)]
+    fn encode_terminal_key_once(&self, key: crate::input::TerminalKey) -> Vec<u8> {
+        let Ok(core) = self.core.lock() else {
+            return Vec::new();
         };
-
+        let negotiated_nothing = keyboard_negotiated_nothing(&core.terminal);
         let Ok(mut encoder) = self.key_encoder.lock() else {
-            return crate::input::encode_terminal_key(key, protocol);
+            return Vec::new();
         };
-        match encoder.encode(&event) {
-            Ok(bytes)
-                if !bytes.is_empty()
-                    && encoded_key_preserves_event_kind(&bytes, &key, protocol) =>
-            {
-                bytes
-            }
-            Ok(_) | Err(_) => crate::input::encode_terminal_key(key, protocol),
-        }
+        encode_key_with(&mut encoder, negotiated_nothing, key)
     }
 
     pub(crate) fn encode_mouse_button(
@@ -2196,10 +2176,17 @@ impl GhosttyPaneTerminal {
     }
 
     pub fn detection_text(&self) -> String {
+        self.detection_text_for_cache().0
+    }
+
+    pub(crate) fn detection_text_for_cache(&self) -> (String, bool) {
+        #[cfg(all(test, unix))]
+        self.detection_text_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.core
             .lock()
             .ok()
-            .and_then(|mut core| ghostty_detection_text(&mut core).ok())
+            .and_then(|mut core| ghostty_detection_text_for_cache(&mut core).ok())
             .unwrap_or_default()
     }
 
@@ -2513,21 +2500,42 @@ impl GhosttyPaneTerminal {
     }
 }
 
-fn encoded_key_preserves_event_kind(
-    bytes: &[u8],
-    key: &crate::input::TerminalKey,
-    protocol: crate::input::KeyboardProtocol,
-) -> bool {
-    if !protocol.reports_event_types() || key.kind == crossterm::event::KeyEventKind::Press {
-        return true;
+/// Encode one key with an encoder configured for the same mode snapshot as
+/// `negotiated_nothing`.
+fn encode_key_with(
+    encoder: &mut crate::ghostty::KeyEncoder,
+    negotiated_nothing: bool,
+    key: crate::input::TerminalKey,
+) -> Vec<u8> {
+    // Before the shell table: Super+Enter must not become a plain Enter.
+    if negotiated_nothing && legacy_super_chord(&key) {
+        debug!(code = ?key.code, "super chord in a pane without keyboard protocol; not forwarded");
+        return Vec::new();
     }
+    let key = if negotiated_nothing {
+        legacy_shell_key(key)
+    } else {
+        key
+    };
+    let Some(event) = ghostty_key_event_from_terminal_key(&key, negotiated_nothing) else {
+        debug!(code = ?key.code, modifiers = ?key.modifiers, "key has no libghostty equivalent; not forwarded");
+        return Vec::new();
+    };
+    encoder.encode(&event).unwrap_or_else(|err| {
+        warn!(?err, code = ?key.code, "libghostty key encoding failed");
+        Vec::new()
+    })
+}
 
-    std::str::from_utf8(bytes)
-        .ok()
-        .and_then(crate::input::parse_terminal_key_sequence)
-        .is_some_and(|parsed| {
-            parsed.code == key.code && parsed.modifiers == key.modifiers && parsed.kind == key.kind
-        })
+/// True when the pane's app asked for no enhanced keyboard protocol (no Kitty
+/// flags, no modifyOtherKeys 2), read from libghostty's live state.
+fn keyboard_negotiated_nothing(terminal: &crate::ghostty::Terminal) -> bool {
+    terminal
+        .kitty_keyboard_flags()
+        .is_ok_and(|flags| flags == 0)
+        && terminal
+            .modify_other_keys_enabled()
+            .is_ok_and(|enabled| !enabled)
 }
 
 fn effective_cursor_state(
@@ -2836,13 +2844,29 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty
 }
 
 fn ghostty_detection_text(core: &mut GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {
+    ghostty_detection_text_for_cache(core).map(|(text, _)| text)
+}
+
+fn ghostty_detection_text_for_cache(
+    core: &mut GhosttyPaneCore,
+) -> Result<(String, bool), crate::ghostty::Error> {
     let lines = core
         .terminal
         .rows()
         .ok()
         .map(|rows| usize::from(rows).max(1))
         .unwrap_or(DEFAULT_DETECTION_ROWS);
-    ghostty_recent_text(core, lines)
+    let text = ghostty_recent_text_for_terminal(&core.terminal, lines)?;
+    Ok(finish_detection_text(core, text, lines))
+}
+
+fn finish_detection_text(core: &mut GhosttyPaneCore, text: String, lines: usize) -> (String, bool) {
+    // Windows fallback reads may refresh deferred history without a content revision.
+    let reusable = !cfg!(windows) || !text.trim().is_empty();
+    (
+        finish_recent_snapshot(core, text, lines, false).text,
+        reusable,
+    )
 }
 
 #[cfg(windows)]
@@ -2906,13 +2930,6 @@ fn windows_powershell_prompt_line_cwd(line: &str) -> Option<std::path::PathBuf> 
     }
     let cwd = std::path::PathBuf::from(raw_cwd);
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
-}
-
-fn ghostty_recent_text(
-    core: &mut GhosttyPaneCore,
-    lines: usize,
-) -> Result<String, crate::ghostty::Error> {
-    ghostty_recent_text_snapshot(core, lines).map(|snapshot| snapshot.text)
 }
 
 fn ghostty_recent_text_snapshot(
@@ -3629,6 +3646,21 @@ fn should_probe_host_terminal_theme_restore(core: &GhosttyPaneCore) -> bool {
         .active_screen()
         .map(|screen| screen == crate::ghostty::ActiveScreen::Alternate)
         .unwrap_or(false)
+}
+
+/// Encode one `key` the way a Unix server's pane does after its app wrote
+/// `app_output` (for example a Kitty keyboard push): the libghostty path,
+/// without the Windows ConPTY record fallback (covered by the Windows harness).
+#[cfg(test)]
+pub(crate) fn test_encode_key_for_app(
+    app_output: &[u8],
+    key: crate::input::TerminalKey,
+) -> Vec<u8> {
+    let (tx, _rx) = mpsc::channel(4);
+    let terminal = crate::ghostty::Terminal::new(80, 24, 0).expect("terminal");
+    let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).expect("pane terminal");
+    pane.process_pty_bytes(PaneId::from_raw(1), 0, app_output, &tx);
+    pane.encode_terminal_key_once(key)
 }
 
 #[cfg(test)]
@@ -4724,13 +4756,10 @@ mod tests {
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Char('a'),
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::empty(),
+        ));
 
         assert_eq!(encoded, b"a");
     }
@@ -4747,16 +4776,15 @@ mod tests {
                 terminal.write(format!("\x1b[>{flags}u").as_bytes());
             }
             let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-            let protocol = pane.keyboard_protocol().unwrap();
 
             for modifiers in [
                 crossterm::event::KeyModifiers::empty(),
                 crossterm::event::KeyModifiers::SHIFT,
             ] {
-                let encoded = pane.encode_terminal_key(
-                    crate::input::TerminalKey::new(crossterm::event::KeyCode::BackTab, modifiers),
-                    protocol,
-                );
+                let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::BackTab,
+                    modifiers,
+                ));
                 assert_eq!(encoded, expected, "backtab with modifiers {modifiers:?}");
             }
         }
@@ -4764,13 +4792,10 @@ mod tests {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Tab,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::empty(),
+        ));
         assert_eq!(encoded, b"\t");
     }
 
@@ -4784,18 +4809,12 @@ mod tests {
             crossterm::event::KeyModifiers::CONTROL,
         );
 
-        assert_eq!(
-            legacy.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy),
-            b"\t"
-        );
+        assert_eq!(legacy.encode_terminal_key(key.clone()), b"\t");
 
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         terminal.write(b"\x1b[>3u");
         let kitty = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-        assert_eq!(
-            kitty.encode_terminal_key(key, crate::input::KeyboardProtocol::Kitty { flags: 3 }),
-            b"\x1b[9;5u"
-        );
+        assert_eq!(kitty.encode_terminal_key(key), b"\x1b[9;5u");
     }
 
     #[cfg(unix)]
@@ -4806,7 +4825,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-        let protocol = crate::input::KeyboardProtocol::Legacy;
 
         for modifiers in [
             KeyModifiers::empty(),
@@ -4819,25 +4837,29 @@ mod tests {
             KeyModifiers::ALT | KeyModifiers::CONTROL | KeyModifiers::SUPER,
         ] {
             let key = crate::input::TerminalKey::new(KeyCode::Enter, modifiers);
-            let expected = if modifiers.contains(KeyModifiers::ALT) {
+            // Super chords never reach a plain shell, so Cmd+Enter cannot run
+            // the command line.
+            let expected = if modifiers.contains(KeyModifiers::SUPER) {
+                b"".as_slice()
+            } else if modifiers.contains(KeyModifiers::ALT) {
                 b"\x1b\r".as_slice()
             } else {
                 b"\r".as_slice()
             };
             for kind in [KeyEventKind::Press, KeyEventKind::Repeat] {
                 assert_eq!(
-                    pane.encode_terminal_key(key.clone().with_kind(kind), protocol),
+                    pane.encode_terminal_key(key.clone().with_kind(kind)),
                     expected,
                     "{modifiers:?} {kind:?}"
                 );
             }
             assert_eq!(
-                pane.encode_terminal_key(key.clone().with_repeat_count(3), protocol),
+                pane.encode_terminal_key(key.clone().with_repeat_count(3)),
                 expected.repeat(3),
                 "{modifiers:?} grouped repeat"
             );
             assert!(
-                pane.encode_terminal_key(key.with_kind(KeyEventKind::Release), protocol)
+                pane.encode_terminal_key(key.with_kind(KeyEventKind::Release))
                     .is_empty(),
                 "{modifiers:?} release"
             );
@@ -4853,8 +4875,9 @@ mod tests {
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
-        let legacy = ["\r", "\r", "\r", "\x1b\r"];
-        let mode_one = ["\x1b[27;2;13~", "\x1b[27;5;13~", "\x1b[27;9;13~", "\x1b\r"];
+        // Like Ghostty, modifyOtherKeys level 1 behaves as if nothing was negotiated.
+        // Super+Enter is not forwarded to panes without a keyboard protocol.
+        let legacy = ["\r", "\r", "", "\x1b\r"];
         let mode_two = [
             "\x1b[27;2;13~",
             "\x1b[27;5;13~",
@@ -4865,7 +4888,7 @@ mod tests {
 
         for (sequence, expected) in [
             ("", legacy),
-            ("\x1b[>4;1m", mode_one),
+            ("\x1b[>4;1m", legacy),
             ("\x1b[>4;2m", mode_two),
             ("\x1b[>4n", legacy),
             ("\x1b[>4;2m", mode_two),
@@ -4875,7 +4898,7 @@ mod tests {
             ("\x1b[>4;2m\x1b[>1u", kitty),
             ("\x1b[<u", mode_two),
             ("\x1b[>4;0m", legacy),
-            ("\x1b[>4;1m", mode_one),
+            ("\x1b[>4;1m", legacy),
             ("\x1b[>04n", legacy),
             ("\x1b[>4;2m", mode_two),
             ("\x1b[>4", mode_two),
@@ -4893,7 +4916,7 @@ mod tests {
             {
                 let key = crate::input::TerminalKey::new(KeyCode::Enter, modifiers);
                 assert_eq!(
-                    pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+                    pane.encode_terminal_key(key),
                     expected.as_bytes(),
                     "{modifiers:?} after {sequence:?}"
                 );
@@ -4912,10 +4935,7 @@ mod tests {
             crossterm::event::KeyModifiers::SHIFT,
         );
 
-        assert_eq!(
-            pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-            b"\x1b[27;2;13~"
-        );
+        assert_eq!(pane.encode_terminal_key(key), b"\x1b[27;2;13~");
     }
 
     #[test]
@@ -4928,14 +4948,13 @@ mod tests {
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyCode::Backspace,
         ] {
-            let press = pane.encode_terminal_key(
-                crate::input::TerminalKey::new(code, crossterm::event::KeyModifiers::empty()),
-                crate::input::KeyboardProtocol::Legacy,
-            );
+            let press = pane.encode_terminal_key(crate::input::TerminalKey::new(
+                code,
+                crossterm::event::KeyModifiers::empty(),
+            ));
             let release = pane.encode_terminal_key(
                 crate::input::TerminalKey::new(code, crossterm::event::KeyModifiers::empty())
                     .with_kind(crossterm::event::KeyEventKind::Release),
-                crate::input::KeyboardProtocol::Legacy,
             );
             assert!(!press.is_empty(), "{code:?} press should emit bytes");
             assert!(
@@ -4957,10 +4976,10 @@ mod tests {
             (crossterm::event::KeyCode::Enter, b"\r".as_slice()),
             (crossterm::event::KeyCode::Backspace, b"\x7f".as_slice()),
         ] {
-            let press = pane.encode_terminal_key(
-                crate::input::TerminalKey::new(code, crossterm::event::KeyModifiers::empty()),
-                pane.keyboard_protocol().unwrap(),
-            );
+            let press = pane.encode_terminal_key(crate::input::TerminalKey::new(
+                code,
+                crossterm::event::KeyModifiers::empty(),
+            ));
             assert_eq!(
                 press, expected,
                 "{code:?} press should stay legacy-compatible without REPORT_ALL_KEYS"
@@ -4969,7 +4988,6 @@ mod tests {
             let release = pane.encode_terminal_key(
                 crate::input::TerminalKey::new(code, crossterm::event::KeyModifiers::empty())
                     .with_kind(crossterm::event::KeyEventKind::Release),
-                pane.keyboard_protocol().unwrap(),
             );
             assert!(
                 release.is_empty(),
@@ -4979,21 +4997,173 @@ mod tests {
     }
 
     #[test]
-    fn ghostty_char_keys_still_use_herdr_encoding() {
+    fn ghostty_alt_letters_keep_esc_prefix_on_every_platform() {
+        // libghostty treats macOS Option as a text modifier unless told otherwise;
+        // Herdr has already decoded Alt from these host bytes.
+        for (host_bytes, expected) in [
+            ("\x1bf", &b"\x1bf"[..]),
+            ("\x1bb", b"\x1bb"),
+            ("\x1bA", b"\x1bA"),
+            ("\x1b.", b"\x1b."),
+        ] {
+            let key = crate::input::parse_terminal_key_sequence(host_bytes).expect("alt key");
+            assert_eq!(
+                test_encode_key_for_app(b"", key),
+                expected,
+                "{host_bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn hyper_and_meta_chords_are_never_typed_as_their_bare_key() {
+        // iTerm2 can report Ctrl as Meta (#4476): `CSI 97;33u`. Typing "a"
+        // would run a command in vim normal mode; libghostty has no Meta.
+        for host_bytes in ["\x1b[97;33u", "\x1b[120;17u"] {
+            let key = crate::input::parse_terminal_key_sequence(host_bytes).expect("kitty key");
+            for app_output in [&b""[..], b"\x1b[>1u", b"\x1b[>31u"] {
+                assert!(
+                    test_encode_key_for_app(app_output, key.clone()).is_empty(),
+                    "{host_bytes:?} after {app_output:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn super_chords_reach_only_panes_that_negotiated_a_keyboard_protocol() {
+        // Super+Space from a Kitty host (#4356) and Cmd+C (#3710).
+        // Super+Enter must not become a plain Enter that runs the command line.
+        for (host_bytes, kitty) in [
+            ("\x1b[32;9u", &b"\x1b[32;9u"[..]),
+            ("\x1b[99;9u", b"\x1b[99;9u"),
+            ("\x1b[13;9u", b"\x1b[13;9u"),
+        ] {
+            let key = crate::input::parse_terminal_key_sequence(host_bytes).expect("kitty key");
+            assert!(
+                test_encode_key_for_app(b"", key.clone()).is_empty(),
+                "{host_bytes:?} in a plain shell"
+            );
+            assert_eq!(
+                test_encode_key_for_app(b"\x1b[>1u", key),
+                kitty,
+                "{host_bytes:?} in a Kitty pane"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_shift_letters_reach_plain_shells_as_control_bytes() {
+        // Lab capture: Alacritty and WezTerm (with or without Kitty keyboard)
+        // send 0x01 for Ctrl+Shift+A; Ghostty's CSI u prints as garbage in a shell.
+        for (host_bytes, plain, kitty) in [
+            ("\x1b[97;6u", &b"\x01"[..], &b"\x1b[97;6u"[..]),
+            ("\x1b[65;5u", b"\x01", b"\x1b[97;6u"),
+            ("\x1b[97;8u", b"\x1b\x01", b"\x1b[97;8u"),
+        ] {
+            let key = crate::input::parse_terminal_key_sequence(host_bytes).expect("kitty key");
+            assert_eq!(
+                test_encode_key_for_app(b"", key.clone()),
+                plain,
+                "{host_bytes:?} in a plain shell"
+            );
+            assert_eq!(
+                test_encode_key_for_app(b"\x1b[>1u", key),
+                kitty,
+                "{host_bytes:?} in a Kitty pane"
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_on_a_russian_layout_interrupts_a_plain_shell() {
+        // Lab capture: kitty reports Ctrl+\u{441} as `CSI 1089::99;5u`; kitty
+        // itself sends ^C to a plain shell.
+        let key = crate::input::parse_terminal_key_sequence("\x1b[1089::99;5u").expect("key");
+        assert_eq!(test_encode_key_for_app(b"", key.clone()), b"\x03");
+        assert_eq!(test_encode_key_for_app(b"\x1b[>1u", key), b"\x1b[99;5u");
+    }
+
+    #[test]
+    fn legacy_alt_prefixes_the_produced_non_ascii_text() {
+        // A legacy host's Alt+Shift+\u{f6}. libghostty on macOS would prefix the
+        // unshifted "\u{f6}" instead.
+        for host_bytes in ["\x1b\u{d6}", "\x1b\u{f6}"] {
+            let key = crate::input::parse_terminal_key_sequence(host_bytes).expect("alt key");
+            assert_eq!(
+                test_encode_key_for_app(b"", key),
+                host_bytes.as_bytes(),
+                "{host_bytes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ghostty_kitty_reports_keep_non_us_key_identity() {
+        // Ctrl++ on a German layout, where + is an unshifted key. The report
+        // already names the key; nothing may reinterpret it as US Shift+=.
+        let key = crate::input::parse_terminal_key_sequence("\x1b[43;5u").expect("kitty key");
+        assert_eq!(test_encode_key_for_app(b"\x1b[>1u", key), b"\x1b[43;5u");
+    }
+
+    #[test]
+    fn ghostty_disambiguate_reports_ctrl_letters_as_kitty_keys() {
         let (tx, _rx) = mpsc::channel(4);
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         terminal.write(b"\x1b[>1u");
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Char('a'),
-                crossterm::event::KeyModifiers::CONTROL,
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Char('a'),
+            crossterm::event::KeyModifiers::CONTROL,
+        ));
 
-        assert_eq!(encoded, vec![1]);
+        assert_eq!(encoded, b"\x1b[97;5u");
+    }
+
+    #[test]
+    fn ghostty_encodes_text_keys_with_layout_text() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
+
+        for (key, expected) in [
+            (
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('D'),
+                    crossterm::event::KeyModifiers::SHIFT,
+                ),
+                "D",
+            ),
+            (
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('%'),
+                    crossterm::event::KeyModifiers::empty(),
+                ),
+                "%",
+            ),
+            (
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('ö'),
+                    crossterm::event::KeyModifiers::empty(),
+                )
+                .with_generated_text(Some("ö".to_owned())),
+                "ö",
+            ),
+            (
+                crate::input::TerminalKey::new(
+                    crossterm::event::KeyCode::Char('8'),
+                    crossterm::event::KeyModifiers::CONTROL,
+                ),
+                "\x7f",
+            ),
+        ] {
+            assert_eq!(
+                pane.encode_terminal_key(key.clone()),
+                expected.as_bytes(),
+                "{key:?}"
+            );
+        }
     }
 
     #[test]
@@ -5005,13 +5175,10 @@ mod tests {
             .unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
 
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
 
         assert_eq!(encoded, b"\x1bOA");
     }
@@ -5051,17 +5218,14 @@ mod tests {
         );
         assert_eq!(pane.modify_other_keys_level(), 2);
 
-        let encoded = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let encoded = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
         assert_eq!(encoded, b"\x1bOA");
 
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let encoded = pane.encode_terminal_key(key.clone());
         assert_eq!(encoded, b"\x1b[27;2;13~");
 
         let encoded = pane.encode_mouse_wheel(
@@ -5083,10 +5247,7 @@ mod tests {
         )
         .with_repeat_count(3);
 
-        assert_eq!(
-            pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-            b"xxx"
-        );
+        assert_eq!(pane.encode_terminal_key(key), b"xxx");
 
         let shifted = crate::input::TerminalKey::new(
             crossterm::event::KeyCode::Char('/'),
@@ -5105,17 +5266,14 @@ mod tests {
         let legacy_expected = b"\x1b[55;8;47;1;16;3_".as_slice();
         #[cfg(not(windows))]
         let legacy_expected = b"///".as_slice();
-        assert_eq!(
-            pane.encode_terminal_key(shifted.clone(), crate::input::KeyboardProtocol::Legacy,),
-            legacy_expected
-        );
+        assert_eq!(pane.encode_terminal_key(shifted.clone()), legacy_expected);
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         terminal.write(b"\x1b[>15u");
         let (tx, _rx) = mpsc::channel(4);
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         assert_eq!(
-            pane.encode_terminal_key(shifted, crate::input::KeyboardProtocol::Kitty { flags: 15 },),
-            b"\x1b[47;2:1u\x1b[47;2:2u\x1b[47;2:2u"
+            pane.encode_terminal_key(shifted),
+            b"\x1b[47;2u\x1b[47;2:2u\x1b[47;2:2u"
         );
     }
 
@@ -5125,21 +5283,17 @@ mod tests {
         let mut terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         terminal.write(b"\x1b[>11u");
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
-        let protocol = pane.keyboard_protocol().unwrap();
         let release = crate::input::TerminalKey::new(
             crossterm::event::KeyCode::Up,
             crossterm::event::KeyModifiers::empty(),
         )
         .with_kind(crossterm::event::KeyEventKind::Release);
-        let expected = pane.encode_terminal_key(release.clone(), protocol);
+        let expected = pane.encode_terminal_key(release.clone());
 
         assert!(!expected.is_empty());
         let mut malformed_release = release;
         malformed_release.repeat_count = 3;
-        assert_eq!(
-            pane.encode_terminal_key(malformed_release, protocol),
-            expected
-        );
+        assert_eq!(pane.encode_terminal_key(malformed_release), expected);
     }
 
     #[test]
@@ -5149,24 +5303,18 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
-        let before = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let before = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
         assert_eq!(before, b"\x1b[A");
 
         pane.process_pty_bytes(pane_id, 0, b"\x1b[?1h", &tx);
 
-        let after = pane.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let after = pane.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
         assert_eq!(after, b"\x1bOA");
     }
 
@@ -5181,9 +5329,9 @@ mod tests {
             crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::SHIFT,
         );
 
-        let before = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let before = pane.encode_terminal_key(key.clone());
         pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
-        let after = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let after = pane.encode_terminal_key(key.clone());
 
         assert_ne!(before, after);
         assert_eq!(after, b"\x1b[13;6u");
@@ -5198,7 +5346,7 @@ mod tests {
         pane.process_pty_bytes(pane_id, 0, b"\x1b[>5u", &tx);
 
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let encoded = pane.encode_terminal_key(key.clone());
 
         assert_eq!(
             pane.keyboard_protocol(),
@@ -5216,7 +5364,7 @@ mod tests {
         pane.seed_keyboard_protocol_flags(5);
 
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let encoded = pane.encode_terminal_key(key.clone());
 
         assert_eq!(
             pane.keyboard_protocol(),
@@ -5261,10 +5409,7 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
 
-        assert_eq!(
-            pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-            b"\x1b[13;28;13;1;16;1_"
-        );
+        assert_eq!(pane.encode_terminal_key(key), b"\x1b[13;28;13;1;16;1_");
     }
 
     #[cfg(windows)]
@@ -5282,30 +5427,31 @@ mod tests {
                 b"\x1b[13;28;13;1;16;1_".as_slice(),
             ),
             (crossterm::event::KeyModifiers::CONTROL, b"\r".as_slice()),
-            (crossterm::event::KeyModifiers::SUPER, b"\r".as_slice()),
+            // Super chords never reach a plain shell (no command-line submit).
+            (crossterm::event::KeyModifiers::SUPER, b"".as_slice()),
             (crossterm::event::KeyModifiers::ALT, b"\x1b\r".as_slice()),
         ] {
             let key = crate::input::TerminalKey::new(crossterm::event::KeyCode::Enter, modifiers);
-            assert_eq!(
-                pane.encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-                expected,
-                "{modifiers:?}"
-            );
+            assert_eq!(pane.encode_terminal_key(key), expected, "{modifiers:?}");
         }
     }
 
     #[test]
-    fn ghostty_modify_other_keys_mode_one_preserves_shift_enter() {
+    fn ghostty_modify_other_keys_mode_one_is_treated_as_unnegotiated() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 0).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx).unwrap();
         let key = crate::input::parse_terminal_key_sequence("\x1b[13;2u").unwrap();
 
         pane.seed_history_ansi("\x1b[>4;1m");
-        assert_eq!(pane.modify_other_keys_level(), 1);
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        assert_eq!(pane.modify_other_keys_level(), 0);
+        let encoded = pane.encode_terminal_key(key.clone());
 
-        assert_eq!(encoded, b"\x1b[27;2;13~");
+        // An unnegotiated Windows pane gets the native ConPTY record instead.
+        #[cfg(windows)]
+        assert_eq!(encoded, b"\x1b[13;28;13;1;16;1_");
+        #[cfg(not(windows))]
+        assert_eq!(encoded, b"\r");
     }
 
     #[test]
@@ -5317,7 +5463,7 @@ mod tests {
         pane.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
 
         let key = crate::input::parse_terminal_key_sequence("\x1b\x7f").unwrap();
-        let encoded = pane.encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy);
+        let encoded = pane.encode_terminal_key(key.clone());
 
         assert_eq!(encoded, b"\x1b[127;3u");
     }
@@ -5334,7 +5480,7 @@ mod tests {
         let crate::raw_input::RawInputEvent::Key(key) = events.remove(0) else {
             panic!("expected key event");
         };
-        let encoded = pane.encode_terminal_key(key, pane.keyboard_protocol().unwrap());
+        let encoded = pane.encode_terminal_key(key);
 
         assert_eq!(encoded, b"\x1b[102;7u");
     }
@@ -5352,22 +5498,13 @@ mod tests {
             crossterm::event::KeyCode::Backspace,
             crossterm::event::KeyModifiers::CONTROL,
         );
-        assert_eq!(
-            legacy.encode_terminal_key(
-                ctrl_backspace.clone(),
-                crate::input::KeyboardProtocol::Legacy
-            ),
-            b"\x08"
-        );
+        assert_eq!(legacy.encode_terminal_key(ctrl_backspace.clone()), b"\x08");
 
         let plain_backspace = crate::input::TerminalKey::new(
             crossterm::event::KeyCode::Backspace,
             crossterm::event::KeyModifiers::empty(),
         );
-        assert_eq!(
-            legacy.encode_terminal_key(plain_backspace, crate::input::KeyboardProtocol::Legacy),
-            b"\x7f"
-        );
+        assert_eq!(legacy.encode_terminal_key(plain_backspace), b"\x7f");
 
         let kitty = GhosttyPaneTerminal::new(
             crate::ghostty::Terminal::new(80, 24, 0).unwrap(),
@@ -5377,10 +5514,7 @@ mod tests {
         let pane_id = PaneId::from_raw(1);
         kitty.process_pty_bytes(pane_id, 0, b"\x1b[>1u", &tx);
 
-        assert_eq!(
-            kitty.encode_terminal_key(ctrl_backspace, crate::input::KeyboardProtocol::Legacy),
-            b"\x1b[127;5u"
-        );
+        assert_eq!(kitty.encode_terminal_key(ctrl_backspace), b"\x1b[127;5u");
     }
 
     #[test]
@@ -5399,20 +5533,14 @@ mod tests {
 
         first.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b[?1h", &tx);
 
-        let first_encoded = first.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
-        let second_encoded = second.encode_terminal_key(
-            crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Up,
-                crossterm::event::KeyModifiers::empty(),
-            ),
-            crate::input::KeyboardProtocol::Legacy,
-        );
+        let first_encoded = first.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
+        let second_encoded = second.encode_terminal_key(crate::input::TerminalKey::new(
+            crossterm::event::KeyCode::Up,
+            crossterm::event::KeyModifiers::empty(),
+        ));
 
         assert_eq!(first_encoded, b"\x1bOA");
         assert_eq!(second_encoded, b"\x1b[A");
