@@ -311,6 +311,10 @@ pub struct App {
     /// A detached server stops polling on its own after a while; it must not also
     /// swallow the answer someone is waiting on.
     pub(crate) work_index_refresh_requested: bool,
+    /// Set by the headless scheduler while it skips interval refreshes because
+    /// no client has been attached for a while. The skipped refresh leaves
+    /// `next_work_index_refresh` in the past, so the loop must not wake for it.
+    pub(crate) work_index_timer_parked: bool,
     pub(crate) work_index_context_fingerprint: crate::work_index::WorkIndexContextFingerprint,
     pub(crate) work_index_cache_bypass: crate::work_index::WorkIndexCacheBypass,
     pub(crate) work_index_snapshot: Option<crate::work_index::Snapshot>,
@@ -1777,6 +1781,7 @@ impl App {
             last_applied_work_index_refresh_generation: 0,
             next_work_index_refresh: Instant::now(),
             work_index_refresh_requested: false,
+            work_index_timer_parked: false,
             work_index_context_fingerprint: Vec::new(),
             work_index_cache_bypass: crate::work_index::WorkIndexCacheBypass::default(),
             work_index_snapshot,

@@ -7746,7 +7746,9 @@ impl HeadlessServer {
         // without an attached TUI. Omitting it here left every server-backed
         // session with a permanently empty index while the interactive loop
         // refreshed fine, which is the #119 defect class.
-        if self.work_index_refresh_is_useful(now) {
+        let work_index_refresh_useful = self.work_index_refresh_is_useful(now);
+        self.app.work_index_timer_parked = !work_index_refresh_useful;
+        if work_index_refresh_useful {
             self.app.start_work_index_refresh_if_due(now);
         }
         let detail_request = self
@@ -9222,6 +9224,30 @@ mod tests {
         server.app.start_work_index_refresh_if_due(now);
         assert!(!server.app.work_index_refresh_requested);
         assert!(!server.work_index_refresh_is_useful(now));
+    }
+
+    #[test]
+    fn idle_skipped_work_index_refresh_does_not_wake_the_loop() {
+        // Regression: a detached server stopped refreshing the work index after
+        // six idle intervals but still scheduled a wake for the overdue refresh,
+        // so `sleep_until` fired at once and the main loop spun at 100% CPU.
+        let mut server = test_headless_server();
+        server.app.work_index_config.enabled = true;
+        server.app.work_index_config.refresh_interval_seconds = 10;
+        let now = Instant::now();
+        server.last_app_client_seen = now - Duration::from_secs(61);
+        server.app.next_work_index_refresh = now - Duration::from_secs(1);
+
+        server.handle_scheduled_tasks_headless_with_render_kind(now, false);
+
+        assert!(server.app.work_index_refresh_in_flight.is_none());
+        assert_eq!(server.app.work_index_refresh_deadline(), None);
+
+        // A requested refresh unparks the timer and runs on the next pass.
+        server.app.work_index_refresh_requested = true;
+        server.handle_scheduled_tasks_headless_with_render_kind(now, false);
+        assert!(!server.app.work_index_timer_parked);
+        assert!(server.app.work_index_refresh_deadline().is_some());
     }
 
     #[test]

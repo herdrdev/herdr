@@ -4089,7 +4089,10 @@ impl crate::app::App {
     }
 
     pub(crate) fn work_index_refresh_deadline(&self) -> Option<Instant> {
-        self.work_index_config.enabled.then(|| {
+        // A parked timer has a due time the scheduler will not act on; waking
+        // for it would spin the headless loop. An attach or a requested
+        // refresh unparks it on the next scheduler pass.
+        (self.work_index_config.enabled && !self.work_index_timer_parked).then(|| {
             self.work_index_refresh_in_flight
                 .as_ref()
                 .map_or(self.next_work_index_refresh, |refresh| refresh.deadline)
