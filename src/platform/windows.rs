@@ -485,18 +485,25 @@ pub(crate) fn sample_status_metrics(
         None
     };
 
+    let (disk_percent, disk_used_gib, disk_total_gib) = status_disk_usage()
+        .map(|(percent, used, total)| (Some(percent), Some(used), Some(total)))
+        .unwrap_or((None, None, None));
+
     super::status_metrics::StatusMetrics {
         cpu_percent,
+        cpu_cores: super::status_metrics::cpu_core_count(),
         mem_used_gib,
         mem_total_gib,
-        disk_percent: status_disk_percent(),
+        disk_percent,
+        disk_used_gib,
+        disk_total_gib,
         hostname,
     }
 }
 
 /// Free space on the system drive. Windows reports the caller's quota-adjusted
 /// free bytes, which is the figure that decides whether a write succeeds.
-fn status_disk_percent() -> Option<u8> {
+fn status_disk_usage() -> Option<(u8, f32, f32)> {
     use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 
     let root: Vec<u16> = "C:\\\0".encode_utf16().collect();
@@ -515,7 +522,9 @@ fn status_disk_percent() -> Option<u8> {
         return None;
     }
     let used = total - available;
-    u8::try_from((u128::from(used) * 100).div_ceil(u128::from(total))).ok()
+    let percent = u8::try_from((u128::from(used) * 100).div_ceil(u128::from(total))).ok()?;
+    let gib = |bytes: u64| bytes as f32 / 1_073_741_824.0;
+    Some((percent, gib(used), gib(total)))
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ mod dock_scratchpad;
 #[path = "ui/dock/shortcuts.rs"]
 mod dock_shortcuts;
 pub(crate) mod dropdown;
+pub(crate) mod focus;
 pub(crate) mod goals;
 mod home;
 pub(crate) mod hyperspace;
@@ -940,7 +941,7 @@ fn compute_view_internal_at(
             rows
         },
         status_buttons: Vec::new(),
-        status_work_links: Vec::new(),
+        status_more_rect: ratatui::layout::Rect::default(),
         status_segments: Vec::new(),
         status_segment_hit_areas: Vec::new(),
         focused_remote_host: None,
@@ -992,21 +993,25 @@ fn compute_view_internal_at(
     // The menu anchors on the `+`, so its geometry needs the strip already
     // stored on the view.
     app.view.dock_surface_menu_layout = dock::chooser_menu_layout(app, dock_area);
-    // The links follow the title, and the title starts at the sidebar's right
-    // edge, so they are laid out only once this frame's sidebar is on the view.
-    // The row is fitted once here: the status segments, the title, and the
-    // links share one layout pass, and render draws what this stored.
+    // The row is fitted once here: the view icons, the threshold metrics and
+    // the "more" popover share one layout pass, and render draws what this
+    // stored.
     app.view.focused_remote_host = status::resolve_focused_remote_host(app, terminal_runtimes);
     if status_bar_is_renderable(app, area) {
         app.view.status_buttons = status::status_buttons(app, status_bar_rect);
         app.view.status_segments = status::fitted_status_segments(app, status_bar_rect);
         app.view.status_segment_hit_areas = status::status_segment_hit_areas(app, status_bar_rect);
-        app.view.status_work_links = status::status_work_links(app, status_bar_rect);
+        let more = status::status_more_layout(app, status_bar_rect, area);
+        app.view.status_more_rect = more.as_ref().map(|layout| layout.rect).unwrap_or_default();
+        if let Some(layout) = more {
+            app.view.status_segment_hit_areas.extend(layout.hit_areas);
+        }
     } else {
         app.view.status_buttons = Vec::new();
         app.view.status_segments = Vec::new();
         app.view.status_segment_hit_areas = Vec::new();
-        app.view.status_work_links = Vec::new();
+        app.view.status_more_rect = Rect::default();
+        app.status_more_open = false;
     }
     app.sync_copy_mode_search_geometry();
 }
@@ -1256,7 +1261,7 @@ fn compute_mobile_view(
         terminal_area,
         work_context_link_rows: Vec::new(),
         status_buttons: Vec::new(),
-        status_work_links: Vec::new(),
+        status_more_rect: ratatui::layout::Rect::default(),
         status_segments: Vec::new(),
         status_segment_hit_areas: Vec::new(),
         focused_remote_host: None,
@@ -1349,6 +1354,7 @@ fn render_with_runtime_registry_inner(
         render_tab_action_buttons(app, frame);
     }
     match app.terminal_area_surface() {
+        crate::app::state::TerminalAreaSurface::Focus => focus::render(app, frame, terminal_area),
         crate::app::state::TerminalAreaSurface::Scratch => {
             scratch::render(app, frame, terminal_area)
         }
@@ -1540,6 +1546,7 @@ fn render_with_runtime_registry_inner(
         | InputOwner::Pane
         | InputOwner::None => {}
     }
+    status::render_status_more_menu(app, frame);
     render_hover_tooltip(app, frame);
     if input_owner == InputOwner::Notepad {
         notepad::render_notepad_caret(app, frame);
@@ -3563,7 +3570,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_status_bar_renders_only_branch_device_and_metrics_segments() {
+    fn desktop_top_bar_renders_view_icons_view_name_and_more_control_only() {
         let mut app = crate::app::state::AppState::test_new();
         app.nerd_font = false;
         app.workspaces = vec![Workspace::test_new("one")];
@@ -3576,7 +3583,6 @@ mod tests {
         app.status_git_cwd = app.status_focused_cwd.clone();
         app.status_git_branch = Some("feature/native-status".into());
 
-        // Wide enough that every contracted field fits.
         let width = 220u16;
         compute_view(&mut app, Rect::new(0, 0, width, 24));
         assert_eq!(app.view.status_bar_rect, Rect::new(0, 0, width, 1));
@@ -3589,45 +3595,47 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        // AC4: fixture metrics provide deterministic segment-parity evidence.
-        assert!(
-            row0.contains("TESTHOST"),
-            "status bar missing host label: {row0:?}"
+        assert!(row0.starts_with(" H  F  O  S  M "), "{row0:?}");
+        assert_eq!(
+            row0.find("Home"),
+            Some((usize::from(width) - 4) / 2),
+            "{row0:?}"
         );
-        // The branch is gone from the row by design; the device and the
-        // resource columns are what the contract now guarantees.
-        assert!(!row0.contains("feature/native-stat"), "{row0:?}");
-        assert!(
-            row0.contains("CPU \u{2581}") && row0.contains("MEM \u{2584}"),
-            "status bar missing resource metrics: {row0:?}"
-        );
-        assert!(!row0.contains("/repo"), "{row0:?}");
-        assert!(!row0.contains("Herdr v"), "{row0:?}");
-        assert!(!row0.contains("testuser"), "{row0:?}");
-        for hidden_identity in ["session:", "workspace:", "tab:", "pane:"] {
-            assert!(!row0.contains(hidden_identity), "{row0:?}");
+        assert!(row0.trim_end().ends_with("..."), "{row0:?}");
+        // A healthy machine shows no metric, and the indicators the bar used
+        // to carry sit behind the `...` control.
+        for hidden in [
+            "TESTHOST",
+            "CPU",
+            "MEM",
+            "DSK",
+            "feature/native-stat",
+            "/repo",
+            "Herdr v",
+            "\u{25cf}",
+            "\u{25b8}",
+        ] {
+            assert!(!row0.contains(hidden), "{hidden}: {row0:?}");
         }
-        assert!(!row0.contains("↓"), "{row0:?}");
-        assert!(!row0.contains("↑"), "{row0:?}");
-        let first_content = row0
-            .char_indices()
-            .find_map(|(index, ch)| (!ch.is_whitespace()).then_some(index))
-            .expect("status row content");
-        assert!(
-            first_content > 0,
-            "status row is not right-aligned: {row0:?}"
-        );
     }
 
     #[test]
-    fn status_bar_keeps_memory_and_cpu_legible_at_120_columns() {
-        // AC3/AC7: the ordinary-width renderer retains both required metric segments.
+    fn top_bar_shows_hot_metrics_legibly_at_120_columns() {
         let mut app = crate::app::state::AppState::test_new();
         app.nerd_font = false;
         app.workspaces = vec![Workspace::test_new("one")];
         app.active = Some(0);
         app.selected = 0;
         app.set_server_mode(Mode::Terminal);
+        let mut metrics = crate::platform::status_metrics::status_metrics_fixture();
+        metrics.cpu_percent = Some(92);
+        metrics.mem_used_gib = Some(13.0);
+        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
+            metrics,
+            sampled_at: std::time::Instant::now(),
+        });
+        app.status_cpu_visible = true;
+        app.status_mem_visible = true;
 
         let width = 120;
         compute_view(&mut app, Rect::new(0, 0, width, 24));
@@ -3639,9 +3647,10 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        assert!(row0.contains("MEM \u{2584}"), "{row0:?}");
-        assert!(row0.contains("CPU \u{2581}"), "{row0:?}");
-        assert!(!row0.contains("Herdr v"), "{row0:?}");
+        assert!(row0.contains("CPU \u{2588}"), "{row0:?}");
+        assert!(row0.contains("MEM \u{2587}"), "{row0:?}");
+        assert!(!row0.contains("DSK"), "disk at 41% stays hidden: {row0:?}");
+        assert!(row0.starts_with(" H  F  O  S  M "), "{row0:?}");
     }
 
     #[test]
@@ -3668,8 +3677,8 @@ mod tests {
                 app.view.status_bar_rect,
                 app.view.status_bar_rect.y,
             );
-            assert!(row0.contains("MEM \u{2584}"), "{row0:?}");
-            assert!(row0.contains("CPU \u{2581}"), "{row0:?}");
+            assert!(row0.contains("Home"), "{row0:?}");
+            assert!(!row0.contains("CPU"), "{row0:?}");
             assert!(!row0.contains("Herdr v"), "{row0:?}");
             rendered.push((
                 "sampled metrics",
@@ -3691,9 +3700,9 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        assert!(row0.contains("MEM -"), "{row0:?}");
-        assert!(row0.contains("CPU -"), "{row0:?}");
-        assert!(!row0.contains("Herdr v"), "{row0:?}");
+        assert!(!row0.contains("MEM"), "{row0:?}");
+        assert!(!row0.contains("CPU"), "{row0:?}");
+        assert!(row0.trim_end().ends_with("..."), "{row0:?}");
         rendered.push((
             "unavailable fallback",
             width,

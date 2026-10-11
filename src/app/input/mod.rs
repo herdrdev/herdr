@@ -298,6 +298,9 @@ impl App {
             self.state.board_view = self.state.board_return.take();
             return None;
         }
+        if self.handle_status_more_menu_key(key_event, owner) {
+            return None;
+        }
         if self.handle_window_cycle_menu_key(key_event, owner) {
             return None;
         }
@@ -407,8 +410,13 @@ impl App {
             InputOwner::Surface(SurfaceInputOwner::Work) => {
                 self.handle_work_view_key(key_event);
             }
+            InputOwner::Surface(SurfaceInputOwner::Focus) => {
+                self.handle_focus_key(key_event);
+            }
             InputOwner::Surface(SurfaceInputOwner::Board) => {
-                self.handle_board_key(key_event);
+                if !self.enter_prefix_from_board(key_event) {
+                    self.handle_board_key(key_event);
+                }
             }
             InputOwner::Surface(SurfaceInputOwner::DockObjectPreview) => {
                 if key_event.code == KeyCode::Esc && key_event.modifiers.is_empty() {
@@ -1407,6 +1415,12 @@ impl App {
             self.state.set_server_mode(Mode::Terminal);
             return None;
         }
+        // The prefix reaches Herdr's shortcuts rather than the agent, so the
+        // top bar's view keys work from the Mailbox like from any other view.
+        if self.state.is_prefix_key(&key) {
+            self.state.set_server_mode(Mode::Prefix);
+            return None;
+        }
         let queue = self.state.blocked_agents();
         if event.code == KeyCode::Tab && event.modifiers.is_empty() {
             self.defer_current_inbox_agent(&queue);
@@ -1425,6 +1439,13 @@ impl App {
         if key.code == KeyCode::Esc && key.modifiers.is_empty() {
             self.state.clear_inbox();
             self.state.set_server_mode(Mode::Terminal);
+            return true;
+        }
+        if self
+            .state
+            .is_prefix_key(&crate::input::TerminalKey::from(key))
+        {
+            self.state.set_server_mode(Mode::Prefix);
             return true;
         }
         let queue = self.state.blocked_agents();
@@ -1463,22 +1484,124 @@ impl App {
     /// A status-bar button does exactly what its keybinding does, so the two
     /// affordances can never drift into meaning different things.
     fn activate_status_button(&mut self, action: crate::app::state::StatusButtonAction) {
-        use crate::app::state::StatusButtonAction;
         match action {
-            StatusButtonAction::Scratch => {
+            crate::app::state::StatusButtonAction::View(view) => self.activate_top_bar_view(view),
+        }
+    }
+
+    /// Switch the screen to one top-bar view. Choosing the view already on
+    /// screen returns Home, the way each view's shortcut toggles it.
+    pub(crate) fn activate_top_bar_view(&mut self, view: crate::app::state::TopBarView) {
+        use crate::app::state::TopBarView;
+        let view = if view == self.state.top_bar_view() {
+            TopBarView::Home
+        } else {
+            view
+        };
+        // Leaving the scratch writer flushes its draft the same way Esc does.
+        if self.state.scratch.open {
+            self.tick_scratch(std::time::Instant::now(), true);
+        }
+        self.state.close_top_bar_views();
+        match view {
+            TopBarView::Home => {}
+            TopBarView::Focus => self.state.open_focus_view(),
+            TopBarView::Orchestration => self.toggle_board_view(),
+            TopBarView::Scratch => {
                 self.tick_scratch(std::time::Instant::now(), true);
                 self.state.scratch.open_writer();
             }
-            StatusButtonAction::Home => {
-                self.state.scratch.open = false;
-                self.state.toggle_home();
-            }
-            StatusButtonAction::NewSession => self.state.request_new_workspace = true,
-            StatusButtonAction::BlockedFilter => {
-                self.state.blocked_filter = !self.state.blocked_filter
-            }
-            StatusButtonAction::Board => self.toggle_board_view(),
+            TopBarView::Mailbox => self.state.toggle_inbox(),
         }
+    }
+
+    /// The prefix reaches Herdr's shortcuts from the board, so the top bar's
+    /// view keys work from Orchestration like from every other view. Board
+    /// text inputs keep the key: a card editor or dialog is typing.
+    pub(crate) fn enter_prefix_from_board(&mut self, key: KeyEvent) -> bool {
+        let typing = self
+            .state
+            .board_view
+            .as_ref()
+            .is_some_and(|view| view.editor.is_some() || view.dialog.is_some());
+        if typing
+            || !self
+                .state
+                .is_prefix_key(&crate::input::TerminalKey::from(key))
+        {
+            return false;
+        }
+        self.state.set_server_mode(Mode::Prefix);
+        true
+    }
+
+    /// Keys while the Focus notepad owns the screen: Esc returns Home, the
+    /// prefix still reaches the shortcuts, and everything else is typing.
+    pub(crate) fn handle_focus_key(&mut self, key: KeyEvent) {
+        if self
+            .state
+            .is_prefix_key(&crate::input::TerminalKey::from(key))
+        {
+            self.state.set_server_mode(Mode::Prefix);
+            return;
+        }
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            self.state.focus_open = false;
+            return;
+        }
+        if let Some(editor) = self.state.focus_editor.as_mut() {
+            editor.key(key);
+        }
+    }
+
+    /// The top bar's "more" popover is modal while open: Esc or q closes it
+    /// and every other key is swallowed, so nothing behind it moves. Client
+    /// menus and overlays sit underneath it, so it owns their keys too. Only
+    /// the pomodoro break prompt outranks it: that prompt appears on a timer
+    /// and is drawn above everything, the popover included.
+    pub(crate) fn handle_status_more_menu_key(&mut self, key: KeyEvent, owner: InputOwner) -> bool {
+        if !self.state.status_more_open || owner == InputOwner::Pomodoro {
+            return false;
+        }
+        if matches!(key.code, KeyCode::Esc | KeyCode::Char('q')) {
+            self.state.status_more_open = false;
+        }
+        true
+    }
+
+    /// A click while the "more" popover is open: on one of its items it does
+    /// what that item does; anywhere else in it, nothing; outside it, the
+    /// popover closes. A click on the bar itself still reaches its target.
+    fn handle_status_more_menu_mouse(&mut self, mouse: MouseEvent, owner: InputOwner) -> bool {
+        if !self.state.status_more_open
+            || owner == InputOwner::Pomodoro
+            || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            return false;
+        }
+        let inside =
+            self.state
+                .point_in_rect(self.state.view.status_more_rect, mouse.column, mouse.row);
+        let kind = self.state.status_segment_kind_at(mouse.column, mouse.row);
+        if !inside {
+            // The `⋯` control toggles the popover itself.
+            if kind == Some(crate::app::state::StatusSegmentKind::More) {
+                return false;
+            }
+            self.state.status_more_open = false;
+            return mouse.row != self.state.view.status_bar_rect.y;
+        }
+        if let Some(kind) = kind {
+            match self.state.activate_status_segment(kind) {
+                Some(MouseAction::Settings(action)) => self.apply_settings_action(action),
+                Some(MouseAction::OpenFleetHost { name, focus_agent }) => {
+                    self.state.status_more_open = false;
+                    self.open_fleet_host_from_input(&name, focus_agent.as_deref());
+                }
+                _ => {}
+            }
+        }
+        true
     }
 
     pub(crate) fn handle_symphony_key(&mut self, key: KeyEvent) -> bool {
@@ -4934,6 +5057,12 @@ impl App {
 
     pub(crate) fn paste_into_input_owner(&mut self, owner: InputOwner, text: &str) -> bool {
         match owner {
+            InputOwner::Surface(SurfaceInputOwner::Focus) => {
+                if let Some(editor) = self.state.focus_editor.as_mut() {
+                    editor.insert(text);
+                }
+                true
+            }
             InputOwner::Surface(SurfaceInputOwner::Scratch) => {
                 if !self.state.scratch.list && !self.state.scratch.confirm_delete {
                     if let Some(editor) = &mut self.state.scratch.editor {
@@ -5215,6 +5344,9 @@ impl App {
             }
             return;
         }
+        if self.handle_status_more_menu_mouse(mouse, owner) {
+            return;
+        }
         if self.handle_window_cycle_menu_mouse(mouse, owner) {
             return;
         }
@@ -5458,27 +5590,6 @@ impl App {
                 } else {
                     self.show_work_link_notice("copied");
                 }
-                return;
-            }
-
-            // A named work link opens its object where the human asked for it:
-            // the click is the opt-in the dock no longer takes on its own.
-            if let Some(object) = self
-                .state
-                .view
-                .status_work_links
-                .iter()
-                .find(|link| {
-                    mouse.column >= link.rect.x
-                        && mouse.column < link.rect.x.saturating_add(link.rect.width)
-                        && mouse.row >= link.rect.y
-                        && mouse.row < link.rect.y.saturating_add(link.rect.height)
-                })
-                .map(|link| link.object.clone())
-            {
-                self.state.dock_collapsed = false;
-                self.state
-                    .open_dock_object(object, crate::app::state::DockTabOrigin::User);
                 return;
             }
 
@@ -7259,15 +7370,24 @@ sidebar_visible = true
     }
 
     #[test]
-    fn topbar_buttons_dispatch_to_home_new_session_board_and_scratchpad() {
+    fn topbar_view_buttons_dispatch_to_focus_board_scratch_mailbox_and_home() {
+        use crate::app::state::{StatusButtonAction, TopBarView};
+
         let mut app = test_app();
         app.state = crate::app::state::AppState::test_new();
 
-        app.activate_status_button(crate::app::state::StatusButtonAction::Home);
-        assert!(app.state.home.is_some());
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Focus));
+        assert!(app.state.focus_open);
+        assert!(app.state.focus_editor.is_some());
 
-        app.activate_status_button(crate::app::state::StatusButtonAction::NewSession);
-        assert!(app.state.request_new_workspace);
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Scratch));
+        assert!(!app.state.focus_open);
+        assert!(app.state.scratch.open);
+        assert!(app.state.scratch.editor.is_some());
+
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Mailbox));
+        assert!(!app.state.scratch.open);
+        assert!(app.state.inbox.is_some());
 
         let date = time::Date::from_calendar_date(2026, time::Month::September, 28)
             .expect("fixed board date");
@@ -7277,12 +7397,233 @@ sidebar_visible = true
             note,
             crate::board::Board::default(),
         ));
-        app.activate_status_button(crate::app::state::StatusButtonAction::Board);
-        assert!(app.state.board_view.is_none());
+        app.state.inbox = None;
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Orchestration));
+        assert!(
+            app.state.board_view.is_none(),
+            "the active view toggles home"
+        );
 
-        app.activate_status_button(crate::app::state::StatusButtonAction::Scratch);
-        assert!(app.state.scratch.open);
-        assert!(app.state.scratch.editor.is_some());
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Focus));
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Home));
+        assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        assert!(
+            app.state.home.is_none(),
+            "Home is the panes, not the overview"
+        );
+    }
+
+    #[test]
+    fn focus_view_takes_typing_and_esc_returns_home() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        app.activate_top_bar_view(crate::app::state::TopBarView::Focus);
+        assert_eq!(
+            app.state.input_owner(),
+            InputOwner::Surface(SurfaceInputOwner::Focus)
+        );
+
+        for c in "hi".chars() {
+            app.handle_focus_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        assert_eq!(
+            app.state.focus_editor.as_ref().expect("editor").note.body,
+            "hi"
+        );
+
+        app.handle_focus_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.state.focus_open);
+        assert_eq!(
+            app.state.top_bar_view(),
+            crate::app::state::TopBarView::Home
+        );
+
+        // The prefix still reaches the shortcuts from inside Focus.
+        app.activate_top_bar_view(crate::app::state::TopBarView::Focus);
+        app.handle_focus_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+    }
+
+    #[test]
+    fn pane_and_tab_switches_are_ignored_while_a_full_view_or_the_popover_is_open() {
+        use crate::app::state::TopBarView;
+
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let mut workspace = crate::workspace::Workspace::test_new("one");
+        workspace.test_add_tab(Some("two"));
+        workspace.switch_tab(0);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let next_tab = TerminalKey::from(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        let next_window = TerminalKey::from(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+
+        for view in [TopBarView::Focus, TopBarView::Scratch, TopBarView::Mailbox] {
+            app.activate_top_bar_view(view);
+            for key in [next_tab.clone(), next_window.clone()] {
+                app.state.set_server_mode(Mode::Prefix);
+                app.handle_prefix_key(key);
+                assert_eq!(app.state.workspaces[0].active_tab, 0, "{view:?}");
+                assert_ne!(app.state.server_mode(), Mode::Prefix, "{view:?}");
+                assert_eq!(app.state.top_bar_view(), view, "the view stays open");
+            }
+            app.activate_top_bar_view(TopBarView::Home);
+        }
+
+        // The popover is modal: the prefix never even reaches the bindings.
+        app.state.status_more_open = true;
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_prefix_key(next_tab.clone());
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        app.state.status_more_open = false;
+
+        // Home: the same key switches tabs.
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_prefix_key(next_tab);
+        assert_eq!(app.state.workspaces[0].active_tab, 1);
+    }
+
+    #[test]
+    fn only_focus_moving_actions_count_as_pane_switches() {
+        for action in [
+            NavigateAction::NextWindow,
+            NavigateAction::PreviousWindow,
+            NavigateAction::NextTab,
+            NavigateAction::PreviousTab,
+            NavigateAction::SwitchTab(2),
+            NavigateAction::CyclePaneNext,
+            NavigateAction::FocusPaneLeft,
+            NavigateAction::NextWorkspace,
+        ] {
+            assert!(action.switches_pane(), "{action:?}");
+        }
+        for action in [
+            NavigateAction::OpenFocusView,
+            NavigateAction::OpenHomeView,
+            NavigateAction::OpenInbox,
+            NavigateAction::Help,
+            NavigateAction::SplitVertical,
+        ] {
+            assert!(!action.switches_pane(), "{action:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_prefix_reaches_herdr_shortcuts_from_the_mailbox() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.activate_top_bar_view(crate::app::state::TopBarView::Mailbox);
+        let prefix = TerminalKey::new(app.state.prefix_code, app.state.prefix_mods);
+        assert!(app.handle_inbox_key(prefix.clone()).await.is_none());
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+
+        app.state.set_server_mode(Mode::Terminal);
+        assert!(app.handle_inbox_key_headless(prefix.as_key_event()));
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        assert!(app.state.inbox.is_some(), "the prefix alone closes nothing");
+    }
+
+    #[test]
+    fn the_prefix_reaches_herdr_shortcuts_from_the_board() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let date = time::Date::from_calendar_date(2026, time::Month::September, 28)
+            .expect("fixed board date");
+        let note = crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+            .expect("synthetic board week");
+        app.state.board_view = Some(crate::board::BoardView::test_new(
+            note,
+            crate::board::Board::default(),
+        ));
+        let prefix = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert!(app.enter_prefix_from_board(prefix));
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        assert!(!app.enter_prefix_from_board(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)));
+    }
+
+    #[test]
+    fn pasting_into_focus_lands_in_its_notepad() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.activate_top_bar_view(crate::app::state::TopBarView::Focus);
+        assert!(app.paste_into_active_text_input("pasted\nlines"));
+        assert_eq!(
+            app.state.focus_editor.as_ref().expect("editor").note.body,
+            "pasted\nlines"
+        );
+    }
+
+    #[test]
+    fn the_more_popover_swallows_keys_and_esc_closes_it() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.status_more_open = true;
+        let owner = InputOwner::Pane;
+        assert!(app.handle_status_more_menu_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            owner
+        ));
+        assert!(app.state.status_more_open);
+        assert!(
+            app.handle_status_more_menu_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), owner)
+        );
+        assert!(!app.state.status_more_open);
+        assert!(!app.handle_status_more_menu_key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            owner
+        ));
+    }
+
+    #[test]
+    fn the_more_popover_swallows_keys_over_client_menus() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.status_more_open = true;
+        let owner = InputOwner::Client(crate::app::state::ClientInputOwner::SidebarSortMenu);
+        assert!(app.handle_status_more_menu_key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            owner
+        ));
+        assert!(app.state.status_more_open);
+        assert!(
+            app.handle_status_more_menu_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), owner)
+        );
+        assert!(!app.state.status_more_open);
+    }
+
+    #[test]
+    fn a_click_outside_the_more_popover_over_a_client_menu_only_closes_it() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.status_more_open = true;
+        app.state.view.status_bar_rect = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let owner = InputOwner::Client(crate::app::state::ClientInputOwner::SidebarSortMenu);
+        assert!(app.handle_status_more_menu_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 5,
+                row: 10,
+                modifiers: KeyModifiers::NONE,
+            },
+            owner
+        ));
+        assert!(!app.state.status_more_open);
+    }
+
+    #[test]
+    fn the_pomodoro_break_prompt_outranks_the_more_popover() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.status_more_open = true;
+        let owner = InputOwner::Pomodoro;
+        assert!(!app
+            .handle_status_more_menu_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), owner));
+        assert!(app.state.status_more_open);
     }
 
     #[test]

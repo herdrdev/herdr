@@ -527,12 +527,16 @@ pub(crate) fn sample_status_metrics(
     let hostname = status_hostname();
     let (mem_used_gib, mem_total_gib) = status_memory().unwrap_or((0.0, 0.0));
     let cpu_percent = status_cpu_ticks().and_then(|(idle, total)| sampler.cpu_percent(idle, total));
+    let disk = super::unix_common::volume_used(c"/");
 
     super::status_metrics::StatusMetrics {
         cpu_percent,
+        cpu_cores: super::status_metrics::cpu_core_count(),
         mem_used_gib: (mem_total_gib > 0.0).then_some(mem_used_gib),
         mem_total_gib: (mem_total_gib > 0.0).then_some(mem_total_gib),
-        disk_percent: super::unix_common::volume_used_percent(c"/"),
+        disk_percent: disk.map(|(percent, _, _)| percent),
+        disk_used_gib: disk.map(|(_, used, _)| used),
+        disk_total_gib: disk.map(|(_, _, total)| total),
         hostname,
     }
 }

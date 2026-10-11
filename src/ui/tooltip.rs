@@ -521,18 +521,10 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
         ),
         ControlId::StatusButton(index) => {
             let button = view.status_buttons.get(index)?;
+            let crate::app::state::StatusButtonAction::View(top_bar_view) = button.action;
             (
                 button.rect,
-                match button.action {
-                    crate::app::state::StatusButtonAction::Home => {
-                        "Home: overview of all workspaces"
-                    }
-                    crate::app::state::StatusButtonAction::NewSession => "New session",
-                    crate::app::state::StatusButtonAction::BlockedFilter => "Blocked agents",
-                    crate::app::state::StatusButtonAction::Board => "Board",
-                    crate::app::state::StatusButtonAction::Scratch => "Scratch: write notes",
-                }
-                .into(),
+                crate::ui::status::view_button_tooltip(app, top_bar_view),
             )
         }
     };
@@ -653,9 +645,76 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
             Some(metrics) => format!("Host herdr runs on: {}", metrics.hostname),
             None => "Host herdr runs on".into(),
         },
-        StatusSegmentKind::Cpu => "CPU busy, sampled from kernel ticks".into(),
-        StatusSegmentKind::Memory => "Memory used of installed total".into(),
-        StatusSegmentKind::Disk => "Disk usage on / (shown above 80%)".into(),
+        StatusSegmentKind::Cpu => cpu_tooltip(metrics),
+        StatusSegmentKind::Memory => memory_tooltip(metrics),
+        StatusSegmentKind::Disk => disk_tooltip(metrics),
+        StatusSegmentKind::More => {
+            "More\nLink, agents, host and fleet machines. Hidden by default.\nClick to open · Esc closes".into()
+        }
+    }
+}
+
+/// Gibibytes as the human reads them, at one precision per tooltip: a tenth
+/// on a small total, whole numbers once the total reaches 100 GB, where the
+/// tenth is noise. A whole value drops its `.0`.
+fn gigabytes(value: f32, total: f32) -> String {
+    let text = if total >= 100.0 {
+        format!("{value:.0}")
+    } else {
+        format!("{value:.1}")
+    };
+    format!("{} GB", text.strip_suffix(".0").unwrap_or(&text))
+}
+
+fn cpu_tooltip(metrics: Option<&crate::platform::status_metrics::StatusMetrics>) -> String {
+    let Some(percent) = metrics.and_then(|metrics| metrics.cpu_percent) else {
+        return "CPU busy: not sampled yet".into();
+    };
+    match metrics.and_then(|metrics| metrics.cpu_cores) {
+        Some(cores) => format!(
+            "CPU {percent}% — {:.1} of {cores} cores busy",
+            f32::from(percent) / 100.0 * f32::from(cores)
+        ),
+        None => format!("CPU {percent}% busy"),
+    }
+}
+
+fn memory_tooltip(metrics: Option<&crate::platform::status_metrics::StatusMetrics>) -> String {
+    let Some(metrics) = metrics else {
+        return "Memory used: not sampled yet".into();
+    };
+    match (
+        crate::ui::status::memory_percent(metrics),
+        metrics.mem_used_gib,
+        metrics.mem_total_gib,
+    ) {
+        (Some(percent), Some(used), Some(total)) => format!(
+            "Memory {percent}% — {} of {} used · {} free",
+            gigabytes(used, total),
+            gigabytes(total, total),
+            gigabytes((total - used).max(0.0), total)
+        ),
+        _ => "Memory used: not sampled yet".into(),
+    }
+}
+
+fn disk_tooltip(metrics: Option<&crate::platform::status_metrics::StatusMetrics>) -> String {
+    let Some(metrics) = metrics else {
+        return "Disk used: not sampled yet".into();
+    };
+    match (
+        metrics.disk_percent,
+        metrics.disk_used_gib,
+        metrics.disk_total_gib,
+    ) {
+        (Some(percent), Some(used), Some(total)) => format!(
+            "Disk {percent}% — {} of {} used on / · {} free",
+            gigabytes(used, total),
+            gigabytes(total, total),
+            gigabytes((total - used).max(0.0), total)
+        ),
+        (Some(percent), _, _) => format!("Disk {percent}% used on /"),
+        _ => "Disk used: not sampled yet".into(),
     }
 }
 
@@ -1058,37 +1117,33 @@ mod status_segments {
     }
 
     #[test]
-    fn topbar_action_buttons_have_named_tooltips() {
+    fn top_bar_view_icons_have_named_tooltips_with_their_shortcuts() {
         let mut app = AppState::test_new();
-        let labels = [
-            "Home: overview of all workspaces",
-            "New session",
-            "Blocked agents",
-            "Board",
-            "Scratch: write notes",
+        let area = Rect::new(0, 0, 120, 1);
+        app.view.status_buttons = crate::ui::status::status_buttons(&app, area);
+        let expected = [
+            ("Home", "prefix+a"),
+            ("Focus", "prefix+ctrl+f"),
+            ("Orchestration", "prefix+ctrl+o"),
+            ("Scratch", "prefix+ctrl+s"),
+            ("Mailbox", "prefix+m"),
         ];
-        app.view.status_buttons = labels
-            .iter()
-            .enumerate()
-            .map(|(index, _)| crate::app::state::StatusButton {
-                action: [
-                    crate::app::state::StatusButtonAction::Home,
-                    crate::app::state::StatusButtonAction::NewSession,
-                    crate::app::state::StatusButtonAction::BlockedFilter,
-                    crate::app::state::StatusButtonAction::Board,
-                    crate::app::state::StatusButtonAction::Scratch,
-                ][index],
-                label: String::new(),
-                rect: Rect::new(index as u16 * 2, 0, 1, 1),
-                active: false,
-            })
-            .collect();
-
-        for (index, expected) in labels.iter().enumerate() {
-            let target = tooltip_target(&app, ControlId::StatusButton(index))
-                .expect("topbar button tooltip");
-            assert_eq!(target.1, *expected);
+        for (index, (name, shortcut)) in expected.iter().enumerate() {
+            let (rect, text) =
+                tooltip_target(&app, ControlId::StatusButton(index)).expect("view icon tooltip");
+            assert_eq!(rect, app.view.status_buttons[index].rect);
+            assert!(text.starts_with(&format!("{name}\n")), "{text}");
+            assert!(text.ends_with(&format!("\n{shortcut}")), "{text}");
         }
+    }
+
+    #[test]
+    fn view_icon_tooltips_follow_rebound_shortcuts() {
+        let mut app = AppState::test_new();
+        app.keybinds.focus_view = crate::config::ActionKeybinds::prefix("z");
+        let text =
+            crate::ui::status::view_button_tooltip(&app, crate::app::state::TopBarView::Focus);
+        assert!(text.ends_with("\nprefix+z"), "{text}");
     }
 
     #[test]
@@ -1100,6 +1155,13 @@ mod status_segments {
     #[test]
     fn hit_areas_cover_the_drawn_row_right_aligned() {
         let mut app = AppState::test_new();
+        let mut metrics = crate::platform::status_metrics::status_metrics_fixture();
+        metrics.cpu_percent = Some(91);
+        app.status_cpu_visible = true;
+        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
+            metrics,
+            sampled_at: std::time::Instant::now(),
+        });
         let area = Rect::new(0, 0, 200, 1);
         app.view.status_segments = crate::ui::status::fitted_status_segments(&app, area);
         let areas = crate::ui::status::status_segment_hit_areas(&app, area);

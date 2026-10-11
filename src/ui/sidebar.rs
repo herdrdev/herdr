@@ -146,8 +146,6 @@ pub(super) fn tab_lifecycle_visible(entry: &AgentPanelEntry) -> bool {
 /// A blocked attention tier remains actionable while lifecycle state still
 /// reports working; the row can show both facts at once.
 pub(crate) fn entry_attention_tier(entry: &AgentPanelEntry) -> AttentionTier {
-    #[cfg(test)]
-    ENTRY_ATTENTION_TIER_VISITS.with(|visits| visits.set(visits.get() + 1));
     entry.attention_tier.unwrap_or_else(|| {
         crate::terminal::state::attention_tier(
             entry.state,
@@ -171,16 +169,6 @@ pub(crate) fn entry_attention_rank(entry: &AgentPanelEntry) -> u8 {
         AttentionTier::Attention => 1,
         AttentionTier::Blocked => 2,
     }
-}
-
-#[cfg(test)]
-thread_local! {
-    static ENTRY_ATTENTION_TIER_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn take_entry_attention_tier_visits() -> usize {
-    ENTRY_ATTENTION_TIER_VISITS.with(|visits| visits.replace(0))
 }
 
 pub(crate) fn entry_is_blocked(entry: &AgentPanelEntry) -> bool {
@@ -2727,7 +2715,8 @@ pub(crate) fn relative_agent_navigation_entry(
         .map(|entry| (next_idx, entry))
 }
 
-#[cfg(test)]
+// Only the unix-gated live-cwd test below calls this helper.
+#[cfg(all(test, unix))]
 pub(crate) fn agent_panel_entries_from(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,

@@ -332,6 +332,11 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # work = "prefix+ctrl+w"         # work projection view: PRs / tickets / agents / review
 # usage = "prefix+ctrl+y"        # historical Claude Code and Codex usage
 # tickets = "prefix+ctrl+t"      # Linear tickets view
+# home_view = "prefix+a"         # top bar Home: close every view, back to the panes
+# focus_view = "prefix+ctrl+f"   # top bar Focus: full-screen notepad
+# orchestration_view = "prefix+ctrl+o" # top bar Orchestration: the board
+# scratch_view = "prefix+ctrl+s" # top bar Scratch: the notes writer
+# mailbox_view = "prefix+m"      # top bar Mailbox: the blocked inbox
 
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.

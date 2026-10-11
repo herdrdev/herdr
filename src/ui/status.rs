@@ -9,35 +9,31 @@ use ratatui::{
     Frame,
 };
 
-use super::text::{display_width, display_width_u16, truncate_end};
+use super::text::{display_width, display_width_u16};
 use super::widgets::panel_contrast_fg;
 use crate::{
     app::state::{
-        CopyFeedback, Palette, StatusButton, StatusButtonAction, StatusSegmentKind, StatusWorkLink,
-        ToastKind, ToastNotification,
+        CopyFeedback, Palette, StatusButton, StatusButtonAction, StatusSegmentKind, ToastKind,
+        ToastNotification, TopBarView,
     },
     app::AppState,
     config::{StatusIndicatorStyle, ToastClipboardPosition, ToastHerdrPosition},
     detect::AgentState,
-    platform::status_metrics::StatusMetrics,
+    platform::status_metrics::metric_segment_visible,
     terminal::TerminalRuntimeRegistry,
 };
 
-/// Full-width, right-aligned top status row.
+/// Full-width top bar.
 ///
-/// Contents, left to right: provider quota (Claude, Codex, OpenCode, Agy) · link dot ·
-/// agent dot · remote device (only when the focused pane is attached to a
-/// fleet host) · device · CPU · memory · disk. The row before the first
-/// surviving segment is intentionally blank.
+/// Left: one icon per view (Home, Focus, Orchestration, Scratch, Mailbox), the
+/// one on screen highlighted. Centre: that view's name. Right: CPU, memory and
+/// disk, each only while it is at or above 80% (amber, red from 90%), then the
+/// `⋯` control. The link, agent, host and fleet indicators live in the popover
+/// that control opens, so a healthy machine shows an otherwise quiet bar.
 ///
-/// Every value is a filled column because the question the row answers is "is
-/// anything close to its ceiling", not "what is the exact number". Expanded
-/// mode adds the numbers and the reset times back.
-///
-/// Layout: spans the full client width above the sidebar and pads before the
-/// first surviving segment. On narrow widths Agy, OpenCode, Codex, Claude,
-/// then the remote device and device elide in that order; CPU and memory remain
-/// required.
+/// Layout: spans the full client width above the sidebar. The right-hand
+/// segments are fitted first; the icons yield to them rather than overlapping,
+/// and the view name is drawn only where it fits between the two.
 pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -83,25 +79,28 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
         Paragraph::new(Line::from(spans)).style(bg),
         Rect::new(area.x, area.y, content_width, area.height),
     );
-    render_focused_pane_title(app, frame, area, used + usize::from(reserved));
-    for link in &app.view.status_work_links {
+
+    let fallback_buttons;
+    let buttons = if app.view.status_buttons.is_empty() {
+        fallback_buttons = status_buttons(app, area);
+        &fallback_buttons
+    } else {
+        &app.view.status_buttons
+    };
+    if let Some(rect) = view_title_rect(app, area, buttons, used + usize::from(reserved)) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                link.label.clone(),
-                Style::default().fg(p.accent).bg(p.panel_bg),
+                app.top_bar_view().name(),
+                Style::default().fg(p.overlay1).bg(p.panel_bg),
             ))),
-            link.rect,
+            rect,
         );
     }
-
-    for button in &app.view.status_buttons {
+    for button in buttons {
         let style = if button.active {
-            Style::default().fg(p.accent).bg(p.panel_bg)
+            Style::default().fg(p.accent).bg(p.surface0)
         } else {
-            Style::default()
-                .fg(p.overlay0)
-                .bg(p.panel_bg)
-                .add_modifier(Modifier::DIM)
+            Style::default().fg(p.overlay1).bg(p.panel_bg)
         };
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(button.label.clone(), style))),
@@ -143,56 +142,37 @@ mod fleet_device_tests {
     }
 }
 
-/// The focused repository and thread, rendered in the status row's otherwise
-/// empty middle. It starts at the sidebar's right edge so the title lines up
-/// with the column the pane itself occupies below, and it yields to both the
-/// left-hand buttons and the right-aligned segments rather than overlapping.
-fn render_focused_pane_title(app: &AppState, frame: &mut Frame, area: Rect, segments_used: usize) {
-    let Some(layout) = focused_pane_title_layout(app, area, segments_used) else {
-        return;
-    };
-    let style = Style::default()
-        .fg(app.palette.subtext0)
-        .bg(app.palette.panel_bg);
-    let mut spans = Vec::with_capacity(2);
-    if let Some(color) = layout.agent_dot_color {
-        spans.push(Span::styled(
-            format!("{} ", layout.agent_dot_glyph.unwrap_or("●")),
-            Style::default().fg(color).bg(app.palette.panel_bg),
-        ));
+/// Where the current view's name sits: centred on the bar, or as close to the
+/// centre as the icons on its left and the segments on its right allow.
+/// `None` when the name does not fit between them at all.
+fn view_title_rect(
+    app: &AppState,
+    area: Rect,
+    buttons: &[StatusButton],
+    segments_used: usize,
+) -> Option<Rect> {
+    let name = app.top_bar_view().name();
+    let width = display_width_u16(name);
+    let left = buttons
+        .iter()
+        .map(|button| button.rect.x.saturating_add(button.rect.width))
+        .max()
+        .unwrap_or(area.x)
+        .saturating_add(1);
+    let right = area
+        .x
+        .saturating_add(area.width)
+        .saturating_sub(u16::try_from(segments_used).unwrap_or(u16::MAX))
+        .saturating_sub(1);
+    if right.saturating_sub(left) < width {
+        return None;
     }
-    spans.push(Span::styled(layout.text, style));
-    frame.render_widget(Paragraph::new(Line::from(spans)), layout.rect);
+    let centred = area.x.saturating_add(area.width.saturating_sub(width) / 2);
+    let x = centred.clamp(left, right.saturating_sub(width));
+    Some(Rect::new(x, area.y, width, 1))
 }
 
-/// Blank columns between the title and the first link, and between links.
-const WORK_LINK_GAP: usize = 2;
-
-struct TitleLayout {
-    text: String,
-    rect: Rect,
-    links: Vec<StatusWorkLink>,
-    agent_dot_color: Option<Color>,
-    agent_dot_glyph: Option<&'static str>,
-}
-
-/// Whether a lowercased title already names this link, as a whole word rather
-/// than as any substring.
-fn title_names(lowercased_title: &str, label: &str) -> bool {
-    let label = label.to_lowercase();
-    let boundary = |character: char| !character.is_alphanumeric() && character != '-';
-    lowercased_title
-        .match_indices(&label)
-        .any(|(index, matched)| {
-            let before = lowercased_title[..index].chars().next_back();
-            let after = lowercased_title[index + matched.len()..].chars().next();
-            before.is_none_or(boundary) && after.is_none_or(boundary)
-        })
-}
-
-/// The right-aligned segments this frame will draw. Built once during view
-/// computation because the title and its links are laid out against them, and
-/// building them twice would repeat the per-pane agent scan behind the dots.
+/// The right-aligned segments this frame will draw, fitted to the bar.
 pub(crate) fn fitted_status_segments(app: &AppState, area: Rect) -> Vec<Segment> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
@@ -202,350 +182,67 @@ pub(crate) fn fitted_status_segments(app: &AppState, area: Rect) -> Vec<Segment>
     if usize::from(content_width) < minimum_required_status_width(app) {
         return Vec::new();
     }
-    status_row_segments(
-        app,
-        metrics_or_unavailable(app),
-        &app.palette,
-        area,
-        content_width,
+    fitted_segments(
+        status_segments(app, metrics_or_unavailable(app), &app.palette),
+        usize::from(content_width),
     )
 }
 
-/// Ticket and pull-request links of the focused pane, as rendered in the status
-/// row. Computed during view computation so the hit areas belong to the same
-/// frame as the labels, and empty whenever the title itself does not fit.
-pub(crate) fn status_work_links(app: &AppState, area: Rect) -> Vec<StatusWorkLink> {
-    if app.dock_context_objects.is_empty() {
-        return Vec::new();
-    }
-    let reserved = super::tabs::tab_action_status_bar_reserved_width(app, area);
-    if usize::from(area.width.saturating_sub(reserved)) < minimum_required_status_width(app) {
-        return Vec::new();
-    }
-    let segments_used = segment_width(&app.view.status_segments) + usize::from(reserved);
-    focused_pane_title_layout(app, area, segments_used)
-        .map(|layout| layout.links)
-        .unwrap_or_default()
-}
-
-/// Title text, its rect, and the links that follow it.
-///
-/// The links are paid for before the title is fitted: an identifier the human
-/// clicks is worth more than the tail of a thread name they are already
-/// reading. Links that would leave no room for the repository are dropped
-/// rather than shown over a clipped title.
-fn focused_pane_title_layout(
-    app: &AppState,
-    area: Rect,
-    segments_used: usize,
-) -> Option<TitleLayout> {
-    let (repo, thread) = focused_pane_title_parts(app)?;
-    let start = focused_pane_title_start(app, area);
-    let segments_start = area
-        .x
-        .saturating_add(area.width)
-        .saturating_sub(u16::try_from(segments_used).unwrap_or(u16::MAX));
-    let raw_width = segments_start.saturating_sub(start);
-    // Keep a separator when space permits, but at 80 columns the repository is
-    // more useful than a blank cell.
-    let width = usize::from(
-        raw_width.saturating_sub(u16::from(usize::from(raw_width) > display_width(&repo))),
-    );
-    let agent_dot_color = focused_agent_dot_color(app);
-    let dot_width = if agent_dot_color.is_some() { 2usize } else { 0 };
-    let width = width.saturating_sub(dot_width);
-    let mut links_width = 0usize;
-    let mut kept: Vec<(crate::app::state::DockObjectRef, String)> = Vec::new();
-    let title_of_record = fit_focused_pane_title(&repo, &thread, usize::MAX)
-        .unwrap_or_default()
-        .to_lowercase();
-    for object in &app.dock_context_objects {
-        let label = app.dock_object_label(object);
-        if label.is_empty() {
-            continue;
-        }
-        // The title already carries the ticket it was derived from. Naming it
-        // twice on one row buys nothing. Matched on whole words, so `#159`
-        // is not swallowed by a title that happens to mention `#1592`.
-        if title_names(&title_of_record, &label) {
-            continue;
-        }
-        let cost = WORK_LINK_GAP + display_width(&label);
-        if width.saturating_sub(links_width + cost) < display_width(&repo) {
-            break;
-        }
-        links_width += cost;
-        kept.push((object.clone(), label));
-    }
-    let title_width = width.saturating_sub(links_width);
-    let text = if app
-        .view
-        .focused_remote_host
-        .as_deref()
-        .is_some_and(|host| host != app.agent_host_name)
-    {
-        Some(super::sidebar::truncate_remote_title(
-            &format!("{repo} / {thread}"),
-            title_width,
-        ))
-    } else {
-        fit_focused_pane_title(&repo, &thread, title_width)
-    }?;
-    let title_start = start.saturating_add(u16::try_from(dot_width).unwrap_or(u16::MAX));
-    let mut cursor = title_start.saturating_add(display_width_u16(&text));
-    let links = kept
+/// What a view icon's tooltip says: its name, what a click does, and the
+/// shortcut that does the same, read from the live keybindings.
+pub(crate) fn view_button_tooltip(app: &AppState, view: TopBarView) -> String {
+    let (what, binding) = match view {
+        TopBarView::Home => (
+            "All tabs and their agents. Click to return here from any view.",
+            &app.keybinds.home_view,
+        ),
+        TopBarView::Focus => (
+            "Hide panes and write in a full-screen notepad. Esc returns Home.",
+            &app.keybinds.focus_view,
+        ),
+        TopBarView::Orchestration => (
+            "Board of every agent: working, blocked, done. Opens the board view.",
+            &app.keybinds.orchestration_view,
+        ),
+        TopBarView::Scratch => (
+            "Your scratch pad, full screen. Opens the scratch notes writer.",
+            &app.keybinds.scratch_view,
+        ),
+        TopBarView::Mailbox => (
+            "Agent requests waiting for you. Opens the blocked inbox.",
+            &app.keybinds.mailbox_view,
+        ),
+    };
+    let shortcut = binding
+        .labels()
         .into_iter()
-        .map(|(object, label)| {
-            let label_width = display_width_u16(&label);
-            let rect = Rect::new(
-                cursor.saturating_add(u16::try_from(WORK_LINK_GAP).unwrap_or(u16::MAX)),
-                area.y,
-                label_width,
-                1,
-            );
-            cursor = rect.x.saturating_add(label_width);
-            StatusWorkLink {
-                rect,
-                label,
-                object,
-            }
-        })
-        .collect();
-    Some(TitleLayout {
-        text,
-        rect: Rect::new(
-            start,
-            area.y,
-            u16::try_from(title_width.saturating_add(dot_width)).unwrap_or(u16::MAX),
-            1,
-        ),
-        links,
-        agent_dot_color,
-        agent_dot_glyph: focused_agent_dot(app).map(|(glyph, _)| glyph),
-    })
+        .next()
+        .unwrap_or_else(|| "no shortcut".into());
+    format!("{}\n{what}\n{shortcut}", view.name())
 }
 
-fn focused_agent_dot(app: &AppState) -> Option<(&'static str, Color)> {
-    let workspace = app.workspaces.get(app.active?)?;
-    let pane_id = workspace.focused_pane_id()?;
-    let pane = workspace.active_tab()?.panes.get(&pane_id)?;
-    let terminal = app.terminals.get(workspace.terminal_id(pane_id)?)?;
-    terminal.effective_known_agent()?;
-    let (state, seen) = terminal.sidebar_projection(pane.seen);
-    Some((
-        super::sidebar::compact_dot_for_state(state, seen, true, false, false, false),
-        state_label_color(state, seen, &app.palette),
-    ))
-}
-
-fn focused_agent_dot_color(app: &AppState) -> Option<Color> {
-    focused_agent_dot(app).map(|(_, color)| color)
-}
-
-/// The right-aligned segments, fitted to whatever the title left them.
-fn status_row_segments(
-    app: &AppState,
-    metrics: &StatusMetrics,
-    p: &Palette,
-    area: Rect,
-    content_width: u16,
-) -> Vec<Segment> {
-    let title_segment_budget = focused_pane_title_parts(app).and_then(|(repo, _)| {
-        let start = focused_pane_title_start(app, area);
-        let dot_width = u16::from(focused_agent_dot_color(app).is_some()) * 2;
-        let budget = area
-            .x
-            .saturating_add(content_width)
-            .saturating_sub(start)
-            .saturating_sub(dot_width)
-            .saturating_sub(display_width_u16(&repo));
-        (usize::from(budget) >= minimum_title_companion_width()).then_some(usize::from(budget))
-    });
-    match title_segment_budget {
-        Some(budget) => fitted_segments_beside_title(status_segments(app, metrics, p), budget),
-        None => fitted_segments(status_segments(app, metrics, p), usize::from(content_width)),
-    }
-}
-
-fn focused_pane_title_start(app: &AppState, area: Rect) -> u16 {
-    let sidebar = app.view.sidebar_rect;
-    let buttons_end = app
-        .view
-        .status_buttons
-        .iter()
-        .map(|button| button.rect.x.saturating_add(button.rect.width))
-        .max()
-        .unwrap_or(area.x);
-    sidebar
-        .x
-        .saturating_add(sidebar.width)
-        .max(area.x)
-        .max(buttons_end)
-}
-
-fn focused_pane_title_parts(app: &AppState) -> Option<(String, String)> {
-    let workspace = app.active.and_then(|ws_idx| app.workspaces.get(ws_idx))?;
-    let pane_id = workspace.focused_pane_id()?;
-    let terminal = app.terminals.get(workspace.terminal_id(pane_id)?)?;
-    let context = terminal.effective_work_context();
-    let repo = context
-        .repo
-        .as_deref()
-        .and_then(|repo| repo.rsplit('/').find(|part| !part.trim().is_empty()))
-        .map(str::trim)
-        .filter(|repo| !repo.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            terminal
-                .cwd
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::trim)
-                .filter(|repo| !repo.is_empty())
-                .map(str::to_string)
-        })?;
-    // The sidebar row for this pane reads the same function, so the two
-    // surfaces cannot name one session differently.
-    let tab_idx = workspace.active_tab;
-    let projection = workspace.tab_display_projection(&app.terminals, tab_idx);
-    let title = crate::workspace::session_title(
-        projection.as_ref(),
-        workspace
-            .tab_display_name_from(&app.terminals, tab_idx)
-            .or_else(|| Some(super::sidebar::DEFAULT_THREAD_TITLE.to_string())),
-    )?;
-    let title = title.trim();
-    (!title.is_empty()).then(|| {
-        let title = match app
-            .view
-            .focused_remote_host
-            .as_deref()
-            .filter(|host| *host != app.agent_host_name)
-        {
-            Some(host) => format!("{title} · {host}"),
-            None => title.to_string(),
-        };
-        (repo, title)
-    })
-}
-
-fn fit_focused_pane_title(repo: &str, thread: &str, width: usize) -> Option<String> {
-    let repo_width = display_width(repo);
-    if repo_width == 0 || repo_width > width {
-        return None;
-    }
-    let full = format!("{repo} / {thread}");
-    if display_width(&full) <= width {
-        return Some(full);
-    }
-    let minimum_truncated = format!("{repo} / …");
-    if display_width(&minimum_truncated) > width {
-        return Some(repo.to_string());
-    }
-    Some(truncate_end(&full, width))
-}
-
-/// Left-aligned quick-access buttons. The status bar's own segments are
-/// right-aligned, so the left half is otherwise pure padding.
-///
-type StatusButtonSpec = (StatusButtonAction, String, bool);
-
-fn status_button_specs(app: &AppState, blocked: usize) -> [StatusButtonSpec; 5] {
-    [
-        (
-            StatusButtonAction::BlockedFilter,
-            if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice {
-                format!(" ⛔ {blocked} · {} ", app.agent_host_name)
-            } else {
-                format!(" ⛔ {blocked} ")
-            },
-            app.blocked_filter,
-        ),
-        (
-            StatusButtonAction::Home,
-            if app.nerd_font { " ⌂ " } else { " H " }.to_string(),
-            app.home.is_some(),
-        ),
-        (
-            StatusButtonAction::NewSession,
-            if app.nerd_font { " ＋ " } else { " + " }.to_string(),
-            false,
-        ),
-        (
-            StatusButtonAction::Board,
-            if app.nerd_font { " ▦ " } else { " B " }.to_string(),
-            app.board_view.is_some(),
-        ),
-        (
-            StatusButtonAction::Scratch,
-            if app.nerd_font { " ✎ " } else { " S " }.to_string(),
-            app.scratch.open,
-        ),
-    ]
-}
-
+/// The five view icons, left-aligned in a fixed order. Built once per frame so
+/// the rendered label and the clickable rect can never disagree.
 pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let mut blocked = crate::ui::sidebar::all_agent_panel_entries(app)
-        .into_iter()
-        .fold(0usize, |blocked, entry| {
-            if crate::ui::sidebar::entry_attention_tier(&entry)
-                != crate::terminal::state::AttentionTier::Blocked
-            {
-                return blocked;
-            }
-            let on_this_device = entry.local_target().is_some_and(|target| {
-                app.workspaces
-                    .get(target.ws_idx)
-                    .and_then(|workspace| workspace.tabs.get(target.tab_idx))
-                    .and_then(|tab| tab.panes.get(&target.pane_id))
-                    .and_then(|pane| app.terminals.get(&pane.attached_terminal_id))
-                    .is_some_and(|terminal| terminal.remote_proxy_host.is_none())
-            });
-            if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
-                && !on_this_device
-            {
-                blocked
-            } else {
-                blocked + 1
-            }
-        });
-    if app.sidebar_blocker_scope == crate::app::state::BlockerScope::Fleet {
-        for remote in &app.remote_agent_panel_entries {
-            if crate::ui::sidebar::entry_attention_tier(&remote.entry)
-                == crate::terminal::state::AttentionTier::Blocked
-            {
-                blocked = blocked.saturating_add(1);
-            }
-        }
-    }
-    let specs = status_button_specs(app, blocked);
-
-    // The right-aligned segments are load-bearing; buttons yield to them rather
-    // than overlapping, and drop whole rather than truncating to an unreadable stub.
-    let title_reserve = if app.sidebar_blocker_scope == crate::app::state::BlockerScope::ThisDevice
-    {
-        0
-    } else {
-        focused_pane_title_parts(app)
-            .map(|(repo, _)| display_width(&repo))
-            .unwrap_or(0)
-            .saturating_add(usize::from(focused_agent_dot_color(app).is_some()) * 2)
-    };
+    let current = app.top_bar_view();
     let content_width = area
         .width
         .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, area));
+    // The right-aligned segments are load-bearing; icons yield to them rather
+    // than overlapping, and drop whole rather than truncating to a stub.
     let reserved = segment_width(&fitted_segments(
         status_segments(app, metrics_or_unavailable(app), &app.palette),
         usize::from(content_width),
-    )) + title_reserve;
+    ));
     let budget = usize::from(content_width).saturating_sub(reserved);
     let mut buttons = Vec::new();
     let mut x = area.x;
     let mut used = 0usize;
-    for (action, label, active) in specs {
+    for view in TopBarView::ALL {
+        let label = format!(" {} ", crate::ui::icons::view_icon(view, app.nerd_font));
         let width = display_width(&label);
         if used + width > budget {
             break;
@@ -556,8 +253,8 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         buttons.push(StatusButton {
             rect: Rect::new(x, area.y, cell_width, 1),
             label,
-            action,
-            active,
+            action: StatusButtonAction::View(view),
+            active: view == current,
         });
         x = x.saturating_add(cell_width);
         used += width;
@@ -637,38 +334,16 @@ fn fitted_segments(mut segments: Vec<Segment>, width: usize) -> Vec<Segment> {
         };
         segments.remove(index);
     }
-
-    debug_assert!(segment_width(&segments) <= width);
     segments
 }
 
-fn fitted_segments_beside_title(mut segments: Vec<Segment>, width: usize) -> Vec<Segment> {
-    if width < minimum_required_status_width_for_segments() {
-        // At 80 columns the repository identity wins the last few cells. CPU
-        // and memory remain; the connectivity dot returns at wider sizes.
-        segments.retain(|segment| segment.text.trim() != DOT.to_string());
-        if width == minimum_title_companion_width() {
-            if let Some(cpu) = segments
-                .iter_mut()
-                .find(|segment| segment.text.starts_with(" CPU "))
-            {
-                cpu.text.remove(0);
-            }
-        }
-    }
-    fitted_segments(segments, width)
-}
-
-fn minimum_required_status_width_for_segments() -> usize {
-    1 + display_width(" CPU \u{2588} 100 ") + display_width(" MEM \u{2588} 100 ")
-}
-
-fn minimum_title_companion_width() -> usize {
-    display_width("CPU \u{2588} ") + display_width(" MEM \u{2588} ")
-}
-
+/// The narrowest bar that still answers its question: every metric at once,
+/// expanded, plus the `⋯` control. Below this the layout goes mobile.
 pub(crate) fn minimum_required_status_width(_app: &AppState) -> usize {
-    minimum_required_status_width_for_segments()
+    display_width(" CPU \u{2588} 100 ")
+        + display_width(" MEM \u{2588} 100 ")
+        + display_width(" DSK \u{2588} 100 ")
+        + display_width(" ... ")
 }
 
 /// The eight fill levels of a column glyph, from shortest to full.
@@ -725,6 +400,7 @@ pub(crate) fn fleet_device_text(
     (format!(" {dot}{}", device.name), Style::default().fg(p.red))
 }
 
+/// The bar's right-hand segments: the threshold metrics, then `⋯`.
 fn status_segments(
     app: &AppState,
     metrics: &crate::platform::status_metrics::StatusMetrics,
@@ -732,14 +408,95 @@ fn status_segments(
 ) -> Vec<Segment> {
     let mut out = Vec::new();
     let expanded = app.status_bar_expanded;
-
+    let label = |metric| crate::ui::icons::metric_label(metric, app.nerd_font);
+    for (kind, metric, percent, was_visible) in [
+        (
+            StatusSegmentKind::Cpu,
+            Metric::Cpu,
+            metrics.cpu_percent,
+            app.status_cpu_visible,
+        ),
+        (
+            StatusSegmentKind::Memory,
+            Metric::Mem,
+            memory_percent(metrics),
+            app.status_mem_visible,
+        ),
+        (
+            StatusSegmentKind::Disk,
+            Metric::Dsk,
+            metrics.disk_percent,
+            app.status_disk_visible,
+        ),
+    ] {
+        if metric_segment_visible(percent, was_visible) {
+            out.push(metric_segment(kind, label(metric), percent, expanded, p));
+        }
+    }
     out.push(Segment {
-        text: format!(" {} ", if expanded { "▾" } else { "▸" }),
-        style: Style::default().fg(p.overlay1),
+        text: format!(" {} ", crate::ui::icons::more_label(app.nerd_font)),
+        style: Style::default().fg(if app.status_more_open {
+            p.accent
+        } else {
+            p.overlay1
+        }),
         preserve_bg: false,
         elide_rank: None,
-        kind: StatusSegmentKind::StatusDetail,
+        kind: StatusSegmentKind::More,
     });
+    out
+}
+
+/// One clickable piece of a "more" popover row.
+pub(crate) struct MoreItem {
+    pub kind: StatusSegmentKind,
+    pub text: String,
+    pub style: Style,
+}
+
+/// The open "more" popover: its bordered rect, its rows, and the hit area of
+/// every item, registered beside the bar's own segments so clicks and hover
+/// tooltips reuse the status-segment paths.
+pub(crate) struct StatusMoreLayout {
+    pub rect: Rect,
+    pub rows: Vec<Vec<MoreItem>>,
+    pub hit_areas: Vec<(StatusSegmentKind, Rect)>,
+}
+
+/// The indicators the bar hides by default, one row each: the metric-number
+/// toggle, link, agents, remote and local host, then the fleet.
+fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
+    let item = |kind, text: String, style| MoreItem { kind, text, style };
+    let mut rows = Vec::new();
+
+    let online = app.connectivity.is_online();
+    rows.push(vec![item(
+        StatusSegmentKind::Link,
+        format!("{DOT} Link {}", if online { "online" } else { "offline" }),
+        Style::default().fg(if online { p.green } else { p.red }),
+    )]);
+
+    let (agents, blocked) = app.agent_dot_counts();
+    if agents > 0 {
+        rows.push(vec![item(
+            StatusSegmentKind::Agents,
+            format!("{DOT} {agents} agents · {blocked} waiting"),
+            Style::default().fg(if blocked > 0 { p.red } else { p.accent }),
+        )]);
+    }
+
+    if let Some(host) = app.view.focused_remote_host.as_deref() {
+        rows.push(vec![item(
+            StatusSegmentKind::RemoteHost,
+            format!("\u{2192} {host}"),
+            Style::default().fg(p.teal),
+        )]);
+    }
+    rows.push(vec![item(
+        StatusSegmentKind::Hostname,
+        format!("Host {}", app.chrome_host_label.trim()),
+        Style::default().fg(p.green),
+    )]);
 
     // Fleet availability is a compact, explorable host list. The local config
     // is the inventory, so configured machines remain visible without a poll.
@@ -751,23 +508,24 @@ fn status_segments(
         Vec::new()
     };
     if has_configured_hosts || !attention_devices.is_empty() {
-        out.push(Segment {
-            text: format!(" {}", if app.nerd_font { "\u{F013B}" } else { "⧉" }),
-            style: Style::default().fg(p.overlay1),
-            preserve_bg: false,
-            elide_rank: Some(5),
-            kind: StatusSegmentKind::FleetLabel,
-        });
+        rows.push(vec![item(
+            StatusSegmentKind::FleetLabel,
+            format!(
+                "{} Fleet {}",
+                if app.nerd_font { "\u{F013B}" } else { "⧉" },
+                if app.fleet_status { "shown" } else { "hidden" }
+            ),
+            Style::default().fg(p.overlay1),
+        )]);
         if app.fleet_status {
             for (idx, device) in attention_devices.iter().enumerate() {
                 let (text, style) = fleet_device_text(device, p);
-                out.push(Segment {
-                    text,
-                    style,
-                    preserve_bg: false,
-                    elide_rank: Some(5),
-                    kind: StatusSegmentKind::FleetDevice(idx),
-                });
+                let text = if device.stale {
+                    text.trim_start().to_string()
+                } else {
+                    format!("{} · {} blockers", text.trim_start(), device.blocked)
+                };
+                rows.push(vec![item(StatusSegmentKind::FleetDevice(idx), text, style)]);
             }
             for (idx, host) in app
                 .machines
@@ -775,7 +533,6 @@ fn status_segments(
                 .filter(|machine| !machine.is_local())
                 .enumerate()
             {
-                let short = format!("{:<3}", host.name.chars().take(3).collect::<String>());
                 let state = app
                     .fleet_snapshot
                     .hosts
@@ -788,105 +545,123 @@ fn status_segments(
                     Some(crate::fleet::HostState::VersionSkew) => (DOT, p.peach),
                     None => ('·', p.overlay0),
                 };
-                out.push(Segment {
-                    text: format!("  {dot}{short}  "),
-                    style: Style::default().fg(color),
-                    preserve_bg: false,
-                    elide_rank: Some(5),
-                    kind: StatusSegmentKind::FleetHost(idx),
-                });
-                out.push(Segment {
-                    text: (if app.nerd_font { "\u{F0A9}" } else { ">" }).to_string(),
-                    style: Style::default().fg(p.overlay1),
-                    preserve_bg: false,
-                    elide_rank: Some(5),
-                    kind: StatusSegmentKind::FleetUseMachine(idx),
-                });
+                rows.push(vec![
+                    item(
+                        StatusSegmentKind::FleetHost(idx),
+                        format!("{dot}{}  ", host.name),
+                        Style::default().fg(color),
+                    ),
+                    item(
+                        StatusSegmentKind::FleetUseMachine(idx),
+                        (if app.nerd_font { "\u{F0A9}" } else { ">" }).to_string(),
+                        Style::default().fg(p.overlay1),
+                    ),
+                ]);
             }
         }
     }
 
-    // The link dot is always present: an absent dot cannot be told apart from a
-    // dot that elided, so "no red" would read as "online" on exactly the narrow
-    // row where the answer matters. Green online, red offline, never elided.
-    let online = app.connectivity.is_online();
-    out.push(Segment {
-        text: format!(" {DOT} "),
-        style: Style::default().fg(if online { p.green } else { p.red }),
-        preserve_bg: false,
-        elide_rank: None,
-        kind: StatusSegmentKind::Link,
-    });
+    rows.push(vec![item(
+        StatusSegmentKind::StatusDetail,
+        format!(
+            "{} Metric numbers {}",
+            if app.status_bar_expanded {
+                "▾"
+            } else {
+                "▸"
+            },
+            if app.status_bar_expanded { "on" } else { "off" }
+        ),
+        Style::default().fg(p.overlay1),
+    )]);
+    rows
+}
 
-    let (agents, blocked) = app.agent_dot_counts();
-    if agents > 0 {
-        let text = if blocked > 0 {
-            format!(" {DOT} {agents}/{blocked} ")
-        } else {
-            format!(" {DOT} {agents} ")
-        };
-        out.push(Segment {
-            text,
-            style: Style::default().fg(if blocked > 0 { p.red } else { p.accent }),
-            preserve_bg: false,
-            elide_rank: Some(5),
-            kind: StatusSegmentKind::Agents,
-        });
+/// Geometry of the open "more" popover, anchored under the `⋯` control at the
+/// bar's right edge. `None` while it is closed or the screen has no room.
+pub(crate) fn status_more_layout(
+    app: &AppState,
+    bar: Rect,
+    screen: Rect,
+) -> Option<StatusMoreLayout> {
+    if !app.status_more_open || bar.width == 0 || bar.height == 0 {
+        return None;
     }
-
-    // A focused pane attached to a fleet host names its machine ahead of the
-    // local one: the local hostname stays next to CPU/MEM, which it still
-    // labels. View computation resolves attached panes and remote-focus
-    // proxies before either status layout pass reaches this function. The
-    // remote segment shares the device's elide rank and sits earlier in the
-    // row, so the first-minimum tie-break sheds it first: a surviving remote
-    // name must never end up labeling local metrics.
-    if let Some(host) = app.view.focused_remote_host.as_deref() {
-        out.push(Segment {
-            text: format!(" \u{2192} {host} "),
-            style: Style::default().fg(p.teal),
-            preserve_bg: false,
-            elide_rank: Some(4),
-            kind: StatusSegmentKind::RemoteHost,
-        });
+    let rows = status_more_rows(app, &app.palette);
+    let inner_width = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|item| display_width(&item.text))
+                .sum::<usize>()
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(2);
+    let available_height = screen.bottom().saturating_sub(bar.y.saturating_add(1));
+    let width = u16::try_from(inner_width.saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .min(screen.width);
+    let height = u16::try_from(rows.len().saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .min(available_height);
+    if width < 4 || height < 3 {
+        return None;
     }
-
-    out.push(Segment {
-        text: format!(" {} ", app.chrome_host_label),
-        style: Style::default().fg(p.green),
-        preserve_bg: false,
-        elide_rank: Some(4),
-        kind: StatusSegmentKind::Hostname,
-    });
-
-    let label = |metric| crate::ui::icons::metric_label(metric, app.nerd_font);
-    out.push(metric_segment(
-        StatusSegmentKind::Cpu,
-        label(Metric::Cpu),
-        metrics.cpu_percent,
-        expanded,
-        p,
-    ));
-    out.push(metric_segment(
-        StatusSegmentKind::Memory,
-        label(Metric::Mem),
-        memory_percent(metrics),
-        expanded,
-        p,
-    ));
-    if crate::platform::status_metrics::disk_segment_visible(
-        metrics.disk_percent,
-        app.status_disk_visible,
-    ) {
-        out.push(metric_segment(
-            StatusSegmentKind::Disk,
-            label(Metric::Dsk),
-            metrics.disk_percent,
-            expanded,
-            p,
-        ));
+    let right = bar.x.saturating_add(
+        bar.width
+            .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, bar)),
+    );
+    let rect = Rect::new(right.saturating_sub(width), bar.y + 1, width, height);
+    let inner_right = rect.right().saturating_sub(1);
+    let mut hit_areas = Vec::new();
+    for (row_idx, row) in rows.iter().enumerate().take(usize::from(height - 2)) {
+        let y = rect.y + 1 + u16::try_from(row_idx).unwrap_or(u16::MAX);
+        let mut x = rect.x + 2;
+        for item in row {
+            let item_width = display_width_u16(&item.text).min(inner_right.saturating_sub(x));
+            if item_width == 0 {
+                break;
+            }
+            hit_areas.push((item.kind, Rect::new(x, y, item_width, 1)));
+            x = x.saturating_add(item_width);
+        }
     }
-    out
+    Some(StatusMoreLayout {
+        rect,
+        rows,
+        hit_areas,
+    })
+}
+
+/// Draw the open "more" popover over whatever sits below the bar.
+pub(crate) fn render_status_more_menu(app: &AppState, frame: &mut Frame) {
+    let Some(layout) = status_more_layout(app, app.view.status_bar_rect, frame.area()) else {
+        return;
+    };
+    let p = &app.palette;
+    frame.render_widget(Clear, layout.rect);
+    let lines = layout
+        .rows
+        .iter()
+        .map(|row| {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(
+                row.iter()
+                    .map(|item| Span::styled(item.text.clone(), item.style.bg(p.panel_bg))),
+            );
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(p.overlay0))
+                .style(Style::default().bg(p.panel_bg)),
+        ),
+        layout.rect,
+    );
 }
 
 /// Memory as a share of the installed total, the form that needs no arithmetic
@@ -1304,6 +1079,7 @@ pub(super) fn status_report_age_micro_label(
 mod tests {
     use super::*;
     use crate::config::{ToastClipboardPosition, ToastHerdrPosition};
+    use crate::platform::status_metrics::StatusMetrics;
 
     fn toast() -> ToastNotification {
         ToastNotification {
@@ -1458,214 +1234,6 @@ mod tests {
     }
 
     #[test]
-    fn required_metrics_survive_optional_segment_elision() {
-        // CPU/MEM are required while branch and device elide by rank.
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.status_focused_cwd = Some(PathBuf::from("/very/long/focused/folder"));
-        app.status_git_cwd = app.status_focused_cwd.clone();
-        app.status_git_branch = Some("feature/very-long-branch".into());
-        let metrics = crate::platform::status_metrics::status_metrics_fixture();
-        let width = minimum_required_status_width(&app);
-        let segments = fitted_segments(status_segments(&app, &metrics, &app.palette), width);
-        let rendered = segments
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(rendered.contains("MEM ▄"));
-        assert!(rendered.contains("CPU ▁"));
-        assert!(!rendered.contains("feature/very-long"));
-    }
-
-    #[test]
-    fn review_findings_narrow_desktop_keeps_required_metrics() {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.mobile_width_threshold = 0;
-        let required = minimum_required_status_width(&app) as u16;
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, required - 1, 5),
-        );
-        assert_eq!(app.view.layout, crate::app::state::ViewLayout::Mobile);
-
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, required, 5),
-        );
-        assert_eq!(app.view.layout, crate::app::state::ViewLayout::Desktop);
-        let mut terminal = Terminal::new(TestBackend::new(required, 1)).unwrap();
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, required, 1)))
-            .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("CPU ▁"), "{rendered}");
-        assert!(rendered.contains("MEM ▄"), "{rendered}");
-    }
-
-    #[test]
-    fn rendered_status_bar_excludes_provider_usage() {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        let mut app = AppState::test_new();
-        app.nerd_font = true;
-        app.provider_usage = usage_fixture();
-        let area = Rect::new(0, 0, 120, 1);
-        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, area))
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        assert!(!buffer
-            .content()
-            .iter()
-            .any(|cell| cell.symbol() == "\u{EC82}"));
-    }
-
-    #[test]
-    fn review_findings_status_width_is_independent_of_metric_snapshot() {
-        let mut app = AppState::test_new();
-        let unavailable_width = minimum_required_status_width(&app);
-        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
-            metrics: StatusMetrics {
-                cpu_percent: Some(100),
-                mem_used_gib: Some(17_179_869_184.0),
-                mem_total_gib: Some(17_179_869_184.0),
-                disk_percent: None,
-                hostname: "metric-host".into(),
-            },
-            sampled_at: std::time::Instant::now(),
-        });
-
-        assert_eq!(minimum_required_status_width(&app), unavailable_width);
-        let required = fitted_segments(
-            status_segments(
-                &app,
-                &app.status_metrics.as_ref().unwrap().metrics,
-                &app.palette,
-            ),
-            unavailable_width,
-        );
-        assert!(segment_width(&required) <= unavailable_width);
-    }
-
-    #[test]
-    fn narrow_desktop_never_truncates_required_metrics() {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.mobile_width_threshold = 0;
-        let required = minimum_required_status_width(&app) as u16;
-        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
-            metrics: StatusMetrics {
-                cpu_percent: Some(100),
-                mem_used_gib: Some(9_999.9),
-                mem_total_gib: Some(9_999.9),
-                disk_percent: None,
-                hostname: "metric-host".into(),
-            },
-            sampled_at: std::time::Instant::now(),
-        });
-        assert_eq!(
-            minimum_required_status_width(&app) as u16,
-            required,
-            "live samples must not move the desktop/mobile breakpoint"
-        );
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, required - 1, 5),
-        );
-        assert_eq!(app.view.layout, crate::app::state::ViewLayout::Mobile);
-
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, required, 5),
-        );
-        assert_eq!(app.view.layout, crate::app::state::ViewLayout::Desktop);
-        let mut terminal = Terminal::new(TestBackend::new(required, 1)).unwrap();
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, required, 1)))
-            .unwrap();
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("CPU \u{2588}"), "{rendered}");
-        assert!(rendered.contains("MEM \u{2588}"), "{rendered}");
-        assert!(
-            rendered.starts_with(' '),
-            "left side must stay blank: {rendered:?}"
-        );
-    }
-
-    fn assert_long_context_fits_status_row(cwd: &str, branch: &str) {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        const WIDTH: usize = crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD as usize;
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.status_focused_cwd = Some(PathBuf::from(cwd));
-        app.status_git_cwd = app.status_focused_cwd.clone();
-        app.status_git_branch = Some(branch.into());
-        let metrics = crate::platform::status_metrics::status_metrics_fixture();
-        let segments = fitted_segments(status_segments(&app, &metrics, &app.palette), WIDTH);
-        assert!(segment_width(&segments) <= WIDTH);
-
-        let mut terminal =
-            Terminal::new(TestBackend::new(WIDTH as u16, 1)).expect("create status terminal");
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, WIDTH as u16, 1)))
-            .expect("render status");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-        assert!(rendered.contains("MEM ▄"), "{rendered}");
-        assert!(rendered.contains("CPU ▁"), "{rendered}");
-        assert!(!rendered.contains("Herdr v"), "{rendered}");
-    }
-
-    #[test]
-    fn minimum_desktop_status_fits_long_ascii_context_and_required_metrics() {
-        assert_long_context_fits_status_row(
-            "/a/very/long/folder/path/that/must/not/displace/required/metrics",
-            "feature/a-very-long-branch-that-must-elide",
-        );
-    }
-
-    #[test]
-    fn minimum_desktop_status_fits_wide_context_and_required_metrics() {
-        assert_long_context_fits_status_row(
-            "/重要な/長い/フォルダー/必須/メトリクス",
-            "機能/長いブランチ名",
-        );
-    }
-
-    #[test]
     fn status_branch_is_bound_to_focused_pane_cwd() {
         let mut workspace = crate::workspace::Workspace::test_new("status");
         workspace.identity_cwd = PathBuf::from("/repo");
@@ -1753,179 +1321,6 @@ mod tests {
         assert_eq!(branch.as_deref(), Some("workspace-root"));
     }
 
-    #[test]
-    fn status_metrics_fallback_format_is_explicit() {
-        // AC3/AC5: unavailable snapshots render stable units without sampling in render.
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        let segments = status_segments(&app, &StatusMetrics::default(), &app.palette);
-        let rendered = segments
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(rendered.contains("MEM -"), "{rendered}");
-        assert!(rendered.contains("CPU -"), "{rendered}");
-    }
-
-    #[test]
-    fn status_metrics_outside_bounded_display_contract_use_fallbacks() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        let baseline = status_segments(
-            &app,
-            &StatusMetrics {
-                cpu_percent: Some(12),
-                mem_used_gib: Some(8.0),
-                mem_total_gib: Some(16.0),
-                disk_percent: None,
-                hostname: "metric-host".into(),
-            },
-            &app.palette,
-        );
-        let metrics = StatusMetrics {
-            cpu_percent: Some(101),
-            mem_used_gib: Some(10_000.0),
-            mem_total_gib: Some(10_000.0),
-            disk_percent: None,
-            hostname: "metric-host".into(),
-        };
-        let rendered = status_segments(&app, &metrics, &app.palette)
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(rendered.contains("CPU -"), "{rendered}");
-        // A percentage has no magnitude ceiling, so a full volume of any size
-        // is expressible; only the impossible CPU reading falls back.
-        assert!(rendered.contains("MEM \u{2588}"), "{rendered}");
-        let fallback = status_segments(&app, &metrics, &app.palette);
-        assert_eq!(
-            segment_width(&baseline),
-            segment_width(&fallback),
-            "metric values and fallbacks must not shift or re-elide the row"
-        );
-    }
-
-    #[test]
-    fn status_renderer_source_contract_excludes_io_and_sampling() {
-        let source = include_str!("status.rs")
-            .split_once("#[cfg(test)]\nmod tests")
-            .expect("status renderer source")
-            .0;
-        for forbidden in [
-            "std::fs",
-            "std::net",
-            "std::process",
-            "Command::new",
-            "sample_status_metrics",
-            "http://",
-            "https://",
-        ] {
-            assert!(!source.contains(forbidden), "found {forbidden}");
-        }
-    }
-
-    #[test]
-    fn status_elision_keeps_metrics_and_drops_optional_host_labels() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.provider_usage = usage_fixture();
-        let metrics = crate::platform::status_metrics::status_metrics_fixture();
-        let full = status_segments(&app, &metrics, &app.palette);
-
-        assert_eq!(
-            full.iter()
-                .filter_map(|segment| segment.elide_rank)
-                .collect::<Vec<_>>(),
-            vec![4]
-        );
-        let rendered = full
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        for provider in ["CC", "CX", "KI", "AG"] {
-            assert!(!rendered.contains(provider), "{rendered}");
-        }
-        assert!(rendered.contains("TESTHOST"), "{rendered}");
-
-        let optional_width = full
-            .iter()
-            .filter(|segment| segment.elide_rank.is_some())
-            .map(|segment| display_width(&segment.text))
-            .sum::<usize>();
-        let required = fitted_segments(
-            status_segments(&app, &metrics, &app.palette),
-            segment_width(&full) - optional_width,
-        );
-        let rendered = required
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(!rendered.contains("TESTHOST"), "{rendered}");
-        assert!(rendered.contains("CPU \u{2581}"), "{rendered}");
-        assert!(rendered.contains("MEM \u{2584}"), "{rendered}");
-    }
-
-    #[test]
-    fn configured_fleet_machine_stays_visible_without_live_inventory() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.machines.push(crate::app::machines::Machine {
-            name: "workbox".into(),
-            icon: None,
-            target: Some("workbox".into()),
-            socket: None,
-        });
-        let segments = status_segments(
-            &app,
-            &crate::platform::status_metrics::status_metrics_fixture(),
-            &app.palette,
-        );
-        let host = segments
-            .iter()
-            .find(|segment| segment.kind == StatusSegmentKind::FleetHost(0))
-            .expect("configured host segment");
-        assert_eq!(host.text, "  ·wor  ");
-        assert_eq!(host.style.fg, Some(app.palette.overlay0));
-        assert!(segments
-            .iter()
-            .any(|segment| segment.kind == StatusSegmentKind::FleetUseMachine(0)));
-    }
-
-    #[test]
-    fn antigravity_quota_is_not_rendered_in_the_status_bar() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.provider_usage = usage_fixture();
-        app.provider_usage
-            .primary_usage_mut(crate::provider_usage::QuotaProvider::Agy)
-            .five_hour = Some(crate::provider_usage::QuotaWindow {
-            used_percent: 12,
-            resets_at: Some(2_000_000_000),
-        });
-
-        let segments = status_segments(
-            &app,
-            &crate::platform::status_metrics::status_metrics_fixture(),
-            &app.palette,
-        );
-        assert!(!segments.iter().any(|segment| segment.text.contains("AG")));
-        assert_eq!(
-            status_segments(
-                &app,
-                &crate::platform::status_metrics::status_metrics_fixture(),
-                &app.palette,
-            )
-            .iter()
-            .filter_map(|segment| segment.elide_rank)
-            .collect::<Vec<_>>(),
-            vec![4]
-        );
-    }
-
     fn fleet_host_fixture() -> crate::fleet::HostSnapshot {
         crate::fleet::HostSnapshot {
             name: "workbox".to_string(),
@@ -1989,178 +1384,6 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn attached_focused_pane_names_the_remote_host_before_the_local_one() {
-        let mut app = app_with_focused_attached_pane();
-        app.nerd_font = false;
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, 120, 20),
-        );
-
-        let rendered = render_status_row(&app, 120);
-
-        let remote = rendered
-            .find("\u{2192} workbox")
-            .expect("remote segment renders");
-        let local = rendered.find("TESTHOST").expect("local host label renders");
-        assert!(
-            remote < local,
-            "remote segment precedes the local host label: {rendered}"
-        );
-        assert!(rendered.contains("CPU"), "{rendered}");
-    }
-
-    #[test]
-    fn local_focused_pane_keeps_the_row_free_of_a_remote_segment() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.ensure_test_terminals();
-        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
-            metrics: crate::platform::status_metrics::status_metrics_fixture(),
-            sampled_at: std::time::Instant::now(),
-        });
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, 120, 20),
-        );
-
-        let rendered = render_status_row(&app, 120);
-
-        assert_eq!(app.view.focused_remote_host, None);
-        assert!(rendered.contains("TESTHOST"), "{rendered}");
-        assert!(!rendered.contains('\u{2192}'), "{rendered}");
-    }
-
-    #[test]
-    fn focused_agent_dot_uses_the_sidebar_lifecycle_color() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.ensure_test_terminals();
-        let workspace = &app.workspaces[0];
-        let pane_id = workspace.focused_pane_id().expect("focused pane");
-        let terminal_id = workspace.terminal_id(pane_id).expect("terminal").clone();
-        let terminal = app.terminals.get_mut(&terminal_id).expect("terminal state");
-        terminal
-            .set_detected_agent_process_at(crate::detect::Agent::Codex, std::time::Instant::now());
-        terminal.set_raw_agent_state_for_test(AgentState::Working);
-
-        assert_eq!(focused_agent_dot_color(&app), Some(app.palette.blue));
-    }
-
-    #[test]
-    fn focused_remote_proxy_names_its_cached_host() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.active = Some(0);
-        app.ensure_test_terminals();
-        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
-            metrics: crate::platform::status_metrics::status_metrics_fixture(),
-            sampled_at: std::time::Instant::now(),
-        });
-        let pane_id = app.workspaces[0].focused_pane_id().expect("focused pane");
-        let terminal_id = app.workspaces[0]
-            .terminal_id(pane_id)
-            .expect("focused terminal")
-            .clone();
-        app.terminals
-            .get_mut(&terminal_id)
-            .expect("terminal state")
-            .remote_proxy_host = Some("buildbox".into());
-        let (runtime, _channels) = crate::terminal::TerminalRuntime::spawn_remote_proxy(
-            pane_id,
-            24,
-            120,
-            0,
-            std::sync::Arc::new(tokio::sync::Notify::new()),
-            std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
-            crate::remote::RemoteFocusOperationState::new(),
-        )
-        .expect("proxy runtime");
-        let mut runtimes = TerminalRuntimeRegistry::new();
-        runtimes.insert(terminal_id, runtime);
-
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &runtimes,
-            Rect::new(0, 0, 120, 20),
-        );
-        let rendered = render_status_row(&app, 120);
-
-        assert_eq!(app.view.focused_remote_host.as_deref(), Some("buildbox"));
-        assert!(rendered.contains("\u{2192} buildbox"), "{rendered}");
-    }
-
-    #[test]
-    fn render_fallback_only_reads_the_resolved_remote_host() {
-        let mut app = app_with_focused_attached_pane();
-        let terminal_id = app.workspaces[0]
-            .terminal_id(app.workspaces[0].focused_pane_id().expect("focused pane"))
-            .expect("focused terminal")
-            .clone();
-        app.terminals
-            .get_mut(&terminal_id)
-            .expect("terminal state")
-            .launch_argv = None;
-        app.fleet_snapshot = crate::fleet::Snapshot::default();
-
-        let rendered = render_status_row(&app, 120);
-
-        assert!(rendered.contains("\u{2192} workbox"), "{rendered}");
-    }
-
-    #[test]
-    fn narrow_width_elides_host_labels_before_metrics() {
-        let mut app = app_with_focused_attached_pane();
-        app.nerd_font = false;
-        app.provider_usage = usage_fixture();
-        let metrics = crate::platform::status_metrics::status_metrics_fixture();
-        let full = status_segments(&app, &metrics, &app.palette);
-        assert_eq!(
-            full.iter()
-                .filter_map(|segment| segment.elide_rank)
-                .collect::<Vec<_>>(),
-            vec![4, 4],
-            "nonessential segments elide before required metrics"
-        );
-
-        let remote_width = display_width(" \u{2192} workbox ");
-        let fitted = fitted_segments(
-            status_segments(&app, &metrics, &app.palette),
-            segment_width(&full),
-        );
-        let rendered = fitted
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(rendered.contains("\u{2192} workbox"), "{rendered}");
-
-        let fitted = fitted_segments(
-            status_segments(&app, &metrics, &app.palette),
-            segment_width(&full) - remote_width,
-        );
-        let rendered = fitted
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(!rendered.contains("workbox"), "{rendered}");
-        assert!(rendered.contains("TESTHOST"), "{rendered}");
-        assert!(rendered.contains("CPU \u{2581}"), "{rendered}");
-        assert!(rendered.contains("MEM \u{2584}"), "{rendered}");
-
-        // The same holds through the real render path at the narrowest
-        // supported width: only the required metrics survive.
-        let narrow = minimum_required_status_width(&app) as u16;
-        let rendered = render_status_row(&app, narrow);
-        assert!(!rendered.contains("workbox"), "{rendered}");
-        assert!(rendered.contains("CPU"), "{rendered}");
-        assert!(rendered.contains("MEM"), "{rendered}");
-    }
-
     /// Two providers with known windows: Claude half-spent on the week, Codex
     /// idle. Fixed values so the glyph a percentage maps to is asserted, not
     /// assumed.
@@ -2200,85 +1423,6 @@ mod tests {
     }
 
     #[test]
-    fn status_content_order_theme_and_omitted_segments_match_contract() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        let mut workspace = crate::workspace::Workspace::test_new("status");
-        workspace.identity_cwd = PathBuf::from("/home/test/work/status");
-        workspace.cached_git_branch = Some("feature/native-status".into());
-        workspace.test_add_tab(Some("logs"));
-        workspace.switch_tab(1);
-        app.workspaces = vec![workspace];
-        app.active = Some(0);
-        app.status_git_cwd = Some(PathBuf::from("/home/test/work/status"));
-        app.status_focused_cwd = app.status_git_cwd.clone();
-        app.status_git_branch = Some("feature/native-status".into());
-        app.provider_usage = usage_fixture();
-
-        let metrics = crate::platform::status_metrics::status_metrics_fixture();
-        let segments = status_segments(&app, &metrics, &app.palette);
-        assert_eq!(
-            segments.len(),
-            5,
-            "detail toggle, link dot, host, CPU, memory"
-        );
-        let rendered = segments
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        let ordered = ["▸", "\u{25cf}", "TESTHOST", "CPU \u{2581}", "MEM \u{2584}"];
-        let mut previous = 0;
-        for value in ordered {
-            let index = rendered
-                .find(value)
-                .unwrap_or_else(|| panic!("{value}: {rendered}"));
-            assert!(index >= previous, "{value} is out of order: {rendered}");
-            previous = index;
-        }
-        // The branch went with the redesign: it never changed inside a
-        // workspace, so it cost a column and answered nothing. Percentages and
-        // reset times belong to expanded mode, not to every frame.
-        for removed in [
-            "feature/native-stat",
-            "testuser",
-            "10.0.0.2",
-            "session:",
-            "workspace:",
-            "~/work/status",
-            "Herdr v",
-            "GiB",
-            "56",
-            "12%",
-        ] {
-            assert!(!rendered.contains(removed), "{removed}: {rendered}");
-        }
-        assert!(!rendered.contains("CC SHQ"));
-        assert_eq!(
-            segments
-                .iter()
-                .find(|segment| segment.text.contains("TESTHOST"))
-                .unwrap()
-                .style
-                .fg,
-            Some(app.palette.green)
-        );
-        // A load colour, not a fixed one: CPU and memory are read for how close
-        // they are to their ceiling, and 12% and 50% are both far from it.
-        for label in ["CPU ", "MEM "] {
-            assert_eq!(
-                segments
-                    .iter()
-                    .find(|segment| segment.text.contains(label))
-                    .unwrap()
-                    .style
-                    .fg,
-                Some(app.palette.green),
-                "{label}"
-            );
-        }
-    }
-
-    #[test]
     fn fill_glyphs_span_the_range_without_a_blank_at_zero() {
         // Zero draws the shortest column, not nothing: an account that is
         // present and idle must look different from an account that is absent.
@@ -2292,93 +1436,427 @@ mod tests {
         assert_eq!(fill_glyph(255), '\u{2588}');
     }
 
-    #[test]
-    fn status_detail_toggle_does_not_restore_provider_usage() {
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.provider_usage = usage_fixture();
-        app.status_now_unix = Some(1_999_990_100);
-
-        let compact = status_segments(&app, &StatusMetrics::default(), &app.palette)
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(compact.contains("▸"), "{compact}");
-        assert!(!compact.contains("CC"), "{compact}");
-
-        app.status_bar_expanded = true;
-        let expanded = status_segments(&app, &StatusMetrics::default(), &app.palette)
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(expanded.contains("▾"), "{expanded}");
-        assert!(!expanded.contains("CC"), "{expanded}");
+    fn metrics(cpu: u8, mem_used: f32, disk: u8) -> StatusMetrics {
+        StatusMetrics {
+            cpu_percent: Some(cpu),
+            cpu_cores: Some(12),
+            mem_used_gib: Some(mem_used),
+            mem_total_gib: Some(32.0),
+            disk_percent: Some(disk),
+            disk_used_gib: Some(f32::from(disk) / 100.0 * 480.0),
+            disk_total_gib: Some(480.0),
+            hostname: "metric-host".into(),
+        }
     }
 
-    #[test]
-    fn nearly_spent_provider_usage_stays_out_of_the_status_bar() {
-        // The one moment the exact figure matters, it appears unasked.
+    /// An app whose last sample is `metrics`, with the visibility state the
+    /// sampler would have derived from it.
+    fn app_with_metrics(metrics: StatusMetrics) -> AppState {
         let mut app = AppState::test_new();
         app.nerd_font = false;
-        app.provider_usage = usage_fixture();
-        app.provider_usage
-            .primary_usage_mut(crate::provider_usage::QuotaProvider::Claude)
-            .seven_day = Some(crate::provider_usage::QuotaWindow {
-            used_percent: 94,
-            resets_at: Some(1_999_999_999),
+        app.status_cpu_visible = metric_segment_visible(metrics.cpu_percent, false);
+        app.status_mem_visible = metric_segment_visible(memory_percent(&metrics), false);
+        app.status_disk_visible = metric_segment_visible(metrics.disk_percent, false);
+        app.status_metrics = Some(crate::platform::status_metrics::StatusMetricsSnapshot {
+            metrics,
+            sampled_at: std::time::Instant::now(),
         });
-        app.status_now_unix = Some(1_999_990_100);
+        app
+    }
 
-        let rendered = status_segments(&app, &StatusMetrics::default(), &app.palette)
+    fn segment_text(app: &AppState) -> String {
+        status_segments(app, metrics_or_unavailable(app), &app.palette)
             .iter()
             .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(!rendered.contains("CC"));
-        assert!(!rendered.contains("94"));
+            .collect()
     }
 
     #[test]
-    fn provider_staleness_is_not_rendered_in_the_status_bar() {
+    fn healthy_machine_shows_no_metric_only_the_more_control() {
+        let app = app_with_metrics(metrics(31, 19.8, 41));
+        let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| segment.kind)
+                .collect::<Vec<_>>(),
+            vec![StatusSegmentKind::More]
+        );
+        assert_eq!(segment_text(&app), " ... ");
+    }
+
+    #[test]
+    fn each_metric_appears_amber_at_80_and_red_at_90() {
+        // Disk at 84% alone: only disk, amber.
+        let app = app_with_metrics(metrics(31, 19.8, 84));
+        let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
+        let kinds = segments
+            .iter()
+            .map(|segment| segment.kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec![StatusSegmentKind::Disk, StatusSegmentKind::More]
+        );
+        assert_eq!(segments[0].style.fg, Some(app.palette.yellow));
+        assert_eq!(segments[0].text, " DSK \u{2587} ");
+
+        // Memory 93% and disk 84%: red then amber, in CPU, memory, disk order.
+        let app = app_with_metrics(metrics(31, 29.8, 84));
+        let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
+        assert_eq!(
+            segments
+                .iter()
+                .map(|segment| (segment.kind, segment.style.fg))
+                .collect::<Vec<_>>(),
+            vec![
+                (StatusSegmentKind::Memory, Some(app.palette.red)),
+                (StatusSegmentKind::Disk, Some(app.palette.yellow)),
+                (StatusSegmentKind::More, Some(app.palette.overlay1)),
+            ]
+        );
+
+        // CPU at 88%: the chip glyph appears with Nerd Font on.
+        let mut app = app_with_metrics(metrics(88, 19.8, 41));
+        app.nerd_font = true;
+        let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
+        assert_eq!(segments[0].kind, StatusSegmentKind::Cpu);
+        assert!(
+            segments[0].text.contains('\u{F061A}'),
+            "{}",
+            segments[0].text
+        );
+        assert_eq!(segments[0].style.fg, Some(app.palette.yellow));
+    }
+
+    #[test]
+    fn metrics_hold_through_the_hysteresis_gap_and_hide_below_it() {
+        assert!(!metric_segment_visible(Some(79), false));
+        assert!(metric_segment_visible(Some(80), false));
+        // Between 78 and 80 the segment keeps whatever state it had, so a
+        // value hovering at the threshold does not flicker every sample.
+        assert!(metric_segment_visible(Some(79), true));
+        assert!(metric_segment_visible(Some(78), true));
+        assert!(!metric_segment_visible(Some(77), true));
+        assert!(!metric_segment_visible(None, true));
+
+        let mut app = app_with_metrics(metrics(79, 25.0, 79));
+        assert_eq!(segment_text(&app), " ... ");
+        app.status_cpu_visible = true;
+        app.status_mem_visible = true;
+        app.status_disk_visible = true;
+        let text = segment_text(&app);
+        for label in ["CPU", "MEM", "DSK"] {
+            assert!(text.contains(label), "{label}: {text}");
+        }
+    }
+
+    #[test]
+    fn unsampled_metrics_stay_hidden() {
         let mut app = AppState::test_new();
         app.nerd_font = false;
-        app.provider_usage = usage_fixture();
-        app.provider_usage
-            .primary_usage_mut(crate::provider_usage::QuotaProvider::Codex)
-            .stale = true;
-
-        let rendered = status_segments(&app, &StatusMetrics::default(), &app.palette)
-            .iter()
-            .map(|segment| segment.text.as_str())
-            .collect::<String>();
-        assert!(!rendered.contains("CX"));
+        app.status_cpu_visible = true;
+        app.status_mem_visible = true;
+        app.status_disk_visible = true;
+        assert_eq!(
+            status_segments(&app, &StatusMetrics::default(), &app.palette)
+                .iter()
+                .map(|segment| segment.kind)
+                .collect::<Vec<_>>(),
+            vec![StatusSegmentKind::More]
+        );
     }
 
     #[test]
-    fn the_link_dot_is_always_present_and_colours_by_state() {
+    fn metric_tooltips_give_relative_and_absolute_values() {
+        let app = app_with_metrics(metrics(88, 19.8, 84));
+        assert_eq!(
+            crate::ui::tooltip::status_segment_tooltip(&app, StatusSegmentKind::Cpu),
+            "CPU 88% — 10.6 of 12 cores busy"
+        );
+        assert_eq!(
+            crate::ui::tooltip::status_segment_tooltip(&app, StatusSegmentKind::Memory),
+            "Memory 62% — 19.8 GB of 32 GB used · 12.2 GB free"
+        );
+        assert_eq!(
+            crate::ui::tooltip::status_segment_tooltip(&app, StatusSegmentKind::Disk),
+            "Disk 84% — 403 GB of 480 GB used on / · 77 GB free"
+        );
+        let more = crate::ui::tooltip::status_segment_tooltip(&app, StatusSegmentKind::More);
+        assert!(more.starts_with("More\n"), "{more}");
+        assert!(more.contains("Esc closes"), "{more}");
+    }
+
+    #[test]
+    fn narrowest_desktop_bar_fits_every_metric_expanded_and_the_more_control() {
+        let mut app = app_with_metrics(metrics(100, 32.0, 100));
+        app.status_bar_expanded = true;
+        let width = minimum_required_status_width(&app);
+        let segments = fitted_segments(
+            status_segments(&app, metrics_or_unavailable(&app), &app.palette),
+            width,
+        );
+        assert_eq!(segments.len(), 4);
+        assert!(segment_width(&segments) <= width);
+
+        let rendered = render_status_row(&app, u16::try_from(width).unwrap());
+        for label in [
+            "CPU \u{2588} 100",
+            "MEM \u{2588} 100",
+            "DSK \u{2588} 100",
+            "...",
+        ] {
+            assert!(rendered.contains(label), "{label}: {rendered}");
+        }
+    }
+
+    #[test]
+    fn view_icons_sit_at_the_left_edge_in_a_fixed_order_with_the_view_highlighted() {
         let mut app = AppState::test_new();
-        fn bare_dot(segments: &[Segment]) -> (Option<Color>, Option<u8>) {
-            let dot = segments
+        app.nerd_font = false;
+        let buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
+        assert_eq!(
+            buttons
                 .iter()
-                .find(|segment| segment.text.trim() == DOT.to_string())
-                .expect("link dot");
-            (dot.style.fg, dot.elide_rank)
+                .map(|button| (button.rect.x, button.label.as_str(), button.active))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, " H ", true),
+                (3, " F ", false),
+                (6, " O ", false),
+                (9, " S ", false),
+                (12, " M ", false),
+            ]
+        );
+        assert_eq!(
+            buttons
+                .iter()
+                .map(|button| button.action)
+                .collect::<Vec<_>>(),
+            TopBarView::ALL
+                .into_iter()
+                .map(StatusButtonAction::View)
+                .collect::<Vec<_>>()
+        );
+
+        app.open_focus_view();
+        let buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
+        assert_eq!(
+            buttons
+                .iter()
+                .filter(|button| button.active)
+                .map(|button| button.action)
+                .collect::<Vec<_>>(),
+            vec![StatusButtonAction::View(TopBarView::Focus)]
+        );
+
+        app.nerd_font = true;
+        let labels = status_buttons(&app, Rect::new(0, 0, 120, 1))
+            .into_iter()
+            .map(|button| button.label)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels,
+            [
+                " \u{F06A1} ",
+                " \u{F04FE} ",
+                " \u{F199C} ",
+                " \u{F0CB6} ",
+                " \u{F1274} "
+            ]
+        );
+    }
+
+    #[test]
+    fn the_bar_renders_icons_the_view_name_centred_and_nothing_else_when_healthy() {
+        let mut app = app_with_metrics(metrics(31, 19.8, 41));
+        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
+        app.active = Some(0);
+        app.ensure_test_terminals();
+        let rendered = render_status_row(&app, 80);
+        assert!(rendered.starts_with(" H  F  O  S  M "), "{rendered:?}");
+        let name = rendered.find("Home").expect("view name");
+        assert_eq!(name, (80 - 4) / 2, "{rendered:?}");
+        assert!(rendered.trim_end().ends_with("..."), "{rendered:?}");
+        for hidden in ["TESTHOST", "CPU", "MEM", "DSK", "\u{25cf}", "\u{25b8}"] {
+            assert!(!rendered.contains(hidden), "{hidden}: {rendered:?}");
         }
 
-        let segments = status_segments(&app, &StatusMetrics::default(), &app.palette);
-        let (fg, rank) = bare_dot(&segments);
-        assert_eq!(fg, Some(app.palette.green));
-        assert!(rank.is_none(), "the link must outlive the data");
+        app.open_focus_view();
+        let rendered = render_status_row(&app, 80);
+        assert!(rendered.contains("Focus"), "{rendered:?}");
+        assert!(!rendered.contains("Home"), "{rendered:?}");
+    }
 
-        app.connectivity.observe(false);
-        app.connectivity.observe(false);
-        let segments = status_segments(&app, &StatusMetrics::default(), &app.palette);
-        let (fg, rank) = bare_dot(&segments);
-        assert_eq!(fg, Some(app.palette.red));
-        assert!(rank.is_none(), "the reason must outlive the data");
+    #[test]
+    fn the_view_name_uses_the_muted_colour_in_normal_weight() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let app = app_with_metrics(metrics(31, 19.8, 41));
+        let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+        terminal
+            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, 80, 1)))
+            .unwrap();
+        let cell = &terminal.backend().buffer()[((80 - 4) / 2, 0)];
+        assert_eq!(cell.symbol(), "H");
+        assert_eq!(cell.fg, app.palette.overlay1);
+        assert!(!cell.modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn view_names_follow_the_surface_on_screen() {
+        let mut app = AppState::test_new();
+        assert_eq!(app.top_bar_view(), TopBarView::Home);
+        app.open_focus_view();
+        assert_eq!(app.top_bar_view(), TopBarView::Focus);
+        app.close_top_bar_views();
+        app.scratch.open_writer();
+        assert_eq!(app.top_bar_view(), TopBarView::Scratch);
+        app.close_top_bar_views();
+        app.toggle_inbox();
+        assert_eq!(app.top_bar_view(), TopBarView::Mailbox);
+        app.close_top_bar_views();
+        assert_eq!(app.top_bar_view(), TopBarView::Home);
+        assert_eq!(
+            TopBarView::ALL.map(TopBarView::name),
+            ["Home", "Focus", "Orchestration", "Scratch", "Mailbox"]
+        );
+    }
+
+    #[test]
+    fn view_icon_tooltips_name_the_view_the_click_and_the_shortcut() {
+        let app = AppState::test_new();
+        let tooltips = TopBarView::ALL
+            .into_iter()
+            .map(|view| view_button_tooltip(&app, view))
+            .collect::<Vec<_>>();
+        for (tooltip, (name, shortcut)) in tooltips.iter().zip([
+            ("Home", "prefix+a"),
+            ("Focus", "prefix+ctrl+f"),
+            ("Orchestration", "prefix+ctrl+o"),
+            ("Scratch", "prefix+ctrl+s"),
+            ("Mailbox", "prefix+m"),
+        ]) {
+            let lines = tooltip.lines().collect::<Vec<_>>();
+            assert_eq!(lines.len(), 3, "{tooltip}");
+            assert_eq!(lines[0], name);
+            assert!(!lines[1].is_empty(), "{tooltip}");
+            assert_eq!(lines[2], shortcut, "{tooltip}");
+        }
+        assert!(tooltips[0].contains("Click to return here from any view"));
+        assert!(tooltips[1].contains("Esc returns Home"));
+    }
+
+    #[test]
+    fn icons_yield_whole_to_the_metrics_rather_than_overlapping_them() {
+        let mut app = app_with_metrics(metrics(100, 32.0, 100));
+        app.status_bar_expanded = true;
+        let width = u16::try_from(minimum_required_status_width(&app)).unwrap() + 7;
+        let area = Rect::new(0, 0, width, 1);
+        let buttons = status_buttons(&app, area);
+        let segments = fitted_status_segments(&app, area);
+        let segments_start = width - u16::try_from(segment_width(&segments)).unwrap();
+        assert_eq!(buttons.len(), 2);
+        for button in &buttons {
+            assert_eq!(button.rect.width, 3, "icons drop whole, never truncate");
+            assert!(button.rect.right() <= segments_start);
+        }
+        assert!(status_buttons(&app, Rect::new(0, 0, 0, 1)).is_empty());
+    }
+
+    #[test]
+    fn hidden_indicators_live_in_the_more_popover() {
+        let mut app = app_with_focused_attached_pane();
+        app.nerd_font = false;
+        app.machines.push(crate::app::machines::Machine {
+            name: "workbox".into(),
+            icon: None,
+            target: Some("workbox".into()),
+            socket: None,
+        });
+        let screen = Rect::new(0, 0, 120, 30);
+        let bar = Rect::new(0, 0, 120, 1);
+        assert!(status_more_layout(&app, bar, screen).is_none());
+
+        app.status_more_open = true;
+        let layout = status_more_layout(&app, bar, screen).expect("open popover");
+        let rows = layout
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|item| item.text.as_str())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows[0], "\u{25cf} Link online");
+        assert!(rows.contains(&"\u{2192} workbox".to_string()), "{rows:?}");
+        assert!(rows.contains(&"Host TESTHOST".to_string()), "{rows:?}");
+        assert!(rows.contains(&"⧉ Fleet shown".to_string()), "{rows:?}");
+        assert!(
+            rows.iter().any(|row| row.starts_with("\u{25cf}workbox")),
+            "{rows:?}"
+        );
+        assert_eq!(
+            rows.last().map(String::as_str),
+            Some("▸ Metric numbers off")
+        );
+
+        // Anchored under the right edge of the bar, every item clickable.
+        assert_eq!(layout.rect.y, 1);
+        assert_eq!(layout.rect.right(), 120);
+        for kind in [
+            StatusSegmentKind::Link,
+            StatusSegmentKind::RemoteHost,
+            StatusSegmentKind::Hostname,
+            StatusSegmentKind::FleetLabel,
+            StatusSegmentKind::FleetHost(0),
+            StatusSegmentKind::FleetUseMachine(0),
+            StatusSegmentKind::StatusDetail,
+        ] {
+            let rect = layout
+                .hit_areas
+                .iter()
+                .find_map(|(candidate, rect)| (*candidate == kind).then_some(*rect))
+                .unwrap_or_else(|| panic!("{kind:?} has a hit area"));
+            assert!(rect.x > layout.rect.x && rect.right() < layout.rect.right());
+            assert!(rect.y > layout.rect.y && rect.bottom() < layout.rect.bottom());
+        }
+
+        // The bar itself carries none of them.
+        let rendered = render_status_row(&app, 120);
+        for hidden in ["TESTHOST", "workbox", "\u{25cf}"] {
+            assert!(!rendered.contains(hidden), "{hidden}: {rendered:?}");
+        }
+    }
+
+    #[test]
+    fn the_open_popover_renders_over_the_screen_below_the_bar() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut app = AppState::test_new();
+        app.nerd_font = false;
+        app.status_more_open = true;
+        app.view.status_bar_rect = Rect::new(0, 0, 60, 1);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal
+            .draw(|frame| render_status_more_menu(&app, frame))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows = (0..10)
+            .map(|y| {
+                (0..60)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        assert!(rows[0].trim().is_empty(), "{rows:#?}");
+        assert!(rows[2].contains("Link online"), "{rows:#?}");
+        assert!(rows[3].contains("Host TESTHOST"), "{rows:#?}");
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn the_agent_dot_turns_red_and_carries_the_blocked_count() {
+    async fn the_popover_agent_row_carries_the_blocked_count() {
         let mut app = AppState::test_new();
         app.workspaces = vec![crate::workspace::Workspace::test_new("agents")];
         app.active = Some(0);
@@ -2393,529 +1871,189 @@ mod tests {
             terminal.detected_agent = Some(crate::detect::Agent::Claude);
             terminal.set_raw_agent_state_for_test(AgentState::Working);
         }
-
-        let working = status_segments(&app, &StatusMetrics::default(), &app.palette);
-        let dot = working
-            .iter()
-            .find(|segment| segment.text.contains(DOT) && segment.text.trim() != DOT.to_string())
-            .expect("agent dot");
-        assert_eq!(dot.text.trim(), format!("{DOT} 1"));
-        assert_eq!(dot.style.fg, Some(app.palette.accent));
+        let agents_row = |app: &AppState| {
+            status_more_rows(app, &app.palette)
+                .into_iter()
+                .flatten()
+                .find(|item| item.kind == StatusSegmentKind::Agents)
+                .map(|item| (item.text, item.style.fg))
+        };
+        assert_eq!(
+            agents_row(&app),
+            Some((
+                format!("{DOT} 1 agents · 0 waiting"),
+                Some(app.palette.accent)
+            ))
+        );
 
         app.terminals
             .get_mut(&terminal_id)
             .expect("terminal")
             .set_raw_agent_state_for_test(AgentState::Blocked);
-        let blocked = status_segments(&app, &StatusMetrics::default(), &app.palette);
-        let dot = blocked
-            .iter()
-            .find(|segment| segment.text.contains(DOT) && segment.text.trim() != DOT.to_string())
-            .expect("agent dot");
-        assert_eq!(dot.text.trim(), format!("{DOT} 1/1"));
-        assert_eq!(dot.style.fg, Some(app.palette.red));
-    }
-
-    #[test]
-    fn disk_appears_only_when_it_is_news_and_holds_through_the_hysteresis_gap() {
-        use crate::platform::status_metrics::disk_segment_visible;
-
-        assert!(!disk_segment_visible(Some(41), false));
-        assert!(disk_segment_visible(Some(80), false));
-        // Between 78 and 80 the segment keeps whatever state it had, so a
-        // volume hovering at the threshold does not flicker every sample.
-        assert!(disk_segment_visible(Some(79), true));
-        assert!(!disk_segment_visible(Some(79), false));
-        assert!(!disk_segment_visible(Some(77), true));
-        assert!(!disk_segment_visible(None, true));
-
-        let mut app = AppState::test_new();
-        app.nerd_font = false;
-        app.status_disk_visible = true;
-        let metrics = StatusMetrics {
-            disk_percent: Some(97),
-            ..crate::platform::status_metrics::status_metrics_fixture()
-        };
-        let rendered = status_segments(&app, &metrics, &app.palette);
-        let disk = rendered
-            .iter()
-            .find(|segment| segment.text.contains("DSK"))
-            .expect("disk segment");
-        assert!(disk.text.contains('\u{2588}'), "{}", disk.text);
-        assert_eq!(disk.style.fg, Some(app.palette.red));
-    }
-
-    /// End-to-end evidence, run by hand: every provider, metric, and account
-    /// label comes from this machine's real sources rather than a fixture.
-    /// Ignored in CI, where none of those sources exist.
-    #[test]
-    #[ignore = "reads this machine's real usage caches"]
-    fn live_smoke_renders_both_modes_from_real_sources() {
-        let mut app = AppState::test_new();
-        app.provider_usage = crate::provider_usage::collect(
-            crate::provider_usage::now_unix(),
-            std::time::Instant::now(),
-        );
-        app.status_now_unix = crate::provider_usage::now_unix();
-        app.status_disk_visible = true;
-        for account in &app.provider_usage.accounts {
-            println!(
-                "quota {:?} {} ({}) 5h={:?} 7d={:?} stale={}",
-                account.provider,
-                account.profile_id,
-                account.label,
-                account.usage.five_hour,
-                account.usage.seven_day,
-                account.usage.stale,
-            );
-        }
-
-        // CPU is a delta, so it needs two samples a sampling interval apart.
-        let mut sampler = crate::platform::status_metrics::StatusMetricSampler::new();
-        let _ = crate::platform::sample_status_metrics(&mut sampler);
-        std::thread::sleep(crate::platform::status_metrics::STATUS_METRIC_REFRESH_INTERVAL);
-        let metrics = crate::platform::sample_status_metrics(&mut sampler);
-
-        for expanded in [false, true] {
-            app.status_bar_expanded = expanded;
-            let row: String = status_segments(&app, &metrics, &app.palette)
-                .iter()
-                .map(|segment| segment.text.as_str())
-                .collect();
-            println!("{} |{row}", if expanded { "expanded" } else { "compact " });
-        }
-    }
-
-    #[test]
-    fn quick_buttons_sit_at_the_left_edge_in_a_stable_order() {
-        let app = AppState::test_new();
-        let buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
-
-        let actions: Vec<StatusButtonAction> = buttons.iter().map(|button| button.action).collect();
         assert_eq!(
-            actions,
-            vec![
-                StatusButtonAction::BlockedFilter,
-                StatusButtonAction::Home,
-                StatusButtonAction::NewSession,
-                StatusButtonAction::Board,
-                StatusButtonAction::Scratch,
-            ]
+            agents_row(&app),
+            Some((format!("{DOT} 1 agents · 1 waiting"), Some(app.palette.red)))
         );
-        assert_eq!(buttons[0].rect.x, 0);
-        // Adjacent, never overlapping: a click can only ever hit one button.
-        for pair in buttons.windows(2) {
-            assert_eq!(pair[0].rect.x + pair[0].rect.width, pair[1].rect.x);
-        }
     }
 
     #[test]
-    fn blocker_button_counts_entries_once_with_the_topbar() {
-        let app = AppState::test_new();
-        super::super::sidebar::take_entry_attention_tier_visits();
-        let buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
-        assert_eq!(buttons.len(), 5);
+    fn the_link_row_colours_by_state() {
+        let mut app = AppState::test_new();
+        let link = |app: &AppState| {
+            status_more_rows(app, &app.palette)
+                .into_iter()
+                .flatten()
+                .find(|item| item.kind == StatusSegmentKind::Link)
+                .map(|item| (item.text, item.style.fg))
+                .expect("link row is always present")
+        };
         assert_eq!(
-            super::super::sidebar::take_entry_attention_tier_visits(),
-            crate::ui::all_agent_panel_entries(&app).len()
+            link(&app),
+            (format!("{DOT} Link online"), Some(app.palette.green))
+        );
+        app.connectivity.observe(false);
+        app.connectivity.observe(false);
+        assert_eq!(
+            link(&app),
+            (format!("{DOT} Link offline"), Some(app.palette.red))
         );
     }
 
     #[test]
-    fn status_button_specs_use_icon_fallbacks_and_only_the_approved_actions() {
-        let mut app = AppState::test_new();
-        app.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
-        let [blocked, home, new_session, board, scratch] = status_button_specs(&app, 2);
-        assert_eq!(home.0, StatusButtonAction::Home);
-        assert_eq!(home.1.trim(), "⌂");
-        assert_eq!(new_session.0, StatusButtonAction::NewSession);
-        assert_eq!(new_session.1.trim(), "＋");
-        assert_eq!(blocked.1.trim(), "⛔ 2");
-        assert_eq!(board.0, StatusButtonAction::Board);
-        assert_eq!(board.1.trim(), "▦");
-        assert_eq!(scratch.0, StatusButtonAction::Scratch);
-        assert_eq!(scratch.1.trim(), "✎");
-
-        let mut fallback = app;
-        fallback.nerd_font = false;
-        let [blocked, home, new_session, board, scratch] = status_button_specs(&fallback, 0);
-        assert_eq!(home.1.trim(), "H");
-        assert_eq!(new_session.1.trim(), "+");
-        assert_eq!(blocked.1.trim(), "⛔ 0");
-        assert_eq!(board.1.trim(), "B");
-        assert_eq!(scratch.1.trim(), "S");
-    }
-
-    #[test]
-    fn blocker_count_and_host_follow_the_selected_scope() {
-        let mut app = AppState::test_new();
-        let local = crate::workspace::Workspace::test_new("local");
-        let mut fleet = crate::workspace::Workspace::test_new("fleet");
-        fleet.is_fleet = true;
-        app.workspaces = vec![local, fleet];
-        app.agent_host_name = "ub1".into();
-        app.ensure_test_terminals();
-        for workspace in &app.workspaces {
-            let pane = workspace.tabs[0].root_pane;
-            let terminal_id = workspace.tabs[0].panes[&pane].attached_terminal_id.clone();
-            let terminal = app.terminals.get_mut(&terminal_id).expect("test terminal");
-            terminal.detected_agent = Some(crate::detect::Agent::Claude);
-            terminal.set_raw_agent_state_for_test(AgentState::Blocked);
-            if workspace.is_fleet {
-                terminal.remote_proxy_host = Some("capture-remote".into());
-            }
-        }
-        let remote_host = crate::fleet::HostSnapshot {
-            name: "capture-remote".into(),
-            target: "capture-remote".into(),
-            local: false,
-            session: None,
-            socket: None,
-            state: crate::fleet::HostState::Reachable,
-            version: None,
-            protocol: None,
-            error: None,
-            remote_identity: None,
-            sessions: None,
-            reachable: true,
-            last_seen_unix_ms: Some(1),
-            entries: vec![crate::fleet::FleetRow::test_agent_row_with_state(
-                "capture-remote",
-                "remote-blocked",
-                "blocked",
-            )],
-        };
-        let remote_snapshot = crate::fleet::Snapshot {
-            hosts: vec![remote_host],
-            ..Default::default()
-        };
-        app.remote_agent_panel_entries =
-            crate::ui::sidebar::remote_agent_panel_entries_at(&remote_snapshot, 1, true);
-        app.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
-        let fleet_buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
-        let blocked_label = |buttons: &[StatusButton]| {
-            buttons
-                .iter()
-                .find(|button| button.action == StatusButtonAction::BlockedFilter)
-                .expect("blocked count button")
-                .label
-                .trim()
-                .to_string()
-        };
-        assert_eq!(blocked_label(&fleet_buttons), "⛔ 2");
-        app.sidebar_blocker_scope = crate::app::state::BlockerScope::ThisDevice;
-        let local_buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
-        assert_eq!(blocked_label(&local_buttons), "⛔ 1 · ub1");
-    }
-
-    #[test]
-    fn buttons_yield_to_the_metrics_rather_than_overlapping_them() {
-        let app = AppState::test_new();
-        let narrow = Rect::new(0, 0, minimum_required_status_width(&app) as u16 + 2, 1);
-
-        let buttons = status_buttons(&app, narrow);
-
-        let content_width =
-            narrow
-                .width
-                .saturating_sub(crate::ui::tabs::tab_action_status_bar_reserved_width(
-                    &app, narrow,
-                ));
-        let title_reserve = focused_pane_title_parts(&app)
-            .map(|(repo, _)| display_width(&repo))
-            .unwrap_or(0)
-            .saturating_add(usize::from(focused_agent_dot_color(&app).is_some()) * 2);
-        let metrics_width = segment_width(&fitted_segments(
-            status_segments(&app, metrics_or_unavailable(&app), &app.palette),
-            usize::from(content_width),
-        ));
-        let used = buttons
-            .iter()
-            .map(|button| usize::from(button.rect.width))
-            .sum::<usize>();
-        assert!(
-            used.saturating_add(metrics_width)
-                .saturating_add(title_reserve)
-                <= usize::from(content_width),
-            "buttons: {buttons:?}"
-        );
-        for button in &buttons {
-            assert!(button.rect.width as usize == display_width(&button.label));
-        }
-    }
-
-    #[test]
-    fn a_zero_width_status_bar_registers_no_buttons() {
-        let app = AppState::test_new();
-        assert!(status_buttons(&app, Rect::new(0, 0, 0, 0)).is_empty());
-    }
-
-    #[test]
-    fn focused_pane_title_starts_at_sidebar_and_keeps_repo_at_eighty_columns() {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        const WIDTH: u16 = 80;
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.ensure_test_terminals();
-        app.active = Some(0);
-        app.sidebar_collapsed = false;
-        app.sidebar_width = 40;
-        let terminal_id = app.workspaces[0].tabs[0]
-            .panes
-            .values()
-            .next()
-            .expect("root pane")
-            .attached_terminal_id
+    fn render_fallback_only_reads_the_resolved_remote_host() {
+        let mut app = app_with_focused_attached_pane();
+        let terminal_id = app.workspaces[0]
+            .terminal_id(app.workspaces[0].focused_pane_id().expect("focused pane"))
+            .expect("focused terminal")
             .clone();
         app.terminals
             .get_mut(&terminal_id)
-            .expect("focused terminal")
-            .set_terminal_title(Some("Fix billing".into()));
-        app.terminals
-            .get_mut(&terminal_id)
-            .expect("focused terminal")
-            .apply_manual_work_context_patch(crate::work_context::PaneWorkContextPatch {
-                repo: Some("herdrdev/herdr".into()),
-                ..Default::default()
-            })
-            .expect("repo context");
+            .expect("terminal state")
+            .launch_argv = None;
+        app.fleet_snapshot = crate::fleet::Snapshot::default();
+        app.status_more_open = true;
 
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, WIDTH, 20),
-        );
-        let sidebar_end = usize::from(
-            app.view
-                .sidebar_rect
-                .x
-                .saturating_add(app.view.sidebar_rect.width),
-        );
-        assert!(sidebar_end > 0, "desktop layout must expose a sidebar");
-
-        let mut terminal = Terminal::new(TestBackend::new(WIDTH, 1)).expect("status terminal");
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, WIDTH, 1)))
-            .expect("render status");
-        let rendered = terminal
-            .backend()
-            .buffer()
-            .content()
+        let rows = status_more_rows(&app, &app.palette);
+        assert!(rows
             .iter()
-            .map(|cell| cell.symbol())
-            .collect::<String>();
-
-        // The buffer mixes multi-byte glyphs, so slice by column, not by byte.
-        let columns = rendered.chars().collect::<Vec<_>>();
-        let at_sidebar_edge = columns[sidebar_end..].iter().collect::<String>();
-        assert!(
-            at_sidebar_edge.starts_with("herdr"),
-            "title must start at the sidebar's right edge: {rendered:?}"
-        );
-        assert_eq!(
-            columns[sidebar_end - 1],
-            ' ',
-            "nothing may run into the title column: {rendered:?}"
-        );
+            .flatten()
+            .any(|item| item.text == "\u{2192} workbox"));
     }
 
     #[test]
-    fn work_links_follow_the_title_with_clickable_labels() {
-        use ratatui::{backend::TestBackend, Terminal};
-
-        const WIDTH: u16 = 120;
+    fn focused_remote_proxy_names_its_cached_host() {
         let mut app = AppState::test_new();
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.ensure_test_terminals();
         app.active = Some(0);
-        app.sidebar_collapsed = false;
-        app.sidebar_width = 30;
-        let terminal_id = app.workspaces[0].tabs[0]
-            .panes
-            .values()
-            .next()
-            .expect("root pane")
-            .attached_terminal_id
-            .clone();
-        let terminal = app
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("focused terminal");
-        terminal.set_terminal_title(Some("Fix billing".into()));
-        terminal.replace_prevalidated_manual_work_context(crate::work_context::PaneWorkContext {
-            repo: Some("herdrdev/herdr".into()),
-            session_name: Some("Fix billing".into()),
-            pr_urls: vec!["https://github.com/herdrdev/herdr/pull/159".into()],
-            ticket_ids: vec!["SCA-3165".into()],
-            ..Default::default()
-        });
-
-        crate::ui::compute_view_with_runtime_registry(
-            &mut app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-            Rect::new(0, 0, WIDTH, 20),
-        );
-
-        assert!(
-            app.dock_open_surfaces.is_empty(),
-            "the links belong to the status row, not to an uninvited dock tab"
-        );
-        assert_eq!(
-            app.view
-                .status_work_links
-                .iter()
-                .map(|link| link.label.as_str())
-                .collect::<Vec<_>>(),
-            ["#159"],
-            "the ticket is already in the title and is not repeated"
-        );
-
-        let mut terminal = Terminal::new(TestBackend::new(WIDTH, 1)).expect("status terminal");
-        terminal
-            .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, WIDTH, 1)))
-            .expect("render status");
-        let columns = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol().to_string())
-            .collect::<Vec<_>>();
-        let rendered = columns.concat();
-        assert!(
-            rendered.contains("herdr / SCA-3165 · Fix billing  #159"),
-            "links follow the title with a gap between them: {rendered:?}"
-        );
-
-        // Every label is clickable exactly where it was drawn.
-        for link in &app.view.status_work_links {
-            let start = usize::from(link.rect.x);
-            let end = start + usize::from(link.rect.width);
-            assert_eq!(columns[start..end].concat(), link.label, "{rendered:?}");
-        }
-    }
-
-    #[test]
-    fn a_title_names_a_link_only_on_a_whole_word() {
-        assert!(title_names("sca-3165 · fix billing", "SCA-3165"));
-        assert!(title_names("#159 review", "#159"));
-        assert!(!title_names("#1592 review", "#159"));
-        assert!(!title_names("sca-31650 · fix billing", "SCA-3165"));
-    }
-
-    #[test]
-    fn the_status_row_title_is_the_title_the_sidebar_row_shows() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.ensure_test_terminals();
-        app.active = Some(0);
-        let terminal_id = app.workspaces[0].tabs[0]
-            .panes
-            .values()
-            .next()
-            .expect("root pane")
-            .attached_terminal_id
-            .clone();
-        let terminal = app
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("focused terminal");
-        terminal.set_terminal_title(Some("cc · herdr · Fix billing".into()));
-        terminal.replace_prevalidated_manual_work_context(crate::work_context::PaneWorkContext {
-            repo: Some("herdrdev/herdr".into()),
-            session_name: Some("Fix billing".into()),
-            ticket_ids: vec!["SCA-3165".into()],
-            ..Default::default()
-        });
-
-        let sidebar_title = crate::ui::sidebar::agent_panel_entries_from(
-            &app,
-            &crate::terminal::TerminalRuntimeRegistry::new(),
-        )
-        .into_iter()
-        .find(|entry| entry.local_target().unwrap().ws_idx == 0)
-        .and_then(|entry| entry.primary_tab_label.clone())
-        .expect("the sidebar names this session");
-
-        assert_eq!(
-            focused_pane_title_parts(&app).map(|(_, title)| title),
-            Some(sidebar_title),
-            "one session, one title"
-        );
-    }
-
-    #[test]
-    fn focused_pane_title_preserves_the_repo_then_truncates_the_thread() {
-        assert_eq!(
-            fit_focused_pane_title("herdr", "fix a long thread name", 16).as_deref(),
-            Some("herdr / fix a l…")
-        );
-        assert_eq!(
-            fit_focused_pane_title("herdr", "fix", 5).as_deref(),
-            Some("herdr")
-        );
-        assert_eq!(fit_focused_pane_title("herdr", "fix", 4), None);
-    }
-
-    #[test]
-    fn focused_pane_title_uses_focused_context_and_cwd_fallback() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
-        app.ensure_test_terminals();
-        app.active = Some(0);
         let pane_id = app.workspaces[0].focused_pane_id().expect("focused pane");
         let terminal_id = app.workspaces[0]
             .terminal_id(pane_id)
             .expect("focused terminal")
             .clone();
-        let terminal = app.terminals.get_mut(&terminal_id).expect("terminal state");
-        terminal.cwd = PathBuf::from("/tmp/local-repo");
-        terminal.set_manual_label("manual thread".into());
-
-        assert_eq!(
-            focused_pane_title_parts(&app),
-            Some(("local-repo".into(), "manual thread".into()))
-        );
-    }
-    #[test]
-    fn freeze_focused_remote_title_has_host_suffix_and_local_title_has_none() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("owner")];
-        app.ensure_test_terminals();
-        app.active = Some(0);
-        let pane = app.workspaces[0].focused_pane_id().unwrap();
-        let terminal_id = app.workspaces[0].terminal_id(pane).unwrap().clone();
-        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
-        terminal.cwd = PathBuf::from("/tmp/repo");
-        terminal.set_manual_label("agent task".into());
-        app.view.focused_remote_host = Some("ub1".into());
-        assert!(focused_pane_title_parts(&app)
-            .unwrap()
-            .1
-            .ends_with(" · ub1"));
-        app.view.focused_remote_host = None;
-        assert_eq!(focused_pane_title_parts(&app).unwrap().1, "agent task");
-    }
-
-    #[test]
-    fn freeze_focused_agent_keeps_working_and_blue_unread_done_indicators() {
-        let mut app = AppState::test_new();
-        app.workspaces = vec![crate::workspace::Workspace::test_new("owner")];
-        app.ensure_test_terminals();
-        app.active = Some(0);
-        let pane = app.workspaces[0].focused_pane_id().unwrap();
-        let terminal_id = app.workspaces[0].terminal_id(pane).unwrap().clone();
-        app.workspaces[0].tabs[0].panes.get_mut(&pane).unwrap().seen = false;
-        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
-        terminal
-            .set_detected_agent_process_at(crate::detect::Agent::Codex, std::time::Instant::now());
-        terminal.set_raw_agent_state_for_test(AgentState::Working);
-        assert_eq!(focused_agent_dot(&app), Some(("●", app.palette.blue)));
         app.terminals
             .get_mut(&terminal_id)
-            .unwrap()
-            .set_raw_agent_state_for_test(AgentState::Idle);
-        assert_eq!(focused_agent_dot(&app), Some(("◉", app.palette.blue)));
+            .expect("terminal state")
+            .remote_proxy_host = Some("buildbox".into());
+        let (runtime, _channels) = crate::terminal::TerminalRuntime::spawn_remote_proxy(
+            pane_id,
+            24,
+            120,
+            0,
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+            std::sync::Arc::new(crate::render_signal::RenderSignal::new()),
+            crate::remote::RemoteFocusOperationState::new(),
+        )
+        .expect("proxy runtime");
+        let mut runtimes = TerminalRuntimeRegistry::new();
+        runtimes.insert(terminal_id, runtime);
+
+        crate::ui::compute_view_with_runtime_registry(
+            &mut app,
+            &runtimes,
+            Rect::new(0, 0, 120, 20),
+        );
+        assert_eq!(app.view.focused_remote_host.as_deref(), Some("buildbox"));
+    }
+
+    #[test]
+    fn compute_view_registers_popover_hit_areas_only_while_open() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
+        app.active = Some(0);
+        app.ensure_test_terminals();
+        let screen = Rect::new(0, 0, 120, 30);
+        crate::ui::compute_view_with_runtime_registry(
+            &mut app,
+            &TerminalRuntimeRegistry::new(),
+            screen,
+        );
+        assert_eq!(app.view.status_more_rect, Rect::default());
+        assert!(!app
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .any(|(kind, _)| *kind == StatusSegmentKind::Hostname));
+
+        app.status_more_open = true;
+        crate::ui::compute_view_with_runtime_registry(
+            &mut app,
+            &TerminalRuntimeRegistry::new(),
+            screen,
+        );
+        assert_ne!(app.view.status_more_rect, Rect::default());
+        let (_, host) = app
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .find(|(kind, _)| *kind == StatusSegmentKind::Hostname)
+            .copied()
+            .expect("host row hit area");
+        assert_eq!(
+            app.status_segment_kind_at(host.x, host.y),
+            Some(StatusSegmentKind::Hostname)
+        );
+        assert!(app
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .any(|(kind, rect)| *kind == StatusSegmentKind::More && rect.y == 0));
+    }
+
+    #[test]
+    fn status_renderer_source_contract_excludes_io_and_sampling() {
+        let source = include_str!("status.rs")
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("status renderer source")
+            .0;
+        for forbidden in [
+            "std::fs",
+            "std::net",
+            "std::process",
+            "Command::new",
+            "sample_status_metrics",
+            "http://",
+            "https://",
+        ] {
+            assert!(!source.contains(forbidden), "found {forbidden}");
+        }
+    }
+
+    #[test]
+    fn provider_usage_never_reaches_the_bar_or_the_popover() {
+        let mut app = app_with_metrics(metrics(31, 19.8, 41));
+        app.provider_usage = usage_fixture();
+        app.status_more_open = true;
+        let mut rendered = render_status_row(&app, 120);
+        rendered.extend(
+            status_more_rows(&app, &app.palette)
+                .into_iter()
+                .flatten()
+                .map(|item| item.text),
+        );
+        for provider in ["CC", "CX", "KI", "AG", "\u{EC82}"] {
+            assert!(!rendered.contains(provider), "{provider}: {rendered}");
+        }
     }
 }
 
@@ -2947,7 +2085,7 @@ mod metric_icons {
     fn nerd_font_on_collapsed_renders_glyph_and_fill_only() {
         assert_eq!(
             texts(true, false),
-            [" \u{F061A} ▄ ", " \u{F035B} ▄ ", " \u{F02CA} ▄ "]
+            [" \u{F061A} ▄ ", " \u{F0688} ▄ ", " \u{F02CA} ▄ "]
         );
     }
 
@@ -2955,7 +2093,7 @@ mod metric_icons {
     fn nerd_font_on_expanded_adds_percentage() {
         assert_eq!(
             texts(true, true),
-            [" \u{F061A} ▄ 50 ", " \u{F035B} ▄ 50 ", " \u{F02CA} ▄ 50 "]
+            [" \u{F061A} ▄ 50 ", " \u{F0688} ▄ 50 ", " \u{F02CA} ▄ 50 "]
         );
     }
 

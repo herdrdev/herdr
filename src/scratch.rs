@@ -243,6 +243,19 @@ impl Editor {
             dirty_at: None,
         }
     }
+    /// In-memory text surface for the Focus view: the same editing and soft
+    /// wrapping as a scratch note, but no file ever backs it.
+    pub(crate) fn ephemeral() -> Self {
+        Self::new(Note {
+            path: PathBuf::new(),
+            title: "Focus".into(),
+            modified: SystemTime::now(),
+            synced: false,
+            body: String::new(),
+            frontmatter: Vec::new(),
+            original: None,
+        })
+    }
     pub fn insert(&mut self, text: &str) {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
         self.note.body.insert_str(self.cursor, &text);

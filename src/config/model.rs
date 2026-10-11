@@ -1147,8 +1147,19 @@ pub struct KeysConfig {
     pub missive: BindingConfig,
     /// Open the blocked-agent inbox. Default: ["prefix+shift+i", "ctrl+alt+i"]
     pub inbox: BindingConfig,
-    /// Open the home view. Default: ["prefix+shift+o", "ctrl+alt+o"]
+    /// Open the home overview. Default: "ctrl+alt+h"
     pub home: BindingConfig,
+    /// Close every top-bar view and return to the panes (the top bar's Home).
+    /// Default: "prefix+a"
+    pub home_view: BindingConfig,
+    /// Toggle the top bar's Focus view, a full-screen notepad. Default: "prefix+ctrl+f"
+    pub focus_view: BindingConfig,
+    /// Toggle the top bar's Orchestration view, the board. Default: "prefix+ctrl+o"
+    pub orchestration_view: BindingConfig,
+    /// Toggle the top bar's Scratch view, the notes writer. Default: "prefix+ctrl+s"
+    pub scratch_view: BindingConfig,
+    /// Toggle the top bar's Mailbox view, the blocked inbox. Default: "prefix+m"
+    pub mailbox_view: BindingConfig,
     /// Run `git pull --rebase` for the focused repository. Unset by default.
     pub git_pull: BindingConfig,
     /// Run the configured Git commit flow for the focused repository. Unset by default.
@@ -1392,6 +1403,11 @@ pub(crate) struct KeysConfigOverlay {
     missive: Option<BindingConfig>,
     inbox: Option<BindingConfig>,
     home: Option<BindingConfig>,
+    home_view: Option<BindingConfig>,
+    focus_view: Option<BindingConfig>,
+    orchestration_view: Option<BindingConfig>,
+    scratch_view: Option<BindingConfig>,
+    mailbox_view: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     git_pull: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1549,6 +1565,11 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(missive);
         apply_field!(inbox);
         apply_field!(home);
+        apply_field!(home_view);
+        apply_field!(focus_view);
+        apply_field!(orchestration_view);
+        apply_field!(scratch_view);
+        apply_field!(mailbox_view);
         apply_field!(git_pull);
         apply_field!(git_commit);
         apply_field!(git_push);
@@ -1714,6 +1735,11 @@ impl KeysConfig {
         copy_effective_action_field!(missive, keybinds.missive);
         copy_effective_action_field!(inbox, keybinds.inbox);
         copy_effective_action_field!(home, keybinds.home);
+        copy_effective_action_field!(home_view, keybinds.home_view);
+        copy_effective_action_field!(focus_view, keybinds.focus_view);
+        copy_effective_action_field!(orchestration_view, keybinds.orchestration_view);
+        copy_effective_action_field!(scratch_view, keybinds.scratch_view);
+        copy_effective_action_field!(mailbox_view, keybinds.mailbox_view);
         copy_effective_action_field!(git_pull, keybinds.git_pull);
         copy_effective_action_field!(git_commit, keybinds.git_commit);
         copy_effective_action_field!(git_push, keybinds.git_push);
@@ -2334,6 +2360,11 @@ impl Default for KeysConfig {
             missive: BindingConfig::empty(),
             inbox: BindingConfig::Many(vec!["prefix+shift+i".into(), "ctrl+alt+i".into()]),
             home: BindingConfig::one("ctrl+alt+h"),
+            home_view: BindingConfig::one("prefix+a"),
+            focus_view: BindingConfig::one("prefix+ctrl+f"),
+            orchestration_view: BindingConfig::one("prefix+ctrl+o"),
+            scratch_view: BindingConfig::one("prefix+ctrl+s"),
+            mailbox_view: BindingConfig::one("prefix+m"),
             git_pull: BindingConfig::empty(),
             git_commit: BindingConfig::empty(),
             git_push: BindingConfig::empty(),

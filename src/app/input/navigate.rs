@@ -11,7 +11,7 @@ use ratatui::layout::Direction;
 
 use crate::{
     app::{
-        state::{AppState, Mode},
+        state::{AppState, Mode, TopBarView},
         App,
     },
     input::TerminalKey,
@@ -186,6 +186,9 @@ impl App {
         action: NavigateAction,
         context: ActionContext,
     ) {
+        if suppress_pane_switch_behind_view(&mut self.state, action, context) {
+            return;
+        }
         if !matches!(
             action,
             NavigateAction::PreviousWindow
@@ -761,12 +764,28 @@ impl App {
                 self.toggle_missive_view();
                 leave_navigate_mode(&mut self.state);
             }
-            NavigateAction::OpenInbox => {
-                self.state.toggle_inbox();
+            NavigateAction::OpenInbox | NavigateAction::OpenMailboxView => {
+                self.activate_top_bar_view(TopBarView::Mailbox);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::OpenHome => {
                 self.state.toggle_home();
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::OpenHomeView => {
+                self.activate_top_bar_view(TopBarView::Home);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::OpenFocusView => {
+                self.activate_top_bar_view(TopBarView::Focus);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::OpenOrchestrationView => {
+                self.activate_top_bar_view(TopBarView::Orchestration);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::OpenScratchView => {
+                self.activate_top_bar_view(TopBarView::Scratch);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::Detach => {
@@ -2759,6 +2778,11 @@ pub(crate) enum NavigateAction {
     OpenDockSymphony,
     OpenInbox,
     OpenHome,
+    OpenHomeView,
+    OpenFocusView,
+    OpenOrchestrationView,
+    OpenScratchView,
+    OpenMailboxView,
     EditScratchpad,
     ShowScratchpad,
     ToggleNotepad,
@@ -3067,6 +3091,14 @@ macro_rules! non_indexed_action_bindings {
             (&kb.missive, NavigateAction::OpenMissiveView),
             (&kb.inbox, NavigateAction::OpenInbox),
             (&kb.home, NavigateAction::OpenHome),
+            (&kb.home_view, NavigateAction::OpenHomeView),
+            (&kb.focus_view, NavigateAction::OpenFocusView),
+            (
+                &kb.orchestration_view,
+                NavigateAction::OpenOrchestrationView,
+            ),
+            (&kb.scratch_view, NavigateAction::OpenScratchView),
+            (&kb.mailbox_view, NavigateAction::OpenMailboxView),
             (&kb.reload_config, NavigateAction::ReloadConfig),
             (
                 &kb.open_notification_target,
@@ -3171,6 +3203,9 @@ pub(super) fn execute_navigate_action_in_context(
     action: NavigateAction,
     context: ActionContext,
 ) {
+    if suppress_pane_switch_behind_view(state, action, context) {
+        return;
+    }
     let previous_mode = state.server_mode();
     match action {
         NavigateAction::NewWorkspace => {
@@ -3687,12 +3722,42 @@ pub(super) fn execute_navigate_action_in_context(
             state.toggle_usage_view();
             leave_navigate_mode(state);
         }
-        NavigateAction::OpenInbox => {
-            state.toggle_inbox();
+        NavigateAction::OpenInbox | NavigateAction::OpenMailboxView => {
+            let was_open = state.inbox.is_some();
+            state.close_top_bar_views();
+            if !was_open {
+                state.toggle_inbox();
+            }
             leave_navigate_mode(state);
         }
         NavigateAction::OpenHome => {
             state.toggle_home();
+            leave_navigate_mode(state);
+        }
+        NavigateAction::OpenHomeView => {
+            state.close_top_bar_views();
+            leave_navigate_mode(state);
+        }
+        NavigateAction::OpenFocusView => {
+            if state.focus_open {
+                state.close_top_bar_views();
+            } else {
+                state.open_focus_view();
+            }
+            leave_navigate_mode(state);
+        }
+        // Opening the board reads the vault, which this state-only executor
+        // cannot do; it can still close the board.
+        NavigateAction::OpenOrchestrationView => {
+            state.board_view = None;
+            leave_navigate_mode(state);
+        }
+        NavigateAction::OpenScratchView => {
+            let was_open = state.scratch.open;
+            state.close_top_bar_views();
+            if !was_open {
+                state.scratch.open_writer();
+            }
             leave_navigate_mode(state);
         }
         NavigateAction::Detach => {
@@ -3813,6 +3878,57 @@ fn leave_navigate_mode(state: &mut AppState) {
     if state.active.is_some() {
         state.set_server_mode(Mode::Terminal);
     }
+}
+
+impl NavigateAction {
+    /// Whether this action moves focus to another pane, tab, workspace or
+    /// agent. Those are the keys a full-screen view or popover must swallow.
+    pub(crate) fn switches_pane(self) -> bool {
+        matches!(
+            self,
+            Self::SwitchWorkspace(_)
+                | Self::SwitchTab(_)
+                | Self::FocusAgent(_)
+                | Self::PreviousWorkspace
+                | Self::NextWorkspace
+                | Self::PreviousAgent
+                | Self::NextAgent
+                | Self::NextReviewAgent
+                | Self::PreviousTab
+                | Self::NextTab
+                | Self::PreviousWindow
+                | Self::NextWindow
+                | Self::PreviousAnyWindow
+                | Self::NextAnyWindow
+                | Self::NextBlockedWindow
+                | Self::FocusPaneLeft
+                | Self::FocusPaneDown
+                | Self::FocusPaneUp
+                | Self::FocusPaneRight
+                | Self::CyclePaneNext
+                | Self::CyclePanePrevious
+                | Self::LastPane
+        )
+    }
+}
+
+/// While a full-screen view or the top bar's popover is open, a pane, tab or
+/// workspace switch would move UI the human cannot see. Such an action is
+/// dropped and the prefix or navigate mode that produced it ends.
+fn suppress_pane_switch_behind_view(
+    state: &mut AppState,
+    action: NavigateAction,
+    context: ActionContext,
+) -> bool {
+    if !action.switches_pane() || !state.pane_cycling_suppressed() {
+        return false;
+    }
+    if context == ActionContext::Navigate {
+        leave_navigate_mode(state);
+    } else {
+        leave_command_mode(state);
+    }
+    true
 }
 
 fn finish_action_context(state: &mut AppState, context: ActionContext, previous_mode: Mode) {
@@ -10021,8 +10137,8 @@ navigate_pane_down = "ctrl+j"
             release_path.display(),
         );
         app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
-            bindings: crate::config::ActionKeybinds::prefix("m"),
-            label: "prefix+m".into(),
+            bindings: crate::config::ActionKeybinds::prefix("t"),
+            label: "prefix+t".into(),
             command,
             action: crate::config::CustomCommandAction::Shell,
             description: None,
@@ -10038,7 +10154,7 @@ navigate_pane_down = "ctrl+j"
         assert_eq!(app.state.server_mode(), Mode::Prefix);
 
         let launch_started = std::time::Instant::now();
-        app.handle_key(TerminalKey::new(KeyCode::Char('m'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
             .await;
         assert!(launch_started.elapsed() < Duration::from_secs(2));
 
@@ -10110,8 +10226,8 @@ navigate_pane_down = "ctrl+j"
         let output_path = unique_temp_path("custom-pane-command");
         let command = format!("printf done > '{}'", output_path.display());
         app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
-            bindings: crate::config::ActionKeybinds::prefix("m"),
-            label: "prefix+m".into(),
+            bindings: crate::config::ActionKeybinds::prefix("t"),
+            label: "prefix+t".into(),
             command,
             action: crate::config::CustomCommandAction::Pane,
             description: None,
@@ -10124,7 +10240,7 @@ navigate_pane_down = "ctrl+j"
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('m'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
             .await;
 
         assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 2);

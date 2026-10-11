@@ -400,12 +400,13 @@ fn datetime_from_tm(value: &libc::tm) -> Option<time::PrimitiveDateTime> {
     Some(time::PrimitiveDateTime::new(date, time))
 }
 
-/// Used percentage of the filesystem holding `path`, from `statvfs`.
+/// Used percentage plus absolute used and total GiB of the filesystem holding
+/// `path`, from `statvfs`.
 ///
 /// Capacity is measured against blocks available to an unprivileged user, the
-/// same basis `df` reports, so the number matches what the human sees when they
+/// same basis `df` reports, so the numbers match what the human sees when they
 /// go looking for the missing space.
-pub(crate) fn volume_used_percent(path: &std::ffi::CStr) -> Option<u8> {
+pub(crate) fn volume_used(path: &std::ffi::CStr) -> Option<(u8, f32, f32)> {
     // SAFETY: `stats` is fully initialised by a successful `statvfs`, and the
     // path is a valid NUL-terminated C string for the duration of the call.
     let stats = unsafe {
@@ -424,7 +425,10 @@ pub(crate) fn volume_used_percent(path: &std::ffi::CStr) -> Option<u8> {
         return None;
     }
     let used = total - available;
-    u8::try_from((used as u128 * 100).div_ceil(total as u128)).ok()
+    let percent = u8::try_from((used as u128 * 100).div_ceil(total as u128)).ok()?;
+    let block_size = stats.f_frsize as u64;
+    let gib = |blocks: u64| (blocks as f64 * block_size as f64 / 1_073_741_824.0) as f32;
+    Some((percent, gib(used), gib(total)))
 }
 
 pub(crate) fn set_default_plugin_pane_pwd(env: &mut Vec<(String, String)>, cwd: &std::path::Path) {

@@ -1060,6 +1060,8 @@ impl App {
             usage_pricing: config.usage.clone(),
             request_usage_scan: false,
             inbox: None,
+            focus_open: false,
+            focus_editor: None,
             home: None,
             spawn_dock: None,
             home_agent_choices: Vec::new(),
@@ -1283,7 +1285,7 @@ impl App {
                 dock_body_rect: Rect::default(),
                 scratchpad_link_rows: Vec::new(),
                 status_buttons: Vec::new(),
-                status_work_links: Vec::new(),
+                status_more_rect: ratatui::layout::Rect::default(),
                 status_segments: Vec::new(),
                 status_segment_hit_areas: Vec::new(),
                 focused_remote_host: None,
@@ -1507,6 +1509,9 @@ impl App {
             provider_usage: crate::provider_usage::ProviderUsageSnapshot::default(),
             connectivity: crate::connectivity::Connectivity::default(),
             status_disk_visible: false,
+            status_cpu_visible: false,
+            status_mem_visible: false,
+            status_more_open: false,
             tab_bar_position: config.ui.tab_bar_position,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: String::new(),
@@ -3904,6 +3909,9 @@ impl App {
             self.accept_selected_agent_finder_result();
             return;
         }
+        if self.handle_status_more_menu_key(key_event, owner) {
+            return;
+        }
         if self.handle_sidebar_areas_menu_key(key_event, owner) {
             return;
         }
@@ -4012,8 +4020,13 @@ impl App {
             state::InputOwner::Surface(state::SurfaceInputOwner::Work) => {
                 self.handle_work_view_key(key_event);
             }
+            state::InputOwner::Surface(state::SurfaceInputOwner::Focus) => {
+                self.handle_focus_key(key_event);
+            }
             state::InputOwner::Surface(state::SurfaceInputOwner::Board) => {
-                self.handle_board_key(key_event);
+                if !self.enter_prefix_from_board(key_event) {
+                    self.handle_board_key(key_event);
+                }
             }
             state::InputOwner::Surface(state::SurfaceInputOwner::DockObjectPreview) => {
                 if key_event.code == crossterm::event::KeyCode::Esc

@@ -10127,17 +10127,6 @@ esac
         assert!(!server.app.state.request_new_tab);
         assert_eq!(server.app.state.requested_new_tab_name, None);
         let events = event_hub.events_after(after_setup);
-        assert_eq!(
-            events
-                .iter()
-                .map(|(_, event)| event.event)
-                .collect::<Vec<_>>(),
-            vec![
-                api::schema::EventKind::TabCreated,
-                api::schema::EventKind::PaneCreated,
-                api::schema::EventKind::LayoutUpdated,
-            ]
-        );
         let tab_created = events
             .iter()
             .find_map(|(_, event)| match &event.data {
@@ -10146,6 +10135,26 @@ esac
             })
             .expect("tab created event");
         assert_eq!(tab_created.label, "ops");
+        // The setup pane's shell may publish its OSC title at any moment; the
+        // tab-create request syncs titles first, so that pane.updated for the
+        // setup tab can legitimately land in this window. Only the new tab's
+        // events are under test.
+        assert_eq!(
+            events
+                .iter()
+                .filter(|(_, event)| !matches!(
+                    &event.data,
+                    api::schema::EventData::PaneUpdated { pane }
+                        if pane.tab_id != tab_created.tab_id
+                ))
+                .map(|(_, event)| event.event)
+                .collect::<Vec<_>>(),
+            vec![
+                api::schema::EventKind::TabCreated,
+                api::schema::EventKind::PaneCreated,
+                api::schema::EventKind::LayoutUpdated,
+            ]
+        );
         shutdown_test_runtimes(&mut server);
     }
 

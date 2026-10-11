@@ -63,7 +63,8 @@ impl App {
         }
 
         let key_event = key.as_key_event();
-        if self.handle_window_cycle_menu_key(key_event, self.state.input_owner())
+        if self.handle_status_more_menu_key(key_event, self.state.input_owner())
+            || self.handle_window_cycle_menu_key(key_event, self.state.input_owner())
             || self.handle_sidebar_areas_menu_key(key_event, self.state.input_owner())
         {
             return None;

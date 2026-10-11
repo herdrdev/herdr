@@ -195,6 +195,81 @@ impl AppState {
         self.handle_mouse_for_owner(terminal_runtimes, source_id, mouse, owner)
     }
 
+    /// What a click on one status-row segment does, wherever that segment is
+    /// drawn: on the bar itself or inside the "more" popover.
+    pub(super) fn activate_status_segment(
+        &mut self,
+        kind: crate::app::state::StatusSegmentKind,
+    ) -> Option<MouseAction> {
+        match kind {
+            crate::app::state::StatusSegmentKind::StatusDetail => {
+                self.status_bar_expanded = !self.status_bar_expanded;
+                return None;
+            }
+            crate::app::state::StatusSegmentKind::FleetLabel => {
+                // Persist like the dock strip toggle, so the choice
+                // survives restarts and a config reload.
+                self.fleet_status = !self.fleet_status;
+                return Some(MouseAction::Settings(SettingsAction::SaveConfigEdit(
+                    crate::app::settings_general::ConfigEdit::Bool {
+                        section: "ui",
+                        key: "fleet_status",
+                        value: self.fleet_status,
+                    },
+                )));
+            }
+            crate::app::state::StatusSegmentKind::FleetDevice(idx) => {
+                let device = self
+                    .fleet_snapshot
+                    .devices_needing_attention()
+                    .into_iter()
+                    .nth(idx)?;
+                return Some(MouseAction::OpenFleetHost {
+                    name: device.name,
+                    focus_agent: device.first_blocked.map(|agent| agent.agent),
+                });
+            }
+            crate::app::state::StatusSegmentKind::FleetHost(idx) => {
+                let machine = self
+                    .machines
+                    .iter()
+                    .filter(|machine| !machine.is_local())
+                    .nth(idx)?;
+                let host = self
+                    .fleet_snapshot
+                    .hosts
+                    .iter()
+                    .find(|host| host.name == machine.name)?;
+                let focus_agent = host
+                    .entries
+                    .iter()
+                    .find(|entry| entry.blocked)
+                    .map(|entry| entry.agent_ref.agent.clone());
+                return Some(MouseAction::OpenFleetHost {
+                    name: host.name.clone(),
+                    focus_agent,
+                });
+            }
+            crate::app::state::StatusSegmentKind::FleetUseMachine(idx) => {
+                let machine = self
+                    .machines
+                    .iter()
+                    .filter(|machine| !machine.is_local())
+                    .nth(idx)?
+                    .name
+                    .clone();
+                self.set_next_home_target(&machine);
+                return None;
+            }
+            crate::app::state::StatusSegmentKind::More => {
+                self.status_more_open = !self.status_more_open;
+                return None;
+            }
+            _ => {}
+        }
+        None
+    }
+
     pub(super) fn handle_mouse_for_owner(
         &mut self,
         terminal_runtimes: &mut TerminalRuntimeRegistry,
@@ -223,69 +298,8 @@ impl AppState {
         let status_kind = matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             .then(|| self.status_segment_kind_at(mouse.column, mouse.row))
             .flatten();
-        if let Some(kind) = status_kind {
-            match kind {
-                crate::app::state::StatusSegmentKind::StatusDetail => {
-                    self.status_bar_expanded = !self.status_bar_expanded;
-                    return None;
-                }
-                crate::app::state::StatusSegmentKind::FleetLabel => {
-                    // Persist like the dock strip toggle, so the choice
-                    // survives restarts and a config reload.
-                    self.fleet_status = !self.fleet_status;
-                    return Some(MouseAction::Settings(SettingsAction::SaveConfigEdit(
-                        crate::app::settings_general::ConfigEdit::Bool {
-                            section: "ui",
-                            key: "fleet_status",
-                            value: self.fleet_status,
-                        },
-                    )));
-                }
-                crate::app::state::StatusSegmentKind::FleetDevice(idx) => {
-                    let device = self
-                        .fleet_snapshot
-                        .devices_needing_attention()
-                        .into_iter()
-                        .nth(idx)?;
-                    return Some(MouseAction::OpenFleetHost {
-                        name: device.name,
-                        focus_agent: device.first_blocked.map(|agent| agent.agent),
-                    });
-                }
-                crate::app::state::StatusSegmentKind::FleetHost(idx) => {
-                    let machine = self
-                        .machines
-                        .iter()
-                        .filter(|machine| !machine.is_local())
-                        .nth(idx)?;
-                    let host = self
-                        .fleet_snapshot
-                        .hosts
-                        .iter()
-                        .find(|host| host.name == machine.name)?;
-                    let focus_agent = host
-                        .entries
-                        .iter()
-                        .find(|entry| entry.blocked)
-                        .map(|entry| entry.agent_ref.agent.clone());
-                    return Some(MouseAction::OpenFleetHost {
-                        name: host.name.clone(),
-                        focus_agent,
-                    });
-                }
-                crate::app::state::StatusSegmentKind::FleetUseMachine(idx) => {
-                    let machine = self
-                        .machines
-                        .iter()
-                        .filter(|machine| !machine.is_local())
-                        .nth(idx)?
-                        .name
-                        .clone();
-                    self.set_next_home_target(&machine);
-                    return None;
-                }
-                _ => {}
-            }
+        if let Some(kind) = status_kind.filter(|kind| kind.is_actionable()) {
+            return self.activate_status_segment(kind);
         }
 
         // The read-only agent tab deliberately does not take editor focus, but
@@ -4588,62 +4602,119 @@ mod tests {
         (app, pane_id, rect)
     }
 
+    fn status_hit_area(app: &App, kind: crate::app::state::StatusSegmentKind) -> Rect {
+        app.state
+            .view
+            .status_segment_hit_areas
+            .iter()
+            .find_map(|(candidate, rect)| (*candidate == kind).then_some(*rect))
+            .unwrap_or_else(|| panic!("{kind:?} hit area"))
+    }
+
     #[test]
-    fn clicking_a_status_row_work_link_opens_it_in_the_dock() {
+    fn the_more_control_opens_a_popover_that_swallows_its_clicks_and_closes_outside() {
+        use crate::app::state::StatusSegmentKind;
+
         let mut app = app_for_mouse_test();
-        // Keep the chrome segment deterministic and leave room for the
-        // clickable pull-request link in this narrow status row.
-        app.state.chrome_host_label = "UB1".into();
-        app.state.agent_host_name = "ub1".into();
         app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
         app.state.active = Some(0);
         app.state.selected = 0;
         app.state.ensure_test_terminals();
-        let terminal_id = app.state.workspaces[0]
-            .focused_pane_id()
-            .and_then(|pane_id| app.state.workspaces[0].terminal_id(pane_id))
-            .expect("focused terminal")
-            .clone();
-        let terminal = app
-            .state
-            .terminals
-            .get_mut(&terminal_id)
-            .expect("focused terminal state");
-        terminal.set_terminal_title(Some("Fix billing".into()));
-        terminal.replace_prevalidated_manual_work_context(crate::work_context::PaneWorkContext {
-            repo: Some("herdrdev/herdr".into()),
-            session_name: Some("Fix billing".into()),
-            pr_urls: vec!["https://github.com/herdrdev/herdr/pull/159".into()],
-            ..Default::default()
-        });
-        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 24));
+        let screen = Rect::new(0, 0, 120, 24);
+        crate::ui::compute_view(&mut app.state, screen);
+        let focused = app.state.workspaces[0].focused_pane_id();
 
-        assert!(
-            app.state.dock_open_surfaces.is_empty(),
-            "the link alone opens nothing"
-        );
-        let link = app
-            .state
-            .view
-            .status_work_links
-            .first()
-            .cloned()
-            .expect("the status row names the pull request");
-        assert_eq!(link.label, "#159");
-
+        let more = status_hit_area(&app, StatusSegmentKind::More);
+        assert_eq!(more.y, 0, "the control sits on the bar");
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            link.rect.x,
-            link.rect.y,
+            more.x,
+            more.y,
         ));
+        assert!(app.state.status_more_open);
+        crate::ui::compute_view(&mut app.state, screen);
 
-        assert!(!app.state.dock_collapsed, "the click opens the dock");
-        assert_eq!(
-            app.state.dock_tab,
-            Some(crate::app::DockSurface::Pr),
-            "on the link that was clicked"
-        );
-        assert_eq!(app.state.dock_tab_label(0), "#159");
+        // A read-only row inside the popover does nothing, and nothing below it
+        // takes the click.
+        let host = status_hit_area(&app, StatusSegmentKind::Hostname);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            host.x,
+            host.y,
+        ));
+        assert!(app.state.status_more_open);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused);
+
+        // The metric-number toggle inside it acts like the old bar segment.
+        let detail = status_hit_area(&app, StatusSegmentKind::StatusDetail);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            detail.x,
+            detail.y,
+        ));
+        assert!(app.state.status_bar_expanded);
+        assert!(app.state.status_more_open);
+
+        // Outside the popover the click only closes it.
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 5, 12));
+        assert!(!app.state.status_more_open);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), focused);
+
+        // The control toggles it shut as well as open.
+        crate::ui::compute_view(&mut app.state, screen);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            more.x,
+            more.y,
+        ));
+        assert!(app.state.status_more_open);
+        crate::ui::compute_view(&mut app.state, screen);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            more.x,
+            more.y,
+        ));
+        assert!(!app.state.status_more_open);
+    }
+
+    #[test]
+    fn clicking_view_icons_switches_views_and_the_active_one_returns_home() {
+        use crate::app::state::{StatusButtonAction, TopBarView};
+
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let screen = Rect::new(0, 0, 120, 24);
+        let click = |app: &mut App, view: TopBarView| {
+            crate::ui::compute_view(&mut app.state, screen);
+            let rect = app
+                .state
+                .view
+                .status_buttons
+                .iter()
+                .find(|button| button.action == StatusButtonAction::View(view))
+                .map(|button| button.rect)
+                .expect("view icon");
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                rect.x,
+                rect.y,
+            ));
+        };
+
+        click(&mut app, TopBarView::Focus);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Focus);
+        click(&mut app, TopBarView::Mailbox);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Mailbox);
+        assert!(!app.state.focus_open, "views replace each other");
+        click(&mut app, TopBarView::Mailbox);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        click(&mut app, TopBarView::Focus);
+        click(&mut app, TopBarView::Home);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        assert!(app.state.focus_editor.is_some(), "the Focus text survives");
     }
 
     #[test]
@@ -12523,6 +12594,8 @@ mod fleet_status_click_tests {
             last_seen_unix_ms: None,
             entries: vec![row],
         }];
+        // The fleet indicators live in the top bar's "more" popover.
+        app.state.status_more_open = true;
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 160, 24));
         app
     }

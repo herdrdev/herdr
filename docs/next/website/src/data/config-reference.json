@@ -1234,7 +1234,37 @@
           "key": "keys.home",
           "type": "keybinding",
           "default": "\"ctrl+alt+h\"",
-          "description": "Open the home view."
+          "description": "Open the home overview."
+        },
+        {
+          "key": "keys.home_view",
+          "type": "keybinding",
+          "default": "\"prefix+a\"",
+          "description": "Close every top-bar view and return to the panes (the top bar's Home)."
+        },
+        {
+          "key": "keys.focus_view",
+          "type": "keybinding",
+          "default": "\"prefix+ctrl+f\"",
+          "description": "Toggle the top bar's Focus view, a full-screen notepad."
+        },
+        {
+          "key": "keys.orchestration_view",
+          "type": "keybinding",
+          "default": "\"prefix+ctrl+o\"",
+          "description": "Toggle the top bar's Orchestration view, the board."
+        },
+        {
+          "key": "keys.scratch_view",
+          "type": "keybinding",
+          "default": "\"prefix+ctrl+s\"",
+          "description": "Toggle the top bar's Scratch view, the notes writer."
+        },
+        {
+          "key": "keys.mailbox_view",
+          "type": "keybinding",
+          "default": "\"prefix+m\"",
+          "description": "Toggle the top bar's Mailbox view, the blocked inbox."
         },
         {
           "key": "keys.git_pull",

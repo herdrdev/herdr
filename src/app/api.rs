@@ -697,11 +697,19 @@ impl App {
                     .status_metric_refresh
                     .finish_and_should_repaint(snapshot.as_ref().map(|value| value.sampled_at));
                 if let Some(snapshot) = snapshot {
-                    self.state.status_disk_visible =
-                        crate::platform::status_metrics::disk_segment_visible(
-                            snapshot.metrics.disk_percent,
-                            self.state.status_disk_visible,
-                        );
+                    use crate::platform::status_metrics::metric_segment_visible;
+                    self.state.status_disk_visible = metric_segment_visible(
+                        snapshot.metrics.disk_percent,
+                        self.state.status_disk_visible,
+                    );
+                    self.state.status_cpu_visible = metric_segment_visible(
+                        snapshot.metrics.cpu_percent,
+                        self.state.status_cpu_visible,
+                    );
+                    self.state.status_mem_visible = metric_segment_visible(
+                        crate::ui::status::memory_percent(&snapshot.metrics),
+                        self.state.status_mem_visible,
+                    );
                     self.state.status_metrics = Some(*snapshot);
                 }
                 self.state.status_now_unix = crate::provider_usage::now_unix();

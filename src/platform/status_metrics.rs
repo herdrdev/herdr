@@ -13,27 +13,41 @@ const STATUS_METRIC_REPAINT_INTERVAL: Duration = Duration::from_secs(4);
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct StatusMetrics {
     pub cpu_percent: Option<u8>,
+    /// Logical core count, so a busy percentage can be read as cores.
+    pub cpu_cores: Option<u16>,
     pub mem_used_gib: Option<f32>,
     pub mem_total_gib: Option<f32>,
     /// Percentage of the volume that actually fills up: the data volume on
     /// macOS, the root filesystem elsewhere. `None` when it cannot be read.
     pub disk_percent: Option<u8>,
+    /// Absolute companions of `disk_percent`, for hover detail.
+    pub disk_used_gib: Option<f32>,
+    pub disk_total_gib: Option<f32>,
     pub hostname: String,
 }
 
-/// Disk is the one metric that stays hidden until it matters, so it needs its
-/// own show/hide boundary. The gap is deliberate: a volume hovering at the
-/// threshold would otherwise flicker the segment in and out every sample.
-pub(crate) const DISK_SHOW_AT_PERCENT: u8 = 80;
-pub(crate) const DISK_HIDE_BELOW_PERCENT: u8 = 78;
+/// A metric earns its place on the bar only once it matters. The show/hide gap
+/// is deliberate: a value hovering at the threshold would otherwise flicker
+/// the segment in and out every sample.
+pub(crate) const METRIC_SHOW_AT_PERCENT: u8 = 80;
+pub(crate) const METRIC_HIDE_BELOW_PERCENT: u8 = 78;
 
-/// Whether the disk segment is visible, given whether it was visible before.
-pub(crate) fn disk_segment_visible(disk_percent: Option<u8>, was_visible: bool) -> bool {
-    match disk_percent {
-        Some(percent) if was_visible => percent >= DISK_HIDE_BELOW_PERCENT,
-        Some(percent) => percent >= DISK_SHOW_AT_PERCENT,
+/// Whether a threshold-gated metric segment is visible, given whether it was
+/// visible before.
+pub(crate) fn metric_segment_visible(percent: Option<u8>, was_visible: bool) -> bool {
+    match percent {
+        Some(percent) if was_visible => percent >= METRIC_HIDE_BELOW_PERCENT,
+        Some(percent) => percent >= METRIC_SHOW_AT_PERCENT,
         None => false,
     }
+}
+
+/// Logical cores as the platform reports them; `None` only where even the
+/// standard library cannot count them.
+pub(crate) fn cpu_core_count() -> Option<u16> {
+    std::thread::available_parallelism()
+        .ok()
+        .and_then(|count| u16::try_from(count.get()).ok())
 }
 
 #[derive(Debug, Clone)]
@@ -140,9 +154,12 @@ pub(super) fn short_hostname(hostname: &str) -> String {
 pub(crate) fn status_metrics_fixture() -> StatusMetrics {
     StatusMetrics {
         cpu_percent: Some(12),
+        cpu_cores: Some(8),
         mem_used_gib: Some(8.0),
         mem_total_gib: Some(16.0),
         disk_percent: Some(41),
+        disk_used_gib: Some(200.0),
+        disk_total_gib: Some(480.0),
         hostname: "testhost".into(),
     }
 }
