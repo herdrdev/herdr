@@ -371,6 +371,29 @@ fn merge_unanswered_closing_blockers(
     changed
 }
 
+fn replace_unanswered_closing_blockers(
+    unanswered: &mut UnansweredClosingBlockers,
+    gates: &[crate::api::schema::ClosingBlockItem],
+    items: &[crate::api::schema::ClosingBlockItem],
+) -> bool {
+    let gates: Vec<_> = gates
+        .iter()
+        .filter(|item| item.requires_human_input())
+        .cloned()
+        .collect();
+    let items: Vec<_> = items
+        .iter()
+        .filter(|item| item.requires_human_input())
+        .cloned()
+        .collect();
+    if unanswered.gates == gates && unanswered.items == items {
+        return false;
+    }
+    unanswered.gates = gates;
+    unanswered.items = items;
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosingReport {
     version: u8,
@@ -1089,6 +1112,23 @@ impl TerminalState {
                     && report_source.as_deref() == Some(authority.source.as_str())
             })
             .map(|authority| authority.agent_label.clone());
+        let live_closing_block_report = current_authority.is_some_and(|authority| {
+            crate::detect::is_closing_block_source(&authority.source, &authority.agent_label)
+        });
+        let stale_closing_report = self
+            .closing_report
+            .as_ref()
+            .and_then(|report| report.unanswered.as_ref())
+            .is_some_and(|unanswered| {
+                unanswered.session_id.is_some()
+                    && unanswered.session_id == report_session_id
+                    && report_turn_seq
+                        .zip(unanswered.turn_seq)
+                        .is_some_and(|(incoming, current)| incoming < current)
+            });
+        if stale_closing_report {
+            return false;
+        }
         let answered_latch = !has_blockers
             && report_agent_label.is_some()
             && self
@@ -1131,10 +1171,19 @@ impl TerminalState {
             }
         }
 
-        let live_closing_block_report = self.hook_authority.as_ref().is_some_and(|authority| {
-            crate::detect::is_closing_block_source(&authority.source, &authority.agent_label)
-        });
         let report = self.closing_report.get_or_insert_default();
+        let replace_latched_blockers = report.unanswered.as_ref().is_some_and(|unanswered| {
+            has_blockers
+                && live_closing_block_report
+                && report_session_id.is_some()
+                && report_turn_seq.is_some()
+                && (unanswered.source.as_deref() != report_source.as_deref()
+                    || unanswered.session_id != report_session_id
+                    || unanswered.agent_label != report_agent_label
+                    || report_turn_seq.is_some_and(|incoming| {
+                        unanswered.turn_seq.is_none_or(|current| incoming > current)
+                    }))
+        });
         if report.unanswered.is_none() && has_blockers && live_closing_block_report {
             let agent_label = self
                 .hook_authority
@@ -1155,17 +1204,29 @@ impl TerminalState {
                     unanswered.source = report_source.clone();
                     unanswered.session_id = report_session_id.clone();
                     unanswered.turn_seq = report_turn_seq;
-                } else if unanswered.source.as_deref() == report_source.as_deref()
-                    && unanswered.session_id == report_session_id
-                    && unanswered.agent_label == report_agent_label
-                {
-                    unanswered.turn_seq = report_turn_seq.or(unanswered.turn_seq);
+                } else {
+                    let newer_report = unanswered.source.as_deref() != report_source.as_deref()
+                        || unanswered.session_id != report_session_id
+                        || unanswered.agent_label != report_agent_label
+                        || report_turn_seq.is_some_and(|incoming| {
+                            unanswered.turn_seq.is_none_or(|current| incoming > current)
+                        });
+                    if newer_report {
+                        unanswered.agent_label = report_agent_label.clone();
+                        unanswered.source = report_source.clone();
+                        unanswered.session_id = report_session_id.clone();
+                        unanswered.turn_seq = report_turn_seq;
+                    }
                 }
             }
         }
         let (display_gates, display_items, latch_changed) =
             if let Some(unanswered) = report.unanswered.as_mut() {
-                let latch_changed = merge_unanswered_closing_blockers(unanswered, &gates, &items);
+                let latch_changed = if replace_latched_blockers {
+                    replace_unanswered_closing_blockers(unanswered, &gates, &items)
+                } else {
+                    merge_unanswered_closing_blockers(unanswered, &gates, &items)
+                };
                 let display_gates = unanswered.gates.clone();
                 let mut display_items = unanswered.items.clone();
                 display_items.extend(
@@ -11702,29 +11763,44 @@ mod tests {
     }
 
     #[test]
-    fn newer_report_with_blockers_keeps_latch_and_merges_new_gate() {
+    fn newer_scoped_report_replaces_reworded_unanswered_gates() {
         let now = Instant::now();
         let mut terminal = test_terminal();
-        let first = test_closing_item(1, "Approve", "Choose the release path");
-        let second = test_closing_item(2, "Decide", "Confirm the migration plan");
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
         apply_scoped_closing_report(
             &mut terminal,
             AgentState::Blocked,
             "session-a",
             1,
             now,
-            vec![first.clone()],
+            vec![
+                test_closing_item(1, "1a", "Approve the original release path"),
+                test_closing_item(2, "1b", "Choose the original migration plan"),
+                test_closing_item(3, "1c", "Confirm the original rollout window"),
+            ],
         );
-        let owner = terminal.blocked_hold_owner_for_agent(Agent::Claude);
-        terminal.hold_blocked_state_for(owner, now);
-
         apply_scoped_closing_report(
             &mut terminal,
             AgentState::Blocked,
             "session-a",
             2,
             now + Duration::from_secs(1),
-            vec![second.clone()],
+            vec![
+                test_closing_item(1, "1a", "Approve the revised release path"),
+                test_closing_item(2, "1b", "Choose the revised migration plan"),
+            ],
+        );
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            3,
+            now + Duration::from_secs(2),
+            vec![test_closing_item(
+                1,
+                "Approval",
+                "Approve the final release path",
+            )],
         );
 
         assert!(terminal
@@ -11733,9 +11809,132 @@ mod tests {
             .unwrap()
             .unanswered
             .is_some());
-        assert_eq!(terminal.closing_gates, vec![first, second]);
+        assert_eq!(
+            terminal
+                .closing_report
+                .as_ref()
+                .unwrap()
+                .unanswered
+                .as_ref()
+                .unwrap()
+                .turn_seq,
+            Some(3)
+        );
+        assert_eq!(
+            terminal.closing_gates,
+            vec![test_closing_item(
+                1,
+                "Approval",
+                "Approve the final release path"
+            )]
+        );
+        assert_eq!(
+            terminal
+                .metadata_tokens_for_api()
+                .get("closing_blocking")
+                .map(String::as_str),
+            Some("1")
+        );
         assert_eq!(terminal.state, AgentState::Blocked);
-        assert!(terminal.blocked_state_hold.is_some());
+    }
+
+    #[test]
+    fn newer_report_removes_superseded_closing_choice() {
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            1,
+            now,
+            vec![
+                test_closing_item(1, "1a", "Approve release"),
+                test_closing_item(2, "1b", "Choose migration"),
+                test_closing_item(3, "1c", "Confirm rollout"),
+            ],
+        );
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            2,
+            now + Duration::from_secs(1),
+            vec![
+                test_closing_item(1, "1a", "Approve release"),
+                test_closing_item(2, "1b", "Choose migration"),
+            ],
+        );
+
+        assert_eq!(terminal.closing_gates.len(), 2);
+        assert!(terminal.closing_gates.iter().all(|gate| gate.label != "1c"));
+        assert_eq!(terminal.state, AgentState::Blocked);
+    }
+
+    #[test]
+    fn stale_scoped_blocker_report_is_ignored() {
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        let current = test_closing_item(1, "Current", "Use the newer report");
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            3,
+            now,
+            vec![current.clone()],
+        );
+        let stale = test_closing_item(1, "Stale", "Use the older report");
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            2,
+            now + Duration::from_secs(1),
+            vec![stale],
+        );
+
+        assert_eq!(terminal.closing_gates, vec![current]);
+        assert_eq!(terminal.state, AgentState::Blocked);
+    }
+
+    #[test]
+    fn blocker_report_from_another_session_replaces_unanswered_gates() {
+        let now = Instant::now();
+        let mut terminal = test_terminal();
+        let old = test_closing_item(1, "Old", "Old session blocker");
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-a",
+            9,
+            now,
+            vec![old],
+        );
+        let new = test_closing_item(1, "New", "New session blocker");
+        apply_scoped_closing_report(
+            &mut terminal,
+            AgentState::Blocked,
+            "session-b",
+            1,
+            now + Duration::from_secs(1),
+            vec![new.clone()],
+        );
+
+        assert_eq!(terminal.closing_gates, vec![new]);
+        assert_eq!(
+            terminal
+                .closing_report
+                .as_ref()
+                .unwrap()
+                .unanswered
+                .as_ref()
+                .unwrap()
+                .session_id
+                .as_deref(),
+            Some("session-b")
+        );
+        assert_eq!(terminal.state, AgentState::Blocked);
     }
 
     #[test]
