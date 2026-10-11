@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 HUMAN_INPUT_LABELS = ("Gate", "Answer", "Verify", "Approve", "Decide")
 GATE_LABELS = ("Gate", "Approve")
 # Label for a human-input item whose own label word is unknown or missing.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 """Claude Code `Stop` hook -> herdr turn-end status.
 
 Installed *beside* herdr's managed `herdr-agent-state.sh`, which herdr overwrites
@@ -28,11 +28,16 @@ from closing_block import parse, settle_ready  # noqa: E402
 from herdr_status import report, reserve_sequence  # noqa: E402
 
 # Claude Code fires Stop hooks concurrently with flushing the final assistant
-# message to the transcript. Reading immediately can find no assistant text at
-# all (first turn) or only the previous turn's text -- both silently corrupt the
-# report. Poll until the newest main-chain assistant text sits after the newest
-# user row, i.e. the reply this Stop belongs to has landed.
-FLUSH_WAIT_SECONDS = 3.0
+# message to the transcript: at hook invocation the transcript usually still
+# ends at the previous tool result or user row, and under load the row can take
+# longer than any sane hook budget to land. Claude Code therefore hands the
+# final reply to the hook as `last_assistant_message`, which is used directly
+# with no transcript read. Only a payload without it (an older Claude Code, or
+# a turn that ended without text) falls back to polling the transcript until
+# the newest main-chain assistant text sits after the newest user row. The cap
+# bounds that fallback; at the old 3.0 s it held the prompt on ~29% of real
+# Stops (stop_hook_summary durations, 7 days, ub1).
+FLUSH_WAIT_SECONDS = 1.0
 FLUSH_POLL_INTERVAL = 0.15
 
 
@@ -84,6 +89,9 @@ def last_assistant_text(transcript_path: str) -> str | None:
 
 
 def last_assistant_turn(transcript_path: str) -> tuple[str | None, str | None]:
+    if not transcript_path or not os.path.isfile(transcript_path):
+        # Nothing to wait for: a missing transcript will not appear mid-Stop.
+        return None, None
     deadline = time.monotonic() + FLUSH_WAIT_SECONDS
     while True:
         text, fresh, timestamp = _scan_turn(_read_rows(transcript_path))
@@ -94,6 +102,18 @@ def last_assistant_turn(transcript_path: str) -> tuple[str | None, str | None]:
             # silently dropped report, and None keeps the old skip behavior.
             return text, timestamp
         time.sleep(FLUSH_POLL_INTERVAL)
+
+
+def stop_turn(payload: dict) -> tuple[str | None, str | None]:
+    """Final reply text for this Stop and its transcript timestamp, if known.
+
+    The payload's `last_assistant_message` is the reply this Stop belongs to, so
+    it needs no flush wait; its timestamp falls back to invocation time.
+    """
+    text = payload.get("last_assistant_message")
+    if isinstance(text, str) and text.strip():
+        return text, None
+    return last_assistant_turn(payload.get("transcript_path") or "")
 
 
 def main() -> int:
@@ -111,7 +131,7 @@ def main() -> int:
     # and reports; allocating its sequence after that stall would revive the
     # old turn.
     seq = reserve_sequence()
-    text, last_turn_at = last_assistant_turn(payload.get("transcript_path") or "")
+    text, last_turn_at = stop_turn(payload)
     if text is None:
         return 0
     last_turn_at = last_turn_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

@@ -2394,10 +2394,61 @@ class StopHookTranscriptTests(unittest.TestCase):
         self.assertEqual(hook.last_assistant_text(path), "Done here.")
         self.assertGreaterEqual(time.monotonic() - started, 0.3)
 
-    def test_missing_file_returns_none(self):
+    def test_missing_file_returns_none_without_waiting(self):
+        import time
+
         hook = self._hook_module()
-        hook.FLUSH_WAIT_SECONDS = 0.2
+        started = time.monotonic()
         self.assertIsNone(hook.last_assistant_text("/nonexistent/transcript.jsonl"))
+        self.assertIsNone(hook.last_assistant_text(""))
+        self.assertLess(time.monotonic() - started, 0.1)
+
+    def test_fresh_row_returns_without_polling(self):
+        import time
+
+        hook = self._hook_module()
+        path = self._write_transcript(['{"type": "user"}', self._ASSISTANT_ROW])
+        with mock.patch.object(hook.time, "sleep") as sleep:
+            started = time.monotonic()
+            self.assertEqual(hook.last_assistant_text(path), "Done here.")
+        sleep.assert_not_called()
+        self.assertLess(time.monotonic() - started, 0.1)
+
+    def test_fallback_wait_is_capped_at_one_second(self):
+        hook = self._hook_module()
+        self.assertLessEqual(hook.FLUSH_WAIT_SECONDS, 1.0)
+
+    def test_payload_reply_wins_over_a_stale_only_transcript(self):
+        # At Stop time the transcript still ends at the previous turn; the
+        # payload's last_assistant_message is the reply this Stop belongs to.
+        import time
+
+        hook = self._hook_module()
+        path = self._write_transcript(
+            [
+                '{"type": "assistant", "message": {"content": '
+                '[{"type": "text", "text": "Previous turn."}]}}',
+                '{"type": "user"}',
+            ]
+        )
+        with mock.patch.object(hook, "last_assistant_turn") as read:
+            started = time.monotonic()
+            text, timestamp = hook.stop_turn(
+                {"transcript_path": path, "last_assistant_message": "Done here."}
+            )
+        read.assert_not_called()
+        self.assertEqual((text, timestamp), ("Done here.", None))
+        self.assertLess(time.monotonic() - started, 0.1)
+
+    def test_blank_or_absent_payload_reply_falls_back_to_the_transcript(self):
+        hook = self._hook_module()
+        path = self._write_transcript(['{"type": "user"}', self._ASSISTANT_ROW])
+        for payload in (
+            {"transcript_path": path},
+            {"transcript_path": path, "last_assistant_message": None},
+            {"transcript_path": path, "last_assistant_message": "  \n"},
+        ):
+            self.assertEqual(hook.stop_turn(payload)[0], "Done here.")
 
     def test_short_reply_reports_missing_lifecycle_evidence(self):
         import io
@@ -2490,6 +2541,58 @@ class StopHookTranscriptTests(unittest.TestCase):
 
         self.assertEqual(calls, ["reserve", "read"])
         self.assertEqual(report.call_args.kwargs["seq"], 101)
+
+    def test_payload_reply_reports_with_the_sequence_reserved_first(self):
+        import io
+        import json
+
+        hook = self._hook_module()
+        calls = []
+
+        def reserve():
+            calls.append("reserve")
+            return 101
+
+        real_stop_turn = hook.stop_turn
+
+        def stop_turn(payload):
+            calls.append("read")
+            return real_stop_turn(payload)
+
+        with mock.patch.object(hook, "reserve_sequence", side_effect=reserve), mock.patch.object(
+            hook, "stop_turn", side_effect=stop_turn
+        ), mock.patch.object(
+            hook, "last_assistant_turn"
+        ) as transcript_read, mock.patch.object(
+            hook,
+            "report",
+            return_value={"payload": {}, "mirror": None, "socket": False},
+        ) as report, mock.patch.dict(
+            hook.os.environ,
+            {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p1"},
+            clear=False,
+        ), mock.patch.object(
+            hook.sys,
+            "stdin",
+            io.StringIO(
+                json.dumps(
+                    {
+                        "session_id": "claude-session-1",
+                        "transcript_path": "/tmp/native-transcript.jsonl",
+                        "last_assistant_message": "**Critical action points (0 blocking)**\n\nDone here.",
+                    }
+                )
+            ),
+        ):
+            self.assertEqual(hook.main(), 0)
+
+        transcript_read.assert_not_called()
+        self.assertEqual(calls, ["reserve", "read"])
+        self.assertEqual(report.call_args.kwargs["seq"], 101)
+        self.assertEqual(report.call_args.kwargs["completion"], "complete")
+        self.assertRegex(
+            report.call_args.kwargs["last_turn_at"], r"^\d{4}-\d\d-\d\dT[0-9:.]+Z$"
+        )
 
     def test_reserved_old_stop_cannot_restore_a_newer_done_report(self):
         gate = closing_block.parse(
@@ -2993,7 +3096,7 @@ class BundleInstallerTests(unittest.TestCase):
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 4)
+            self.assertEqual(result["files"][name]["version"], 5)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),
