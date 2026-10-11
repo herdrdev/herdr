@@ -165,6 +165,10 @@ const SHUTDOWN_API_TIMEOUT: Duration = Duration::from_secs(5);
 /// avoid reintroducing the idle CPU spin.
 const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+// Split shell redraws need several early updates; sustained output still coalesces.
+const INTERACTIVE_RENDER_BUDGET: u8 = 16;
+const INTERACTIVE_RENDER_WINDOW: Duration = Duration::from_millis(32);
+
 // ---------------------------------------------------------------------------
 // Headless server
 // ---------------------------------------------------------------------------
@@ -197,6 +201,8 @@ pub struct HeadlessServer {
     client_socket_identity: SocketFileIdentity,
     clients: HashMap<u64, ClientConnection>,
     native_graphics: native_graphics::NativeGraphics,
+    interactive_input_deadlines: HashMap<crate::layout::PaneId, Instant>,
+    interactive_render_budget: Option<(Instant, u8)>,
     #[cfg(unix)]
     next_client_id: u64,
     /// The client currently driving session-wide host presentation and side effects.
@@ -350,6 +356,8 @@ impl HeadlessServer {
             client_socket_identity,
             clients: HashMap::new(),
             native_graphics: Default::default(),
+            interactive_input_deadlines: HashMap::new(),
+            interactive_render_budget: None,
             #[cfg(unix)]
             next_client_id: 1,
             foreground_client_id: None,
@@ -531,14 +539,13 @@ impl HeadlessServer {
             // bounded classification cadence without delaying presentation work
             // that joins the same coalesced request.
             let render_cadence_due = self.app.can_render_now(now);
-            if needs_render
-                && (render_cadence_due
-                    || (self.app.can_present_now(now)
-                        && self.has_pending_presentation_work(
-                            needs_full_render,
-                            needs_graphics_render,
-                        )))
-            {
+            let presentation_due = self.app.can_present_now(now)
+                && self.has_pending_presentation_work(needs_full_render, needs_graphics_render);
+            let interactive_due = needs_render
+                && !render_cadence_due
+                && !presentation_due
+                && self.can_render_interactive(now);
+            if needs_render && (render_cadence_due || presentation_due || interactive_due) {
                 crate::render_prof::event("render.attempt");
                 let render_request = self.app.render_dirty.take();
                 let pty_dirty = !render_request.pty_sources.is_empty();
@@ -585,6 +592,9 @@ impl HeadlessServer {
                     self.render_and_stream();
                 }
                 self.app.record_render_attempt(now, !hidden_only);
+                if interactive_due {
+                    self.record_interactive_render(now);
+                }
                 needs_render = false;
                 needs_full_render = false;
                 needs_graphics_render = false;
@@ -2424,10 +2434,16 @@ impl HeadlessServer {
                     return foreground_changed | geometry_changed;
                 };
                 let scroll_before = runtime.scroll_metrics();
-                if let Err(err) = apply_client_pane_input_events(runtime, &events) {
-                    warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
+                let input_result = apply_client_pane_input_events(runtime, &events);
+                let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                match input_result {
+                    Ok(true) => self.note_interactive_input(runtime_pane_id, Instant::now()),
+                    Ok(false) => {}
+                    Err(err) => {
+                        warn!(client_id, pane_id, err = %err, "targeted client shell input failed");
+                    }
                 }
-                foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
+                foreground_changed | geometry_changed || scroll_changed
             }
             ServerEvent::ClientShellPopupInput {
                 client_id,
@@ -2446,12 +2462,12 @@ impl HeadlessServer {
                     client.pixel_mouse && client.host_sgr_pixels_active == Some(true)
                 });
                 let mut events = events;
-                let Some(popup_terminal_id) = self
+                let Some((popup_terminal_id, popup_pane_id)) = self
                     .app
                     .state
                     .popup_pane
                     .as_ref()
-                    .map(|popup| popup.terminal_id.clone())
+                    .map(|popup| (popup.terminal_id.clone(), popup.pane_id))
                 else {
                     return false;
                 };
@@ -2502,10 +2518,16 @@ impl HeadlessServer {
                     return foreground_changed | geometry_changed;
                 };
                 let scroll_before = runtime.scroll_metrics();
-                if let Err(err) = apply_client_popup_input_events(runtime, &events) {
-                    warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
+                let input_result = apply_client_popup_input_events(runtime, &events);
+                let scroll_changed = runtime.scroll_metrics() != scroll_before;
+                match input_result {
+                    Ok(true) => self.note_interactive_input(popup_pane_id, Instant::now()),
+                    Ok(false) => {}
+                    Err(err) => {
+                        warn!(client_id, terminal_id, err = %err, "targeted client popup input failed");
+                    }
                 }
-                foreground_changed | geometry_changed || runtime.scroll_metrics() != scroll_before
+                foreground_changed | geometry_changed || scroll_changed
             }
             ServerEvent::ClientShellEndpointRequestError {
                 client_id,
