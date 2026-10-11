@@ -76,6 +76,18 @@ impl RenderSignal {
                 .any(|pane_id| state.immediate_pty_sources.contains(pane_id))
     }
 
+    pub(crate) fn has_pending_visible_pty_source(&self, eligible: impl Fn(PaneId) -> bool) -> bool {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state
+            .request
+            .pty_sources
+            .iter()
+            .any(|pane_id| state.immediate_pty_sources.contains(pane_id) && eligible(*pane_id))
+    }
+
     /// Coalesces terminal-title changes separately from ordinary PTY damage so
     /// consumers can update metadata without inspecting every pane.
     pub(crate) fn request_terminal_title(&self, pane_id: PaneId) -> bool {
