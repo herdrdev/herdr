@@ -443,13 +443,16 @@ fn compact_age(
     entry: &AgentPanelEntry,
     now: std::time::Instant,
 ) -> (String, Option<std::time::Instant>) {
-    let instant = entry
+    let activity = entry
         .last_turn_at
         .map(|timestamp| timestamp.instant)
         .into_iter()
-        .chain(entry.reported_at)
         .chain(entry.activity_at)
         .max();
+    // A status report is a liveness timestamp, not proof of recent activity.
+    // Prefer actual activity when available so fresh heartbeats do not erase
+    // the age of an idle agent's last turn; use reports only as a fallback.
+    let instant = activity.or(entry.reported_at);
     let age = instant
         .map(|instant| status_report_age_micro_label(instant, now))
         .unwrap_or_else(|| "—".to_string());
@@ -19040,6 +19043,27 @@ pub(crate) mod tests {
             assert_eq!(rendered, label);
             assert!(display_width(&rendered) <= 3);
         }
+    }
+
+    #[test]
+    fn compact_age_uses_old_activity_when_status_report_is_fresh() {
+        let now = std::time::Instant::now();
+        let mut entry = compact_test_entry("idle agent", Some(Agent::Codex));
+        let activity = now - std::time::Duration::from_secs(2 * 60 * 60);
+        entry.last_turn_at = Some(AgentReplyTimestamp {
+            instant: activity,
+            unix_seconds: 1_760_000_000,
+        });
+        entry.activity_at = Some(activity);
+        entry.reported_at = Some(now - std::time::Duration::from_secs(5));
+
+        assert_eq!(compact_age(&entry, now), ("2h".into(), Some(activity)));
+
+        entry.last_turn_at = None;
+        entry.activity_at = None;
+        assert_eq!(compact_age(&entry, now).0, "");
+        entry.reported_at = Some(now - std::time::Duration::from_secs(60));
+        assert_eq!(compact_age(&entry, now).0, "1m");
     }
 
     #[test]
