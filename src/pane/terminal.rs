@@ -189,6 +189,8 @@ pub(crate) struct GhosttyPaneTerminal {
     pub core: Mutex<GhosttyPaneCore>,
     #[cfg(test)]
     pub(super) scroll_metrics_reads: std::sync::atomic::AtomicUsize,
+    #[cfg(all(test, unix))]
+    pub(super) detection_text_reads: std::sync::atomic::AtomicUsize,
     key_encoder: Mutex<crate::ghostty::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
 }
@@ -499,6 +501,11 @@ impl PaneTerminal {
 
     pub fn detection_text(&self) -> String {
         self.ghostty.detection_text()
+    }
+
+    /// The flag permits reuse only when a later read cannot refresh Windows fallback text.
+    pub(crate) fn detection_text_for_cache(&self) -> (String, bool) {
+        self.ghostty.detection_text_for_cache()
     }
 
     pub(crate) fn try_compression_activity(&self) -> Result<Option<u64>, crate::ghostty::Error> {
@@ -1172,6 +1179,8 @@ impl GhosttyPaneTerminal {
         Ok(Self {
             #[cfg(test)]
             scroll_metrics_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(all(test, unix))]
+            detection_text_reads: std::sync::atomic::AtomicUsize::new(0),
             core: Mutex::new(GhosttyPaneCore {
                 #[cfg(test)]
                 dirty_collection_hook: None,
@@ -2167,10 +2176,17 @@ impl GhosttyPaneTerminal {
     }
 
     pub fn detection_text(&self) -> String {
+        self.detection_text_for_cache().0
+    }
+
+    pub(crate) fn detection_text_for_cache(&self) -> (String, bool) {
+        #[cfg(all(test, unix))]
+        self.detection_text_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.core
             .lock()
             .ok()
-            .and_then(|mut core| ghostty_detection_text(&mut core).ok())
+            .and_then(|mut core| ghostty_detection_text_for_cache(&mut core).ok())
             .unwrap_or_default()
     }
 
@@ -2828,13 +2844,29 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty
 }
 
 fn ghostty_detection_text(core: &mut GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {
+    ghostty_detection_text_for_cache(core).map(|(text, _)| text)
+}
+
+fn ghostty_detection_text_for_cache(
+    core: &mut GhosttyPaneCore,
+) -> Result<(String, bool), crate::ghostty::Error> {
     let lines = core
         .terminal
         .rows()
         .ok()
         .map(|rows| usize::from(rows).max(1))
         .unwrap_or(DEFAULT_DETECTION_ROWS);
-    ghostty_recent_text(core, lines)
+    let text = ghostty_recent_text_for_terminal(&core.terminal, lines)?;
+    Ok(finish_detection_text(core, text, lines))
+}
+
+fn finish_detection_text(core: &mut GhosttyPaneCore, text: String, lines: usize) -> (String, bool) {
+    // Windows fallback reads may refresh deferred history without a content revision.
+    let reusable = !cfg!(windows) || !text.trim().is_empty();
+    (
+        finish_recent_snapshot(core, text, lines, false).text,
+        reusable,
+    )
 }
 
 #[cfg(windows)]
@@ -2898,13 +2930,6 @@ fn windows_powershell_prompt_line_cwd(line: &str) -> Option<std::path::PathBuf> 
     }
     let cwd = std::path::PathBuf::from(raw_cwd);
     (cwd.is_absolute() && cwd.is_dir()).then_some(cwd)
-}
-
-fn ghostty_recent_text(
-    core: &mut GhosttyPaneCore,
-    lines: usize,
-) -> Result<String, crate::ghostty::Error> {
-    ghostty_recent_text_snapshot(core, lines).map(|snapshot| snapshot.text)
 }
 
 fn ghostty_recent_text_snapshot(

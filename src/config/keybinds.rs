@@ -2049,6 +2049,43 @@ prefix = []
     }
 
     #[test]
+    fn ctrl_keybind_matches_non_latin_layout_chord_with_base_key() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+navigate_pane_down = "ctrl+w"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+
+        // Russian layout: "\u{0446}" on the physical `w` key, Ctrl held.
+        let key = crate::input::parse_terminal_key_sequence("\x1b[1094::119;5u").unwrap();
+        assert!(keybinds.navigate.pane_down.matches_direct_key(&key));
+        let without_base = crate::input::parse_terminal_key_sequence("\x1b[1094;5u").unwrap();
+        assert!(!keybinds
+            .navigate
+            .pane_down
+            .matches_direct_key(&without_base));
+    }
+
+    #[test]
+    fn latin_layout_ctrl_keybind_keeps_matching_layout_key() {
+        let config: Config = toml::from_str(
+            r#"
+[keys]
+navigate_pane_down = "ctrl+\u00f6"
+"#,
+        )
+        .unwrap();
+        let keybinds = config.keybinds();
+
+        // German layout: "\u{f6}" on the physical `;` key.
+        let key = crate::input::parse_terminal_key_sequence("\x1b[246::59;5u").unwrap();
+        assert!(keybinds.navigate.pane_down.matches_direct_key(&key));
+    }
+
+    #[test]
     fn navigate_bindings_allow_plain_keys_and_reject_local_conflicts() {
         let config: Config = toml::from_str(
             r#"

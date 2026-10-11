@@ -1314,6 +1314,476 @@ async fn reporter_text_key_release_reaches_kitty_event_pane() {
     }
 }
 
+/// A key on a non-US layout, as the Ghostty app reports it: the physical key
+/// and the layout's (unshifted, shifted) text.
+const fn layout_key(key: ffi::GhosttyKey, base: char, shifted: char) -> KeyDef {
+    text("layout", key, base, shifted)
+}
+
+fn layout_keystroke_through_herdr(
+    host: HostProfile,
+    pane_mode: &[u8],
+    def: KeyDef,
+    mods: u16,
+) -> (HostKeystroke, String, String) {
+    let keystroke = Oracle::new(host.setup(pane_mode)).keystroke(def, mods);
+    let (press, release) = Oracle::new(pane_mode).keystroke(def, mods);
+    let direct = if keystroke.1.is_empty() {
+        press
+    } else {
+        [press, release].concat()
+    };
+    let mut herdr = HerdrPath::new(host, pane_mode);
+    let pane_press = herdr.feed(&keystroke.0).expect("press reaches the pane");
+    let pane_release = herdr.feed(&keystroke.1).expect("release reaches the pane");
+    (
+        keystroke,
+        show(&direct),
+        show(&[pane_press, pane_release].concat()),
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn layout_ctrl_chords_match_ghostty_direct() {
+    // #1079. Keystrokes from a Kitty host on Russian, German, Turkish, French,
+    // Nordic and Polish layouts, built like Ghostty builds them. `ghostty` is
+    // what Ghostty sends the app directly (recorded from libghostty, and
+    // checked against it below); `herdr` is what the pane gets through Herdr.
+    use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const ALT: u16 = ghostty::MOD_ALT;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
+    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
+    let ru_c = layout_key(GhosttyKey_GHOSTTY_KEY_C, '\u{441}', '\u{421}');
+    let ru_i = layout_key(GhosttyKey_GHOSTTY_KEY_I, '\u{448}', '\u{428}');
+    let ru_bracket = layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{445}', '\u{425}');
+    let de = layout_key(GhosttyKey_GHOSTTY_KEY_SEMICOLON, '\u{f6}', '\u{d6}');
+    let tr = layout_key(GhosttyKey_GHOSTTY_KEY_I, '\u{131}', 'I');
+    let fr = layout_key(GhosttyKey_GHOSTTY_KEY_DIGIT_2, '\u{e9}', '2');
+    let no = layout_key(GhosttyKey_GHOSTTY_KEY_BRACKET_LEFT, '\u{e5}', '\u{c5}');
+    let pl = layout_key(GhosttyKey_GHOSTTY_KEY_E, '\u{119}', '\u{118}');
+    let keys = [
+        ("ru ctrl+w", ru_w, CTRL),
+        ("ru ctrl+c", ru_c, CTRL),
+        ("ru ctrl+i", ru_i, CTRL),
+        ("ru ctrl+[", ru_bracket, CTRL),
+        ("ru ctrl+shift+[", ru_bracket, CTRL | SHIFT),
+        ("ru alt+w", ru_w, ALT),
+        ("ru ctrl+alt+w", ru_w, CTRL | ALT),
+        ("ru w", ru_w, 0),
+        ("ru shift+w", ru_w, SHIFT),
+        ("de ctrl+\u{f6}", de, CTRL),
+        ("tr ctrl+\u{131}", tr, CTRL),
+        ("fr ctrl+\u{e9}", fr, CTRL),
+        ("no ctrl+\u{e5}", no, CTRL),
+        ("pl altgr \u{119}", pl, CTRL | ALT),
+    ];
+    // (pane, key, ghostty, herdr)
+    let table: &[(&str, &str, &str, &str)] = &[
+        // Plain shell. Ctrl alone maps to the physical key's control byte
+        // when Ghostty has one; Ctrl+I and Ctrl+[ keep the layout character.
+        ("legacy", "ru ctrl+w", "\\x17", "\\x17"),
+        ("legacy", "ru ctrl+c", "\\x03", "\\x03"),
+        ("legacy", "ru ctrl+i", "\\x1b[1096;5u", "\\x1b[1096;5u"),
+        ("legacy", "ru ctrl+[", "\\x1b[1093;5u", "\\x1b[1093;5u"),
+        (
+            "legacy",
+            "ru ctrl+shift+[",
+            "\\x1b[1061;5u",
+            "\\x1b[1061;5u",
+        ),
+        ("legacy", "ru alt+w", "\\x1b\\xd1\\x86", "\\x1b\\xd1\\x86"),
+        ("legacy", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        ("legacy", "ru shift+w", "\\xd0\\xa6", "\\xd0\\xa6"),
+        ("legacy", "de ctrl+\u{f6}", "\\x1b[246;5u", "\\x1b[246;5u"),
+        ("legacy", "tr ctrl+\u{131}", "\\x1b[305;5u", "\\x1b[305;5u"),
+        ("legacy", "no ctrl+\u{e5}", "\\x1b[229;5u", "\\x1b[229;5u"),
+        // Ghostty maps these by physical key too, but Ctrl+Alt can be AltGr
+        // on Windows hosts and Latin keys are shortcuts of their own, so
+        // Herdr keeps the layout character.
+        ("legacy", "ru ctrl+alt+w", "\\x1b\\x17", "\\x1b[1094;7u"),
+        ("legacy", "fr ctrl+\u{e9}", "\\x00", "\\x1b[233;5u"),
+        ("legacy", "pl altgr \u{119}", "\\x1b\\x05", "\\x1b[281;7u"),
+        // Kitty apps. A rewritten chord reaches them as the physical key, the
+        // key the Kitty spec says to match shortcuts on.
+        ("kitty1", "ru ctrl+w", "\\x1b[1094;5u", "\\x1b[119;5u"),
+        ("kitty1", "ru ctrl+c", "\\x1b[1089;5u", "\\x1b[99;5u"),
+        ("kitty1", "ru ctrl+i", "\\x1b[1096;5u", "\\x1b[1096;5u"),
+        ("kitty1", "ru ctrl+[", "\\x1b[1093;5u", "\\x1b[1093;5u"),
+        (
+            "kitty1",
+            "ru ctrl+shift+[",
+            "\\x1b[1093;6u",
+            "\\x1b[1093;6u",
+        ),
+        ("kitty1", "ru alt+w", "\\x1b[1094;3u", "\\x1b[1094;3u"),
+        ("kitty1", "ru ctrl+alt+w", "\\x1b[1094;7u", "\\x1b[1094;7u"),
+        ("kitty1", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        ("kitty1", "ru shift+w", "\\xd0\\xa6", "\\xd0\\xa6"),
+        ("kitty1", "de ctrl+\u{f6}", "\\x1b[246;5u", "\\x1b[246;5u"),
+        ("kitty1", "tr ctrl+\u{131}", "\\x1b[305;5u", "\\x1b[305;5u"),
+        ("kitty1", "fr ctrl+\u{e9}", "\\x1b[233;5u", "\\x1b[233;5u"),
+        ("kitty1", "no ctrl+\u{e5}", "\\x1b[229;5u", "\\x1b[229;5u"),
+        ("kitty1", "pl altgr \u{119}", "\\x1b[281;7u", "\\x1b[281;7u"),
+        (
+            "kitty3",
+            "ru ctrl+w",
+            "\\x1b[1094;5u\\x1b[1094;5:3u",
+            "\\x1b[119;5u\\x1b[119;5:3u",
+        ),
+        (
+            "kitty3",
+            "ru w",
+            "\\xd1\\x86\\x1b[1094;1:3u",
+            "\\xd1\\x86\\x1b[1094;1:3u",
+        ),
+        // Alternate keys: the pane input wire has no base-layout slot, so
+        // Herdr drops that field for every non-ASCII key (as on master).
+        ("kitty5", "ru ctrl+w", "\\x1b[1094::119;5u", "\\x1b[119;5u"),
+        ("kitty5", "ru ctrl+c", "\\x1b[1089::99;5u", "\\x1b[99;5u"),
+        (
+            "kitty5",
+            "ru ctrl+shift+[",
+            "\\x1b[1093:1061:91;6u",
+            "\\x1b[1093:1061;6u",
+        ),
+        ("kitty5", "ru alt+w", "\\x1b[1094::119;3u", "\\x1b[1094;3u"),
+        ("kitty5", "ru w", "\\xd1\\x86", "\\xd1\\x86"),
+        (
+            "kitty5",
+            "de ctrl+\u{f6}",
+            "\\x1b[246::59;5u",
+            "\\x1b[246;5u",
+        ),
+    ];
+    let panes: HashMap<&str, &[u8]> = [
+        ("legacy", &b""[..]),
+        ("kitty1", b"\x1b[>1u"),
+        ("kitty3", b"\x1b[>3u"),
+        ("kitty5", b"\x1b[>5u"),
+    ]
+    .into_iter()
+    .collect();
+    for &(pane, name, ghostty, want) in table {
+        let &(_, def, mods) = keys.iter().find(|(key, ..)| *key == name).unwrap();
+        let (host, direct, got) =
+            layout_keystroke_through_herdr(HostProfile::Kitty, panes[pane], def, mods);
+        assert_eq!(direct, ghostty, "{pane} {name}: Ghostty direct");
+        assert_eq!(got, want, "{pane} {name}: host sent {}", show(&host.0));
+    }
+    // Every key is covered in the plain shell and a Kitty app.
+    for (name, ..) in keys {
+        for pane in ["legacy", "kitty1"] {
+            assert!(
+                table.iter().any(|row| row.0 == pane && row.1 == name),
+                "{pane} {name}"
+            );
+        }
+    }
+
+    // Plain Cyrillic typing from a host without the Kitty protocol.
+    for (pane, pane_mode) in [("legacy", &b""[..]), ("kitty1", b"\x1b[>1u")] {
+        for mods in [0, SHIFT] {
+            let (_, direct, got) =
+                layout_keystroke_through_herdr(HostProfile::Legacy, pane_mode, ru_w, mods);
+            assert_eq!(got, direct, "legacy host {pane} {}", mods_name(mods));
+        }
+    }
+
+    // Hosts that name no base-layout key: nothing is known about the physical
+    // key, so the layout character goes through as reported.
+    for (pane_mode, host_bytes, want) in [
+        (&b""[..], &b"\x1b[1094;5u"[..], "\\x1b[1094;5u"),
+        (b"\x1b[>1u", b"\x1b[1094;5u", "\\x1b[1094;5u"),
+        (b"", b"\x1b[1094;3u", "\\x1b\\xd1\\x86"),
+        (b"\x1b[>1u", b"\x1b[1089:1057;6u", "\\x1b[1089;6u"),
+    ] {
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        let got = herdr.feed(host_bytes).expect("reaches the pane");
+        assert_eq!(show(&got), want, "{}", show(host_bytes));
+    }
+
+    // Ctrl let go before the key: the release names the layout character
+    // without Ctrl, and is paired with the physical-key press.
+    let mut herdr = HerdrPath::new(HostProfile::Kitty, b"\x1b[>3u");
+    let press = herdr.feed(b"\x1b[1094::119;5u").expect("press");
+    let release = herdr.feed(b"\x1b[1094::119;1:3u").expect("release");
+    assert_eq!(
+        show(&[press, release].concat()),
+        "\\x1b[119;5u\\x1b[119;1:3u"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn layout_chord_releases_pair_when_modifiers_change_first() {
+    // A modifier let go before the key changes whether the chord is Ctrl
+    // alone, so the press and the release can name different keys (the layout
+    // character or the physical key). The release must still reach the pane
+    // as the key it saw pressed, and must not stay leased.
+    use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const ALT: u16 = ghostty::MOD_ALT;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
+    const PRESS: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
+    const RELEASE: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE;
+    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
+    // (case, press mods, release mods, Ghostty direct, Herdr)
+    let cases = [
+        (
+            "ctrl+shift, shift let go first",
+            CTRL | SHIFT,
+            CTRL,
+            "\\x1b[1094;6u\\x1b[1094;5:3u",
+            "\\x1b[1094;6u\\x1b[1094;5:3u",
+        ),
+        (
+            "ctrl+alt, alt let go first",
+            CTRL | ALT,
+            CTRL,
+            "\\x1b[1094;7u\\x1b[1094;5:3u",
+            "\\x1b[1094;7u\\x1b[1094;5:3u",
+        ),
+        (
+            "ctrl+shift, ctrl let go first",
+            CTRL | SHIFT,
+            SHIFT,
+            "\\x1b[1094;6u\\x1b[1094;2:3u",
+            "\\x1b[1094;6u\\x1b[1094;2:3u",
+        ),
+        // A Ctrl chord reaches Kitty apps as its physical key (see
+        // `layout_ctrl_chords_match_ghostty_direct`); its release follows.
+        (
+            "ctrl, ctrl let go first",
+            CTRL,
+            0,
+            "\\x1b[1094;5u\\x1b[1094;1:3u",
+            "\\x1b[119;5u\\x1b[119;1:3u",
+        ),
+        (
+            "ctrl, shift added before release",
+            CTRL,
+            CTRL | SHIFT,
+            "\\x1b[1094;5u\\x1b[1094;6:3u",
+            "\\x1b[119;5u\\x1b[119;6:3u",
+        ),
+    ];
+    let pane_mode = b"\x1b[>3u";
+    for (name, press_mods, release_mods, ghostty, want) in cases {
+        let mut host = Oracle::new(HostProfile::Kitty.setup(pane_mode));
+        let host_press = host.encode(ru_w, press_mods, PRESS);
+        let host_release = host.encode(ru_w, release_mods, RELEASE);
+        let mut direct = Oracle::new(pane_mode);
+        let direct_bytes = [
+            direct.encode(ru_w, press_mods, PRESS),
+            direct.encode(ru_w, release_mods, RELEASE),
+        ]
+        .concat();
+        assert_eq!(show(&direct_bytes), ghostty, "{name}: Ghostty direct");
+
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        let press = herdr.feed(&host_press).expect("press reaches the pane");
+        let release = herdr.feed(&host_release).expect("release reaches the pane");
+        assert_eq!(
+            show(&[press, release].concat()),
+            want,
+            "{name}: host sent {} {}",
+            show(&host_press),
+            show(&host_release)
+        );
+        // Nothing stays leased: losing focus releases no further key.
+        let after = herdr.feed(b"\x1b[O").unwrap_or_default();
+        assert!(
+            !show(&after).contains(":3u"),
+            "{name}: focus loss sent {}",
+            show(&after)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn overlapping_layout_and_us_keys_release_exactly() {
+    // A US `w` held together with a Russian chord on the same physical key.
+    // Each release must end its own press, in either order, however the
+    // chord's modifiers changed in between.
+    use ffi::*;
+    const CTRL: u16 = ghostty::MOD_CTRL;
+    const SHIFT: u16 = ghostty::MOD_SHIFT;
+    const PRESS: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_PRESS;
+    const RELEASE: ffi::GhosttyKeyAction = ffi::GhosttyKeyAction_GHOSTTY_KEY_ACTION_RELEASE;
+    let us_w = *KEYS.iter().find(|def| def.name == "w").unwrap();
+    let ru_w = layout_key(GhosttyKey_GHOSTTY_KEY_W, '\u{446}', '\u{426}');
+    type Step = (KeyDef, u16, ffi::GhosttyKeyAction);
+    // (case, steps, Ghostty direct, Herdr)
+    let cases: [(&str, Vec<Step>, &str, &str); 4] = [
+        (
+            "ctrl+shift+\u{446}, shift let go, \u{446} then w released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL | SHIFT, PRESS),
+                (ru_w, CTRL, RELEASE),
+                (us_w, CTRL, RELEASE),
+            ],
+            "w\\x1b[1094;6u\\x1b[1094;5:3u\\x1b[119;5:3u",
+            "w\\x1b[1094;6u\\x1b[1094;5:3u\\x1b[119;5:3u",
+        ),
+        (
+            "ctrl+shift+\u{446}, shift let go, w then \u{446} released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL | SHIFT, PRESS),
+                (us_w, CTRL, RELEASE),
+                (ru_w, CTRL, RELEASE),
+            ],
+            "w\\x1b[1094;6u\\x1b[119;5:3u\\x1b[1094;5:3u",
+            "w\\x1b[1094;6u\\x1b[119;5:3u\\x1b[1094;5:3u",
+        ),
+        // A Ctrl chord reaches Kitty apps as its physical key (see
+        // `layout_ctrl_chords_match_ghostty_direct`); its release follows.
+        (
+            "ctrl+\u{446}, ctrl let go, \u{446} then w released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL, PRESS),
+                (ru_w, 0, RELEASE),
+                (us_w, 0, RELEASE),
+            ],
+            "w\\x1b[1094;5u\\x1b[1094;1:3u\\x1b[119;1:3u",
+            "w\\x1b[119;5u\\x1b[119;1:3u\\x1b[119;1:3u",
+        ),
+        (
+            "ctrl+\u{446}, ctrl let go, w then \u{446} released",
+            vec![
+                (us_w, 0, PRESS),
+                (ru_w, CTRL, PRESS),
+                (us_w, 0, RELEASE),
+                (ru_w, 0, RELEASE),
+            ],
+            "w\\x1b[1094;5u\\x1b[119;1:3u\\x1b[1094;1:3u",
+            "w\\x1b[119;5u\\x1b[119;1:3u\\x1b[119;1:3u",
+        ),
+    ];
+    let pane_mode = b"\x1b[>3u";
+    for (name, steps, ghostty, want) in cases {
+        let mut host = Oracle::new(HostProfile::Kitty.setup(pane_mode));
+        let mut direct = Oracle::new(pane_mode);
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        let mut direct_bytes = Vec::new();
+        let mut pane_bytes = Vec::new();
+        let mut host_bytes = Vec::new();
+        for (def, mods, action) in steps {
+            let report = host.encode(def, mods, action);
+            direct_bytes.extend(direct.encode(def, mods, action));
+            pane_bytes.extend(herdr.feed(&report).expect("reaches the pane"));
+            host_bytes.push(show(&report));
+        }
+        assert_eq!(show(&direct_bytes), ghostty, "{name}: Ghostty direct");
+        assert_eq!(show(&pane_bytes), want, "{name}: host sent {host_bytes:?}");
+        // Nothing stays leased: losing focus releases no further key.
+        let after = herdr.feed(b"\x1b[O").unwrap_or_default();
+        assert!(
+            !show(&after).contains(":3u"),
+            "{name}: focus loss sent {}",
+            show(&after)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn goto_search_opens_on_shifted_slash_from_a_report_all_pane() {
+    // #4963, recorded from Ghostty 1.3.1 with a Portuguese layout, where `/` is
+    // Shift+7. With a plain pane Herdr keeps the host at flags 7 and the press
+    // arrives as text; when the focused pane asks for all keys Herdr pushes 31
+    // and the press arrives as a report carrying the shifted key and its text.
+    for (pane_mode, press, release) in [
+        (&b""[..], &b"/"[..], &b"\x1b[55:47;2:3u"[..]),
+        (b"\x1b[>31u", b"\x1b[55:47;2;47u", b"\x1b[55:47;2:3u"),
+    ] {
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        herdr.state.open_navigator_overlay();
+        assert_eq!(herdr.feed(press), None, "{}", show(pane_mode));
+        assert_eq!(herdr.feed(release), None, "{}", show(pane_mode));
+        assert!(
+            matches!(
+                &herdr.state.overlay,
+                Some(ClientShellOverlay::Navigator(navigator)) if navigator.search_focused
+            ),
+            "goto search did not activate for pane {}",
+            show(pane_mode)
+        );
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn goto_search_opens_only_for_a_typed_slash() {
+    // (pane mode, host bytes, whether goto search opens)
+    for (pane_mode, press, opens) in [
+        // Unshifted `/` reported as a kitty key.
+        (&b"\x1b[>31u"[..], &b"\x1b[47u"[..], true),
+        // Shift+/ typing `?` without a shifted alternate is not `/`.
+        (b"\x1b[>31u", b"\x1b[47;2;63u", false),
+        // Shift+/ without text or alternate says nothing about `/`.
+        (b"\x1b[>31u", b"\x1b[47;2u", false),
+        // Shift+7 with a `/` alternate and no text is `/`.
+        (b"\x1b[>31u", b"\x1b[55:47;2u", true),
+        // Ctrl+/ and Alt+/ are not text.
+        (b"\x1b[>31u", b"\x1b[47;5u", false),
+        (b"\x1b[>31u", b"\x1b[47;3u", false),
+        (b"", b"\x1b/", false),
+    ] {
+        let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+        herdr.state.open_navigator_overlay();
+        let _ = herdr.feed(press);
+        let focused = matches!(
+            &herdr.state.overlay,
+            Some(ClientShellOverlay::Navigator(navigator)) if navigator.search_focused
+        );
+        assert_eq!(focused, opens, "{}", show(press));
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn wezterm_escape_tap_reaches_the_pane_with_doubled_escape_preserved() {
+    // #1266: WezTerm with `enable_kitty_keyboard` sends an Escape press as a
+    // bare ESC and its release as `CSI 27;1:3u`. The macOS host policy keeps
+    // legacy `ESC ESC` whole, which used to swallow quick taps.
+    const PRESS: &[u8] = b"\x1b";
+    const RELEASE: &[u8] = b"\x1b[27;1:3u";
+    let mouse: &[u8] = b"\x1b[?1000h\x1b[?1006h";
+    for (pane_mode, want) in [
+        (&b""[..], &b"\x1b"[..]),
+        (mouse, b"\x1b"),
+        (b"\x1b[>1u", b"\x1b[27u"),
+    ] {
+        for (reads, label) in [
+            (vec![[PRESS, RELEASE].concat()], "one read"),
+            (vec![PRESS.to_vec(), RELEASE.to_vec()], "two reads"),
+        ] {
+            let mut herdr = HerdrPath::new(HostProfile::Kitty, pane_mode);
+            herdr.framer = crate::raw_input::RawInputByteFramer::with_host_input_policy(true);
+            herdr.framer.set_host_escape_disambiguation_active(true);
+            let mut chunks = Vec::new();
+            for read in &reads {
+                chunks.extend(herdr.framer.push(read));
+            }
+            for _ in 0..3 {
+                chunks.extend(herdr.framer.flush_timeout());
+            }
+            let outcomes = chunks
+                .iter()
+                .map(|chunk| herdr.state.handle_input_bytes(chunk))
+                .collect();
+            let got = herdr.deliver(outcomes).expect("escape reaches the pane");
+            assert_eq!(show(&got), show(want), "{label}, pane {}", show(pane_mode));
+        }
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn mouse_transparency_conformance() {

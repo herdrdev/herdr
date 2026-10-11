@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use tracing::warn;
@@ -52,12 +53,17 @@ fn save_json_to_path<T: serde::Serialize>(path: &Path, snapshot: &T) -> std::io:
     }
     let json = serde_json::to_string_pretty(snapshot)?;
     let tmp_path = target.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &json)?;
-    if let Err(err) = std::fs::rename(&tmp_path, &target) {
+    let mut temporary = std::fs::File::create(&tmp_path)?;
+    // A rename can survive a hard crash before unflushed file contents reach disk.
+    let result = temporary
+        .write_all(json.as_bytes())
+        .and_then(|()| temporary.sync_all());
+    drop(temporary);
+    if let Err(err) = result.and_then(|()| crate::platform::replace_file(&tmp_path, &target)) {
         let _ = std::fs::remove_file(&tmp_path);
         return Err(err);
     }
-    Ok(())
+    crate::platform::sync_parent_directory(target.parent().unwrap_or_else(|| Path::new(".")))
 }
 
 pub(super) fn save_history_to_path(
@@ -225,6 +231,52 @@ mod tests {
         assert!(!session.contains("split-secret"));
         assert!(!session.contains("history"));
         assert!(history.contains("split-secret"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn failed_replacement_preserves_saved_files_and_retries() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let (session_path, history_path) = temp_session_paths("failed-replacement");
+        save_to_path(&session_path, &empty_snapshot()).unwrap();
+        save_history_to_path(&history_path, Some(&history_snapshot("old history"))).unwrap();
+
+        for path in [&session_path, &history_path] {
+            let original = std::fs::read(path).unwrap();
+            let locked = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
+                .open(path)
+                .unwrap();
+            let mut changed = empty_snapshot();
+            changed.selected = 7;
+            let save = || {
+                if path == &session_path {
+                    save_to_path(path, &changed)
+                } else {
+                    save_history_to_path(path, Some(&history_snapshot("new history")))
+                }
+            };
+            assert!(save().is_err());
+            assert_eq!(std::fs::read(path).unwrap(), original);
+            assert!(!path.with_extension("json.tmp").exists());
+
+            drop(locked);
+            save().unwrap();
+            assert!(!path.with_extension("json.tmp").exists());
+        }
+
+        assert_eq!(
+            parse_snapshot(&std::fs::read_to_string(&session_path).unwrap())
+                .unwrap()
+                .selected,
+            7
+        );
+        let history = std::fs::read_to_string(&history_path).unwrap();
+        assert!(history.contains("new history"));
+        assert!(!history.contains("old history"));
+        std::fs::remove_dir_all(session_path.parent().unwrap()).unwrap();
     }
 
     #[test]

@@ -419,12 +419,13 @@ impl ClientShellState {
                 };
                 // A native record is released as the recorded key. A VT release
                 // report already names its key and shifted character exactly,
-                // except a non-Latin Ctrl chord pressed as its physical key: it
-                // is released as that key, matching the press the pane saw.
-                let physical_chord = key.base_layout_key().map(KeyCode::Char)
-                    == Some(lease.key.code)
-                    && key.code != lease.key.code;
-                let release = if key.physical_key_id().is_some() || physical_chord {
+                // except around a non-Latin Ctrl chord: Ctrl alone resolves to
+                // the physical key, so a modifier let go before the key flips
+                // between the layout character and that key. It is released as
+                // the key the pane saw pressed.
+                let layout_chord =
+                    key.code != lease.key.code && key.identity() == lease.key.identity();
+                let release = if key.physical_key_id().is_some() || layout_chord {
                     lease
                         .key
                         .with_modifiers(key.modifiers)
@@ -1127,7 +1128,7 @@ impl ClientShellState {
         if let Some(lease) = self.input_leases.remove(lease_key) {
             return Some(lease);
         }
-        let KeyCode::Char(c) = key.code else {
+        let KeyCode::Char(c) = key.layout_key().map_or(key.code, KeyCode::Char) else {
             return None;
         };
         fn single(mut chars: impl Iterator<Item = char>) -> Option<char> {
@@ -1146,9 +1147,6 @@ impl ClientShellState {
             .and_then(char::from_u32)
             .into_iter()
             .chain(other_case)
-            // A Ctrl chord on a non-Latin layout was leased as its physical key;
-            // its release names the layout character if Ctrl was let go first.
-            .chain(key.base_layout_key())
             .find_map(|candidate| {
                 self.input_leases.remove(&crate::input::InputLeaseKey::new(
                     LOCAL_INPUT_SOURCE,

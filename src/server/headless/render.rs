@@ -1,6 +1,38 @@
 use super::*;
 
 impl HeadlessServer {
+    pub(super) fn note_interactive_input(&mut self, pane_id: crate::layout::PaneId, now: Instant) {
+        self.interactive_input_deadlines
+            .retain(|_, deadline| *deadline > now);
+        self.interactive_input_deadlines
+            .insert(pane_id, now + INTERACTIVE_RENDER_WINDOW);
+    }
+
+    pub(super) fn can_render_interactive(&self, now: Instant) -> bool {
+        if self.interactive_render_budget.is_some_and(|(epoch, used)| {
+            now.duration_since(epoch) < crate::app::MIN_RENDER_INTERVAL
+                && used >= INTERACTIVE_RENDER_BUDGET
+        }) {
+            return false;
+        }
+        self.app
+            .render_dirty
+            .has_pending_visible_pty_source(|pane_id| {
+                self.interactive_input_deadlines
+                    .get(&pane_id)
+                    .is_some_and(|deadline| *deadline > now)
+            })
+    }
+
+    pub(super) fn record_interactive_render(&mut self, now: Instant) {
+        let (epoch, used) = self.interactive_render_budget.get_or_insert((now, 0));
+        if now.duration_since(*epoch) >= crate::app::MIN_RENDER_INTERVAL {
+            *epoch = now;
+            *used = 0;
+        }
+        *used += 1;
+    }
+
     fn shell_focused_runtime(
         &self,
         client_id: u64,
