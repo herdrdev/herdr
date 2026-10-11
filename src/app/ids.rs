@@ -64,6 +64,7 @@ impl App {
             .position(|workspace| workspace.id == id)
             .or_else(|| id.strip_prefix("w_")?.parse::<usize>().ok()?.checked_sub(1))
             .or_else(|| id.parse::<usize>().ok()?.checked_sub(1))
+            .filter(|&index| index < self.state.workspaces.len())
     }
 
     pub(crate) fn parse_tab_id(&self, id: &str) -> Option<(usize, usize)> {
@@ -148,5 +149,33 @@ impl App {
     ) -> Option<(usize, crate::layout::PaneId)> {
         let (ws_idx, pane_id) = self.parse_pane_id(id)?;
         (self.public_pane_id(ws_idx, pane_id).as_deref() == Some(id)).then_some((ws_idx, pane_id))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use crate::{config::Config, workspace::Workspace};
+
+    #[test]
+    fn numeric_workspace_ids_beyond_the_last_workspace_are_not_found() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.workspaces = vec![Workspace::test_new("only")];
+        let id = app.state.workspaces[0].id.clone();
+
+        assert_eq!(app.parse_workspace_id(&id), Some(0));
+        assert_eq!(app.parse_workspace_id("1"), Some(0));
+        assert_eq!(app.parse_workspace_id("w_1"), Some(0));
+        for id in ["2", "999", "w_2", "w_999", "0", "w_0"] {
+            assert_eq!(app.parse_workspace_id(id), None, "{id}");
+        }
+        assert_eq!(app.parse_tab_id("2:1"), None);
     }
 }
