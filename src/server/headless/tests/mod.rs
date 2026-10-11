@@ -3680,6 +3680,33 @@ async fn client_shell_split_echo_bypasses_cadence_with_bounded_visible_burst() {
     assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"Z"));
     assert!(server.interactive_input_deadlines.contains_key(&pane_id));
 
+    // A full queue after an accepted key must not lose that key's priority.
+    for _ in 0..3 {
+        let runtime = server
+            .app
+            .state
+            .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+            .unwrap();
+        runtime
+            .try_send_bytes(Bytes::from_static(b"queued"))
+            .unwrap();
+    }
+    server.interactive_input_deadlines.clear();
+    server.handle_server_event_with_render_impact(ServerEvent::ClientShellPaneInput {
+        client_id: 1,
+        pane_id: server.app.public_pane_id(0, pane_id).unwrap(),
+        events: vec![
+            crate::protocol::ClientPaneInputEvent::TextCommit("A".into()),
+            crate::protocol::ClientPaneInputEvent::TextCommit("B".into()),
+        ],
+    });
+    for _ in 0..3 {
+        assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"queued"));
+    }
+    assert_eq!(input_rx.try_recv().unwrap(), Bytes::from_static(b"A"));
+    assert!(input_rx.try_recv().is_err());
+    assert!(server.interactive_input_deadlines.contains_key(&pane_id));
+
     let start = Instant::now();
     server.note_interactive_input(pane_id, start);
     server.app.record_render_attempt(start, true);
