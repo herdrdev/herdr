@@ -63,6 +63,8 @@ pub struct PaneDetail {
     pub reported_at: Option<Instant>,
     pub last_agent_state_change_seq: Option<u64>,
     pub activity_at: Option<Instant>,
+    pub agent_activity_at: Option<Instant>,
+    pub human_activity_at: Option<Instant>,
     pub state_labels: HashMap<String, String>,
     pub tokens: HashMap<String, String>,
 }
@@ -179,6 +181,8 @@ impl Tab {
                         (false, Some(output_at)) => Some(output_at),
                         (false, None) => terminal.agent_activity_at(),
                     },
+                    agent_activity_at: terminal.agent_activity_at(),
+                    human_activity_at: pane.activity.last_human_at(),
                     state_labels: presentation.state_labels,
                     tokens: terminal.metadata_tokens.values(),
                 })

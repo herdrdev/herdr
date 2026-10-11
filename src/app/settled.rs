@@ -401,7 +401,7 @@ impl AppState {
         let Some((ws_idx, pane)) = self.pane_state_mut(pane_id) else {
             return false;
         };
-        pane.activity.note(now);
+        pane.activity.note_human(now);
         pane.settle_resume_guard = false;
         let changed = pane.settled_at.take().is_some();
         if changed {

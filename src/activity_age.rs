@@ -13,6 +13,7 @@ const MAX_DISPLAY_DAYS: u64 = 999;
 /// repaint footers and status lines without doing new work.
 pub(crate) struct PaneActivity {
     last_at: Instant,
+    last_human_at: Option<Instant>,
     restored_age_at_last_at: Option<Duration>,
     quiet_since: Option<Instant>,
     restored_age_at_quiet_since: Option<Duration>,
@@ -27,6 +28,7 @@ impl PaneActivity {
     pub(crate) fn new(now: Instant) -> Self {
         Self {
             last_at: now,
+            last_human_at: None,
             restored_age_at_last_at: None,
             quiet_since: None,
             restored_age_at_quiet_since: None,
@@ -53,6 +55,15 @@ impl PaneActivity {
     pub(crate) fn note(&mut self, now: Instant) {
         self.last_at = now;
         self.restored_age_at_last_at = None;
+    }
+
+    pub(crate) fn note_human(&mut self, now: Instant) {
+        self.note(now);
+        self.last_human_at = Some(now);
+    }
+
+    pub(crate) fn last_human_at(&self) -> Option<Instant> {
+        self.last_human_at
     }
 
     pub(crate) fn needs_detection_snapshot(

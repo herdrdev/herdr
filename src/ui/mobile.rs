@@ -2465,6 +2465,8 @@ mod tests {
                 reported_at: None,
                 last_agent_state_change_seq: None,
                 activity_at: None,
+                agent_activity_at: None,
+                human_activity_at: None,
                 state_labels: std::collections::HashMap::new(),
                 tokens: std::collections::HashMap::new(),
                 tab_first_pane: false,
