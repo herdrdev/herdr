@@ -123,13 +123,11 @@ impl DetectionTextCache {
         &mut self,
         agent: Option<Agent>,
         content_seq: &AtomicU64,
-        read: impl FnOnce() -> String,
+        read: impl FnOnce() -> (String, bool),
     ) -> bool {
         let before = content_seq.load(Ordering::Acquire);
-        // Windows blank reads can refresh deferred recent-history fallback.
         // Identified agents retain their existing screen-read behavior everywhere.
-        if cfg!(unix)
-            && agent.is_none()
+        if agent.is_none()
             // The terminal accessor also returns empty on failure; keep retrying it.
             && !self.text.is_empty()
             && before.is_multiple_of(2)
@@ -137,11 +135,11 @@ impl DetectionTextCache {
         {
             return false;
         }
-        let text = read();
+        let (text, reusable) = read();
         let after = content_seq.load(Ordering::Acquire);
         // Writers announce themselves before touching the terminal. A read that
         // overlaps a writer must not bless either revision for future reuse.
-        self.revision = (before == after && before.is_multiple_of(2)).then_some(before);
+        self.revision = (reusable && before == after && before.is_multiple_of(2)).then_some(before);
         let changed = text != self.text;
         self.text = text;
         changed
@@ -393,78 +391,61 @@ pub(super) fn mark_detection_content_changed(detection_content_seq: &AtomicU64) 
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn unidentified_text_cache_preserves_text_changes_and_forced_reads() {
         let sequence = AtomicU64::new(0);
         let mut cache = DetectionTextCache::default();
-        assert!(cache.refresh(None, &sequence, || "one".into()));
+        assert!(cache.refresh(None, &sequence, || ("one".into(), true)));
         for _ in 0..20 {
             assert!(!cache.refresh(None, &sequence, || panic!("unchanged text was extracted")));
         }
         sequence.store(2, Ordering::Release);
         assert!(
-            !cache.refresh(None, &sequence, || "one".into()),
+            !cache.refresh(None, &sequence, || ("one".into(), true)),
             "bytes are not text changes"
         );
         sequence.store(4, Ordering::Release);
-        assert!(cache.refresh(None, &sequence, || "two".into()));
+        assert!(cache.refresh(None, &sequence, || ("two".into(), true)));
         for _ in 0..2 {
             let mut read = false;
             assert!(!cache.refresh(Some(Agent::Codex), &sequence, || {
                 read = true;
-                "two".into()
+                ("two".into(), true)
             }));
             assert!(read, "identified agents must keep their existing reads");
         }
         cache.clear();
-        assert!(cache.refresh(None, &sequence, || "two".into()));
+        assert!(cache.refresh(None, &sequence, || ("two".into(), true)));
         sequence.store(6, Ordering::Release);
-        assert!(cache.refresh(None, &sequence, String::new));
-        assert!(cache.refresh(None, &sequence, || "retry after empty read".into()));
+        assert!(cache.refresh(None, &sequence, || (String::new(), false)));
+        assert!(cache.refresh(None, &sequence, || ("retry after empty read".into(), true)));
     }
 
-    #[cfg(unix)]
     #[test]
     fn unidentified_text_cache_does_not_reuse_overlapping_writes() {
         let sequence = AtomicU64::new(0);
         let mut cache = DetectionTextCache::default();
         assert!(cache.refresh(None, &sequence, || {
             sequence.store(2, Ordering::Release);
-            "old".into()
+            ("old".into(), true)
         }));
         assert_eq!(
             cache.revision, None,
             "old text must not acquire the new revision"
         );
-        assert!(cache.refresh(None, &sequence, || "new".into()));
+        assert!(cache.refresh(None, &sequence, || ("new".into(), true)));
 
         sequence.store(3, Ordering::Release);
-        assert!(cache.refresh(None, &sequence, || "during write".into()));
+        assert!(cache.refresh(None, &sequence, || ("during write".into(), true)));
         assert_eq!(
             cache.revision, None,
             "an in-progress write cannot be reused"
         );
         sequence.store(4, Ordering::Release);
-        assert!(cache.refresh(None, &sequence, || "completed write".into()));
+        assert!(cache.refresh(None, &sequence, || ("completed write".into(), true)));
         assert!(!cache.refresh(None, &sequence, || panic!(
             "completed revision should be reusable"
         )));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn unidentified_text_cache_keeps_windows_fallback_reads() {
-        let sequence = AtomicU64::new(0);
-        let mut cache = DetectionTextCache::default();
-        for _ in 0..2 {
-            let mut read = false;
-            cache.refresh(None, &sequence, || {
-                read = true;
-                "nonempty fallback text".into()
-            });
-            assert!(read);
-        }
     }
 
     fn publish_state(state: AgentState) -> DetectionPublishState {

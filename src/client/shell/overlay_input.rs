@@ -718,7 +718,14 @@ impl ClientShellState {
                 outcome.repaint = true;
                 return;
             }
-            if code == KeyCode::Char('/') && modifiers.is_empty() {
+            // Match the typed character so layouts where `/` needs Shift work
+            // when the host reports it as a shifted key (report-all panes).
+            // A shifted key needs the host's text or shifted alternate: bare
+            // `CSI 47;2u` is Shift+/, which is not `/` on most layouts.
+            let shifted_without_evidence = key.modifiers.contains(KeyModifiers::SHIFT)
+                && key.generated_text.is_none()
+                && key.shifted_codepoint.is_none();
+            if !shifted_without_evidence && crate::input::keybind_help_text_char(key) == Some('/') {
                 if let Some(ClientShellOverlay::Navigator(navigator)) = self.overlay.as_mut() {
                     navigator.search_focused = true;
                     navigator.filter = None;
