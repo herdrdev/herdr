@@ -143,10 +143,6 @@ pub(crate) fn cycle_label(nerd_font: bool) -> &'static str {
     }
 }
 
-const CHIP: &str = "\u{F061A}"; // md-chip
-                                // Stacked lines read as "memory in use" without the chip glyph CPU already owns.
-const REORDER_HORIZONTAL: &str = "\u{F0688}"; // md-reorder_horizontal
-const HARDDISK: &str = "\u{F02CA}"; // md-harddisk
 const HOME_OUTLINE: &str = "\u{F06A1}"; // md-home_outline
 const TARGET: &str = "\u{F04FE}"; // md-target
 const SITEMAP_OUTLINE: &str = "\u{F199C}"; // md-sitemap_outline
@@ -155,25 +151,6 @@ const INBOX_OUTLINE: &str = "\u{F1274}"; // md-inbox_outline
 const DOTS_HORIZONTAL: &str = "\u{F01D8}"; // md-dots_horizontal
 const FOLDER_OPEN: &str = "\u{F07C}"; // fa-folder_open
 const LIGHTBULB_ON_OUTLINE: &str = "\u{F0A00}"; // md-lightbulb_on_outline
-
-/// Host metrics shown in the status row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Metric {
-    Cpu,
-    Mem,
-    Dsk,
-}
-
-pub(crate) fn metric_label(metric: Metric, nerd_font: bool) -> &'static str {
-    match (metric, nerd_font) {
-        (Metric::Cpu, true) => CHIP,
-        (Metric::Mem, true) => REORDER_HORIZONTAL,
-        (Metric::Dsk, true) => HARDDISK,
-        (Metric::Cpu, false) => "CPU",
-        (Metric::Mem, false) => "MEM",
-        (Metric::Dsk, false) => "DSK",
-    }
-}
 
 /// One icon per top-bar view; a single letter when Nerd Font glyphs are off.
 pub(crate) fn view_icon(view: crate::app::state::TopBarView, nerd_font: bool) -> &'static str {

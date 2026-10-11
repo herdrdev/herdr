@@ -1592,6 +1592,11 @@ impl App {
             return mouse.row != self.state.view.status_bar_rect.y;
         }
         if let Some(kind) = kind {
+            if let crate::app::state::StatusSegmentKind::MoreAction(action) = kind {
+                self.activate_status_more_action(action);
+                self.state.status_more_open = false;
+                return true;
+            }
             match self.state.activate_status_segment(kind) {
                 Some(MouseAction::Settings(action)) => self.apply_settings_action(action),
                 Some(MouseAction::OpenFleetHost { name, focus_agent }) => {
@@ -1602,6 +1607,60 @@ impl App {
             }
         }
         true
+    }
+
+    fn activate_status_more_action(&mut self, action: crate::app::state::TopBarAction) {
+        use crate::app::state::{Mode, TopBarAction};
+        match action {
+            TopBarAction::RepoEditor
+                if matches!(
+                    self.state.effective_interaction_mode(),
+                    Mode::Terminal | Mode::Navigate
+                ) && self.state.repo_editor_available() =>
+            {
+                self.state.request_open_repo_editor = true;
+                self.state.set_server_mode(Mode::Terminal);
+            }
+            TopBarAction::AddAction
+                if matches!(
+                    self.state.effective_interaction_mode(),
+                    Mode::Terminal | Mode::Navigate
+                ) =>
+            {
+                self.state.add_action = Some(crate::app::state::AddActionState::default());
+                self.state.set_server_mode(Mode::AddAction);
+            }
+            TopBarAction::PaneToggle(direction)
+                if matches!(
+                    self.state.effective_interaction_mode(),
+                    Mode::Terminal | Mode::Navigate
+                ) =>
+            {
+                self.state.request_pane_toggle = Some(direction);
+                self.state.set_server_mode(Mode::Terminal);
+            }
+            TopBarAction::UserAction(index)
+                if matches!(
+                    self.state.effective_interaction_mode(),
+                    Mode::Terminal | Mode::Navigate
+                ) =>
+            {
+                self.state.request_user_action = Some(index);
+                self.state.set_server_mode(Mode::Terminal);
+            }
+            TopBarAction::GitMenu => {
+                if self.state.effective_interaction_mode() == Mode::GitMenu {
+                    self.state.set_server_mode(Mode::Terminal);
+                } else if matches!(
+                    self.state.effective_interaction_mode(),
+                    Mode::Terminal | Mode::Navigate
+                ) {
+                    self.state.git_menu = crate::app::state::MenuListState::new(0);
+                    self.state.set_server_mode(Mode::GitMenu);
+                }
+            }
+            _ => {}
+        }
     }
 
     pub(crate) fn handle_symphony_key(&mut self, key: KeyEvent) -> bool {
@@ -7612,6 +7671,36 @@ sidebar_visible = true
             },
             owner
         ));
+        assert!(!app.state.status_more_open);
+    }
+
+    #[test]
+    fn clicking_a_pane_action_in_the_more_popover_uses_the_existing_toggle_request() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.status_more_open = true;
+        app.state.view.status_more_rect = ratatui::layout::Rect::new(10, 2, 30, 8);
+        app.state.view.status_segment_hit_areas = vec![(
+            crate::app::state::StatusSegmentKind::MoreAction(
+                crate::app::state::TopBarAction::PaneToggle(
+                    crate::app::state::PaneToggleDirection::Below,
+                ),
+            ),
+            ratatui::layout::Rect::new(13, 4, 12, 1),
+        )];
+        assert!(app.handle_status_more_menu_mouse(
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 14,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            },
+            InputOwner::Pane,
+        ));
+        assert_eq!(
+            app.state.request_pane_toggle,
+            Some(crate::app::state::PaneToggleDirection::Below)
+        );
         assert!(!app.state.status_more_open);
     }
 

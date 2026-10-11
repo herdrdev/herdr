@@ -335,10 +335,10 @@ mod tests {
         let status = frame_rect_text(&frame, app.view.status_bar_rect);
         assert!(status.starts_with(" H  F  O  S  M "), "{status:?}");
         assert!(status.contains("Home"), "{status:?}");
-        assert!(
-            !status.contains("CPU"),
-            "metrics below 80% stay hidden: {status:?}"
-        );
+        assert_eq!(status.matches('\u{25cf}').count(), 3, "{status:?}");
+        for hidden_value in ["CPU 12%", "MEM 8.0/16G", "DSK 41%"] {
+            assert!(!status.contains(hidden_value), "{status:?}");
+        }
         assert!(status.trim_end().ends_with("..."), "{status:?}");
         let text = frame_text(&frame);
         assert!(text.lines().any(|line| line.contains("Spaces")));

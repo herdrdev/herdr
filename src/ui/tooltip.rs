@@ -659,6 +659,24 @@ pub(crate) fn status_segment_tooltip(app: &AppState, kind: StatusSegmentKind) ->
         StatusSegmentKind::More => {
             "More\nLink, agents, host and fleet machines. Hidden by default.\nClick to open · Esc closes".into()
         }
+        StatusSegmentKind::MoreGroup => String::new(),
+        StatusSegmentKind::MoreAction(action) => match action {
+            crate::app::state::TopBarAction::RepoEditor => "Open repository editor".into(),
+            crate::app::state::TopBarAction::AddAction => "Create a user action".into(),
+            crate::app::state::TopBarAction::PaneToggle(
+                crate::app::state::PaneToggleDirection::Below,
+            ) => "Split below or close the pane below".into(),
+            crate::app::state::TopBarAction::PaneToggle(
+                crate::app::state::PaneToggleDirection::Right,
+            ) => "Split right or close the pane on the right".into(),
+            crate::app::state::TopBarAction::UserAction(index) => app
+                .keybinds
+                .user_actions
+                .get(index)
+                .map(|action| action.name.clone())
+                .unwrap_or_else(|| "User action".into()),
+            crate::app::state::TopBarAction::GitMenu => "Git actions".into(),
+        },
     }
 }
 

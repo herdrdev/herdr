@@ -9,27 +9,27 @@ use ratatui::{
     Frame,
 };
 
-use super::text::{display_width, display_width_u16};
+use super::text::{display_width, display_width_u16, truncate_end};
 use super::widgets::panel_contrast_fg;
 use crate::{
     app::state::{
         CopyFeedback, Palette, StatusButton, StatusButtonAction, StatusSegmentKind, ToastKind,
-        ToastNotification, TopBarView,
+        ToastNotification, TopBarAction, TopBarView,
     },
     app::AppState,
     config::{StatusIndicatorStyle, ToastClipboardPosition, ToastHerdrPosition},
     detect::AgentState,
-    platform::status_metrics::metric_segment_visible,
     terminal::TerminalRuntimeRegistry,
 };
+
+#[cfg(test)]
+use crate::platform::status_metrics::metric_segment_visible;
 
 /// Full-width top bar.
 ///
 /// Left: one icon per view (Home, Focus, Orchestration, Scratch, Mailbox), the
-/// one on screen highlighted. Centre: that view's name. Right: CPU, memory and
-/// disk, each only while it is at or above 80% (amber, red from 90%), then the
-/// `⋯` control. The link, agent, host and fleet indicators live in the popover
-/// that control opens, so a healthy machine shows an otherwise quiet bar.
+/// one on screen highlighted. Centre: view name and focused pane title. Right:
+/// CPU, memory, disk and `⋯`; host details and actions live in the popover.
 ///
 /// Layout: spans the full client width above the sidebar. The right-hand
 /// segments are fitted first; the icons yield to them rather than overlapping,
@@ -87,10 +87,10 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     } else {
         &app.view.status_buttons
     };
-    if let Some(rect) = view_title_rect(app, area, buttons, used + usize::from(reserved)) {
+    if let Some((rect, text)) = view_title_rect(app, area, buttons, used + usize::from(reserved)) {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                app.top_bar_view().name(),
+                text,
                 Style::default().fg(p.overlay1).bg(p.panel_bg),
             ))),
             rect,
@@ -150,9 +150,8 @@ fn view_title_rect(
     area: Rect,
     buttons: &[StatusButton],
     segments_used: usize,
-) -> Option<Rect> {
+) -> Option<(Rect, String)> {
     let name = app.top_bar_view().name();
-    let width = display_width_u16(name);
     let left = buttons
         .iter()
         .map(|button| button.rect.x.saturating_add(button.rect.width))
@@ -164,12 +163,23 @@ fn view_title_rect(
         .saturating_add(area.width)
         .saturating_sub(u16::try_from(segments_used).unwrap_or(u16::MAX))
         .saturating_sub(1);
-    if right.saturating_sub(left) < width {
+    let available = usize::from(right.saturating_sub(left));
+    if available < display_width(name) {
         return None;
     }
+    let parts = focused_pane_title_parts(app);
+    let separator = if parts.is_some() { " · " } else { "" };
+    let title_budget = available.saturating_sub(display_width(name) + display_width(separator));
+    let title =
+        parts.and_then(|(repo, thread)| fit_focused_pane_title(&repo, &thread, title_budget));
+    let text = match title {
+        Some(title) if !title.is_empty() => format!("{name}{separator}{title}"),
+        _ => name.to_string(),
+    };
+    let width = display_width_u16(&text);
     let centred = area.x.saturating_add(area.width.saturating_sub(width) / 2);
     let x = centred.clamp(left, right.saturating_sub(width));
-    Some(Rect::new(x, area.y, width, 1))
+    Some((Rect::new(x, area.y, width, 1), text))
 }
 
 /// The right-aligned segments this frame will draw, fitted to the bar.
@@ -182,10 +192,30 @@ pub(crate) fn fitted_status_segments(app: &AppState, area: Rect) -> Vec<Segment>
     if usize::from(content_width) < minimum_required_status_width(app) {
         return Vec::new();
     }
-    fitted_segments(
+    fit_status_segments(
         status_segments(app, metrics_or_unavailable(app), &app.palette),
         usize::from(content_width),
     )
+}
+
+fn fit_status_segments(mut segments: Vec<Segment>, width: usize) -> Vec<Segment> {
+    if segment_width(&segments) > width {
+        for (kind, short) in [
+            (StatusSegmentKind::Cpu, "C"),
+            (StatusSegmentKind::Memory, "M"),
+            (StatusSegmentKind::Disk, "D"),
+        ] {
+            if let Some(segment) = segments.iter_mut().find(|segment| segment.kind == kind) {
+                let value = segment
+                    .text
+                    .trim()
+                    .split_once(' ')
+                    .map(|(_, value)| value.trim());
+                segment.text = format!(" {short} {} ", value.unwrap_or("--"));
+            }
+        }
+    }
+    segments
 }
 
 /// What a view icon's tooltip says: its name, what a click does, and the
@@ -233,7 +263,7 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, area));
     // The right-aligned segments are load-bearing; icons yield to them rather
     // than overlapping, and drop whole rather than truncating to a stub.
-    let reserved = segment_width(&fitted_segments(
+    let reserved = segment_width(&fit_status_segments(
         status_segments(app, metrics_or_unavailable(app), &app.palette),
         usize::from(content_width),
     ));
@@ -281,8 +311,6 @@ pub(crate) struct Segment {
     style: Style,
     /// When true, `style` already carries its own background (prefix pill).
     preserve_bg: bool,
-    /// Lower values elide first; `None` is required at desktop widths.
-    elide_rank: Option<u8>,
     kind: StatusSegmentKind,
 }
 
@@ -322,40 +350,18 @@ fn segment_width(segments: &[Segment]) -> usize {
         .sum()
 }
 
-fn fitted_segments(mut segments: Vec<Segment>, width: usize) -> Vec<Segment> {
-    while segment_width(&segments) > width {
-        let candidate = segments
-            .iter()
-            .enumerate()
-            .filter_map(|(index, segment)| segment.elide_rank.map(|rank| (rank, index)))
-            .min_by_key(|(rank, _)| *rank);
-        let Some((_, index)) = candidate else {
-            break;
-        };
-        segments.remove(index);
-    }
-    segments
-}
-
-/// The narrowest bar that still answers its question: every metric at once,
-/// expanded, plus the `⋯` control. Below this the layout goes mobile.
+/// The narrowest bar that still keeps all three compact metrics and `⋯`.
 pub(crate) fn minimum_required_status_width(_app: &AppState) -> usize {
-    display_width(" CPU \u{2588} 100 ")
-        + display_width(" MEM \u{2588} 100 ")
-        + display_width(" DSK \u{2588} 100 ")
-        + display_width(" ... ")
+    display_width(" C 100%  M 999/999G  D 100%  ... ")
 }
 
-/// The eight fill levels of a column glyph, from shortest to full.
-const FILL_LEVELS: [char; 8] = [
-    '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}',
-];
 const WARN_PERCENT: u8 = 80;
 const CRITICAL_PERCENT: u8 = 90;
 const DOT: char = '\u{25cf}';
+const FILL_LEVELS: [char; 8] = [
+    '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}', '\u{2588}',
+];
 
-/// Maps a percentage onto a column glyph. Zero still draws the shortest column
-/// rather than a blank, so a present-but-idle account stays visibly present.
 pub(crate) fn fill_glyph(percent: u8) -> char {
     let index = usize::from(percent.min(100)) * FILL_LEVELS.len() / 101;
     FILL_LEVELS[index.min(FILL_LEVELS.len() - 1)]
@@ -368,8 +374,6 @@ pub(crate) fn load_color(percent: u8, p: &Palette) -> Color {
         _ => p.green,
     }
 }
-
-use crate::ui::icons::Metric;
 
 pub(crate) fn fleet_device_text(
     device: &crate::fleet::DeviceAttention,
@@ -392,31 +396,46 @@ fn status_segments(
     p: &Palette,
 ) -> Vec<Segment> {
     let mut out = Vec::new();
-    let expanded = app.status_bar_expanded;
-    let label = |metric| crate::ui::icons::metric_label(metric, app.nerd_font);
-    for (kind, metric, percent, was_visible) in [
+    let cpu = metrics.cpu_percent.filter(|value| *value <= 100);
+    let memory = memory_percent(metrics);
+    let disk = metrics.disk_percent.filter(|value| *value <= 100);
+    let memory_value = match (metrics.mem_used_gib, metrics.mem_total_gib) {
+        (Some(used), Some(total)) if used.is_finite() && total.is_finite() && total > 0.0 => {
+            Some(format!("{used:.1}/{total:.0}G"))
+        }
+        _ => None,
+    };
+    for (kind, label, value, percent, was_visible) in [
         (
             StatusSegmentKind::Cpu,
-            Metric::Cpu,
-            metrics.cpu_percent,
+            "CPU",
+            cpu.map(|n| format!("{n}%")),
+            cpu,
             app.status_cpu_visible,
         ),
         (
             StatusSegmentKind::Memory,
-            Metric::Mem,
-            memory_percent(metrics),
+            "MEM",
+            memory_value,
+            memory,
             app.status_mem_visible,
         ),
         (
             StatusSegmentKind::Disk,
-            Metric::Dsk,
-            metrics.disk_percent,
+            "DSK",
+            disk.map(|n| format!("{n}%")),
+            disk,
             app.status_disk_visible,
         ),
     ] {
-        if metric_segment_visible(percent, was_visible) {
-            out.push(metric_segment(kind, label(metric), percent, expanded, p));
-        }
+        out.push(compact_metric_segment(
+            kind,
+            label,
+            value.as_deref(),
+            percent,
+            was_visible,
+            p,
+        ));
     }
     out.push(Segment {
         text: format!(" {} ", crate::ui::icons::more_label(app.nerd_font)),
@@ -426,7 +445,6 @@ fn status_segments(
             p.overlay1
         }),
         preserve_bg: false,
-        elide_rank: None,
         kind: StatusSegmentKind::More,
     });
     out
@@ -544,6 +562,84 @@ fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
                 ]);
             }
         }
+    }
+
+    let on_status_bar = |rect: Rect| {
+        app.mouse_capture
+            && rect.width > 0
+            && rect.y == app.view.status_bar_rect.y
+            && app.view.status_bar_rect.height > 0
+    };
+    let mut panes = Vec::new();
+    for (rect, direction, label) in [
+        (
+            app.view.pane_toggle_below_hit_area,
+            crate::app::state::PaneToggleDirection::Below,
+            "Split below",
+        ),
+        (
+            app.view.pane_toggle_right_hit_area,
+            crate::app::state::PaneToggleDirection::Right,
+            "Split right",
+        ),
+    ] {
+        if on_status_bar(rect) {
+            panes.push(item(
+                StatusSegmentKind::MoreAction(TopBarAction::PaneToggle(direction)),
+                label.into(),
+                Style::default().fg(p.overlay1),
+            ));
+        }
+    }
+    if !panes.is_empty() {
+        rows.push(vec![item(
+            StatusSegmentKind::MoreGroup,
+            "Panes".into(),
+            Style::default().fg(p.accent),
+        )]);
+        rows.extend(panes.into_iter().map(|item| vec![item]));
+    }
+
+    let mut actions = Vec::new();
+    if on_status_bar(app.view.repo_editor_button_hit_area) {
+        actions.push(item(
+            StatusSegmentKind::MoreAction(TopBarAction::RepoEditor),
+            "Open editor".into(),
+            Style::default().fg(p.overlay1),
+        ));
+    }
+    if on_status_bar(app.view.add_action_button_hit_area) {
+        actions.push(item(
+            StatusSegmentKind::MoreAction(TopBarAction::AddAction),
+            "New action".into(),
+            Style::default().fg(p.overlay1),
+        ));
+    }
+    for (index, rect) in &app.view.user_action_hit_areas {
+        if on_status_bar(*rect) {
+            if let Some(action) = app.keybinds.user_actions.get(*index) {
+                actions.push(item(
+                    StatusSegmentKind::MoreAction(TopBarAction::UserAction(*index)),
+                    action.name.clone(),
+                    Style::default().fg(p.overlay1),
+                ));
+            }
+        }
+    }
+    if on_status_bar(app.view.git_menu_button_hit_area) {
+        actions.push(item(
+            StatusSegmentKind::MoreAction(TopBarAction::GitMenu),
+            "Git actions".into(),
+            Style::default().fg(p.overlay1),
+        ));
+    }
+    if !actions.is_empty() {
+        rows.push(vec![item(
+            StatusSegmentKind::MoreGroup,
+            "Actions".into(),
+            Style::default().fg(p.accent),
+        )]);
+        rows.extend(actions.into_iter().map(|item| vec![item]));
     }
 
     rows.push(vec![item(
@@ -685,31 +781,81 @@ pub(crate) fn resolve_focused_remote_host(
         .map(str::to_owned)
 }
 
-fn metric_segment(
+fn compact_metric_segment(
     kind: StatusSegmentKind,
     label: &str,
+    value: Option<&str>,
     percent: Option<u8>,
-    expanded: bool,
+    was_visible: bool,
     p: &Palette,
 ) -> Segment {
-    let (text, color) = match percent.filter(|percent| *percent <= 100) {
-        Some(percent) if expanded => (
-            format!(" {label} {} {percent} ", fill_glyph(percent)),
-            load_color(percent, p),
-        ),
-        Some(percent) => (
-            format!(" {label} {} ", fill_glyph(percent)),
-            load_color(percent, p),
-        ),
-        None => (format!(" {label} - "), p.overlay0),
-    };
+    let healthy =
+        percent.is_some_and(|value| value < WARN_PERCENT && !(was_visible && value >= 78));
     Segment {
-        text,
-        style: Style::default().fg(color),
+        text: if healthy {
+            format!(" {DOT} ")
+        } else {
+            format!(" {label} {} ", value.unwrap_or("--"))
+        },
+        style: Style::default().fg(match percent {
+            Some(value) if value >= CRITICAL_PERCENT => p.red,
+            Some(value) if value >= WARN_PERCENT || (was_visible && value >= 78) => p.yellow,
+            _ => p.green,
+        }),
         preserve_bg: false,
-        elide_rank: None,
         kind,
     }
+}
+
+/// The focused pane's repository and session title share the same source as
+/// the sidebar, so the bar cannot name a pane differently from its row.
+fn focused_pane_title_parts(app: &AppState) -> Option<(String, String)> {
+    let workspace = app.active.and_then(|ws_idx| app.workspaces.get(ws_idx))?;
+    let pane_id = workspace.focused_pane_id()?;
+    let terminal = app.terminals.get(workspace.terminal_id(pane_id)?)?;
+    let context = terminal.effective_work_context();
+    let repo = context
+        .repo
+        .as_deref()
+        .and_then(|repo| repo.rsplit('/').find(|part| !part.trim().is_empty()))
+        .map(str::trim)
+        .filter(|repo| !repo.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            terminal
+                .cwd
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|repo| !repo.is_empty())
+                .map(str::to_string)
+        })?;
+    let tab_idx = workspace.active_tab;
+    let projection = workspace.tab_display_projection(&app.terminals, tab_idx);
+    let title = crate::workspace::session_title(
+        projection.as_ref(),
+        workspace
+            .tab_display_name_from(&app.terminals, tab_idx)
+            .or_else(|| Some(super::sidebar::DEFAULT_THREAD_TITLE.to_string())),
+    )?;
+    let title = title.trim();
+    (!title.is_empty()).then(|| (repo, title.to_string()))
+}
+
+fn fit_focused_pane_title(repo: &str, thread: &str, width: usize) -> Option<String> {
+    let repo_width = display_width(repo);
+    if repo_width == 0 || repo_width > width {
+        return None;
+    }
+    let full = format!("{repo} / {thread}");
+    if display_width(&full) <= width {
+        return Some(full);
+    }
+    let minimum = format!("{repo} / …");
+    if display_width(&minimum) > width {
+        return Some(repo.to_string());
+    }
+    Some(truncate_end(&full, width))
 }
 
 #[cfg(test)]
@@ -1407,20 +1553,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn fill_glyphs_span_the_range_without_a_blank_at_zero() {
-        // Zero draws the shortest column, not nothing: an account that is
-        // present and idle must look different from an account that is absent.
-        assert_eq!(fill_glyph(0), '\u{2581}');
-        assert_eq!(fill_glyph(50), '\u{2584}');
-        assert_eq!(fill_glyph(100), '\u{2588}');
-        for percent in 0..=100u8 {
-            assert!(FILL_LEVELS.contains(&fill_glyph(percent)), "{percent}");
-        }
-        // Out-of-range input saturates rather than panicking on the index.
-        assert_eq!(fill_glyph(255), '\u{2588}');
-    }
-
     fn metrics(cpu: u8, mem_used: f32, disk: u8) -> StatusMetrics {
         StatusMetrics {
             cpu_percent: Some(cpu),
@@ -1457,7 +1589,7 @@ mod tests {
     }
 
     #[test]
-    fn healthy_machine_shows_no_metric_only_the_more_control() {
+    fn healthy_machine_shows_only_green_metric_icons() {
         let app = app_with_metrics(metrics(31, 19.8, 41));
         let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
         assert_eq!(
@@ -1465,14 +1597,22 @@ mod tests {
                 .iter()
                 .map(|segment| segment.kind)
                 .collect::<Vec<_>>(),
-            vec![StatusSegmentKind::More]
+            vec![
+                StatusSegmentKind::Cpu,
+                StatusSegmentKind::Memory,
+                StatusSegmentKind::Disk,
+                StatusSegmentKind::More
+            ]
         );
-        assert_eq!(segment_text(&app), " ... ");
+        assert_eq!(segment_text(&app), " ●  ●  ●  ... ");
+        assert!(segments[..3]
+            .iter()
+            .all(|segment| segment.style.fg == Some(app.palette.green)));
     }
 
     #[test]
     fn each_metric_appears_amber_at_80_and_red_at_90() {
-        // Disk at 84% alone: only disk, amber.
+        // Disk at 84% is amber; healthy metrics stay as green icons.
         let app = app_with_metrics(metrics(31, 19.8, 84));
         let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
         let kinds = segments
@@ -1481,10 +1621,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             kinds,
-            vec![StatusSegmentKind::Disk, StatusSegmentKind::More]
+            vec![
+                StatusSegmentKind::Cpu,
+                StatusSegmentKind::Memory,
+                StatusSegmentKind::Disk,
+                StatusSegmentKind::More
+            ]
         );
-        assert_eq!(segments[0].style.fg, Some(app.palette.yellow));
-        assert_eq!(segments[0].text, " DSK \u{2587} ");
+        assert_eq!(segments[2].style.fg, Some(app.palette.yellow));
+        assert_eq!(segments[2].text, " DSK 84% ");
 
         // Memory 93% and disk 84%: red then amber, in CPU, memory, disk order.
         let app = app_with_metrics(metrics(31, 29.8, 84));
@@ -1495,27 +1640,24 @@ mod tests {
                 .map(|segment| (segment.kind, segment.style.fg))
                 .collect::<Vec<_>>(),
             vec![
+                (StatusSegmentKind::Cpu, Some(app.palette.green)),
                 (StatusSegmentKind::Memory, Some(app.palette.red)),
                 (StatusSegmentKind::Disk, Some(app.palette.yellow)),
                 (StatusSegmentKind::More, Some(app.palette.overlay1)),
             ]
         );
 
-        // CPU at 88%: the chip glyph appears with Nerd Font on.
+        // CPU at 88% uses the amber alert color.
         let mut app = app_with_metrics(metrics(88, 19.8, 41));
         app.nerd_font = true;
         let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
         assert_eq!(segments[0].kind, StatusSegmentKind::Cpu);
-        assert!(
-            segments[0].text.contains('\u{F061A}'),
-            "{}",
-            segments[0].text
-        );
+        assert_eq!(segments[0].text, " CPU 88% ");
         assert_eq!(segments[0].style.fg, Some(app.palette.yellow));
     }
 
     #[test]
-    fn metrics_hold_through_the_hysteresis_gap_and_hide_below_it() {
+    fn threshold_hysteresis_does_not_expand_green_range_metrics() {
         assert!(!metric_segment_visible(Some(79), false));
         assert!(metric_segment_visible(Some(80), false));
         // Between 78 and 80 the segment keeps whatever state it had, so a
@@ -1526,18 +1668,22 @@ mod tests {
         assert!(!metric_segment_visible(None, true));
 
         let mut app = app_with_metrics(metrics(79, 25.0, 79));
-        assert_eq!(segment_text(&app), " ... ");
+        assert!(!segment_text(&app).contains("CPU 79%"));
+        assert_eq!(
+            app.palette.green,
+            status_segments(&app, metrics_or_unavailable(&app), &app.palette)[0]
+                .style
+                .fg
+                .unwrap()
+        );
         app.status_cpu_visible = true;
         app.status_mem_visible = true;
         app.status_disk_visible = true;
-        let text = segment_text(&app);
-        for label in ["CPU", "MEM", "DSK"] {
-            assert!(text.contains(label), "{label}: {text}");
-        }
+        assert!(segment_text(&app).contains("DSK 79%"));
     }
 
     #[test]
-    fn unsampled_metrics_stay_hidden() {
+    fn unsampled_metrics_keep_placeholders() {
         let mut app = AppState::test_new();
         app.nerd_font = false;
         app.status_cpu_visible = true;
@@ -1548,7 +1694,12 @@ mod tests {
                 .iter()
                 .map(|segment| segment.kind)
                 .collect::<Vec<_>>(),
-            vec![StatusSegmentKind::More]
+            vec![
+                StatusSegmentKind::Cpu,
+                StatusSegmentKind::Memory,
+                StatusSegmentKind::Disk,
+                StatusSegmentKind::More
+            ]
         );
     }
 
@@ -1577,7 +1728,7 @@ mod tests {
         let mut app = app_with_metrics(metrics(100, 32.0, 100));
         app.status_bar_expanded = true;
         let width = minimum_required_status_width(&app);
-        let segments = fitted_segments(
+        let segments = fit_status_segments(
             status_segments(&app, metrics_or_unavailable(&app), &app.palette),
             width,
         );
@@ -1585,12 +1736,7 @@ mod tests {
         assert!(segment_width(&segments) <= width);
 
         let rendered = render_status_row(&app, u16::try_from(width).unwrap());
-        for label in [
-            "CPU \u{2588} 100",
-            "MEM \u{2588} 100",
-            "DSK \u{2588} 100",
-            "...",
-        ] {
+        for label in ["C 100%", "M 32.0/32G", "D 100%", "..."] {
             assert!(rendered.contains(label), "{label}: {rendered}");
         }
     }
@@ -1653,24 +1799,25 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_renders_icons_the_view_name_centred_and_nothing_else_when_healthy() {
+    fn the_bar_renders_view_and_focused_title_with_always_visible_metrics() {
         let mut app = app_with_metrics(metrics(31, 19.8, 41));
         app.workspaces = vec![crate::workspace::Workspace::test_new("status")];
         app.active = Some(0);
         app.ensure_test_terminals();
-        let rendered = render_status_row(&app, 80);
-        assert!(rendered.starts_with(" H  F  O  S  M "), "{rendered:?}");
-        let name = rendered.find("Home").expect("view name");
-        assert_eq!(name, (80 - 4) / 2, "{rendered:?}");
-        assert!(rendered.trim_end().ends_with("..."), "{rendered:?}");
-        for hidden in ["TESTHOST", "CPU", "MEM", "DSK", "\u{25cf}", "\u{25b8}"] {
-            assert!(!rendered.contains(hidden), "{hidden}: {rendered:?}");
+        for width in [80, 120, 200] {
+            let rendered = render_status_row(&app, width);
+            assert!(rendered.starts_with(" H  F  O  S  M "), "{rendered:?}");
+            assert!(rendered.contains("Home"), "{rendered:?}");
+            assert!(rendered.matches('\u{25cf}').count() >= 3, "{rendered:?}");
         }
 
         app.open_focus_view();
-        let rendered = render_status_row(&app, 80);
-        assert!(rendered.contains("Focus"), "{rendered:?}");
-        assert!(!rendered.contains("Home"), "{rendered:?}");
+        for width in [80, 120, 200] {
+            let rendered = render_status_row(&app, width);
+            assert!(rendered.contains("Focus"), "{rendered:?}");
+            assert!(!rendered.contains("Home"), "{rendered:?}");
+            assert!(rendered.matches('\u{25cf}').count() >= 3, "{rendered:?}");
+        }
     }
 
     #[test]
@@ -1736,7 +1883,13 @@ mod tests {
     fn icons_yield_whole_to_the_metrics_rather_than_overlapping_them() {
         let mut app = app_with_metrics(metrics(100, 32.0, 100));
         app.status_bar_expanded = true;
-        let width = u16::try_from(minimum_required_status_width(&app)).unwrap() + 7;
+        let width = u16::try_from(segment_width(&status_segments(
+            &app,
+            metrics_or_unavailable(&app),
+            &app.palette,
+        )))
+        .unwrap()
+            + 7;
         let area = Rect::new(0, 0, width, 1);
         let buttons = status_buttons(&app, area);
         let segments = fitted_status_segments(&app, area);
@@ -1810,8 +1963,36 @@ mod tests {
 
         // The bar itself carries none of them.
         let rendered = render_status_row(&app, 120);
-        for hidden in ["TESTHOST", "workbox", "\u{25cf}"] {
+        for hidden in ["TESTHOST", "workbox"] {
             assert!(!rendered.contains(hidden), "{hidden}: {rendered:?}");
+        }
+        assert_eq!(rendered.matches('\u{25cf}').count(), 3, "{rendered:?}");
+    }
+
+    #[test]
+    fn fallback_pane_and_action_controls_are_grouped_in_the_more_popover() {
+        let mut app = AppState::test_new();
+        app.mouse_capture = true;
+        app.view.status_bar_rect = Rect::new(0, 0, 100, 1);
+        app.view.pane_toggle_below_hit_area = Rect::new(90, 0, 3, 1);
+        app.view.pane_toggle_right_hit_area = Rect::new(93, 0, 3, 1);
+        app.view.repo_editor_button_hit_area = Rect::new(70, 0, 3, 1);
+        app.view.add_action_button_hit_area = Rect::new(73, 0, 3, 1);
+        app.view.git_menu_button_hit_area = Rect::new(80, 0, 6, 1);
+        let rows = status_more_rows(&app, &app.palette);
+        assert!(rows.iter().flatten().any(|item| item.text == "Panes"));
+        assert!(rows.iter().flatten().any(|item| item.text == "Actions"));
+        for label in [
+            "Split below",
+            "Split right",
+            "Open editor",
+            "New action",
+            "Git actions",
+        ] {
+            assert!(
+                rows.iter().flatten().any(|item| item.text == label),
+                "{label}"
+            );
         }
     }
 
@@ -2039,59 +2220,5 @@ mod tests {
         for provider in ["CC", "CX", "KI", "AG", "\u{EC82}"] {
             assert!(!rendered.contains(provider), "{provider}: {rendered}");
         }
-    }
-}
-
-#[cfg(test)]
-mod metric_icons {
-    use super::*;
-    use crate::ui::icons::{metric_label, Metric};
-
-    /// Expanded mirrors `app.status_bar_expanded`: the percentage only shows
-    /// when the status bar is expanded.
-    fn texts(nerd_font: bool, expanded: bool) -> Vec<String> {
-        let p = Palette::catppuccin();
-        [Metric::Cpu, Metric::Mem, Metric::Dsk]
-            .into_iter()
-            .map(|metric| {
-                metric_segment(
-                    StatusSegmentKind::Cpu,
-                    metric_label(metric, nerd_font),
-                    Some(50),
-                    expanded,
-                    &p,
-                )
-                .text
-            })
-            .collect()
-    }
-
-    #[test]
-    fn nerd_font_on_collapsed_renders_glyph_and_fill_only() {
-        assert_eq!(
-            texts(true, false),
-            [" \u{F061A} ▄ ", " \u{F0688} ▄ ", " \u{F02CA} ▄ "]
-        );
-    }
-
-    #[test]
-    fn nerd_font_on_expanded_adds_percentage() {
-        assert_eq!(
-            texts(true, true),
-            [" \u{F061A} ▄ 50 ", " \u{F0688} ▄ 50 ", " \u{F02CA} ▄ 50 "]
-        );
-    }
-
-    #[test]
-    fn nerd_font_off_collapsed_renders_text_and_fill_only() {
-        assert_eq!(texts(false, false), [" CPU ▄ ", " MEM ▄ ", " DSK ▄ "]);
-    }
-
-    #[test]
-    fn nerd_font_off_expanded_adds_percentage() {
-        assert_eq!(
-            texts(false, true),
-            [" CPU ▄ 50 ", " MEM ▄ 50 ", " DSK ▄ 50 "]
-        );
     }
 }

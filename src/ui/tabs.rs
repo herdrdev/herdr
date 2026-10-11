@@ -793,6 +793,11 @@ pub(crate) fn tab_action_status_bar_reserved_width(app: &AppState, status_bar_re
     let add = app.view.add_action_button_hit_area;
     let below = app.view.pane_toggle_below_hit_area;
     let right = app.view.pane_toggle_right_hit_area;
+    // Fallback controls are now items in the `⋯` popover; the bar owns the
+    // complete right edge for metrics and that control.
+    if add.width > 0 && add.y == status_bar_rect.y && status_bar_rect.height > 0 {
+        return 0;
+    }
     // `add` is the sentinel, not `menu`: the pull button and the pane toggles
     // are optional, so an absent one says nothing about where the row lives.
     if add.width == 0 || add.y != status_bar_rect.y || status_bar_rect.height == 0 {
@@ -1012,6 +1017,12 @@ fn tab_drop_indicator_x(
 /// Drawn from the top-level render pass because these controls move to the
 /// status row whenever the tab row is hidden.
 pub(super) fn render_tab_action_buttons(app: &AppState, frame: &mut Frame) {
+    let status_fallback = app.view.add_action_button_hit_area.width > 0
+        && app.view.add_action_button_hit_area.y == app.view.status_bar_rect.y
+        && app.view.status_bar_rect.height > 0;
+    if status_fallback {
+        return;
+    }
     let p = &app.palette;
     let icons = TabActionVisibility::from_state(app).nerd_font;
     let editor_rect = app.view.repo_editor_button_hit_area;

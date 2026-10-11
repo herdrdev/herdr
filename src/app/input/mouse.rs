@@ -776,6 +776,7 @@ impl AppState {
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.tab_action_fallback_on_status_bar()
             && rect_contains(
                 self.view.repo_editor_button_hit_area,
                 mouse.column,
@@ -794,6 +795,7 @@ impl AppState {
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.tab_action_fallback_on_status_bar()
             && rect_contains(
                 self.view.add_action_button_hit_area,
                 mouse.column,
@@ -810,6 +812,7 @@ impl AppState {
         }
 
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.tab_action_fallback_on_status_bar()
             && matches!(
                 self.effective_interaction_mode(),
                 Mode::Terminal | Mode::Navigate
@@ -3631,6 +3634,9 @@ impl AppState {
     }
 
     pub(super) fn on_git_menu_button(&self, col: u16, row: u16) -> bool {
+        if self.tab_action_fallback_on_status_bar() {
+            return false;
+        }
         let area = self.view.git_menu_button_hit_area;
         area.width > 0
             && row >= area.y
@@ -3736,6 +3742,9 @@ impl AppState {
         col: u16,
         row: u16,
     ) -> Option<crate::app::state::PaneToggleDirection> {
+        if self.tab_action_fallback_on_status_bar() {
+            return None;
+        }
         [
             (
                 self.view.pane_toggle_below_hit_area,
@@ -3755,6 +3764,12 @@ impl AppState {
                 && col < area.x + area.width)
                 .then_some(direction)
         })
+    }
+
+    fn tab_action_fallback_on_status_bar(&self) -> bool {
+        let add = self.view.add_action_button_hit_area;
+        let status = self.view.status_bar_rect;
+        add.width > 0 && status.height > 0 && add.y == status.y
     }
 
     pub(super) fn on_new_tab_button(&self, col: u16, row: u16) -> bool {
