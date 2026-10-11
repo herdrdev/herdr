@@ -244,6 +244,15 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
         .into_iter()
         .find_map(|(control, rect)| rect_contains(rect, col, row).then_some(control))
         .or_else(|| {
+            view.tab_hit_areas
+                .iter()
+                .enumerate()
+                .find_map(|(index, rect)| {
+                    (rect.width > 1 && col == rect.x && row >= rect.y && row < rect.bottom())
+                        .then_some(ControlId::TopBarTabPin(index))
+                })
+        })
+        .or_else(|| {
             view.status_buttons
                 .iter()
                 .enumerate()
@@ -456,6 +465,21 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
             (view.tab_scroll_right_hit_area, "Scroll tabs right".into())
         }
         ControlId::TopBarNewTab => (view.new_tab_hit_area, "New tab".into()),
+        ControlId::TopBarTabPin(index) => {
+            let rect = *view.tab_hit_areas.get(index)?;
+            if rect.width <= 1 {
+                return None;
+            }
+            let pinned = app
+                .active
+                .and_then(|ws_idx| app.workspaces.get(ws_idx))
+                .and_then(|workspace| workspace.tabs.get(index))?
+                .pinned;
+            (
+                Rect::new(rect.x, rect.y, 1, rect.height),
+                if pinned { "Unpin tab" } else { "Pin tab" }.into(),
+            )
+        }
         ControlId::TopBarRepoEditor => (view.repo_editor_button_hit_area, "Open in nvim".into()),
         ControlId::TopBarAddAction => (view.add_action_button_hit_area, "Add action".into()),
         ControlId::TopBarUserAction(index) => (
@@ -704,6 +728,28 @@ pub(super) fn render_hover_tooltip(app: &AppState, frame: &mut Frame) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tab_pin_hover_names_both_states_even_in_a_narrow_tab() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![crate::workspace::Workspace::test_new("test")];
+        app.active = Some(0);
+        app.view.tab_hit_areas = vec![Rect::new(4, 2, 2, 1)];
+        let control = ControlId::TopBarTabPin(0);
+        assert_eq!(hovered_control_at(&app, 4, 2), Some(control));
+        assert_eq!(hovered_control_at(&app, 5, 2), None);
+        assert_eq!(
+            tooltip_target(&app, control),
+            Some((Rect::new(4, 2, 1, 1), "Pin tab".into()))
+        );
+        app.workspaces[0].tabs[0].pinned = true;
+        assert_eq!(
+            tooltip_target(&app, control),
+            Some((Rect::new(4, 2, 1, 1), "Unpin tab".into()))
+        );
+        app.view.tab_hit_areas[0].width = 1;
+        assert_eq!(hovered_control_at(&app, 4, 2), None);
+    }
 
     #[test]
     fn board_filter_and_done_controls_have_actionable_tooltips() {

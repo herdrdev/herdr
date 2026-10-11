@@ -1282,15 +1282,15 @@ pub(super) fn status_report_age_label(
     })
 }
 
-/// Three-column sidebar age: `40s`, `3m`, `12m`, `1h`, `2d`. Days cap at `99d`
-/// so the label never outgrows its field.
+/// Three-column sidebar age: blank under one minute, then `3m`, `12m`, `1h`,
+/// `2d`. Days cap at `99d` so the label never outgrows its field.
 pub(super) fn status_report_age_micro_label(
     reported_at: std::time::Instant,
     now: std::time::Instant,
 ) -> String {
     let seconds = now.saturating_duration_since(reported_at).as_secs();
     if seconds < 60 {
-        format!("{seconds}s")
+        String::new()
     } else if seconds < 3_600 {
         format!("{}m", seconds / 60)
     } else if seconds < 86_400 {
@@ -2522,7 +2522,8 @@ mod tests {
 
     #[test]
     fn status_button_specs_use_icon_fallbacks_and_only_the_approved_actions() {
-        let app = AppState::test_new();
+        let mut app = AppState::test_new();
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
         let [blocked, home, new_session, board, scratch] = status_button_specs(&app, 2);
         assert_eq!(home.0, StatusButtonAction::Home);
         assert_eq!(home.1.trim(), "⌂");
@@ -2589,6 +2590,7 @@ mod tests {
         };
         app.remote_agent_panel_entries =
             crate::ui::sidebar::remote_agent_panel_entries_at(&remote_snapshot, 1, true);
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
         let fleet_buttons = status_buttons(&app, Rect::new(0, 0, 120, 1));
         let blocked_label = |buttons: &[StatusButton]| {
             buttons

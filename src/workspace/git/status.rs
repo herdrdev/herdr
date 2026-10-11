@@ -769,9 +769,12 @@ mod tests {
         run_git(&repo, &["config", "user.email", "herdr@example.invalid"]);
         run_git(&repo, &["config", "user.name", "Herdr Test"]);
         run_git(&repo, &["commit", "--allow-empty", "-m", "initial"]);
-        run_git(&repo, &["branch", "-M", "main"]);
+        run_git(&repo, &["branch", "-M", "test-head-moves"]);
         run_git(&repo, &["remote", "add", "origin", &remote_arg]);
-        run_git(&repo, &["push", "-u", "origin", "main"]);
+        run_git(
+            &repo,
+            &["push", "-u", "origin", "HEAD:refs/heads/test-head-moves"],
+        );
 
         let (initial, cache_entry) = git_status_snapshot_for_cwd(&repo, None);
         assert_eq!(initial.ahead_behind, Some((0, 0)));
@@ -779,7 +782,7 @@ mod tests {
 
         let (updated, _) = git_status_snapshot_for_cwd(&repo, cache_entry.as_ref());
 
-        assert_eq!(updated.branch.as_deref(), Some("main"));
+        assert_eq!(updated.branch.as_deref(), Some("test-head-moves"));
         assert_eq!(updated.ahead_behind, Some((1, 0)));
 
         std::fs::remove_dir_all(base).unwrap();

@@ -1469,7 +1469,7 @@ fn render_compact_agent_row_body(
         + widths.age
         + display_width(&layout.done_marker);
     let title_width = usize::from(rect.width).saturating_sub(fixed_width);
-    let pin_width = sidebar_pin_width(app, entry, rect, title_width);
+    let pin_width = sidebar_pin_width(app, entry, rect, title_width, tab);
     let title_width = title_width.saturating_sub(pin_width);
     let control_pane = row_control_pane(app, entry, tab);
     let show_controls = control_pane.as_ref().is_some_and(|control| control.snoozed)
@@ -1640,8 +1640,11 @@ fn sidebar_pin_width(
     entry: &AgentPanelEntry,
     row: Rect,
     title_width: usize,
+    tab: bool,
 ) -> usize {
-    if entry.local_target().is_some()
+    if tab
+        && entry.pin_allowed
+        && entry.local_target().is_some()
         && (entry.pinned || sidebar_row_is_hovered(app, row.y))
         && title_width >= SIDEBAR_SELECTED_MIN_TITLE_WIDTH + SIDEBAR_PIN_CONTROL_WIDTH
     {
@@ -1658,7 +1661,7 @@ fn sidebar_pin_rect(
     prefix: usize,
     tab: bool,
 ) -> Option<Rect> {
-    if !entry.pinned && !sidebar_row_is_hovered(app, row.y) {
+    if !tab || !entry.pin_allowed || (!entry.pinned && !sidebar_row_is_hovered(app, row.y)) {
         return None;
     }
     let provider = compact_provider(entry, app.nerd_font);
@@ -1682,7 +1685,7 @@ fn sidebar_pin_rect(
                 0
             },
     );
-    let pin_width = sidebar_pin_width(app, entry, row, title_width);
+    let pin_width = sidebar_pin_width(app, entry, row, title_width, tab);
     (pin_width > 0).then(|| {
         Rect::new(
             row.x + (widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + title_width - pin_width) as u16,
@@ -1818,7 +1821,8 @@ pub(crate) fn selected_row_control_at(
             0
         };
     let title_width = usize::from(rect.width).saturating_sub(fixed_width);
-    let title_width = title_width.saturating_sub(sidebar_pin_width(app, entry, rect, title_width));
+    let title_width =
+        title_width.saturating_sub(sidebar_pin_width(app, entry, rect, title_width, tab));
     let selected = selected_local_row_pane(app, entry, tab).is_some();
     let mobile = app.view.layout == crate::app::state::ViewLayout::Mobile;
     let hovered = sidebar_row_is_hovered(app, rect.y);
@@ -1993,6 +1997,8 @@ pub(crate) struct AgentPanelEntry {
     pub(crate) settle_hint: Option<crate::app::settled::SettleHint>,
     data: std::sync::Arc<AgentPanelEntryData>,
     pub(crate) pinned: bool,
+    /// Only the primary window projection offers the whole-window pin action.
+    pub(crate) pin_allowed: bool,
     pub(crate) parked: bool,
     /// Projection-only overlay. Keeping it outside shared row data lets group
     /// builders mark redundancy without copying a cached remote entry.
@@ -2099,6 +2105,7 @@ impl AgentPanelEntry {
             settle_hint: None,
             data: std::sync::Arc::new(data),
             pinned: false,
+            pin_allowed: true,
             parked: false,
             space_label_redundant: false,
             remote_entry: None,
@@ -4019,7 +4026,6 @@ fn collapsed_sidebar_placement(
 
     let working_shelf = app.sidebar_sections_layout
         && !section_is_collapsed(app, WORKING_SECTION_TITLE)
-        && !entry.pinned
         && sidebar_entry_has_working_state(entry);
     if working_shelf {
         if devices::group_is_collapsed(app, "working", &app.agent_host_name, true, true) {
@@ -4444,6 +4450,15 @@ fn compact_sidebar_rows_inner(
         .iter()
         .map(|(ws_idx, tab_idx, _)| (*ws_idx, *tab_idx))
         .collect::<std::collections::HashSet<_>>();
+    let tabs_with_snoozed_panes = classified
+        .iter()
+        .filter(|(_, lifecycle)| *lifecycle == SidebarEntryLifecycle::Snoozed)
+        .filter_map(|(entry, _)| {
+            entry
+                .local_target()
+                .map(|target| (target.ws_idx, target.tab_idx))
+        })
+        .collect::<std::collections::HashSet<_>>();
     let mut active_panes = Vec::new();
     let mut snoozed_panes = Vec::new();
     let mut settled_panes = Vec::new();
@@ -4479,6 +4494,11 @@ fn compact_sidebar_rows_inner(
     };
     let snoozed_entries = ordered_tab_entries(app, &snoozed_panes);
     let mut snoozed_entries = snoozed_entries;
+    for entry in &mut snoozed_entries {
+        if let Some(target) = entry.local_target() {
+            entry.pin_allowed = !tabs_with_active_panes.contains(&(target.ws_idx, target.tab_idx));
+        }
+    }
     if app.blocked_filter {
         snoozed_entries.retain(|entry| {
             let visible = entry_has_red_dot(entry);
@@ -4491,6 +4511,13 @@ fn compact_sidebar_rows_inner(
         });
     }
     let mut settled_entries = ordered_tab_entries(app, &settled_panes);
+    for entry in &mut settled_entries {
+        if let Some(target) = entry.local_target() {
+            let tab = (target.ws_idx, target.tab_idx);
+            entry.pin_allowed =
+                !tabs_with_active_panes.contains(&tab) && !tabs_with_snoozed_panes.contains(&tab);
+        }
+    }
     let mut visible_entries = active_entries;
     if app.blocked_filter {
         visible_entries.retain(|entry| {
@@ -4503,10 +4530,9 @@ fn compact_sidebar_rows_inner(
             visible
         });
     }
-    let (recently_done, visible_entries): (Vec<_>, Vec<_>) =
-        visible_entries.into_iter().partition(|entry| {
-            (!sections_layout || !entry.pinned) && entry_is_past_done_hide_threshold(app, entry)
-        });
+    let (recently_done, visible_entries): (Vec<_>, Vec<_>) = visible_entries
+        .into_iter()
+        .partition(|entry| entry_is_past_done_hide_threshold(app, entry));
     settled_entries.extend(recently_done);
     settled_entries = ordered_tab_entries(app, &settled_entries);
 
@@ -4526,14 +4552,10 @@ fn compact_sidebar_rows_inner(
         let working_collapsed = section_is_collapsed(app, WORKING_SECTION_TITLE);
         let mut space_entries = Vec::new();
         let mut remote_main_entries = Vec::new();
-        // Pinned panes have their own shelf. Active unpinned panes stay in the
-        // device tree when Working is collapsed; otherwise working panes live
-        // only in the Working shelf so each local pane has one row.
-        for entry in visible_entries
-            .iter()
-            .filter(|entry| !entry.pinned)
-            .cloned()
-        {
+        // Pinned windows also remain in their normal lifecycle section.
+        // Working panes stay in the device tree when Working is collapsed;
+        // otherwise they live in the Working shelf.
+        for entry in visible_entries.iter().cloned() {
             if entry.remote_entry.is_some() {
                 remote_main_entries.push(entry);
             } else if working_collapsed || !sidebar_entry_has_working_state(&entry) {
@@ -4556,8 +4578,6 @@ fn compact_sidebar_rows_inner(
         for entry in &mut working_entries {
             entry.working_shelf = true;
         }
-        snoozed_entries.retain(|entry| !entry.pinned);
-        settled_entries.retain(|entry| !entry.pinned);
         let mut rows = Vec::new();
         if !pinned_entries.is_empty() {
             append_shelf_space_rows(
@@ -4723,9 +4743,6 @@ fn compact_sidebar_rows_inner(
     }
 
     let mut rows = Vec::new();
-    projected_active.retain(|entry| !entry.pinned);
-    projected_snoozed.retain(|entry| !entry.pinned);
-    projected_settled.retain(|entry| !entry.pinned);
     if pinned_entries.is_empty()
         && sidebar_rows_are_filtered(app)
         && projected_active.is_empty()
@@ -9124,6 +9141,7 @@ pub(crate) fn compute_tab_card_areas(
                 ws_idx: target.ws_idx,
                 tab_idx: target.tab_idx,
                 pane_id: target.pane_id,
+                pin_allowed: entry.pin_allowed,
                 depth: *depth,
                 rect: Rect::new(body.x, y, body.width, height),
             });
@@ -10015,6 +10033,7 @@ pub(crate) fn compute_sidebar_hover_targets(
                     entry,
                     Rect::new(body.x, row_y, body.width, 1),
                     title_width,
+                    tab,
                 );
                 if pin_width > 0 {
                     if let Some(rect) = clamp_row_cells(
@@ -18170,6 +18189,7 @@ pub(crate) mod tests {
     #[test]
     fn blocker_scope_limits_the_blocker_strip_and_marks_remote_remainder() {
         let mut app = AppState::test_new();
+        app.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
         app.agent_host_name = "ub1".into();
         app.sidebar_sections_layout = true;
         app.workspaces = vec![Workspace::test_new("local")];
@@ -19018,9 +19038,10 @@ pub(crate) mod tests {
     fn compact_age_labels_fit_three_columns() {
         let now = std::time::Instant::now();
         for (seconds, label) in [
-            (40, "40s"),
-            (180, "3m"),
-            (720, "12m"),
+            (0, ""),
+            (59, ""),
+            (60, "1m"),
+            (3_599, "59m"),
             (3_600, "1h"),
             (2 * 86_400, "2d"),
             (500 * 86_400, "99d"),
@@ -19029,6 +19050,51 @@ pub(crate) mod tests {
             let rendered = crate::ui::status::status_report_age_micro_label(reported, now);
             assert_eq!(rendered, label);
             assert!(display_width(&rendered) <= 3);
+        }
+    }
+
+    #[test]
+    fn compact_age_boundaries_match_desktop_and_mobile_rows() {
+        let now = std::time::Instant::now();
+        let app = app_with_agents(&["one"]);
+        let mut entry = compact_test_entry("age boundary", Some(Agent::Pi));
+        for (seconds, expected) in [(0, ""), (59, ""), (60, "1m"), (3_599, "59m"), (3_600, "1h")] {
+            entry.activity_at = Some(now - std::time::Duration::from_secs(seconds));
+            for width in [18, 36] {
+                let desktop = tab_row_layout(
+                    &entry,
+                    now,
+                    width,
+                    0,
+                    &app.palette,
+                    app.status_indicators,
+                    false,
+                );
+                let mobile = mobile_tab_row_layout(
+                    &entry,
+                    now,
+                    width,
+                    0,
+                    &app.palette,
+                    app.status_indicators,
+                    false,
+                );
+                let expected_age = (width >= SIDEBAR_AGE_MIN_ROW_WIDTH).then_some(expected);
+                assert_eq!(
+                    desktop.activity_age.as_deref(),
+                    expected_age,
+                    "desktop {seconds}s at width {width}"
+                );
+                assert_eq!(
+                    mobile.activity_age, desktop.activity_age,
+                    "mobile {seconds}s at width {width}"
+                );
+                assert_eq!(
+                    mobile.activity_instant,
+                    (width >= SIDEBAR_AGE_MIN_ROW_WIDTH).then_some(entry.activity_at.unwrap())
+                );
+                assert_eq!(desktop.activity_instant, mobile.activity_instant);
+            }
         }
     }
 
@@ -22253,7 +22319,10 @@ row_gap = 1
         let tab_row = compute_tab_card_areas(&app, area)[0].rect.y;
         let busy_text = row_text(busy.backend().buffer(), tab_row, 49);
         assert!(busy_text.contains("●"), "{busy_text:?}");
-        assert!(busy_text.ends_with("42s"), "{busy_text:?}");
+        assert!(
+            !busy_text.contains("42s"),
+            "sub-minute age stays blank: {busy_text:?}"
+        );
         assert!(!busy_text.contains(" · one"), "{busy_text:?}");
         let dot_x = find_symbol_x(busy.backend().buffer(), tab_row, 49, "●");
         assert_eq!(
@@ -24189,6 +24258,132 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn pinning_a_split_window_creates_one_pinned_row_for_the_whole_tab() {
+        let mut app = app_for_real_sidebar_fixtures(&["split"]);
+        app.sidebar_sections_layout = true;
+        let second_pane = app.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        app.ensure_test_terminals();
+        assert_eq!(app.workspaces[0].tabs[0].panes.len(), 2);
+
+        app.workspaces[0].tabs[0].pinned = true;
+        let rows = sidebar_rows(&app);
+        let pinned = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    SidebarRow::SectionHeader {
+                        title: PINNED_SECTION_TITLE,
+                        count: 1,
+                        ..
+                    }
+                )
+            })
+            .expect("one pinned window");
+        let pinned_rows = rows[pinned + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, SidebarRow::Divider))
+            .filter(|row| matches!(row, SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.ws_idx == 0 && target.tab_idx == 0)))
+            .count();
+        assert_eq!(pinned_rows, 1, "split panes share one pinned window row");
+        let divider = rows
+            .iter()
+            .position(|row| matches!(row, SidebarRow::Divider))
+            .expect("pinned shelf divider");
+        assert_eq!(
+            rows[divider + 1..]
+                .iter()
+                .filter(|row| matches!(row, SidebarRow::Tab { entry, .. }
+                    if entry.local_target().is_some_and(|target| target.ws_idx == 0 && target.tab_idx == 0)))
+                .count(),
+            1,
+            "split window also has exactly one normal row"
+        );
+        assert!(app.workspaces[0].tabs[0].panes.contains_key(&second_pane));
+
+        app.workspaces[0].tabs[0].pinned = false;
+        let rows = sidebar_rows(&app);
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: PINNED_SECTION_TITLE,
+                ..
+            }
+        )));
+        assert_eq!(app.workspaces[0].tabs[0].panes.len(), 2);
+    }
+
+    #[test]
+    fn pinned_window_copies_keep_separate_hit_rows_at_mobile_and_desktop_widths() {
+        for width in [18, 60] {
+            for layout in [
+                crate::app::state::ViewLayout::Desktop,
+                crate::app::state::ViewLayout::Mobile,
+            ] {
+                let mut app = app_for_real_sidebar_fixtures(&["window"]);
+                app.sidebar_sections_layout = true;
+                app.view.layout = layout;
+                app.workspaces[0].tabs[0].pinned = true;
+                app.sidebar_presentation
+                    .expanded_workspace_ids
+                    .insert(app.workspaces[0].id.clone());
+                let area = Rect::new(0, 0, width, 40);
+                let cards = compute_tab_card_areas(&app, area);
+                let window_rows = cards
+                    .iter()
+                    .filter(|card| card.ws_idx == 0 && card.tab_idx == 0)
+                    .collect::<Vec<_>>();
+                assert_eq!(window_rows.len(), 2, "{width} columns, {layout:?}");
+                assert_ne!(window_rows[0].rect.y, window_rows[1].rect.y);
+            }
+        }
+    }
+
+    #[test]
+    fn pinned_snoozed_window_stays_in_snoozed_section() {
+        let mut app = app_with_agents(&["snoozed"]);
+        app.sidebar_sections_layout = true;
+        let pane = app.workspaces[0].tabs[0].root_pane;
+        assert!(app.snooze_pane_at(0, pane, app.view_observed_unix_s + 60));
+        set_sections_group_collapsed(&mut app, SNOOZED_SECTION_TITLE, false);
+        app.sidebar_presentation
+            .expanded_workspace_ids
+            .insert(app.workspaces[0].id.clone());
+        app.workspaces[0].tabs[0].pinned = true;
+
+        let rows = sidebar_rows(&app);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: PINNED_SECTION_TITLE,
+                count: 1,
+                ..
+            }
+        )));
+        let snoozed = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    SidebarRow::SectionHeader {
+                        title: SNOOZED_SECTION_TITLE,
+                        count: 1,
+                        ..
+                    }
+                )
+            })
+            .expect("normal snoozed section retains pinned window");
+        assert!(rows[snoozed + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, SidebarRow::SectionHeader { .. }))
+            .any(|row| matches!(row,
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                    if entry.local_target().is_some_and(|target| target.pane_id == pane)
+            )));
+    }
+
+    #[test]
     fn sections_pinned_done_tab_stays_pinned_after_done_hide_threshold() {
         let done_since = std::time::Instant::now();
         let mut app = priority_app_with_states(&[AgentState::Idle]);
@@ -24223,10 +24418,17 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 ..
             }
         )));
-        assert!(pinned_rows.iter().any(|row| matches!(
+        let settled_header = pinned_rows
+            .iter()
+            .position(|row| {
+                matches!(row, SidebarRow::SectionHeader { title, count: 1, .. }
+                if *title == SETTLED_SECTION_TITLE)
+            })
+            .expect("pinned window remains in its settled section");
+        assert!(pinned_rows[settled_header + 1..].iter().any(|row| matches!(
             row,
-            SidebarRow::SectionHeader { title, count: 0, .. }
-                if *title == SETTLED_SECTION_TITLE
+            SidebarRow::Tab { entry, .. }
+                if entry.local_target().is_some_and(|target| target.pane_id == pane_id)
         )));
 
         app.workspaces[0].tabs[0].pinned = false;
@@ -24433,6 +24635,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 assert!(sidebar_pin_rect(&app, &entry, rect, 1, true).is_none());
                 app.hovered_control = Some(crate::app::state::ControlId::SidebarRowHover(0));
                 let pin = sidebar_pin_rect(&app, &entry, rect, 1, true).expect("hover pin");
+                assert!(sidebar_pin_rect(&app, &entry, rect, 1, false).is_none());
+                assert!(!matches!(
+                    selected_row_control_at(&app, &entry, rect, 0, false, pin.x),
+                    Some(crate::app::state::SidebarHoverAction::Pin { .. })
+                ));
                 assert!(matches!(
                     selected_row_control_at(&app, &entry, rect, 0, true, pin.x),
                     Some(crate::app::state::SidebarHoverAction::Pin {
@@ -24458,6 +24665,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 let mut pinned = entry;
                 pinned.pinned = true;
                 assert!(sidebar_pin_rect(&app, &pinned, rect, 1, true).is_some());
+                assert!(sidebar_pin_rect(&app, &pinned, rect, 1, false).is_none());
                 terminal
                     .draw(|frame| {
                         render_compact_agent_row_with_prefix(
@@ -24471,6 +24679,122 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 );
             }
         }
+    }
+
+    #[test]
+    fn mixed_snoozed_pane_is_not_a_second_window_pin_target() {
+        for width in [18, 60] {
+            for mobile in [false, true] {
+                let mut app = AppState::test_new();
+                let mut workspace = Workspace::test_new("mixed window");
+                let snoozed_pane = workspace.tabs[0].root_pane;
+                workspace.test_split(Direction::Horizontal);
+                workspace.tabs[0]
+                    .panes
+                    .get_mut(&snoozed_pane)
+                    .unwrap()
+                    .set_snoozed_until(Some(u64::MAX));
+                app.workspaces = vec![workspace];
+                app.ensure_test_terminals();
+                for terminal in app.terminals.values_mut() {
+                    terminal.detected_agent = Some(Agent::Pi);
+                    terminal.set_raw_agent_state_for_test(AgentState::Working);
+                }
+                app.active = Some(0);
+                app.sidebar_sections_layout = true;
+                app.sidebar_width = width;
+                app.nerd_font = true;
+                app.set_sidebar_group_mode(SidebarGroupMode::Spaces);
+                expand_section_for_all_views(&mut app, SNOOZED_SECTION_TITLE);
+                set_sections_group_collapsed(&mut app, SNOOZED_SECTION_TITLE, false);
+                app.view.layout = if mobile {
+                    crate::app::state::ViewLayout::Mobile
+                } else {
+                    crate::app::state::ViewLayout::Desktop
+                };
+                app.reconcile_sidebar_presentation();
+                let rows = sidebar_rows(&app);
+                let mut tabs = rows.iter().filter_map(|row| match row {
+                    SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                        if entry.local_target().is_some() =>
+                    {
+                        Some(entry)
+                    }
+                    _ => None,
+                });
+                let primary = tabs.next().expect("active window row");
+                let child = tabs.next().expect("snoozed pane projection");
+                assert!(primary.pin_allowed, "primary window must be pinnable");
+                assert!(!child.pin_allowed, "snoozed child is not a window");
+                assert_eq!(child.local_target().unwrap().pane_id, snoozed_pane);
+                let rect = Rect::new(0, 0, width, 1);
+                app.hovered_control = Some(crate::app::state::ControlId::SidebarRowHover(0));
+                assert!(sidebar_pin_rect(&app, primary, rect, 1, true).is_some());
+                assert!(sidebar_pin_rect(&app, child, rect, 1, true).is_none());
+                assert!((0..width).all(|column| !matches!(
+                    selected_row_control_at(&app, child, rect, 1, true, column),
+                    Some(crate::app::state::SidebarHoverAction::Pin { .. })
+                )));
+                let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        render_compact_agent_row_with_prefix(
+                            &app, frame, child, rect, 1, true, None, None,
+                        )
+                    })
+                    .unwrap();
+                let rendered = row_text(terminal.backend().buffer(), 0, width);
+                assert!(
+                    !rendered.contains('󰐄') && !rendered.contains('󰐃'),
+                    "{rendered:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn whole_snoozed_and_settled_windows_keep_pin_targets() {
+        let mut app = AppState::test_new();
+        let mut workspace = Workspace::test_new("snoozed window");
+        let snoozed_pane = workspace.tabs[0].root_pane;
+        workspace.tabs[0]
+            .panes
+            .get_mut(&snoozed_pane)
+            .unwrap()
+            .set_snoozed_until(Some(u64::MAX));
+        let settled_tab = workspace.test_add_tab(Some("settled window"));
+        let settled_pane = workspace.tabs[settled_tab].root_pane;
+        workspace.tabs[settled_tab]
+            .panes
+            .get_mut(&settled_pane)
+            .unwrap()
+            .settled_at = Some(1_725_000_000);
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        for terminal in app.terminals.values_mut() {
+            terminal.detected_agent = Some(Agent::Pi);
+            terminal.set_raw_agent_state_for_test(AgentState::Working);
+        }
+        app.active = Some(0);
+        app.sidebar_sections_layout = true;
+        app.set_sidebar_group_mode(SidebarGroupMode::Spaces);
+        expand_section_for_all_views(&mut app, SNOOZED_SECTION_TITLE);
+        expand_section_for_all_views(&mut app, SETTLED_SECTION_TITLE);
+        set_sections_group_collapsed(&mut app, SNOOZED_SECTION_TITLE, false);
+        set_sections_group_collapsed(&mut app, SETTLED_SECTION_TITLE, false);
+        app.reconcile_sidebar_presentation();
+        let rows = sidebar_rows(&app);
+        let targets = rows
+            .iter()
+            .filter_map(|row| match row {
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. } => {
+                    entry.local_target().map(|target| (entry, target))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().all(|(entry, _)| entry.pin_allowed));
     }
 
     #[test]
@@ -24505,6 +24829,18 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 .filter(|row| matches!(row, SidebarRow::Tab { .. }))
                 .count();
             assert_eq!(pinned_tabs, 2);
+            for ws_idx in [0, 1] {
+                assert_eq!(
+                    rows[pinned_end + 1..]
+                        .iter()
+                        .filter(|row| matches!(row,
+                            SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                                if entry.local_target().is_some_and(|target| target.ws_idx == ws_idx)))
+                        .count(),
+                    1,
+                    "pinned window {ws_idx} remains in its normal section"
+                );
+            }
             app.collapsed_sidebar_groups.insert(if sections {
                 "sections:Pinned".into()
             } else {
@@ -24519,6 +24855,10 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 })
             ));
             assert!(matches!(folded.get(1), Some(SidebarRow::Divider)));
+            assert!(folded[2..].iter().any(|row| matches!(row,
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                    if entry.local_target().is_some_and(|target| target.ws_idx == 0)
+            )));
             app.workspaces[0].tabs[0].pinned = false;
             app.workspaces[1].tabs[0].pinned = false;
             assert!(!sidebar_rows(&app).iter().any(|row| matches!(
@@ -33773,11 +34113,12 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn sections_layout_lists_each_tab_once() {
+    fn sections_layout_lists_pinned_tabs_in_both_sections_and_others_once() {
         let mut app = app_with_unlinked_tab_directories(&[None, None]);
         make_agents_blocked(&mut app);
         app.sidebar_sections_layout = true;
         app.workspaces[0].tabs[1].pinned = true;
+        let pinned_pane_id = app.workspaces[0].tabs[1].root_pane;
 
         let rows = sidebar_rows(&app);
         let local_pane_ids = app
@@ -33795,7 +34136,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                         if entry.local_target().is_some_and(|target| target.pane_id == pane_id))
                 })
                 .count();
-            assert_eq!(tab_row_count, 1, "pane {pane_id:?} should have one tab row");
+            let expected_count = if pane_id == pinned_pane_id { 2 } else { 1 };
+            assert_eq!(
+                tab_row_count, expected_count,
+                "pane {pane_id:?} should appear once per applicable section"
+            );
         }
     }
 

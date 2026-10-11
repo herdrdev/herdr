@@ -4030,6 +4030,8 @@ mod tests {
                 ws_idx: 0,
                 tab_idx: 0,
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
                 settle_pane_id: Some(root_pane),
                 snooze_target: Some(root_pane),
@@ -5821,6 +5823,8 @@ mod tests {
     #[test]
     fn blocker_scope_dropdown_selects_by_mouse_and_keyboard() {
         let mut app = app_for_mouse_test();
+        app.state.sidebar_blocker_scope = crate::app::state::BlockerScope::Fleet;
+        app.state.sidebar_blocker_scope_menu_selected = 1;
         app.state.sidebar_sections_layout = true;
         app.state.workspaces = vec![Workspace::test_new("blocked")];
         app.state.ensure_test_terminals();

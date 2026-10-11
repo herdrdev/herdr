@@ -1067,6 +1067,7 @@ pub struct TabCardArea {
     pub ws_idx: usize,
     pub tab_idx: usize,
     pub pane_id: PaneId,
+    pub pin_allowed: bool,
     pub depth: u16,
     pub rect: Rect,
 }
@@ -1521,8 +1522,8 @@ pub(crate) enum SidebarSortMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BlockerScope {
-    ThisDevice,
     #[default]
+    ThisDevice,
     Fleet,
 }
 
@@ -3656,6 +3657,11 @@ pub enum ContextMenuKind {
         /// Snapshot of the tab's star at open time, so the entry can read
         /// "Star" or "Unstar" without the menu reaching back into state.
         starred: bool,
+        /// Snapshot for the Pin/Unpin context-menu label.
+        pinned: bool,
+        /// Only a window row or top tab may offer Pin/Unpin; pane rows use
+        /// this menu for their existing lifecycle actions.
+        pin_allowed: bool,
         /// Snapshot of the tab's subgroup membership at open time, so the menu
         /// offers "Remove from subgroup" exactly when there is one to remove.
         has_subgroup: bool,
@@ -3991,6 +3997,8 @@ pub enum ContextMenuAction {
     RenameTab,
     StarTab,
     UnstarTab,
+    PinTab,
+    UnpinTab,
     MoveToSubgroup,
     RemoveFromSubgroup,
     Snooze,
@@ -4031,6 +4039,8 @@ impl ContextMenuAction {
             Self::NewTab => "New tab",
             Self::StarTab => STAR_ITEM,
             Self::UnstarTab => UNSTAR_ITEM,
+            Self::PinTab => "Pin",
+            Self::UnpinTab => "Unpin",
             Self::MoveToSubgroup => MOVE_TO_SUBGROUP_ITEM,
             Self::RemoveFromSubgroup => REMOVE_FROM_SUBGROUP_ITEM,
             Self::Snooze => SNOOZE_ITEM,
@@ -4134,6 +4144,8 @@ impl ContextMenuState {
             ],
             ContextMenuKind::Tab {
                 starred,
+                pinned,
+                pin_allowed,
                 has_subgroup,
                 settle_pane_id,
                 snooze_target,
@@ -4149,6 +4161,16 @@ impl ContextMenuState {
                     },
                     ContextMenuAction::MoveToSubgroup,
                 ];
+                if *pin_allowed {
+                    items.insert(
+                        3,
+                        if *pinned {
+                            ContextMenuAction::UnpinTab
+                        } else {
+                            ContextMenuAction::PinTab
+                        },
+                    );
+                }
                 if *has_subgroup {
                     items.push(ContextMenuAction::RemoveFromSubgroup);
                 }
@@ -5560,6 +5582,7 @@ pub(crate) enum ControlId {
     TopBarScrollLeft,
     TopBarScrollRight,
     TopBarNewTab,
+    TopBarTabPin(usize),
     TopBarRepoEditor,
     TopBarAddAction,
     TopBarUserAction(usize),
@@ -8054,7 +8077,7 @@ impl AppState {
             sidebar_filter_menu_selected: 0,
             sidebar_blocker_scope: BlockerScope::default(),
             sidebar_blocker_scope_menu_open: false,
-            sidebar_blocker_scope_menu_selected: 1,
+            sidebar_blocker_scope_menu_selected: 0,
             sidebar_search_active: false,
             agent_finder_saved_query: None,
             agent_finder_history: Vec::new(),
@@ -9447,6 +9470,8 @@ mod tests {
                 settle_pane_id: Some(pane_id),
                 snooze_target: Some(pane_id),
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
             },
             x: 7,
@@ -9476,6 +9501,8 @@ mod tests {
                 settle_pane_id: Some(pane_id),
                 snooze_target: Some(pane_id),
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
             }
         );
@@ -9519,6 +9546,8 @@ mod tests {
                 settle_pane_id: None,
                 snooze_target: None,
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
             },
             x: 2,

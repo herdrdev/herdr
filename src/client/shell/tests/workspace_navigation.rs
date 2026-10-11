@@ -147,6 +147,38 @@ fn local_navigation_highlight_stays_visible_with_terminal_theme() {
 }
 
 #[test]
+fn collapsed_workspace_keeps_active_emphasis_distinct_from_navigation_selection() {
+    use ratatui::style::{Color, Modifier};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(workspaces(2)));
+    state.sidebar_collapsed = true;
+    state.compose(100, 28).unwrap();
+    enter_navigation(&mut state);
+    preview_key(&mut state, b"\x1b[B");
+
+    let buffer = state.compose(100, 28).unwrap().to_ratatui_buffer().unwrap();
+    let focused = workspace_rect(&state, &ClientEndpointId::Local, "ws_1");
+    let selected = workspace_rect(&state, &ClientEndpointId::Local, "ws_2");
+    let focused_style = buffer[(focused.x, focused.y)].style();
+    let selected_style = buffer[(selected.x, selected.y)].style();
+
+    assert_eq!(focused_style.fg, Some(state.config.palette.text));
+    assert!(focused_style.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(focused_style.bg, Some(state.config.palette.sidebar_bg));
+    assert_eq!(selected_style.fg, Some(state.config.palette.overlay1));
+    assert!(!selected_style.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(
+        selected_style.bg,
+        Some(if state.config.palette.selection_bg == Color::Reset {
+            state.config.palette.active_row_bg
+        } else {
+            state.config.palette.selection_bg
+        })
+    );
+}
+
+#[test]
 fn navigation_highlights_only_the_preview_and_activates_on_enter() {
     for (compact, cols) in [(true, 100), (false, 100), (false, 44)] {
         for terminal_theme in [false, true] {

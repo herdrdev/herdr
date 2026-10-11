@@ -11,12 +11,10 @@ use super::widgets::{panel_contrast_fg, readable_fg_on};
 use crate::app::AppState;
 
 /// The pin lives in the leading pad column every tab cell already renders, so
-/// the affordance costs no width and never touches the label: a pinned tab
-/// shows `*` where an unpinned one shows the blank that was always there. The
-/// click target is that column either way -- an icon you can only hit once it
-/// is already on would be no way to turn it on.
-pub(crate) const PIN_GLYPH_ON: char = '*';
-pub(crate) const PIN_GLYPH_OFF: char = ' ';
+/// the affordance costs no width and never touches the label. The leading
+/// cell remains the click target in both states.
+pub(crate) const PIN_GLYPH_ON: char = '󰐃';
+pub(crate) const PIN_GLYPH_OFF: char = '󰐄';
 
 const MIN_TAB_WIDTH: u16 = 8;
 /// One cell of padding on each side of the glyph, matching `+` and the scroll
@@ -1293,10 +1291,16 @@ pub(super) fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
             plain_name
         };
         name = truncate_end(&name, base_width);
-        let pin = if tab.pinned {
-            PIN_GLYPH_ON
+        let pin = if app.nerd_font {
+            if tab.pinned {
+                PIN_GLYPH_ON
+            } else {
+                PIN_GLYPH_OFF
+            }
+        } else if tab.pinned {
+            '*'
         } else {
-            PIN_GLYPH_OFF
+            'P'
         };
         let padding = width.saturating_sub(1).saturating_sub(display_width(&name));
         let left = padding / 2;
@@ -1653,8 +1657,35 @@ mod tests {
     }
 
     #[test]
+    fn unpinned_tab_renders_a_visible_pin_control() {
+        let mut app = AppState::test_new();
+        app.nerd_font = false;
+        app.workspaces = vec![Workspace::test_new("test")];
+        app.active = Some(0);
+        app.view.tab_bar_rect = Rect::new(0, 0, 30, 1);
+        let view = compute_tab_bar_view(
+            &app.workspaces[0],
+            &app.terminals,
+            app.view.tab_bar_rect,
+            0,
+            true,
+            false,
+            &[],
+            all_tab_actions_visible(),
+        );
+        app.view.tab_hit_areas = view.tab_hit_areas;
+        let mut terminal = Terminal::new(TestBackend::new(30, 1)).unwrap();
+        terminal
+            .draw(|frame| render_tab_bar(&app, frame, app.view.tab_bar_rect))
+            .unwrap();
+        let rect = app.view.tab_hit_areas[0];
+        assert_eq!(terminal.backend().buffer()[(rect.x, rect.y)].symbol(), "P");
+    }
+
+    #[test]
     fn cjk_tab_labels_are_centered_by_display_width() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].set_custom_name("提交 notes 的反馈".into());
 
@@ -1684,7 +1715,7 @@ mod tests {
         let rect = app.view.tab_hit_areas[0];
         assert_eq!(rect.width, 21);
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(rect.x, rect.y)].symbol(), " ");
+        assert_eq!(buffer[(rect.x, rect.y)].symbol(), "P");
         assert_eq!(buffer[(rect.x + 1, rect.y)].symbol(), " ");
         assert_eq!(buffer[(rect.x + 2, rect.y)].symbol(), "提");
         assert_eq!(buffer[(rect.x + rect.width - 2, rect.y)].symbol(), " ");
@@ -1694,6 +1725,7 @@ mod tests {
     #[test]
     fn tab_labels_are_centered_in_their_cells() {
         let mut app = AppState::test_new();
+        app.nerd_font = false;
         let mut ws = Workspace::test_new("test");
         ws.tabs[0].set_custom_name("omarchy".into());
 
@@ -1723,7 +1755,7 @@ mod tests {
         let cell: String = (rect.x..rect.x + rect.width)
             .map(|x| buffer[(x, rect.y)].symbol())
             .collect();
-        assert_eq!(cell, "  omarchy  ");
+        assert_eq!(cell, "P omarchy  ");
     }
 
     #[test]

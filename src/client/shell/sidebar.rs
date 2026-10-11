@@ -80,7 +80,10 @@ pub(crate) fn render_collapsed_sidebar(
                 .fg(palette.overlay1)
                 .bg(selection_background)
         } else if workspace.focused {
-            Style::default().fg(palette.text).bg(active_background)
+            Style::default()
+                .fg(palette.text)
+                .bg(active_background)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(palette.overlay0)
         };

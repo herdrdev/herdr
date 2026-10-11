@@ -5043,6 +5043,8 @@ mod tests {
     #[tokio::test]
     async fn pane_process_info_reports_new_tty_after_runtime_respawn() {
         use std::path::Path;
+        use std::thread;
+        use std::time::{Duration, Instant};
 
         let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(
@@ -5100,10 +5102,19 @@ mod tests {
             .map(Path::to_path_buf)
             .expect("respawned pane tty");
         assert_ne!(new_tty, old_tty, "respawn must allocate a fresh PTY");
-        assert_eq!(
-            std::fs::read_link(format!("/proc/{shell_pid}/fd/0")).expect("respawned shell stdin"),
-            new_tty
-        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let stdin_path = format!("/proc/{shell_pid}/fd/0");
+        loop {
+            let observed = std::fs::read_link(&stdin_path);
+            if observed.as_ref().is_ok_and(|path| path == &new_tty) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "respawned shell stdin did not become {new_tty:?}; last observed: {observed:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
 
         let target = app.public_pane_id(0, pane_id).expect("public pane id");
         let response =

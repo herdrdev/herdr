@@ -2202,7 +2202,8 @@ impl AppState {
                 // Session rows sit inside the same sidebar rect as workspace
                 // header rows but `workspace_at_row` never matches them, so
                 // without this branch a right-click on a session did nothing.
-                if let Some((ws_idx, tab_idx)) = self.tab_target_at(mouse.row).or_else(|| {
+                let window_row_target = self.tab_target_at(mouse.row);
+                if let Some((ws_idx, tab_idx)) = window_row_target.or_else(|| {
                     self.agent_detail_target_at(mouse.row)
                         .map(|(w, t, _)| (w, t))
                 }) {
@@ -2227,6 +2228,14 @@ impl AppState {
                             settle_pane_id,
                             snooze_target,
                             starred: self.tab_starred(ws_idx, tab_idx),
+                            pinned: self.workspaces[ws_idx].tabs[tab_idx].pinned,
+                            pin_allowed: crate::ui::compute_tab_card_areas(
+                                self,
+                                self.view.sidebar_rect,
+                            )
+                            .into_iter()
+                            .find(|card| mouse.row >= card.rect.y && mouse.row < card.rect.bottom())
+                            .is_some_and(|card| card.pin_allowed),
                             has_subgroup: self
                                 .workspaces
                                 .get(ws_idx)
@@ -2309,6 +2318,8 @@ impl AppState {
                             settle_pane_id: None,
                             snooze_target: None,
                             starred: self.tab_starred(ws_idx, tab_idx),
+                            pinned: self.workspaces[ws_idx].tabs[tab_idx].pinned,
+                            pin_allowed: true,
                             has_subgroup: self
                                 .workspaces
                                 .get(ws_idx)
@@ -3204,6 +3215,7 @@ impl AppState {
             Some(tab_idx),
             ContextMenuKind::Tab {
                 starred,
+                pinned,
                 has_subgroup,
                 ..
             },
@@ -3211,6 +3223,7 @@ impl AppState {
         {
             if let Some(tab) = self.workspaces[ws_idx].tabs.get(tab_idx) {
                 *starred = tab.starred;
+                *pinned = tab.pinned;
                 *has_subgroup = tab.subgroup().is_some();
             }
         }
@@ -4581,6 +4594,7 @@ mod tests {
         // Keep the chrome segment deterministic and leave room for the
         // clickable pull-request link in this narrow status row.
         app.state.chrome_host_label = "UB1".into();
+        app.state.agent_host_name = "ub1".into();
         app.state.workspaces = vec![Workspace::test_new("one")];
         app.state.active = Some(0);
         app.state.selected = 0;
@@ -6911,6 +6925,8 @@ mod tests {
                 ws_idx: 1,
                 tab_idx: 0,
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
                 settle_pane_id: Some(target.pane_id),
                 snooze_target: Some(target.pane_id),
@@ -6924,6 +6940,116 @@ mod tests {
         );
         assert!(menu.items().contains(&"Rename"));
         assert!(menu.items().contains(&crate::app::state::SETTLE_ITEM));
+    }
+
+    #[test]
+    fn right_clicking_split_snoozed_pane_has_no_window_pin_action() {
+        let mut app = app_for_mouse_test();
+        let mut workspace = Workspace::test_new("split window");
+        let snoozed_pane = workspace.tabs[0].root_pane;
+        workspace.test_split(ratatui::layout::Direction::Horizontal);
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        for terminal in app.state.terminals.values_mut() {
+            terminal.detected_agent = Some(Agent::Pi);
+            terminal.set_raw_agent_state_for_test(AgentState::Working);
+        }
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_sections_layout = true;
+        app.state.sidebar_width = 44;
+        app.state.set_server_mode(Mode::Terminal);
+        app.state.reconcile_sidebar_presentation();
+        let deadline = crate::app::settled::unix_seconds(std::time::SystemTime::now()) + 900;
+        assert!(app.state.snooze_pane_at(0, snoozed_pane, deadline));
+        app.state
+            .collapsed_sidebar_groups
+            .insert("sections:Snoozed".into());
+        let sidebar = Rect::new(0, 0, 44, 40);
+        app.state.view.sidebar_rect = sidebar;
+        let tab_cards = crate::ui::compute_tab_card_areas(&app.state, sidebar);
+        let child_row = tab_cards
+            .iter()
+            .find(|card| card.pane_id == snoozed_pane)
+            .map(|card| {
+                assert!(!card.pin_allowed);
+                card.rect.y
+            })
+            .or_else(|| {
+                crate::ui::compute_agent_card_areas(&app.state, sidebar)
+                    .into_iter()
+                    .find(|card| card.pane_id == snoozed_pane)
+                    .map(|card| card.rect.y)
+            })
+            .expect("visible snoozed child row");
+        app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(MouseEventKind::Down(MouseButton::Right), 9, child_row),
+        );
+        let menu = app.state.context_menu.as_ref().expect("child row menu");
+        assert!(!menu.items().contains(&"Pin"));
+        assert!(!menu.items().contains(&"Unpin"));
+    }
+
+    #[test]
+    fn sidebar_session_menu_pins_and_unpins_without_focusing_the_target() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_width = 40;
+        app.state.set_server_mode(Mode::Terminal);
+        app.state.toggle_workspace_agent_disclosure(1);
+        let area = Rect::new(0, 0, 120, 40);
+
+        for (action, pinned) in [
+            (ContextMenuAction::PinTab, true),
+            (ContextMenuAction::UnpinTab, false),
+        ] {
+            crate::ui::compute_view(&mut app.state, area);
+            let rows = crate::ui::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)
+                .into_iter()
+                .filter(|card| card.ws_idx == 1)
+                .collect::<Vec<_>>();
+            assert_eq!(rows.len(), if pinned { 1 } else { 2 });
+            let row = if pinned { &rows[0] } else { &rows[1] };
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                row.rect.x + 2,
+                row.rect.y,
+            ));
+            let menu = app.state.context_menu.as_ref().expect("session menu");
+            let index = app
+                .state
+                .context_menu_actions(menu)
+                .iter()
+                .position(|candidate| *candidate == action)
+                .expect("pin action reflects current state");
+            let menu_rect = app.state.context_menu_rect().expect("menu rect");
+            app.handle_mouse(mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                menu_rect.x + 2,
+                menu_rect.y + 1 + index as u16,
+            ));
+            crate::ui::compute_view(&mut app.state, area);
+            assert_eq!(app.state.workspaces[1].tabs[0].pinned, pinned);
+            assert_eq!(app.state.active, Some(0));
+            assert_eq!(app.state.workspaces[0].active_tab, 0);
+            assert_eq!(
+                crate::ui::sidebar::sidebar_rows(&app.state)
+                    .iter()
+                    .any(|row| matches!(
+                        row,
+                        crate::ui::sidebar::SidebarRow::SectionHeader {
+                            title: "Pinned",
+                            ..
+                        }
+                    )),
+                pinned,
+            );
+        }
     }
 
     #[test]
@@ -7004,10 +7130,24 @@ mod tests {
             let menu = app.state.context_menu.as_ref().expect("row context menu");
             let items = app.state.context_menu_items(menu);
             assert_eq!(
+                items.contains(&"Pin"),
+                pane_id == active_pane,
+                "only the window row offers Pin"
+            );
+            assert_eq!(
                 items.contains(&crate::app::state::SETTLE_ITEM),
                 pane_id == active_pane,
                 "snoozed rows must not offer Settle"
             );
+            if pane_id == snoozed_pane {
+                app.state.workspaces[0].tabs[0].pinned = true;
+                let menu = app.state.context_menu.as_ref().expect("pane row menu");
+                let items = app.state.context_menu_items(menu);
+                assert!(
+                    !items.contains(&"Unpin"),
+                    "pane row must not offer {items:?}"
+                );
+            }
         }
     }
 
@@ -7095,6 +7235,108 @@ mod tests {
             Some(1_725_000_000),
             "opening the context menu must preserve settlement"
         );
+    }
+
+    #[test]
+    fn tab_pin_click_keeps_focus_and_populates_pinned_sidebar_section() {
+        let mut app = app_for_mouse_test();
+        let mut ws = Workspace::test_new("test");
+        ws.test_add_tab(None);
+        app.state.workspaces = vec![ws];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_width = 60;
+        app.state.set_server_mode(Mode::Terminal);
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let tab = app.state.view.tab_hit_areas[1];
+        app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(MouseEventKind::Down(MouseButton::Left), tab.x, tab.y),
+        );
+        assert_eq!(app.state.request_pin_toggle.take(), Some((0, 1)));
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert!(app.state.tab_presses.is_empty());
+        app.toggle_pin_tab_via_api(0, 1);
+        crate::ui::compute_view(&mut app.state, area);
+        assert!(app.state.workspaces[0].tabs[1].pinned);
+        assert!(crate::ui::sidebar::sidebar_rows(&app.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                crate::ui::sidebar::SidebarRow::SectionHeader {
+                    title: "Pinned",
+                    ..
+                }
+            )));
+        app.toggle_pin_tab_via_api(0, 1);
+        crate::ui::compute_view(&mut app.state, area);
+        assert!(!app.state.workspaces[0].tabs[1].pinned);
+        assert!(!crate::ui::sidebar::sidebar_rows(&app.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                crate::ui::sidebar::SidebarRow::SectionHeader {
+                    title: "Pinned",
+                    ..
+                }
+            )));
+    }
+
+    #[test]
+    fn hovering_sidebar_row_then_clicking_pin_adds_pinned_section() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.sidebar_width = 60;
+        app.state.set_server_mode(Mode::Terminal);
+        let area = Rect::new(0, 0, 120, 40);
+        crate::ui::compute_view(&mut app.state, area);
+        let row =
+            crate::ui::sidebar::compute_tab_card_areas(&app.state, app.state.view.sidebar_rect)[0]
+                .rect;
+        let hover =
+            crate::ui::hovered_control_at(&app.state, row.x + 3, row.y).expect("sidebar row hover");
+        app.state
+            .set_hovered_control_at(Some(hover), std::time::Instant::now());
+        crate::ui::compute_view(&mut app.state, area);
+        let pin = app
+            .state
+            .view
+            .sidebar_hover_targets
+            .iter()
+            .find(|target| {
+                matches!(
+                    target.action,
+                    Some(crate::app::state::SidebarHoverAction::Pin {
+                        ws_idx: 0,
+                        tab_idx: 0
+                    })
+                )
+            })
+            .expect("hover exposes pin")
+            .rect;
+        app.state.handle_mouse(
+            &mut app.terminal_runtimes,
+            crate::app::LOCAL_INPUT_SOURCE,
+            mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
+        );
+        assert_eq!(app.state.request_pin_toggle.take(), Some((0, 0)));
+        app.toggle_pin_tab_via_api(0, 0);
+        crate::ui::compute_view(&mut app.state, area);
+        assert!(crate::ui::sidebar::sidebar_rows(&app.state)
+            .iter()
+            .any(|row| matches!(
+                row,
+                crate::ui::sidebar::SidebarRow::SectionHeader {
+                    title: "Pinned",
+                    ..
+                }
+            )));
     }
 
     #[test]
@@ -10626,6 +10868,8 @@ mod tests {
                 ws_idx: 0,
                 tab_idx: 1,
                 starred: false,
+                pinned: false,
+                pin_allowed: true,
                 has_subgroup: false,
                 settle_pane_id: None,
                 snooze_target: None,

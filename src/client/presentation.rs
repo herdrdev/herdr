@@ -563,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_blocker_scope_round_trips_and_legacy_defaults_to_fleet() {
+    fn sidebar_blocker_scope_round_trips_and_legacy_defaults_to_this_device() {
         let path = temp_path();
         update_path(&path, |state| {
             state.sidebar_blocker_scope = Some(crate::app::state::BlockerScope::ThisDevice);
@@ -575,12 +575,22 @@ mod tests {
                 .sidebar_blocker_scope,
             Some(crate::app::state::BlockerScope::ThisDevice)
         );
+        update_path(&path, |state| {
+            state.sidebar_blocker_scope = Some(crate::app::state::BlockerScope::Fleet);
+        })
+        .expect("save explicit Fleet scope");
+        assert_eq!(
+            load_from_path(&path)
+                .expect("load explicit Fleet scope")
+                .sidebar_blocker_scope,
+            Some(crate::app::state::BlockerScope::Fleet)
+        );
         let legacy: ClientPresentationFile =
             serde_json::from_str(r#"{"sidebar_group_mode":"repo_pr"}"#)
                 .expect("legacy presentation state");
         assert_eq!(
             legacy.sidebar_blocker_scope.unwrap_or_default(),
-            crate::app::state::BlockerScope::Fleet
+            crate::app::state::BlockerScope::ThisDevice
         );
         let _ = std::fs::remove_file(path);
     }
