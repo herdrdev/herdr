@@ -34,7 +34,13 @@ pub(crate) fn notepad_height(app: &AppState, content: Rect) -> u16 {
     if spare < MIN_NOTEPAD_ROWS {
         return 0;
     }
-    app.notepad.height.min(spare)
+    if app.notepad.active_tab_target() == Some(crate::notepad::NotepadTabTarget::Usage) {
+        u16::try_from(app.view.notepad_usage_content_rows.max(1).saturating_add(1))
+            .unwrap_or(u16::MAX)
+            .min(spare)
+    } else {
+        app.notepad.height.min(spare)
+    }
 }
 
 /// The panel itself, at the bottom of the sidebar's content area.
@@ -223,6 +229,10 @@ fn header_spans<'a>(app: &'a AppState, palette: &Palette, width: u16) -> Line<'a
         spans.push(Span::styled(label, tab_style(palette, active, focused)));
         used = used.saturating_add(tab_width);
     }
+    if let Some(device) = usage_device_label(app, width, used) {
+        used = used.saturating_add(display_width_u16(&device));
+        spans.push(Span::styled(device, Style::default().fg(palette.overlay1)));
+    }
     // Unsaved and diverged are the two facts the operator cannot recover by
     // looking at the body, so they get the remaining space.
     let marker = if app.notepad.error.is_some() {
@@ -256,6 +266,44 @@ fn header_spans<'a>(app: &'a AppState, palette: &Palette, width: u16) -> Line<'a
         ));
     }
     Line::from(spans)
+}
+
+fn usage_device_label(app: &AppState, width: u16, used: u16) -> Option<String> {
+    if app.notepad.active_tab_target() != Some(crate::notepad::NotepadTabTarget::Usage) {
+        return None;
+    }
+    let device = super::notepad_usage::device_name(
+        &app.agent_host_name,
+        width < 32 && app.notepad.usage_collapsed,
+    );
+    let glyph = if app.nerd_font { "\u{F013B}" } else { "⧉" };
+    let label = format!(" {glyph} {device}");
+    (used.saturating_add(display_width_u16(&label)) < width).then_some(label)
+}
+
+pub(crate) fn usage_title_hit_area(app: &AppState, panel: Rect) -> Rect {
+    if panel.height == 0
+        || app.notepad.active_tab_target() != Some(crate::notepad::NotepadTabTarget::Usage)
+    {
+        return Rect::default();
+    }
+    let tabs = header_tab_positions(app, panel.width).0;
+    let Some((_, start, len)) = tabs
+        .iter()
+        .find(|(target, _, _)| *target == crate::notepad::NotepadTabTarget::Usage)
+    else {
+        return Rect::default();
+    };
+    let used = tabs
+        .last()
+        .map_or(0, |(_, start, len)| start.saturating_add(*len));
+    let extra = usage_device_label(app, panel.width, used).map_or(0, |s| display_width_u16(&s));
+    Rect::new(
+        panel.x.saturating_add(*start),
+        panel.y,
+        used.saturating_add(extra).saturating_sub(*start).max(*len),
+        1,
+    )
 }
 
 pub(crate) fn usage_toggle_hit_area(app: &AppState, panel: Rect) -> Rect {
@@ -429,7 +477,7 @@ mod tests {
             crate::notepad::NotepadState::from_config(&crate::config::NotepadConfig::default());
         assert!(!app.notepad.enabled);
         assert_eq!(app.notepad.visible_tabs, vec!["usage".to_string()]);
-        assert_eq!(notepad_height(&app, Rect::new(0, 0, 26, 40)), 8);
+        assert_eq!(notepad_height(&app, Rect::new(0, 0, 26, 40)), 2);
     }
 
     #[test]
@@ -879,7 +927,7 @@ mod render_tests {
         app.notepad.height = 8;
         app.notepad.set_visible_tabs(vec!["usage".to_string()]);
         let with = crate::ui::workspace_list_rect_for_app(&app, sidebar);
-        assert_eq!(without.height - with.height, 8);
+        assert_eq!(without.height - with.height, 2);
         assert_eq!(with.y, without.y);
     }
     /// The focused pane, the home composer and the notepad all claim the one

@@ -158,6 +158,10 @@ pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<C
     }
     let fixed = [
         (
+            ControlId::NotepadUsageTitle,
+            super::notepad::usage_title_hit_area(app, view.notepad_rect),
+        ),
+        (
             ControlId::SidebarAnimationPause,
             view.hyperspace_pause_hit_area,
         ),
@@ -363,6 +367,10 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
         ControlId::NotepadUsageRow(index) => (
             *view.notepad_usage_hit_areas.get(index)?,
             view.notepad_usage_rows.get(index)?.tooltip.clone()?,
+        ),
+        ControlId::NotepadUsageTitle => (
+            super::notepad::usage_title_hit_area(app, view.notepad_rect),
+            super::notepad_usage::title_tooltip(app),
         ),
         ControlId::NotepadUsageToggle => (
             view.notepad_usage_toggle_hit_area,
@@ -1007,33 +1015,24 @@ mod tests {
         assert!(app.notepad.usage_tab || app.notepad.select_usage_tab());
         crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
         assert_eq!(app.view.notepad_usage_hit_areas.len(), 1);
-        app.notepad
-            .usage_expanded_providers
-            .insert(crate::provider_usage::QuotaProvider::Claude);
-        crate::ui::compute_view(&mut app, Rect::new(0, 0, 120, 40));
-
-        let header = app.view.notepad_usage_hit_areas[0];
+        let row = app.view.notepad_usage_hit_areas[0];
         assert_eq!(
-            hovered_control_at(&app, header.x, header.y),
+            hovered_control_at(&app, row.x, row.y),
             Some(ControlId::NotepadUsageRow(0))
         );
-        assert_eq!(
-            tooltip_target(&app, ControlId::NotepadUsageRow(0))
-                .expect("provider header tooltip")
-                .1,
-            "claude quota: bars show % of each window used; 5h = rolling five-hour window, 7d = weekly window"
-        );
-
-        let row = app.view.notepad_usage_hit_areas[1];
-        assert_eq!(row.width, app.view.notepad_rect.width);
-        assert_eq!(
-            hovered_control_at(&app, row.right().saturating_sub(1), row.y),
-            Some(ControlId::NotepadUsageRow(1))
-        );
-        assert!(tooltip_target(&app, ControlId::NotepadUsageRow(1))
-            .expect("account row tooltip")
+        assert!(tooltip_target(&app, ControlId::NotepadUsageRow(0))
+            .unwrap()
             .1
-            .starts_with("5h window: no data\n7d window: no data"));
+            .starts_with("Claude Code · ?\nno email reported"));
+        let title = super::super::notepad::usage_title_hit_area(&app, app.view.notepad_rect);
+        assert_eq!(
+            hovered_control_at(&app, title.x, title.y),
+            Some(ControlId::NotepadUsageTitle)
+        );
+        assert!(tooltip_target(&app, ControlId::NotepadUsageTitle)
+            .unwrap()
+            .1
+            .contains("every 60s"));
 
         let toggle = app.view.notepad_usage_toggle_hit_area;
         assert_eq!(

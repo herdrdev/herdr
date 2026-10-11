@@ -361,26 +361,11 @@ pub(crate) fn fill_glyph(percent: u8) -> char {
     FILL_LEVELS[index.min(FILL_LEVELS.len() - 1)]
 }
 
-fn load_color(percent: u8, p: &Palette) -> Color {
+pub(crate) fn load_color(percent: u8, p: &Palette) -> Color {
     match percent {
         percent if percent >= CRITICAL_PERCENT => p.red,
         percent if percent >= WARN_PERCENT => p.yellow,
         _ => p.green,
-    }
-}
-
-pub(crate) fn provider_style(
-    usage: &crate::provider_usage::AccountUsage,
-    color: Color,
-    p: &Palette,
-) -> Style {
-    if usage.stale {
-        return Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-    }
-    match usage.peak_percent() {
-        Some(percent) if percent >= CRITICAL_PERCENT => Style::default().fg(p.red),
-        Some(percent) if percent >= WARN_PERCENT => Style::default().fg(p.yellow),
-        _ => Style::default().fg(color),
     }
 }
 

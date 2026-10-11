@@ -516,9 +516,31 @@ pub(crate) struct QuotaWindow {
     pub resets_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UsageUnavailable {
+    NoStatuslineData,
+    NoSessionData,
+    HelperMissing,
+    HelperTimedOut,
+    HelperFailed,
+    HelperUnreadable,
+    NoQuotaSource,
+    UnknownProfile,
+    UnknownAccount,
+    AuthExpired,
+}
+
+fn unavailable(reason: UsageUnavailable) -> AccountUsage {
+    AccountUsage {
+        unavailable: Some(reason),
+        ..AccountUsage::default()
+    }
+}
+
 /// A single provider account: its short label and its windows.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct AccountUsage {
+    pub unavailable: Option<UsageUnavailable>,
     /// Short account code, e.g. `SHQ`. `None` when the account cannot be named.
     pub account: Option<String>,
     /// Full account email, when the provider's local credentials name it.
@@ -571,6 +593,7 @@ pub(crate) struct ProviderAccountUsage {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct ProviderUsageSnapshot {
+    pub collected_unix: Option<i64>,
     pub accounts: Vec<ProviderAccountUsage>,
     primary_claude: String,
     primary_codex: String,
@@ -607,6 +630,7 @@ impl ProviderUsageSnapshot {
                     usage: kimi,
                 },
             ],
+            collected_unix: None,
             primary_claude: "default".into(),
             primary_codex: "default".into(),
             primary_kimi: "default".into(),
@@ -684,7 +708,7 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
         provider: QuotaProvider::OpenCode,
         profile_id: "default".into(),
         label: "default".into(),
-        usage: AccountUsage::default(),
+        usage: unavailable(UsageUnavailable::NoQuotaSource),
     });
     {
         accounts.push(ProviderAccountUsage {
@@ -695,6 +719,7 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
         });
     }
     ProviderUsageSnapshot {
+        collected_unix: now_unix,
         accounts,
         primary_claude,
         primary_codex,
@@ -1265,6 +1290,13 @@ pub(crate) fn parse_claude_rate_limits(
     };
 
     AccountUsage {
+        unavailable: if fields.get("AUTH") == Some(&"refused") {
+            Some(UsageUnavailable::AuthExpired)
+        } else if window("R5", "R5_RST").is_none() && window("R7", "R7_RST").is_none() {
+            Some(UsageUnavailable::NoStatuslineData)
+        } else {
+            None
+        },
         account: None,
         five_hour: window("R5", "R5_RST"),
         seven_day: window("R7", "R7_RST"),
@@ -1282,13 +1314,72 @@ fn load_claude_usage_from(
     now: Instant,
 ) -> AccountUsage {
     let mut usage = std::fs::read_to_string(path).map_or_else(
-        |_| AccountUsage::default(),
+        |_| unavailable(UsageUnavailable::NoStatuslineData),
         |contents| parse_claude_rate_limits(&contents, now_unix, file_age(path, now)),
     );
+    let default_dir = home_path(".claude");
+    if let Some(dir) = config_dir.or(default_dir.as_deref()) {
+        if read_profile_metadata(&dir.join(".auth-state")).is_some()
+            && usage.unavailable == Some(UsageUnavailable::AuthExpired)
+        {
+            usage.unavailable = if usage.is_empty() {
+                Some(UsageUnavailable::NoStatuslineData)
+            } else {
+                None
+            };
+        }
+    }
+    if config_dir.or(default_dir.as_deref()).is_some_and(|dir| {
+        claude_auth_expired(
+            dir,
+            now_unix,
+            usage.unavailable == Some(UsageUnavailable::AuthExpired),
+        )
+    }) {
+        usage.unavailable = Some(UsageUnavailable::AuthExpired);
+    }
     usage.account = claude_account_code(profile, config_dir);
     usage.email = claude_account_email(config_dir);
     usage.last_refresh_unix = file_modified_unix(path);
     usage
+}
+
+/// Read only bounded metadata; credential values never leave this function.
+fn claude_auth_expired(dir: &Path, now: Option<i64>, env_refused: bool) -> bool {
+    let auth_state = read_profile_metadata(&dir.join(".auth-state"));
+    let refused = auth_state.as_deref().map_or(env_refused, |text| {
+        text.lines().any(|line| line.trim() == "AUTH=refused")
+    });
+    if refused {
+        return true;
+    }
+    let Some(now) = now else {
+        return false;
+    };
+    let Some(text) = read_profile_metadata(&dir.join(".credentials.json")) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return false;
+    };
+    let Some(oauth) = value.get("claudeAiOauth") else {
+        return false;
+    };
+    oauth
+        .get("expiresAt")
+        .and_then(serde_json::Value::as_i64)
+        .is_some_and(|at| at < now.saturating_mul(1000))
+        && oauth
+            .get("refreshToken")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(str::is_empty)
+}
+
+fn read_profile_metadata(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?.take(MAX_PROFILE_METADATA_BYTES + 1);
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    (text.len() as u64 <= MAX_PROFILE_METADATA_BYTES).then_some(text)
 }
 
 fn load_all_claude_usage(
@@ -1412,6 +1503,7 @@ fn cached_codex_record(path: &Path) -> Option<CodexRateLimits> {
 fn load_codex_usage_from(root: &Path, now_unix: Option<i64>) -> AccountUsage {
     let Ok(files) = recent_jsonl_files(&root.join("sessions"), MAX_USAGE_FILES) else {
         return AccountUsage {
+            unavailable: Some(UsageUnavailable::NoSessionData),
             account: codex_account_code(root),
             email: codex_account_email(root),
             ..AccountUsage::default()
@@ -1419,6 +1511,7 @@ fn load_codex_usage_from(root: &Path, now_unix: Option<i64>) -> AccountUsage {
     };
 
     let mut usage = AccountUsage {
+        unavailable: Some(UsageUnavailable::NoSessionData),
         account: codex_account_code(root),
         email: codex_account_email(root),
         ..AccountUsage::default()
@@ -1443,6 +1536,7 @@ fn load_codex_usage_from(root: &Path, now_unix: Option<i64>) -> AccountUsage {
                 matches!((window.resets_at, now_unix), (Some(resets_at), Some(now)) if resets_at <= now)
             });
         if !usage.is_empty() {
+            usage.unavailable = None;
             usage.last_refresh_unix = file_modified_unix(&path);
             break;
         }
@@ -1529,7 +1623,7 @@ struct RawKimiUsage {
 
 pub(crate) fn parse_kimi_usage(output: &str, now_unix: Option<i64>) -> AccountUsage {
     let Ok(raw) = serde_json::from_str::<RawKimiUsage>(output) else {
-        return AccountUsage::default();
+        return unavailable(UsageUnavailable::HelperUnreadable);
     };
     let window = |raw: Option<RawKimiWindow>| {
         let raw = raw?;
@@ -1552,13 +1646,19 @@ pub(crate) fn parse_kimi_usage(output: &str, now_unix: Option<i64>) -> AccountUs
             resets_at,
         })
     };
-    AccountUsage {
+    let usage = AccountUsage {
         account: None,
         five_hour: window(raw.five_hour),
         seven_day: window(raw.seven_day),
         credits: None,
         stale: false,
+        last_refresh_unix: now_unix,
         ..AccountUsage::default()
+    };
+    if usage.is_empty() {
+        unavailable(UsageUnavailable::HelperUnreadable)
+    } else {
+        usage
     }
 }
 
@@ -1566,40 +1666,84 @@ pub(crate) fn parse_kimi_usage(output: &str, now_unix: Option<i64>) -> AccountUs
 /// `kimi-usage` the statusline uses. Absent binary, non-zero exit, or garbage
 /// output all mean the same thing to the bar: no Kimi segment at all.
 fn load_kimi_usage(now_unix: Option<i64>) -> AccountUsage {
-    let Some(binary) = resolve_kimi_usage() else {
-        return AccountUsage::default();
-    };
-    let Ok(mut child) = Command::new(binary)
-        .arg("--rate-limits")
+    // Codex refreshes itself; Kimi/agy helpers expose no auth failure signal.
+    match run_helper(
+        resolve_kimi_usage(),
+        "--rate-limits",
+        KIMI_TIMEOUT,
+        KIMI_OUTPUT_LIMIT,
+    ) {
+        Ok(output) => parse_kimi_usage(&output, now_unix),
+        Err(reason) => unavailable(reason),
+    }
+}
+
+/// Drain stdout concurrently so a large helper response cannot fill its pipe
+/// and masquerade as a timeout. Store at most limit + 1 bytes.
+fn run_helper(
+    binary: Option<PathBuf>,
+    arg: &str,
+    timeout: Duration,
+    limit: usize,
+) -> Result<String, UsageUnavailable> {
+    let binary = binary.ok_or(UsageUnavailable::HelperMissing)?;
+    let mut child = Command::new(binary)
+        .arg(arg)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-    else {
-        return AccountUsage::default();
-    };
-
-    let deadline = Instant::now() + KIMI_TIMEOUT;
-    let output = loop {
+        .map_err(|_| UsageUnavailable::HelperFailed)?;
+    let stdout = child.stdout.take().ok_or(UsageUnavailable::HelperFailed)?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result = (|| {
+            let mut bytes = Vec::new();
+            let mut stdout = stdout;
+            let mut buffer = [0; 4096];
+            loop {
+                let count = stdout.read(&mut buffer)?;
+                if count == 0 {
+                    break;
+                }
+                let remaining = (limit + 1).saturating_sub(bytes.len());
+                bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+            }
+            Ok::<_, io::Error>(bytes)
+        })();
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break child.wait_with_output().ok(),
-            Ok(None) if Instant::now() >= deadline => {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            result => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break None;
+                // Do not join: descendants can retain stdout after the helper dies.
+                return Err(if result.is_err() {
+                    UsageUnavailable::HelperFailed
+                } else {
+                    UsageUnavailable::HelperTimedOut
+                });
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(_) => break None,
         }
     };
-
-    let Some(output) = output.filter(|output| output.status.success()) else {
-        return AccountUsage::default();
-    };
-    if output.stdout.len() > KIMI_OUTPUT_LIMIT {
-        return AccountUsage::default();
+    if !status.success() {
+        return Err(UsageUnavailable::HelperFailed);
     }
-    parse_kimi_usage(&String::from_utf8_lossy(&output.stdout), now_unix)
+    let bytes = receiver
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|error| match error {
+            std::sync::mpsc::RecvTimeoutError::Timeout => UsageUnavailable::HelperTimedOut,
+            std::sync::mpsc::RecvTimeoutError::Disconnected => UsageUnavailable::HelperUnreadable,
+        })?
+        .map_err(|_| UsageUnavailable::HelperUnreadable)?;
+    if bytes.len() > limit {
+        return Err(UsageUnavailable::HelperUnreadable);
+    }
+    String::from_utf8(bytes).map_err(|_| UsageUnavailable::HelperUnreadable)
 }
 
 fn resolve_kimi_usage() -> Option<PathBuf> {
@@ -1634,10 +1778,10 @@ struct RawAgyUsage {
 
 pub(crate) fn parse_agy_usage(output: &str, now_unix: Option<i64>) -> AccountUsage {
     let Ok(raw) = serde_json::from_str::<RawAgyUsage>(output) else {
-        return AccountUsage::default();
+        return unavailable(UsageUnavailable::HelperUnreadable);
     };
     let Some(usages) = raw.usages else {
-        return AccountUsage::default();
+        return unavailable(UsageUnavailable::HelperUnreadable);
     };
     let window = |raw: Option<RawAgyWindow>| {
         let raw = raw?;
@@ -1659,11 +1803,17 @@ pub(crate) fn parse_agy_usage(output: &str, now_unix: Option<i64>) -> AccountUsa
             resets_at,
         })
     };
-    AccountUsage {
+    let usage = AccountUsage {
         five_hour: window(usages.five_hour),
         seven_day: window(usages.seven_day),
         stale: false,
+        last_refresh_unix: now_unix,
         ..AccountUsage::default()
+    };
+    if usage.is_empty() {
+        unavailable(UsageUnavailable::HelperUnreadable)
+    } else {
+        usage
     }
 }
 
@@ -1674,44 +1824,10 @@ fn load_agy_usage(now_unix: Option<i64>) -> AccountUsage {
 }
 
 fn load_agy_usage_from(binary: Option<PathBuf>, now_unix: Option<i64>) -> AccountUsage {
-    let Some(binary) = binary else {
-        return AccountUsage::default();
-    };
-    let Ok(mut child) = Command::new(binary)
-        .arg("--json")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
-        return AccountUsage::default();
-    };
-
-    let deadline = Instant::now() + AGY_TIMEOUT;
-    let output = loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break child.wait_with_output().ok(),
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(25)),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-
-    let Some(output) = output.filter(|output| output.status.success()) else {
-        return AccountUsage::default();
-    };
-    if output.stdout.len() > AGY_OUTPUT_LIMIT {
-        return AccountUsage::default();
+    match run_helper(binary, "--json", AGY_TIMEOUT, AGY_OUTPUT_LIMIT) {
+        Ok(output) => parse_agy_usage(&output, now_unix),
+        Err(reason) => unavailable(reason),
     }
-    parse_agy_usage(&String::from_utf8_lossy(&output.stdout), now_unix)
 }
 
 fn resolve_agy_usage() -> Option<PathBuf> {
@@ -1772,6 +1888,133 @@ pub(crate) fn now_unix() -> Option<i64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn usage_claude_auth_signals_are_bounded_and_do_not_expose_tokens() {
+        let root = std::env::temp_dir().join(format!(
+            "herdr-auth-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let cache = root.join("rate-limits-night.env");
+        fs::write(&cache, "R5=81\nR5_RST=20000\nAUTH=refused\n").unwrap();
+        let load = || {
+            load_claude_usage_from(
+                &cache,
+                Some("night"),
+                Some(&root),
+                Some(10000),
+                Instant::now(),
+            )
+        };
+        assert_eq!(load().unavailable, Some(UsageUnavailable::AuthExpired));
+        fs::write(root.join(".auth-state"), "AUTH=ok\n").unwrap();
+        assert_eq!(load().unavailable, None);
+        fs::write(root.join(".auth-state"), "AUTH=refused\n").unwrap();
+        assert_eq!(load().unavailable, Some(UsageUnavailable::AuthExpired));
+        for auth in ["ok", "missing", "error", "unknown"] {
+            fs::write(root.join(".auth-state"), format!("AUTH={auth}\n")).unwrap();
+            assert_eq!(load().unavailable, None);
+        }
+        fs::write(
+            root.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"expiresAt":9999000,"accessToken":"synthetic-token"}}"#,
+        )
+        .unwrap();
+        let usage = load();
+        assert_eq!(usage.unavailable, Some(UsageUnavailable::AuthExpired));
+        assert!(!format!("{usage:?}").contains("synthetic-token"));
+        assert_eq!(usage.five_hour.unwrap().used_percent, 81);
+        fs::write(
+            root.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"expiresAt":9999000,"refreshToken":"synthetic-refresh"}}"#,
+        )
+        .unwrap();
+        assert_eq!(load().unavailable, None);
+        fs::write(
+            root.join(".credentials.json"),
+            r#"{"claudeAiOauth":{"expiresAt":10001000}}"#,
+        )
+        .unwrap();
+        assert_eq!(load().unavailable, None);
+        fs::write(
+            root.join(".credentials.json"),
+            " ".repeat(MAX_PROFILE_METADATA_BYTES as usize + 1),
+        )
+        .unwrap();
+        assert_eq!(load().unavailable, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn usage_helper_parsing_records_refresh_time() {
+        let kimi = parse_kimi_usage(r#"{"five_hour":{"used_percentage":12}}"#, Some(123));
+        let agy = parse_agy_usage(r#"{"usages":{"limit_5h":{"used_ratio":0.12}}}"#, Some(123));
+        for usage in [kimi, agy] {
+            assert_eq!(usage.last_refresh_unix, Some(123));
+            assert_eq!(usage.unavailable, None);
+        }
+    }
+    #[test]
+    fn usage_missing_sources_and_unreadable_helpers_have_reasons() {
+        assert_eq!(
+            parse_claude_rate_limits("", Some(10), None).unavailable,
+            Some(UsageUnavailable::NoStatuslineData)
+        );
+        assert_eq!(
+            load_codex_usage_from(Path::new("/nonexistent/herdr-usage"), Some(10)).unavailable,
+            Some(UsageUnavailable::NoSessionData)
+        );
+        for parse in [parse_kimi_usage, parse_agy_usage] {
+            for output in ["garbage", "{}"] {
+                assert_eq!(
+                    parse(output, Some(10)).unavailable,
+                    Some(UsageUnavailable::HelperUnreadable)
+                );
+            }
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn usage_helper_missing_failed_timeout_and_output_limit() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "herdr-helper-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(
+            run_helper(None, "", Duration::from_millis(20), 1024),
+            Err(UsageUnavailable::HelperMissing)
+        );
+        let script = root.join("helper");
+        for (body, expected) in [
+            ("exit 1", UsageUnavailable::HelperFailed),
+            ("exec sleep 1", UsageUnavailable::HelperTimedOut),
+            ("printf '123456789'", UsageUnavailable::HelperUnreadable),
+        ] {
+            fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(
+                run_helper(Some(script.clone()), "", Duration::from_millis(20), 8),
+                Err(expected)
+            );
+        }
+        fs::write(&script, "#!/bin/sh\nprintf garbage\n").unwrap();
+        let output = run_helper(Some(script), "", Duration::from_secs(1), 1024).unwrap();
+        assert_eq!(
+            parse_kimi_usage(&output, None).unavailable,
+            Some(UsageUnavailable::HelperUnreadable)
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     use super::*;
 
     // Fixed wall clock shared by quota parser fixtures.

@@ -1214,6 +1214,7 @@ impl App {
                 notepad_tab_hit_areas: Vec::new(),
                 notepad_agent_rows: Vec::new(),
                 notepad_agent_max_scroll: 0,
+                notepad_usage_content_rows: 0,
                 notepad_usage_rows: Vec::new(),
                 notepad_usage_hit_areas: Vec::new(),
                 notepad_usage_max_scroll: 0,

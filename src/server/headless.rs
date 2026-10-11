@@ -9628,6 +9628,7 @@ esac
                 crate::provider_usage::AccountUsage::default(),
                 crate::provider_usage::AccountUsage::default(),
             );
+        server.app.state.provider_usage.accounts[0].usage.account = Some("SHQ".into());
         let template = server.app.state.provider_usage.accounts[0].clone();
         for index in 0..20 {
             let mut account = template.clone();
@@ -9706,7 +9707,7 @@ esac
         ));
         assert!(first_text.contains("▸ Tasks"), "{first_text}");
         assert!(!first_text.contains("note"), "{first_text}");
-        assert!(second_text.contains("Claude"), "{second_text}");
+        assert!(second_text.contains("SHQ"), "{second_text}");
         assert!(!second_text.contains("note"), "{second_text}");
         assert!(third_text.contains("note"), "{third_text}");
         assert!(

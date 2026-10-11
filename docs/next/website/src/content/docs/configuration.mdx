@@ -52,7 +52,9 @@ Reload applies most UI settings without restarting panes. Startup-only settings 
 
 Themes, sidebar layouts, copy behavior, and other presentation settings come from the client's local config, including when viewing an SSH machine. Pane defaults, worktrees, integrations, and custom commands belong to the server where the panes run. The UI's `reload config` action reloads both the client's local settings and the selected server's config. Local keybindings reload too; `--remote-keybindings server` instead uses the selected server's keybindings.
 
-The sidebar starts with this device expanded and other devices collapsed; devices without agents stay hidden. Device expansion choices survive restart and client handoff. Working, Snoozed, Settled, and usage start collapsed; Runs and Aloops start hidden, while the inbox stays visible. Collapsed usage shows accounts in use, and expanded usage groups all accounts by provider. Remote pane titles include their host.
+The sidebar starts with this device expanded and other devices collapsed; devices without agents stay hidden. Device expansion choices survive restart and client handoff. Working, Snoozed, Settled, and usage start collapsed; Runs and Aloops start hidden, while the inbox stays visible. Collapsed usage shows the selected account for each connected provider, and expanded usage groups all accounts by provider. The panel fits its rows and returns spare space to the workspace list. Remote pane titles include their host.
+
+Usage pairs each account’s 5h and 7d quota bars on one line. Yellow starts at 80%, red at 90%, and `⊘` marks an exhausted window. A `~` marks stale data; a lock (or `!` without Nerd Fonts) marks locally detected expired Claude authentication. Hover an account for its profile, email, windows, and connection reason; hover the usage title or device label for refresh and pane details. Clicking an account opens the usage dashboard. Disconnected providers without active panes stay hidden, and OpenCode appears only when expanded because it has no quota source.
 
 ## Headless terminal size
 

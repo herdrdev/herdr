@@ -435,17 +435,13 @@ impl AppState {
             return;
         }
         let index = usize::from(mouse.row.saturating_sub(body.y));
-        match self
+        if let Some(NotepadUsageAction::OpenDashboard) = self
             .view
             .notepad_usage_rows
             .get(index)
             .map(|row| row.action)
         {
-            Some(NotepadUsageAction::OpenDashboard) => self.toggle_usage_view(),
-            Some(NotepadUsageAction::ToggleProvider(provider)) => {
-                self.notepad.toggle_usage_provider(provider)
-            }
-            _ => {}
+            self.toggle_usage_view();
         }
     }
 
@@ -1088,10 +1084,7 @@ mod tests {
         let body = notepad_body_rect(state.view.notepad_rect);
 
         assert!(state.handle_notepad_mouse(&click_at(body.x, body.y)));
-        assert!(state.usage_view.is_none(), "the provider header is inert");
-        crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
-        assert!(state.handle_notepad_mouse(&click_at(body.x, body.y + 1)));
-        assert!(state.usage_view.is_some());
+        assert!(state.usage_view.is_some(), "account row opens dashboard");
         assert!(state.request_usage_scan);
     }
 
@@ -1114,7 +1107,7 @@ mod tests {
             .detected_agent = Some(crate::detect::Agent::Claude);
         state.notepad.select_usage_tab();
         crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
-        assert_eq!(state.view.notepad_usage_rows.len(), 1);
+        assert_eq!(state.view.notepad_usage_rows.len(), 3);
 
         let toggle = state.view.notepad_usage_toggle_hit_area;
         assert_eq!(toggle.width, 1);
@@ -1122,7 +1115,7 @@ mod tests {
         assert!(!state.notepad.usage_collapsed);
 
         crate::ui::compute_view(&mut state, Rect::new(0, 0, 120, 40));
-        assert_eq!(state.view.notepad_usage_rows.len(), 6);
+        assert_eq!(state.view.notepad_usage_rows.len(), 3);
     }
 
     #[test]

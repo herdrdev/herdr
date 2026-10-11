@@ -379,6 +379,13 @@ fn compute_view_internal_at(
     observed_at: std::time::Instant,
     observed_unix_s: u64,
 ) {
+    // Pane-scaled count: only pay for it while the Usage tab can show.
+    let notepad_usage_content_rows = if app.notepad.usage_tab && !app.sidebar_collapsed {
+        notepad_usage::usage_row_count(app)
+    } else {
+        0
+    };
+    app.view.notepad_usage_content_rows = notepad_usage_content_rows;
     app.view_observed_at = observed_at;
     app.refresh_board_agent_lines(terminal_runtimes, observed_unix_s);
     app.view_observed_unix_s = observed_unix_s;
@@ -886,6 +893,7 @@ fn compute_view_internal_at(
         notepad_tab_hit_areas,
         notepad_agent_rows,
         notepad_agent_max_scroll,
+        notepad_usage_content_rows,
         notepad_usage_rows,
         notepad_usage_hit_areas,
         notepad_usage_max_scroll,
@@ -1219,6 +1227,7 @@ fn compute_mobile_view(
         notepad_tab_hit_areas: Vec::new(),
         notepad_agent_rows: Vec::new(),
         notepad_agent_max_scroll: 0,
+        notepad_usage_content_rows: app.view.notepad_usage_content_rows,
         notepad_usage_rows: Vec::new(),
         notepad_usage_hit_areas: Vec::new(),
         notepad_usage_max_scroll: 0,

@@ -464,27 +464,6 @@ impl NotepadState {
         self.usage_scroll = 0;
     }
 
-    pub(crate) fn toggle_usage_provider(&mut self, provider: crate::provider_usage::QuotaProvider) {
-        if !self.usage_collapsed {
-            self.usage_collapsed = true;
-            self.usage_expanded_providers.clear();
-            for candidate in [
-                crate::provider_usage::QuotaProvider::Claude,
-                crate::provider_usage::QuotaProvider::Codex,
-                crate::provider_usage::QuotaProvider::Kimi,
-                crate::provider_usage::QuotaProvider::Agy,
-                crate::provider_usage::QuotaProvider::OpenCode,
-            ] {
-                if candidate != provider {
-                    self.usage_expanded_providers.insert(candidate);
-                }
-            }
-        } else if !self.usage_expanded_providers.remove(&provider) {
-            self.usage_expanded_providers.insert(provider);
-        }
-        self.usage_scroll = 0;
-    }
-
     pub(crate) fn toggle_agent_section(&mut self, section: AgentSection) {
         self.agent_collapsed.toggle(section);
     }
