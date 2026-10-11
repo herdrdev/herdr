@@ -10,21 +10,21 @@
 //! - We avoid duplicating parsing logic in the client
 //! - Host terminal control replies can be buffered or discarded before they leak
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, AtomicU32};
 use std::sync::Arc;
 
 #[cfg(unix)]
 use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
-#[cfg(windows)]
-use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::ClientLoopEvent;
 
 #[cfg(any(windows, test))]
-mod windows_vti;
+pub(super) mod windows_vti;
 
 // ---------------------------------------------------------------------------
 // Stdin reader thread
@@ -126,7 +126,7 @@ fn unix_stdin_reader_loop(
         if (framer.has_pending_input() || !pending_palette.is_empty())
             && stdin_read_ready(
                 &reader,
-                idle_flush_timeout_ms(&framer, host_mouse_capture_active.load(Ordering::Acquire)),
+                framer.idle_flush_timeout_ms(host_mouse_capture_active.load(Ordering::Acquire)),
             ) == Some(false)
         {
             let had_pending = framer.has_pending_input();
@@ -228,10 +228,8 @@ fn unix_stdin_reader_loop(
                     return;
                 }
 
-                let timeout_ms = idle_flush_timeout_ms(
-                    &framer,
-                    host_mouse_capture_active.load(Ordering::Acquire),
-                );
+                let timeout_ms =
+                    framer.idle_flush_timeout_ms(host_mouse_capture_active.load(Ordering::Acquire));
                 if stdin_read_ready(&reader, timeout_ms) == Some(false) {
                     let had_pending = framer.has_pending_input();
                     let chunks = framer.flush_timeout();
@@ -351,7 +349,7 @@ fn classify_unix_input(
     sgr_pixels: bool,
     geometry: Option<crate::input::mouse::HostGeometry>,
 ) -> Option<ClientLoopEvent> {
-    if sgr_pixels && crate::input::mouse::parse_report(&data).is_some() {
+    if sgr_pixels && crate::raw_input::parse_sgr_mouse_report(&data).is_some() {
         return geometry.map(|geometry| ClientLoopEvent::PixelMouse(data, geometry));
     }
     Some(ClientLoopEvent::StdinInput(data))
@@ -371,238 +369,26 @@ fn flush_unix_palette_input(
         .is_ok()
 }
 
-#[cfg(unix)]
-fn idle_flush_timeout_ms(
-    framer: &crate::raw_input::RawInputByteFramer,
-    host_mouse_capture_active: bool,
-) -> i32 {
-    if !host_mouse_capture_active {
-        return crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS;
-    }
-    if framer.has_pending_lone_escape() || framer.has_pending_incomplete_mouse_sequence() {
-        crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
-    } else if framer.has_pending_csi_introducer() {
-        // A mouse report split after ESC[ is still ambiguous with legacy Alt+[.
-        crate::raw_input::MOUSE_ACTIVE_CSI_INTRODUCER_FLUSH_TIMEOUT_MS
-    } else {
-        crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
-    }
-}
-
 #[cfg(windows)]
 fn windows_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
     host_color_query_sent: bool,
 ) {
-    if !super::windows_vti_input_backend_enabled() {
-        windows_vti::trace_input_transport("reader=crossterm");
-        windows_crossterm_reader_loop(event_tx, should_quit);
-    } else {
-        match windows_vti::console_input_handle() {
-            Ok(handle) => {
-                windows_vti::trace_input_transport("reader=windows-console");
-                windows_vti::raw_console_reader_loop(
-                    handle,
-                    event_tx,
-                    should_quit,
-                    host_color_query_sent,
-                );
-            }
-            _ => {
-                windows_vti::trace_input_transport("reader=crossterm-fallback");
-                windows_crossterm_reader_loop(event_tx, should_quit);
-            }
+    match windows_vti::console_input_handle() {
+        Ok(handle) => {
+            windows_vti::trace_input_transport("reader=windows-console");
+            windows_vti::raw_console_reader_loop(
+                handle,
+                event_tx,
+                should_quit,
+                host_color_query_sent,
+            );
+        }
+        Err(err) => {
+            tracing::error!(%err, "no Windows console input available; keyboard input is disabled");
         }
     }
-}
-
-#[cfg(windows)]
-fn windows_crossterm_reader_loop(
-    event_tx: mpsc::Sender<ClientLoopEvent>,
-    should_quit: &Arc<AtomicBool>,
-) {
-    let mut framer = crate::raw_input::RawInputFramer::for_host_input();
-
-    while !should_quit.load(Ordering::Acquire) {
-        match crossterm::event::poll(Duration::from_millis(10)) {
-            Ok(true) => {}
-            Ok(false) => {
-                if framer.has_pending_input() {
-                    tracing::debug!("windows input raw sequence timed out; flushing");
-                    if !send_windows_raw_events(framer.flush_timeout(), &event_tx) {
-                        return;
-                    }
-                }
-                continue;
-            }
-            Err(_) => break,
-        }
-
-        let event = match crossterm::event::read() {
-            Ok(event) => event,
-            Err(_) => break,
-        };
-
-        let (raw_events, event) = frame_windows_crossterm_event(&mut framer, event);
-        if !send_windows_raw_events(raw_events, &event_tx) {
-            return;
-        }
-        let Some(event) = event else {
-            continue;
-        };
-        if event_tx
-            .blocking_send(ClientLoopEvent::StdinEvents(vec![event]))
-            .is_err()
-        {
-            return;
-        }
-    }
-
-    if framer.has_pending_input() {
-        let _ = send_windows_raw_events(framer.flush_interrupted(), &event_tx);
-    }
-}
-
-#[cfg(any(windows, test))]
-fn frame_windows_crossterm_event(
-    framer: &mut crate::raw_input::RawInputFramer,
-    event: crossterm::event::Event,
-) -> (
-    Vec<crate::raw_input::RawInputEvent>,
-    Option<crate::protocol::ClientInputEvent>,
-) {
-    let raw_sequence_pending = framer.has_pending_input();
-    if let Some(bytes) = windows_key_raw_bytes(&event, raw_sequence_pending) {
-        tracing::debug!(
-            bytes = ?bytes,
-            pending_before = raw_sequence_pending,
-            "windows input routed through raw framer"
-        );
-        return (framer.push(&bytes), None);
-    }
-
-    if windows_event_is_control_key(&event) {
-        tracing::debug!(event = ?event, "windows control key forwarded as semantic input");
-    }
-    let Some(event) = windows_crossterm_input_event(event) else {
-        // Preserve the existing flush for unrelated pending input, but do not
-        // cancel mouse recovery for an event that will not be forwarded.
-        return (
-            if raw_sequence_pending {
-                framer.flush_timeout()
-            } else {
-                Vec::new()
-            },
-            None,
-        );
-    };
-    if raw_sequence_pending {
-        tracing::debug!("windows input raw sequence interrupted by semantic event; flushing");
-    }
-    // Even a dormant mouse prefix must stop claiming bytes after semantic input.
-    (framer.flush_interrupted(), Some(event))
-}
-
-#[cfg(any(windows, test))]
-fn windows_crossterm_input_event(
-    event: crossterm::event::Event,
-) -> Option<crate::protocol::ClientInputEvent> {
-    let event = crate::protocol::ClientInputEvent::from_crossterm(event)?;
-    match event {
-        crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char(codepoint),
-            modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
-            source,
-            ..
-        } => Some(crate::protocol::ClientInputEvent::Key {
-            code: crate::protocol::ClientKeyCode::Char(codepoint),
-            modifiers: 0,
-            kind: crate::protocol::ClientKeyKind::Press,
-            repeat_count: 1,
-            generated_text: Some(codepoint.to_string()),
-            source,
-        }),
-        event => Some(event),
-    }
-}
-
-#[cfg(any(windows, test))]
-fn windows_event_is_control_key(event: &crossterm::event::Event) -> bool {
-    use crossterm::event::{Event, KeyModifiers};
-
-    matches!(
-        event,
-        Event::Key(key)
-            if key.modifiers.contains(KeyModifiers::CONTROL)
-                || matches!(key.code, crossterm::event::KeyCode::Char(ch) if ch.is_control())
-    )
-}
-
-#[cfg(any(windows, test))]
-fn windows_key_raw_bytes(
-    event: &crossterm::event::Event,
-    raw_sequence_pending: bool,
-) -> Option<Vec<u8>> {
-    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
-
-    let Event::Key(key) = event else {
-        return None;
-    };
-    if key.kind == KeyEventKind::Release {
-        return None;
-    }
-
-    match key.code {
-        KeyCode::Esc if key.modifiers.is_empty() => Some(vec![0x1b]),
-        KeyCode::Char('[') if !raw_sequence_pending && key.modifiers == KeyModifiers::CONTROL => {
-            Some(vec![0x1b])
-        }
-        KeyCode::Char(ch)
-            if !raw_sequence_pending
-                && matches!(ch, 'i' | 'I')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && !key.modifiers.contains(KeyModifiers::ALT) =>
-        {
-            let mut buf = [0; 4];
-            Some(ch.encode_utf8(&mut buf).as_bytes().to_vec())
-        }
-        KeyCode::Char(ch) if raw_sequence_pending || ch.is_control() => {
-            let mut bytes = Vec::new();
-            if key.modifiers.contains(KeyModifiers::ALT) {
-                bytes.push(0x1b);
-            }
-            let mut buf = [0; 4];
-            bytes.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-            Some(bytes)
-        }
-        _ => None,
-    }
-}
-
-#[cfg(windows)]
-fn send_windows_raw_events(
-    events: Vec<crate::raw_input::RawInputEvent>,
-    event_tx: &mpsc::Sender<ClientLoopEvent>,
-) -> bool {
-    let raw_event_count = events.len();
-    let events = events
-        .into_iter()
-        .filter_map(windows_client_input_event_from_raw)
-        .collect::<Vec<_>>();
-    if events.is_empty() {
-        return true;
-    }
-
-    tracing::debug!(
-        raw_event_count,
-        forwarded_event_count = events.len(),
-        "windows raw-framed input events forwarded"
-    );
-    event_tx
-        .blocking_send(ClientLoopEvent::StdinEvents(events))
-        .is_ok()
 }
 
 #[cfg(any(windows, test))]
@@ -792,7 +578,7 @@ mod tests {
         let events = framer.push(b"\x1b\x1b");
 
         assert_eq!(events.len(), 1);
-        assert!(framer.has_pending_input());
+        // The second escape is still pending until the idle flush.
         assert_eq!(framer.flush_timeout().len(), 1);
     }
 
@@ -805,7 +591,7 @@ mod tests {
         next: &[u8],
     ) -> Vec<Vec<u8>> {
         let first_wait =
-            std::time::Duration::from_millis(idle_flush_timeout_ms(framer, mouse_capture) as u64);
+            std::time::Duration::from_millis(framer.idle_flush_timeout_ms(mouse_capture) as u64);
         let mut chunks = Vec::new();
         if gap >= first_wait {
             chunks.extend(framer.flush_timeout());
@@ -1058,7 +844,7 @@ mod tests {
     }
 
     #[test]
-    fn mouse_active_escape_sequences_get_longer_reassembly_window() {
+    fn only_ambiguous_escape_prefixes_get_the_short_keyboard_window() {
         let mut escape = crate::raw_input::RawInputByteFramer::default();
         assert!(escape.push(b"\x1b").is_empty());
         let mut csi = crate::raw_input::RawInputByteFramer::default();
@@ -1070,26 +856,30 @@ mod tests {
         let mut unrelated = crate::raw_input::RawInputByteFramer::default();
         assert!(unrelated.push(b"\x1b[49:33;2:").is_empty());
 
-        for framer in [&escape, &csi, &sgr_mouse, &default_mouse, &unrelated] {
+        // A lone ESC or ESC[ may still be a key (Escape, Alt+[).
+        for framer in [&escape, &csi] {
             assert_eq!(
-                idle_flush_timeout_ms(framer, false),
+                framer.idle_flush_timeout_ms(false),
                 crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
             );
         }
-        for framer in [&escape, &sgr_mouse, &default_mouse] {
-            assert_eq!(
-                idle_flush_timeout_ms(framer, true),
-                crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
-            );
-        }
         assert_eq!(
-            idle_flush_timeout_ms(&csi, true),
+            escape.idle_flush_timeout_ms(true),
+            crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS
+        );
+        assert_eq!(
+            csi.idle_flush_timeout_ms(true),
             crate::raw_input::MOUSE_ACTIVE_CSI_INTRODUCER_FLUSH_TIMEOUT_MS
         );
-        assert_eq!(
-            idle_flush_timeout_ms(&unrelated, true),
-            crate::raw_input::RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS
-        );
+        // Anything further inside a sequence cannot be a key: wait for the rest.
+        for framer in [&sgr_mouse, &default_mouse, &unrelated] {
+            for mouse_capture in [false, true] {
+                assert_eq!(
+                    framer.idle_flush_timeout_ms(mouse_capture),
+                    crate::raw_input::INCOMPLETE_SEQUENCE_FLUSH_TIMEOUT_MS
+                );
+            }
+        }
 
         let mouse_timeout_ms =
             std::hint::black_box(crate::raw_input::MOUSE_ACTIVE_ESCAPE_SEQUENCE_FLUSH_TIMEOUT_MS);
@@ -1100,201 +890,6 @@ mod tests {
 #[cfg(test)]
 mod windows_tests {
     use super::*;
-    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
-
-    #[test]
-    fn windows_control_chars_are_reframed_as_raw_bytes() {
-        let escape = Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
-        assert_eq!(
-            windows_key_raw_bytes(&escape, false).as_deref(),
-            Some(b"\x1b".as_slice())
-        );
-
-        let enter = Event::Key(KeyEvent::new(KeyCode::Char('\r'), KeyModifiers::empty()));
-        assert_eq!(
-            windows_key_raw_bytes(&enter, false).as_deref(),
-            Some(b"\r".as_slice())
-        );
-
-        let printable = Event::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty()));
-        assert_eq!(windows_key_raw_bytes(&printable, false), None);
-
-        let pending_arrow_tail =
-            Event::Key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::empty()));
-        assert_eq!(
-            windows_key_raw_bytes(&pending_arrow_tail, true).as_deref(),
-            Some(b"[".as_slice())
-        );
-    }
-
-    #[test]
-    fn windows_crossterm_semantic_input_cancels_dormant_and_buffered_mouse_recovery() {
-        for buffered in [false, true] {
-            let mut framer = crate::raw_input::RawInputFramer::for_host_input();
-            assert!(framer.push(b"\x1b[<3").is_empty());
-            assert!(framer.flush_timeout().is_empty());
-            assert!(framer.flush_timeout().is_empty());
-            if buffered {
-                assert!(framer.push(b"5").is_empty());
-            }
-            // Printable input bypasses the raw route when no bytes are pending;
-            // an arrow bypasses it even when a continuation is buffered.
-            let key = if buffered {
-                KeyCode::Up
-            } else {
-                KeyCode::Char('x')
-            };
-            let event = Event::Key(KeyEvent::new(key, KeyModifiers::empty()));
-            let (raw, semantic) = frame_windows_crossterm_event(&mut framer, event.clone());
-            let raw_bytes: Vec<_> = raw
-                .into_iter()
-                .filter_map(|event| {
-                    let crate::raw_input::RawInputEvent::Key(key) = event else {
-                        return None;
-                    };
-                    key.vt_bytes().map(ToOwned::to_owned)
-                })
-                .collect();
-            assert_eq!(
-                raw_bytes.concat(),
-                if buffered { b"5".as_slice() } else { b"" }
-            );
-            assert_eq!(semantic, windows_crossterm_input_event(event));
-            assert_eq!(framer.push(b"5;28;31M").len(), 8);
-        }
-    }
-
-    #[test]
-    fn windows_crossterm_ignored_event_preserves_mouse_recovery() {
-        let mut framer = crate::raw_input::RawInputFramer::for_host_input();
-        assert!(framer.push(b"\x1b[<3").is_empty());
-        assert!(framer.flush_timeout().is_empty());
-        assert!(framer.push(b"5").is_empty());
-        let (raw, semantic) = frame_windows_crossterm_event(&mut framer, Event::Resize(80, 24));
-        assert!(raw.is_empty());
-        assert!(semantic.is_none());
-        let events = framer.push(b";28;31Mx");
-        assert!(
-            matches!(events.as_slice(), [crate::raw_input::RawInputEvent::Key(key)]
-            if key.code == KeyCode::Char('x'))
-        );
-        assert!(!framer.has_pending_input());
-    }
-
-    #[test]
-    fn windows_crossterm_printable_press_keeps_key_semantics_and_text() {
-        let event = Event::Key(KeyEvent::new(KeyCode::Char('你'), KeyModifiers::empty()));
-
-        assert_eq!(
-            windows_crossterm_input_event(event),
-            Some(crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('你'),
-                modifiers: 0,
-                kind: crate::protocol::ClientKeyKind::Press,
-                repeat_count: 1,
-                generated_text: Some("你".to_string()),
-                source: crate::protocol::ClientKeySource::Synthesized,
-            })
-        );
-    }
-
-    #[test]
-    fn windows_ctrl_bracket_starts_raw_escape_sequence() {
-        let ctrl_bracket = Event::Key(KeyEvent::new(KeyCode::Char('['), KeyModifiers::CONTROL));
-        assert_eq!(
-            windows_key_raw_bytes(&ctrl_bracket, false).as_deref(),
-            Some(b"\x1b".as_slice())
-        );
-
-        let mut framer = crate::raw_input::RawInputFramer::default();
-        assert!(framer.push(b"\x1b").is_empty());
-        let events = framer.push(b"[<35;48;26M");
-        assert_eq!(events.len(), 1);
-
-        let event = windows_client_input_event_from_raw(events.into_iter().next().unwrap())
-            .expect("raw mouse converts");
-        assert!(matches!(
-            event,
-            crate::protocol::ClientInputEvent::Mouse {
-                kind: crate::protocol::ClientMouseKind::Moved,
-                column: 47,
-                row: 25,
-                modifiers: _,
-            }
-        ));
-    }
-
-    #[test]
-    fn windows_ctrl_shift_bracket_stays_semantic() {
-        let ctrl_shift_bracket = Event::Key(KeyEvent::new(
-            KeyCode::Char('['),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ));
-        assert_eq!(windows_key_raw_bytes(&ctrl_shift_bracket, false), None);
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_ctrl_d_semantic_event_encodes_to_eot() {
-        let event = Event::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
-        assert_eq!(windows_key_raw_bytes(&event, false), None);
-
-        let event =
-            crate::protocol::ClientInputEvent::from_crossterm(event).expect("ctrl-d converts");
-        let raw = event.to_raw_input_event();
-        let crate::raw_input::RawInputEvent::Key(key) = raw else {
-            panic!("expected key");
-        };
-        assert_eq!(key.code, KeyCode::Char('d'));
-        assert_eq!(key.modifiers, KeyModifiers::CONTROL);
-        assert_eq!(
-            crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
-            b"\x04"
-        );
-    }
-
-    #[test]
-    fn windows_pasted_printable_ctrl_i_routes_as_literal_i() {
-        let event = Event::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::CONTROL));
-        assert_eq!(
-            windows_key_raw_bytes(&event, false).as_deref(),
-            Some(b"i".as_slice())
-        );
-
-        let event = Event::Key(KeyEvent::new(
-            KeyCode::Char('I'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        ));
-        assert_eq!(
-            windows_key_raw_bytes(&event, false).as_deref(),
-            Some(b"I".as_slice())
-        );
-    }
-
-    #[test]
-    fn windows_eot_control_char_normalizes_to_ctrl_d() {
-        let event = Event::Key(KeyEvent::new(KeyCode::Char('\u{4}'), KeyModifiers::empty()));
-        let bytes = windows_key_raw_bytes(&event, false).expect("eot routes through raw framer");
-        assert_eq!(bytes, b"\x04");
-
-        let mut framer = crate::raw_input::RawInputFramer::default();
-        let events = framer.push(&bytes);
-        assert_eq!(events.len(), 1);
-
-        let event = windows_client_input_event_from_raw(events.into_iter().next().unwrap())
-            .expect("raw eot converts");
-        assert_eq!(
-            event,
-            crate::protocol::ClientInputEvent::Key {
-                code: crate::protocol::ClientKeyCode::Char('d'),
-                modifiers: KeyModifiers::CONTROL.bits(),
-                kind: crate::protocol::ClientKeyKind::Press,
-                repeat_count: 1,
-                generated_text: None,
-                source: crate::protocol::ClientKeySource::Vt { bytes: vec![4] },
-            }
-        );
-    }
 
     #[test]
     fn windows_pending_escape_sequence_converts_to_semantic_arrow() {

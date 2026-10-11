@@ -534,6 +534,8 @@ in pane or agent APIs. Native non-terminal plugin panes are outside plugin v1.
 
 New panes identify as `TERM_PROGRAM=herdr`, with `TERM_PROGRAM_VERSION` set to
 Herdr's version. They keep `TERM=xterm-256color` and `COLORTERM=truecolor`.
+They also get `fish_handle_reflow=0`, because Herdr reflows text on resize;
+an inherited or explicit `fish_handle_reflow` value is kept.
 Herdr removes inherited outer-terminal session markers (iTerm2, WezTerm, Kitty,
 Windows Terminal, tmux, screen, and Zellij), iTerm2's `LC_TERMINAL` identity,
 and known Claude Code, Codex, and OMP session markers before applying explicit

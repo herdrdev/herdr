@@ -240,35 +240,55 @@ fn client_shell_graphics_follow_final_shell_origin_and_local_overlay_visibility(
 
 #[test]
 fn delayed_link_fallback_does_not_replay_against_changed_geometry() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    state.set_pane_surface(surface());
-    state.compose(106, 20).expect("pane frame");
-    let pane = state.hits.panes[0].clone();
-    let down = MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: pane.inner_rect.x + 2,
-        row: pane.inner_rect.y + 1,
-        modifiers: KeyModifiers::CONTROL,
-    };
-    let activate = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
-    let request_id = match &activate.actions[..] {
-        [ClientShellAction::Endpoint { request, .. }] => request.id.clone(),
-        _ => panic!("expected link activation request"),
-    };
-    state.hits.panes[0].inner_rect.x = state.hits.panes[0].inner_rect.x.saturating_add(1);
-
-    let (_, actions) = state.handle_endpoint_result(
-        "boot-1",
-        &request_id,
-        Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
-            url: None,
-            handled: false,
-        }),
-    );
-
-    assert!(actions.is_empty());
-    assert!(state.url_click_consumes_until_up);
+    for url in [
+        None,
+        Some("https://example.test"),
+        Some("file:///C:/Code/note.md"),
+    ] {
+        for changed in 0..4 {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_snapshot(Box::new(snapshot()));
+            state.set_pane_surface(surface());
+            state.compose(106, 20).expect("pane frame");
+            let pane = state.hits.panes[0].clone();
+            let down = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: pane.inner_rect.x + 2,
+                row: pane.inner_rect.y + 1,
+                modifiers: KeyModifiers::CONTROL,
+            };
+            let activate = state.handle_raw_events(vec![RawInputEvent::Mouse(down)]);
+            let [ClientShellAction::Endpoint { request, .. }] = &activate.actions[..] else {
+                panic!("expected link activation request");
+            };
+            match changed {
+                0 => state.hits.panes[0].inner_rect.x += 1,
+                1 => state.mode = ClientShellMode::Navigate,
+                2 => state.config.mouse_capture = false,
+                _ => {
+                    state.overlay = Some(ClientShellOverlay::Help(ClientHelpOverlay {
+                        query: TextEditor::default(),
+                        search_focused: false,
+                        scroll: 0,
+                    }))
+                }
+            }
+            let (_, actions) = state.handle_endpoint_result(
+                "boot-1",
+                &request.id,
+                Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
+                    url: url.map(str::to_owned),
+                    handled: false,
+                }),
+            );
+            assert!(
+                actions.is_empty(),
+                "late replies must not replay or open links"
+            );
+            assert!(state.url_click_consumes_until_up);
+        }
+    }
 }
 
 #[test]
@@ -280,6 +300,216 @@ fn invalid_experimental_reload_keeps_input_source_preference() {
     assert!(shell.switch_ascii_input_source_in_prefix);
     shell.apply_live_config(&config, &[], &[]);
     assert!(!shell.switch_ascii_input_source_in_prefix);
+}
+
+fn pane_key_events(
+    outcome: &ClientShellInput,
+) -> Vec<(
+    crate::protocol::ClientKeyCode,
+    crate::protocol::ClientKeyKind,
+)> {
+    outcome
+        .requests
+        .iter()
+        .filter_map(|request| match request {
+            ClientMessage::ClientShellPaneInput { events, .. } => Some(events),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|event| match event {
+            ClientPaneInputEvent::Key { code, kind, .. } => Some((code.clone(), *kind)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn text_press_release_survives_shift_released_first_and_never_becomes_a_repeat() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_host_reports_key_releases(true);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    // Shift+A arrives as text; Shift is let go before A, so the release names
+    // plain `a` with no shifted alternate.
+    let press = state.handle_input_bytes(b"A");
+    assert_eq!(
+        pane_key_events(&press),
+        [(ClientKeyCode::Char('A'), ClientKeyKind::Press)]
+    );
+    let release = state.handle_input_bytes(b"\x1b[97;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('a'), ClientKeyKind::Release)]
+    );
+
+    // A text press whose release never arrived must not turn the next press
+    // into a repeat routed to the old target.
+    let _ = state.handle_input_bytes(b"%");
+    let again = state.handle_input_bytes(b"%");
+    assert_eq!(
+        pane_key_events(&again),
+        [(ClientKeyCode::Char('%'), ClientKeyKind::Press)]
+    );
+}
+
+#[test]
+fn raw_backspace_follows_the_host_tty_erase_character() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    // #3244: MobaXterm sends 0x08 for Backspace and its tty says erase is ^H.
+    for (erase, plain, alt) in [
+        (
+            Some(0x08),
+            ClientKeyCode::Backspace,
+            ClientKeyCode::Backspace,
+        ),
+        (
+            Some(0x7f),
+            ClientKeyCode::Char('h'),
+            ClientKeyCode::Char('h'),
+        ),
+        (None, ClientKeyCode::Char('h'), ClientKeyCode::Char('h')),
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_host_erase_byte(erase);
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+
+        let press = state.handle_input_bytes(b"\x08");
+        assert_eq!(
+            pane_key_events(&press),
+            [(plain.clone(), ClientKeyKind::Press)],
+            "erase {erase:?}"
+        );
+        let alt_press = state.handle_input_bytes(b"\x1b\x08");
+        assert_eq!(
+            pane_key_events(&alt_press),
+            [(alt, ClientKeyKind::Press)],
+            "alt, erase {erase:?}"
+        );
+    }
+}
+
+#[test]
+fn shifted_punctuation_release_after_shift_reaches_the_pane() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_host_reports_key_releases(true);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    // "?" arrives as text; with Shift let go first the release names only the
+    // unshifted key, which no layout-free rule can relate to "?".
+    let _ = state.handle_input_bytes(b"?");
+    let release = state.handle_input_bytes(b"\x1b[47;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('/'), ClientKeyKind::Release)]
+    );
+    // Nothing is left to be released later as a stale "?".
+    let blur = state.handle_input_bytes(b"\x1b[O");
+    assert!(pane_key_events(&blur).is_empty());
+
+    // With two text keys held the release is ambiguous and nothing is taken.
+    let _ = state.handle_input_bytes(b"?");
+    let _ = state.handle_input_bytes(b"!");
+    let ambiguous = state.handle_input_bytes(b"\x1b[47;1:3u");
+    assert!(pane_key_events(&ambiguous).is_empty());
+}
+
+#[test]
+fn held_key_reports_keep_their_release_around_ime_commits_and_focus_loss() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    let new_state = || {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_host_reports_key_releases(true);
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state
+    };
+
+    // A key report carrying its text (report-all host) is a real held key:
+    // losing focus releases it.
+    let mut state = new_state();
+    let _ = state.handle_input_bytes(b"\x1b[97;;97u");
+    let blur = state.handle_input_bytes(b"\x1b[O");
+    assert_eq!(
+        pane_key_events(&blur),
+        [(ClientKeyCode::Char('a'), ClientKeyKind::Release)]
+    );
+
+    // Many IME commits while a key is held never displace that key: its
+    // release still reaches the pane as the held key.
+    let mut state = new_state();
+    let _ = state.handle_input_bytes(b"\x1b[120;;120u");
+    for ch in
+        "\u{65e5}\u{672c}\u{8a9e}\u{d55c}\u{ad6d}\u{c5b4}\u{4e2d}\u{6587}\u{3042}\u{3044}\u{3046}"
+            .chars()
+    {
+        let _ = state.handle_input_bytes(ch.to_string().as_bytes());
+    }
+    let release = state.handle_input_bytes(b"\x1b[120;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('x'), ClientKeyKind::Release)]
+    );
+}
+
+#[test]
+fn non_latin_ctrl_chord_release_matches_after_ctrl_is_let_go() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_host_reports_key_releases(true);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    // Russian layout: Ctrl+\u{441} is the C key; Ctrl goes up before C.
+    let press = state.handle_input_bytes(b"\x1b[1089::99;5u");
+    assert_eq!(
+        pane_key_events(&press),
+        [(ClientKeyCode::Char('c'), ClientKeyKind::Press)]
+    );
+    let release = state.handle_input_bytes(b"\x1b[1089::99;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('c'), ClientKeyKind::Release)]
+    );
+
+    // Plain Cyrillic typing still releases as its own key.
+    let _ = state.handle_input_bytes(b"\x1b[1089::99;;1089u");
+    let release = state.handle_input_bytes(b"\x1b[1089::99;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('\u{441}'), ClientKeyKind::Release)]
+    );
+}
+
+#[test]
+fn unmatched_release_never_takes_a_held_key_while_herdr_owns_another_press() {
+    use crate::protocol::{ClientKeyCode, ClientKeyKind};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_host_reports_key_releases(true);
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+
+    // Hold `a` in the pane, then press the prefix: Herdr owns that press.
+    let _ = state.handle_input_bytes(b"a");
+    let _ = state.handle_input_bytes(b"\x1b[98;5u");
+    // A release the leases cannot name must not be charged to the held `a`.
+    let stray = state.handle_input_bytes(b"\x1b[47;1:3u");
+    assert!(pane_key_events(&stray).is_empty());
+    let release = state.handle_input_bytes(b"\x1b[97;1:3u");
+    assert_eq!(
+        pane_key_events(&release),
+        [(ClientKeyCode::Char('a'), ClientKeyKind::Release)]
+    );
 }
 
 #[test]
@@ -629,26 +859,79 @@ fn rename_pane_empty_value_is_preserved_as_a_clear_request() {
 
 #[test]
 fn styled_client_composition_preserves_pane_hyperlinks() {
-    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
-    state.set_snapshot(Box::new(snapshot()));
-    let mut pane_surface = surface();
-    let linked = Buffer::with_lines(["LIVE", "PANE"]);
-    pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
-        &linked,
-        None,
-        &[((0, 0), "L".into(), "https://example.test".into())],
-    );
-    state.set_pane_surface(pane_surface);
-    let mut selection =
-        crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
-    assert!(selection.finish());
-    state.selection = Some(selection);
-    let frame = state.compose(106, 20).expect("composed frame");
-    let hit = &state.hits.panes[0];
-    let index =
-        usize::from(hit.inner_rect.y) * usize::from(frame.width) + usize::from(hit.inner_rect.x);
-    let link = frame.cells[index].hyperlink.expect("linked cell") as usize;
-    assert_eq!(frame.hyperlinks[link], "https://example.test");
+    for uri in [
+        "https://example.test",
+        "obsidian://open?vault=meta&file=note.md",
+    ] {
+        for draw_host_cursor in [false, true] {
+            let mut state =
+                ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_snapshot(Box::new(snapshot()));
+            let mut pane_surface = surface();
+            let linked = Buffer::with_lines(["LIVE", "PANE"]);
+            pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
+                &linked,
+                None,
+                &[((0, 0), "L".into(), uri.into())],
+            );
+            state.set_pane_surface(pane_surface);
+            let mut selection =
+                crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
+            assert!(selection.finish());
+            state.selection = Some(selection);
+            let frame = state.compose(106, 20).expect("composed frame");
+            let hit = &state.hits.panes[0];
+            let index = usize::from(hit.inner_rect.y) * usize::from(frame.width)
+                + usize::from(hit.inner_rect.x);
+            let link = frame.cells[index].hyperlink.expect("linked cell") as usize;
+            assert_eq!(frame.hyperlinks[link], uri);
+            let x = hit.inner_rect.x;
+            let y = hit.inner_rect.y;
+            let mut client = crate::client::state::ClientState::test_new();
+            client.draw_host_cursor = draw_host_cursor;
+            let mut terminal = crate::ghostty::Terminal::new(106, 20, 0).unwrap();
+            for (phase, (capture, repaint)) in [
+                (false, false),
+                (true, false),
+                (false, false),
+                (true, true),
+                (true, false),
+                (false, true),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                client.shell_mouse_capture_preference = capture;
+                // Effective mouse reporting may still be requested by a pane app.
+                client.mouse_capture_active = true;
+                client.repaint_pending = repaint;
+                let mut frame = state.compose(106, 20).expect("linked semantic frame");
+                let link = frame.cells[index].hyperlink.expect("retained link") as usize;
+                assert_eq!(frame.hyperlinks[link], uri);
+                // Change the linked cell on the diff pass so it must be painted again.
+                if phase == 4 {
+                    frame.frame.cells[index].symbol = "D".into();
+                }
+                frame.frame.cursor = Some(crate::protocol::CursorState {
+                    x: x + 1,
+                    y,
+                    visible: true,
+                    shape: Default::default(),
+                });
+                let expected = frame.cells[index].symbol.clone();
+                let mut output = Vec::new();
+                assert!(client.try_present_frame_to(&mut output, frame));
+                terminal.write(&output);
+                assert_eq!(
+                    terminal.viewport_hyperlink_uri(x, u32::from(y)).unwrap(),
+                    (!capture).then_some(uri.to_owned()),
+                    "host link ownership must follow configured capture for {uri}"
+                );
+                let (_, label) = terminal.screen_cell(x, u32::from(y)).unwrap();
+                assert_eq!(label, expected.chars().map(u32::from).collect::<Vec<_>>());
+            }
+        }
+    }
 }
 
 #[test]

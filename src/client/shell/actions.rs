@@ -660,7 +660,8 @@ impl ClientShellState {
                     event.kind
                         == crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left)
                 });
-                let replay = (self.mode == ClientShellMode::Terminal
+                let replay = (self.config.mouse_capture
+                    && self.mode == ClientShellMode::Terminal
                     && self.overlay.is_none()
                     && self
                         .hits
@@ -688,7 +689,7 @@ impl ClientShellState {
                     Ok(crate::api::schema::ResponseResult::PaneLinkActivated {
                         url: Some(url),
                         handled: false,
-                    }) if crate::app::actions::safe_web_url(&url).is_some() => {
+                    }) if crate::app::actions::safe_web_url(&url).is_some() && replay.is_some() => {
                         self.url_click_consumes_until_up = completed_before_release;
                         (false, vec![ClientShellAction::OpenSafeWebUrl(url)])
                     }
@@ -698,6 +699,10 @@ impl ClientShellState {
                     Ok(_) => {
                         self.set_endpoint_error("endpoint returned an unexpected link result");
                         (true, replay_action(replay))
+                    }
+                    Err(error) if error.code.as_deref() == Some("plugin_link_failed") => {
+                        self.url_click_consumes_until_up = completed_before_release;
+                        (true, Vec::new())
                     }
                     Err(error)
                         if matches!(

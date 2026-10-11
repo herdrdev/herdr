@@ -52,6 +52,7 @@ pub(crate) struct EncodedBlit {
     pub(crate) full: bool,
     next_last_visible_cursor: Option<(u16, u16)>,
     next_last_cursor_shape: u8,
+    suppress_visible_cursor: bool,
 }
 
 /// Stateful encoder that diffs semantic frames into terminal ANSI bytes.
@@ -60,6 +61,7 @@ pub(crate) struct BlitEncoder {
     last_frame: Option<FrameData>,
     last_visible_cursor: Option<(u16, u16)>,
     last_cursor_shape: u8,
+    suppress_visible_cursor: bool,
 }
 
 impl BlitEncoder {
@@ -124,12 +126,14 @@ impl BlitEncoder {
             full,
             next_last_visible_cursor,
             next_last_cursor_shape,
+            suppress_visible_cursor,
         }
     }
 
     pub(crate) fn commit(&mut self, frame: FrameData, encoded: EncodedBlit) {
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
+        self.suppress_visible_cursor = encoded.suppress_visible_cursor;
         self.last_frame = Some(frame);
     }
 
@@ -147,17 +151,17 @@ impl BlitEncoder {
         if rows.iter().any(|row| !patch_row_fits(frame, row)) || patch_rows_overlap(rows) {
             return None;
         }
-        // Metadata revisions need no terminal output. Keep visible cursors on
-        // the normal path because their suppression policy can change.
+        // Metadata revisions need no output unless the cursor's display policy changed.
         if rows.is_empty()
             && cursor == frame.cursor
-            && cursor.as_ref().is_none_or(|cursor| !cursor.visible)
+            && self.suppress_visible_cursor == suppress_visible_cursor
         {
             return Some(EncodedBlit {
                 bytes: Vec::new(),
                 full: false,
                 next_last_visible_cursor: self.last_visible_cursor,
                 next_last_cursor_shape: self.last_cursor_shape,
+                suppress_visible_cursor,
             });
         }
         let mut bytes = Vec::new();
@@ -178,6 +182,7 @@ impl BlitEncoder {
             full: false,
             next_last_visible_cursor,
             next_last_cursor_shape,
+            suppress_visible_cursor,
         })
     }
 
@@ -244,6 +249,7 @@ impl BlitEncoder {
         frame.cursor = cursor;
         self.last_visible_cursor = encoded.next_last_visible_cursor;
         self.last_cursor_shape = encoded.next_last_cursor_shape;
+        self.suppress_visible_cursor = encoded.suppress_visible_cursor;
         true
     }
 }
@@ -1928,6 +1934,12 @@ mod tests {
                 visible: false,
                 shape: 2,
             }),
+            Some(CursorState {
+                x: 0,
+                y: 0,
+                visible: true,
+                shape: 2,
+            }),
         ] {
             frame.cursor = cursor.clone();
             let initial = encoder.encode(&frame, false);
@@ -1966,6 +1978,21 @@ mod tests {
             )
             .unwrap();
         assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[?25l"));
+        let cursor = encoder.last_frame.as_ref().unwrap().cursor.clone();
+        assert!(encoder.commit_patch(&[], cursor.clone(), encoded));
+        assert!(encoder
+            .encode_patch(&[], cursor.clone(), true)
+            .unwrap()
+            .bytes
+            .is_empty());
+        let encoded = encoder.encode_patch(&[], cursor.clone(), false).unwrap();
+        assert!(String::from_utf8_lossy(&encoded.bytes).contains("\x1b[?25h"));
+        assert!(encoder.commit_patch(&[], cursor.clone(), encoded));
+        assert!(encoder
+            .encode_patch(&[], cursor, false)
+            .unwrap()
+            .bytes
+            .is_empty());
     }
 
     #[test]

@@ -41,6 +41,7 @@ pub(super) fn apply_reload(
             enabled,
             state.endpoint_sgr_pixels_requested,
             state.pixel_geometry_exact,
+            state.host_sgr_pixel_mouse,
         );
         if enabled != state.mouse_capture_active
             || sgr_pixels != host_sgr_pixels_active.load(Ordering::Acquire)

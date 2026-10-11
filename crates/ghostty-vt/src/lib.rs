@@ -883,6 +883,8 @@ impl Terminal {
         };
         let userdata = (&mut *terminal.callback_state as *mut TerminalCallbackState).cast();
         let glyph_protocol = false;
+        // libghostty enables image storage by default; Herdr opts in explicitly.
+        let kitty_storage_limit: u64 = 0;
         let terminfo_name = ffi::GhosttyString {
             ptr: TERM.as_ptr().cast(),
             len: TERM.len(),
@@ -894,6 +896,12 @@ impl Terminal {
         let clipboard_callback: ffi::GhosttyTerminalClipboardWriteFn =
             Some(clipboard_write_trampoline);
         unsafe {
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                (&kitty_storage_limit as *const u64).cast(),
+            )
+            .into_result()?;
             ffi::ghostty_terminal_set(
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
@@ -955,6 +963,10 @@ impl Terminal {
             )
             .into_result()?;
         }
+        // Disabling storage advances its generation even though it is empty.
+        terminal
+            .kitty_empty_generation
+            .set(Some(terminal.kitty_graphics_generation()?));
         Ok(terminal)
     }
 
@@ -3021,13 +3033,19 @@ impl Drop for RenderState {
 
 pub struct KeyEvent {
     raw: ffi::GhosttyKeyEvent,
+    // libghostty borrows the UTF-8 pointer instead of copying it, so the event
+    // owns the text for as long as the handle can be encoded.
+    utf8: Box<str>,
 }
 
 impl KeyEvent {
     pub fn new() -> Result<Self, Error> {
         let mut raw = ptr::null_mut();
         unsafe { ffi::ghostty_key_event_new(ptr::null(), &mut raw).into_result()? };
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            utf8: Box::from(""),
+        })
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyKeyAction) {
@@ -3043,13 +3061,26 @@ impl KeyEvent {
     }
 
     pub fn set_utf8(&mut self, text: &str) {
+        self.utf8 = Box::from(text);
         unsafe {
-            ffi::ghostty_key_event_set_utf8(self.raw, text.as_ptr().cast::<c_char>(), text.len())
+            ffi::ghostty_key_event_set_utf8(
+                self.raw,
+                self.utf8.as_ptr().cast::<c_char>(),
+                self.utf8.len(),
+            )
         }
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {
         unsafe { ffi::ghostty_key_event_set_unshifted_codepoint(self.raw, codepoint) }
+    }
+
+    pub fn set_consumed_mods(&mut self, mods: u16) {
+        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw, mods) }
+    }
+
+    pub fn set_composing(&mut self, composing: bool) {
+        unsafe { ffi::ghostty_key_event_set_composing(self.raw, composing) }
     }
 }
 
@@ -3072,6 +3103,23 @@ impl KeyEncoder {
 
     pub fn set_from_terminal(&mut self, terminal: &Terminal) {
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.raw, terminal.raw()) }
+    }
+
+    /// Whether macOS Option acts as Alt (ESC prefix) rather than a text
+    /// modifier. `set_from_terminal` resets this to false.
+    pub fn set_macos_option_as_alt(&mut self, enabled: bool) {
+        let value = if enabled {
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_TRUE
+        } else {
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE
+        };
+        unsafe {
+            ffi::ghostty_key_encoder_setopt(
+                self.raw,
+                ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                (&value as *const ffi::GhosttyOptionAsAlt).cast(),
+            )
+        }
     }
 
     pub fn encode(&mut self, event: &KeyEvent) -> Result<Vec<u8>, Error> {
@@ -3892,6 +3940,7 @@ mod tests {
     #[test]
     fn kitty_image_fingerprint_refreshes_on_retransmission() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        terminal.enable_kitty_graphics().unwrap();
         terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
         let first = terminal
             .kitty_image_placements_with_data_filter(|_| true)
@@ -3942,6 +3991,7 @@ mod tests {
     #[test]
     fn kitty_image_fingerprint_survives_hidden_placements_until_the_image_is_deleted() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        terminal.enable_kitty_graphics().unwrap();
         let cached =
             |terminal: &Terminal| terminal.kitty_fingerprints.lock().unwrap().contains_key(&7);
         terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
@@ -3969,16 +4019,17 @@ mod tests {
     #[test]
     fn kitty_storage_generation_skips_only_proven_empty_storage() {
         let mut terminal = Terminal::new(10, 5, 1_000_000).unwrap();
+        assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
         terminal.enable_kitty_graphics().unwrap();
         terminal.resize(10, 5, 8, 16).unwrap();
 
-        assert_eq!(terminal.kitty_graphics_generation().unwrap(), 0);
+        let initial_generation = terminal.kitty_graphics_generation().unwrap();
         assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
         assert!(terminal.kitty_image_placements().unwrap().is_empty());
 
         terminal.write(b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
         let transmitted = terminal.kitty_graphics_generation().unwrap();
-        assert_ne!(transmitted, 0);
+        assert_ne!(transmitted, initial_generation);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
         assert!(terminal.kitty_image_placements().unwrap().is_empty());
         assert_eq!(terminal.kitty_empty_generation.get(), Some(transmitted));
@@ -4054,6 +4105,52 @@ mod tests {
         assert_eq!(placements[0].data, [255, 0, 0, 255]);
         assert_eq!(placements[0].render.grid_cols, 10);
         assert_eq!(placements[0].render.grid_rows, 5);
+    }
+
+    #[test]
+    fn kitty_graphics_queries_require_explicit_enablement() {
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        let responses = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let sink = responses.clone();
+        terminal
+            .set_write_pty_callback(move |bytes| sink.lock().unwrap().extend_from_slice(bytes))
+            .unwrap();
+        // The reporter's direct, compressed RGBA capability probe followed by DA1.
+        let query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\x1b\\\x1b[c";
+
+        for enabled in [false, true] {
+            if enabled {
+                terminal.enable_kitty_graphics().unwrap();
+            }
+            for reset in [false, true] {
+                if reset {
+                    terminal.write(b"\x1bc");
+                }
+                responses.lock().unwrap().clear();
+                terminal.write(query);
+                let expected: &[u8] = if enabled {
+                    b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22c"
+                } else {
+                    b"\x1b[?62;22c"
+                };
+                assert_eq!(
+                    responses.lock().unwrap().as_slice(),
+                    expected,
+                    "enabled={enabled}, reset={reset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_kitty_graphics_discards_uploads_across_screen_changes() {
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        for sequence in [b"".as_slice(), b"\x1b[?1049h", b"\x1b[?1049l"] {
+            terminal.write(sequence);
+            terminal.resize(12, 6, 8, 16).unwrap();
+            terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\");
+            assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        }
     }
 
     #[test]

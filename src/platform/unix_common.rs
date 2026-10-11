@@ -17,6 +17,17 @@ pub(crate) fn read_fd(fd: std::os::fd::RawFd, data: &mut [u8]) -> std::io::Resul
     }
 }
 
+/// The tty's erase character (VERASE) on stdin, when one is set.
+pub(super) fn terminal_erase_byte() -> Option<u8> {
+    let mut termios: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut termios) } != 0 {
+        return None;
+    }
+    let erase = termios.c_cc[libc::VERASE];
+    // 0 (Linux) and 0xff (BSD) disable the special character.
+    (erase != 0 && erase != 0xff).then_some(erase)
+}
+
 pub(crate) fn poll_fd_readable(fd: std::os::fd::RawFd, timeout_ms: i32) -> std::io::Result<bool> {
     let mut descriptor = libc::pollfd {
         fd,

@@ -201,6 +201,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn local_keybindings_profile_preserves_plus_prefixes() {
+        let config: Config = toml::from_str(
+            "[keys]\nprefix = [\"ctrl+plus\", \"alt+plus\"]\nnew_tab = \"prefix+plus\"\n",
+        )
+        .unwrap();
+        let profile = config.local_keybindings_profile_toml().unwrap();
+        let restored = keybindings_from_profile_toml(&profile).unwrap();
+        assert_eq!(restored.prefix, config.prefix_keys());
+        assert_eq!(
+            restored.keybinds.new_tab.bindings,
+            config.keybinds().new_tab.bindings
+        );
+    }
+
+    #[test]
     fn local_keybindings_profile_includes_defaults_and_excludes_commands() {
         let config: Config = toml::from_str(
             r#"
