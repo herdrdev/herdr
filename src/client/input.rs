@@ -38,7 +38,7 @@ pub(super) mod windows_vti;
 pub fn stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
-    host_color_query_sent: bool,
+    will_query_host_terminal_theme: bool,
     host_theme_query_pending: Arc<AtomicU32>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
@@ -57,14 +57,14 @@ pub fn stdin_reader_loop(
             host_sgr_pixels_active,
         );
         let _ = (host_escape_disambiguation_active, initial_host_input);
-        windows_stdin_reader_loop(event_tx, should_quit, host_color_query_sent);
+        windows_stdin_reader_loop(event_tx, should_quit, will_query_host_terminal_theme);
     }
 
     #[cfg(unix)]
     unix_stdin_reader_loop(
         event_tx,
         should_quit,
-        host_color_query_sent,
+        will_query_host_terminal_theme,
         host_theme_query_pending,
         host_cell_size_query_sent,
         host_mouse_capture_active,
@@ -80,7 +80,7 @@ pub fn stdin_reader_loop(
 fn unix_stdin_reader_loop(
     event_tx: mpsc::Sender<ClientLoopEvent>,
     should_quit: &Arc<AtomicBool>,
-    host_color_query_sent: bool,
+    will_query_host_terminal_theme: bool,
     host_theme_query_pending: Arc<AtomicU32>,
     host_cell_size_query_sent: bool,
     host_mouse_capture_active: Arc<AtomicBool>,
@@ -95,9 +95,7 @@ fn unix_stdin_reader_loop(
     let mut scratch = [0u8; 4096];
     let mut framer = crate::raw_input::RawInputByteFramer::for_host_input();
     framer.set_host_escape_disambiguation_active(host_escape_disambiguation_active);
-    if host_color_query_sent {
-        framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
+    if will_query_host_terminal_theme {
         framer.enable_host_appearance_query_on_focus();
     }
     if host_cell_size_query_sent {
@@ -180,8 +178,8 @@ fn unix_stdin_reader_loop(
         match reader.read(&mut scratch) {
             Ok(0) => break,
             Ok(n) => {
-                // A redraw can issue queries while this thread is blocked in read().
-                // Arm the split-reply guard before framing the returned bytes.
+                // Every palette sweep is counted before it is written, so the
+                // guard is armed before any reply byte can be framed.
                 for _ in 0..host_theme_query_pending.swap(0, Ordering::AcqRel) {
                     framer.host_color_query_sent();
                 }

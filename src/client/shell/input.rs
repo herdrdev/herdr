@@ -326,9 +326,11 @@ impl ClientShellState {
                         .push(ClientMessage::ClientShellFocus { focused: false });
                 }
                 RawInputEvent::HostColorSchemeChanged(appearance) => {
+                    // The startup sweep already read the palette the first report describes.
+                    outcome.query_host_theme |=
+                        self.host_appearance_explicit && self.host_appearance != Some(appearance);
                     self.host_appearance = Some(appearance);
                     self.host_appearance_explicit = true;
-                    outcome.query_host_theme = true;
                     if self.config.theme_runtime.auto_switch {
                         self.config.palette = crate::app::client_palette_for_appearance(
                             &self.config.theme_runtime,
