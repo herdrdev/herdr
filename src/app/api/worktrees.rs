@@ -621,6 +621,21 @@ mod tests {
         );
     }
 
+    fn git_revision(repo: &Path, revision: &str) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "--verify", revision])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
     fn create_committed_repo(name: &str) -> PathBuf {
         let repo = unique_temp_path(name);
         std::fs::create_dir_all(&repo).unwrap();
@@ -935,6 +950,7 @@ mod tests {
             &repo,
             &["commit", "--quiet", "-am", "advance requested source"],
         );
+        let expected = git_revision(&repo, "HEAD");
         let mut app = app_with_parent(&repo);
         app.state.worktree_directory = worktree_root.clone();
         let (respond_to, response_rx) = response_channel();
@@ -959,8 +975,8 @@ mod tests {
             panic!("expected worktree_created response");
         };
         assert_eq!(
-            std::fs::read_to_string(Path::new(&worktree.path).join("README.md")).unwrap(),
-            "requested source\n",
+            git_revision(Path::new(&worktree.path), "HEAD"),
+            expected,
             "automatic creation must never check out a retained branch after a name collision"
         );
         assert_ne!(worktree.branch.as_deref(), Some(retained_branch.as_str()));
@@ -980,6 +996,7 @@ mod tests {
         let subdir = repo.join("subdir");
         std::fs::create_dir_all(&subdir).unwrap();
         run_git(&repo, &["branch", "requested-base"]);
+        let expected = git_revision(&repo, "requested-base");
         std::fs::write(repo.join("README.md"), "newer HEAD\n").unwrap();
         run_git(&repo, &["commit", "--quiet", "-am", "advance HEAD"]);
         let seed = 17;
@@ -1007,10 +1024,7 @@ mod tests {
             panic!("expected worktree_created response");
         };
         assert_eq!(Path::new(&worktree.path), checkout);
-        assert_eq!(
-            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
-            "test\n"
-        );
+        assert_eq!(git_revision(&checkout, "HEAD"), expected);
         assert_eq!(
             worktree.branch,
             Some(crate::worktree::generated_branch_slug(seed + 1))
@@ -1039,6 +1053,7 @@ mod tests {
     #[tokio::test]
     async fn automatic_worktree_concurrent_requests_reserve_distinct_paths_across_retry() {
         let repo = create_committed_repo("auto-concurrent-repo");
+        let expected = git_revision(&repo, "HEAD");
         let root = unique_temp_path("auto-concurrent-root");
         let seed = 20;
         run_git(
@@ -1069,10 +1084,7 @@ mod tests {
             let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
                 panic!("expected worktree_created response");
             };
-            assert_eq!(
-                std::fs::read_to_string(Path::new(&worktree.path).join("README.md")).unwrap(),
-                "test\n"
-            );
+            assert_eq!(git_revision(Path::new(&worktree.path), "HEAD"), expected);
             worktree.path
         });
         assert_ne!(paths[0], paths[1]);
@@ -1214,6 +1226,7 @@ mod tests {
         let worktree_root = unique_temp_path("api-worktree-create-existing-branch-root");
         let branch = "foo";
         run_git(&repo, &["branch", branch]);
+        let expected = git_revision(&repo, branch);
         std::fs::write(
             repo.join("README.md"),
             "new source must not replace explicit branch\n",
@@ -1250,10 +1263,7 @@ mod tests {
         assert_eq!(worktree.branch.as_deref(), Some(branch));
         let checkout = Path::new(&worktree.path);
         assert!(checkout.join("README.md").exists());
-        assert_eq!(
-            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
-            "test\n"
-        );
+        assert_eq!(git_revision(checkout, "HEAD"), expected);
         let branch_name = std::process::Command::new("git")
             .arg("-C")
             .arg(checkout)
