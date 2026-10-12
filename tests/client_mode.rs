@@ -2255,3 +2255,346 @@ fn client_receives_notify_on_agent_state_change() {
 
     cleanup_spawned_herdr(spawned, base);
 }
+
+/// A query the client wrote to its host terminal, as the terminal sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostQuery {
+    /// OSC 10 `?` or OSC 11 `?`
+    DefaultColor(u8),
+    /// OSC 4 `index;?`
+    PaletteColor(u8),
+    /// CSI `?996n`
+    ColorScheme,
+    /// CSI `c`
+    PrimaryDeviceAttributes,
+    /// CSI `?u`
+    KittyKeyboardFlags,
+    /// CSI `?1016$p`
+    SgrPixelMouseMode,
+    /// CSI `16t`
+    CellSize,
+    /// CSI `?1004h`: a mode set, but a focused terminal answers it with a focus-in report.
+    FocusReportingEnabled,
+}
+
+/// `None` while the sequence at the start of `bytes` is still incomplete.
+fn classify_escape_sequence(bytes: &[u8]) -> Option<(Option<HostQuery>, usize)> {
+    const ESC: u8 = 0x1b;
+    let second = *bytes.get(1)?;
+    let string_terminator = |body_start: usize| -> Option<(usize, usize)> {
+        let mut index = body_start;
+        while index < bytes.len() {
+            match bytes[index] {
+                0x07 => return Some((index, index + 1)),
+                ESC if bytes.get(index + 1) == Some(&b'\\') => return Some((index, index + 2)),
+                ESC if index + 1 >= bytes.len() => return None,
+                _ => index += 1,
+            }
+        }
+        None
+    };
+    match second {
+        b']' => {
+            let (body_end, len) = string_terminator(2)?;
+            let body = std::str::from_utf8(&bytes[2..body_end]).unwrap_or("");
+            let query = match body {
+                "10;?" => Some(HostQuery::DefaultColor(10)),
+                "11;?" => Some(HostQuery::DefaultColor(11)),
+                _ => body
+                    .strip_prefix("4;")
+                    .and_then(|rest| rest.strip_suffix(";?"))
+                    .and_then(|index| index.parse().ok())
+                    .map(HostQuery::PaletteColor),
+            };
+            Some((query, len))
+        }
+        b'[' => {
+            let mut index = 2;
+            while index < bytes.len() && (0x20..=0x3f).contains(&bytes[index]) {
+                index += 1;
+            }
+            let final_byte = *bytes.get(index)?;
+            let params = std::str::from_utf8(&bytes[2..index]).unwrap_or("");
+            let query = match (params, final_byte) {
+                ("?996", b'n') => Some(HostQuery::ColorScheme),
+                ("", b'c') => Some(HostQuery::PrimaryDeviceAttributes),
+                ("?", b'u') => Some(HostQuery::KittyKeyboardFlags),
+                ("?1016$", b'p') => Some(HostQuery::SgrPixelMouseMode),
+                ("16", b't') => Some(HostQuery::CellSize),
+                ("?1004", b'h') => Some(HostQuery::FocusReportingEnabled),
+                _ => None,
+            };
+            Some((query, index + 1))
+        }
+        b'P' | b'_' | b'^' | b'X' => {
+            let (_, len) = string_terminator(2)?;
+            Some((None, len))
+        }
+        b'(' | b')' | b'#' => (bytes.len() >= 3).then_some((None, 3)),
+        _ => Some((None, 2)),
+    }
+}
+
+/// An unfinished trailing sequence stays unconsumed.
+fn scan_host_queries(bytes: &[u8]) -> (Vec<HostQuery>, usize) {
+    let mut queries = Vec::new();
+    let mut index = 0;
+    while let Some(offset) = bytes[index..].iter().position(|&byte| byte == 0x1b) {
+        let start = index + offset;
+        let Some((query, len)) = classify_escape_sequence(&bytes[start..]) else {
+            return (queries, start);
+        };
+        queries.extend(query);
+        index = start + len;
+    }
+    (queries, bytes.len())
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HostTerminalModel {
+    /// Answers CSI `?996n` with a dark color-scheme report.
+    answers_color_scheme: bool,
+    /// Sends CSI `I` when focus reporting is enabled, like a focused iTerm2 or WezTerm window.
+    reports_focus_on_enable: bool,
+    /// Answers CSI `16t` with this (height, width) cell size.
+    cell_size_px: Option<(u32, u32)>,
+}
+
+impl HostTerminalModel {
+    const ITERM2_LIKE: Self = Self {
+        answers_color_scheme: true,
+        reports_focus_on_enable: true,
+        cell_size_px: None,
+    };
+
+    fn reply(self, query: HostQuery) -> Option<String> {
+        match query {
+            HostQuery::DefaultColor(10) => Some("\x1b]10;rgb:cccc/cccc/cccc\x1b\\".into()),
+            HostQuery::DefaultColor(_) => Some("\x1b]11;rgb:1e1e/1e1e/2e2e\x1b\\".into()),
+            HostQuery::PaletteColor(index) => Some(format!(
+                "\x1b]4;{index};rgb:{index:02x}{index:02x}/4040/8080\x1b\\"
+            )),
+            HostQuery::ColorScheme => self.answers_color_scheme.then(|| "\x1b[?997;1n".into()),
+            HostQuery::PrimaryDeviceAttributes => Some("\x1b[?62;22c".into()),
+            HostQuery::KittyKeyboardFlags => Some("\x1b[?0u".into()),
+            HostQuery::SgrPixelMouseMode => Some("\x1b[?1016;2$y".into()),
+            HostQuery::CellSize => self
+                .cell_size_px
+                .map(|(height, width)| format!("\x1b[6;{height};{width}t")),
+            HostQuery::FocusReportingEnabled => {
+                self.reports_focus_on_enable.then(|| "\x1b[I".into())
+            }
+        }
+    }
+}
+
+fn count(queries: &[HostQuery], predicate: fn(&HostQuery) -> bool) -> usize {
+    queries.iter().filter(|query| predicate(query)).count()
+}
+
+fn palette_queries(queries: &[HostQuery]) -> usize {
+    count(queries, |query| matches!(query, HostQuery::PaletteColor(_)))
+}
+
+fn host_query_summary(queries: &[HostQuery]) -> String {
+    format!(
+        "total={} osc10/11={} osc4={} csi?996n={} da1={} kitty={} decrqm1016={} csi16t={} focus_enables={}",
+        queries.len(),
+        count(queries, |q| matches!(q, HostQuery::DefaultColor(_))),
+        palette_queries(queries),
+        count(queries, |q| matches!(q, HostQuery::ColorScheme)),
+        count(queries, |q| matches!(q, HostQuery::PrimaryDeviceAttributes)),
+        count(queries, |q| matches!(q, HostQuery::KittyKeyboardFlags)),
+        count(queries, |q| matches!(q, HostQuery::SgrPixelMouseMode)),
+        count(queries, |q| matches!(q, HostQuery::CellSize)),
+        count(queries, |q| matches!(q, HostQuery::FocusReportingEnabled)),
+    )
+}
+
+const HOST_QUERY_SETTLE: Duration = Duration::from_millis(1500);
+const HOST_QUERY_DEADLINE: Duration = Duration::from_secs(20);
+
+struct AttachedHostTerminal {
+    _server: SpawnedHerdr,
+    client: SpawnedHerdr,
+    base: PathBuf,
+    output: SharedOutput,
+    writer: Box<dyn Write + Send>,
+    cursor: usize,
+}
+
+impl AttachedHostTerminal {
+    fn attach() -> Self {
+        let base = unique_test_dir();
+        let config_home = base.join("config");
+        let runtime_dir = base.join("runtime");
+        let api_socket = runtime_dir.join("herdr.sock");
+        let client_socket = runtime_dir.join("herdr-client.sock");
+        let server = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
+        wait_for_socket(&api_socket, Duration::from_secs(10));
+        wait_for_socket(&client_socket, Duration::from_secs(10));
+        let client = spawn_client_shell_process(&config_home, &runtime_dir, &api_socket);
+        let master = client._master.as_ref().expect("client PTY");
+        let output = spawn_pty_drain(master.try_clone_reader().unwrap());
+        let writer = master.take_writer().unwrap();
+        Self {
+            _server: server,
+            client,
+            base,
+            output,
+            writer,
+            cursor: 0,
+        }
+    }
+
+    fn send(&mut self, bytes: &[u8]) {
+        self.writer.write_all(bytes).unwrap();
+        self.writer.flush().unwrap();
+    }
+
+    fn resize(&self, rows: u16, cols: u16) {
+        let size = PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        };
+        self.client._master.as_ref().unwrap().resize(size).unwrap();
+    }
+
+    /// Answers the client's host queries as `model` would until the client has been quiet
+    /// for `HOST_QUERY_SETTLE`, and returns the queries seen since the previous call.
+    fn settle(&mut self, model: HostTerminalModel) -> Vec<HostQuery> {
+        let started = Instant::now();
+        let mut last_activity = started;
+        let mut queries = Vec::new();
+        while started.elapsed() < HOST_QUERY_DEADLINE && last_activity.elapsed() < HOST_QUERY_SETTLE
+        {
+            let pending = {
+                let captured = self.output.lock().unwrap_or_else(|p| p.into_inner());
+                captured.bytes[self.cursor..].to_vec()
+            };
+            let (found, consumed) = scan_host_queries(&pending);
+            if consumed > 0 {
+                self.cursor += consumed;
+                last_activity = Instant::now();
+            }
+            for query in found {
+                if let Some(reply) = model.reply(query) {
+                    self.send(reply.as_bytes());
+                }
+                queries.push(query);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        queries
+    }
+
+    fn finish(self) {
+        let AttachedHostTerminal {
+            _server,
+            client,
+            base,
+            writer,
+            ..
+        } = self;
+        drop(writer);
+        drop(client);
+        cleanup_spawned_herdr(_server, base);
+    }
+}
+
+#[test]
+fn attach_to_a_host_that_answers_color_scheme_queries_sweeps_the_palette_once() {
+    let _lock = test_lock();
+    let mut attached = AttachedHostTerminal::attach();
+    let startup = attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.finish();
+    assert_eq!(
+        palette_queries(&startup),
+        256,
+        "one attach should query each palette entry once: {}",
+        host_query_summary(&startup)
+    );
+}
+
+#[test]
+fn focus_gain_with_unchanged_color_scheme_only_requeries_the_scheme() {
+    let _lock = test_lock();
+    let mut attached = AttachedHostTerminal::attach();
+    let startup = attached.settle(HostTerminalModel::ITERM2_LIKE);
+    assert!(
+        palette_queries(&startup) >= 256,
+        "startup should have swept the palette: {}",
+        host_query_summary(&startup)
+    );
+    attached.send(b"\x1b[I");
+    let after_focus = attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.finish();
+    assert_eq!(
+        after_focus,
+        vec![HostQuery::ColorScheme],
+        "a focus gain whose color scheme report is unchanged should cost one CSI ?996n: {}",
+        host_query_summary(&after_focus)
+    );
+}
+
+#[test]
+fn explicit_color_scheme_flip_resweeps_the_palette_once() {
+    let _lock = test_lock();
+    let mut attached = AttachedHostTerminal::attach();
+    attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.send(b"\x1b[?997;2n");
+    let after_flip = attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.finish();
+    assert_eq!(
+        (
+            count(&after_flip, |q| matches!(q, HostQuery::DefaultColor(_))),
+            palette_queries(&after_flip),
+        ),
+        (2, 256),
+        "a dark-to-light report should re-query the default colors and palette once: {}",
+        host_query_summary(&after_flip)
+    );
+}
+
+#[test]
+fn resize_resweeps_the_palette_once() {
+    let _lock = test_lock();
+    let mut attached = AttachedHostTerminal::attach();
+    attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.resize(30, 100);
+    let after_resize = attached.settle(HostTerminalModel::ITERM2_LIKE);
+    attached.finish();
+    assert_eq!(
+        (
+            palette_queries(&after_resize),
+            count(&after_resize, |q| matches!(q, HostQuery::ColorScheme)),
+        ),
+        (256, 1),
+        "a resize should sweep once even though it re-enables focus reports: {}",
+        host_query_summary(&after_resize)
+    );
+}
+
+#[test]
+fn differing_cell_size_reply_adds_only_the_resize_sweep() {
+    let _lock = test_lock();
+    let mut attached = AttachedHostTerminal::attach();
+    let model = HostTerminalModel {
+        cell_size_px: Some((15, 7)),
+        ..HostTerminalModel::ITERM2_LIKE
+    };
+    let startup = attached.settle(model);
+    attached.finish();
+    assert_eq!(
+        (
+            palette_queries(&startup),
+            count(&startup, |q| matches!(q, HostQuery::ColorScheme)),
+            count(&startup, |q| matches!(q, HostQuery::FocusReportingEnabled)),
+        ),
+        (512, 3, 2),
+        "a cell size that differs from the default is one resize sweep, not a focus sweep: {}",
+        host_query_summary(&startup)
+    );
+}
