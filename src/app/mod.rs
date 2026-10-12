@@ -85,6 +85,7 @@ const LOOP_RECEIPT_FALLBACK_INTERVAL: Duration = Duration::from_secs(30);
 const AUTO_UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const PENDING_AGENT_RESUME_THEME_WAIT: Duration = Duration::from_millis(750);
 const SESSION_SAVE_DEBOUNCE: Duration = Duration::from_secs(5);
+const SESSION_SAVE_MAX_WAIT: Duration = Duration::from_secs(30);
 const SIDEBAR_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
 const PANE_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(350);
 const PANE_COPY_HIGHLIGHT_DURATION: Duration = Duration::from_millis(500);
@@ -390,6 +391,7 @@ pub struct App {
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
     pub(crate) session_save_deadline: Option<Instant>,
+    pub(crate) session_save_first_dirty_at: Option<Instant>,
     pub(crate) session_save_scheduled_revision: Option<u64>,
     pub(crate) session_save_thread: Option<std::thread::JoinHandle<session::SessionSaveResult>>,
     pub(crate) session_save_failures: u32,
@@ -1841,6 +1843,7 @@ impl App {
             stall_nudge_episodes: std::collections::HashMap::new(),
             pending_stall_nudge_submissions: std::collections::HashMap::new(),
             session_save_deadline: None,
+            session_save_first_dirty_at: None,
             session_save_scheduled_revision: None,
             session_save_thread: None,
             session_save_failures: 0,
@@ -8715,7 +8718,7 @@ mod tests {
     }
 
     #[test]
-    fn ac1_5_second_dirty_mutation_resets_debounce_deadline() {
+    fn ac1_5_second_dirty_mutation_reschedules_within_max_wait() {
         let mut app = test_app();
         app.no_session = false;
         app.state.mark_session_dirty();
@@ -8726,7 +8729,81 @@ mod tests {
         app.state.mark_session_dirty();
         app.sync_session_save_schedule();
 
-        assert!(app.session_save_deadline.expect("second deadline") > first_deadline);
+        assert!(app.session_save_deadline.expect("second deadline") >= first_deadline);
+        assert!(
+            app.session_save_deadline.expect("second deadline")
+                <= app.session_save_first_dirty_at.expect("first dirty") + SESSION_SAVE_MAX_WAIT
+        );
+    }
+
+    #[test]
+    fn session_save_starts_after_max_wait_during_continuous_dirtying() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let config_home = unique_temp_path("session-save-max-wait");
+        env.set("XDG_CONFIG_HOME", &config_home);
+        env.remove(crate::session::SESSION_ENV_VAR);
+
+        let mut app = test_app();
+        app.no_session = false;
+        app.state.workspaces = vec![Workspace::test_new("autosave")];
+        app.state.ensure_test_terminals();
+        app.session_save_first_dirty_at =
+            Some(Instant::now() - SESSION_SAVE_MAX_WAIT + Duration::from_millis(150));
+        for _ in 0..10 {
+            app.schedule_session_save();
+            app.sync_session_save_schedule();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        assert!(app.session_save_deadline.expect("save deadline") <= Instant::now());
+        app.start_background_session_save();
+        assert!(
+            app.session_save_thread.is_some(),
+            "save should start by max wait"
+        );
+        app.save_session_now();
+
+        env.remove("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(config_home);
+    }
+
+    #[test]
+    fn stale_save_completion_opens_a_fresh_max_wait_window() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let config_home = unique_temp_path("stale-session-save-max-wait");
+        env.set("XDG_CONFIG_HOME", &config_home);
+        env.remove(crate::session::SESSION_ENV_VAR);
+
+        let mut app = test_app();
+        app.no_session = false;
+        app.state.workspaces = vec![Workspace::test_new("autosave")];
+        app.state.ensure_test_terminals();
+        app.state.mark_session_dirty();
+        app.session_save_first_dirty_at =
+            Some(Instant::now() - SESSION_SAVE_MAX_WAIT - Duration::from_secs(1));
+
+        app.start_background_session_save();
+        assert!(app.session_save_thread.is_some());
+        app.state.mark_session_dirty();
+        let result = app
+            .session_save_thread
+            .take()
+            .expect("save thread")
+            .join()
+            .expect("save result");
+        assert_ne!(result.revision, app.state.session_dirty_revision);
+        app.apply_session_save_result(result);
+
+        app.session_save_deadline = None;
+        app.schedule_session_save();
+        let now = Instant::now();
+        let first_dirty_at = app.session_save_first_dirty_at.expect("fresh first dirty");
+        let deadline = app.session_save_deadline.expect("next deadline");
+        assert!(deadline > now, "deadline should not already be due");
+        assert!(deadline <= first_dirty_at + SESSION_SAVE_MAX_WAIT);
+
+        env.remove("XDG_CONFIG_HOME");
+        let _ = std::fs::remove_dir_all(config_home);
     }
 
     #[test]
