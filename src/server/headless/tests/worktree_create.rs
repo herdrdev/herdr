@@ -80,13 +80,25 @@ async fn check_focused_automatic_collision() {
         response_write_complete: None,
     });
     entered.recv_timeout(Duration::from_secs(5)).unwrap();
-    let first_path = server
+    let first_path_key = server
         .app
         .pending_api_worktree_creates
         .keys()
         .next()
         .unwrap()
         .clone();
+    // Reservation keys may use a Windows verbatim prefix that Git cannot
+    // consume. Reconstruct the checkout path from the configured directory.
+    let first_path = server
+        .app
+        .state
+        .worktree_directory
+        .join(repo.file_name().unwrap())
+        .join(first_path_key.file_name().unwrap());
+    assert_eq!(
+        crate::worktree::canonical_or_original(&first_path),
+        first_path_key
+    );
     // Occupy the candidate while discovery is blocked. The automatic request
     // must allocate another path without adopting or deleting this checkout.
     git(&[
