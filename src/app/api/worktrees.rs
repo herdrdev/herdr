@@ -924,11 +924,302 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn automatic_worktree_collision_uses_requested_source_not_retained_branch() {
+        let repo = create_committed_repo("automatic-worktree-collision-repo");
+        let worktree_root = unique_temp_path("automatic-worktree-collision-root");
+        let seed = 0x1234;
+        let retained_branch = crate::worktree::generated_branch_slug(seed);
+        run_git(&repo, &["branch", &retained_branch]);
+        std::fs::write(repo.join("README.md"), "requested source\n").unwrap();
+        run_git(
+            &repo,
+            &["commit", "--quiet", "-am", "advance requested source"],
+        );
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = worktree_root.clone();
+        let (respond_to, response_rx) = response_channel();
+        app.start_api_worktree_create_with_seed(
+            "req".into(),
+            WorktreeCreateParams {
+                workspace_id: Some(app.state.workspaces[0].id.clone()),
+                ..WorktreeCreateParams::default()
+            },
+            respond_to,
+            seed,
+        );
+        let response = loop {
+            if let Ok(response) = response_rx.try_recv() {
+                break response;
+            }
+            let event = wait_for_app_event(&mut app);
+            app.handle_internal_event(event);
+        };
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+            panic!("expected worktree_created response");
+        };
+        assert_eq!(
+            std::fs::read_to_string(Path::new(&worktree.path).join("README.md")).unwrap(),
+            "requested source\n",
+            "automatic creation must never check out a retained branch after a name collision"
+        );
+        assert_ne!(worktree.branch.as_deref(), Some(retained_branch.as_str()));
+        assert!(app.pending_api_worktree_creates.is_empty());
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(worktree_root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[tokio::test]
+    async fn automatic_worktree_from_cwd_preserves_custom_base_and_explicit_path_on_retry() {
+        let repo = create_committed_repo("auto-cwd-base-repo");
+        let root = unique_temp_path("auto-cwd-base-root");
+        let checkout = root.join("chosen-checkout");
+        let subdir = repo.join("subdir");
+        std::fs::create_dir_all(&subdir).unwrap();
+        run_git(&repo, &["branch", "requested-base"]);
+        std::fs::write(repo.join("README.md"), "newer HEAD\n").unwrap();
+        run_git(&repo, &["commit", "--quiet", "-am", "advance HEAD"]);
+        let seed = 17;
+        run_git(
+            &repo,
+            &["branch", &crate::worktree::generated_branch_slug(seed)],
+        );
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = root.join("defaults");
+        let (respond_to, response_rx) = response_channel();
+        app.start_api_worktree_create_with_seed(
+            "req".into(),
+            WorktreeCreateParams {
+                cwd: Some(subdir.display().to_string()),
+                base: Some("requested-base".into()),
+                path: Some(checkout.display().to_string()),
+                ..WorktreeCreateParams::default()
+            },
+            respond_to,
+            seed,
+        );
+        let response = finish_seeded_create(&mut app, &response_rx);
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+            panic!("expected worktree_created response");
+        };
+        assert_eq!(Path::new(&worktree.path), checkout);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
+            "test\n"
+        );
+        assert_eq!(
+            worktree.branch,
+            Some(crate::worktree::generated_branch_slug(seed + 1))
+        );
+        assert!(app.pending_api_worktree_creates.is_empty());
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    fn finish_seeded_create(
+        app: &mut App,
+        response_rx: &std::sync::mpsc::Receiver<String>,
+    ) -> String {
+        loop {
+            if let Ok(response) = response_rx.try_recv() {
+                return response;
+            }
+            let event = wait_for_app_event(app);
+            app.handle_internal_event(event);
+        }
+    }
+
+    #[tokio::test]
+    async fn automatic_worktree_concurrent_requests_reserve_distinct_paths_across_retry() {
+        let repo = create_committed_repo("auto-concurrent-repo");
+        let root = unique_temp_path("auto-concurrent-root");
+        let seed = 20;
+        run_git(
+            &repo,
+            &["branch", &crate::worktree::generated_branch_slug(seed)],
+        );
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = root.clone();
+        let mut responses = Vec::new();
+        for id in ["first", "second"] {
+            let (respond_to, response_rx) = response_channel();
+            app.start_api_worktree_create_with_seed(
+                id.into(),
+                WorktreeCreateParams {
+                    workspace_id: Some(app.state.workspaces[0].id.clone()),
+                    ..WorktreeCreateParams::default()
+                },
+                respond_to,
+                seed,
+            );
+            responses.push(response_rx);
+        }
+        assert_eq!(app.pending_api_worktree_creates.len(), 2);
+        let first = finish_seeded_create(&mut app, &responses[0]);
+        let second = finish_seeded_create(&mut app, &responses[1]);
+        let paths = [first, second].map(|response| {
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+                panic!("expected worktree_created response");
+            };
+            assert_eq!(
+                std::fs::read_to_string(Path::new(&worktree.path).join("README.md")).unwrap(),
+                "test\n"
+            );
+            worktree.path
+        });
+        assert_ne!(paths[0], paths[1]);
+        assert!(app.pending_api_worktree_creates.is_empty());
+        app.state.assert_invariants_for_test();
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[tokio::test]
+    async fn automatic_worktree_skips_a_pending_removal_without_taking_its_reservation() {
+        let repo = create_committed_repo("auto-pending-remove-repo");
+        let root = unique_temp_path("auto-pending-remove-root");
+        let seed = 25;
+        let reserved = crate::worktree::default_checkout_path(
+            &root,
+            repo.file_name().unwrap().to_str().unwrap(),
+            &crate::worktree::generated_branch_slug(seed),
+        );
+        let reserved = crate::worktree::canonical_or_original(&reserved);
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = root.clone();
+        app.pending_api_worktree_remove_paths
+            .insert(reserved.clone(), 777);
+        let (respond_to, response_rx) = response_channel();
+        app.start_api_worktree_create_with_seed(
+            "req".into(),
+            WorktreeCreateParams {
+                workspace_id: Some(app.state.workspaces[0].id.clone()),
+                ..WorktreeCreateParams::default()
+            },
+            respond_to,
+            seed,
+        );
+        let response = finish_seeded_create(&mut app, &response_rx);
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeCreated { worktree, .. } = success.result else {
+            panic!("expected worktree_created response");
+        };
+        assert_eq!(
+            worktree.branch,
+            Some(crate::worktree::generated_branch_slug(seed + 1))
+        );
+        assert_eq!(
+            app.pending_api_worktree_remove_paths.get(&reserved),
+            Some(&777)
+        );
+        assert!(app.pending_api_worktree_creates.is_empty());
+        for (_, runtime) in app.terminal_runtimes.drain() {
+            runtime.shutdown();
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_retry_exhaustion_clears_reservations_without_deleting_paths() {
+        let repo = create_committed_repo("auto-exhaustion-repo");
+        let root = unique_temp_path("auto-exhaustion-root");
+        let seed = 30;
+        let repo_name = repo.file_name().unwrap().to_str().unwrap();
+        for offset in 0..crate::worktree::WorktreeCreation::MAX_ATTEMPTS {
+            let branch = crate::worktree::generated_branch_slug(seed + offset as u64);
+            let path = crate::worktree::default_checkout_path(&root, repo_name, &branch);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(path.join("sentinel"), "keep").unwrap();
+        }
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = root.clone();
+        let (respond_to, response_rx) = response_channel();
+        app.start_api_worktree_create_with_seed(
+            "req".into(),
+            WorktreeCreateParams {
+                workspace_id: Some(app.state.workspaces[0].id.clone()),
+                ..WorktreeCreateParams::default()
+            },
+            respond_to,
+            seed,
+        );
+        let response = finish_seeded_create(&mut app, &response_rx);
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "worktree_create_failed");
+        assert!(error.error.message.contains("64 attempts"));
+        assert!(app.pending_api_worktree_creates.is_empty());
+        assert_eq!(app.state.workspaces.len(), 1);
+        for offset in 0..crate::worktree::WorktreeCreation::MAX_ATTEMPTS {
+            let branch = crate::worktree::generated_branch_slug(seed + offset as u64);
+            let path = crate::worktree::default_checkout_path(&root, repo_name, &branch);
+            assert_eq!(
+                std::fs::read_to_string(path.join("sentinel")).unwrap(),
+                "keep"
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_retry_spawn_failure_clears_the_new_reservation() {
+        let repo = create_committed_repo("auto-retry-spawn-repo");
+        let root = unique_temp_path("auto-retry-spawn-root");
+        let seed = 40;
+        run_git(
+            &repo,
+            &["branch", &crate::worktree::generated_branch_slug(seed)],
+        );
+        let mut app = app_with_parent(&repo);
+        app.state.worktree_directory = root.clone();
+        let (respond_to, response_rx) = response_channel();
+        app.start_api_worktree_create_with_seed(
+            "req".into(),
+            WorktreeCreateParams {
+                workspace_id: Some(app.state.workspaces[0].id.clone()),
+                ..WorktreeCreateParams::default()
+            },
+            respond_to,
+            seed,
+        );
+        let collision = wait_for_app_event(&mut app);
+        assert!(matches!(&collision, AppEvent::WorktreeAddFinished(result)
+            if matches!(result.result, Err(crate::worktree::WorktreeCreateError::Collision(_)))));
+        crate::thread_spawn::test_hook::fail_next_spawns(1);
+        app.handle_internal_event(collision);
+        let response = finish_seeded_create(&mut app, &response_rx);
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "worktree_create_failed");
+        assert!(error.error.message.contains("could not start"));
+        assert!(app.pending_api_worktree_creates.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[tokio::test]
     async fn deferred_api_worktree_create_checks_out_existing_branch() {
         let repo = create_committed_repo("api-worktree-create-existing-branch-repo");
         let worktree_root = unique_temp_path("api-worktree-create-existing-branch-root");
         let branch = "foo";
         run_git(&repo, &["branch", branch]);
+        std::fs::write(
+            repo.join("README.md"),
+            "new source must not replace explicit branch\n",
+        )
+        .unwrap();
+        run_git(&repo, &["commit", "--quiet", "-am", "advance source"]);
         let mut app = test_app();
         let mut parent = Workspace::test_new("main");
         parent.identity_cwd = repo.clone();
@@ -959,6 +1250,10 @@ mod tests {
         assert_eq!(worktree.branch.as_deref(), Some(branch));
         let checkout = Path::new(&worktree.path);
         assert!(checkout.join("README.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("README.md")).unwrap(),
+            "test\n"
+        );
         let branch_name = std::process::Command::new("git")
             .arg("-C")
             .arg(checkout)
@@ -1140,6 +1435,15 @@ mod tests {
             api_request: Some(ApiWorktreeAddRequest {
                 id: "req".into(),
                 operation_id: 9,
+                creation: crate::worktree::WorktreeCreation::new(
+                    Some("existing".into()),
+                    "HEAD".into(),
+                    Some(checkout.clone()),
+                    PathBuf::new(),
+                    "",
+                    false,
+                    0,
+                ),
                 checkout_key,
                 source_workspace_id: Some(source_id),
                 source_existing_membership: None,

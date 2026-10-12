@@ -27,8 +27,186 @@ pub(crate) fn generated_branch_slug(seed: u64) -> String {
     ];
     let adjective = adjectives[(seed as usize) % adjectives.len()];
     let noun = nouns[((seed / adjectives.len() as u64) as usize) % nouns.len()];
-    let suffix = seed & 0xffff;
-    format!("{DEFAULT_WORKTREE_PREFIX}/{adjective}-{noun}-{suffix:04x}")
+    format!("{DEFAULT_WORKTREE_PREFIX}/{adjective}-{noun}-{seed:016x}")
+}
+
+/// One server-owned create operation. Automatic names must never opt in to
+/// existing-branch checkout, even when another process wins the same name.
+#[derive(Debug)]
+pub(crate) struct WorktreeCreation {
+    pub(crate) branch: String,
+    pub(crate) path: PathBuf,
+    base: String,
+    trust_repository: bool,
+    automatic: Option<AutomaticBranch>,
+}
+
+#[derive(Debug)]
+struct AutomaticBranch {
+    seed: u64,
+    remaining: usize,
+    checkout_directory: Option<PathBuf>,
+    base_resolved: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum WorktreeCreateError {
+    Collision(String),
+    Failed(String),
+}
+
+impl WorktreeCreateError {
+    pub(crate) fn message(self) -> String {
+        match self {
+            Self::Collision(message) | Self::Failed(message) => message,
+        }
+    }
+}
+
+impl From<String> for WorktreeCreateError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
+impl WorktreeCreation {
+    pub(crate) const MAX_ATTEMPTS: usize = 64;
+
+    pub(crate) fn new(
+        branch: Option<String>,
+        base: String,
+        path: Option<PathBuf>,
+        checkout_root: PathBuf,
+        repo_name: &str,
+        trust_repository: bool,
+        seed: u64,
+    ) -> Self {
+        let automatic = branch.is_none().then(|| AutomaticBranch {
+            seed,
+            remaining: Self::MAX_ATTEMPTS - 1,
+            checkout_directory: path.is_none().then(|| checkout_root.join(repo_name)),
+            base_resolved: false,
+        });
+        let branch = branch.unwrap_or_else(|| generated_branch_slug(seed));
+        let path =
+            path.unwrap_or_else(|| default_checkout_path(&checkout_root, repo_name, &branch));
+        Self {
+            branch,
+            path,
+            base,
+            trust_repository,
+            automatic,
+        }
+    }
+
+    pub(crate) fn has_automatic_path(&self) -> bool {
+        self.automatic
+            .as_ref()
+            .is_some_and(|auto| auto.checkout_directory.is_some())
+    }
+
+    pub(crate) fn next_candidate(&mut self) -> bool {
+        let Some(auto) = self.automatic.as_mut() else {
+            return false;
+        };
+        if auto.remaining == 0 {
+            return false;
+        }
+        auto.remaining -= 1;
+        auto.seed = auto.seed.wrapping_add(1);
+        self.branch = generated_branch_slug(auto.seed);
+        if let Some(directory) = &auto.checkout_directory {
+            self.path = directory.join(branch_to_path_slug(&self.branch));
+        }
+        true
+    }
+
+    pub(crate) fn run(&mut self, source: &Path) -> Result<(), WorktreeCreateError> {
+        let Some(automatic) = self.automatic.as_mut() else {
+            if let Some(parent) = self.path.parent() {
+                std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+            }
+            return run_worktree_add_command(
+                source,
+                &self.path,
+                &self.branch,
+                &self.base,
+                self.trust_repository,
+            )
+            .map_err(Into::into);
+        };
+
+        // Resolve once, before any attempt. A retry must not follow a moving HEAD.
+        if !automatic.base_resolved {
+            let output = repository_git_command(source, self.trust_repository)
+                .args(["rev-parse", "--verify", "--end-of-options"])
+                .arg(format!("{}^{{commit}}", self.base))
+                .output()
+                .map_err(|err| err.to_string())?;
+            if !output.status.success() {
+                return Err(WorktreeCreateError::Failed(format!(
+                    "could not resolve worktree base '{}': {}",
+                    self.base,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )));
+            }
+            self.base = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            automatic.base_resolved = true;
+        }
+
+        // Check before add: Git can create a branch before rejecting the path.
+        // Include empty directories, dangling symlinks and stale registrations.
+        let occupied = match std::fs::symlink_metadata(&self.path) {
+            Ok(_) => true,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+            Err(err) => return Err(WorktreeCreateError::Failed(err.to_string())),
+        } || worktree_list_contains_path(source, &self.path, self.trust_repository)?;
+        if occupied {
+            let message = format!(
+                "worktree checkout '{}' already exists or is registered",
+                self.path.display()
+            );
+            return Err(if self.has_automatic_path() {
+                WorktreeCreateError::Collision(message)
+            } else {
+                WorktreeCreateError::Failed(message)
+            });
+        }
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+        }
+        let command = build_worktree_add_new_branch_command(
+            source,
+            &self.path,
+            &self.branch,
+            &self.base,
+            self.trust_repository,
+        );
+        run_worktree_command(&command).map_err(|message| {
+            // Only this definitive pre-creation failure permits another name.
+            // A path/checkout failure may already have created our branch: do
+            // not retry or delete anything on that ambiguous outcome. Hooks may
+            // also print this diagnostic after creation, so require the checkout
+            // to remain absent and unregistered before treating it as a conflict.
+            let collision = format!("fatal: a branch named '{}' already exists", self.branch);
+            if message.lines().any(|line| line == collision)
+                && matches!(std::fs::symlink_metadata(&self.path),
+                    Err(err) if err.kind() == std::io::ErrorKind::NotFound)
+                && matches!(
+                    worktree_list_contains_path(source, &self.path, self.trust_repository),
+                    Ok(false)
+                )
+            {
+                WorktreeCreateError::Collision(message)
+            } else {
+                WorktreeCreateError::Failed(format!(
+                    "{message}; attempted branch '{}' at '{}'; inspect these before retrying",
+                    self.branch,
+                    self.path.display(),
+                ))
+            }
+        })
+    }
 }
 
 pub(crate) fn branch_to_path_slug(branch: &str) -> String {
@@ -148,7 +326,36 @@ pub(crate) fn expand_tilde_absolute_path(path: &str) -> PathBuf {
 }
 
 pub(crate) fn canonical_or_original(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    loop {
+        let candidate = if ancestor.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            ancestor
+        };
+        match std::fs::canonicalize(candidate) {
+            Ok(mut canonical) => {
+                // A missing checkout still has the identity of its resolved
+                // parent. Git records that path, including symlinks such as
+                // /tmp -> /private/tmp on macOS, before or after creation.
+                for component in missing.iter().rev() {
+                    canonical.push(component);
+                }
+                return canonical;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return path.to_path_buf(),
+        }
+        let Some(name) = ancestor.file_name() else {
+            return path.to_path_buf();
+        };
+        let Some(parent) = ancestor.parent() else {
+            return path.to_path_buf();
+        };
+        missing.push(name.to_os_string());
+        ancestor = parent;
+    }
 }
 
 fn repository_git_command(repo_root: &Path, trust_repository: bool) -> std::process::Command {
@@ -606,6 +813,281 @@ mod tests {
         repo
     }
 
+    fn automatic_creation(root: &Path, seed: u64) -> WorktreeCreation {
+        WorktreeCreation::new(
+            None,
+            "HEAD".into(),
+            None,
+            root.to_path_buf(),
+            "",
+            false,
+            seed,
+        )
+    }
+
+    fn git_output(repo: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    #[test]
+    fn automatic_worktree_collision_pins_base_and_preserves_old_branch() {
+        let repo = create_committed_repo("auto-base-pin");
+        let root = unique_temp_path("auto-base-pin-checkouts");
+        let mut creation = automatic_creation(&root, 7);
+        let old = git_output(&repo, &["rev-parse", "HEAD"]);
+        run_git(&repo, &["branch", &creation.branch]);
+        let retained_branch = creation.branch.clone();
+        std::fs::write(repo.join("README.md"), "requested\n").unwrap();
+        run_git(&repo, &["commit", "--quiet", "-am", "requested source"]);
+        let expected = git_output(&repo, &["rev-parse", "HEAD"]);
+        assert!(matches!(
+            creation.run(&repo),
+            Err(WorktreeCreateError::Collision(_))
+        ));
+        std::fs::write(repo.join("README.md"), "moved again\n").unwrap();
+        run_git(
+            &repo,
+            &["commit", "--quiet", "-am", "source moved during retry"],
+        );
+        assert!(creation.next_candidate());
+        creation.run(&repo).unwrap();
+        assert_eq!(git_output(&creation.path, &["rev-parse", "HEAD"]), expected);
+        assert_eq!(git_output(&repo, &["rev-parse", &retained_branch]), old);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_skips_occupied_and_registered_paths_before_creating_branch() {
+        for registered in [false, true] {
+            let repo = create_committed_repo("auto-occupied");
+            let root = unique_temp_path("auto-occupied-checkouts");
+            let mut creation = automatic_creation(&root, 10);
+            if registered {
+                run_git(
+                    &repo,
+                    &[
+                        "worktree",
+                        "add",
+                        "--detach",
+                        creation.path.to_str().unwrap(),
+                        "HEAD",
+                    ],
+                );
+                std::fs::remove_dir_all(&creation.path).unwrap();
+            } else {
+                std::fs::create_dir_all(&creation.path).unwrap();
+            }
+            assert!(matches!(
+                creation.run(&repo),
+                Err(WorktreeCreateError::Collision(_))
+            ));
+            assert!(!local_branch_exists(&repo, &creation.branch, false).unwrap());
+            let original = creation.path.clone();
+            assert!(creation.next_candidate());
+            creation.run(&repo).unwrap();
+            assert_ne!(creation.path, original);
+            let _ = std::fs::remove_dir_all(root);
+            let _ = std::fs::remove_dir_all(repo);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_worktree_skips_registered_missing_checkout_under_symlink_parent() {
+        let repo = create_committed_repo("auto-symlink-registration");
+        let root = unique_temp_path("auto-symlink-checkouts");
+        let actual = root.join("actual");
+        let alias = root.join("alias");
+        std::fs::create_dir_all(&actual).unwrap();
+        std::os::unix::fs::symlink(&actual, &alias).unwrap();
+        let mut creation = automatic_creation(&alias, 15);
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--detach",
+                creation.path.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        std::fs::remove_dir_all(&creation.path).unwrap();
+        let skipped_branch = creation.branch.clone();
+        assert!(matches!(
+            creation.run(&repo),
+            Err(WorktreeCreateError::Collision(_))
+        ));
+        assert!(!local_branch_exists(&repo, &skipped_branch, false).unwrap());
+        assert!(creation.next_candidate());
+        creation.run(&repo).unwrap();
+        assert_eq!(
+            git_output(&creation.path, &["rev-parse", "HEAD"]),
+            git_output(&repo, &["rev-parse", "HEAD"])
+        );
+        assert!(!local_branch_exists(&repo, &skipped_branch, false).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_explicit_path_is_not_replaced_on_collision() {
+        let repo = create_committed_repo("auto-explicit-path");
+        let path = unique_temp_path("auto-explicit-path-checkout");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("sentinel"), "keep").unwrap();
+        let mut creation = WorktreeCreation::new(
+            None,
+            "HEAD".into(),
+            Some(path.clone()),
+            PathBuf::new(),
+            "",
+            false,
+            42,
+        );
+        assert!(matches!(
+            creation.run(&repo),
+            Err(WorktreeCreateError::Failed(_))
+        ));
+        assert_eq!(creation.path, path);
+        assert_eq!(
+            std::fs::read_to_string(path.join("sentinel")).unwrap(),
+            "keep"
+        );
+        assert!(!local_branch_exists(&repo, &creation.branch, false).unwrap());
+        let _ = std::fs::remove_dir_all(path);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_invalid_base_is_terminal_and_creates_nothing() {
+        let repo = create_committed_repo("auto-invalid-base");
+        let root = unique_temp_path("auto-invalid-base-checkouts");
+        let mut creation = automatic_creation(&root, 11);
+        creation.base = "missing-ref".into();
+        assert!(matches!(
+            creation.run(&repo),
+            Err(WorktreeCreateError::Failed(_))
+        ));
+        assert!(!root.exists());
+        assert!(!local_branch_exists(&repo, &creation.branch, false).unwrap());
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_branch_race_retries_without_reusing_competing_branch() {
+        let repo = create_committed_repo("auto-branch-race");
+        let root = unique_temp_path("auto-branch-race-checkouts");
+        let creation = automatic_creation(&root, 12);
+        let competing_branch = creation.branch.clone();
+        let (entered, release) = test_list_gate::block(&repo);
+        let worker_repo = repo.clone();
+        let worker = std::thread::spawn(move || {
+            let mut creation = creation;
+            let result = creation.run(&worker_repo);
+            (creation, result)
+        });
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        run_git(&repo, &["branch", &competing_branch]);
+        release.send(()).unwrap();
+        let (mut creation, result) = worker.join().unwrap();
+        assert!(matches!(result, Err(WorktreeCreateError::Collision(_))));
+        assert!(creation.next_candidate());
+        creation.run(&repo).unwrap();
+        assert_ne!(creation.branch, competing_branch);
+        assert!(local_branch_exists(&repo, &competing_branch, false).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_path_race_is_terminal_and_preserves_partial_state() {
+        let repo = create_committed_repo("auto-path-race");
+        let root = unique_temp_path("auto-path-race-checkouts");
+        let creation = automatic_creation(&root, 13);
+        let path = creation.path.clone();
+        let (entered, release) = test_list_gate::block(&repo);
+        let worker_repo = repo.clone();
+        let worker = std::thread::spawn(move || {
+            let mut creation = creation;
+            let result = creation.run(&worker_repo);
+            (creation, result)
+        });
+        entered
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("sentinel"), "another actor").unwrap();
+        release.send(()).unwrap();
+        let (creation, result) = worker.join().unwrap();
+        let Err(WorktreeCreateError::Failed(message)) = result else {
+            panic!("post-add path race must not be retried");
+        };
+        assert!(message.contains(&creation.branch));
+        assert!(message.contains(path.to_str().unwrap()));
+        assert!(local_branch_exists(&repo, &creation.branch, false).unwrap());
+        assert_eq!(
+            std::fs::read_to_string(path.join("sentinel")).unwrap(),
+            "another actor"
+        );
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn automatic_worktree_hook_collision_message_after_creation_is_terminal() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = create_committed_repo("auto-hook-failure");
+        let root = unique_temp_path("auto-hook-failure-checkouts");
+        let mut creation = automatic_creation(&root, 14);
+        let hook = repo.join(".git/hooks/post-checkout");
+        std::fs::write(
+            &hook,
+            format!(
+                "#!/bin/sh\nprintf \"fatal: a branch named '{}' already exists\\n\" >&2\nexit 1\n",
+                creation.branch,
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let Err(WorktreeCreateError::Failed(message)) = creation.run(&repo) else {
+            panic!("a post-checkout hook failure must not be retried as a name collision");
+        };
+        assert!(message.contains(&creation.branch));
+        assert!(creation.path.join(".git").is_file());
+        assert!(local_branch_exists(&repo, &creation.branch, false).unwrap());
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(repo);
+    }
+
+    #[test]
+    fn automatic_worktree_candidate_budget_is_bounded_and_uses_high_seed_bits() {
+        let mut creation = automatic_creation(Path::new("/checkouts"), u64::MAX);
+        let mut names = std::collections::HashSet::from([creation.branch.clone()]);
+        for _ in 1..WorktreeCreation::MAX_ATTEMPTS {
+            assert!(creation.next_candidate());
+            assert!(names.insert(creation.branch.clone()));
+        }
+        assert!(!creation.next_candidate());
+        assert_eq!(names.len(), WorktreeCreation::MAX_ATTEMPTS);
+        assert_ne!(generated_branch_slug(0), generated_branch_slug(1 << 16));
+    }
+
     #[test]
     fn trusted_repository_git_args_are_request_scoped() {
         assert_eq!(
@@ -620,8 +1102,14 @@ mod tests {
 
     #[test]
     fn generated_branch_slug_is_worktree_namespaced_and_stable() {
-        assert_eq!(generated_branch_slug(0), "worktree/brave-river-0000");
-        assert_eq!(generated_branch_slug(9), "worktree/calm-cloud-0009");
+        assert_eq!(
+            generated_branch_slug(0),
+            "worktree/brave-river-0000000000000000"
+        );
+        assert_eq!(
+            generated_branch_slug(9),
+            "worktree/calm-cloud-0000000000000009"
+        );
     }
 
     #[test]

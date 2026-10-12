@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::api::schema::{
@@ -103,18 +102,22 @@ impl App {
         params: WorktreeCreateParams,
         respond_to: std::sync::mpsc::Sender<String>,
     ) {
-        let branch = params
-            .branch
-            .unwrap_or_else(|| {
-                let seed = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|duration| duration.as_micros().min(u128::from(u64::MAX)) as u64)
-                    .unwrap_or(0);
-                crate::worktree::generated_branch_slug(seed)
-            })
-            .trim()
-            .to_string();
-        if branch.is_empty() {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_micros().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0);
+        self.start_api_worktree_create_with_seed(id, params, respond_to, seed);
+    }
+
+    pub(super) fn start_api_worktree_create_with_seed(
+        &mut self,
+        id: String,
+        params: WorktreeCreateParams,
+        respond_to: std::sync::mpsc::Sender<String>,
+        seed: u64,
+    ) {
+        let branch = params.branch.map(|branch| branch.trim().to_string());
+        if branch.as_ref().is_some_and(|branch| branch.is_empty()) {
             Self::send_api_response(
                 respond_to,
                 encode_error(id, "invalid_request", "branch is required"),
@@ -129,43 +132,27 @@ impl App {
                 return;
             }
         };
-        let checkout_path = match params.path {
+        let path = match params.path {
             Some(path) => match absolute_user_path(&path) {
-                Ok(path) => path,
+                Ok(path) => Some(path),
                 Err(err) => {
                     Self::send_api_response(respond_to, encode_error(id, err.code, err.message));
                     return;
                 }
             },
-            None => crate::worktree::default_checkout_path(
-                &self.state.worktree_directory,
-                &source.repo_name,
-                &branch,
-            ),
+            None => None,
         };
-        let checkout_key = crate::worktree::canonical_or_original(&checkout_path);
-        if self
-            .pending_api_worktree_creates
-            .contains_key(&checkout_key)
-            || self
-                .pending_api_worktree_remove_paths
-                .contains_key(&checkout_key)
-        {
-            Self::send_api_response(
-                respond_to,
-                encode_error(
-                    id,
-                    "worktree_operation_in_progress",
-                    "worktree operation is already in progress for this checkout",
-                ),
-            );
-            return;
-        }
+        let creation = crate::worktree::WorktreeCreation::new(
+            branch,
+            base,
+            path,
+            self.state.worktree_directory.clone(),
+            &source.repo_name,
+            params.trust_repository,
+            seed,
+        );
+        let checkout_key = crate::worktree::canonical_or_original(&creation.path);
         let operation_id = self.next_api_worktree_operation_id();
-        self.pending_api_worktree_creates
-            .insert(checkout_key.clone(), operation_id);
-
-        let parent_dir = checkout_path.parent().map(Path::to_path_buf);
         let source_workspace_id = source
             .workspace_idx
             .and_then(|idx| self.state.workspaces.get(idx).map(|ws| ws.id.clone()));
@@ -179,6 +166,7 @@ impl App {
         let api_request = ApiWorktreeAddRequest {
             id,
             operation_id,
+            creation,
             checkout_key,
             source_workspace_id,
             source_existing_membership,
@@ -190,36 +178,53 @@ impl App {
             focus: params.focus,
             respond_to,
         };
-        let source_checkout_path = api_request.source_checkout_path.clone();
+        self.start_api_worktree_create_attempt(api_request);
+    }
+
+    fn start_api_worktree_create_attempt(&mut self, mut api: ApiWorktreeAddRequest) {
+        loop {
+            api.checkout_key = crate::worktree::canonical_or_original(&api.creation.path);
+            if !self
+                .pending_api_worktree_creates
+                .contains_key(&api.checkout_key)
+                && !self
+                    .pending_api_worktree_remove_paths
+                    .contains_key(&api.checkout_key)
+            {
+                break;
+            }
+            if api.creation.has_automatic_path() && api.creation.next_candidate() {
+                continue;
+            }
+            Self::send_api_response(
+                api.respond_to,
+                encode_error(
+                    api.id,
+                    "worktree_operation_in_progress",
+                    "worktree operation is already in progress for this checkout",
+                ),
+            );
+            return;
+        }
+        self.pending_api_worktree_creates
+            .insert(api.checkout_key.clone(), api.operation_id);
         let event_tx = self.event_tx.clone();
         let finished = crate::events::WorktreeAddResult {
-            path: checkout_path,
-            api_request: Some(api_request),
+            path: api.creation.path.clone(),
+            api_request: Some(api),
             result: Ok(()),
         };
         let spawned = crate::thread_spawn::spawn_named_with(
             "herdr-worktree-add",
             finished,
             move |mut finished| {
-                finished.result = if let Some(parent_dir) = parent_dir {
-                    std::fs::create_dir_all(&parent_dir).map_err(|err| err.to_string())
-                } else {
-                    Ok(())
-                }
-                .and_then(|()| {
-                    crate::worktree::run_worktree_add_command(
-                        &source_checkout_path,
-                        &finished.path,
-                        &branch,
-                        &base,
-                        params.trust_repository,
-                    )
-                });
+                let api = finished.api_request.as_mut().expect("API create request");
+                finished.result = api.creation.run(&api.source_checkout_path);
                 let _ = event_tx.blocking_send(AppEvent::WorktreeAddFinished(Box::new(finished)));
             },
         );
         if let Err((mut finished, err)) = spawned {
-            finished.result = Err(format!("could not start worktree creation: {err}"));
+            finished.result = Err(format!("could not start worktree creation: {err}").into());
             self.queue_worktree_spawn_failure(AppEvent::WorktreeAddFinished(Box::new(finished)));
         }
     }
@@ -407,7 +412,7 @@ impl App {
         &mut self,
         mut result: crate::events::WorktreeAddResult,
     ) {
-        let Some(api) = result.api_request.take() else {
+        let Some(mut api) = result.api_request.take() else {
             return;
         };
         let checkout_key = api.checkout_key.clone();
@@ -429,10 +434,29 @@ impl App {
         self.pending_api_worktree_creates.remove(&checkout_key);
 
         if let Err(err) = result.result {
-            Self::send_api_response(
-                api.respond_to,
-                encode_error(api.id, "worktree_create_failed", err),
-            );
+            if matches!(err, crate::worktree::WorktreeCreateError::Collision(_)) {
+                if api.creation.next_candidate() {
+                    self.start_api_worktree_create_attempt(api);
+                    return;
+                }
+                Self::send_api_response(
+                    api.respond_to,
+                    encode_error(
+                        api.id,
+                        "worktree_create_failed",
+                        format!(
+                            "could not allocate an automatic worktree after {} attempts: {}",
+                            crate::worktree::WorktreeCreation::MAX_ATTEMPTS,
+                            err.message()
+                        ),
+                    ),
+                );
+            } else {
+                Self::send_api_response(
+                    api.respond_to,
+                    encode_error(api.id, "worktree_create_failed", err.message()),
+                );
+            }
             return;
         }
 
@@ -464,7 +488,10 @@ impl App {
                             encode_error(
                                 api.id,
                                 "worktree_open_failed",
-                                format!("created worktree but failed to open workspace: {err}"),
+                                format!(
+                                    "created worktree at '{}' but failed to open workspace: {err}",
+                                    result.path.display()
+                                ),
                             ),
                         );
                         return;

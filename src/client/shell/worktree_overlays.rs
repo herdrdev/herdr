@@ -34,6 +34,16 @@ pub(super) fn render_worktree_create_overlay(
         &create.branch,
         Style::default().fg(p.text).bg(p.surface0),
     );
+    if create.branch.is_empty() {
+        put_text(
+            b,
+            input.x + 1,
+            input.y,
+            input.width.saturating_sub(1),
+            "Automatic (leave blank)",
+            Style::default().fg(p.overlay0).bg(p.surface0),
+        );
+    }
     put_text(
         b,
         inner.x,
