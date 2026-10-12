@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 """Codex `notify` handler -> herdr turn-end status.
 
 Codex invokes the notify program with a single JSON argument. For a finished
@@ -185,7 +185,10 @@ def main() -> int:
             external_wait=block.external_wait,
             parse_status=block.parse_status,
             workers_unknown=block.workers_unknown,
-            settle_ready=settle_ready(text),
+            state=block.herdr_state,
+            settle_ready=(block.completion == "complete" if block.source == "record" else settle_ready(text)),
+            closing_source=block.source,
+            parse_message=(block.message() if block.record_errors else None),
             session_id=session_id or None,
             title=title_from(payload, pane_id),
             seq=seq,

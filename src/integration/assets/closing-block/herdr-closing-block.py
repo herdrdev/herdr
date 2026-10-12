@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 """Claude Code `Stop` hook -> herdr turn-end status.
 
 Installed *beside* herdr's managed `herdr-agent-state.sh`, which herdr overwrites
@@ -18,6 +18,7 @@ Fails silent and non-blocking in every path.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 import time
@@ -116,6 +117,30 @@ def stop_turn(payload: dict) -> tuple[str | None, str | None]:
     return last_assistant_turn(payload.get("transcript_path") or "")
 
 
+def lint_result_blocks(session_id: str | None, last_turn_at: str | None, invoked_at: str) -> bool:
+    """Whether cap-lint has a newer invalid result for this assistant turn."""
+    if not session_id:
+        return False
+    root = os.environ.get("HERDR_CLOSING_BLOCK_LINT_RESULT_DIR")
+    if root is None:
+        configured = os.environ.get("CAP_LINT_STATE_DIR")
+        if configured:
+            marker_dir = configured
+        else:
+            state = os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state")
+            marker_dir = os.path.join(state, "scalable-agent-fleet", "cap-lint")
+        root = os.path.join(os.path.dirname(marker_dir), os.path.basename(marker_dir) + "-closing")
+    path = os.path.join(root, hashlib.sha256(session_id.encode()).hexdigest() + ".json")
+    try:
+        stat = os.stat(path)
+        with open(path, encoding="utf-8") as handle:
+            result = json.load(handle)
+        turn_time = datetime.fromisoformat((last_turn_at or invoked_at).replace("Z", "+00:00")).timestamp()
+        return stat.st_mtime > turn_time and isinstance(result, dict) and result.get("valid") is False
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def main() -> int:
     if os.environ.get("HERDR_ENV") != "1" or not os.environ.get("HERDR_PANE_ID"):
         return 0
@@ -134,7 +159,17 @@ def main() -> int:
     text, last_turn_at = stop_turn(payload)
     if text is None:
         return 0
-    last_turn_at = last_turn_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    invocation_time = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if last_turn_at is None:
+        _transcript_text, _fresh, transcript_timestamp = _scan_turn(
+            _read_rows(payload.get("transcript_path") or "")
+        )
+        last_turn_at = transcript_timestamp
+    last_turn_at = last_turn_at or invocation_time
+    if lint_result_blocks(payload.get("session_id"), last_turn_at, invocation_time):
+        if os.environ.get("HERDR_CLOSING_BLOCK_DEBUG"):
+            print("closing-block: skipped report after newer invalid cap-lint result", file=sys.stderr)
+        return 0
     # A short reply without task evidence still emits a sequenced report, but
     # marks that evidence missing so the runtime can preserve unresolved state.
     block = parse(text)
@@ -153,7 +188,10 @@ def main() -> int:
         external_wait=block.external_wait,
         parse_status=block.parse_status,
         workers_unknown=block.workers_unknown,
-        settle_ready=settle_ready(text),
+        state=block.herdr_state,
+        settle_ready=(block.completion == "complete" if block.source == "record" else settle_ready(text)),
+        closing_source=block.source,
+        parse_message=(block.message() if block.record_errors else None),
         session_id=payload.get("session_id"),
         session_path=payload.get("transcript_path"),
         seq=seq,

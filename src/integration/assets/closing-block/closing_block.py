@@ -13,7 +13,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
+try:
+    from closing_block_record import extract as extract_record, validate as validate_record
+except ImportError:  # embedded standalone (herdr src/turns.rs include_str!): legacy prose only
+    def extract_record(text):  # type: ignore[misc]
+        return None, text
+
+    def validate_record(record):  # type: ignore[misc]
+        return ["closing_block_record unavailable"]
 HUMAN_INPUT_LABELS = ("Gate", "Answer", "Verify", "Approve", "Decide")
 GATE_LABELS = ("Gate", "Approve")
 # Label for a human-input item whose own label word is unknown or missing.
@@ -46,7 +54,7 @@ _AGENTS_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 _DONE_RE = re.compile(
-    r"^(?:\*\*)?Done here\.(?:\*\*)?[ \t]*\r?$", re.MULTILINE | re.IGNORECASE
+    r"^(?:\*\*)?Done here\.?(?:\*\*)?[ \t]*\r?$", re.MULTILINE | re.IGNORECASE
 )
 _NOW_RE = re.compile(
     r"^(?:\*\*)?Now:(?:\*\*)?[ \t]*(?P<rest>.*?)(?:\*\*)?[ \t]*\r?$",
@@ -189,6 +197,8 @@ class Item:
     text: str
     metadata: dict[str, Any] | None = None
     blocking: bool = False
+    default: str | None = None
+    default_at: str | None = None
 
     def wire(self) -> dict[str, Any]:
         metadata = _metadata(self.text)
@@ -200,8 +210,8 @@ class Item:
             "text": self.text,
             "blocking": self.blocking,
             **metadata,
-            "default": None,
-            "default_at": None,
+            "default": self.default,
+            "default_at": self.default_at,
         }
 
 
@@ -211,6 +221,9 @@ class Decision:
     text: str
     recommendation: str
     decided_at: str | None = None
+    action: str | None = None
+    revert: str | None = None
+    reversible: bool = True
 
     def wire(self) -> dict[str, Any]:
         decided_at = self.decided_at
@@ -220,8 +233,10 @@ class Decision:
             "n": self.index,
             "text": self.text,
             "recommendation": self.recommendation,
-            "reversible": True,
+            "reversible": self.reversible,
             "decided_at": decided_at,
+            **({"action": self.action} if self.action is not None else {}),
+            **({"revert": self.revert} if self.revert is not None else {}),
         }
 
 
@@ -255,6 +270,10 @@ class ClosingBlock:
     discarded_items: int = 0
     # Set when items were recovered without a recognised heading.
     fallback: bool = False
+    source: str = "legacy"
+    record_errors: list[str] = field(default_factory=list)
+    record_state: str | None = None
+    record_completion: str | None = None
 
     @property
     def gates(self) -> list[Item]:
@@ -284,6 +303,10 @@ class ClosingBlock:
 
     @property
     def parse_status(self) -> str:
+        if self.record_errors:
+            return "malformed"
+        if self.source == "record":
+            return "ok"
         if not self.present:
             return "missing"
         if self.fallback:
@@ -307,6 +330,8 @@ class ClosingBlock:
 
     @property
     def completion(self) -> str:
+        if self.source == "record" and not self.record_errors:
+            return self.record_completion or "incomplete"
         if self.parse_status == "missing":
             return "missing"
         if (
@@ -331,6 +356,8 @@ class ClosingBlock:
 
     @property
     def herdr_state(self) -> str:
+        if self.source == "record" and self.record_state:
+            return self.record_state
         if (
             self.blocking > 0
             or self.waiting_on_you
@@ -342,6 +369,8 @@ class ClosingBlock:
         return "idle"
 
     def message(self) -> str | None:
+        if self.record_errors:
+            return "; ".join(self.record_errors)
         if self.blocking > 0:
             pending = [
                 item
@@ -679,6 +708,8 @@ def _now_entries(rest: str) -> tuple[list[str], list[str]]:
             # External waits use the `wait — <event>` form; other prose is a
             # worker, so the parser never guesses from free text.
             continue
+        elif re.match(r"^done here\.?$", entry, re.I):
+            continue
         else:
             streams.append(entry)
     return streams, waits
@@ -730,6 +761,46 @@ def _headerless_fallback(
 
 def parse(text: str) -> ClosingBlock:
     """Parse the last closing block out of a full assistant message."""
+    record, body = extract_record(text)
+    if record is not None:
+        errors = validate_record(record)
+        if not errors:
+            derived_state = "blocked" if record["items"] else (
+                "working" if record["workers"] or record["wait"] is not None or record["now"]["kind"] in {"worker", "wait"}
+                else "idle" if record["now"]["kind"] in {"done_here", "stopped"}
+                else "unknown"
+            )
+            block = ClosingBlock(present=True, source="record", record_state=derived_state)
+            block.record_completion = "complete" if (
+                record["now"]["kind"] == "done_here" and not record["items"]
+                and not record["workers"] and record["wait"] is None
+            ) else "incomplete"
+            for item in record["items"]:
+                refs = item.get("refs") or {}
+                options = item.get("options") or []
+                recommended = [option["letter"] for option in options if option.get("recommended") is True]
+                block.items.append(Item(
+                    item["n"], item["kind"], item["text"],
+                    metadata={"pr": (refs.get("pr") or [{}])[0].get("number"),
+                              "ticket": (refs.get("ticket") or [None])[0],
+                              "url": (refs.get("url") or [None])[0]},
+                    blocking=True, default=recommended[0] if len(recommended) == 1 else None,
+                ))
+            block.decisions = [Decision(d["n"], d["text"], d.get("recommendation") or d["text"], d.get("decided_at"), d.get("action"), d.get("revert"), d.get("reversible", True)) for d in record["decisions"]]
+            block.agents = [worker["name"] for worker in record["workers"]]
+            block.declared_agents = len(block.agents)
+            block.workers_unknown = False
+            block.external_wait = (record["wait"] or {}).get("event")
+            return block
+        fallback = parse(body)
+        fallback.source = "record"
+        fallback.record_errors = errors
+        return fallback
+    if body != text:
+        fallback = parse(body)
+        fallback.source = "record"
+        fallback.record_errors = ["invalid JSON in closing-state trailer"]
+        return fallback
     block = ClosingBlock()
 
     if text.startswith("\ufeff"):
@@ -853,6 +924,7 @@ def parse(text: str) -> ClosingBlock:
     agents = lifecycle_agents[-1] if lifecycle_agents else None
     external_wait = lifecycle_waits[-1] if lifecycle_waits else None
     last_now = lifecycle_now[-1] if lifecycle_now else None
+    now_done = bool(last_now and re.fullmatch(r"\s*done here\.?\s*", last_now.group("rest"), re.I))
     latest_legacy_position = max(
         (marker.start() for marker in (agents, external_wait) if marker), default=-1
     )
@@ -860,7 +932,7 @@ def parse(text: str) -> ClosingBlock:
     latest_activity_position = max(
         latest_legacy_position, last_now.start() if last_now else -1
     )
-    done_is_final = bool(last_done and last_done.start() > latest_activity_position)
+    done_is_final = now_done or bool(last_done and last_done.start() > latest_activity_position)
 
     if done_is_final:
         block.declared_agents = 0

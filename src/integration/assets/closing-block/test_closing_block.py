@@ -2973,10 +2973,12 @@ class CodexNotifyHookTests(unittest.TestCase):
 class BundleInstallerTests(unittest.TestCase):
     RUNTIME_FILES = (
         "closing_block.py",
+        "closing_block_record.py",
         "herdr_status.py",
         "herdr-closing-block.py",
         "herdr-codex-notify.py",
     )
+    DATA_FILES = ("closing_block_schema.json",)
 
     @staticmethod
     def _installer_module():
@@ -3075,6 +3077,7 @@ class BundleInstallerTests(unittest.TestCase):
         self.assertEqual(len(list(config.parent.glob("config.toml.backup-*"))), backup_count)
 
     def _bundle_source(self, label):
+        import shutil
         source = self.root / f"source-{label}"
         source.mkdir()
         for name in self.RUNTIME_FILES:
@@ -3082,6 +3085,8 @@ class BundleInstallerTests(unittest.TestCase):
             (source / name).write_text(
                 f"{content}\n# installer {label}\n", encoding="utf-8"
             )
+        for name in self.DATA_FILES:
+            shutil.copy2(self.source / name, source / name)
         return source
 
     def test_install_replaces_the_five_modules_as_one_verified_bundle(self):
@@ -3090,13 +3095,13 @@ class BundleInstallerTests(unittest.TestCase):
         result = installer.install_bundle(self.source, self.target, dry_run=False)
 
         self.assertEqual(result["mode"], "installed")
-        self.assertEqual(set(result["files"]), set(self.RUNTIME_FILES))
+        self.assertEqual(set(result["files"]), set((*self.RUNTIME_FILES, *self.DATA_FILES)))
         for name in self.RUNTIME_FILES:
             self.assertEqual(
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 5)
+            self.assertEqual(result["files"][name]["version"], 6)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),
@@ -3174,6 +3179,8 @@ class BundleInstallerTests(unittest.TestCase):
         def pre_lock_install():
             self.target.mkdir(parents=True, exist_ok=True)
             for name in self.RUNTIME_FILES:
+                original_replace(legacy_source / name, self.target / name)
+            for name in self.DATA_FILES:
                 original_replace(legacy_source / name, self.target / name)
 
         def fail_after_first_replacement(source, destination):
@@ -3521,6 +3528,82 @@ class SectionWordFallbackTests(unittest.TestCase):
             "```\n1. **Decide** — x?\nReply 1a / 1b. Silence holds.\n```\n"
         )
         self.assertEqual(block.herdr_state, "idle")
+
+
+class ClosingBlockRecordTests(unittest.TestCase):
+    @staticmethod
+    def trailer(record):
+        import json
+        return "Visible prose.\n\n**Now:** waiting on you\n```closing-state\n" + json.dumps(record) + "\n```\n"
+
+    def test_record_drives_items_defaults_decisions_and_lifecycle(self):
+        record = {"v": 3, "state": "unknown", "completion": "incomplete", "items": [
+            {"n": 1, "kind": "Approve", "text": "Merge PR", "options": [
+                {"letter": "a", "text": "Merge", "recommended": True}, {"letter": "b", "text": "Wait"}],
+                "refs": {"pr": [{"repo": "org/repo", "number": 42}, {"repo": "x/y", "number": 43}], "ticket": ["AGF-27"], "url": ["https://example.test"]}},
+            {"n": 2, "kind": "Verify", "text": "Confirm result", "options": [{"letter": "a", "text": "yes"}], "default": "a"}],
+            "decisions": [{"n": 1, "text": "Kept behavior", "recommendation": "none", "reversible": True}],
+            "workers": [], "wait": None, "now": {"kind": "waiting_on_you", "text": None}}
+        block = closing_block.parse(self.trailer(record))
+        self.assertEqual(block.source, "record")
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.completion, "incomplete")
+        self.assertEqual([(i.label, i.default) for i in block.items], [("Approve", "a"), ("Verify", None)])
+        self.assertEqual(block.wire_gates()[0]["pr"], 42)
+        self.assertEqual(block.wire_gates()[0]["ticket"], "AGF-27")
+        self.assertEqual(len(block.decisions), 1)
+
+    def test_done_here_record_is_complete_and_legacy_now_form_is_not_worker(self):
+        record = {"v": 3, "state": "unknown", "completion": "incomplete", "items": [], "decisions": [], "workers": [], "wait": None, "now": {"kind": "done_here"}}
+        block = closing_block.parse(self.trailer(record))
+        self.assertEqual(block.completion, "complete")
+        self.assertEqual(block.agents, [])
+        self.assertFalse(block.workers_unknown)
+        legacy = closing_block.parse("**Needs you: nothing.**\n**Now:** Done here\n")
+        self.assertEqual(legacy.agents, [])
+        self.assertEqual(legacy.completion, "complete")
+
+    def test_invalid_record_is_malformed_and_uses_visible_prose(self):
+        import json
+        record = {"v": 2, "state": "broken", "completion": "incomplete", "items": [], "decisions": [], "workers": [], "wait": None, "now": {"kind": "done_here"}}
+        text = "**Critical action points (1 blocking)**\n1. **Approve** — Continue?\n```closing-state\n" + json.dumps(record) + "\n```\n"
+        block = closing_block.parse(text)
+        self.assertEqual(block.parse_status, "malformed")
+        self.assertTrue(block.record_errors)
+        self.assertEqual(block.blocking, 1)
+
+    def test_stop_hook_obeys_newer_invalid_cap_lint_result(self):
+        import hashlib, json, os, tempfile
+        hook = StopHookTranscriptTests._hook_module()
+        root = tempfile.mkdtemp(prefix="herdr-lint-result-")
+        session = "session-1"
+        result = os.path.join(root, hashlib.sha256(session.encode()).hexdigest() + ".json")
+        with open(result, "w", encoding="utf-8") as handle:
+            json.dump({"valid": False}, handle)
+        now = __import__("time").time()
+        os.utime(result, (now + 2, now + 2))
+        with mock.patch.dict(hook.os.environ, {"HERDR_CLOSING_BLOCK_LINT_RESULT_DIR": root}):
+            self.assertTrue(hook.lint_result_blocks(session, None, __import__("datetime").datetime.fromtimestamp(now, __import__("datetime").timezone.utc).isoformat()))
+
+    def test_stop_hook_does_not_report_when_newer_lint_result_is_invalid(self):
+        import hashlib, json, os, tempfile, time
+        import io
+        hook = StopHookTranscriptTests._hook_module()
+        root = tempfile.mkdtemp(prefix="herdr-lint-skip-")
+        session = "skip-session"
+        path = os.path.join(root, hashlib.sha256(session.encode()).hexdigest() + ".json")
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"valid": False}, handle)
+        future = time.time() + 5
+        os.utime(path, (future, future))
+        payload = {"session_id": session, "last_assistant_message": "Done here."}
+        with mock.patch.dict(hook.os.environ, {
+            "HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p-lint-skip",
+            "HERDR_CLOSING_BLOCK_LINT_RESULT_DIR": root,
+        }, clear=False), mock.patch.object(hook.sys, "stdin", io.StringIO(json.dumps(payload))), mock.patch.object(hook, "report") as report:
+            self.assertEqual(hook.main(), 0)
+        report.assert_not_called()
 
 
 if __name__ == "__main__":

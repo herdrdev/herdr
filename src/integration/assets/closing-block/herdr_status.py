@@ -30,7 +30,7 @@ from typing import Any
 
 from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
 
-# HERDR_INTEGRATION_VERSION=5
+# HERDR_INTEGRATION_VERSION=6
 VERSION = 2
 
 
@@ -80,6 +80,7 @@ def _normalize_item(
     *,
     index: int,
     label: str,
+    preserve_default: bool = False,
 ) -> dict[str, Any]:
     if isinstance(value, str):
         text = value
@@ -102,7 +103,10 @@ def _normalize_item(
     item.setdefault("pr", None)
     item.setdefault("ticket", None)
     item.setdefault("url", None)
-    item["default"] = None
+    if not preserve_default:
+        item["default"] = None
+    else:
+        item.setdefault("default", None)
     item["default_at"] = None
     return item
 
@@ -343,6 +347,8 @@ def report(
     parse_status: str = "ok",
     workers_unknown: bool = False,
     settle_ready: bool = False,
+    closing_source: str = "legacy",
+    parse_message: str | None = None,
     session_id: str | None = None,
     session_path: str | None = None,
     title: str | None = None,
@@ -354,11 +360,11 @@ def report(
 ) -> dict:
     """Push one v2 turn-end status. Never raises; returns what it did."""
     gate_objects = [
-        _normalize_item(value, index=index, label="Gate")
+        _normalize_item(value, index=index, label="Gate", preserve_default=closing_source == "record")
         for index, value in enumerate(gates or [], start=1)
     ]
     item_objects = [
-        _normalize_item(value, index=index, label="Answer")
+        _normalize_item(value, index=index, label="Answer", preserve_default=closing_source == "record")
         for index, value in enumerate(items or [], start=1)
     ]
     all_items = [*gate_objects, *item_objects]
@@ -478,7 +484,7 @@ def report(
     if state == "working" and wait and isinstance(eta_s, int) and eta_s >= 0:
         agent_params["wait"] = wait
         agent_params["eta_s"] = eta_s
-    message = message_for(blocking, agents, gate_objects, action_points)
+    message = parse_message or message_for(blocking, agents, gate_objects, action_points)
     if message:
         agent_params["message"] = message
 
@@ -486,6 +492,7 @@ def report(
     tokens = {
         "closing_completion": completion,
         "closing_parse": parse_status,
+        "closing_source": closing_source,
         "session_title": (title or "")[:120],
     }
     if dependencies_authoritative:

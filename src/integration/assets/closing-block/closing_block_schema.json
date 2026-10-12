@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://scalable.so/schemas/closing-block/v3",
+  "title": "Closing-block record v3",
+  "description": "One machine record per assistant turn. The Markdown closing block is rendered from it and never parsed into it. Carried as the final element of the message in a fenced block with info string `closing-state`, single-line JSON.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "state", "completion", "items", "decisions", "workers", "wait", "now"],
+  "properties": {
+    "v": {"const": 3}, "state": {"enum": ["idle", "working", "blocked", "unknown"]},
+    "completion": {"enum": ["complete", "incomplete"]}, "goal": {"type": ["string", "null"]},
+    "verified_when": {"type": ["string", "null"]},
+    "items": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["n", "kind", "text", "options"], "properties": {
+      "n": {"type": "integer", "minimum": 1}, "kind": {"enum": ["Approve", "Decide", "Verify", "Answer"]}, "text": {"type": "string", "minLength": 1},
+      "plain": {"type": ["string", "null"]}, "exception": {"type": ["string", "null"]}, "shadow": {"type": ["string", "null"]},
+      "options": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["letter", "text"], "properties": {"letter": {"type": "string", "pattern": "^[a-z]$"}, "text": {"type": "string", "minLength": 1}, "recommended": {"type": "boolean", "default": false}}}},
+      "refs": {"type": "object", "additionalProperties": false, "properties": {"pr": {"type": "array", "items": {"type": "object", "required": ["repo", "number"], "properties": {"repo": {"type": "string"}, "number": {"type": "integer"}, "url": {"type": "string"}}}}, "ticket": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9]+-[0-9]+$"}}, "url": {"type": "array", "items": {"type": "string"}}}},
+      "default": {"type": ["string", "null"], "pattern": "^[a-z]$"}, "default_at": {"type": ["string", "null"], "format": "date-time"}
+    }}},
+    "decisions": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["n", "text"], "properties": {"n": {"type": "integer", "minimum": 1}, "text": {"type": "string"}, "action": {"type": ["string", "null"]}, "revert": {"type": ["string", "null"]}, "recommendation": {"type": ["string", "null"]}, "reversible": {"type": "boolean", "default": true}, "decided_at": {"type": ["string", "null"]}}}},
+    "workers": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["name", "activity"], "properties": {"name": {"type": "string"}, "activity": {"type": "string"}, "run_id": {"type": ["string", "null"]}, "agent": {"type": ["string", "null"]}}}},
+    "wait": {"type": ["object", "null"], "additionalProperties": false, "required": ["event"], "properties": {"event": {"type": "string"}, "wakeup_id": {"type": ["string", "null"]}, "eta_s": {"type": ["integer", "null"]}}},
+    "now": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["worker", "wait", "stopped", "waiting_on_you", "done_here"]}, "text": {"type": ["string", "null"]}}},
+    "verified": {"type": ["object", "null"], "additionalProperties": false, "required": ["text"], "properties": {"text": {"type": "string", "minLength": 1}}}
+  }
+}

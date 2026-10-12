@@ -21,10 +21,12 @@ from pathlib import Path
 
 RUNTIME_FILES = (
     "closing_block.py",
+    "closing_block_record.py",
     "herdr_status.py",
     "herdr-closing-block.py",
     "herdr-codex-notify.py",
 )
+DATA_FILES = ("closing_block_schema.json",)
 VERSION_RE = re.compile(r"^# HERDR_INTEGRATION_VERSION=(?P<version>\d+)$", re.MULTILINE)
 
 
@@ -35,25 +37,28 @@ class BundleValidationError(ValueError):
 def bundle_manifest(source_dir: Path) -> dict[str, dict[str, str | int]]:
     manifest: dict[str, dict[str, str | int]] = {}
     versions: set[int] = set()
-    for name in RUNTIME_FILES:
+    for name in (*RUNTIME_FILES, *DATA_FILES):
         path = source_dir / name
         if not path.is_file() or path.is_symlink():
             raise BundleValidationError(f"missing regular source file: {name}")
         try:
             data = path.read_bytes()
             text = data.decode("utf-8")
-            compile(text, str(path), "exec")
-        except (OSError, UnicodeDecodeError, SyntaxError) as error:
+            if name in RUNTIME_FILES:
+                compile(text, str(path), "exec")
+            elif name == "closing_block_schema.json":
+                json.loads(text)
+        except (OSError, UnicodeDecodeError, SyntaxError, ValueError) as error:
             raise BundleValidationError(f"invalid source file {name}: {error}") from error
-        matches = VERSION_RE.findall(text)
-        if len(matches) != 1:
-            raise BundleValidationError(f"expected one integration version in {name}")
-        version = int(matches[0])
-        versions.add(version)
-        manifest[name] = {
-            "version": version,
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
+        matches = VERSION_RE.findall(text) if name in RUNTIME_FILES else []
+        if name in RUNTIME_FILES:
+            if len(matches) != 1:
+                raise BundleValidationError(f"expected one integration version in {name}")
+            version = int(matches[0])
+            versions.add(version)
+            manifest[name] = {"version": version, "sha256": hashlib.sha256(data).hexdigest()}
+        else:
+            manifest[name] = {"sha256": hashlib.sha256(data).hexdigest()}
     if len(versions) != 1:
         raise BundleValidationError("runtime module integration versions do not match")
     return manifest
@@ -129,7 +134,7 @@ def _replace_runtime_files(
     source: Path, target: Path, written: list[tuple[Path, tuple[int, int]]]
 ) -> None:
     target.mkdir(parents=True, exist_ok=True)
-    for name in RUNTIME_FILES:
+    for name in (*RUNTIME_FILES, *DATA_FILES):
         staged_file = source / name
         destination = target / name
         written.append((destination, _file_identity(staged_file)))
@@ -139,7 +144,7 @@ def _replace_runtime_files(
 def _restore_runtime_files(backup: Path, target: Path) -> None:
     restore = Path(tempfile.mkdtemp(prefix=f".{target.name}.restore-", dir=target.parent))
     try:
-        for name in RUNTIME_FILES:
+        for name in (*RUNTIME_FILES, *DATA_FILES):
             source = backup / name
             destination = target / name
             if not source.exists() and not source.is_symlink():
@@ -320,7 +325,7 @@ def install_bundle(source_dir: Path, target: Path, *, dry_run: bool) -> dict:
         try:
             if target.exists():
                 shutil.copytree(target, stage, dirs_exist_ok=True, symlinks=True)
-            for name in RUNTIME_FILES:
+            for name in (*RUNTIME_FILES, *DATA_FILES):
                 staged_file = stage / name
                 if staged_file.exists() or staged_file.is_symlink():
                     staged_file.unlink()
