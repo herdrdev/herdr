@@ -193,6 +193,7 @@ pub(crate) struct GhosttyPaneTerminal {
     pub(super) detection_text_reads: std::sync::atomic::AtomicUsize,
     key_encoder: Mutex<crate::ghostty::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
+    clipboard_cache: super::clipboard_cache::ClipboardCache,
 }
 
 pub(crate) struct GhosttyPaneCore {
@@ -1152,8 +1153,20 @@ fn text_fingerprint(text: &str) -> u64 {
 
 impl GhosttyPaneTerminal {
     pub fn new(
+        terminal: crate::ghostty::Terminal,
+        response_writer: mpsc::Sender<Bytes>,
+    ) -> std::io::Result<Self> {
+        Self::with_clipboard_cache(
+            terminal,
+            response_writer,
+            super::clipboard_cache::ClipboardCache::shared(),
+        )
+    }
+
+    fn with_clipboard_cache(
         mut terminal: crate::ghostty::Terminal,
         _response_writer: mpsc::Sender<Bytes>,
+        clipboard_cache: super::clipboard_cache::ClipboardCache,
     ) -> std::io::Result<Self> {
         let pending_pty_responses = Arc::new(Mutex::new(Vec::new()));
         let callback_responses = pending_pty_responses.clone();
@@ -1161,6 +1174,24 @@ impl GhosttyPaneTerminal {
             .set_write_pty_callback(move |bytes| {
                 if let Ok(mut responses) = callback_responses.lock() {
                     responses.push(Bytes::copy_from_slice(bytes));
+                }
+            })
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+        // Answer OSC 52 clipboard queries from the newest entry Herdr served to a
+        // pane child. The reply is encoded by libghostty-vt and reaches the child
+        // through the write_pty callback collected above.
+        let read_cache = clipboard_cache.clone();
+        terminal
+            .set_clipboard_read_callback(move |request| {
+                if request.location != crate::ghostty::ClipboardLocation::Standard
+                    || !super::clipboard_cache::serves_requested_mime(request.mimes)
+                {
+                    return crate::ghostty::ClipboardReadReply::Unsupported;
+                }
+                match read_cache.last_entry() {
+                    Some(entry) => crate::ghostty::ClipboardReadReply::Text(entry),
+                    None => crate::ghostty::ClipboardReadReply::Unsupported,
                 }
             })
             .map_err(|e| std::io::Error::other(e.to_string()))?;
@@ -1207,6 +1238,7 @@ impl GhosttyPaneTerminal {
             }),
             key_encoder: Mutex::new(key_encoder),
             pending_pty_responses,
+            clipboard_cache,
         })
     }
 
@@ -1421,6 +1453,11 @@ impl GhosttyPaneTerminal {
         );
         let terminal_bells = core.terminal.take_bell_count();
         let clipboard_writes = core.terminal.take_clipboard_writes();
+        // The newest child copy becomes the entry served to later OSC 52 queries.
+        // Restored history is drained before the live write, so it cannot land here.
+        for content in &clipboard_writes {
+            self.clipboard_cache.record(content);
+        }
         let reported_cwd = core
             .terminal
             .take_pwd_changes()
@@ -4231,12 +4268,86 @@ mod tests {
     fn seeded_history_clipboard_write_does_not_leak_into_live_output() {
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
-        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane =
+            GhosttyPaneTerminal::with_clipboard_cache(terminal, tx.clone(), Default::default())
+                .unwrap();
         pane.seed_history_ansi("\x1b]52;c;c3RhbGU=\x07");
 
         let result = pane.process_pty_bytes(PaneId::from_raw(1), 0, b"live output", &tx);
 
         assert!(result.clipboard_writes.is_empty());
+        // Restored scrollback must not become the entry served to clipboard queries.
+        let result = pane.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b]52;c;?\x07", &tx);
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]52;c;\x07")]
+        );
+    }
+
+    #[test]
+    fn osc52_query_answers_with_the_last_pane_clipboard_write() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(80, 24, 100).unwrap();
+        let pane =
+            GhosttyPaneTerminal::with_clipboard_cache(terminal, tx.clone(), Default::default())
+                .unwrap();
+        let pane_id = PaneId::from_raw(1);
+
+        // Nothing has been copied yet, so the child gets an empty clipboard rather
+        // than waiting for a reply that never arrives.
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]52;c;?\x07", &tx);
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]52;c;\x07")]
+        );
+
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]52;c;aGVsbG8=\x07", &tx);
+        assert_eq!(result.clipboard_writes, vec![b"hello".to_vec()]);
+        assert!(result.terminal_responses.is_empty());
+
+        // The reply reuses the query's terminator.
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]52;c;?\x1b\\", &tx);
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]52;c;aGVsbG8=\x1b\\")]
+        );
+
+        // Only the standard clipboard is served, matching the write side.
+        let result = pane.process_pty_bytes(pane_id, 0, b"\x1b]52;p;?\x07", &tx);
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]52;p;\x07")]
+        );
+    }
+
+    #[test]
+    fn osc52_query_shares_the_newest_write_between_panes() {
+        let (tx, _rx) = mpsc::channel(4);
+        let clipboard_cache = super::super::clipboard_cache::ClipboardCache::default();
+        let writer = GhosttyPaneTerminal::with_clipboard_cache(
+            crate::ghostty::Terminal::new(80, 24, 100).unwrap(),
+            tx.clone(),
+            clipboard_cache.clone(),
+        )
+        .unwrap();
+        let reader = GhosttyPaneTerminal::with_clipboard_cache(
+            crate::ghostty::Terminal::new(80, 24, 100).unwrap(),
+            tx.clone(),
+            clipboard_cache,
+        )
+        .unwrap();
+
+        let result =
+            writer.process_pty_bytes(PaneId::from_raw(1), 0, b"\x1b]52;c;aGVsbG8=\x07", &tx);
+        assert_eq!(result.clipboard_writes, vec![b"hello".to_vec()]);
+
+        // The attached client has one clipboard, so a query in another pane reads
+        // the newest copy from any pane.
+        let result = reader.process_pty_bytes(PaneId::from_raw(2), 0, b"\x1b]52;c;?\x07", &tx);
+        assert_eq!(
+            result.terminal_responses,
+            vec![Bytes::from_static(b"\x1b]52;c;aGVsbG8=\x07")]
+        );
     }
 
     #[test]

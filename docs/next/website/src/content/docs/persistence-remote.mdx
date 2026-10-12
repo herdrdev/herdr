@@ -92,6 +92,8 @@ herdr --remote workbox --handoff
 
 If you SSH into the server first and run `herdr` there, Herdr runs entirely on the server and cannot access your local desktop clipboard beyond normal terminal text paste.
 
+Text copy from a pane reaches your local clipboard with OSC 52, including copies emitted by programs inside the pane such as a neovim yank. Herdr also answers OSC 52 clipboard queries from the pane, so a program that reads the clipboard back, such as a neovim `"+p` paste or `xclip -selection clipboard -o`, receives the most recent copy made inside Herdr instead of waiting for a reply. Herdr keeps only that last entry and never reads your local clipboard on a pane's behalf, so text you copied outside Herdr is not available to programs inside a pane.
+
 For Linux and macOS hosts, Herdr can copy the current local binary when the platforms match. For Homebrew, mise, and Nix installs, when the platforms differ, or for Windows hosts, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
 
 For local builds or custom packages, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Use a bare Herdr executable for Linux or macOS targets and a complete `herdr-windows-x86_64.zip` package for Windows targets.

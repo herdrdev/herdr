@@ -496,6 +496,39 @@ impl CellWide {
 type WritePtyCallback = dyn FnMut(&[u8]) + Send;
 
 const MAX_CLIPBOARD_BYTES: usize = 192 * 1024;
+const CLIPBOARD_TEXT_MIME: &[u8] = b"text/plain";
+
+/// Clipboard destination a read request targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardLocation {
+    Standard,
+    Selection,
+    Primary,
+    Other,
+}
+
+/// Borrowed clipboard read request from the running program.
+#[derive(Debug)]
+pub struct ClipboardReadRequest<'a> {
+    pub location: ClipboardLocation,
+    /// MIME types the program wants, in order of preference. OSC 52 requests
+    /// carry only `text/plain`; Kitty clipboard (OSC 5522) requests can carry
+    /// arbitrary types and an empty list when asking for the targets listing.
+    pub mimes: &'a [&'a str],
+    /// The program asked for the list of available MIME types only.
+    pub list: bool,
+}
+
+/// Reply to a clipboard read request.
+#[derive(Debug, Clone)]
+pub enum ClipboardReadReply {
+    /// Serve these bytes as the text representation of the clipboard.
+    Text(Vec<u8>),
+    /// This clipboard cannot be read; the program receives an empty clipboard.
+    Unsupported,
+}
+
+type ClipboardReadCallback = dyn FnMut(&ClipboardReadRequest<'_>) -> ClipboardReadReply + Send;
 
 #[derive(Default)]
 struct TerminalCallbackState {
@@ -503,6 +536,7 @@ struct TerminalCallbackState {
     bell_count: u16,
     pwd_changes: Vec<Vec<u8>>,
     clipboard_writes: Vec<Vec<u8>>,
+    clipboard_read: Option<Box<ClipboardReadCallback>>,
     size_report: ffi::GhosttySizeReportSize,
     color_scheme: Option<ColorScheme>,
 }
@@ -657,6 +691,112 @@ unsafe fn capture_clipboard_write(
     }
     state.clipboard_writes.push(bytes.to_vec());
     ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS
+}
+
+unsafe extern "C" fn clipboard_read_trampoline(
+    _terminal: ffi::GhosttyTerminal,
+    userdata: *mut c_void,
+    read: *const ffi::GhosttyClipboardRead,
+) {
+    if read.is_null() || unsafe { (*read).size } < mem::size_of::<ffi::GhosttyClipboardRead>() {
+        return;
+    }
+    // Without a reply function the library answers the program itself with an
+    // empty clipboard, so there is nothing to serve here.
+    let Some(reply) = (unsafe { (*read).reply }) else {
+        return;
+    };
+
+    let (result, text) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // SAFETY: libghostty-vt owns the request for the synchronous callback.
+        unsafe { serve_clipboard_read(userdata, read) }
+    }))
+    .unwrap_or((clipboard_read_unsupported(), None));
+
+    // The reply borrows the served text, so `text` must outlive `content`.
+    let content = text.as_ref().map(|bytes| ffi::GhosttyClipboardContent {
+        mime: ffi::GhosttyString {
+            ptr: CLIPBOARD_TEXT_MIME.as_ptr(),
+            len: CLIPBOARD_TEXT_MIME.len(),
+        },
+        data: ffi::GhosttyString {
+            ptr: bytes.as_ptr(),
+            len: bytes.len(),
+        },
+    });
+    let response = ffi::GhosttyClipboardReadReply {
+        size: mem::size_of::<ffi::GhosttyClipboardReadReply>(),
+        result,
+        contents: match content.as_ref() {
+            Some(content) => content as *const ffi::GhosttyClipboardContent,
+            None => ptr::null(),
+        },
+        contents_len: usize::from(content.is_some()),
+        available: ptr::null(),
+        available_len: 0,
+        remember: false,
+    };
+    // SAFETY: `reply` and `response` are valid for this call and the content
+    // strings outlive it.
+    unsafe { reply(read, &response) };
+}
+
+fn clipboard_read_unsupported() -> ffi::GhosttyClipboardReadResult {
+    ffi::GhosttyClipboardReadResult_GHOSTTY_CLIPBOARD_READ_RESULT_UNSUPPORTED
+}
+
+unsafe fn serve_clipboard_read(
+    userdata: *mut c_void,
+    read: *const ffi::GhosttyClipboardRead,
+) -> (ffi::GhosttyClipboardReadResult, Option<Vec<u8>>) {
+    if userdata.is_null() {
+        return (clipboard_read_unsupported(), None);
+    }
+    // SAFETY: the trampoline checked the request size before this call.
+    let request = unsafe { &*read };
+    // SAFETY: userdata is the TerminalCallbackState installed with this terminal.
+    let state = unsafe { &mut *userdata.cast::<TerminalCallbackState>() };
+    let Some(callback) = state.clipboard_read.as_mut() else {
+        return (clipboard_read_unsupported(), None);
+    };
+
+    let location = match request.location {
+        ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD => {
+            ClipboardLocation::Standard
+        }
+        ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_SELECTION => {
+            ClipboardLocation::Selection
+        }
+        ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_PRIMARY => {
+            ClipboardLocation::Primary
+        }
+        _ => ClipboardLocation::Other,
+    };
+    let requested = if request.mimes.is_null() || request.mimes_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: libghostty-vt keeps the requested MIME strings alive for the
+        // duration of the callback.
+        unsafe { slice::from_raw_parts(request.mimes, request.mimes_len) }
+            .iter()
+            .filter_map(|mime| borrowed_bytes(*mime))
+            .filter_map(|mime| std::str::from_utf8(mime).ok())
+            .collect()
+    };
+
+    match callback(&ClipboardReadRequest {
+        location,
+        mimes: &requested,
+        list: request.list,
+    }) {
+        ClipboardReadReply::Text(bytes) if bytes.len() <= MAX_CLIPBOARD_BYTES => (
+            ffi::GhosttyClipboardReadResult_GHOSTTY_CLIPBOARD_READ_RESULT_SUCCESS,
+            Some(bytes),
+        ),
+        ClipboardReadReply::Text(_) | ClipboardReadReply::Unsupported => {
+            (clipboard_read_unsupported(), None)
+        }
+    }
 }
 
 unsafe fn borrowed_bytes<'a>(value: ffi::GhosttyString) -> Option<&'a [u8]> {
@@ -1154,6 +1294,30 @@ impl Terminal {
             .into_result()?;
         }
         self.callback_state.write_pty = Some(Box::new(callback));
+        Ok(())
+    }
+
+    /// Installs the handler that answers clipboard read requests from the running
+    /// program (OSC 52 `?` and Kitty clipboard OSC 5522 reads). The callback is
+    /// synchronous: the VT stream waits until it returns, and the library encodes
+    /// the reply back to the program through the `write_pty` callback.
+    ///
+    /// Without this callback OSC 52 reads are ignored and OSC 5522 reads are
+    /// refused. Installing it also makes the terminal report Kitty paste events
+    /// (mode 5522) as recognized.
+    pub fn set_clipboard_read_callback<F>(&mut self, callback: F) -> Result<(), Error>
+    where
+        F: FnMut(&ClipboardReadRequest<'_>) -> ClipboardReadReply + Send + 'static,
+    {
+        unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CLIPBOARD_READ,
+                (clipboard_read_trampoline as *const ()).cast(),
+            )
+            .into_result()?;
+        }
+        self.callback_state.clipboard_read = Some(Box::new(callback));
         Ok(())
     }
 
@@ -4646,7 +4810,7 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_queries_never_disclose_contents_and_split_writes_complete_once() {
+    fn clipboard_queries_without_a_read_callback_stay_unanswered_and_split_writes_complete_once() {
         for suffix in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
             let bytes = [b"\x1b]52;c;YQBi".as_slice(), suffix].concat();
             for split in 0..=bytes.len() {
@@ -4665,6 +4829,72 @@ mod tests {
                 assert!(terminal.take_clipboard_writes().is_empty());
                 assert!(replies.lock().unwrap().is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn clipboard_read_callback_answers_osc52_queries_with_the_query_terminator() {
+        for terminator in [b"\x07".as_slice(), b"\x1b\\".as_slice()] {
+            let mut terminal = Terminal::new(10, 3, 0).unwrap();
+            let replies = Arc::new(Mutex::new(Vec::new()));
+            let captured = Arc::clone(&replies);
+            terminal
+                .set_write_pty_callback(move |bytes| {
+                    captured.lock().unwrap().extend_from_slice(bytes)
+                })
+                .unwrap();
+            let served = Arc::new(Mutex::new(Vec::new()));
+            let observed = Arc::clone(&served);
+            terminal
+                .set_clipboard_read_callback(move |request| {
+                    observed.lock().unwrap().push((
+                        request.location,
+                        request
+                            .mimes
+                            .iter()
+                            .map(|mime| (*mime).to_string())
+                            .collect::<Vec<_>>(),
+                        request.list,
+                    ));
+                    if request.location == ClipboardLocation::Standard {
+                        ClipboardReadReply::Text(b"last entry".to_vec())
+                    } else {
+                        ClipboardReadReply::Unsupported
+                    }
+                })
+                .unwrap();
+
+            let mut query = Vec::from(b"\x1b]52;c;?".as_slice());
+            query.extend_from_slice(terminator);
+            terminal.write(&query);
+
+            let mut expected = Vec::from(b"\x1b]52;c;bGFzdCBlbnRyeQ==".as_slice());
+            expected.extend_from_slice(terminator);
+            assert_eq!(std::mem::take(&mut *replies.lock().unwrap()), expected);
+            assert_eq!(
+                std::mem::take(&mut *served.lock().unwrap()),
+                vec![(
+                    ClipboardLocation::Standard,
+                    vec!["text/plain".to_string()],
+                    false,
+                )]
+            );
+
+            // A refused clipboard is answered with an empty payload rather than
+            // silence, so the program stops waiting.
+            terminal.write(b"\x1b]52;p;?\x07");
+            assert_eq!(
+                std::mem::take(&mut *replies.lock().unwrap()),
+                b"\x1b]52;p;\x07"
+            );
+            assert_eq!(
+                std::mem::take(&mut *served.lock().unwrap()),
+                vec![(
+                    ClipboardLocation::Primary,
+                    vec!["text/plain".to_string()],
+                    false
+                )]
+            );
         }
     }
 
