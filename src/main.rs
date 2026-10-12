@@ -74,6 +74,7 @@ mod detect;
 mod events;
 mod files;
 mod fleet;
+mod focus_capture;
 mod ghostty;
 mod goals;
 mod groups;
@@ -283,6 +284,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # workspace_picker = "prefix+w"
 # goto = "prefix+g"
 # agent_finder = "prefix+f"
+# capture = "prefix+t" # captures a thought to the local focus list
 # new_workspace = "prefix+alt+n"
 # new_worktree = "prefix+shift+g"
 # open_worktree = ""    # optional, unset by default
@@ -696,6 +698,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 [day_board]
 # Mark a working item stale after this many quiet seconds. Default: 600 (10 minutes).
 # stale_after = 600
+
+# [focus]
+# Local Markdown focus list used by `herdr focus add` and the capture composer.
+# dir = "~/workspaces/obsidian/focus"
 
 [experimental]
 # Allow launching herdr from inside a herdr-managed pane.

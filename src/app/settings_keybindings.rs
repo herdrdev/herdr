@@ -119,6 +119,7 @@ const BUILT_IN_GROUPS: &[(&str, &[BuiltIn])] = &[
             built_in("new_workspace", "new workspace", |kb| &kb.new_workspace),
             built_in("new_thread", "new thread", |kb| &kb.new_thread),
             built_in("new_agent_dock", "spawn dock", |kb| &kb.new_agent_dock),
+            built_in("capture", "capture to focus list", |kb| &kb.capture),
             built_in("agent_finder", "search agents", |kb| &kb.agent_finder),
             built_in("new_worktree", "new worktree", |kb| &kb.new_worktree),
             built_in("open_worktree", "open worktree", |kb| &kb.open_worktree),
@@ -417,6 +418,11 @@ mod tests {
             Some(KeybindTarget::BuiltIn { field: "settings" })
         );
         assert!(!settings_row.key.is_empty());
+        let capture_row = rows
+            .iter()
+            .find(|row| row.label == "capture to focus list")
+            .expect("capture row");
+        assert_eq!(capture_row.key, "prefix+t");
         assert!(rows
             .iter()
             .any(|row| row.heading && row.label == "user actions"));

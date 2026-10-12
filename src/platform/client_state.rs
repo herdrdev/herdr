@@ -1,5 +1,19 @@
 use std::path::Path;
 
+#[cfg(unix)]
+pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+}
+
+#[cfg(not(unix))]
+pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(path)
+}
+
 #[cfg(not(windows))]
 pub(crate) fn create_private_state_file(path: &Path) -> std::io::Result<std::fs::File> {
     super::create_remote_ssh_config_file(path)

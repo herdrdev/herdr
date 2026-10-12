@@ -1599,6 +1599,8 @@ pub(crate) struct SidebarPresentationState {
     pub(crate) new_thread: Option<SidebarNewThreadState>,
     /// TUI-only spawn draft. Swapped with this attach and never projected by the server API.
     pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
+    pub(crate) capture: Option<crate::app::capture::CaptureState>,
+    pub(crate) capture_ack: Option<crate::app::capture::CaptureAck>,
     pub(crate) project_menu: Option<SidebarProjectMenuState>,
     pub(crate) selected_work_group: Option<String>,
     pub(crate) object_menu: Option<SidebarObjectMenuState>,
@@ -1867,6 +1869,7 @@ pub(crate) enum InputOwner {
     Pomodoro,
     Client(ClientInputOwner),
     AddProject,
+    Capture,
     SpawnDock,
     Server(ServerInputOwner),
     Popup,
@@ -1947,6 +1950,20 @@ impl SidebarPresentationState {
     ) {
         if let Some(client_id) = self.spawn_dock_client_id.as_deref() {
             crate::client::presentation::save_spawn_dock_draft(client_id, draft);
+        }
+    }
+
+    pub(crate) fn load_capture_draft(&self) -> Option<crate::client::presentation::CaptureDraft> {
+        self.spawn_dock_client_id
+            .as_deref()
+            .and_then(crate::client::presentation::load_capture_draft)
+    }
+    pub(crate) fn save_capture_draft(
+        &self,
+        draft: Option<crate::client::presentation::CaptureDraft>,
+    ) {
+        if let Some(client_id) = self.spawn_dock_client_id.as_deref() {
+            crate::client::presentation::save_capture_draft(client_id, draft);
         }
     }
 
@@ -2693,6 +2710,7 @@ impl PaneToggleDirection {
 
 pub struct ViewState {
     pub layout: ViewLayout,
+    pub(crate) screen_area: Rect,
     /// Full-width top status row (tmux-parity). Empty on mobile / tiny heights.
     pub status_bar_rect: Rect,
     pub sidebar_rect: Rect,
@@ -4520,6 +4538,9 @@ pub struct AppState {
     pub(crate) home: Option<crate::app::home::HomeState>,
     /// Bottom-docked spawn composer, presented over panes without replacing them.
     pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
+    pub(crate) capture: Option<crate::app::capture::CaptureState>,
+    pub(crate) capture_ack: Option<crate::app::capture::CaptureAck>,
+    pub(crate) focus_dir: std::path::PathBuf,
     /// Client-local provider choices retained when Home closes.
     pub(crate) home_agent_choices: Vec<crate::app::home::HomeAgentChoice>,
     /// Provider choices resolved outside `HomeState`, ready for the next Home open.
@@ -6620,6 +6641,8 @@ impl AppState {
         std::mem::swap(&mut self.sidebar_new_menu, &mut other.new_menu);
         std::mem::swap(&mut self.sidebar_new_thread, &mut other.new_thread);
         std::mem::swap(&mut self.spawn_dock, &mut other.spawn_dock);
+        std::mem::swap(&mut self.capture, &mut other.capture);
+        std::mem::swap(&mut self.capture_ack, &mut other.capture_ack);
         std::mem::swap(&mut self.sidebar_project_menu, &mut other.project_menu);
         std::mem::swap(
             &mut self.sidebar_selected_work_group,
@@ -6773,6 +6796,9 @@ impl AppState {
         }
         if self.add_project_active() {
             return InputOwner::AddProject;
+        }
+        if self.capture.is_some() {
+            return InputOwner::Capture;
         }
         if self.spawn_dock.is_some() {
             return InputOwner::SpawnDock;
@@ -8092,6 +8118,9 @@ impl AppState {
             scratch: crate::scratch::ScratchState::default(),
             home: None,
             spawn_dock: None,
+            capture: None,
+            capture_ack: None,
+            focus_dir: crate::worktree::expand_tilde_path(crate::focus_capture::DEFAULT_DIR),
             home_agent_choices: Vec::new(),
             home_catalog: crate::app::home_catalog::HomeCatalog::fallback(),
             launch_profiles: crate::app::launch_profiles::resolve(&[]),
@@ -8264,6 +8293,7 @@ impl AppState {
             mobile_switcher_scroll: 0,
             view: ViewState {
                 layout: ViewLayout::Desktop,
+                screen_area: Rect::default(),
                 status_bar_rect: Rect::default(),
                 sidebar_rect: Rect::default(),
                 sidebar_footer_settings_hit_area: Rect::default(),

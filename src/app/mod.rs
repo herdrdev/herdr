@@ -41,6 +41,7 @@ pub(crate) mod pane_graphics;
 mod pane_lifecycle;
 mod scratch;
 pub(crate) use pane_lifecycle::pane_is_quiet;
+pub(crate) mod capture;
 mod pane_send;
 mod popup;
 pub(crate) mod probes;
@@ -1070,6 +1071,9 @@ impl App {
             focus_editor: None,
             home: None,
             spawn_dock: None,
+            capture: None,
+            capture_ack: None,
+            focus_dir: crate::worktree::expand_tilde_path(&config.focus.dir),
             home_agent_choices: Vec::new(),
             home_catalog: if cfg!(test) {
                 crate::app::home_catalog::HomeCatalog::fallback()
@@ -1206,6 +1210,7 @@ impl App {
             mobile_switcher_scroll: 0,
             view: state::ViewState {
                 layout: state::ViewLayout::Desktop,
+                screen_area: Rect::default(),
                 status_bar_rect: Rect::default(),
                 sidebar_rect: Rect::default(),
                 sidebar_footer_settings_hit_area: Rect::default(),
@@ -3133,6 +3138,9 @@ impl App {
                 }
             }
         }
+        if !invalid_section("focus") {
+            self.state.focus_dir = crate::worktree::expand_tilde_path(&config.focus.dir);
+        }
         if !invalid_section("notepad") {
             self.apply_notepad_config(&config.notepad);
         }
@@ -3639,6 +3647,14 @@ impl App {
                             // The headless client path has its own synchronous
                             // router, so it must consume the shared spawn dock
                             // before any pane forwarding can occur.
+                            if owner == state::InputOwner::Capture && self.state.capture.is_some() {
+                                self.handle_capture_key(key.as_key_event());
+                                self.input_leases.insert_consumed(
+                                    lease_key,
+                                    input::ConsumedInputLease::SuppressRepeats,
+                                );
+                                continue;
+                            }
                             if owner == state::InputOwner::SpawnDock
                                 && self.state.spawn_dock.is_some()
                             {
@@ -3926,6 +3942,7 @@ impl App {
         }
         match owner {
             state::InputOwner::Pomodoro | state::InputOwner::Popup | state::InputOwner::Pane => {}
+            state::InputOwner::Capture => self.handle_capture_key(key_event),
             state::InputOwner::SpawnDock => self.handle_spawn_dock_key(key_event),
             state::InputOwner::Client(owner) => match owner {
                 state::ClientInputOwner::Overlay(overlay) => {

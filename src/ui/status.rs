@@ -182,6 +182,32 @@ fn view_title_rect(
     Some((Rect::new(x, area.y, width, 1), text))
 }
 
+pub(crate) fn capture_ack_rect(app: &AppState, area: Rect, desired_width: u16) -> Option<Rect> {
+    let reserved = super::tabs::tab_action_status_bar_reserved_width(app, area);
+    let segments_used = if app.view.status_segments.is_empty() {
+        let fitted = fitted_status_segments(app, area);
+        segment_width(&fitted)
+    } else {
+        segment_width(&app.view.status_segments)
+    };
+    let fallback_buttons;
+    let buttons = if app.view.status_buttons.is_empty() {
+        fallback_buttons = status_buttons(app, area);
+        &fallback_buttons
+    } else {
+        &app.view.status_buttons
+    };
+    let (title, _) = view_title_rect(app, area, buttons, segments_used + usize::from(reserved))?;
+    let width = desired_width.min(area.width);
+    let center = title.x.saturating_add(title.width / 2);
+    let x = center
+        .saturating_sub(width / 2)
+        .clamp(area.x, area.right().saturating_sub(width));
+    let left = x.min(title.x);
+    let right = x.saturating_add(width).max(title.right());
+    Some(Rect::new(left, area.y, right.saturating_sub(left), 1))
+}
+
 /// The right-aligned segments this frame will draw, fitted to the bar.
 pub(crate) fn fitted_status_segments(app: &AppState, area: Rect) -> Vec<Segment> {
     if area.width == 0 || area.height == 0 {
@@ -1818,6 +1844,61 @@ mod tests {
             assert!(!rendered.contains("Home"), "{rendered:?}");
             assert!(rendered.matches('\u{25cf}').count() >= 3, "{rendered:?}");
         }
+    }
+
+    #[test]
+    fn capture_ack_covers_the_full_focused_pane_title() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut app = AppState::test_new();
+        let mut workspace = crate::workspace::Workspace::test_new("status");
+        workspace.tabs[0].custom_name = Some("status".into());
+        app.workspaces = vec![workspace];
+        app.active = Some(0);
+        app.ensure_test_terminals();
+        app.status_bar_enabled = true;
+        let area = Rect::new(0, 0, 120, 1);
+        app.view.status_bar_rect = area;
+        let buttons = status_buttons(&app, area);
+        let title = view_title_rect(&app, area, &buttons, 0).expect("focused pane title");
+        assert!(title.1.contains("status"), "{}", title.1);
+
+        let mut baseline = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        baseline
+            .draw(|frame| render_status_bar(&app, frame, area))
+            .unwrap();
+        let baseline_row = baseline
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(baseline_row.contains(&title.1), "{baseline_row:?}");
+
+        app.capture_ack = Some(crate::app::capture::CaptureAck {
+            text: "saved · research queued".into(),
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(2),
+        });
+        let mut acknowledged = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        acknowledged
+            .draw(|frame| {
+                render_status_bar(&app, frame, area);
+                crate::ui::capture::render_ack(&app, frame);
+            })
+            .unwrap();
+        let acknowledged_row = acknowledged
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(acknowledged_row.contains("✓ saved · research queued"));
+        assert!(
+            !acknowledged_row.contains(&title.1),
+            "focused title leaked beside the acknowledgement: {acknowledged_row:?}"
+        );
     }
 
     #[test]

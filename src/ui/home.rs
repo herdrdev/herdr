@@ -905,7 +905,7 @@ fn headline_line(app: &AppState, width: u16, focused: bool) -> Line<'static> {
 }
 
 /// `├───┤` across the card, meeting the border cells the block drew.
-fn divider_line(width: u16) -> String {
+pub(crate) fn divider_line(width: u16) -> String {
     match width {
         0 => String::new(),
         1 => "├".to_string(),
@@ -918,7 +918,7 @@ fn divider_line(width: u16) -> String {
 /// Newlines are hard breaks, everything else wraps at the column, and only the
 /// last `height` lines survive so a long prompt scrolls its tail into view the
 /// way typing into a box does.
-fn prompt_layout(
+pub(crate) fn prompt_layout(
     prompt: &str,
     width: u16,
     height: u16,

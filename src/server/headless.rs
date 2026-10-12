@@ -814,6 +814,36 @@ fn spawn_windows_client_accept_thread(
 }
 
 impl HeadlessServer {
+    fn next_capture_ack_deadline(&self) -> Option<Instant> {
+        self.clients
+            .values()
+            .filter_map(|client| {
+                client
+                    .sidebar_presentation
+                    .capture_ack
+                    .as_ref()
+                    .map(|ack| ack.deadline)
+            })
+            .min()
+    }
+
+    fn clear_due_capture_acks(&mut self, now: Instant) -> bool {
+        let mut changed = false;
+        for client in self.clients.values_mut() {
+            if client
+                .sidebar_presentation
+                .capture_ack
+                .as_ref()
+                .is_some_and(|ack| now >= ack.deadline)
+            {
+                client.sidebar_presentation.capture_ack = None;
+                client.request_repaint();
+                changed = true;
+            }
+        }
+        changed
+    }
+
     /// Creates and starts the headless server.
     ///
     /// This:
@@ -1240,6 +1270,12 @@ impl HeadlessServer {
                 .filter_map(|client| client.sidebar_presentation.agent_finder_deadline)
                 .fold(next_deadline, |deadline, finder| {
                     Some(deadline.map_or(finder, |current| current.min(finder)))
+                });
+            let next_deadline = self
+                .next_capture_ack_deadline()
+                .into_iter()
+                .fold(next_deadline, |deadline, ack| {
+                    Some(deadline.map_or(ack, |current| current.min(ack)))
                 });
             let event = {
                 tokio::select! {
@@ -7700,6 +7736,7 @@ impl HeadlessServer {
             self.app.state.copy_feedback = None;
             other_changed = true;
         }
+        other_changed |= self.clear_due_capture_acks(now);
 
         if self
             .app
@@ -8633,6 +8670,54 @@ mod tests {
 
     fn test_headless_server() -> HeadlessServer {
         test_headless_server_with_event_hub(api::EventHub::default())
+    }
+
+    #[tokio::test]
+    async fn capture_ack_deadline_wakes_and_repaints_its_client() {
+        let (mut server, _, _) = retained_test_server(b"capture ack");
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(2);
+        let (clients, app) = (&mut server.clients, &mut server.app);
+        let client = clients.get_mut(&1).unwrap();
+        let mut presentation = ClientInputPresentation::take(client, &app.state);
+        presentation.install(&mut app.state);
+        app.state.capture_ack = Some(crate::app::capture::CaptureAck {
+            text: "saved to focus list".into(),
+            deadline,
+        });
+        presentation.uninstall(&mut app.state);
+        presentation.store(client, &app.state);
+        server.clients.get_mut(&1).unwrap().render_state =
+            crate::server::render_stream::ClientRenderState::new(RenderEncoding::TerminalAnsi);
+        assert_eq!(
+            server.clients[&1]
+                .sidebar_presentation
+                .capture_ack
+                .as_ref()
+                .map(|ack| ack.deadline),
+            Some(deadline)
+        );
+
+        assert_eq!(server.next_capture_ack_deadline(), Some(deadline));
+        assert!(!server.clear_due_capture_acks(deadline - Duration::from_millis(1)));
+        assert!(server.clients[&1]
+            .sidebar_presentation
+            .capture_ack
+            .is_some());
+        assert!(server.clear_due_capture_acks(deadline));
+        assert!(server.clients[&1]
+            .sidebar_presentation
+            .capture_ack
+            .is_none());
+        assert!(matches!(
+            &server.clients[&1].render_state,
+            crate::server::render_stream::ClientRenderState::TerminalAnsi {
+                repaint_pending: true,
+                ..
+            }
+        ));
+        assert!(server.next_capture_ack_deadline().is_none());
+        shutdown_test_runtimes(&mut server);
     }
 
     #[test]

@@ -52,6 +52,7 @@ pub(super) fn command() -> Command {
         .subcommand(fleet_command())
         .subcommand(work_index_command())
         .subcommand(day_command())
+        .subcommand(focus_command())
         .subcommand(watchdog_command())
         .subcommand(channel_command())
         .subcommand(machine::command())
@@ -260,6 +261,23 @@ fn day_command() -> Command {
         )
         .subcommand(id_command("done", "id", "Complete an item"))
         .subcommand(id_command("dismiss", "id", "Dismiss an item"))
+}
+
+fn focus_command() -> Command {
+    Command::new("focus")
+        .about("Capture items to the local focus list")
+        .subcommand(
+            Command::new("add")
+                .about("Save a focus item")
+                .arg(
+                    Arg::new("text")
+                        .value_name("TEXT")
+                        .num_args(1..)
+                        .required(true),
+                )
+                .arg(flag("research"))
+                .arg(json_flag()),
+        )
 }
 
 pub(super) fn watchdog_command() -> Command {

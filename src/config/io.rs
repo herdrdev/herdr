@@ -14,6 +14,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "agent_detection",
     "day_board",
     "experimental",
+    "focus",
     "files",
     "goals_panel",
     "keys",
@@ -322,6 +323,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.scratch = section,
+    );
+    load_live_section(
+        table,
+        "focus",
+        "focus config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.focus = section,
     );
     load_live_section(
         table,
@@ -1149,6 +1158,29 @@ resume_agents_on_restore = true
         assert_eq!(loaded.config.day_board.stale_after, 90);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn focus_capture_binding_defaults_to_prefix_t_and_inbox_defaults_are_unchanged() {
+        let defaults = Config::default();
+        assert_eq!(
+            defaults.keys.capture,
+            super::super::BindingConfig::one("prefix+t")
+        );
+        assert_eq!(
+            defaults.keys.inbox,
+            super::super::BindingConfig::Many(vec!["prefix+shift+i".into(), "ctrl+alt+i".into()])
+        );
+        let loaded = load_live_config_from_str(
+            "[keys]\ncapture = \"prefix+shift+i\"\ninbox = \"ctrl+alt+i\"\n",
+        )
+        .expect("focus keybinding config");
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert!(loaded.invalid_sections.is_empty());
+        assert_eq!(
+            loaded.config.keys.capture,
+            super::super::BindingConfig::one("prefix+shift+i")
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use ratatui::{
 
 pub(crate) mod add_project;
 mod aloop_run;
+pub(crate) mod capture;
 mod command_palette;
 mod dialogs;
 pub(crate) mod dock;
@@ -879,6 +880,7 @@ fn compute_view_internal_at(
     );
     app.view = crate::app::ViewState {
         layout: ViewLayout::Desktop,
+        screen_area: area,
         status_bar_rect,
         sidebar_rect: sidebar_area,
         sidebar_footer_settings_hit_area,
@@ -1213,6 +1215,7 @@ fn compute_mobile_view(
 
     app.view = crate::app::ViewState {
         layout: ViewLayout::Mobile,
+        screen_area: area,
         status_bar_rect: Rect::default(),
         sidebar_rect: Rect::default(),
         sidebar_footer_settings_hit_area: Rect::default(),
@@ -1442,6 +1445,8 @@ fn render_with_runtime_registry_inner(
     render_notifications(app, frame, terminal_area);
     render_popup_pane(app, terminal_runtimes, frame, terminal_area);
     spawn_dock::render(app, frame, terminal_area);
+    capture::render_ack(app, frame);
+    capture::render(app, frame, frame.area());
 
     let mode_bar_area = if app.view.layout == ViewLayout::Desktop
         && app.tab_bar_position == crate::config::TabBarPositionConfig::Bottom
@@ -1550,6 +1555,7 @@ fn render_with_runtime_registry_inner(
         | InputOwner::Surface(_)
         | InputOwner::Notepad
         | InputOwner::SpawnDock
+        | InputOwner::Capture
         | InputOwner::Dock(_)
         | InputOwner::Sidebar
         | InputOwner::Pane

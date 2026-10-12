@@ -501,7 +501,7 @@ impl SpawnDockState {
     }
 }
 
-fn format_age(seconds: u64) -> String {
+pub(crate) fn format_age(seconds: u64) -> String {
     if seconds < 60 {
         format!("{seconds}s")
     } else if seconds < 3600 {

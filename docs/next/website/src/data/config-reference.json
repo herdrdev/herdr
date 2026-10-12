@@ -595,6 +595,12 @@
           "description": "Open the bottom-docked agent launcher."
         },
         {
+          "key": "keys.capture",
+          "type": "keybinding",
+          "default": "\"prefix+t\"",
+          "description": "Capture a thought to the local focus list."
+        },
+        {
           "key": "keys.new_worktree",
           "type": "keybinding",
           "default": "\"prefix+shift+g\"",
@@ -2650,6 +2656,18 @@
           "type": "string",
           "default": "\"~/workspaces/personal/vault/Scratch\"",
           "description": "Markdown folder shared with Zen writer. ~ expands to the home directory. Synced notes have sync: true frontmatter; local notes are stored in .local. No network calls."
+        }
+      ]
+    },
+    {
+      "id": "focus",
+      "title": "Focus",
+      "keys": [
+        {
+          "key": "focus.dir",
+          "type": "string",
+          "default": "\"~/workspaces/obsidian/focus\"",
+          "description": "Local Markdown folder used for captured focus items. ~ expands to the home directory."
         }
       ]
     }

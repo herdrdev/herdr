@@ -20,6 +20,17 @@ pub(crate) struct SpawnDockDraft {
     pub(crate) saved_at_unix: u64,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) struct CaptureDraft {
+    pub(crate) text: String,
+    pub(crate) saved_at_unix: u64,
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CAPTURE_DRAFTS: std::cell::RefCell<std::collections::HashMap<String, Option<CaptureDraft>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
 #[cfg(test)]
 thread_local! {
     static TEST_SPAWN_DOCK_DRAFTS: std::cell::RefCell<std::collections::HashMap<String, Option<SpawnDockDraft>>> = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -68,6 +79,66 @@ fn spawn_dock_draft_path_in(state_dir: &Path, client_id: &str) -> PathBuf {
             (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
         });
     state_dir.join(format!("spawn-dock-draft-{hash:016x}.json"))
+}
+
+#[cfg(not(test))]
+fn capture_draft_path(client_id: &str) -> PathBuf {
+    capture_draft_path_in(&crate::config::state_dir(), client_id)
+}
+#[cfg(not(test))]
+fn capture_draft_path_in(state_dir: &Path, client_id: &str) -> PathBuf {
+    let hash = client_id
+        .bytes()
+        .fold(0xcbf29ce484222325_u64, |hash, byte| {
+            (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3)
+        });
+    state_dir.join(format!("capture-draft-{hash:016x}.json"))
+}
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[cfg(not(test))]
+struct CaptureDraftFile {
+    #[serde(default)]
+    draft: Option<CaptureDraft>,
+}
+
+pub(crate) fn load_capture_draft(client_id: &str) -> Option<CaptureDraft> {
+    #[cfg(test)]
+    {
+        TEST_CAPTURE_DRAFTS.with(|drafts| drafts.borrow().get(client_id).cloned().flatten())
+    }
+    #[cfg(not(test))]
+    {
+        let path = capture_draft_path(client_id);
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => serde_json::from_str::<CaptureDraftFile>(&raw)
+                .ok()
+                .and_then(|file| file.draft),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => {
+                warn!(path = %path.display(), err = %error, "failed to load capture draft");
+                None
+            }
+        }
+    }
+}
+#[cfg(test)]
+pub(crate) fn saved_capture_draft_for_test(client_id: &str) -> Option<CaptureDraft> {
+    load_capture_draft(client_id)
+}
+pub(crate) fn save_capture_draft(client_id: &str, draft: Option<CaptureDraft>) {
+    #[cfg(test)]
+    {
+        TEST_CAPTURE_DRAFTS.with(|saved| {
+            saved.borrow_mut().insert(client_id.to_owned(), draft);
+        });
+    }
+    #[cfg(not(test))]
+    {
+        let path = capture_draft_path(client_id);
+        if let Err(error) = save_json_to_path(&path, &CaptureDraftFile { draft }) {
+            warn!(path = %path.display(), err = %error, "failed to save capture draft");
+        }
+    }
 }
 
 pub(crate) fn load_spawn_dock_draft(client_id: &str) -> Option<SpawnDockDraft> {

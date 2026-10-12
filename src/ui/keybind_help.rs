@@ -122,6 +122,7 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.new_workspace), "new workspace"),
         help_entry(keybind_label(&kb.new_thread), "new thread"),
         help_entry(keybind_label(&kb.new_agent_dock), "spawn dock"),
+        help_entry(keybind_label(&kb.capture), "capture to focus list"),
         help_entry(keybind_label(&kb.agent_finder), "search agents"),
         help_entry(keybind_label(&kb.new_worktree), "new worktree"),
         help_entry(keybind_label(&kb.open_worktree), "open worktree"),

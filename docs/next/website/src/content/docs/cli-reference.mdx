@@ -5,6 +5,8 @@ description: Herdr commands for sessions, workspaces, tabs, panes, notifications
 
 Most Herdr CLI commands talk to the running server over the same local socket API used by integrations and agents. `status-log` reads and writes its local files directly, without a running server.
 
+`herdr focus add <text…> [--research] [--json]` writes one Markdown item to the configured local focus folder without connecting to a server. Text arguments are joined with spaces; use `-` to read the capture from standard input. `--research` adds the research tag, while `--json` prints the absolute path, slug, and order.
+
 Most commands print JSON responses for deterministic automation in scripts.
 
 ## Launch and status

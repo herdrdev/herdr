@@ -220,6 +220,10 @@ impl App {
                         .save_spawn_dock_draft(Some(dock.draft()));
                 }
             }
+            NavigateAction::Capture => {
+                leave_navigate_mode(&mut self.state);
+                self.state.open_capture();
+            }
             NavigateAction::OpenAgentFinder => {
                 leave_navigate_mode(&mut self.state);
                 self.state.open_agent_finder();
@@ -2701,6 +2705,7 @@ pub(crate) enum NavigateAction {
     NewWorkspace,
     NewThread,
     NewAgentDock,
+    Capture,
     OpenAgentFinder,
     NewWorktree,
     OpenWorktree,
@@ -2997,6 +3002,7 @@ macro_rules! non_indexed_action_bindings {
             (&kb.new_workspace, NavigateAction::NewWorkspace),
             (&kb.new_thread, NavigateAction::NewThread),
             (&kb.new_agent_dock, NavigateAction::NewAgentDock),
+            (&kb.capture, NavigateAction::Capture),
             (&kb.new_worktree, NavigateAction::NewWorktree),
             (&kb.open_worktree, NavigateAction::OpenWorktree),
             (&kb.remove_worktree, NavigateAction::RemoveWorktree),
@@ -3220,6 +3226,10 @@ pub(super) fn execute_navigate_action_in_context(
         NavigateAction::NewAgentDock => {
             leave_navigate_mode(state);
             state.open_spawn_dock();
+        }
+        NavigateAction::Capture => {
+            leave_navigate_mode(state);
+            state.open_capture();
         }
         NavigateAction::OpenAgentFinder => leave_navigate_mode(state),
         NavigateAction::NewWorktree => {
@@ -10137,8 +10147,8 @@ navigate_pane_down = "ctrl+j"
             release_path.display(),
         );
         app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
-            bindings: crate::config::ActionKeybinds::prefix("t"),
-            label: "prefix+t".into(),
+            bindings: crate::config::ActionKeybinds::prefix("alt+t"),
+            label: "prefix+alt+t".into(),
             command,
             action: crate::config::CustomCommandAction::Shell,
             description: None,
@@ -10154,7 +10164,7 @@ navigate_pane_down = "ctrl+j"
         assert_eq!(app.state.server_mode(), Mode::Prefix);
 
         let launch_started = std::time::Instant::now();
-        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await;
         assert!(launch_started.elapsed() < Duration::from_secs(2));
 
@@ -10226,8 +10236,8 @@ navigate_pane_down = "ctrl+j"
         let output_path = unique_temp_path("custom-pane-command");
         let command = format!("printf done > '{}'", output_path.display());
         app.state.keybinds.custom_commands = vec![crate::config::CustomCommandKeybind {
-            bindings: crate::config::ActionKeybinds::prefix("t"),
-            label: "prefix+t".into(),
+            bindings: crate::config::ActionKeybinds::prefix("alt+t"),
+            label: "prefix+alt+t".into(),
             command,
             action: crate::config::CustomCommandAction::Pane,
             description: None,
@@ -10240,7 +10250,7 @@ navigate_pane_down = "ctrl+j"
             app.state.prefix_mods,
         ))
         .await;
-        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
             .await;
 
         assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 2);
@@ -10450,5 +10460,102 @@ navigate_pane_down = "ctrl+j"
             user_action_for_key(&state, &key, BindingDispatch::Prefix),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn default_capture_binding_opens_composer_from_a_pane() {
+        let mut app = app_with_test_workspaces(&["local"]);
+        let config = crate::config::Config::default();
+        app.state.keybinds = config.keybinds();
+        app.state.active = Some(0);
+        let pane_before = app.state.workspaces[0].focused_pane_id();
+
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
+            .await;
+
+        assert!(app.state.capture.is_some());
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
+    }
+
+    #[tokio::test]
+    async fn capture_binding_keeps_focus_persists_and_clears_its_own_draft_on_save() {
+        let mut app = app_with_test_workspaces(&["local"]);
+        let client = format!("test-capture-{}", std::process::id());
+        app.state.sidebar_presentation.spawn_dock_client_id = Some(client.clone());
+        app.state.sidebar_presentation.save_capture_draft(None);
+        let spawn_before = crate::client::presentation::saved_spawn_dock_draft_for_test(&client);
+        let root = std::env::temp_dir().join(format!("herdr-capture-input-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        app.state.focus_dir = root.clone();
+        let mut config = crate::config::Config::default();
+        config.keys.capture = crate::config::BindingConfig::one("prefix+shift+i");
+        config.keys.inbox = crate::config::BindingConfig::one("ctrl+alt+i");
+        app.state.keybinds = config.keybinds();
+        app.state.active = Some(0);
+        let active_before = app.state.active;
+        let pane_before = app.state.workspaces[0].focused_pane_id();
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('i'), KeyModifiers::SHIFT))
+            .await;
+        assert!(app.state.capture.is_some());
+        assert_eq!(
+            app.state.input_owner(),
+            crate::app::state::InputOwner::Capture
+        );
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
+        assert!(app.state.capture.as_ref().unwrap().text.is_empty());
+        assert!(app.state.capture_ack.is_none());
+        for c in "Remember this thought".chars() {
+            app.handle_key(TerminalKey::new(KeyCode::Char(c), KeyModifiers::empty()))
+                .await;
+        }
+        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
+            .await;
+        assert_eq!(
+            crate::client::presentation::saved_capture_draft_for_test(&client)
+                .unwrap()
+                .text,
+            "Remember this thought"
+        );
+        assert_eq!(app.state.active, active_before);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('i'), KeyModifiers::SHIFT))
+            .await;
+        assert!(app.state.capture.as_ref().unwrap().restored_age.is_some());
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
+        assert!(app.state.capture.is_none());
+        assert!(app.state.capture_ack.is_some());
+        assert!(app
+            .state
+            .capture_ack
+            .as_ref()
+            .is_some_and(|ack| ack.deadline > std::time::Instant::now()));
+        assert!(crate::client::presentation::saved_capture_draft_for_test(&client).is_none());
+        assert_eq!(
+            crate::client::presentation::saved_spawn_dock_draft_for_test(&client),
+            spawn_before
+        );
+        assert_eq!(app.state.active, active_before);
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
+        app.state.set_server_mode(Mode::Prefix);
+        app.handle_key(TerminalKey::new(KeyCode::Char('i'), KeyModifiers::SHIFT))
+            .await;
+        for c in "research this".chars() {
+            app.handle_key(TerminalKey::new(KeyCode::Char(c), KeyModifiers::empty()))
+                .await;
+        }
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::CONTROL))
+            .await;
+        assert_eq!(
+            app.state.capture_ack.as_ref().map(|ack| ack.text.as_str()),
+            Some("saved · research queued")
+        );
+        let research = std::fs::read_to_string(root.join("research-this.md")).unwrap();
+        assert!(research.contains("tags: [research]\n"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

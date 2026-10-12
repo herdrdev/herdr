@@ -286,6 +286,10 @@ impl App {
             return None;
         }
         let interrupting_overlay = spawn_dock_input_is_interrupted(&owner);
+        if self.state.capture.is_some() && !interrupting_overlay {
+            self.handle_capture_key(key_event);
+            return None;
+        }
         if self.state.spawn_dock.is_some() && !interrupting_overlay {
             self.handle_spawn_dock_key(key_event);
             return None;
@@ -373,6 +377,7 @@ impl App {
                 self.handle_home_key_event(key_event);
             }
             InputOwner::SpawnDock => self.handle_spawn_dock_key(key_event),
+            InputOwner::Capture => self.handle_capture_key(key_event),
             InputOwner::Server(owner) => match owner {
                 ServerInputOwner::Onboarding => self.handle_onboarding_key(key_event),
                 ServerInputOwner::ReleaseNotes => self.handle_release_notes_key(key_event),
@@ -511,6 +516,70 @@ impl App {
             .as_mut()
             .map(|dock| dock.handle_key(event, auto_host.as_deref()));
         self.apply_spawn_dock_action(action);
+    }
+
+    pub(super) fn handle_capture_key(&mut self, event: KeyEvent) {
+        let action = self
+            .state
+            .capture
+            .as_mut()
+            .map(|capture| capture.handle_key(event));
+        match action {
+            Some(crate::app::capture::CaptureAction::Close) => {
+                self.persist_capture_draft();
+                self.state.capture = None;
+            }
+            Some(crate::app::capture::CaptureAction::Consumed) => self.persist_capture_draft(),
+            Some(crate::app::capture::CaptureAction::Save(research)) => {
+                let text = self
+                    .state
+                    .capture
+                    .as_ref()
+                    .map(|capture| capture.text.clone())
+                    .unwrap_or_default();
+                if text.trim().is_empty() {
+                    return;
+                }
+                match crate::focus_capture::add_item(&self.state.focus_dir, &text, research) {
+                    Ok(_) => {
+                        self.state.sidebar_presentation.save_capture_draft(None);
+                        self.state.capture = None;
+                        self.state.capture_ack = Some(crate::app::capture::CaptureAck {
+                            text: if research {
+                                "saved · research queued".into()
+                            } else {
+                                "saved to focus list".into()
+                            },
+                            deadline: std::time::Instant::now() + std::time::Duration::from_secs(2),
+                        });
+                    }
+                    Err(crate::focus_capture::AddError::Empty) => {}
+                    Err(crate::focus_capture::AddError::Io(error)) => {
+                        if let Some(capture) = self.state.capture.as_mut() {
+                            capture.error = Some(error.to_string());
+                            capture.restored_age = None;
+                        }
+                        self.persist_capture_draft();
+                    }
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn persist_capture_draft(&self) {
+        let draft =
+            self.state
+                .capture
+                .as_ref()
+                .map(|capture| crate::client::presentation::CaptureDraft {
+                    text: capture.text.clone(),
+                    saved_at_unix: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                });
+        self.state.sidebar_presentation.save_capture_draft(draft);
     }
 
     fn apply_spawn_dock_action(&mut self, action: Option<crate::app::spawn_dock::SpawnDockAction>) {
@@ -5209,6 +5278,13 @@ impl App {
                 }
                 true
             }
+            InputOwner::Capture => {
+                if let Some(capture) = self.state.capture.as_mut() {
+                    capture.insert_text(text);
+                }
+                self.persist_capture_draft();
+                true
+            }
             InputOwner::Surface(SurfaceInputOwner::Board) => self.board_insert_text(text),
             InputOwner::Server(ServerInputOwner::Navigator) => {
                 if !self.state.navigator.search_focused {
@@ -5419,6 +5495,17 @@ impl App {
         if self.state.spawn_dock.is_some()
             && !spawn_dock_input_is_interrupted(&owner)
             && self.handle_spawn_dock_mouse(mouse)
+        {
+            return;
+        }
+        if self.state.capture.is_some()
+            && !spawn_dock_input_is_interrupted(&owner)
+            && crate::ui::capture::hit_test(
+                &self.state,
+                self.state.view.screen_area,
+                mouse.column,
+                mouse.row,
+            )
         {
             return;
         }

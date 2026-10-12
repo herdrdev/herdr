@@ -27,6 +27,7 @@ mod api;
 mod completion;
 mod day;
 mod fleet;
+mod focus;
 mod integration;
 mod machine;
 mod notification;
@@ -196,6 +197,7 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         "fleet" => fleet::run_fleet_command(&args[2..])?,
         "work-index" => work_index::run_work_index_command(&args[2..])?,
         "day" => day::run_day_command(&args[2..])?,
+        "focus" => focus::run_focus_command(&args[2..])?,
         "watchdog" => watchdog::run_watchdog_command(&args[2..])?,
         "channel" => run_channel_command(&args[2..])?,
         "machine" => machine::run_machine_command(&args[2..])?,

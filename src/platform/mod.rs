@@ -290,7 +290,9 @@ pub(crate) fn client_presentation_identity() -> String {
 }
 
 mod client_state;
-pub(crate) use client_state::{create_private_state_file, replace_file, sync_parent_directory};
+pub(crate) use client_state::{
+    create_private_dir_all, create_private_state_file, replace_file, sync_parent_directory,
+};
 
 #[cfg(not(unix))]
 pub(crate) fn begin_cli_output() {}

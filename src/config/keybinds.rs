@@ -339,6 +339,7 @@ pub struct Keybinds {
     pub new_workspace: ActionKeybinds,
     pub new_thread: ActionKeybinds,
     pub new_agent_dock: ActionKeybinds,
+    pub capture: ActionKeybinds,
     pub new_worktree: ActionKeybinds,
     pub open_worktree: ActionKeybinds,
     pub remove_worktree: ActionKeybinds,
@@ -574,6 +575,7 @@ impl Config {
             new_workspace: empty_action!(),
             new_thread: empty_action!(),
             new_agent_dock: empty_action!(),
+            capture: empty_action!(),
             new_worktree: empty_action!(),
             open_worktree: empty_action!(),
             remove_worktree: empty_action!(),
@@ -769,6 +771,7 @@ impl Config {
             apply_action!(keybinds.new_workspace, new_workspace, source);
             apply_action!(keybinds.new_thread, new_thread, source);
             apply_action!(keybinds.new_agent_dock, new_agent_dock, source);
+            apply_action!(keybinds.capture, capture, source);
             apply_action!(keybinds.new_worktree, new_worktree, source);
             apply_action!(keybinds.open_worktree, open_worktree, source);
             apply_action!(keybinds.remove_worktree, remove_worktree, source);
@@ -2938,6 +2941,9 @@ width = "80%"
     fn user_actions_parse_in_order_with_physical_prefix_syntax() {
         let config: Config = toml::from_str(
             r#"
+[keys]
+capture = ""
+
 [[actions]]
 name = "test"
 command = "just test"
