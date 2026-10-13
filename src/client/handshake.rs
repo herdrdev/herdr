@@ -1,11 +1,10 @@
 use std::io;
 #[cfg(unix)]
 use std::io::IsTerminal as _;
-use std::time::Duration;
+use std::sync::atomic::AtomicBool;
+use std::time::{Duration, Instant};
 
 use interprocess::local_socket::traits::Stream as _;
-#[cfg(windows)]
-use tracing::debug;
 use tracing::info;
 
 use crate::ipc::LocalStream;
@@ -101,31 +100,25 @@ fn direct_graphics_profile_allowed() -> bool {
     false
 }
 
-#[cfg(windows)]
-fn set_handshake_recv_timeout(
-    stream: &LocalStream,
-    timeout: Option<Duration>,
-    context: &'static str,
-) -> Result<(), ClientError> {
-    match stream.set_recv_timeout(timeout) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::Unsupported => {
-            debug!(err = %err, context, "client socket receive timeout unavailable");
-            Ok(())
-        }
-        Err(err) => Err(ClientError::ConnectionFailed(err)),
-    }
-}
-
-#[cfg(not(windows))]
-fn set_handshake_recv_timeout(
-    stream: &LocalStream,
-    timeout: Option<Duration>,
-    _context: &'static str,
-) -> Result<(), ClientError> {
-    stream
-        .set_recv_timeout(timeout)
-        .map_err(ClientError::ConnectionFailed)
+fn read_handshake_response(
+    stream: &mut LocalStream,
+    read_timeout: Duration,
+) -> Result<ServerMessage, ClientError> {
+    let deadline = Instant::now() + read_timeout;
+    crate::ipc::set_local_stream_polling(stream, true).map_err(ClientError::ConnectionFailed)?;
+    let stopped = AtomicBool::new(false);
+    let response = protocol::read_message(
+        &mut super::transport::EndpointReader {
+            stream,
+            stopped: &stopped,
+            deadline: Some(deadline),
+        },
+        MAX_FRAME_SIZE,
+    );
+    let restored = crate::ipc::set_local_stream_polling(stream, false);
+    let response = response?;
+    restored.map_err(ClientError::ConnectionFailed)?;
+    Ok(response)
 }
 
 #[derive(Debug)]
@@ -238,17 +231,7 @@ pub(super) fn do_handshake(
     } else {
         handshake_read_timeout()
     };
-    set_handshake_recv_timeout(
-        stream,
-        Some(read_timeout),
-        "client handshake read timeout unavailable",
-    )?;
-    let welcome: ServerMessage = protocol::read_message(stream, MAX_FRAME_SIZE)?;
-    set_handshake_recv_timeout(
-        stream,
-        None,
-        "failed to clear client handshake read timeout",
-    )?;
+    let welcome = read_handshake_response(stream, read_timeout)?;
 
     if endpoint_shell {
         let ServerMessage::EndpointControl { kind, data } = welcome else {
@@ -324,6 +307,160 @@ pub(super) fn do_handshake(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stream_pair() -> (LocalStream, LocalStream) {
+        use interprocess::local_socket::traits::Listener as _;
+        let path = std::env::temp_dir().join(format!(
+            "hhs-{}-{:x}.sock",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let listener = crate::ipc::bind_private_local_listener(&path).unwrap();
+        let client = crate::ipc::connect_local_stream(&path).unwrap();
+        let server = listener.accept().unwrap();
+        std::fs::remove_file(path).unwrap();
+        (client, server)
+    }
+
+    #[test]
+    fn handshake_response_deadline_bounds_silent_and_partial_replies() {
+        use std::io::Write as _;
+        use std::time::Instant;
+        let mut outcomes = Vec::new();
+        for (prefix, drip) in [
+            (vec![], false),
+            (vec![100, 0], false),
+            (vec![100, 0, 0, 0, 1, 2], false),
+            (vec![100, 0, 0, 0], true),
+        ] {
+            let (mut client, mut server) = stream_pair();
+            let (release, held) = std::sync::mpsc::channel();
+            let peer = std::thread::spawn(move || {
+                server.write_all(&prefix).unwrap();
+                if drip {
+                    // Each fragment arrives sooner than the read budget; the total must stay bounded.
+                    for _ in 0..12 {
+                        if held.recv_timeout(Duration::from_millis(40)).is_ok() {
+                            return;
+                        }
+                        if server.write_all(&[1]).is_err() {
+                            return;
+                        }
+                    }
+                } else {
+                    // Bound the reproduction even when the reader ignores its deadline.
+                    let _ = held.recv_timeout(Duration::from_millis(500));
+                }
+            });
+            let start = Instant::now();
+            let result = read_handshake_response(&mut client, Duration::from_millis(100));
+            let elapsed = start.elapsed();
+            let _ = release.send(());
+            peer.join().unwrap();
+            outcomes.push((elapsed, result));
+        }
+        for (elapsed, result) in outcomes {
+            assert!(
+                matches!(result, Err(ClientError::ConnectionLost(ref error)) if error.kind() == io::ErrorKind::TimedOut),
+                "{elapsed:?}: {result:?}"
+            );
+            assert!(elapsed < Duration::from_millis(400), "{elapsed:?}");
+        }
+    }
+
+    #[test]
+    fn handshake_preserves_welcome_rejection_close_and_frame_limit() {
+        use std::io::Write as _;
+        for endpoint_shell in [false, true] {
+            for outcome in ["welcome", "rejected", "closed", "oversized"] {
+                let (mut client, mut server) = stream_pair();
+                let peer = std::thread::spawn(move || {
+                    let hello: ClientMessage =
+                        protocol::read_message(&mut server, MAX_FRAME_SIZE).unwrap();
+                    assert!(
+                        matches!(hello, ClientMessage::EndpointControl { .. }) == endpoint_shell
+                    );
+                    match outcome {
+                        "closed" => (),
+                        "oversized" => server
+                            .write_all(&((MAX_FRAME_SIZE + 1) as u32).to_le_bytes())
+                            .unwrap(),
+                        _ => {
+                            let welcome = if endpoint_shell {
+                                let welcome = if outcome == "rejected" {
+                                    EndpointServerWelcome::incompatible(
+                                        "denied",
+                                        "permission denied",
+                                    )
+                                } else {
+                                    EndpointServerWelcome::compatible(vec!["pane.close".into()])
+                                };
+                                ServerMessage::EndpointControl {
+                                    kind: ENDPOINT_WELCOME_KIND.into(),
+                                    data: serde_json::to_string(&welcome).unwrap(),
+                                }
+                            } else {
+                                ServerMessage::Welcome {
+                                    version: PROTOCOL_VERSION,
+                                    encoding: RenderEncoding::TerminalAnsi,
+                                    error: (outcome == "rejected")
+                                        .then(|| "permission denied".into()),
+                                }
+                            };
+                            protocol::write_message(&mut server, &welcome).unwrap();
+                        }
+                    }
+                });
+                let response = do_handshake(
+                    &mut client,
+                    80,
+                    24,
+                    0,
+                    0,
+                    HandshakePixelCapabilities {
+                        exact_geometry: false,
+                        sgr_mouse: false,
+                    },
+                    endpoint_shell
+                        .then_some(crate::protocol::ClientSurfaceSize { cols: 80, rows: 24 }),
+                    false,
+                    false,
+                    true,
+                    true,
+                );
+                peer.join().unwrap();
+                match outcome {
+                    "welcome" => {
+                        let response = response.unwrap();
+                        assert_eq!(
+                            response.encoding,
+                            if endpoint_shell {
+                                RenderEncoding::SemanticFrame
+                            } else {
+                                RenderEncoding::TerminalAnsi
+                            }
+                        );
+                        if endpoint_shell {
+                            assert_eq!(response.endpoint_methods, Some(vec!["pane.close".into()]));
+                        }
+                    }
+                    "rejected" => assert!(
+                        matches!(response, Err(ClientError::HandshakeRejected { error, .. }) if error == "permission denied")
+                    ),
+                    "closed" => assert!(
+                        matches!(response, Err(ClientError::ConnectionLost(ref error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+                    ),
+                    "oversized" => assert!(
+                        matches!(response, Err(ClientError::Protocol(protocol::FramingError::Oversized { claimed, max })) if claimed == MAX_FRAME_SIZE + 1 && max == MAX_FRAME_SIZE)
+                    ),
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
 
     #[test]
     fn direct_graphics_requires_local_transport_even_on_supported_host_terminal() {

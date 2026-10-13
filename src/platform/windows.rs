@@ -197,10 +197,11 @@ impl RemoteBridgeWake {
 
 pub(crate) fn wait_client_stream_readable(
     _stream: &crate::ipc::LocalStream,
+    timeout: Duration,
 ) -> std::io::Result<()> {
     // Sync named pipes have no read timeout. The caller peeks before each read and checks its
     // cancellation flag between polls, including when a frame arrives in several fragments.
-    std::thread::sleep(Duration::from_millis(2));
+    std::thread::sleep(timeout.min(Duration::from_millis(2)));
     Ok(())
 }
 

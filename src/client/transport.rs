@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 
 pub(super) fn start_endpoint_transport(
     stream: LocalStream,
@@ -52,6 +53,7 @@ pub(super) fn server_reader_thread(
     let mut stream = EndpointReader {
         stream: &mut stream,
         stopped: should_quit,
+        deadline: None,
     };
     loop {
         if should_quit.load(Ordering::Acquire) {
@@ -101,9 +103,10 @@ pub(super) fn server_reader_thread(
     }
 }
 
-struct EndpointReader<'a> {
-    stream: &'a mut LocalStream,
-    stopped: &'a AtomicBool,
+pub(super) struct EndpointReader<'a> {
+    pub(super) stream: &'a mut LocalStream,
+    pub(super) stopped: &'a AtomicBool,
+    pub(super) deadline: Option<Instant>,
 }
 
 impl io::Read for EndpointReader<'_> {
@@ -112,11 +115,21 @@ impl io::Read for EndpointReader<'_> {
             if self.stopped.load(Ordering::Acquire) {
                 return Ok(0);
             }
+            let remaining = match self.deadline {
+                Some(deadline) => {
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::TimedOut, "handshake response timed out")
+                        })?
+                }
+                None => Duration::from_millis(100),
+            };
             match crate::ipc::poll_local_stream_read_count(self.stream, buffer)? {
                 crate::ipc::LocalStreamReadCount::Data(count) => return Ok(count),
                 crate::ipc::LocalStreamReadCount::Closed => return Ok(0),
                 crate::ipc::LocalStreamReadCount::Pending => {
-                    crate::platform::wait_client_stream_readable(self.stream)?;
+                    crate::platform::wait_client_stream_readable(self.stream, remaining)?;
                 }
             }
         }
@@ -226,6 +239,7 @@ mod tests {
         EndpointReader {
             stream: &mut reader_stream,
             stopped: &stopped,
+            deadline: None,
         }
         .read_to_end(&mut output)
         .unwrap();
