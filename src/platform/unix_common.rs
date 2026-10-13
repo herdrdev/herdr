@@ -136,7 +136,10 @@ pub(crate) fn write_client_stream(
     Ok(())
 }
 
-pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> std::io::Result<()> {
+pub(crate) fn wait_client_stream_readable(
+    stream: &crate::ipc::LocalStream,
+    timeout: std::time::Duration,
+) -> std::io::Result<()> {
     use std::os::fd::{AsFd as _, AsRawFd as _};
     let crate::ipc::LocalStream::UdSocket(stream) = stream;
     let mut descriptor = libc::pollfd {
@@ -145,7 +148,8 @@ pub(crate) fn wait_client_stream_readable(stream: &crate::ipc::LocalStream) -> s
         revents: 0,
     };
     // Bound cancellation latency without polling idle connections hundreds of times per second.
-    let result = unsafe { libc::poll(&mut descriptor, 1, 100) };
+    let wait_ms = timeout.as_millis().clamp(1, 100) as i32;
+    let result = unsafe { libc::poll(&mut descriptor, 1, wait_ms) };
     if result < 0 {
         let error = std::io::Error::last_os_error();
         if error.kind() != std::io::ErrorKind::Interrupted {
