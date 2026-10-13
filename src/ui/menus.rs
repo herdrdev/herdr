@@ -298,9 +298,67 @@ pub(super) fn render_context_menu(app: &AppState, frame: &mut Frame) {
 
     let actions = app.context_menu_actions(menu);
     let items: Vec<ListItem> = app
-        .context_menu_items(menu)
-        .iter()
-        .map(|item| ListItem::new(Line::from(*item)))
+        .context_menu_actions(menu)
+        .into_iter()
+        .map(|action| {
+            let label = match (&menu.kind, action) {
+                (
+                    crate::app::state::ContextMenuKind::UsageAccount { accounts, .. },
+                    crate::app::state::ContextMenuAction::SwitchUsageAccountLocal(index),
+                ) => accounts
+                    .get(index)
+                    .map(|account| {
+                        let current = if account.current { " (current)" } else { "" };
+                        match &account.email {
+                            Some(email) => format!(
+                                "Switch this machine to {} ({email}){current}",
+                                account.profile_id
+                            ),
+                            None => {
+                                format!("Switch this machine to {}{current}", account.profile_id)
+                            }
+                        }
+                    })
+                    .unwrap_or_default(),
+                (
+                    crate::app::state::ContextMenuKind::UsageAccount { accounts, .. },
+                    crate::app::state::ContextMenuAction::SwitchUsageAccountAll(index),
+                ) => accounts
+                    .get(index)
+                    .map(|account| {
+                        let current = if account.current { " (current)" } else { "" };
+                        match &account.email {
+                            Some(email) => format!(
+                                "Switch all machines (ub1, ub2) to {} ({email}){current}",
+                                account.profile_id
+                            ),
+                            None => format!(
+                                "Switch all machines (ub1, ub2) to {}{current}",
+                                account.profile_id
+                            ),
+                        }
+                    })
+                    .unwrap_or_default(),
+                (
+                    crate::app::state::ContextMenuKind::UsageAccount {
+                        codex_reset_credits: Some(credits),
+                        confirming_codex_reset: false,
+                        ..
+                    },
+                    crate::app::state::ContextMenuAction::ResetCodexWindow,
+                ) => format!("Reset 7d window ({credits} left)"),
+                (
+                    crate::app::state::ContextMenuKind::UsageAccount {
+                        codex_reset_credits: Some(credits),
+                        confirming_codex_reset: true,
+                        ..
+                    },
+                    crate::app::state::ContextMenuAction::ConfirmCodexWindowReset,
+                ) => format!("Confirm reset 7d window ({credits} left)"),
+                (_, action) => menu.label_for_action(action).to_string(),
+            };
+            ListItem::new(Line::from(label))
+        })
         .collect();
     let list = List::new(items)
         .style(Style::default().fg(p.text))

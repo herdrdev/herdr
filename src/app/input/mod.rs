@@ -1925,6 +1925,7 @@ impl App {
             return;
         };
         match target {
+            UsageHitTarget::ClaudeSubscription | UsageHitTarget::CodexSubscription => {}
             UsageHitTarget::Cost => view.metric = UsageMetric::Cost,
             UsageHitTarget::Tokens => view.metric = UsageMetric::Tokens,
             UsageHitTarget::Hours24 => view.range = UsageRange::Hours24,
@@ -5578,6 +5579,87 @@ impl App {
             return;
         }
         if owner == InputOwner::Surface(SurfaceInputOwner::Usage) {
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Right)) {
+                let target = self
+                    .state
+                    .view
+                    .usage_hit_areas
+                    .iter()
+                    .find(|hit| {
+                        mouse.column >= hit.rect.x
+                            && mouse.column < hit.rect.right()
+                            && mouse.row >= hit.rect.y
+                            && mouse.row < hit.rect.bottom()
+                    })
+                    .map(|hit| hit.target);
+                let provider = match target {
+                    Some(crate::app::state::UsageHitTarget::ClaudeSubscription) => {
+                        Some(crate::provider_usage::QuotaProvider::Claude)
+                    }
+                    Some(crate::app::state::UsageHitTarget::CodexSubscription) => {
+                        Some(crate::provider_usage::QuotaProvider::Codex)
+                    }
+                    _ => None,
+                };
+                if let Some(provider) = provider {
+                    let usage = &self.state.provider_usage;
+                    let current = usage
+                        .primary(provider)
+                        .map(|account| account.profile_id.as_str());
+                    let codex_identity_available = provider
+                        != crate::provider_usage::QuotaProvider::Codex
+                        || usage
+                            .primary(provider)
+                            .is_some_and(|account| account.usage.email.is_some());
+                    let accounts = if codex_identity_available {
+                        usage
+                            .accounts
+                            .iter()
+                            .filter(|account| account.provider == provider)
+                            .filter_map(|account| {
+                                crate::app::input::modal::usage_profile_switch_command(
+                                    provider,
+                                    &account.profile_id,
+                                )?;
+                                Some(crate::app::state::UsageAccountMenuOption {
+                                    profile_id: account.profile_id.clone(),
+                                    email: account.usage.email.clone().filter(|email| {
+                                        email.len() <= 254 && !email.chars().any(char::is_control)
+                                    }),
+                                    current: current == Some(account.profile_id.as_str()),
+                                })
+                            })
+                            .collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    };
+                    let codex_reset_credits = (provider
+                        == crate::provider_usage::QuotaProvider::Codex)
+                        .then_some(usage.codex_reset_credits)
+                        .flatten();
+                    if !accounts.is_empty() || codex_reset_credits.is_some_and(|n| n > 0) {
+                        let selected = accounts
+                            .iter()
+                            .position(|account| !account.current)
+                            .map(crate::app::state::ContextMenuAction::SwitchUsageAccountLocal)
+                            .unwrap_or(crate::app::state::ContextMenuAction::ResetCodexWindow);
+                        self.state.context_menu = Some(crate::app::state::ContextMenuState {
+                            kind: crate::app::state::ContextMenuKind::UsageAccount {
+                                provider,
+                                accounts,
+                                codex_reset_credits,
+                                confirming_codex_reset: false,
+                            },
+                            x: mouse.column,
+                            y: mouse.row,
+                            selected,
+                        });
+                        self.state
+                            .open_client_overlay(crate::app::state::ClientOverlay::ContextMenu);
+                    }
+                    return;
+                }
+            }
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
                 let target = self
                     .state

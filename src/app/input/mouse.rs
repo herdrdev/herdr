@@ -3170,7 +3170,9 @@ impl AppState {
                 tab_id,
                 ..
             } => (workspace_id, Some(tab_id)),
-            ContextMenuKind::RemoteAgent { .. } => return Some((0, None)),
+            ContextMenuKind::RemoteAgent { .. } | ContextMenuKind::UsageAccount { .. } => {
+                return Some((0, None))
+            }
         };
         let ws_idx = self
             .workspaces
@@ -3210,7 +3212,7 @@ impl AppState {
                 *cached_ws = ws_idx;
                 *cached_tab = tab_idx;
             }
-            ContextMenuKind::RemoteAgent { .. } => {}
+            ContextMenuKind::RemoteAgent { .. } | ContextMenuKind::UsageAccount { .. } => {}
         }
         true
     }
@@ -3223,6 +3225,9 @@ impl AppState {
                 .find(|entry| entry.agent_ref == *agent_ref && entry.host_fresh && entry.settled)
                 .map(|_| vec![ContextMenuAction::Unsettle])
                 .unwrap_or_default();
+        }
+        if matches!(menu.kind, ContextMenuKind::UsageAccount { .. }) {
+            return menu.actions_for_pane_state(false, false, false);
         }
         let Some((ws_idx, tab_idx)) = self.context_menu_target_indices(menu) else {
             return Vec::new();
@@ -11962,6 +11967,59 @@ mod tests {
             assert_eq!(view.breakdown, UsageBreakdown::Model);
             assert!(view.scanning);
         }
+    }
+
+    #[test]
+    fn right_clicking_claude_subscription_row_opens_profile_menu() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces = vec![Workspace::test_new("one")];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.usage_view = Some(crate::app::state::UsageViewState::new(None));
+        let mut usage = crate::provider_usage::ProviderUsageSnapshot::with_primary_accounts(
+            crate::provider_usage::AccountUsage::default(),
+            crate::provider_usage::AccountUsage::default(),
+            crate::provider_usage::AccountUsage::default(),
+        );
+        usage
+            .accounts
+            .push(crate::provider_usage::ProviderAccountUsage {
+                provider: crate::provider_usage::QuotaProvider::Claude,
+                profile_id: "team".into(),
+                label: "team".into(),
+                usage: crate::provider_usage::AccountUsage {
+                    email: Some("team@example.com".into()),
+                    ..Default::default()
+                },
+            });
+        app.state.provider_usage = usage;
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 120, 40));
+        let row = app
+            .state
+            .view
+            .usage_hit_areas
+            .iter()
+            .find(|hit| hit.target == crate::app::state::UsageHitTarget::ClaudeSubscription)
+            .expect("Claude subscription row");
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            row.rect.x,
+            row.rect.y,
+        ));
+
+        let menu = app.state.context_menu.as_ref().expect("account menu");
+        let crate::app::state::ContextMenuKind::UsageAccount { accounts, .. } = &menu.kind else {
+            panic!("expected provider account menu");
+        };
+        assert_eq!(accounts.len(), 2);
+        assert!(accounts[0].current);
+        assert_eq!(accounts[1].email.as_deref(), Some("team@example.com"));
+        let actions = app.state.context_menu_actions(menu);
+        assert!(actions.contains(&ContextMenuAction::SwitchUsageAccountLocal(1)));
+        assert!(actions.contains(&ContextMenuAction::SwitchUsageAccountAll(1)));
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
     }
 
     #[tokio::test]

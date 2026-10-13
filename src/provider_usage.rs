@@ -16,7 +16,7 @@ use std::{
     cmp::Reverse,
     collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io::{self, Read, Seek, SeekFrom, Write},
+    io::{self, BufRead, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Mutex, OnceLock},
@@ -31,6 +31,7 @@ const KIMI_TIMEOUT: Duration = Duration::from_secs(5);
 const KIMI_OUTPUT_LIMIT: usize = 64 * 1024;
 const AGY_TIMEOUT: Duration = Duration::from_secs(5);
 const AGY_OUTPUT_LIMIT: usize = 64 * 1024;
+const CODEX_APP_SERVER_TIMEOUT: Duration = Duration::from_secs(10);
 const FIVE_HOUR_MINUTES: u64 = 300;
 const SEVEN_DAY_MINUTES: u64 = 10_080;
 const MAX_USAGE_FILES: usize = 64;
@@ -595,6 +596,7 @@ pub(crate) struct ProviderAccountUsage {
 pub(crate) struct ProviderUsageSnapshot {
     pub collected_unix: Option<i64>,
     pub accounts: Vec<ProviderAccountUsage>,
+    pub codex_reset_credits: Option<u32>,
     primary_claude: String,
     primary_codex: String,
     primary_kimi: String,
@@ -631,6 +633,7 @@ impl ProviderUsageSnapshot {
                 },
             ],
             collected_unix: None,
+            codex_reset_credits: None,
             primary_claude: "default".into(),
             primary_codex: "default".into(),
             primary_kimi: "default".into(),
@@ -721,12 +724,122 @@ pub(crate) fn collect(now_unix: Option<i64>, now: Instant) -> ProviderUsageSnaps
     ProviderUsageSnapshot {
         collected_unix: now_unix,
         accounts,
+        codex_reset_credits: (!cfg!(test)).then(read_codex_reset_credits).flatten(),
         primary_claude,
         primary_codex,
         primary_kimi: "default".into(),
         primary_agy: "default".into(),
         primary_opencode: "default".into(),
     }
+}
+
+fn read_codex_reset_credits() -> Option<u32> {
+    run_codex_app_server_request("account/rateLimits/read", serde_json::json!({})).and_then(
+        |response| {
+            response
+                .get("result")?
+                .get("rate_limit_reset_credits")?
+                .as_u64()?
+                .try_into()
+                .ok()
+        },
+    )
+}
+
+pub(crate) fn consume_codex_reset_credit() -> bool {
+    run_codex_app_server_request(
+        "account/rateLimitResetCredit/consume",
+        serde_json::json!({}),
+    )
+    .is_some_and(|response| response.get("result").is_some() && response.get("error").is_none())
+}
+
+fn run_codex_app_server_request(
+    method: &'static str,
+    params: serde_json::Value,
+) -> Option<serde_json::Value> {
+    let mut child = Command::new("codex")
+        .args(["app-server", "--listen", "stdio://"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let result =
+            codex_app_server_request(std::io::BufReader::new(stdout), stdin, method, params);
+        let _ = sender.send(result);
+    });
+    let deadline = Instant::now() + CODEX_APP_SERVER_TIMEOUT;
+    let result = loop {
+        match receiver.try_recv() {
+            Ok(result) => break result,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+        if Instant::now() >= deadline {
+            break None;
+        }
+        if child.try_wait().ok().flatten().is_some() {
+            break receiver
+                .recv_timeout(Duration::from_millis(100))
+                .ok()
+                .flatten();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    result
+}
+
+fn codex_app_server_request<R: BufRead, W: Write>(
+    mut reader: R,
+    mut writer: W,
+    method: &str,
+    params: serde_json::Value,
+) -> Option<serde_json::Value> {
+    fn send<W: Write>(writer: &mut W, value: serde_json::Value) -> Option<()> {
+        serde_json::to_writer(&mut *writer, &value).ok()?;
+        writer.write_all(b"\n").ok()?;
+        writer.flush().ok()
+    }
+    fn response<R: BufRead>(reader: &mut R, expected_id: u64) -> Option<serde_json::Value> {
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).ok()? == 0 || line.len() > 64 * 1024 {
+                return None;
+            }
+            let value: serde_json::Value = serde_json::from_str(&line).ok()?;
+            if value.get("id").and_then(serde_json::Value::as_u64) == Some(expected_id) {
+                return (value.get("error").is_none()).then_some(value);
+            }
+        }
+    }
+    send(
+        &mut writer,
+        serde_json::json!({
+            "id": 0,
+            "method": "initialize",
+            "params": {
+                "clientInfo": {"name": "herdr", "version": env!("CARGO_PKG_VERSION")},
+                "capabilities": {}
+            }
+        }),
+    )?;
+    response(&mut reader, 0)?;
+    send(&mut writer, serde_json::json!({"method": "initialized"}))?;
+    send(
+        &mut writer,
+        serde_json::json!({"id": 1, "method": method, "params": params}),
+    )?;
+    response(&mut reader, 1)
 }
 
 /// Loads the last complete scan without touching provider logs, so opening the
@@ -1420,6 +1533,7 @@ fn load_all_claude_usage(
         let path = statusline_cache_dir().join(format!("rate-limits-{profile_id}.env"));
         let mut usage =
             load_claude_usage_from(&path, Some(&profile_id), Some(&config_dir), now_unix, now);
+        usage.email = claude_profile_email(&config_dir).or(usage.email);
         if profile_id == primary {
             if let Some(details) = details {
                 usage.cost_usd = Some(details.cost_usd);
@@ -2040,6 +2154,51 @@ mod tests {
             52.0
         );
         assert_eq!(usage.credits, Some(1927.95));
+    }
+
+    #[test]
+    fn codex_app_server_reset_credit_read_uses_stubbed_json_rpc() {
+        let input = concat!(
+            "{\"id\":0,\"result\":{}}\n",
+            "{\"id\":1,\"result\":{\"rate_limit_reset_credits\":2}}\n"
+        );
+        let mut requests = Vec::new();
+        let response = codex_app_server_request(
+            std::io::Cursor::new(input),
+            &mut requests,
+            "account/rateLimits/read",
+            serde_json::json!({}),
+        )
+        .expect("stub app-server response");
+        assert_eq!(response["result"]["rate_limit_reset_credits"], 2);
+        let requests = String::from_utf8(requests).expect("JSON requests");
+        assert!(requests.contains("\"method\":\"initialize\""));
+        assert!(requests.contains("\"method\":\"initialized\""));
+        assert!(requests.contains("\"method\":\"account/rateLimits/read\""));
+    }
+
+    #[test]
+    fn codex_app_server_consume_accepts_stubbed_result_and_rejects_rpc_error() {
+        let mut requests = Vec::new();
+        let success = codex_app_server_request(
+            std::io::Cursor::new("{\"id\":0,\"result\":{}}\n{\"id\":1,\"result\":{}}\n"),
+            &mut requests,
+            "account/rateLimitResetCredit/consume",
+            serde_json::json!({}),
+        )
+        .expect("stub app-server response");
+        assert!(success.get("result").is_some());
+        assert!(String::from_utf8(requests)
+            .expect("JSON requests")
+            .contains("account/rateLimitResetCredit/consume"));
+
+        assert!(codex_app_server_request(
+            std::io::Cursor::new("{\"id\":0,\"result\":{}}\n{\"id\":1,\"error\":{\"code\":-1}}\n"),
+            Vec::new(),
+            "account/rateLimitResetCredit/consume",
+            serde_json::json!({}),
+        )
+        .is_none());
     }
 
     #[test]

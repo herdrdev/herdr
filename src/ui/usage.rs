@@ -169,9 +169,34 @@ fn header_rows(width: u16) -> u16 {
 
 pub(crate) fn hit_areas(area: Rect) -> Vec<UsageHitArea> {
     let layout = layout(area);
-    let mut areas = header_hit_areas(layout.header);
+    let mut areas = subscription_hit_areas(layout.subscription);
+    areas.extend(header_hit_areas(layout.header));
     areas.extend(breakdown_hit_areas(layout.breakdown));
     areas
+}
+
+fn subscription_hit_areas(area: Rect) -> Vec<UsageHitArea> {
+    let compact = usize::from(area.height) < SUBSCRIPTION_PROVIDERS.len() * 2;
+    let row_height = if compact { 1 } else { 2 };
+    SUBSCRIPTION_PROVIDERS
+        .iter()
+        .take(usize::from(area.height / row_height).max(1))
+        .enumerate()
+        .filter_map(|(index, provider)| {
+            let target = match provider {
+                QuotaProvider::Claude => UsageHitTarget::ClaudeSubscription,
+                QuotaProvider::Codex => UsageHitTarget::CodexSubscription,
+                _ => return None,
+            };
+            let y = area
+                .y
+                .saturating_add((index as u16).saturating_mul(row_height));
+            (y < area.bottom()).then_some(UsageHitArea {
+                target,
+                rect: Rect::new(area.x, y, area.width, row_height.min(area.bottom() - y)),
+            })
+        })
+        .collect()
 }
 
 fn header_hit_areas(header: Rect) -> Vec<UsageHitArea> {
@@ -303,8 +328,14 @@ fn render_subscription_usage(
     let constraints = vec![Constraint::Length(row_height); shown];
     let rows = Layout::vertical(&constraints).split(area);
     let providers = SUBSCRIPTION_PROVIDERS.map(|provider| {
+        let mut label = quota_provider_label(provider).to_string();
+        if provider == QuotaProvider::Codex {
+            if let Some(credits) = snapshot.codex_reset_credits {
+                label.push_str(&format!(" ↺{credits}"));
+            }
+        }
         (
-            quota_provider_label(provider),
+            label,
             snapshot.primary_usage(provider),
             quota_provider_color(provider, palette),
         )
@@ -320,16 +351,16 @@ fn render_subscription_usage(
             Style::default().fg(palette.text)
         };
         let mut header = vec![Span::styled(
-            label,
+            label.clone(),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )];
         let claude_has_details = usage.cost_usd.is_some() || usage.remaining_minutes.is_some();
         // Compact rows spend no width on an all-placeholder detail line.
-        if label == "Claude Code" && (claude_has_details || !compact) {
+        if label.starts_with("Claude Code") && (claude_has_details || !compact) {
             header.push(Span::raw("  "));
             header.push(Span::styled(claude_details_text(usage), style));
-        } else if let (false, Some(balance)) = (label == "Claude Code", usage.credits) {
-            let label_width = super::text::display_width(label);
+        } else if let (false, Some(balance)) = (label.starts_with("Claude Code"), usage.credits) {
+            let label_width = super::text::display_width(&label);
             let available = usize::from(provider_area.width).saturating_sub(label_width + 2);
             header.push(Span::raw("  "));
             header.push(Span::styled(credits_text(balance, available), style));
@@ -523,7 +554,10 @@ fn render_header(
             UsageHitTarget::Days30 => ("[30 days]", state.range == UsageRange::Days30),
             UsageHitTarget::Days90 => ("[90 days]", state.range == UsageRange::Days90),
             UsageHitTarget::Rescan => ("⟳", state.scanning),
-            UsageHitTarget::Model | UsageHitTarget::Day => continue,
+            UsageHitTarget::ClaudeSubscription
+            | UsageHitTarget::CodexSubscription
+            | UsageHitTarget::Model
+            | UsageHitTarget::Day => continue,
         };
         let style = if active {
             Style::default()
@@ -844,6 +878,7 @@ fn render_breakdown(
     );
     for hit in breakdown_hit_areas(area) {
         match hit.target {
+            UsageHitTarget::ClaudeSubscription | UsageHitTarget::CodexSubscription => {}
             UsageHitTarget::Model => {
                 frame.render_widget(Paragraph::new("[Model]").style(model_style), hit.rect)
             }
@@ -1057,6 +1092,36 @@ mod tests {
         AccountUsage, ProviderUsageSnapshot, QuotaWindow, UsageProvider, UsageSample, UsageSnapshot,
     };
     use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn subscription_provider_rows_have_distinct_right_click_hit_targets() {
+        let hits = hit_areas(Rect::new(0, 0, 120, 40));
+        let claude = hits
+            .iter()
+            .find(|hit| hit.target == UsageHitTarget::ClaudeSubscription)
+            .expect("Claude row hit area");
+        let codex = hits
+            .iter()
+            .find(|hit| hit.target == UsageHitTarget::CodexSubscription)
+            .expect("Codex row hit area");
+        assert_ne!(claude.rect.y, codex.rect.y);
+        for (hit, target) in [
+            (claude, UsageHitTarget::ClaudeSubscription),
+            (codex, UsageHitTarget::CodexSubscription),
+        ] {
+            assert_eq!(
+                hits.iter()
+                    .find(|candidate| {
+                        hit.rect.x >= candidate.rect.x
+                            && hit.rect.x < candidate.rect.right()
+                            && hit.rect.y >= candidate.rect.y
+                            && hit.rect.y < candidate.rect.bottom()
+                    })
+                    .map(|candidate| candidate.target),
+                Some(target)
+            );
+        }
+    }
 
     fn fixture() -> UsageSnapshot {
         UsageSnapshot {
@@ -1509,7 +1574,7 @@ mod tests {
             .filter(|hit| hit.rect.width > 0 && hit.rect.height > 0)
             .map(|hit| hit.target)
             .collect();
-        assert_eq!(targets.len(), 9);
+        assert_eq!(targets.len(), 11);
     }
 
     #[test]

@@ -724,6 +724,70 @@ impl App {
                 // projecting per-client Usage-tab state into shared AppState.
                 true
             }
+            AppEvent::UsageProfileSwitchFinished {
+                provider,
+                profile,
+                host_results,
+            } => {
+                let previous_toast = self.state.toast.clone();
+                let succeeded = !host_results.is_empty() && host_results.iter().all(|(_, ok)| *ok);
+                let provider_name = match provider {
+                    crate::provider_usage::QuotaProvider::Claude => "Claude",
+                    crate::provider_usage::QuotaProvider::Codex => "Codex",
+                    _ => "provider",
+                };
+                self.state.toast = Some(crate::app::state::ToastNotification {
+                    kind: if succeeded {
+                        crate::app::state::ToastKind::Finished
+                    } else {
+                        crate::app::state::ToastKind::NeedsAttention
+                    },
+                    title: if succeeded {
+                        format!("{provider_name} switched to {profile}")
+                    } else {
+                        format!("{provider_name} switch to {profile} failed")
+                    },
+                    context: host_results
+                        .iter()
+                        .map(|(host, ok)| {
+                            format!("{host}: {}", if *ok { "success" } else { "failed" })
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                    position: None,
+                    target: None,
+                });
+                self.sync_toast_deadline(previous_toast);
+                true
+            }
+            AppEvent::CodexWindowResetFinished { succeeded } => {
+                let previous_toast = self.state.toast.clone();
+                self.state.toast = Some(crate::app::state::ToastNotification {
+                    kind: if succeeded {
+                        crate::app::state::ToastKind::Finished
+                    } else {
+                        crate::app::state::ToastKind::NeedsAttention
+                    },
+                    title: if succeeded {
+                        "Codex 7d window reset".to_string()
+                    } else {
+                        "Codex 7d window reset failed".to_string()
+                    },
+                    context: if succeeded {
+                        "usage refresh scheduled".to_string()
+                    } else {
+                        "app-server request returned an error".to_string()
+                    },
+                    position: None,
+                    target: None,
+                });
+                self.sync_toast_deadline(previous_toast);
+                if succeeded {
+                    self.provider_usage_refreshed_at = None;
+                    self.schedule_provider_usage(std::time::Instant::now());
+                }
+                true
+            }
             AppEvent::RemoteFocusTransition {
                 operation_id,
                 transition,

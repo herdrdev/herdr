@@ -15,6 +15,101 @@ use crate::{
     layout::NavDirection,
 };
 
+pub(super) fn usage_profile_switch_command(
+    provider: crate::provider_usage::QuotaProvider,
+    profile: &str,
+) -> Option<(&'static str, &'static str, String)> {
+    if profile.is_empty()
+        || profile.len() > 128
+        || !profile
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    {
+        return None;
+    }
+    match provider {
+        crate::provider_usage::QuotaProvider::Claude => {
+            Some(("claude-profile", "switch", profile.to_string()))
+        }
+        crate::provider_usage::QuotaProvider::Codex => {
+            Some(("codex-profile", "switch", profile.to_string()))
+        }
+        _ => None,
+    }
+}
+
+fn remote_profile_switch_args(
+    host: &str,
+    program: &str,
+    subcommand: &str,
+    profile: &str,
+) -> Option<Vec<String>> {
+    if !matches!(host, "ub1" | "ub2")
+        || usage_profile_switch_command(
+            match program {
+                "claude-profile" => crate::provider_usage::QuotaProvider::Claude,
+                "codex-profile" => crate::provider_usage::QuotaProvider::Codex,
+                _ => return None,
+            },
+            profile,
+        )
+        .is_none()
+    {
+        return None;
+    }
+    Some(vec![
+        "-o".into(),
+        "BatchMode=yes".into(),
+        "-o".into(),
+        "ConnectTimeout=10".into(),
+        host.into(),
+        format!("~/.local/bin/{program} {subcommand} {profile}"),
+    ])
+}
+
+fn run_profile_switch(program: &str, subcommand: &str, profile: &str) -> bool {
+    let mut command = std::process::Command::new(program);
+    command.arg(subcommand).arg(profile);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    run_command_with_timeout(command)
+}
+
+fn run_remote_profile_switch(host: &str, program: &str, subcommand: &str, profile: &str) -> bool {
+    let Some(args) = remote_profile_switch_args(host, program, subcommand, profile) else {
+        return false;
+    };
+    let mut command = std::process::Command::new("ssh");
+    command.args(args);
+    command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    run_command_with_timeout(command)
+}
+
+fn run_command_with_timeout(mut command: std::process::Command) -> bool {
+    let Ok(mut child) = command.spawn() else {
+        return false;
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return false;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ModalAction {
     Continue,
@@ -1789,12 +1884,107 @@ impl App {
         self.sync_toast_deadline(previous_toast);
     }
 
+    fn start_usage_profile_switch(
+        &self,
+        provider: crate::provider_usage::QuotaProvider,
+        profile: String,
+        all_machines: bool,
+    ) {
+        let Some((program, subcommand, profile)) = usage_profile_switch_command(provider, &profile)
+        else {
+            return;
+        };
+        let event_tx = self.event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let host_results = if all_machines {
+                std::thread::scope(|scope| {
+                    let local = scope.spawn(|| {
+                        (
+                            "this machine".to_string(),
+                            run_profile_switch(program, subcommand, &profile),
+                        )
+                    });
+                    let ub1 = scope.spawn(|| {
+                        (
+                            "ub1".to_string(),
+                            run_remote_profile_switch("ub1", program, subcommand, &profile),
+                        )
+                    });
+                    let ub2 = scope.spawn(|| {
+                        (
+                            "ub2".to_string(),
+                            run_remote_profile_switch("ub2", program, subcommand, &profile),
+                        )
+                    });
+                    [local.join(), ub1.join(), ub2.join()]
+                        .into_iter()
+                        .map(|result| result.unwrap_or_else(|_| ("host".into(), false)))
+                        .collect()
+                })
+            } else {
+                vec![(
+                    "this machine".to_string(),
+                    run_profile_switch(program, subcommand, &profile),
+                )]
+            };
+            let _ = event_tx.blocking_send(crate::events::AppEvent::UsageProfileSwitchFinished {
+                provider,
+                profile,
+                host_results,
+            });
+        });
+    }
+
+    fn start_codex_window_reset(&self) {
+        let event_tx = self.event_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let succeeded = crate::provider_usage::consume_codex_reset_credit();
+            let _ = event_tx
+                .blocking_send(crate::events::AppEvent::CodexWindowResetFinished { succeeded });
+        });
+    }
+
     pub(crate) fn apply_context_menu_action_via_api(
         &mut self,
         mut menu: ContextMenuState,
         action: ContextMenuAction,
     ) {
         if !self.state.rebase_context_menu_indices(&mut menu) {
+            self.state.close_client_overlay();
+            return;
+        }
+        if let ContextMenuKind::UsageAccount {
+            provider,
+            accounts,
+            codex_reset_credits,
+            confirming_codex_reset,
+        } = &mut menu.kind
+        {
+            match action {
+                ContextMenuAction::SwitchUsageAccountLocal(index)
+                | ContextMenuAction::SwitchUsageAccountAll(index) => {
+                    if let Some(account) = accounts.get(index) {
+                        self.start_usage_profile_switch(
+                            *provider,
+                            account.profile_id.clone(),
+                            matches!(action, ContextMenuAction::SwitchUsageAccountAll(_)),
+                        );
+                    }
+                }
+                ContextMenuAction::ResetCodexWindow if codex_reset_credits.unwrap_or(0) > 0 => {
+                    *confirming_codex_reset = true;
+                    menu.selected = ContextMenuAction::ConfirmCodexWindowReset;
+                    self.state.context_menu = Some(menu);
+                    self.state.open_client_overlay(ClientOverlay::ContextMenu);
+                    return;
+                }
+                ContextMenuAction::ConfirmCodexWindowReset
+                    if *confirming_codex_reset && codex_reset_credits.unwrap_or(0) > 0 =>
+                {
+                    self.start_codex_window_reset();
+                }
+                _ => {}
+            }
             self.state.close_client_overlay();
             return;
         }
@@ -2325,6 +2515,45 @@ mod tests {
     use super::super::{capture_snapshot, state_with_workspaces};
     use super::*;
     use crate::workspace::Workspace;
+
+    #[test]
+    fn usage_profile_switch_command_uses_direct_cli_arguments() {
+        assert_eq!(
+            usage_profile_switch_command(
+                crate::provider_usage::QuotaProvider::Claude,
+                "scalable-so-v2"
+            ),
+            Some(("claude-profile", "switch", "scalable-so-v2".to_string()))
+        );
+        assert_eq!(
+            usage_profile_switch_command(
+                crate::provider_usage::QuotaProvider::Codex,
+                "team.scalable"
+            ),
+            Some(("codex-profile", "switch", "team.scalable".to_string()))
+        );
+        for invalid in ["", "../outside", "two words", "x;touch /tmp/pwned"] {
+            assert!(usage_profile_switch_command(
+                crate::provider_usage::QuotaProvider::Claude,
+                invalid
+            )
+            .is_none());
+        }
+        assert_eq!(
+            remote_profile_switch_args("ub1", "claude-profile", "switch", "team-scalable-so"),
+            Some(vec![
+                "-o".into(),
+                "BatchMode=yes".into(),
+                "-o".into(),
+                "ConnectTimeout=10".into(),
+                "ub1".into(),
+                "~/.local/bin/claude-profile switch team-scalable-so".into(),
+            ])
+        );
+        assert!(
+            remote_profile_switch_args("unknown", "claude-profile", "switch", "team").is_none()
+        );
+    }
 
     fn temp_config_path(name: &str) -> std::path::PathBuf {
         let unique = format!(

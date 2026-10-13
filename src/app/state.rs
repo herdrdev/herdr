@@ -2667,6 +2667,8 @@ pub(crate) struct HomeHitArea {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum UsageHitTarget {
+    ClaudeSubscription,
+    CodexSubscription,
     Cost,
     Tokens,
     Hours24,
@@ -3669,6 +3671,13 @@ pub(crate) struct RemoteAgentPressState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UsageAccountMenuOption {
+    pub profile_id: String,
+    pub email: Option<String>,
+    pub current: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextMenuKind {
     Workspace {
         workspace_id: String,
@@ -3736,6 +3745,12 @@ pub enum ContextMenuKind {
     },
     RemoteAgent {
         agent_ref: crate::api::schema::AgentRef,
+    },
+    UsageAccount {
+        provider: crate::provider_usage::QuotaProvider,
+        accounts: Vec<UsageAccountMenuOption>,
+        codex_reset_credits: Option<u32>,
+        confirming_codex_reset: bool,
     },
 }
 
@@ -4056,6 +4071,10 @@ pub enum ContextMenuAction {
     OpenFolder(PaneOpenWith),
     SendToNewAgent,
     SendToExistingAgent,
+    SwitchUsageAccountLocal(usize),
+    SwitchUsageAccountAll(usize),
+    ResetCodexWindow,
+    ConfirmCodexWindowReset,
     ClearPaneName,
     SwapPane,
     SplitRight,
@@ -4097,6 +4116,9 @@ impl ContextMenuAction {
             Self::OpenFolder(target) => target.directory_item(),
             Self::SendToNewAgent => SEND_TO_NEW_AGENT_ITEM,
             Self::SendToExistingAgent => SEND_TO_EXISTING_AGENT_ITEM,
+            Self::SwitchUsageAccountLocal(_) | Self::SwitchUsageAccountAll(_) => "Switch account",
+            Self::ResetCodexWindow => "Reset 7d window",
+            Self::ConfirmCodexWindowReset => "Confirm reset 7d window",
             Self::ClearPaneName => "Clear pane name",
             Self::SwapPane => "Swap with focused pane",
             Self::SplitRight => "Split right",
@@ -4148,6 +4170,33 @@ impl ContextMenuState {
                 ContextMenuAction::CloseWorkspace,
             ],
             ContextMenuKind::RemoteAgent { .. } => vec![ContextMenuAction::Unsettle],
+            ContextMenuKind::UsageAccount {
+                provider,
+                accounts,
+                codex_reset_credits,
+                confirming_codex_reset,
+            } => {
+                let mut actions = accounts
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(index, _)| {
+                        [
+                            ContextMenuAction::SwitchUsageAccountLocal(index),
+                            ContextMenuAction::SwitchUsageAccountAll(index),
+                        ]
+                    })
+                    .collect::<Vec<_>>();
+                if *provider == crate::provider_usage::QuotaProvider::Codex
+                    && codex_reset_credits.is_some_and(|credits| credits > 0)
+                {
+                    actions.push(if *confirming_codex_reset {
+                        ContextMenuAction::ConfirmCodexWindowReset
+                    } else {
+                        ContextMenuAction::ResetCodexWindow
+                    });
+                }
+                actions
+            }
             ContextMenuKind::GitWorkspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
@@ -9004,7 +9053,7 @@ impl AppState {
                         assert_live_pane(source_pane_id, "context menu source pane");
                     }
                 }
-                ContextMenuKind::RemoteAgent { .. } => {}
+                ContextMenuKind::RemoteAgent { .. } | ContextMenuKind::UsageAccount { .. } => {}
             }
         }
     }

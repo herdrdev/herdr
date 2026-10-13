@@ -174,6 +174,14 @@ pub enum AppEvent {
     ProviderUsageRefreshed {
         snapshot: Box<crate::provider_usage::ProviderUsageSnapshot>,
     },
+    UsageProfileSwitchFinished {
+        provider: crate::provider_usage::QuotaProvider,
+        profile: String,
+        host_results: Vec<(String, bool)>,
+    },
+    CodexWindowResetFinished {
+        succeeded: bool,
+    },
     /// A generation-bound local history scan completed off the render thread.
     UsageScanFinished {
         generation: u64,
