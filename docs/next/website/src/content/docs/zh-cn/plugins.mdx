@@ -158,6 +158,7 @@ PowerShell、Python、Rust、Go、Lua、Bun 或用户机器上可用的任何其
 
 ```bash
 herdr plugin install ogulcancelik/herdr-plugin-examples/agent-telegram-notify
+herdr plugin update
 herdr plugin config-dir examples.agent-telegram-notify
 herdr plugin list
 herdr plugin action list --plugin examples.agent-telegram-notify
@@ -175,9 +176,13 @@ herdr plugin log list --plugin example.layout
 ```
 
 `plugin install` 只接受 GitHub 简写,比如 `owner/repo/subdir`。它用 `git`
-克隆,在交互式终端展示预览,运行受支持的构建命令,然后把检出保存到
-Herdr 管理的插件数据下并注册。非交互式安装用 `--yes`。重新安装 GitHub
-管理的插件会替换该托管检出。已安装和已链接的插件及其启用状态对当前用户
+克隆,在交互式终端展示预览,在新的 Herdr 托管安装目录中构建并注册。
+非交互式安装用 `--yes`。更新和重新安装会保留旧安装:运行中的命令和窗格继续
+使用原来的文件,新调用无需重新加载配置便会使用新版本。现有进程不会重启,
+启动钩子仍在下次服务器启动时运行。
+`plugin update` 不指定目标时更新所有 GitHub 托管插件,也可以指定插件 id 或 GitHub 来源。
+它重新获取安装时记录的 ref,跳过未变化的提交,批量更新时忽略本地链接的插件。
+非交互式更新用 `--yes`。已安装和已链接的插件及其启用状态对当前用户
 全局生效,可在所有 Herdr 会话中使用。即使 Herdr 服务器没有运行,也可以通过
 `plugin install` 和 `plugin link` 注册插件。仅安装在 Herdr 0.7.3 命名会话中的
 插件必须重新 install 或 link;现有的插件配置和状态会保留。
@@ -186,11 +191,14 @@ Herdr 管理的插件数据下并注册。非交互式安装用 `--yes`。重新
 插件的配置和状态目录,`plugin config-dir <id>` 打印配置目录,方便安装
 文档和 shell 脚本使用。
 
-`plugin uninstall <id-or-source>` 注销插件。对 GitHub 管理的安装,它还会
-删除托管检出,并且既接受插件 id,也接受与 install 相同的
-`owner/repo[/subdir...]` 简写。`plugin unlink <id>` 只注销插件、不动文件,
-对本地开发很有用。v1 没有单独的 `plugin update`;要刷新托管插件,请从
-GitHub 重新安装。
+`plugin uninstall <id-or-source>` 注销插件,接受插件 id 或与 install 相同的
+`owner/repo[/subdir...]` 简写。更新、重新安装和卸载后会保留安装文件,
+让运行中的插件完成工作。使用旧安装的服务器退出后,下一次成功安装、更新或
+服务器启动会自动清理过时的托管安装。重新加载配置不会释放旧安装。
+关闭服务器前请停止插件工作;服务器退出后仍存活的进程不受清理保护。
+插件必须在其父命令或窗格退出前停止分离的后台进程。
+没有清理跟踪的旧安装会保留,配置和状态也会保留。
+`plugin unlink <id>` 只注销插件、不动文件,对本地开发很有用。
 
 示例菜谱仓库是 `ogulcancelik/herdr-plugin-examples`。它在子目录中包含
 多个独立示例插件,包括 `agent-telegram-notify`、`github-link-preview` 和
