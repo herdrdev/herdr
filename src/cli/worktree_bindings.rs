@@ -56,6 +56,13 @@ pub(crate) fn command() -> Command {
         .about("Manage Git worktree-backed workspaces")
         .subcommand_required(true)
         .subcommands(LEAVES.iter().map(Leaf::command))
+        .mut_subcommand("open", |open| {
+            open.group(
+                clap::ArgGroup::new("open_target")
+                    .args(["path", "branch"])
+                    .required(true),
+            )
+        })
 }
 
 pub(crate) fn request(args: &[String]) -> Result<Request, ParseError> {

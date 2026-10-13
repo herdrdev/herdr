@@ -36,11 +36,7 @@ fn request(matches: &ArgMatches) -> Result<Request, ParseError> {
 pub(super) fn run(args: &[String]) -> std::io::Result<i32> {
     match projection::parse(command(), args, request) {
         Ok(request) => super::print_response(&super::send_request(&request)?),
-        Err(ParseError::Clap(error)) => {
-            crate::platform::begin_cli_output();
-            error.print()?;
-            Ok(error.exit_code())
-        }
+        Err(ParseError::Clap(error)) => super::print_clap_error(&error),
         Err(ParseError::Usage(message)) => {
             eprintln!("{message}");
             Ok(2)

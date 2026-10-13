@@ -213,12 +213,7 @@ pub(super) fn live_handoff_command() -> clap::Command {
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     let params = match parse_live_handoff_params(args) {
         Ok(params) => params,
-        Err(ParseError::Clap(error)) => {
-            let code = error.exit_code();
-            crate::platform::begin_cli_output();
-            error.print()?;
-            return Ok(code);
-        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
         Err(ParseError::Usage(message)) => {
             eprintln!("{message}");
             return Ok(2);

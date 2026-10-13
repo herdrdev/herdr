@@ -38,6 +38,8 @@ fn capture(args: &[&str], response: Value) -> Capture {
         }
         match listener.accept() {
             Ok((mut stream, _)) => {
+                // BSD-derived platforms inherit the listener's non-blocking flag.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(1)))
                     .unwrap();

@@ -23,8 +23,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
     }
     let Some(leaf) = bindings::LEAVES.iter().find(|leaf| leaf.name == name) else {
         if let Err(error) = command().no_binary_name(true).try_get_matches_from(args) {
-            error.print()?;
-            return Ok(error.exit_code());
+            return super::print_clap_error(&error);
         }
         return Ok(2);
     };
@@ -35,10 +34,7 @@ pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
             eprintln!("{message}");
             return Ok(2);
         }
-        Err(ParseError::Clap(error)) => {
-            error.print()?;
-            return Ok(error.exit_code());
-        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
     };
     if matches!(leaf.output, bindings::Output::Quiet) {
         return super::send_ok_request(request.method);

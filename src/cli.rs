@@ -748,14 +748,16 @@ fn run_json_request(request: Result<Request, projection::ParseError>) -> std::io
             return Ok(2);
         }
         Err(projection::ParseError::Io(error)) => return Err(error),
-        Err(projection::ParseError::Clap(error)) => {
-            let code = error.exit_code();
-            crate::platform::begin_cli_output();
-            error.print()?;
-            return Ok(code);
-        }
+        Err(projection::ParseError::Clap(error)) => return print_clap_error(&error),
     };
     print_response(&send_request(&request)?)
+}
+
+/// Prints a Clap diagnostic or help page and returns its exit code.
+pub(super) fn print_clap_error(error: &clap::Error) -> std::io::Result<i32> {
+    crate::platform::begin_cli_output();
+    error.print()?;
+    Ok(error.exit_code())
 }
 
 pub(super) fn send_ok_request(method: Method) -> std::io::Result<i32> {

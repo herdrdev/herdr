@@ -42,11 +42,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         bindings::from_matches,
     ) {
         Ok(operation) => operation,
-        Err(ParseError::Clap(error)) => {
-            let code = error.exit_code();
-            error.print()?;
-            return Ok(code);
-        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
         Err(ParseError::Usage(message)) => {
             eprintln!("{message}");
             return Ok(2);

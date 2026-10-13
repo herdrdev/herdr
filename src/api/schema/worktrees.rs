@@ -59,11 +59,9 @@ cli_params! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub cwd: Option<String> => Field::new(None).input(crate::cli::worktree::bindings::path("cwd").order(1)),
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub path: Option<String> => Field::new(None).input(crate::cli::worktree::bindings::path("path").order(2)
-            .configure(|arg| arg.conflicts_with("branch").required_unless_present("branch"))),
+        pub path: Option<String> => Field::new(None).input(crate::cli::worktree::bindings::path("path").order(2)),
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub branch: Option<String> => Field::new(None).input(bindings::optional_text("branch", "NAME").order(3)
-            .configure(|arg| arg.required_unless_present("path"))),
+        pub branch: Option<String> => Field::new(None).input(bindings::optional_text("branch", "NAME").order(3)),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub label: Option<String> => Field::new(None).input(bindings::optional_text("label", "TEXT").order(4)),
         #[serde(default)]

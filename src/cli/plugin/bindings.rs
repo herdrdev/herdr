@@ -37,6 +37,7 @@ pub(crate) fn path() -> Input<String> {
     })
     .value_name("PATH")
     .path()
+    .verbatim()
 }
 
 pub(crate) fn pane_id() -> Input<String> {
@@ -360,7 +361,7 @@ mod tests {
     #[test]
     fn plugin_clap_preserves_context_filters_and_ordered_updates() {
         let (Method::PluginLink(params), _) =
-            parse(&["link", "--disabled", "./plugin", "--enabled", "--disabled"]).unwrap()
+            parse(&["link", "./plugin", "--disabled", "--enabled", "--disabled"]).unwrap()
         else {
             panic!("link request");
         };
@@ -374,6 +375,12 @@ mod tests {
                 .display()
                 .to_string()
         );
+        // The first operand is always the path, even when it looks like a flag.
+        let (Method::PluginLink(params), _) = parse(&["link", "--disabled"]).unwrap() else {
+            panic!("flag-shaped link path");
+        };
+        assert!(params.enabled);
+        assert!(params.path.ends_with("--disabled"), "{}", params.path);
         let (Method::PluginActionInvoke(params), _) =
             parse(&["action", "invoke", "apply", "--plugin=plugin:7"]).unwrap()
         else {

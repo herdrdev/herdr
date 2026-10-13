@@ -59,38 +59,75 @@ impl Leaf {
     }
 }
 
-/// One-line usage for `command`, derived from its declared arguments.
+fn render_argument(argument: &Arg) -> String {
+    let value = argument
+        .get_value_names()
+        .and_then(|names| names.first())
+        .map_or_else(|| argument.get_id().as_str(), |name| name.as_str());
+    let repeated = argument
+        .get_num_args()
+        .is_some_and(|range| range.max_values() > 1);
+    match argument.get_long() {
+        Some(long) if argument.get_action().takes_values() => format!("--{long} {value}"),
+        Some(long) => format!("--{long}"),
+        None if argument.is_last_set() => format!("-- <{value}>..."),
+        None if repeated => format!("<{value}>..."),
+        None => format!("<{value}>"),
+    }
+}
+
+/// One-line usage for `command`, derived from its declared arguments and groups.
 fn synopsis(path: &str, command: &Command) -> String {
-    let mut parts = vec![path.to_owned()];
+    let required_groups: Vec<_> = command
+        .get_groups()
+        .filter(|group| group.is_required_set())
+        .collect();
+    let grouped = |argument: &Arg| {
+        required_groups
+            .iter()
+            .any(|group| group.get_args().any(|id| id == argument.get_id()))
+    };
     let visible = || {
         command
             .get_arguments()
-            .filter(|argument| !argument.is_hide_set())
+            .filter(|argument| !argument.is_hide_set() && !grouped(argument))
     };
-    let positionals = visible().filter(|argument| argument.is_positional());
-    let options = visible().filter(|argument| !argument.is_positional());
-    for argument in positionals.chain(options) {
-        let value = argument
-            .get_value_names()
-            .and_then(|names| names.first())
-            .map_or_else(|| argument.get_id().as_str(), |name| name.as_str());
-        let text = match argument.get_long() {
-            Some(long) if argument.get_action().takes_values() => format!("--{long} {value}"),
-            Some(long) => format!("--{long}"),
-            None if argument
-                .get_num_args()
-                .is_some_and(|range| range.max_values() > 1) =>
-            {
-                format!("<{value}>...")
-            }
-            None => format!("<{value}>"),
-        };
-        parts.push(if argument.is_required_set() {
+    let render = |argument: &Arg| {
+        let text = render_argument(argument);
+        if argument.is_required_set() {
             text
         } else {
             format!("[{text}]")
-        });
+        }
+    };
+    let mut parts = vec![path.to_owned()];
+    parts.extend(
+        visible()
+            .filter(|argument| argument.is_positional() && !argument.is_last_set())
+            .map(render),
+    );
+    for group in &required_groups {
+        let members: Vec<_> = group
+            .get_args()
+            .filter_map(|id| {
+                command
+                    .get_arguments()
+                    .find(|argument| argument.get_id() == id)
+            })
+            .map(render_argument)
+            .collect();
+        parts.push(format!("({})", members.join(" | ")));
     }
+    parts.extend(
+        visible()
+            .filter(|argument| !argument.is_positional())
+            .map(render),
+    );
+    parts.extend(
+        visible()
+            .filter(|argument| argument.is_last_set())
+            .map(render),
+    );
     parts.join(" ")
 }
 
@@ -794,10 +831,17 @@ mod tests {
             .subcommand(
                 Command::new("nested")
                     .subcommand(command("numbers", NumbersProjection::arguments())),
+            )
+            .subcommand(
+                command("pick", NumbersProjection::arguments()).group(
+                    clap::ArgGroup::new("pick")
+                        .args(["seq", "pattern"])
+                        .required(true),
+                ),
             );
         assert_eq!(
             group_commands(&group),
-            "herdr group commands:\n  herdr group label <id> [<LABEL>...] [--clear]\n  herdr group nested numbers [--seq N] [--pattern TEXT]"
+            "herdr group commands:\n  herdr group label <id> [<LABEL>...] [--clear]\n  herdr group nested numbers [--seq N] [--pattern TEXT]\n  herdr group pick (--seq N | --pattern TEXT)"
         );
     }
 

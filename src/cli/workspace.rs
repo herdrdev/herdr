@@ -22,12 +22,7 @@ pub(super) fn run_workspace_command(args: &[String]) -> std::io::Result<i32> {
             return Ok(2);
         }
         Err(ParseError::Io(error)) => return Err(error),
-        Err(ParseError::Clap(error)) => {
-            let code = error.exit_code();
-            crate::platform::begin_cli_output();
-            error.print()?;
-            return Ok(code);
-        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
     };
     if leaf.quiet {
         super::send_ok_request(request.method)

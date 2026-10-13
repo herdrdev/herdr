@@ -40,11 +40,7 @@ pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
             eprintln!("{message}");
             return Ok(2);
         }
-        Err(ParseError::Clap(error)) => {
-            let code = error.exit_code();
-            error.print()?;
-            return Ok(code);
-        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
     };
     match method {
         Method::PluginLink(params) => plugin_link(params),
