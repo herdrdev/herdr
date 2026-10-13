@@ -29,7 +29,7 @@ ghostty-vt = { path = "crates/ghostty-vt" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"
-clap = { version = "4.5", default-features = false, features = ["std", "help", "usage"] }
+clap = { version = "4.5", default-features = false, features = ["std", "help", "usage", "error-context", "string"] }
 clap_complete = "4.5"
 crossterm = "0.29"
 ctrlc = { version = "3", features = ["termination"] }

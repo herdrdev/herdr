@@ -1,3 +1,5 @@
+use super::projection::{self, ParseError};
+use crate::api::schema::server::ServerLiveHandoffProjection;
 use crate::api::schema::{EmptyParams, Method, Request, ServerLiveHandoffParams};
 
 pub(super) fn run_server_command(args: &[String]) -> std::io::Result<Option<i32>> {
@@ -202,12 +204,26 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
     }
 }
 
+pub(super) fn live_handoff_command() -> clap::Command {
+    projection::command("live-handoff", ServerLiveHandoffProjection::arguments())
+        .about("Hand off live panes to a new local server")
+        .hide(true)
+}
+
 fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
-    let Some(params) = parse_live_handoff_params(args) else {
-        eprintln!(
-            "usage: herdr server live-handoff [--import-exe <path>] [--expected-protocol <n>] [--expected-version <version>]"
-        );
-        return Ok(2);
+    let params = match parse_live_handoff_params(args) {
+        Ok(params) => params,
+        Err(ParseError::Clap(error)) => {
+            let code = error.exit_code();
+            crate::platform::begin_cli_output();
+            error.print()?;
+            return Ok(code);
+        }
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(ParseError::Io(error)) => return Err(error),
     };
 
     // Live handoff is itself a protocol-mismatch recovery path, so it must
@@ -235,30 +251,12 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     Ok(0)
 }
 
-fn parse_live_handoff_params(args: &[String]) -> Option<ServerLiveHandoffParams> {
-    let mut params = ServerLiveHandoffParams::default();
-    let mut idx = 0;
-    while idx < args.len() {
-        let arg = &args[idx];
-        let (flag, value) = if let Some((flag, value)) = arg.split_once('=') {
-            (flag, Some(value.to_string()))
-        } else {
-            let value = args.get(idx + 1).cloned();
-            idx += 1;
-            (arg.as_str(), value)
-        };
-        let value = value?;
-        match flag {
-            "--import-exe" => params.import_exe = Some(value),
-            "--expected-protocol" => {
-                params.expected_protocol = Some(value.parse().ok()?);
-            }
-            "--expected-version" => params.expected_version = Some(value),
-            _ => return None,
-        }
-        idx += 1;
-    }
-    Some(params)
+fn parse_live_handoff_params(args: &[String]) -> Result<ServerLiveHandoffParams, ParseError> {
+    projection::parse(
+        live_handoff_command().bin_name("herdr server live-handoff"),
+        args,
+        ServerLiveHandoffProjection::from_matches,
+    )
 }
 
 fn print_server_help() {
@@ -354,6 +352,28 @@ mod tests {
             methods,
             vec![Method::ServerReloadAgentManifests(EmptyParams::default())]
         );
+    }
+
+    #[test]
+    fn live_handoff_projection_preserves_defaults_and_stays_hidden() {
+        assert_eq!(
+            serde_json::to_value(parse_live_handoff_params(&[]).unwrap()).unwrap(),
+            serde_json::json!({})
+        );
+        assert!(live_handoff_command().is_hide_set());
+        let args = vec!["--help".into()];
+        assert!(
+            matches!(parse_live_handoff_params(&args), Err(ParseError::Clap(error)) if error.exit_code() == 0)
+        );
+        for values in [
+            vec!["--expected-protocol", "bad"],
+            vec!["--expected-protocol", "4294967296"],
+            vec!["--import-exe"],
+            vec!["--other", "value"],
+        ] {
+            let args = values.into_iter().map(String::from).collect::<Vec<_>>();
+            assert!(parse_live_handoff_params(&args).is_err());
+        }
     }
 
     #[test]

@@ -12,59 +12,16 @@ pub(crate) const MAX_ENDPOINT_BOOT_ID_BYTES: usize = 128;
 pub(crate) const MAX_ENDPOINT_REQUEST_ID_BYTES: usize = 128;
 const ENDPOINT_RESPONSE_CHUNK_BYTES: usize = 512 * 1024;
 
-const CLIENT_SHELL_METHODS: &[&str] = &[
-    "client_shell.surface.set",
-    "command.invoke",
-    "integration.install",
-    "integration.list",
-    "layout.set_split_ratio",
-    "pane.clear",
-    "pane.close",
-    "pane.copy_motion",
-    "pane.copy_search",
-    "pane.edit_scrollback",
-    "pane.focus",
-    "pane.focus_direction",
-    "pane.input.set",
-    "pane.link.activate",
-    "pane.link.resolve",
-    "pane.rename",
-    "pane.resize",
-    "pane.scroll",
-    "pane.selection.read",
-    "pane.split",
-    "pane.swap",
-    "pane.zoom",
-    "product_announcement.dismiss",
-    "release_notes.dismiss",
-    "server.reload_config",
-    "tab.close",
-    "tab.create",
-    "tab.focus",
-    "tab.move",
-    "tab.rename",
-    "workspace.close",
-    "workspace.create",
-    "workspace.focus",
-    "workspace.move",
-    "workspace.move_block",
-    "workspace.rename",
-    "worktree.create",
-    "worktree.list",
-    "worktree.open",
-    "worktree.remove",
-];
-
 pub(crate) fn supported_client_shell_method_names() -> &'static [&'static str] {
-    CLIENT_SHELL_METHODS
+    crate::api::schema::operations::client_shell_method_names()
 }
 
 pub(crate) fn supports_client_shell_method_name(method: &str) -> bool {
-    CLIENT_SHELL_METHODS.contains(&method)
+    supported_client_shell_method_names().contains(&method)
 }
 
 pub(crate) fn supports_client_shell_method(method: &Method) -> bool {
-    supports_client_shell_method_name(crate::api::api_method_name(method))
+    method.operation().client_shell
 }
 
 pub(crate) fn error_response(id: String, code: &str, message: impl Into<String>) -> String {
@@ -245,7 +202,7 @@ mod tests {
             .expect("request method branches");
         let mut digests = BTreeMap::new();
 
-        for method in CLIENT_SHELL_METHODS {
+        for method in supported_client_shell_method_names() {
             let branch = branches
                 .iter()
                 .find(|branch| {
@@ -306,7 +263,7 @@ mod tests {
 
     #[test]
     fn advertised_client_shell_methods_are_sorted_unique_and_in_schema() {
-        assert!(CLIENT_SHELL_METHODS
+        assert!(supported_client_shell_method_names()
             .windows(2)
             .all(|pair| pair[0] < pair[1]));
 
@@ -337,7 +294,7 @@ mod tests {
             .expect("request schema");
         let mut schema_methods = Vec::new();
         collect_method_constants(&schema, &mut schema_methods);
-        for method in CLIENT_SHELL_METHODS {
+        for method in supported_client_shell_method_names() {
             assert!(
                 schema_methods.iter().any(|candidate| candidate == method),
                 "advertised endpoint method {method:?} is absent from the request schema"

@@ -1459,3 +1459,9 @@ fn pane_link_resolve_round_trips() {
         result
     );
 }
+
+#[test]
+fn read_choices_cover_every_api_value() {
+    crate::cli::projection::assert_choices_cover_api_enum(READ_SOURCES);
+    crate::cli::projection::assert_choices_cover_api_enum(READ_FORMATS);
+}

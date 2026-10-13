@@ -1,82 +1,59 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::projection::{self, ParseError};
 use crate::api::schema::{
-    InstalledPluginInfo, Method, PluginActionInvokeParams, PluginActionListParams,
-    PluginInvocationContext, PluginLinkParams, PluginListParams, PluginLogListParams,
-    PluginPaneCloseParams, PluginPaneFocusParams, PluginPaneOpenParams, PluginPanePlacement,
-    PluginPlatform, PluginSetEnabledParams, PluginSourceInfo, PluginSourceKind, PluginUnlinkParams,
-    Request, ResponseResult, SplitDirection, SuccessResponse,
+    InstalledPluginInfo, Method, PluginLinkParams, PluginListParams, PluginPlatform,
+    PluginSourceInfo, PluginSourceKind, PluginUnlinkParams, Request, ResponseResult,
+    SuccessResponse,
 };
-use crate::popup_size::PopupSize;
+
+pub(crate) mod bindings;
+
+pub(crate) fn command() -> clap::Command {
+    bindings::command()
+}
 
 const PLUGIN_BUILD_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 const PLUGIN_INSTALL_USAGE: &str =
     "usage: herdr plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
 
 pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_help();
-        return Ok(2);
+    match args.first().map(String::as_str) {
+        Some("install") => return plugin_install(&args[1..]),
+        Some("update") => return plugin_update(&args[1..]),
+        Some("uninstall") => return plugin_uninstall(&args[1..]),
+        Some("config-dir") => return plugin_config_dir_command(&args[1..]),
+        _ => {}
+    }
+    let (method, json) = match projection::parse(
+        command().bin_name("herdr plugin"),
+        args,
+        bindings::from_matches,
+    ) {
+        Ok(parsed) => parsed,
+        Err(ParseError::Io(error)) => return Err(error),
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(ParseError::Clap(error)) => {
+            let code = error.exit_code();
+            error.print()?;
+            return Ok(code);
+        }
     };
-
-    match subcommand {
-        "install" => plugin_install(&args[1..]),
-        "update" => plugin_update(&args[1..]),
-        "uninstall" => plugin_uninstall(&args[1..]),
-        "link" => plugin_link(&args[1..]),
-        "list" => plugin_list(&args[1..]),
-        "config-dir" => plugin_config_dir_command(&args[1..]),
-        "unlink" => plugin_unlink(&args[1..]),
-        "enable" => plugin_set_enabled(&args[1..], true),
-        "disable" => plugin_set_enabled(&args[1..], false),
-        "action" => run_plugin_action_command(&args[1..]),
-        "log" | "logs" => plugin_log_list(&args[1..]),
-        "pane" => run_plugin_pane_command(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_help();
-            Ok(2)
-        }
+    match method {
+        Method::PluginLink(params) => plugin_link(params),
+        Method::PluginList(params) => plugin_list(params, json),
+        method => print_plugin_response(method),
     }
 }
 
-fn plugin_link(args: &[String]) -> std::io::Result<i32> {
-    let Some(path) = args.first() else {
-        eprintln!("usage: herdr plugin link <path> [--disabled]");
-        return Ok(2);
-    };
-    let path = normalize_plugin_path_arg(path)?;
-    let mut enabled = true;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--disabled" => {
-                enabled = false;
-                index += 1;
-            }
-            "--enabled" => {
-                enabled = true;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    let params = PluginLinkParams {
-        path,
-        enabled,
-        source: None,
-    };
+fn plugin_link(params: PluginLinkParams) -> std::io::Result<i32> {
     let response = match super::send_request(&Request {
         id: "cli:plugin".into(),
         method: Method::PluginLink(params.clone()),
@@ -103,29 +80,7 @@ fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     Ok(0)
 }
 
-fn plugin_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut json = false;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--json" => {
-                json = true;
-                index += 1;
-            }
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    let params = PluginListParams { plugin_id };
+fn plugin_list(params: PluginListParams, json: bool) -> std::io::Result<i32> {
     let response = match super::send_request(&Request {
         id: "cli:plugin".into(),
         method: Method::PluginList(params.clone()),
@@ -138,20 +93,6 @@ fn plugin_list(args: &[String]) -> std::io::Result<i32> {
         return super::print_response(&response);
     }
     print_plugin_list_human(&response)
-}
-
-fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
-    let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginUnlink(PluginUnlinkParams {
-        plugin_id: plugin_id.clone(),
-    }))
 }
 
 #[derive(Debug)]
@@ -514,381 +455,6 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
 
     println!("Uninstalled {plugin_id}.");
     Ok(0)
-}
-
-fn plugin_set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
-    let Some(plugin_id) = args.first() else {
-        eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
-            if enabled { "enable" } else { "disable" }
-        );
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
-            if enabled { "enable" } else { "disable" }
-        );
-        return Ok(2);
-    }
-    let params = PluginSetEnabledParams {
-        plugin_id: plugin_id.clone(),
-    };
-    if enabled {
-        print_plugin_response(Method::PluginEnable(params))
-    } else {
-        print_plugin_response(Method::PluginDisable(params))
-    }
-}
-
-fn plugin_log_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut limit = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "list" if index == 0 => index += 1,
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            "--limit" => {
-                let Some(raw) = required_value(args, &mut index, "--limit") else {
-                    return Ok(2);
-                };
-                let Ok(parsed) = raw.parse::<usize>() else {
-                    eprintln!("invalid --limit value: {raw}");
-                    return Ok(2);
-                };
-                limit = Some(parsed);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    print_plugin_response(Method::PluginLogList(PluginLogListParams {
-        plugin_id,
-        limit,
-    }))
-}
-
-fn run_plugin_action_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_action_help();
-        return Ok(2);
-    };
-
-    match subcommand {
-        "list" => plugin_action_list(&args[1..]),
-        "invoke" => plugin_action_invoke(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_action_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_action_help();
-            Ok(2)
-        }
-    }
-}
-
-fn plugin_action_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    print_plugin_response(Method::PluginActionList(PluginActionListParams {
-        plugin_id,
-    }))
-}
-
-fn plugin_action_invoke(args: &[String]) -> std::io::Result<i32> {
-    let Some(action_id) = args.first() else {
-        eprintln!("usage: herdr plugin action invoke <action_id> [--plugin ID]");
-        return Ok(2);
-    };
-    let mut plugin_id = None;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    print_plugin_response(Method::PluginActionInvoke(PluginActionInvokeParams {
-        action_id: action_id.clone(),
-        plugin_id,
-        context: Some(PluginInvocationContext {
-            workspace_id: None,
-            workspace_label: None,
-            workspace_cwd: None,
-            worktree: None,
-            tab_id: None,
-            tab_label: None,
-            focused_pane_id: None,
-            focused_pane_cwd: None,
-            focused_pane_agent: None,
-            focused_pane_status: None,
-            selected_text: None,
-            invocation_source: Some("cli".into()),
-            correlation_id: None,
-            clicked_url: None,
-            link_handler_id: None,
-        }),
-    }))
-}
-
-fn run_plugin_pane_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_pane_help();
-        return Ok(2);
-    };
-
-    match subcommand {
-        "open" => plugin_pane_open(&args[1..]),
-        "focus" => plugin_pane_focus(&args[1..]),
-        "close" => plugin_pane_close(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_pane_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_pane_help();
-            Ok(2)
-        }
-    }
-}
-
-fn plugin_pane_open(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut entrypoint = None;
-    let mut placement = None;
-    let mut width = None;
-    let mut height = None;
-    let mut workspace_id = None;
-    let mut target_pane_id = None;
-    let mut direction = None;
-    let mut cwd = None;
-    let mut focus = true;
-    let mut env = HashMap::new();
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            "--entrypoint" => {
-                let Some(value) = required_value(args, &mut index, "--entrypoint") else {
-                    return Ok(2);
-                };
-                entrypoint = Some(value);
-            }
-            "--placement" => {
-                let Some(value) = required_value(args, &mut index, "--placement") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_pane_placement(&value) else {
-                    return Ok(2);
-                };
-                placement = Some(parsed);
-            }
-            "--width" => {
-                let Some(value) = required_value(args, &mut index, "--width") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_popup_dimension(&value, "--width") else {
-                    return Ok(2);
-                };
-                width = Some(parsed);
-            }
-            "--height" => {
-                let Some(value) = required_value(args, &mut index, "--height") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_popup_dimension(&value, "--height") else {
-                    return Ok(2);
-                };
-                height = Some(parsed);
-            }
-            "--workspace" => {
-                let Some(value) = required_value(args, &mut index, "--workspace") else {
-                    return Ok(2);
-                };
-                workspace_id = Some(value);
-            }
-            "--target-pane" => {
-                let Some(value) = required_value(args, &mut index, "--target-pane") else {
-                    return Ok(2);
-                };
-                target_pane_id = Some(value);
-            }
-            "--direction" => {
-                let Some(value) = required_value(args, &mut index, "--direction") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_split_direction(&value) else {
-                    return Ok(2);
-                };
-                direction = Some(parsed);
-            }
-            "--cwd" => {
-                let Some(value) = required_value(args, &mut index, "--cwd") else {
-                    return Ok(2);
-                };
-                cwd = Some(value);
-            }
-            "--env" => {
-                let Some(value) = required_value(args, &mut index, "--env") else {
-                    return Ok(2);
-                };
-                let (key, value) = match super::parse_env_assignment(&value) {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return Ok(2);
-                    }
-                };
-                env.insert(key, value);
-            }
-            "--focus" => {
-                focus = true;
-                index += 1;
-            }
-            "--no-focus" => {
-                focus = false;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    let Some(plugin_id) = plugin_id else {
-        eprintln!("missing required --plugin");
-        return Ok(2);
-    };
-    let Some(entrypoint) = entrypoint else {
-        eprintln!("missing required --entrypoint");
-        return Ok(2);
-    };
-
-    print_plugin_response(Method::PluginPaneOpen(PluginPaneOpenParams {
-        plugin_id,
-        entrypoint,
-        placement,
-        width,
-        height,
-        workspace_id,
-        target_pane_id,
-        direction,
-        cwd,
-        focus,
-        env,
-    }))
-}
-
-fn parse_popup_dimension(value: &str, flag: &str) -> Option<PopupSize> {
-    match PopupSize::parse_cli(value) {
-        Ok(value) => Some(value),
-        Err(message) => {
-            eprintln!("{flag} {message}");
-            None
-        }
-    }
-}
-
-fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
-    let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginPaneFocus(PluginPaneFocusParams {
-        pane_id: super::normalize_pane_id(pane_id),
-    }))
-}
-
-fn plugin_pane_close(args: &[String]) -> std::io::Result<i32> {
-    let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginPaneClose(PluginPaneCloseParams {
-        pane_id: super::normalize_pane_id(pane_id),
-    }))
-}
-
-fn required_value(args: &[String], index: &mut usize, flag: &str) -> Option<String> {
-    let Some(value) = args.get(*index + 1) else {
-        eprintln!("missing value for {flag}");
-        return None;
-    };
-    *index += 2;
-    Some(value.clone())
-}
-
-fn parse_pane_placement(value: &str) -> Option<PluginPanePlacement> {
-    match value {
-        "overlay" => Some(PluginPanePlacement::Overlay),
-        "popup" => Some(PluginPanePlacement::Popup),
-        "split" => Some(PluginPanePlacement::Split),
-        "tab" => Some(PluginPanePlacement::Tab),
-        "zoomed" | "fullscreen" => Some(PluginPanePlacement::Zoomed),
-        _ => {
-            eprintln!("invalid pane placement: {value}");
-            None
-        }
-    }
-}
-
-fn parse_split_direction(value: &str) -> Option<SplitDirection> {
-    match value {
-        "right" => Some(SplitDirection::Right),
-        "down" => Some(SplitDirection::Down),
-        _ => {
-            eprintln!("invalid split direction: {value}");
-            None
-        }
-    }
 }
 
 fn normalize_plugin_path_arg(value: &str) -> std::io::Result<String> {
@@ -1804,35 +1370,6 @@ fn print_plugin_response(method: Method) -> std::io::Result<i32> {
         id: "cli:plugin".into(),
         method,
     })?)
-}
-
-fn print_plugin_help() {
-    eprintln!("herdr plugin commands:");
-    eprintln!("  herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
-    eprintln!("  herdr plugin update [<plugin_id|owner/repo[/subdir...]>...] [--yes]");
-    eprintln!("  herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
-    eprintln!("  herdr plugin link <path> [--disabled]");
-    eprintln!("  herdr plugin list [--plugin ID] [--json]");
-    eprintln!("  herdr plugin config-dir <plugin_id>");
-    eprintln!("  herdr plugin unlink <plugin_id>");
-    eprintln!("  herdr plugin enable <plugin_id>");
-    eprintln!("  herdr plugin disable <plugin_id>");
-    eprintln!("  herdr plugin action <list|invoke>");
-    eprintln!("  herdr plugin log list [--plugin ID] [--limit N]");
-    eprintln!("  herdr plugin pane <open|focus|close>");
-}
-
-fn print_plugin_action_help() {
-    eprintln!("herdr plugin action commands:");
-    eprintln!("  herdr plugin action list [--plugin ID]");
-    eprintln!("  herdr plugin action invoke <action_id> [--plugin ID]");
-}
-
-fn print_plugin_pane_help() {
-    eprintln!("herdr plugin pane commands:");
-    eprintln!("  herdr plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
-    eprintln!("  herdr plugin pane focus <pane_id>");
-    eprintln!("  herdr plugin pane close <pane_id>");
 }
 
 #[cfg(test)]

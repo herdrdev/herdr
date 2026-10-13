@@ -954,7 +954,7 @@ command = ["sh", "-c", "sleep 5"]
     let missing_plugin_value = run_cli(&socket_path, &["plugin", "list", "--plugin"]);
     assert_eq!(missing_plugin_value.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&missing_plugin_value.stderr)
-        .contains("missing value for --plugin"));
+        .contains("a value is required for '--plugin <ID>' but none was supplied"));
 
     let invalid_limit = run_cli(
         &socket_path,

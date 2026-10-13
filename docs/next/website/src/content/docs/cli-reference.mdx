@@ -7,6 +7,8 @@ Herdr’s CLI talks to the running server over the same local socket API used by
 
 Most commands print JSON responses for deterministic automation in scripts.
 
+API-backed commands use the same argument definitions for parsing, `--help`, and shell completion. Value options accept both `--label text` and `--label=text`. Invalid arguments are rejected before connecting to the server.
+
 ## Launch and status
 
 ```bash
