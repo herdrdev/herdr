@@ -422,7 +422,7 @@ fn capture_keybinding(state: &mut AppState, key: KeyEvent) -> Option<SettingsAct
     let target = crate::app::settings_keybindings::keybinding_target(state, row)?;
     let label = crate::config::format_key_combo((key.code, key.modifiers));
     let mut config = crate::config::Config::load().config;
-    match crate::config::validate_user_action_key(&mut config, &label) {
+    match validate_keybinding_capture(&mut config, &target, &label) {
         Ok(label) => Some(SettingsAction::SaveKeybinding { target, key: label }),
         Err(diagnostic) => {
             // The validator phrases its refusal in terms of the temporary
@@ -433,6 +433,19 @@ fn capture_keybinding(state: &mut AppState, key: KeyEvent) -> Option<SettingsAct
             }
             None
         }
+    }
+}
+
+fn validate_keybinding_capture(
+    config: &mut crate::config::Config,
+    target: &crate::app::settings_keybindings::KeybindTarget,
+    key: &str,
+) -> Result<String, String> {
+    match target {
+        crate::app::settings_keybindings::KeybindTarget::BuiltIn {
+            field: "focus_leave",
+        } => crate::config::validate_focus_room_leave_key(config, key),
+        _ => crate::config::validate_user_action_key(config, key),
     }
 }
 
@@ -721,6 +734,19 @@ mod tests {
         for character in text.chars() {
             press(state, KeyCode::Char(character));
         }
+    }
+
+    #[test]
+    fn focus_leave_key_capture_does_not_conflict_with_outside_room_actions() {
+        let mut config = crate::config::Config::default();
+        let target = crate::app::settings_keybindings::KeybindTarget::BuiltIn {
+            field: "focus_leave",
+        };
+        assert_eq!(
+            validate_keybinding_capture(&mut config, &target, "prefix+o").unwrap(),
+            "prefix+o"
+        );
+        assert!(validate_keybinding_capture(&mut config, &target, "prefix+f").is_err());
     }
 
     #[test]

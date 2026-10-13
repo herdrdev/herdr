@@ -19,6 +19,7 @@ mod dock_scratchpad;
 mod dock_shortcuts;
 pub(crate) mod dropdown;
 pub(crate) mod focus;
+pub(crate) mod focus_room;
 pub(crate) mod goals;
 mod home;
 pub(crate) mod hyperspace;
@@ -380,6 +381,123 @@ fn compute_view_internal_at(
     observed_at: std::time::Instant,
     observed_unix_s: u64,
 ) {
+    if app.focus_room.active {
+        // Most room frames already have the room tab selected. Keep that hot
+        // path scalar; only scan tabs when an external action changed focus or
+        // removed the room tab.
+        let room_tab = active_focus_room_tab(app).or_else(|| {
+            app.focus_room
+                .tab_id
+                .as_deref()
+                .and_then(|tab_id| crate::app::focus_room::find_tab(app, tab_id))
+        });
+        let room_pane_live = room_tab.is_some_and(|(ws_idx, _, pane_id)| {
+            app.workspaces[ws_idx]
+                .pane_state(pane_id)
+                .is_some_and(|pane| {
+                    app.terminals.contains_key(&pane.attached_terminal_id)
+                        && terminal_runtimes
+                            .get(&pane.attached_terminal_id)
+                            .is_some_and(|runtime| !runtime.child_has_exited())
+                })
+        });
+        if !room_pane_live {
+            app.focus_room.active = false;
+            let room_id = app.focus_room.tab_id.clone();
+            app.focus_room.tab_disappeared();
+            app.focus_room_ui = crate::app::focus_room::FocusRoomUiState::default();
+            if app.agent_finder_saved_query.is_some() {
+                app.close_agent_finder();
+            }
+            let destination = app
+                .focus_room
+                .return_to
+                .as_deref()
+                .and_then(|tab_id| crate::app::focus_room::find_tab(app, tab_id))
+                .or_else(|| {
+                    app.workspaces
+                        .iter()
+                        .enumerate()
+                        .find_map(|(ws_idx, workspace)| {
+                            workspace
+                                .tabs
+                                .iter()
+                                .enumerate()
+                                .find_map(|(tab_idx, tab)| {
+                                    let id = crate::workspace::public_tab_id_for_number(
+                                        &workspace.id,
+                                        tab.number,
+                                    );
+                                    (room_id.as_deref() != Some(id.as_str())).then_some((
+                                        ws_idx,
+                                        tab_idx,
+                                        tab.root_pane,
+                                    ))
+                                })
+                        })
+                });
+            if let Some((ws_idx, tab_idx, _)) = destination {
+                app.switch_workspace_tab(ws_idx, tab_idx);
+            }
+            app.mark_session_dirty();
+        } else {
+            let Some((ws_idx, tab_idx, pane_id)) = room_tab else {
+                return;
+            };
+            if app.active != Some(ws_idx) || app.workspaces[ws_idx].active_tab_index() != tab_idx {
+                app.switch_workspace_tab(ws_idx, tab_idx);
+                if let Some(index) = app.workspaces[ws_idx].tabs[tab_idx]
+                    .layout
+                    .pane_ids()
+                    .iter()
+                    .position(|candidate| *candidate == pane_id)
+                {
+                    app.selected = index;
+                }
+                app.mark_session_dirty();
+            }
+            app.view_observed_at = observed_at;
+            app.view_observed_unix_s = observed_unix_s;
+            let geometry = focus_room::compute_geometry(
+                area,
+                app.focus_room_ui.leave_dialog_open,
+                app.agent_finder_saved_query.is_some(),
+                app.focus_room_ui.drawer.is_some(),
+                false,
+            );
+            let surface = self::tab_surface::compute_focus_room_surface(
+                app,
+                terminal_runtimes,
+                geometry.pane,
+                resize_panes,
+                cell_size,
+            );
+            app.view.layout = ViewLayout::Desktop;
+            app.view.screen_area = area;
+            app.view.status_bar_rect = geometry.bar;
+            app.view.sidebar_rect = Rect::default();
+            app.view.tab_bar_rect = Rect::default();
+            app.view.terminal_area = geometry.pane;
+            app.view.pane_infos = surface.pane_infos;
+            app.view.split_borders = surface.split_borders;
+            app.view.status_buttons.clear();
+            app.view.status_segments.clear();
+            app.view.status_segment_hit_areas.clear();
+            app.view.status_more_rect = Rect::default();
+            app.view.tab_hit_areas.clear();
+            app.view.workspace_card_areas.clear();
+            app.view.agent_card_areas.clear();
+            app.view.sidebar_hover_targets.clear();
+            app.view.dock_rect = Rect::default();
+            app.view.dock_handle_rect = Rect::default();
+            app.view.dock_divider_rect = Rect::default();
+            app.view.toast_hit_area = Rect::default();
+            app.view.focused_remote_host = None;
+            app.focus_room_ui.geometry = geometry;
+            return;
+        }
+    }
+
     // Pane-scaled count: only pay for it while the Usage tab can show.
     let notepad_usage_content_rows = if app.notepad.usage_tab && !app.sidebar_collapsed {
         notepad_usage::usage_row_count(app)
@@ -1039,7 +1157,52 @@ fn compute_view_internal_at(
         app.view.status_more_rect = Rect::default();
         app.status_more_open = false;
     }
+    let room_tab_exists = !app.focus_room.active && app.focus_room.tab_id.is_some();
+    if room_tab_exists {
+        let show_return = status_bar_is_renderable(app, area);
+        let mut geometry = focus_room::compute_geometry(area, false, false, false, show_return);
+        if show_return {
+            geometry.return_hit_area.y = status_bar_rect.y;
+        }
+        app.focus_room_ui.geometry = geometry.clone();
+        if show_return {
+            let content_x = geometry.return_hit_area.right().saturating_add(1);
+            let content = Rect::new(
+                content_x,
+                status_bar_rect.y,
+                status_bar_rect.right().saturating_sub(content_x),
+                status_bar_rect.height,
+            );
+            app.view.status_buttons = status::status_buttons(app, content);
+            app.view.status_segments = status::fitted_status_segments(app, content);
+            app.view.status_segment_hit_areas = status::status_segment_hit_areas(app, content);
+            let more = status::status_more_layout(app, content, area);
+            app.view.status_more_rect = more.as_ref().map(|layout| layout.rect).unwrap_or_default();
+            if let Some(layout) = more {
+                app.view.status_segment_hit_areas.extend(layout.hit_areas);
+            }
+        }
+    } else {
+        app.focus_room_ui.geometry = crate::app::focus_room::FocusRoomGeometry::default();
+    }
     app.sync_copy_mode_search_geometry();
+}
+
+/// Returns the focus room pane when its tab is already active. This is the
+/// normal render path; callers that need recovery can fall back to a lookup.
+pub(crate) fn active_focus_room_tab(
+    app: &AppState,
+) -> Option<(usize, usize, crate::layout::PaneId)> {
+    let room_tab_id = app.focus_room.tab_id.as_deref()?;
+    let ws_idx = app.active?;
+    let workspace = app.workspaces.get(ws_idx)?;
+    let tab_idx = workspace.active_tab_index();
+    let tab = workspace.tabs.get(tab_idx)?;
+    let room_tab_number = room_tab_id
+        .strip_prefix(&workspace.id)?
+        .strip_prefix(":t")
+        .and_then(crate::workspace::decode_public_number)?;
+    (room_tab_number == tab.number).then_some((ws_idx, tab_idx, tab.root_pane))
 }
 
 fn uses_mobile_layout(app: &AppState, area: Rect) -> bool {
@@ -1371,6 +1534,24 @@ fn render_with_runtime_registry_inner(
     frame: &mut Frame,
     input_owner: InputOwner,
 ) {
+    if app.focus_room.active {
+        focus_room::render(app, terminal_runtimes, frame);
+        match input_owner {
+            InputOwner::Server(ServerInputOwner::Settings) => {
+                render_settings_overlay(app, frame, frame.area())
+            }
+            InputOwner::Server(ServerInputOwner::KeybindHelp) => {
+                render_keybind_help_overlay(app, frame)
+            }
+            InputOwner::Server(ServerInputOwner::Copy) => {
+                render_copy_mode_overlay(app, frame, app.view.terminal_area)
+            }
+            _ => {}
+        }
+        pomodoro::render_overlay(app, frame, frame.area());
+        planning_lock::render(app, frame, frame.area());
+        return;
+    }
     let tab_bar_area = app.view.tab_bar_rect;
     let terminal_area = app.view.terminal_area;
 

@@ -53,6 +53,50 @@ pub(crate) fn compute_tab_surface(
     }
 }
 
+/// The room has one pane and ignores the ordinary pane chrome and scrollbar
+/// gutter settings so Vellum receives the full body rectangle.
+pub(crate) fn compute_focus_room_surface(
+    app: &AppState,
+    terminal_runtimes: &TerminalRuntimeRegistry,
+    area: Rect,
+    resize_panes: bool,
+    cell_size: crate::kitty_graphics::HostCellSize,
+) -> TabSurfaceLayout {
+    let pane_id = crate::ui::active_focus_room_tab(app).map(|(_, _, pane_id)| pane_id);
+    let Some(pane_id) = pane_id else {
+        return TabSurfaceLayout {
+            pane_infos: Vec::new(),
+            split_borders: Vec::new(),
+        };
+    };
+    if resize_panes {
+        let terminal_id = app
+            .active
+            .and_then(|ws_idx| app.workspaces.get(ws_idx))
+            .and_then(|workspace| workspace.terminal_id(pane_id))
+            .filter(|terminal_id| !app.direct_attach_resize_locks.contains(terminal_id));
+        if let Some(runtime) = terminal_id.and_then(|id| terminal_runtimes.get(id)) {
+            runtime.resize(
+                area.height,
+                area.width,
+                cell_size.width_px,
+                cell_size.height_px,
+            );
+        }
+    }
+    TabSurfaceLayout {
+        pane_infos: vec![PaneInfo {
+            id: pane_id,
+            rect: area,
+            inner_rect: area,
+            scrollbar_rect: None,
+            borders: ratatui::widgets::Borders::NONE,
+            is_focused: true,
+        }],
+        split_borders: Vec::new(),
+    }
+}
+
 pub(crate) fn resize_tab_surface(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,

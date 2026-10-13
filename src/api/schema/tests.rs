@@ -147,6 +147,34 @@ fn fleet_list_is_a_typed_read_only_api_method() {
 }
 
 #[test]
+fn focus_enter_request_and_response_round_trip() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "focus-room",
+        "method": "focus.enter",
+        "params": {}
+    }))
+    .unwrap();
+    assert_eq!(
+        request,
+        Request {
+            id: "focus-room".into(),
+            method: Method::FocusEnter(EmptyParams::default()),
+        }
+    );
+    let response = SuccessResponse {
+        id: "focus-room".into(),
+        result: ResponseResult::FocusEntered {
+            tab_id: "workspace:tab-1".into(),
+            pane_id: "workspace:pane-1".into(),
+            created: true,
+        },
+    };
+    let restored: SuccessResponse =
+        serde_json::from_value(serde_json::to_value(&response).unwrap()).unwrap();
+    assert_eq!(restored, response);
+}
+
+#[test]
 fn agent_search_is_a_typed_read_only_api_method() {
     let request: Request = serde_json::from_value(serde_json::json!({
         "id": "finder",

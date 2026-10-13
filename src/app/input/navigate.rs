@@ -224,6 +224,18 @@ impl App {
                 leave_navigate_mode(&mut self.state);
                 self.state.open_capture();
             }
+            NavigateAction::FocusEnter => {
+                if let Err(error) = self.enter_focus_room() {
+                    self.state.toast = Some(crate::app::state::ToastNotification {
+                        kind: crate::app::state::ToastKind::NeedsAttention,
+                        title: "cannot enter focus room".into(),
+                        context: error,
+                        position: None,
+                        target: None,
+                    });
+                    leave_navigate_mode(&mut self.state);
+                }
+            }
             NavigateAction::OpenAgentFinder => {
                 leave_navigate_mode(&mut self.state);
                 self.state.open_agent_finder();
@@ -1996,6 +2008,44 @@ enum PrefixBindingMatch {
     UserAction(usize),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FocusRoomPrefixBinding {
+    Action(NavigateAction),
+    OtherAction,
+    Unbound,
+}
+
+pub(crate) fn focus_room_prefix_binding(
+    state: &AppState,
+    key: &TerminalKey,
+) -> FocusRoomPrefixBinding {
+    match prefix_binding_for_key(state, key) {
+        Some(PrefixBindingMatch::Action(action)) => FocusRoomPrefixBinding::Action(action),
+        Some(PrefixBindingMatch::Command(_) | PrefixBindingMatch::UserAction(_)) => {
+            FocusRoomPrefixBinding::OtherAction
+        }
+        None => FocusRoomPrefixBinding::Unbound,
+    }
+}
+
+pub(crate) fn focus_room_action_allowed(action: NavigateAction) -> bool {
+    matches!(
+        action,
+        NavigateAction::Capture
+            | NavigateAction::OpenAgentFinder
+            | NavigateAction::Help
+            | NavigateAction::Settings
+            | NavigateAction::Detach
+            | NavigateAction::CopyMode
+            | NavigateAction::ReloadConfig
+    )
+}
+
+pub(crate) fn focus_room_direct_other_action(state: &AppState, key: &TerminalKey) -> bool {
+    command_for_key(state, key, BindingDispatch::Direct).is_some()
+        || user_action_for_key(state, key, BindingDispatch::Direct).is_some()
+}
+
 fn prefix_binding_for_key(state: &AppState, key: &TerminalKey) -> Option<PrefixBindingMatch> {
     exact_prefix_binding_for_key(state, key).or_else(|| {
         generated_character_key(key)
@@ -2283,6 +2333,39 @@ pub(crate) struct WindowCycleSnapshot {
 const WINDOW_CYCLE_SNAPSHOT_IDLE: Duration = Duration::from_millis(1500);
 
 impl App {
+    pub(crate) fn handle_focus_room_prefix_key(&mut self, raw_key: TerminalKey) -> bool {
+        if self.state.is_prefix_key(&raw_key) {
+            self.handle_prefix_key(raw_key);
+            return true;
+        }
+        if self.state.keybinds.focus_leave.matches_prefix_key(&raw_key) {
+            self.open_focus_room_leave_dialog();
+            leave_command_mode(&mut self.state);
+            return true;
+        }
+        match focus_room_prefix_binding(&self.state, &raw_key) {
+            FocusRoomPrefixBinding::Action(action) => {
+                if focus_room_action_allowed(action) {
+                    if action == NavigateAction::OpenAgentFinder {
+                        self.state.focus_room_ui.drawer = None;
+                    }
+                    self.execute_tui_navigate_action(action, ActionContext::Prefix);
+                } else {
+                    leave_command_mode(&mut self.state);
+                }
+                true
+            }
+            FocusRoomPrefixBinding::OtherAction => {
+                leave_command_mode(&mut self.state);
+                true
+            }
+            FocusRoomPrefixBinding::Unbound => {
+                leave_command_mode(&mut self.state);
+                false
+            }
+        }
+    }
+
     fn window_cycle_order_at(&mut self, now: Instant) -> Vec<WindowCycleTarget> {
         let fresh = self.window_cycle_snapshot.as_ref().is_some_and(|snapshot| {
             now.saturating_duration_since(snapshot.last_used_at) < WINDOW_CYCLE_SNAPSHOT_IDLE
@@ -2714,6 +2797,7 @@ pub(crate) enum NavigateAction {
     NewThread,
     NewAgentDock,
     Capture,
+    FocusEnter,
     OpenAgentFinder,
     NewWorktree,
     OpenWorktree,
@@ -3029,6 +3113,7 @@ macro_rules! non_indexed_action_bindings {
             (&kb.new_thread, NavigateAction::NewThread),
             (&kb.new_agent_dock, NavigateAction::NewAgentDock),
             (&kb.capture, NavigateAction::Capture),
+            (&kb.focus_enter, NavigateAction::FocusEnter),
             (&kb.new_worktree, NavigateAction::NewWorktree),
             (&kb.open_worktree, NavigateAction::OpenWorktree),
             (&kb.remove_worktree, NavigateAction::RemoveWorktree),
@@ -3257,6 +3342,7 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
             state.open_capture();
         }
+        NavigateAction::FocusEnter => leave_navigate_mode(state),
         NavigateAction::OpenAgentFinder => leave_navigate_mode(state),
         NavigateAction::NewWorktree => {
             if let Some(ws_idx) = workspace_action_target(state, context)
@@ -4103,6 +4189,24 @@ mod tests {
         terminal::TerminalState,
         workspace::Workspace,
     };
+
+    #[test]
+    fn focus_room_prefix_actions_are_allowlisted_and_leave_is_room_scoped() {
+        let mut state = state_with_workspaces(&["focus-room"]);
+        state.keybinds = Config::default().keybinds();
+        let o = TerminalKey::new(KeyCode::Char('o'), KeyModifiers::empty());
+        assert!(state.keybinds.focus_leave.matches_prefix_key(&o));
+        assert!(matches!(
+            prefix_binding_for_key(&state, &o),
+            Some(PrefixBindingMatch::Action(
+                NavigateAction::OpenNotificationTarget
+            ))
+        ));
+        assert!(focus_room_action_allowed(NavigateAction::Capture));
+        assert!(focus_room_action_allowed(NavigateAction::OpenAgentFinder));
+        assert!(!focus_room_action_allowed(NavigateAction::FocusEnter));
+        assert!(!focus_room_action_allowed(NavigateAction::CloseTab));
+    }
 
     #[test]
     fn freeze_closing_a_window_closes_only_its_selected_agent_pane() {
@@ -10540,16 +10644,30 @@ navigate_pane_down = "ctrl+j"
         let config = crate::config::Config::default();
         app.state.keybinds = config.keybinds();
         app.state.active = Some(0);
+        app.state.set_server_mode(Mode::Terminal);
         let pane_before = app.state.workspaces[0].focused_pane_id();
 
         app.handle_key(TerminalKey::new(
-            KeyCode::Char('u'),
+            KeyCode::Char('r'),
             KeyModifiers::CONTROL | KeyModifiers::ALT,
         ))
         .await;
 
         assert!(app.state.capture.is_some());
         assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
+    }
+
+    #[tokio::test]
+    async fn prefix_t_does_not_open_capture_by_default() {
+        let mut app = app_with_test_workspaces(&["local"]);
+        app.state.keybinds = crate::config::Config::default().keybinds();
+        app.state.active = Some(0);
+        app.state.set_server_mode(Mode::Prefix);
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
+            .await;
+
+        assert!(app.state.capture.is_none());
     }
 
     #[tokio::test]

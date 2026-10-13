@@ -4454,6 +4454,12 @@ impl PaneRuntime {
         (pid > 0).then_some(pid)
     }
 
+    pub(crate) fn child_has_exited(&self) -> bool {
+        self.child_wait_completed
+            .as_ref()
+            .is_some_and(|completed| completed.load(Ordering::Acquire))
+    }
+
     pub fn tty_name(&self) -> Option<&Path> {
         self.tty_name.as_deref()
     }

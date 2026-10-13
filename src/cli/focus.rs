@@ -5,13 +5,21 @@ pub(super) fn run_focus_command(args: &[String]) -> io::Result<i32> {
         .first()
         .is_none_or(|arg| arg == "--help" || arg == "-h")
     {
-        println!("usage: herdr focus add <text…> [--research] [--json]");
+        println!("usage: herdr focus add <text…> [--research] [--json] | enter [--json]");
         return Ok(if !args.is_empty() { 0 } else { 2 });
     }
     if args.first().is_some_and(|arg| arg == "add") {
         return add(&args[1..]);
     }
-    eprintln!("usage: herdr focus add <text…> [--research] [--json]");
+    if args.first().is_some_and(|arg| arg == "enter") {
+        let enter_args = &args[1..];
+        if let Some(option) = enter_args.iter().find(|arg| *arg != "--json") {
+            eprintln!("unknown option: {option}");
+            return Ok(2);
+        }
+        return super::runtime::focus_enter(enter_args.iter().any(|arg| arg == "--json"));
+    }
+    eprintln!("usage: herdr focus add <text…> [--research] [--json] | enter [--json]");
     Ok(2)
 }
 

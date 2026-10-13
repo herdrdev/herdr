@@ -19,9 +19,9 @@ pub use self::{
     },
     keybinds::{
         format_key_combo, normalize_key_combo, terminal_key_matches_combo,
-        validate_user_action_key, ActionKeybinds, BindingConfig, CommandKeybindConfig,
-        CustomCommandAction, CustomCommandKeybind, IndexedKeybind, Keybinds, LiveKeybindConfig,
-        UserAction,
+        validate_focus_room_leave_key, validate_user_action_key, ActionKeybinds, BindingConfig,
+        CommandKeybindConfig, CustomCommandAction, CustomCommandKeybind, IndexedKeybind, Keybinds,
+        LiveKeybindConfig, UserAction,
     },
     model::{
         validated_sidebar_bounds, ActionConfig, AgentPanelSortConfig, Config, ConfigReloadReport,

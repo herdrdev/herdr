@@ -30,6 +30,12 @@ use crate::detect::{Agent, AgentState};
 use crate::terminal::state::derive_completion_tier;
 use crate::terminal::state::{AttentionTier, CompletionTier};
 use crate::terminal::TerminalRuntimeRegistry;
+
+pub(crate) fn short_agent_label(display_agent: &str) -> Option<String> {
+    crate::detect::parse_agent_label(display_agent)
+        .and_then(|agent| super::icons::agent_text_tag(Some(agent)))
+        .map(str::to_owned)
+}
 use crate::ui::work_list_detail::{PrAction, PrActionKind, PrActionPlacement, PrItem};
 use crate::ui::work_status::WorkGroupStatus;
 
@@ -22084,6 +22090,7 @@ pub(crate) mod tests {
             workspaces: Vec::new(),
             active: None,
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(24),
             sidebar_section_split: Some(0.4),
             collapsed_space_keys: std::collections::HashSet::new(),
@@ -29737,6 +29744,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             workspaces: Vec::new(),
             active: None,
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(48),
             sidebar_section_split: Some(app.sidebar_section_split),
             collapsed_space_keys: app.collapsed_space_keys.clone(),

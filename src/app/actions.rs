@@ -1954,6 +1954,16 @@ impl AppState {
         self.close_workspace_indices(close_indices);
     }
 
+    pub(crate) fn forget_focus_room_tab(&mut self, tab_id: &str) -> bool {
+        if self.focus_room.tab_id.as_deref() != Some(tab_id) {
+            return false;
+        }
+        self.focus_room.tab_disappeared();
+        self.focus_room_ui = crate::app::focus_room::FocusRoomUiState::default();
+        self.mark_session_dirty();
+        true
+    }
+
     pub(crate) fn close_workspace_exact(&mut self, ws_idx: usize) {
         if ws_idx < self.workspaces.len() {
             self.close_workspace_indices(vec![ws_idx]);
@@ -1964,6 +1974,29 @@ impl AppState {
         self.selection = None;
         self.selection_autoscroll = None;
         self.mark_session_dirty();
+
+        let room_tab_closes = self
+            .focus_room
+            .tab_id
+            .as_deref()
+            .is_some_and(|room_tab_id| {
+                close_indices.iter().any(|idx| {
+                    self.workspaces.get(*idx).is_some_and(|workspace| {
+                        workspace.tabs.iter().any(|tab| {
+                            crate::workspace::public_tab_id_for_number(&workspace.id, tab.number)
+                                == room_tab_id
+                        })
+                    })
+                })
+            });
+        if room_tab_closes {
+            self.focus_room.tab_disappeared();
+            self.focus_room_ui = crate::app::focus_room::FocusRoomUiState::default();
+            if self.agent_finder_saved_query.is_some() {
+                self.close_agent_finder();
+            }
+            self.mark_session_dirty();
+        }
 
         let mut terminal_ids = Vec::new();
         let mut pane_ids = Vec::new();
@@ -2388,6 +2421,16 @@ impl AppState {
 
     #[cfg(test)]
     fn close_tab_preserving_workspace_for_test(&mut self, ws_idx: usize, tab_idx: usize) {
+        let room_tab_id = self
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.tabs.get(tab_idx))
+            .map(|tab| {
+                crate::workspace::public_tab_id_for_number(&self.workspaces[ws_idx].id, tab.number)
+            });
+        if let Some(tab_id) = room_tab_id {
+            self.forget_focus_room_tab(&tab_id);
+        }
         let terminal_ids = self.terminal_ids_for_tab(ws_idx, tab_idx);
         let pane_ids = self.pane_ids_for_tab(ws_idx, tab_idx);
         if self.workspaces[ws_idx].tabs.len() == 1 {
@@ -4550,7 +4593,7 @@ impl AppState {
     }
 
     fn apply_agent_notification_delivery(&mut self, delivery: &AgentNotificationDelivery) {
-        if self.local_sound_playback {
+        if self.local_sound_playback && !self.focus_room.active {
             if let Some(sound) = delivery.sound {
                 crate::sound::play(sound, &self.sound);
             }

@@ -21,6 +21,33 @@ pub(super) fn workspace_list() -> std::io::Result<i32> {
     )
 }
 
+pub(super) fn focus_enter(json: bool) -> std::io::Result<i32> {
+    let response = super::send_request(&Request {
+        id: "cli:focus:enter".into(),
+        method: Method::FocusEnter(EmptyParams::default()),
+    })?;
+    if response.get("error").is_some() {
+        return super::print_response(&response);
+    }
+    let result = response
+        .get("result")
+        .ok_or_else(|| std::io::Error::other("focus.enter response has no result"))?;
+    let value = serde_json::json!({
+        "tab_id": result.get("tab_id").and_then(serde_json::Value::as_str)
+            .ok_or_else(|| std::io::Error::other("focus.enter response has no tab_id"))?,
+        "pane_id": result.get("pane_id").and_then(serde_json::Value::as_str)
+            .ok_or_else(|| std::io::Error::other("focus.enter response has no pane_id"))?,
+        "created": result.get("created").and_then(serde_json::Value::as_bool)
+            .ok_or_else(|| std::io::Error::other("focus.enter response has no created flag"))?,
+    });
+    if json {
+        println!("{}", serde_json::to_string(&value)?);
+    } else {
+        println!("{}", value["tab_id"].as_str().unwrap_or_default());
+    }
+    Ok(0)
+}
+
 pub(super) fn workspace_create(params: WorkspaceCreateParams) -> std::io::Result<i32> {
     print_method_response("cli:workspace:create", Method::WorkspaceCreate(params))
 }

@@ -123,6 +123,8 @@ pub(super) fn keybind_help_groups(app: &AppState) -> Vec<HelpGroup> {
         help_entry(keybind_label(&kb.new_thread), "new thread"),
         help_entry(keybind_label(&kb.new_agent_dock), "spawn dock"),
         help_entry(keybind_label(&kb.capture), "capture to focus list"),
+        help_entry(keybind_label(&kb.focus_enter), "enter Focus Room"),
+        help_entry(keybind_label(&kb.focus_leave), "leave Focus Room"),
         help_entry(keybind_label(&kb.agent_finder), "search agents"),
         help_entry(keybind_label(&kb.new_worktree), "new worktree"),
         help_entry(keybind_label(&kb.open_worktree), "open worktree"),
@@ -619,5 +621,20 @@ mod tests {
             entries,
             vec![("prefix+t".into(), Cow::Owned("test".into()))]
         );
+    }
+
+    #[test]
+    fn capture_default_appears_in_help() {
+        let mut app = AppState::test_new();
+        app.keybinds = crate::config::Config::default().keybinds();
+
+        let entries = keybind_help_groups(&app)
+            .into_iter()
+            .flat_map(|(_, entries)| entries)
+            .collect::<Vec<_>>();
+
+        assert!(entries
+            .iter()
+            .any(|(key, label)| key == "ctrl+alt+r" && label == "capture to focus list"));
     }
 }

@@ -120,6 +120,8 @@ const BUILT_IN_GROUPS: &[(&str, &[BuiltIn])] = &[
             built_in("new_thread", "new thread", |kb| &kb.new_thread),
             built_in("new_agent_dock", "spawn dock", |kb| &kb.new_agent_dock),
             built_in("capture", "capture to focus list", |kb| &kb.capture),
+            built_in("focus_enter", "enter Focus Room", |kb| &kb.focus_enter),
+            built_in("focus_leave", "leave Focus Room", |kb| &kb.focus_leave),
             built_in("agent_finder", "search agents", |kb| &kb.agent_finder),
             built_in("new_worktree", "new worktree", |kb| &kb.new_worktree),
             built_in("open_worktree", "open worktree", |kb| &kb.open_worktree),
@@ -422,7 +424,7 @@ mod tests {
             .iter()
             .find(|row| row.label == "capture to focus list")
             .expect("capture row");
-        assert_eq!(capture_row.key, "ctrl+alt+u");
+        assert_eq!(capture_row.key, "ctrl+alt+r");
         assert!(rows
             .iter()
             .any(|row| row.heading && row.label == "user actions"));
@@ -433,5 +435,11 @@ mod tests {
                         field: "editor_open_repo",
                     })
         }));
+        assert!(rows
+            .iter()
+            .any(|row| { row.label == "enter Focus Room" && row.key == "prefix+shift+z" }));
+        assert!(rows
+            .iter()
+            .any(|row| row.label == "leave Focus Room" && row.key == "prefix+o"));
     }
 }

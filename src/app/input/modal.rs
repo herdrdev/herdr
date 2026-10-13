@@ -2751,6 +2751,7 @@ mod tests {
     fn direct_resize_key_exits_resize_mode() {
         let mut state = state_with_workspaces(&["test"]);
         state.set_server_mode(Mode::Resize);
+        state.keybinds.capture = crate::config::ActionKeybinds::prefix("c");
         state.keybinds.resize_mode = crate::config::ActionKeybinds::direct("ctrl+alt+r");
 
         handle_resize_key(

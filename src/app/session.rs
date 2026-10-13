@@ -192,7 +192,7 @@ impl App {
         if self.state.workspaces.is_empty() {
             SessionSaveJob::Clear
         } else {
-            let snapshot = crate::persist::capture(
+            let mut snapshot = crate::persist::capture(
                 &self.state.workspaces,
                 &self.state.terminals,
                 &self.terminal_runtimes,
@@ -205,6 +205,7 @@ impl App {
                 self.state.window_cycle_mode,
                 self.state.skip_collapsed_cycle,
             );
+            snapshot.focus_room = self.state.focus_room.snapshot();
             let history = self.persist_pane_history.then(|| {
                 crate::persist::capture_history(
                     &snapshot,

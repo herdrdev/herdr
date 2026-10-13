@@ -28,6 +28,9 @@ pub struct SessionSnapshot {
     pub workspaces: Vec<WorkspaceSnapshot>,
     pub active: Option<usize>,
     pub selected: usize,
+    /// The persistent focus-room session identity, absent from older snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus_room: Option<crate::focus_room::FocusRoomSnapshot>,
     #[serde(default)]
     pub sidebar_width: Option<u16>,
     #[serde(default)]
@@ -314,6 +317,8 @@ struct RawSessionSnapshot {
     #[serde(default)]
     selected: usize,
     #[serde(default)]
+    focus_room: Option<crate::focus_room::FocusRoomSnapshot>,
+    #[serde(default)]
     sidebar_width: Option<u16>,
     #[serde(default)]
     sidebar_section_split: Option<f32>,
@@ -338,6 +343,7 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
             .collect::<Result<Vec<_>, _>>()?,
         active: raw.active,
         selected: raw.selected,
+        focus_room: raw.focus_room,
         sidebar_width: raw.sidebar_width,
         sidebar_section_split: raw.sidebar_section_split,
         collapsed_space_keys: raw.collapsed_space_keys,
@@ -432,6 +438,7 @@ pub fn capture(
             .collect(),
         active,
         selected,
+        focus_room: None,
         sidebar_width: Some(sidebar_width),
         sidebar_section_split: Some(sidebar_section_split),
         collapsed_space_keys,
@@ -1395,6 +1402,7 @@ mod tests {
             workspaces: vec![],
             active: None,
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
@@ -2018,6 +2026,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),
@@ -2081,6 +2090,7 @@ mod tests {
         assert_eq!(snap.selected, 0);
         assert_eq!(snap.sidebar_width, None);
         assert_eq!(snap.sidebar_section_split, None);
+        assert_eq!(snap.focus_room, None);
         assert_eq!(snap.workspaces[0].tabs.len(), 2);
         assert_eq!(
             snap.workspaces[1].identity_cwd,
@@ -2114,6 +2124,34 @@ mod tests {
         assert_eq!(restored.sidebar_width, None);
         assert_eq!(restored.sidebar_section_split, None);
         assert!(!restored.prio_panel_collapsed);
+        assert_eq!(restored.focus_room, None);
+    }
+
+    #[test]
+    fn focus_room_snapshot_roundtrips_as_an_additive_session_field() {
+        let json = serde_json::json!({
+            "version": SNAPSHOT_VERSION,
+            "workspaces": [],
+            "active": null,
+            "selected": 0,
+            "focus_room": {
+                "tab_id": "focus:tab-1",
+                "active": true,
+                "return_to": "work:tab-2"
+            }
+        })
+        .to_string();
+        let restored = parse_snapshot(&json).unwrap();
+        assert_eq!(
+            restored.focus_room,
+            Some(crate::focus_room::FocusRoomSnapshot {
+                tab_id: Some("focus:tab-1".into()),
+                active: true,
+                return_to: Some("work:tab-2".into()),
+            })
+        );
+        let encoded = serde_json::to_value(restored).unwrap();
+        assert_eq!(encoded["focus_room"]["tab_id"], "focus:tab-1");
     }
 
     #[test]
@@ -3012,6 +3050,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: std::collections::HashSet::new(),

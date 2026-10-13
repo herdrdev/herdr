@@ -82,6 +82,8 @@ impl HeadlessServer {
             self.app.state.window_cycle_mode,
             self.app.state.skip_collapsed_cycle,
         );
+        let mut snapshot = snapshot;
+        snapshot.focus_room = self.app.state.focus_room.snapshot();
 
         let mut handoff_entries = Vec::new();
         for (terminal_id, runtime) in self.app.terminal_runtimes.iter() {

@@ -113,6 +113,9 @@ fn wrap_tooltip_label(label: &str, max_width: u16) -> Vec<String> {
 }
 
 pub(crate) fn hovered_control_at(app: &AppState, col: u16, row: u16) -> Option<ControlId> {
+    if rect_contains(app.focus_room_ui.geometry.return_hit_area, col, row) {
+        return Some(ControlId::FocusRoomReturn);
+    }
     if app.board_view.is_some()
         && col >= app.view.terminal_area.x
         && col < app.view.terminal_area.right()
@@ -314,6 +317,14 @@ fn tooltip_target(app: &AppState, control: ControlId) -> Option<(Rect, String)> 
         | ControlId::FocusBoardDone
         | ControlId::FocusBoardCard(_) => return crate::ui::board::tooltip_target(app, control),
         ControlId::ConfigDiagnostic => return None,
+        ControlId::FocusRoomReturn => {
+            let key = app.keybinds.focus_enter.label();
+            (
+                app.focus_room_ui.geometry.return_hit_area,
+                key.map(|key| format!("return to focus · {key}"))
+                    .unwrap_or_else(|| "return to focus".into()),
+            )
+        }
         ControlId::TicketBoardFilter => {
             let work = app.work_view.as_ref()?;
             (

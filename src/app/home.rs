@@ -1976,7 +1976,7 @@ impl crate::app::state::AppState {
     /// swallows input would change what every one of them is testing. Launching
     /// is a concern of the thing that starts a session, not of the constructor.
     pub(crate) fn open_home_on_launch(&mut self, config: &crate::config::Config) {
-        if config.ui.show_home_on_start {
+        if config.ui.show_home_on_start && !self.focus_room.active {
             let mut home = self.new_home_state();
             home.focus = None;
             self.home = Some(home);

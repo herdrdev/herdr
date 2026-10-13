@@ -37,6 +37,9 @@ impl App {
             method,
             Method::Ping(_)
                 | Method::SessionSnapshot(_)
+                // Focus.enter performs its own tab-scoped lock check so it can
+                // return the user-facing `planning lock is on` error.
+                | Method::FocusEnter(_)
                 | Method::SidebarCoverage(_)
                 | Method::WorkspaceFocus(_)
                 | Method::TabFocus(_)
@@ -2512,6 +2515,19 @@ impl App {
             Method::DayNote(params) => return self.handle_day_note(request.id, params),
             Method::DayDone(params) => return self.handle_day_done(request.id, params),
             Method::DayDismiss(params) => return self.handle_day_dismiss(request.id, params),
+            Method::FocusEnter(_) => {
+                return match self.enter_focus_room() {
+                    Ok(result) => responses::encode_success(
+                        request.id,
+                        crate::api::schema::ResponseResult::FocusEntered {
+                            tab_id: result.tab_id,
+                            pane_id: result.pane_id,
+                            created: result.created,
+                        },
+                    ),
+                    Err(error) => responses::encode_error(request.id, "operation_rejected", error),
+                };
+            }
             Method::AgentFocus(params) => {
                 return self.handle_agent_focus_params(request.id, params)
             }
@@ -2766,7 +2782,10 @@ impl App {
     }
 
     fn emit_api_notification_sound(&self, sound: crate::api::schema::NotificationShowSound) {
-        if !self.state.local_sound_playback || !self.state.sound.allows(None) {
+        if self.state.focus_room.active
+            || !self.state.local_sound_playback
+            || !self.state.sound.allows(None)
+        {
             return;
         }
         if let Some(sound) = sound.to_sound() {
@@ -2936,6 +2955,9 @@ mod tests {
             crate::api::schema::PingParams {},
         )));
         assert!(App::planning_lock_api_allows(&Method::SessionSnapshot(
+            EmptyParams::default(),
+        )));
+        assert!(App::planning_lock_api_allows(&Method::FocusEnter(
             EmptyParams::default(),
         )));
         assert!(App::planning_lock_api_allows(&Method::PaneFocus(

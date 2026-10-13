@@ -447,6 +447,7 @@ impl App {
         for pane_id in &pane_ids {
             self.fleet_attach_agents.remove(pane_id);
         }
+        self.focus_room_tab_will_disappear(&tab_id);
         let public_pane_ids = emit_pane_closed.then(|| {
             pane_ids
                 .iter()

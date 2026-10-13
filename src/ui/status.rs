@@ -25,6 +25,8 @@ use crate::{
 #[cfg(test)]
 use crate::platform::status_metrics::metric_segment_visible;
 
+const RETURN_LABEL: &str = " ← focus ";
+
 /// Full-width top bar.
 ///
 /// Left: one icon per view (Home, Focus, Orchestration, Board, Scratch), the
@@ -43,10 +45,35 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     let bg = Style::default().bg(p.panel_bg);
     frame.render_widget(Paragraph::new("").style(bg), area);
 
+    let returning_room = !app.focus_room.active
+        && app.focus_room.tab_id.is_some()
+        && app.focus_room_ui.geometry.return_hit_area.width > 0;
+    let content_area = if returning_room {
+        let button = app.focus_room_ui.geometry.return_hit_area;
+        frame.render_widget(
+            Paragraph::new(RETURN_LABEL).style(
+                Style::default()
+                    .fg(p.panel_bg)
+                    .bg(p.accent)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            button,
+        );
+        Rect::new(
+            button.right().saturating_add(1),
+            area.y,
+            area.right()
+                .saturating_sub(button.right().saturating_add(1)),
+            area.height,
+        )
+    } else {
+        area
+    };
+
     // The pane toggles sit at the far right of this row when the tab row is
     // hidden, so the segments must stop short of them instead of underlapping.
-    let reserved = super::tabs::tab_action_status_bar_reserved_width(app, area);
-    let content_width = area.width.saturating_sub(reserved);
+    let reserved = super::tabs::tab_action_status_bar_reserved_width(app, content_area);
+    let content_width = content_area.width.saturating_sub(reserved);
     if usize::from(content_width) < minimum_required_status_width(app) {
         return;
     }
@@ -55,7 +82,7 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     // draw do, fits it here instead of drawing an empty row.
     let fitted;
     let segments = if app.view.status_segments.is_empty() {
-        fitted = fitted_status_segments(app, area);
+        fitted = fitted_status_segments(app, content_area);
         &fitted
     } else {
         &app.view.status_segments
@@ -77,17 +104,24 @@ pub(crate) fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)).style(bg),
-        Rect::new(area.x, area.y, content_width, area.height),
+        Rect::new(
+            content_area.x,
+            content_area.y,
+            content_width,
+            content_area.height,
+        ),
     );
 
     let fallback_buttons;
     let buttons = if app.view.status_buttons.is_empty() {
-        fallback_buttons = status_buttons(app, area);
+        fallback_buttons = status_buttons(app, content_area);
         &fallback_buttons
     } else {
         &app.view.status_buttons
     };
-    if let Some((rect, text)) = view_title_rect(app, area, buttons, used + usize::from(reserved)) {
+    if let Some((rect, text)) =
+        view_title_rect(app, content_area, buttons, used + usize::from(reserved))
+    {
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 text,

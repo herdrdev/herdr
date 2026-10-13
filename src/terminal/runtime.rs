@@ -692,6 +692,10 @@ impl TerminalRuntime {
         self.0.child_pid()
     }
 
+    pub(crate) fn child_has_exited(&self) -> bool {
+        self.0.child_has_exited()
+    }
+
     pub fn tty_name(&self) -> Option<&std::path::Path> {
         self.0.tty_name()
     }

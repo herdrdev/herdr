@@ -205,7 +205,10 @@ impl super::App {
         if tick.phase_ended {
             // The overlay is the reminder; the sound is what reaches an operator
             // who is looking at another window.
-            if self.state.local_sound_playback && self.state.sound.allows(None) {
+            if self.state.local_sound_playback
+                && !self.state.focus_room.active
+                && self.state.sound.allows(None)
+            {
                 crate::sound::play(crate::sound::Sound::Request, &self.state.sound);
             }
             if self.state.pomodoro.held() {

@@ -46,6 +46,7 @@ pub(crate) fn action_for_field(field: &str) -> Option<NavigateAction> {
         "new_thread" => NavigateAction::NewThread,
         "new_agent_dock" => NavigateAction::NewAgentDock,
         "capture" => NavigateAction::Capture,
+        "focus_enter" => NavigateAction::FocusEnter,
         "agent_finder" => NavigateAction::OpenAgentFinder,
         "new_worktree" => NavigateAction::NewWorktree,
         "open_worktree" => NavigateAction::OpenWorktree,
@@ -210,7 +211,14 @@ impl AppState {
         let query = self.command_palette.query.as_str();
         let mut entries = Vec::new();
 
+        if self.focus_room.active {
+            return entries;
+        }
+
         for (group, field, label, accessor) in built_in_keybinding_entries() {
+            if field == "focus_enter" {
+                continue;
+            }
             let Some(action) = action_for_field(field) else {
                 continue;
             };
@@ -222,6 +230,16 @@ impl AppState {
                 label: label.to_string(),
                 key: accessor(&self.keybinds).label().unwrap_or_default(),
                 command: PaletteCommand::BuiltIn(action),
+                score,
+            });
+        }
+
+        if let Some(score) = score_entry("", "focus: enter", query) {
+            entries.push(PaletteEntry {
+                group: String::new(),
+                label: "focus: enter".to_string(),
+                key: self.keybinds.focus_enter.label().unwrap_or_default(),
+                command: PaletteCommand::BuiltIn(NavigateAction::FocusEnter),
                 score,
             });
         }

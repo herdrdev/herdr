@@ -1242,6 +1242,16 @@ impl App {
             crate::ui::pomodoro::animation_deadline_at(&self.state, self.state.screen_rect(), now),
             self.planning_lock_render_deadline(now),
             self.state.agent_finder_deadline,
+            self.state
+                .focus_room_ui
+                .drawer
+                .as_ref()
+                .filter(|drawer| self.state.focus_room.active && !drawer.remote)
+                .map(|drawer| {
+                    drawer
+                        .refreshed_at
+                        .map_or(now, |at| at + std::time::Duration::from_millis(250))
+                }),
         ]
         .into_iter()
         .flatten()

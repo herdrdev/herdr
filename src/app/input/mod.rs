@@ -97,6 +97,7 @@ pub(crate) use self::{
         open_new_workspace_dialog,
     },
     navigate::{
+        focus_room_action_allowed, focus_room_direct_other_action,
         terminal_direct_indexed_navigation_action, terminal_direct_non_indexed_navigation_action,
         ActionContext, NavigateAction,
     },
@@ -317,6 +318,12 @@ impl App {
             crate::platform::read_clipboard_text,
         ) {
             return None;
+        }
+        if self.state.focus_room.active && !matches!(&owner, InputOwner::Pomodoro) {
+            if self.handle_focus_room_key(key.clone()) {
+                return None;
+            }
+            return self.handle_terminal_key(key).await;
         }
         if !matches!(
             owner,
@@ -574,7 +581,7 @@ impl App {
         }
     }
 
-    fn persist_capture_draft(&self) {
+    pub(super) fn persist_capture_draft(&self) {
         let draft =
             self.state
                 .capture
@@ -4997,6 +5004,9 @@ impl App {
             }
             return;
         }
+        if self.append_focus_room_drawer_text(owner, text) {
+            return;
+        }
         if self.paste_into_input_owner(owner, text) {
             return;
         }
@@ -5209,6 +5219,9 @@ impl App {
     }
 
     pub(crate) fn paste_into_input_owner(&mut self, owner: InputOwner, text: &str) -> bool {
+        if self.append_focus_room_drawer_text(owner, text) {
+            return true;
+        }
         match owner {
             InputOwner::Surface(SurfaceInputOwner::Focus) => {
                 if let Some(editor) = self.state.focus_editor.as_mut() {
@@ -5502,6 +5515,61 @@ impl App {
                     }
                 }
             }
+            return;
+        }
+        if self.handle_focus_room_mouse(mouse) {
+            return;
+        }
+        if self.state.focus_room.active {
+            let geometry = &self.state.focus_room_ui.geometry;
+            let point = ratatui::layout::Rect::new(mouse.column, mouse.row, 1, 1);
+            if self.state.focus_room_ui.drawer.is_some() && geometry.drawer_rect.intersects(point) {
+                return;
+            }
+            if self.state.agent_finder_saved_query.is_some()
+                && geometry.finder_rect.intersects(point)
+            {
+                return;
+            }
+            if !geometry.pane.intersects(point) {
+                return;
+            }
+            if self.state.capture.is_some()
+                && crate::ui::capture::hit_test(
+                    &self.state,
+                    self.state.view.screen_area,
+                    mouse.column,
+                    mouse.row,
+                )
+            {
+                return;
+            }
+            if matches!(
+                owner,
+                InputOwner::Server(
+                    ServerInputOwner::Settings
+                        | ServerInputOwner::KeybindHelp
+                        | ServerInputOwner::Copy
+                )
+            ) {
+                let _ = self.handle_overlay_mouse(mouse);
+                return;
+            }
+
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                self.pending_url_click_sources.remove(&source_id);
+            }
+            let handled_double_click = self.handle_pane_double_click(mouse);
+            if !handled_double_click {
+                self.focus_pane_before_mouse_press(mouse);
+                let _ = self.state.handle_mouse_for_owner(
+                    &mut self.terminal_runtimes,
+                    source_id,
+                    mouse,
+                    InputOwner::Pane,
+                );
+            }
+            self.finish_mouse_handling(self.state.agent_panel_sort, self.state.settings.section);
             return;
         }
         if self.handle_status_more_menu_mouse(mouse, owner) {
@@ -7855,7 +7923,7 @@ sidebar_visible = true
             }
             app.state.set_server_mode(Mode::Terminal);
             app.handle_key(TerminalKey::new(
-                KeyCode::Char('u'),
+                KeyCode::Char('r'),
                 KeyModifiers::CONTROL | KeyModifiers::ALT,
             ))
             .await;

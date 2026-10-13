@@ -445,6 +445,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::DayNote(_) => "day.note",
         Method::DayDone(_) => "day.done",
         Method::DayDismiss(_) => "day.dismiss",
+        Method::FocusEnter(_) => "focus.enter",
         Method::AgentRead(_) => "agent.read",
         Method::AgentExplain(_) => "agent.explain",
         Method::AgentSendKeys(_) => "agent.send_keys",

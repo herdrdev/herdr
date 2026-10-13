@@ -7,6 +7,8 @@ Most Herdr CLI commands talk to the running server over the same local socket AP
 
 `herdr focus add <text…> [--research] [--json]` writes one Markdown item to the configured local focus folder without connecting to a server. Text arguments are joined with spaces; use `-` to read the capture from standard input. `--research` adds the research tag, while `--json` prints the absolute path, slug, and order.
 
+`herdr focus enter [--json]` enters the session's persistent Focus Room, creating its Vellum pane the first time. Without `--json`, it prints the room tab ID; JSON includes the tab ID, pane ID, and whether Herdr created the room.
+
 Most commands print JSON responses for deterministic automation in scripts.
 
 ## Launch and status

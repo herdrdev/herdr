@@ -597,8 +597,20 @@
         {
           "key": "keys.capture",
           "type": "keybinding",
-          "default": "\"ctrl+alt+u\"",
+          "default": "\"ctrl+alt+r\"",
           "description": "Capture a thought to the local focus list."
+        },
+        {
+          "key": "keys.focus_enter",
+          "type": "keybinding",
+          "default": "\"prefix+shift+z\"",
+          "description": "Enter Focus Room."
+        },
+        {
+          "key": "keys.focus_leave",
+          "type": "keybinding",
+          "default": "\"prefix+o\"",
+          "description": "Leave Focus Room. Scoped to the room."
         },
         {
           "key": "keys.new_worktree",
@@ -2674,6 +2686,12 @@
           "type": "string",
           "default": "\"~/workspaces/obsidian/focus\"",
           "description": "Local Markdown folder used for captured focus items. ~ expands to the home directory."
+        },
+        {
+          "key": "focus.vellum",
+          "type": "string",
+          "default": "\"vellum\"",
+          "description": "Vellum executable used by Focus Room. ~ expands to the home directory."
         }
       ]
     }

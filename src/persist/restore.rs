@@ -34,10 +34,18 @@ struct PaneRestoreStartup<'a> {
     reserved_agent_session: Option<String>,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct FocusRoomRestore<'a> {
+    pub(crate) tab_id: &'a str,
+    pub(crate) cwd: Option<&'a std::path::Path>,
+    pub(crate) launch_argv: Option<&'a [String]>,
+}
+
 struct RestoreRuntimeContext<'a> {
     scrollback_limit_bytes: usize,
     shell_config: crate::pane::PaneShellConfig<'a>,
     resume_agents_on_restore: bool,
+    focus_room: Option<FocusRoomRestore<'a>>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -116,7 +124,7 @@ pub fn restore(
     render_dirty: Arc<RenderSignal>,
 ) -> RestoredSession {
     let mut imported_panes = HashMap::new();
-    restore_with_imports(
+    restore_with_imports_and_failures(
         snapshot,
         history,
         rows,
@@ -125,10 +133,62 @@ pub fn restore(
         crate::pane::PaneShellConfig::new(default_shell, shell_mode),
         resume_agents_on_restore,
         &mut imported_panes,
+        None,
         events,
         render_notify,
         render_dirty,
     )
+    .0
+}
+
+// Keep the existing restore arguments stable while threading one room-specific
+// launch override through the shared restore pipeline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn restore_with_focus_room(
+    snapshot: &SessionSnapshot,
+    history: Option<&SessionHistorySnapshot>,
+    rows: u16,
+    cols: u16,
+    scrollback_limit_bytes: usize,
+    default_shell: &str,
+    shell_mode: crate::config::ShellModeConfig,
+    resume_agents_on_restore: bool,
+    focus_room: Option<FocusRoomRestore<'_>>,
+    events: mpsc::Sender<AppEvent>,
+    render_notify: Arc<Notify>,
+    render_dirty: Arc<RenderSignal>,
+) -> RestoredSession {
+    let Some(focus_room) = focus_room else {
+        return restore(
+            snapshot,
+            history,
+            rows,
+            cols,
+            scrollback_limit_bytes,
+            default_shell,
+            shell_mode,
+            resume_agents_on_restore,
+            events,
+            render_notify,
+            render_dirty,
+        );
+    };
+    let mut imported_panes = HashMap::new();
+    restore_with_imports_and_failures(
+        snapshot,
+        history,
+        rows,
+        cols,
+        scrollback_limit_bytes,
+        crate::pane::PaneShellConfig::new(default_shell, shell_mode),
+        resume_agents_on_restore,
+        &mut imported_panes,
+        Some(focus_room),
+        events,
+        render_notify,
+        render_dirty,
+    )
+    .0
 }
 
 #[cfg(unix)]
@@ -247,6 +307,7 @@ fn restore_with_imports_strict(
         shell_config,
         resume_agents_on_restore,
         imported_panes,
+        None,
         events,
         render_notify,
         render_dirty,
@@ -265,35 +326,9 @@ fn restore_with_imports_strict(
     Ok(restored)
 }
 
-fn restore_with_imports(
-    snapshot: &SessionSnapshot,
-    history: Option<&SessionHistorySnapshot>,
-    rows: u16,
-    cols: u16,
-    scrollback_limit_bytes: usize,
-    shell_config: crate::pane::PaneShellConfig<'_>,
-    resume_agents_on_restore: bool,
-    imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
-    events: mpsc::Sender<AppEvent>,
-    render_notify: Arc<Notify>,
-    render_dirty: Arc<RenderSignal>,
-) -> RestoredSession {
-    restore_with_imports_and_failures(
-        snapshot,
-        history,
-        rows,
-        cols,
-        scrollback_limit_bytes,
-        shell_config,
-        resume_agents_on_restore,
-        imported_panes,
-        events,
-        render_notify,
-        render_dirty,
-    )
-    .0
-}
-
+// The restore pipeline already has eleven independent inputs; keep this
+// task-specific room override grouped as one option instead of widening it.
+#[allow(clippy::too_many_arguments)]
 fn restore_with_imports_and_failures(
     snapshot: &SessionSnapshot,
     history: Option<&SessionHistorySnapshot>,
@@ -303,6 +338,7 @@ fn restore_with_imports_and_failures(
     shell_config: crate::pane::PaneShellConfig<'_>,
     resume_agents_on_restore: bool,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
+    focus_room: Option<FocusRoomRestore<'_>>,
     events: mpsc::Sender<AppEvent>,
     render_notify: Arc<Notify>,
     render_dirty: Arc<RenderSignal>,
@@ -326,6 +362,7 @@ fn restore_with_imports_and_failures(
             scrollback_limit_bytes,
             shell_config,
             resume_agents_on_restore,
+            focus_room,
             events: events.clone(),
             render_notify: render_notify.clone(),
             render_dirty: render_dirty.clone(),
@@ -404,6 +441,10 @@ fn restore_workspace(
 
     for (idx, tab_snap) in snap.tabs.iter().enumerate() {
         let tab_number = snap.public_tab_numbers.get(idx).copied().unwrap_or(idx + 1);
+        let public_tab_id = crate::workspace::public_tab_id_for_number(&workspace_id, tab_number);
+        let focus_room = runtime_context
+            .focus_room
+            .filter(|room| room.tab_id == public_tab_id);
         let (restored_tab, tab_failed_imports) = restore_tab(
             tab_snap,
             history.and_then(|history| history.tabs.get(idx)),
@@ -415,6 +456,7 @@ fn restore_workspace(
             resumed_agent_sessions,
             imported_panes,
             &public_pane_ids_by_old_raw,
+            focus_room,
         );
         failed_imports += tab_failed_imports;
         let Some((mut tab, restored_terminals, restored_runtimes, reverse_id_map)) = restored_tab
@@ -535,6 +577,7 @@ fn restore_tab(
     resumed_agent_sessions: &mut HashSet<String>,
     imported_panes: &mut HashMap<u32, crate::handoff_runtime::ImportedHandoffRuntime>,
     public_pane_ids_by_old_raw: &HashMap<u32, String>,
+    focus_room: Option<FocusRoomRestore<'_>>,
 ) -> RestoreFailures<Option<RestoredTab>> {
     let (node, id_map) = restore_node_remapped(&snap.layout);
     let reverse_id_map: HashMap<PaneId, u32> = id_map
@@ -550,8 +593,11 @@ fn restore_tab(
     for id in &pane_ids {
         let old_id = reverse_id_map.get(id);
         let saved_pane = old_id.and_then(|old_id| snap.panes.get(old_id));
-        let saved_cwd = saved_pane
-            .map(|p| p.cwd.clone())
+        let focus_room_launch_argv = focus_room.and_then(|room| room.launch_argv);
+        let saved_cwd = focus_room
+            .and_then(|room| room.cwd)
+            .map(PathBuf::from)
+            .or_else(|| saved_pane.map(|pane| pane.cwd.clone()))
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| "/".into()));
 
         let cwd = saved_cwd;
@@ -579,7 +625,9 @@ fn restore_tab(
         let saved_managed_agent = saved_pane
             .and_then(|pane| pane.managed_agent_kind.as_deref())
             .and_then(crate::detect::parse_canonical_agent_label);
-        let saved_launch_argv = saved_pane.and_then(|p| p.launch_argv.clone());
+        let saved_launch_argv = focus_room_launch_argv
+            .map(|argv| argv.to_vec())
+            .or_else(|| saved_pane.and_then(|p| p.launch_argv.clone()));
         let saved_agent_session = saved_pane.and_then(|p| p.agent_session.as_ref());
         let expected_pane_id = old_id.and_then(|old_id| public_pane_ids_by_old_raw.get(old_id));
         let saved_history = old_id
@@ -658,7 +706,7 @@ fn restore_tab(
         let imported_pane_done_for_ms = imported_runtime
             .as_ref()
             .and_then(|imported| imported.state.pane_done_for_ms);
-        let pending_native_agent_restore = if was_imported {
+        let pending_native_agent_restore = if was_imported || focus_room_launch_argv.is_some() {
             None
         } else {
             startup.restore_plan.clone()
@@ -743,6 +791,22 @@ fn restore_tab(
                     runtime_context.render_notify.clone(),
                     runtime_context.render_dirty.clone(),
                 )
+            } else if let Some(argv) = focus_room_launch_argv {
+                TerminalRuntime::spawn_argv_command(
+                    *id,
+                    rows,
+                    cols,
+                    cwd.clone(),
+                    argv,
+                    &launch_env,
+                    crate::pane::AgentDetection::Enabled,
+                    runtime_context.scrollback_limit_bytes,
+                    crate::terminal_theme::TerminalTheme::default(),
+                    None,
+                    runtime_context.events.clone(),
+                    runtime_context.render_notify.clone(),
+                    runtime_context.render_dirty.clone(),
+                )
             } else {
                 TerminalRuntime::spawn_with_initial_history(
                     *id,
@@ -763,21 +827,39 @@ fn restore_tab(
 
             #[cfg(not(unix))]
             {
-                TerminalRuntime::spawn_with_initial_history(
-                    *id,
-                    rows,
-                    cols,
-                    cwd.clone(),
-                    runtime_context.scrollback_limit_bytes,
-                    crate::terminal_theme::TerminalTheme::default(),
-                    None,
-                    runtime_context.shell_config,
-                    &launch_env,
-                    startup.initial_history_ansi,
-                    runtime_context.events.clone(),
-                    runtime_context.render_notify.clone(),
-                    runtime_context.render_dirty.clone(),
-                )
+                if let Some(argv) = focus_room_launch_argv {
+                    TerminalRuntime::spawn_argv_command(
+                        *id,
+                        rows,
+                        cols,
+                        cwd.clone(),
+                        argv,
+                        &launch_env,
+                        crate::pane::AgentDetection::Enabled,
+                        runtime_context.scrollback_limit_bytes,
+                        crate::terminal_theme::TerminalTheme::default(),
+                        None,
+                        runtime_context.events.clone(),
+                        runtime_context.render_notify.clone(),
+                        runtime_context.render_dirty.clone(),
+                    )
+                } else {
+                    TerminalRuntime::spawn_with_initial_history(
+                        *id,
+                        rows,
+                        cols,
+                        cwd.clone(),
+                        runtime_context.scrollback_limit_bytes,
+                        crate::terminal_theme::TerminalTheme::default(),
+                        None,
+                        runtime_context.shell_config,
+                        &launch_env,
+                        startup.initial_history_ansi,
+                        runtime_context.events.clone(),
+                        runtime_context.render_notify.clone(),
+                        runtime_context.render_dirty.clone(),
+                    )
+                }
             }
         };
 
@@ -791,7 +873,7 @@ fn restore_tab(
                 ) {
                     warn!(pane_id = id.raw(), %error, "ignoring invalid saved pane work context");
                 }
-                if was_imported {
+                if was_imported || focus_room_launch_argv.is_some() {
                     if let Some(argv) = saved_launch_argv {
                         terminal = terminal.with_launch_argv(argv).with_respawn_shell_on_exit();
                     }
@@ -1363,6 +1445,7 @@ mod tests {
             workspaces: Vec::new(),
             active: None,
             selected: 0,
+            focus_room: None,
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: HashSet::new(),
@@ -1993,6 +2076,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
@@ -2155,6 +2239,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
@@ -2322,6 +2407,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
@@ -2474,6 +2560,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: None,
             sidebar_section_split: None,
             collapsed_space_keys: Default::default(),
@@ -2906,6 +2993,7 @@ mod tests {
             }],
             active: Some(0),
             selected: 0,
+            focus_room: None,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
             collapsed_space_keys: Default::default(),

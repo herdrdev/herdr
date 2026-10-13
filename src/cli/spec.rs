@@ -278,6 +278,11 @@ fn focus_command() -> Command {
                 .arg(flag("research"))
                 .arg(json_flag()),
         )
+        .subcommand(
+            Command::new("enter")
+                .about("Enter the Focus Room")
+                .arg(json_flag()),
+        )
 }
 
 pub(super) fn watchdog_command() -> Command {
@@ -1504,6 +1509,16 @@ mod tests {
     fn spec_describes_all_completion_commands() {
         let cmd = super::command();
         assert_command_descriptions(&cmd, &mut Vec::new());
+    }
+
+    #[test]
+    fn focus_enter_command_accepts_optional_json_output() {
+        assert!(super::command()
+            .try_get_matches_from(["herdr", "focus", "enter"])
+            .is_ok());
+        assert!(super::command()
+            .try_get_matches_from(["herdr", "focus", "enter", "--json"])
+            .is_ok());
     }
 
     #[test]

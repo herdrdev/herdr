@@ -607,6 +607,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_legacy_ctrl_alt_r() {
+        let key = parse_terminal_key_sequence("\x1b\x12")
+            .expect("ctrl-alt-r legacy sequence should parse");
+        assert_terminal_key_eq(
+            key.clone(),
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            crossterm::event::KeyEventKind::Press,
+            None,
+        );
+        assert_eq!(
+            encode_terminal_key(key, KeyboardProtocol::Legacy),
+            b"\x1b\x12"
+        );
+    }
+
+    #[test]
+    fn parse_kitty_ctrl_alt_r() {
+        let key = parse_terminal_key_sequence("\x1b[114;7u")
+            .expect("ctrl-alt-r kitty sequence should parse");
+        assert_terminal_key_eq(
+            key,
+            KeyCode::Char('r'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+            crossterm::event::KeyEventKind::Press,
+            None,
+        );
+    }
+
+    #[test]
     fn unknown_legacy_ss3_sequence_remains_unsupported() {
         assert!(parse_terminal_key_sequence("\x1bOz").is_none());
     }

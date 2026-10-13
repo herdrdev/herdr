@@ -7912,6 +7912,22 @@
         {
           "properties": {
             "method": {
+              "const": "focus.enter",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.read",
               "type": "string"
             },
@@ -15233,6 +15249,30 @@
                 "type",
                 "tab",
                 "root_pane"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "created": {
+                  "type": "boolean"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "tab_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "focus_entered",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "tab_id",
+                "pane_id",
+                "created"
               ],
               "type": "object"
             },

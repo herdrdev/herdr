@@ -1601,6 +1601,7 @@ pub(crate) struct SidebarPresentationState {
     pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
     pub(crate) capture: Option<crate::app::capture::CaptureState>,
     pub(crate) capture_ack: Option<crate::app::capture::CaptureAck>,
+    pub(crate) focus_room_ui: crate::app::focus_room::FocusRoomUiState,
     pub(crate) project_menu: Option<SidebarProjectMenuState>,
     pub(crate) selected_work_group: Option<String>,
     pub(crate) object_menu: Option<SidebarObjectMenuState>,
@@ -4589,7 +4590,9 @@ pub struct AppState {
     pub(crate) spawn_dock: Option<crate::app::spawn_dock::SpawnDockState>,
     pub(crate) capture: Option<crate::app::capture::CaptureState>,
     pub(crate) capture_ack: Option<crate::app::capture::CaptureAck>,
+    pub(crate) focus_room_ui: crate::app::focus_room::FocusRoomUiState,
     pub(crate) focus_dir: std::path::PathBuf,
+    pub(crate) focus_vellum: String,
     /// Client-local provider choices retained when Home closes.
     pub(crate) home_agent_choices: Vec<crate::app::home::HomeAgentChoice>,
     /// Provider choices resolved outside `HomeState`, ready for the next Home open.
@@ -5067,6 +5070,8 @@ pub struct AppState {
     /// Authoritative server lock policy. Password material is excluded from
     /// persisted session snapshots and API projections.
     pub(crate) planning_lock: crate::planning_lock::PlanningLock,
+    /// Persistent server-owned Focus Room session state.
+    pub(crate) focus_room: crate::focus_room::FocusRoom,
     /// Local flow for setting up, unlocking, or managing the planning lock.
     pub(crate) planning_lock_dialog: Option<crate::planning_lock::Dialog>,
     /// The idle star field pinned under both of them.
@@ -5697,6 +5702,7 @@ pub(crate) enum ControlId {
     TopBarPaneRight,
     StatusButton(usize),
     StatusSegment(StatusSegmentKind),
+    FocusRoomReturn,
 }
 
 /// One right-aligned status-row segment, named for its hover explanation.
@@ -6692,6 +6698,7 @@ impl AppState {
         std::mem::swap(&mut self.spawn_dock, &mut other.spawn_dock);
         std::mem::swap(&mut self.capture, &mut other.capture);
         std::mem::swap(&mut self.capture_ack, &mut other.capture_ack);
+        std::mem::swap(&mut self.focus_room_ui, &mut other.focus_room_ui);
         std::mem::swap(&mut self.sidebar_project_menu, &mut other.project_menu);
         std::mem::swap(
             &mut self.sidebar_selected_work_group,
@@ -8190,7 +8197,9 @@ impl AppState {
             spawn_dock: None,
             capture: None,
             capture_ack: None,
+            focus_room_ui: crate::app::focus_room::FocusRoomUiState::default(),
             focus_dir: crate::worktree::expand_tilde_path(crate::focus_capture::DEFAULT_DIR),
+            focus_vellum: "vellum".into(),
             home_agent_choices: Vec::new(),
             home_catalog: crate::app::home_catalog::HomeCatalog::fallback(),
             launch_profiles: crate::app::launch_profiles::resolve(&[]),
@@ -8579,6 +8588,7 @@ impl AppState {
             goals: crate::goals::GoalsPanelState::default(),
             pomodoro: crate::pomodoro::PomodoroState::default(),
             planning_lock: crate::planning_lock::PlanningLock::default(),
+            focus_room: crate::focus_room::FocusRoom::default(),
             planning_lock_dialog: None,
             // Off in fixtures, the way the break timer is: a decorative panel
             // must not silently move every existing sidebar layout assertion.
@@ -9750,6 +9760,42 @@ mod tests {
             }
         );
         assert_eq!(menu.selected, ContextMenuAction::Snooze);
+    }
+
+    #[test]
+    fn focus_room_overlays_are_isolated_between_sidebar_presentations() {
+        let mut app = AppState::test_new();
+        let mut first_client = SidebarPresentationState::default();
+        let mut second_client = SidebarPresentationState::default();
+        app.swap_sidebar_presentation(&mut first_client);
+        app.focus_room_ui.leave_dialog_open = true;
+        app.agent_finder_saved_query = Some(String::new());
+        app.focus_room_ui.drawer = Some(crate::app::focus_room::FocusRoomDrawerState {
+            pane_id: Some("work:pane-1".into()),
+            agent_ref: None,
+            title: "review".into(),
+            agent_label: "cc".into(),
+            host: "local".into(),
+            remote: false,
+            lines: Vec::new(),
+            input: String::new(),
+            cursor: 0,
+            output_revision: 0,
+            refreshed_at: None,
+        });
+        app.swap_sidebar_presentation(&mut first_client);
+
+        app.swap_sidebar_presentation(&mut second_client);
+        assert!(!app.focus_room_ui.leave_dialog_open);
+        assert!(app.agent_finder_saved_query.is_none());
+        assert!(app.focus_room_ui.drawer.is_none());
+        app.swap_sidebar_presentation(&mut second_client);
+
+        app.swap_sidebar_presentation(&mut first_client);
+        assert!(app.focus_room_ui.leave_dialog_open);
+        assert_eq!(app.agent_finder_saved_query.as_deref(), Some(""));
+        assert!(app.focus_room_ui.drawer.is_some());
+        app.swap_sidebar_presentation(&mut first_client);
     }
 
     #[test]

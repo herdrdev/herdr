@@ -562,11 +562,13 @@ pub struct ScratchConfig {
 #[serde(default)]
 pub struct FocusConfig {
     pub dir: String,
+    pub vellum: String,
 }
 impl Default for FocusConfig {
     fn default() -> Self {
         Self {
             dir: crate::focus_capture::DEFAULT_DIR.into(),
+            vellum: "vellum".into(),
         }
     }
 }
@@ -965,8 +967,12 @@ pub struct KeysConfig {
     pub new_thread: BindingConfig,
     /// Open the spawn dock at the bottom of the pane area. Default: "prefix+y"
     pub new_agent_dock: BindingConfig,
-    /// Capture a thought to the local focus list. Default: "ctrl+alt+u".
+    /// Capture a thought to the local focus list. Default: "ctrl+alt+r".
     pub capture: BindingConfig,
+    /// Enter the Focus Room. Default: "prefix+shift+z".
+    pub focus_enter: BindingConfig,
+    /// Leave the Focus Room. Default: "prefix+o"; scoped to the room.
+    pub focus_leave: BindingConfig,
     /// Create a Git worktree from the selected workspace. Default: "prefix+shift+g"
     pub new_worktree: BindingConfig,
     /// Open an existing Git worktree from the selected workspace. Unset by default.
@@ -1236,6 +1242,10 @@ pub(crate) struct KeysConfigOverlay {
     #[serde(skip_serializing_if = "Option::is_none")]
     capture: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    focus_enter: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    focus_leave: Option<BindingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     new_worktree: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     open_worktree: Option<BindingConfig>,
@@ -1489,6 +1499,8 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(new_thread);
         apply_field!(new_agent_dock);
         apply_field!(capture);
+        apply_field!(focus_enter);
+        apply_field!(focus_leave);
         apply_field!(new_worktree);
         apply_field!(open_worktree);
         apply_field!(remove_worktree);
@@ -1661,6 +1673,8 @@ impl KeysConfig {
         copy_effective_action_field!(new_thread, keybinds.new_thread);
         copy_effective_action_field!(new_agent_dock, keybinds.new_agent_dock);
         copy_effective_action_field!(capture, keybinds.capture);
+        copy_effective_action_field!(focus_enter, keybinds.focus_enter);
+        copy_effective_action_field!(focus_leave, keybinds.focus_leave);
         copy_effective_action_field!(new_worktree, keybinds.new_worktree);
         copy_effective_action_field!(open_worktree, keybinds.open_worktree);
         copy_effective_action_field!(remove_worktree, keybinds.remove_worktree);
@@ -2286,7 +2300,9 @@ impl Default for KeysConfig {
             new_workspace: BindingConfig::one("prefix+alt+n"),
             new_thread: BindingConfig::one("prefix+c"),
             new_agent_dock: BindingConfig::one("prefix+y"),
-            capture: BindingConfig::one("ctrl+alt+u"),
+            capture: BindingConfig::one("ctrl+alt+r"),
+            focus_enter: BindingConfig::one("prefix+shift+z"),
+            focus_leave: BindingConfig::one("prefix+o"),
             new_worktree: BindingConfig::one("prefix+shift+g"),
             open_worktree: BindingConfig::empty(),
             remove_worktree: BindingConfig::empty(),

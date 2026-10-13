@@ -340,6 +340,8 @@ pub struct Keybinds {
     pub new_thread: ActionKeybinds,
     pub new_agent_dock: ActionKeybinds,
     pub capture: ActionKeybinds,
+    pub focus_enter: ActionKeybinds,
+    pub focus_leave: ActionKeybinds,
     pub new_worktree: ActionKeybinds,
     pub open_worktree: ActionKeybinds,
     pub remove_worktree: ActionKeybinds,
@@ -551,6 +553,8 @@ impl Config {
         };
         let mut registry = BindingRegistry::new(prefix, prefix_source);
         registry.reserve_direct(prefix, "keys.prefix", prefix_source);
+        let mut focus_room_registry = BindingRegistry::new(prefix, prefix_source);
+        focus_room_registry.reserve_direct(prefix, "keys.prefix", prefix_source);
         let mut navigate_registry = BindingRegistry::new(prefix, prefix_source);
         navigate_registry.reserve_direct(prefix, "keys.prefix", prefix_source);
         reserve_navigate_runtime_keys(&mut navigate_registry);
@@ -576,6 +580,8 @@ impl Config {
             new_thread: empty_action!(),
             new_agent_dock: empty_action!(),
             capture: empty_action!(),
+            focus_enter: empty_action!(),
+            focus_leave: empty_action!(),
             new_worktree: empty_action!(),
             open_worktree: empty_action!(),
             remove_worktree: empty_action!(),
@@ -714,6 +720,19 @@ impl Config {
                 }
             };
         }
+        macro_rules! apply_focus_room_action {
+            ($target:expr, $field:ident, $source:expr) => {
+                if field_source!($field) == $source {
+                    $target = parse_action_bindings(
+                        concat!("keys.", stringify!($field)),
+                        &self.keys.$field,
+                        &mut focus_room_registry,
+                        &mut diagnostics,
+                        $source,
+                    );
+                }
+            };
+        }
         macro_rules! apply_indexed {
             (
                 $target:expr,
@@ -772,6 +791,7 @@ impl Config {
             apply_action!(keybinds.new_thread, new_thread, source);
             apply_action!(keybinds.new_agent_dock, new_agent_dock, source);
             apply_action!(keybinds.capture, capture, source);
+            apply_action!(keybinds.focus_enter, focus_enter, source);
             apply_action!(keybinds.new_worktree, new_worktree, source);
             apply_action!(keybinds.open_worktree, open_worktree, source);
             apply_action!(keybinds.remove_worktree, remove_worktree, source);
@@ -953,6 +973,28 @@ impl Config {
             }
         }
 
+        macro_rules! reserve_room_action {
+            ($field:ident, $target:expr) => {
+                for binding in &$target.bindings {
+                    focus_room_registry.register(
+                        binding,
+                        concat!("keys.", stringify!($field)),
+                        field_source!($field),
+                    );
+                }
+            };
+        }
+        reserve_room_action!(help, keybinds.help);
+        reserve_room_action!(settings, keybinds.settings);
+        reserve_room_action!(capture, keybinds.capture);
+        reserve_room_action!(agent_finder, keybinds.agent_finder);
+        reserve_room_action!(detach, keybinds.detach);
+        reserve_room_action!(reload_config, keybinds.reload_config);
+        reserve_room_action!(copy_mode, keybinds.copy_mode);
+        for source in [BindingSource::User, BindingSource::Default] {
+            apply_focus_room_action!(keybinds.focus_leave, focus_leave, source);
+        }
+
         // Keep the pre-picker field names usable for existing configurations;
         // canonical defaults and new configurations live under *_work_link.
         if !self.keys.key_field_is_user_configured("open_work_url")
@@ -1018,6 +1060,29 @@ pub fn validate_user_action_key(config: &mut Config, key: &str) -> Result<String
                 .unwrap_or_else(|| "keybinding is already bound".into())
         });
     config.actions.pop();
+    result
+}
+
+/// Validate a Settings key capture using Focus Room's room-scoped binding
+/// registry. `focus_leave` intentionally shares its default chord with an
+/// action that only runs outside the room.
+pub fn validate_focus_room_leave_key(config: &mut Config, key: &str) -> Result<String, String> {
+    let previous = std::mem::replace(
+        &mut config.keys.focus_leave,
+        BindingConfig::one(key.to_owned()),
+    );
+    let result = {
+        let (_, _, diagnostics, keybinds) = config.validated_keybinds();
+        keybinds.focus_leave.label().ok_or_else(|| {
+            diagnostics
+                .iter()
+                .rev()
+                .find(|diagnostic| diagnostic.contains("focus_leave"))
+                .cloned()
+                .unwrap_or_else(|| "keybinding is already bound".into())
+        })
+    };
+    config.keys.focus_leave = previous;
     result
 }
 
@@ -2024,6 +2089,30 @@ next_tab = "prefix+n"
                 KeyCode::Char('p'),
                 KeyModifiers::empty(),
             )));
+    }
+
+    #[test]
+    fn focus_room_defaults_keep_leave_scoped_and_enter_conflict_free() {
+        let config = Config::default();
+        let (_, _, diagnostics, kb) = config.validated_keybinds();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(kb.focus_enter.label().as_deref(), Some("prefix+shift+z"));
+        assert_eq!(kb.focus_leave.label().as_deref(), Some("prefix+o"));
+        assert_eq!(
+            kb.open_notification_target.label().as_deref(),
+            Some("prefix+o")
+        );
+    }
+
+    #[test]
+    fn focus_leave_key_validation_uses_the_room_scoped_registry() {
+        let mut config = Config::default();
+        assert_eq!(
+            validate_focus_room_leave_key(&mut config, "prefix+o").unwrap(),
+            "prefix+o"
+        );
+        assert!(validate_focus_room_leave_key(&mut config, "prefix+f").is_err());
+        assert!(validate_user_action_key(&mut config, "prefix+o").is_err());
     }
 
     #[test]

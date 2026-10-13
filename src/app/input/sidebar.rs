@@ -96,7 +96,7 @@ impl AppState {
         self.schedule_agent_finder_search();
     }
 
-    fn close_agent_finder(&mut self) {
+    pub(crate) fn close_agent_finder(&mut self) {
         if let Some(query) = self.agent_finder_saved_query.take() {
             let mut filter = self.sidebar_work_filter.clone();
             filter.query = query;
