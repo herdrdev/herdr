@@ -54,7 +54,7 @@ struct ReconnectState {
     next_attempt: Option<Instant>,
     in_flight: bool,
     generation: Option<u64>,
-    online_since: Option<Instant>,
+    ready_since: Option<Instant>,
 }
 
 impl ReconnectState {
@@ -65,7 +65,7 @@ impl ReconnectState {
             next_attempt: Some(now),
             in_flight: false,
             generation: None,
-            online_since: None,
+            ready_since: None,
         }
     }
 }
@@ -208,23 +208,22 @@ impl EndpointSupervisors {
                 if endpoint_id.is_local() {
                     state.attempts = 0;
                 }
-                state.online_since.get_or_insert(now);
                 state.next_attempt = None;
             }
             ClientEndpointStatus::Attention => {
-                state.online_since = None;
+                state.ready_since = None;
                 // Authentication or configuration may be repaired outside this client.
                 state.next_attempt =
                     (!endpoint_id.is_local()).then_some(now + Duration::from_secs(30));
             }
             ClientEndpointStatus::Disabled => {
-                state.online_since = None;
+                state.ready_since = None;
                 state.next_attempt = None;
             }
             ClientEndpointStatus::Connecting | ClientEndpointStatus::Reconnecting => {
                 // A brief maintenance wake can complete a handshake without restoring the link.
-                if state.online_since.take().is_some_and(|connected| {
-                    now.saturating_duration_since(connected) >= STABLE_CONNECTION_PERIOD
+                if state.ready_since.take().is_some_and(|ready| {
+                    now.saturating_duration_since(ready) >= STABLE_CONNECTION_PERIOD
                 }) {
                     state.attempts = 0;
                 }
@@ -240,6 +239,21 @@ impl EndpointSupervisors {
             }
         }
         true
+    }
+
+    pub(crate) fn mark_ready(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        generation: u64,
+        now: Instant,
+    ) {
+        if let Some(state) = self
+            .endpoints
+            .get_mut(endpoint_id)
+            .filter(|state| state.generation == Some(generation))
+        {
+            state.ready_since.get_or_insert(now);
+        }
     }
 
     /// A user asked for this machine now, so skip its pending backoff and restart the ladder.
@@ -481,6 +495,7 @@ mod tests {
         for attempt in 1..=5 {
             let connected = now + Duration::from_secs(attempt * 20);
             assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, connected));
+            supervisors.mark_ready(&id, 2, connected);
             let failed = connected + Duration::from_secs(15);
             assert!(supervisors.disconnected(&id, 2, failed));
             assert_eq!(
@@ -490,11 +505,44 @@ mod tests {
         }
         let connected = now + Duration::from_secs(200);
         assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, connected));
+        supervisors.mark_ready(&id, 1, connected);
+        let ready = connected + Duration::from_secs(45);
+        supervisors.mark_ready(&id, 2, ready);
         let failed = connected + Duration::from_secs(60);
         assert!(supervisors.disconnected(&id, 2, failed));
         assert_eq!(
             supervisors.endpoints[&id].next_attempt,
+            Some(failed + Duration::from_secs(16))
+        );
+
+        let connected = now + Duration::from_secs(300);
+        assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, connected));
+        let ready = connected + Duration::from_secs(45);
+        supervisors.mark_ready(&id, 2, ready);
+        supervisors.mark_ready(&id, 2, ready + Duration::from_secs(30));
+        let failed = ready + Duration::from_secs(60);
+        assert!(supervisors.disconnected(&id, 2, failed));
+        assert_eq!(
+            supervisors.endpoints[&id].next_attempt,
             Some(failed + INITIAL_RETRY_DELAY)
+        );
+    }
+
+    #[test]
+    fn a_handshake_without_readiness_does_not_reset_backoff() {
+        let now = Instant::now();
+        let profile = profile();
+        let id = ClientEndpointId::Ssh(profile.id.clone());
+        let mut supervisors = EndpointSupervisors::new(&[profile], now);
+        let state = supervisors.endpoints.get_mut(&id).unwrap();
+        state.generation = Some(2);
+        state.attempts = 9;
+        assert!(supervisors.record_status(&id, 2, ClientEndpointStatus::Online, now));
+        let failed = now + Duration::from_secs(75);
+        assert!(supervisors.disconnected(&id, 2, failed));
+        assert_eq!(
+            supervisors.endpoints[&id].next_attempt,
+            Some(failed + MAX_RETRY_DELAY)
         );
     }
 

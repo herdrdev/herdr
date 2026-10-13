@@ -2171,6 +2171,7 @@ async fn run_client_loop(
                             }
                         }
                         write_stream.mark_ready(&endpoint_id, generation);
+                        supervisors.mark_ready(&endpoint_id, generation, now);
                         if endpoint_id.is_local() {
                             if let Some(event) =
                                 take_ready_local_activation(&mut state, &write_stream)

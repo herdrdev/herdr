@@ -515,6 +515,7 @@ mod tests {
             false,
         );
         let now = Instant::now();
+        registry.mark_ready(&ssh_id, 2);
         registry.tick_health(now + super::super::health::HEARTBEAT_INTERVAL);
         assert!(matches!(
             sent.lock().unwrap().as_slice(),
@@ -553,9 +554,10 @@ mod tests {
         );
         let now = Instant::now();
         registry.mark_ready(&ssh_id, 2);
-        registry.received(&ssh_id, 2, now + super::super::health::HEARTBEAT_INTERVAL);
-        registry.tick_health(now + super::super::health::HEARTBEAT_TIMEOUT);
+        registry.received(&ssh_id, 2, now + std::time::Duration::from_secs(80));
+        registry.tick_health(now + std::time::Duration::from_secs(80));
         assert!(registry.connection(&ssh_id).is_some());
+        assert!(!registry.connection(&ssh_id).unwrap().surface_active);
     }
 
     #[test]

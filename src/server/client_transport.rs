@@ -2022,6 +2022,80 @@ mod tests {
     }
 
     #[test]
+    fn endpoint_health_waits_for_registration_but_not_the_initial_snapshot() {
+        let (mut client, server, _path) = local_stream_pair("startup-health");
+        let (events, mut pending) = mpsc::channel(1);
+        events
+            .blocking_send(ServerEvent::ClientWriterDrained { client_id: 99 })
+            .unwrap();
+        let server_events = events.clone();
+        let server_thread = std::thread::spawn(move || {
+            handle_client_handshake(
+                server,
+                43,
+                &server_events,
+                &Arc::new(AtomicBool::new(false)),
+            )
+        });
+        let mut reader = client.try_clone().unwrap();
+        let (messages, received) = std::sync::mpsc::channel();
+        let client_thread = std::thread::spawn(move || {
+            for _ in 0..3 {
+                let message: ServerMessage =
+                    protocol::read_message(&mut reader, MAX_FRAME_SIZE).unwrap();
+                messages.send(message).unwrap();
+            }
+        });
+        protocol::write_message(&mut client, &endpoint_hello(80, 29)).unwrap();
+        let welcome = endpoint_welcome(received.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(welcome.error.is_none());
+        let ping = ClientMessage::EndpointControl {
+            kind: crate::protocol::endpoint::HEALTH_PING_KIND.into(),
+            data: "startup".into(),
+        };
+        protocol::write_message(&mut client, &ping).unwrap();
+        assert!(matches!(
+            received.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(matches!(
+            pending.blocking_recv(),
+            Some(ServerEvent::ClientWriterDrained { client_id: 99 })
+        ));
+        let Some(ServerEvent::ClientShellConnected { writer, .. }) = pending.blocking_recv() else {
+            panic!("registration must precede other client events");
+        };
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ServerMessage::EndpointControl { kind, .. }
+                if kind == crate::protocol::endpoint::HEALTH_PONG_KIND
+        ));
+
+        // Registered transports answer health checks while the state loop is still busy.
+        events
+            .blocking_send(ServerEvent::ClientWriterDrained { client_id: 99 })
+            .unwrap();
+        protocol::write_message(&mut client, &ping).unwrap();
+        assert!(matches!(
+            received.recv_timeout(Duration::from_secs(2)).unwrap(),
+            ServerMessage::EndpointControl { kind, .. }
+                if kind == crate::protocol::endpoint::HEALTH_PONG_KIND
+        ));
+        protocol::write_message(&mut client, &ClientMessage::Detach).unwrap();
+        assert!(matches!(
+            pending.blocking_recv(),
+            Some(ServerEvent::ClientWriterDrained { client_id: 99 })
+        ));
+        assert!(matches!(
+            pending.blocking_recv(),
+            Some(ServerEvent::ClientDetach { client_id: 43 })
+        ));
+        server_thread.join().unwrap().unwrap();
+        client_thread.join().unwrap();
+        drop(writer);
+    }
+
+    #[test]
     fn dedicated_client_shell_handshake_rejects_empty_surface() {
         let (mut client_stream, server_stream, _path) =
             local_stream_pair("client-shell-empty-surface");
