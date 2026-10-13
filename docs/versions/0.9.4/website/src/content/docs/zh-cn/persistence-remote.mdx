@@ -1,0 +1,155 @@
+---
+title: 持久化与远程访问
+description: 从 Herdr 分离、稍后重新连接、使用命名会话,以及通过 SSH 连接。
+---
+
+Herdr 让窗格在后台服务器中持续运行。你的终端客户端可以分离,稍后再重新连接。
+
+关于本地、SSH 和 `herdr --remote` 工作流,参见[使用 Herdr 的工作方式](/zh-cn/docs/how-to-work/)。
+
+## 分离与重新连接
+
+用 `ctrl+b q` 分离客户端;窗格和智能体继续运行。再次运行 `herdr` 即可重新连接。用 `herdr server stop` 停止会话及其窗格。
+
+在服务器完全停止后再次启动时,Herdr 会恢复保存的会话形态。关于分离、服务器重启、屏幕历史回放、智能体原生会话恢复和实时交接各自能保留什么,参见[会话状态与恢复](/zh-cn/docs/session-state/)。
+
+在 Linux 和 macOS 上,服务器忽略 `SIGHUP`,因此启动它的 shell 挂断不会停止窗格。要主动停止服务器,请使用 `herdr server stop` 或 `SIGTERM`;原先使用 `SIGHUP` 的脚本需要修改。关闭日志会记录停止原因。
+
+## 命名会话
+
+需要相互独立的 Herdr 服务器时,使用命名会话。
+
+```bash
+herdr session list
+herdr session attach work
+herdr session attach side-project
+herdr session stop work
+herdr session delete side-project
+```
+
+命名会话拥有自己的窗格、标签页、工作区、socket 和运行时状态。它仍然共享同一个全局配置文件。
+
+删除会话时，请使用 `herdr session list` 显示的完整名称，大小写必须一致。在不区分大小写的文件系统上，`herdr session delete foo` 会拒绝删除名为 `Foo` 的会话。
+
+脚本中使用 `--json`:
+
+```bash
+herdr session list --json
+herdr session stop work --json
+herdr session delete side-project --json
+```
+
+## 已保存的 SSH 机器
+
+要在一个 Herdr 窗口中使用 Local 和多台 SSH 机器，请参阅[连接机器](/zh-cn/docs/connecting-machines/)。该指南涵盖设置、切换、重连、配置和远程自动化。移除已保存的机器只会断开客户端，不会停止远程会话。
+
+## 通过 SSH 远程连接
+
+[使用 Herdr 的工作方式](/zh-cn/docs/how-to-work/)比较了几种远程连接方式：先 SSH 到服务器再运行 `herdr`，使用已保存的 SSH 机器集中管理多个目标，或从本地直接连接一个远程会话：
+
+```bash
+herdr --remote workbox
+herdr --remote ssh://you@server:2222
+```
+
+侧栏宽度、分区比例、折叠分组和代理排序会按远程目标与会话保存在本地。重新连接同一目标和会话时会恢复这些偏好；不同 SSH 别名或会话的偏好相互独立。
+
+这种模式下，远程服务器保持窗格运行，并通过 SSH 发送终端内容和会话状态。本地 Herdr 负责绘制 UI，包括侧边栏、菜单和主题。因为客户端在本地运行,Herdr 可以把图像剪贴板粘贴等本地桌面功能桥接到远程会话: 把图像复制到远程临时文件,再粘贴该路径。
+
+默认情况下,`herdr --remote` 在这次连接中使用你本地的 Herdr 按键绑定。即使远程服务器的配置不同,也能保持本地的肌肉记忆。编辑本地按键绑定后，可通过 UI 中的 `reload config` 应用更改，无需分离重连。想改用远程服务器配置时,使用 `--remote-keybindings server`。本地的自定义命令按键绑定不会被发送,因为那些命令会在远程主机上执行。
+
+对于经常连接的目标,使用你的 SSH 配置:
+
+```text
+Host workbox
+  HostName server.example.com
+  User you
+  Port 2222
+```
+
+然后这样连接:
+
+```bash
+herdr --remote workbox
+```
+
+远程连接和已保存的 SSH 机器支持 Linux、macOS 和 Windows 客户端，目标可以是 x86_64 或 aarch64 的 Linux/macOS 主机，也可以是 x86_64 的 Windows 主机。Windows ARM64 主机通过 Windows 的 x64 模拟运行 x64 构建，仅提供尽力而为的支持，可能存在错误和其他问题。当主机报告 ARM64 时，显式远程连接和已保存机器的设置过程会显示模拟运行提示。只要两端支持稳定端点代数，版本就不必一致。Linux/macOS 上优先使用远程 `PATH` 中兼容的 `herdr`，再检查常见的直接安装、Homebrew、mise 和 Nix profile 路径。Windows 上检查 `PATH` 和当前有效的托管版本。如果没有兼容的二进制文件，交互式运行会询问是否安装或更新；非交互式运行直接失败，不修改主机。Linux/macOS 安装到 `~/.local/bin/herdr`，Windows 安装包含应用本地 ConPTY 运行时的完整软件包。如果 `~/.local/bin` 不在远程 `PATH` 中，Herdr 会发出警告。
+
+默认情况下,`herdr --remote` 通过一个临时 SSH 配置运行远程设置和桥接: 先包含你的 SSH 配置,再补充兜底的保活设置。已有的用户保活设置优先。Linux 和 macOS 客户端还会添加一个私有的单次连接 control socket 来复用连接;Windows OpenSSH 不使用此方式。设置 `[remote].manage_ssh_config = false` 可以不用 Herdr 生成的配置或 control socket,而使用普通 `ssh`。
+
+远程连接使用正常的 OpenSSH 认证。如果在非交互式 shell、脚本、CI 或移动终端中无法输入私钥口令，请先将密钥加载到 ssh-agent：
+
+```bash
+ssh-add
+herdr --remote workbox
+```
+
+认证失败时，先通过 `ssh workbox` 确认普通 SSH 连接正常。
+
+仅有版本差异不会替换或重启运行中的远程服务器。缺少必要兼容性或独立后台运行支持的服务器，会在停止前询问。已保存机器还需要画面传输和健康探测能力，详见[连接机器](/zh-cn/docs/connecting-machines/)。默认回答为 No；停止服务器会结束窗格进程。进行这次一次性升级时，可对受支持的服务器加上 `--handoff`，通过实验性实时交接保留窗格进程：
+
+```bash
+herdr --remote workbox --handoff
+```
+
+如果你先 SSH 到服务器再在那里运行 `herdr`,Herdr 就完全运行在服务器上。这种模式简单实用,但除了普通的终端文本粘贴之外,它无法访问你本地桌面的剪贴板。
+
+对于 Linux/macOS 主机，平台一致的直接安装可以复制当前本地二进制文件。Homebrew、mise、Nix 安装、平台不一致或目标为 Windows 时，会从 `https://herdr.dev/latest.json` 下载与当前客户端版本对应的发布产物。
+
+对于本地构建或自定义软件包，在远程连接前设置 `HERDR_REMOTE_BINARY` 指向本地文件。Linux/macOS 目标使用 Herdr 可执行文件，Windows 目标必须使用完整的 `herdr-windows-x86_64.zip` 软件包。
+
+```bash
+HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
+```
+
+## 远程命名会话
+
+用 `--session` 搭配 `--remote` 连接远程主机上的命名会话:
+
+```bash
+herdr --remote workbox --session agents
+```
+
+## 直接终端附加
+
+完整的 Herdr 连接会打开整个工作区 UI。直接附加则在你当前的终端中打开一个由服务器拥有的终端。
+
+直接终端附加适用于 Linux 和 macOS，不支持原生 Windows。
+
+按智能体目标附加:
+
+```bash
+herdr agent attach reviewer
+```
+
+按终端 ID 附加:
+
+```bash
+herdr terminal attach term_abc123
+```
+
+直接附加先流式传输当前渲染的终端状态,然后是实时 ANSI 帧。输入直接进入该终端。
+
+用 `ctrl+b q` 分离。用 `ctrl+b ctrl+b` 发送字面的 `ctrl+b`。
+
+一个终端只能有一个可写的直接附加客户端拥有输入和调整尺寸的权限。用 `--takeover` 替换现有的所有者:
+
+```bash
+herdr terminal attach term_abc123 --takeover
+```
+
+对于只需要读取已渲染终端数据的第三方桥接，可以使用只读观察者：
+
+```bash
+herdr terminal session observe w1:p1 --cols 120 --rows 40
+```
+
+它以逐行 JSON 输出包含 base64 ANSI 数据的 `terminal.frame`，服务器关闭流时输出 `terminal.closed`。多个观察者可以同时查看同一终端，不会取得输入、调整尺寸、滚动或接管权限。
+
+交互式桥接可使用可写控制器：
+
+```bash
+herdr terminal session control w1:p1 --takeover --cols 120 --rows 40
+```
+
+控制模式输出相同的帧，并从标准输入读取逐行 JSON 命令。`terminal.input` 发送文本或 base64 数据，`terminal.resize` 更改视口尺寸，`terminal.scroll` 滚动视口，`terminal.mouse` 向已开启鼠标报告的应用发送单元格位置的鼠标事件，`terminal.release` 关闭控制器。同一时间只有一个控制器能拥有输入和调整尺寸的权限。

@@ -13,6 +13,8 @@ Detach the client with `ctrl+b q`; panes and agents keep running. Reattach by ru
 
 When Herdr starts again after a full server stop, it restores the saved session shape. For what survives detach, server restart, screen history replay, native agent session restore, and live handoff, see [Session state and restore](/docs/session-state/).
 
+On Linux and macOS, the server ignores `SIGHUP`, so a hangup from its launching shell does not stop the panes. To stop it deliberately, use `herdr server stop` or `SIGTERM`; scripts that previously used `SIGHUP` must change. Shutdown logs record the reason.
+
 ## Named sessions
 
 Use named sessions when you want independent Herdr servers.
