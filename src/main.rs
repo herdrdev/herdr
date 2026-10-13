@@ -275,7 +275,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # help = "prefix+?"
 # settings = "prefix+s"
 # command_palette = ["ctrl+alt+p", "super+p"]
-# home = "ctrl+alt+h"
+# home = "" # retired; use home_view for the Home launcher
 # detach = "prefix+q"
 # reload_config = "prefix+shift+r"
 # open_notification_target = "prefix+o"
@@ -284,7 +284,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # workspace_picker = "prefix+w"
 # goto = "prefix+g"
 # agent_finder = "prefix+f"
-# capture = "prefix+t" # captures a thought to the local focus list
+# capture = "ctrl+alt+u" # captures a thought to the local focus list
 # new_workspace = "prefix+alt+n"
 # new_worktree = "prefix+shift+g"
 # open_worktree = ""    # optional, unset by default
@@ -334,11 +334,11 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # work = "prefix+ctrl+w"         # work projection view: PRs / tickets / agents / review
 # usage = "prefix+ctrl+y"        # historical Claude Code and Codex usage
 # tickets = "prefix+ctrl+t"      # Linear tickets view
-# home_view = "prefix+a"         # top bar Home: close every view, back to the panes
-# focus_view = "prefix+ctrl+f"   # top bar Focus: full-screen notepad
-# orchestration_view = "prefix+ctrl+o" # top bar Orchestration: the board
-# scratch_view = "prefix+ctrl+s" # top bar Scratch: the notes writer
-# mailbox_view = "prefix+m"      # top bar Mailbox: the blocked inbox
+# home_view = ["ctrl+alt+h", "prefix+a"] # open Home launcher
+# focus_view = ["ctrl+alt+f", "prefix+ctrl+f"] # full-screen notepad
+# orchestration_view = ["ctrl+alt+o", "prefix+ctrl+o"] # panes with sidebar and tabs
+# board_view = "ctrl+alt+w"      # weekly board
+# scratch_view = ["ctrl+alt+s", "prefix+ctrl+s"] # scratch notes writer
 
 # Navigate-mode movement. These local shortcuts win while navigate mode is open.
 # They are independent from focus_pane_*. Do not include prefix+, esc, enter, tab, or 1..9 here.

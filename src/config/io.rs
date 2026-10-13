@@ -1161,15 +1161,64 @@ resume_agents_on_restore = true
     }
 
     #[test]
-    fn focus_capture_binding_defaults_to_prefix_t_and_inbox_defaults_are_unchanged() {
+    fn capture_and_screen_bindings_have_distinct_defaults() {
         let defaults = Config::default();
         assert_eq!(
             defaults.keys.capture,
-            super::super::BindingConfig::one("prefix+t")
+            super::super::BindingConfig::one("ctrl+alt+u")
         );
         assert_eq!(
             defaults.keys.inbox,
             super::super::BindingConfig::Many(vec!["prefix+shift+i".into(), "ctrl+alt+i".into()])
+        );
+        assert_eq!(
+            defaults.keys.home_view,
+            super::super::BindingConfig::Many(vec!["ctrl+alt+h".into(), "prefix+a".into()])
+        );
+        assert_eq!(
+            defaults.keys.focus_view,
+            super::super::BindingConfig::Many(vec!["ctrl+alt+f".into(), "prefix+ctrl+f".into()])
+        );
+        assert_eq!(
+            defaults.keys.orchestration_view,
+            super::super::BindingConfig::Many(vec!["ctrl+alt+o".into(), "prefix+ctrl+o".into()])
+        );
+        assert_eq!(
+            defaults.keys.board_view,
+            super::super::BindingConfig::one("ctrl+alt+w")
+        );
+        assert_eq!(
+            defaults.keys.scratch_view,
+            super::super::BindingConfig::Many(vec!["ctrl+alt+s".into(), "prefix+ctrl+s".into()])
+        );
+        assert_eq!(defaults.keys.home, super::super::BindingConfig::empty());
+        assert!(defaults.ui.show_home_on_start);
+        let bindings = [
+            &defaults.keys.home_view,
+            &defaults.keys.focus_view,
+            &defaults.keys.orchestration_view,
+            &defaults.keys.board_view,
+            &defaults.keys.scratch_view,
+            &defaults.keys.capture,
+            &defaults.keys.inbox,
+        ];
+        let labels = bindings
+            .into_iter()
+            .flat_map(|binding| match binding {
+                super::super::BindingConfig::One(value) => vec![value.as_str()],
+                super::super::BindingConfig::Many(values) => {
+                    values.iter().map(String::as_str).collect()
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            labels
+                .iter()
+                .copied()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            labels.len(),
+            "default Home, view, capture and Inbox shortcuts must be distinct"
         );
         let loaded = load_live_config_from_str(
             "[keys]\ncapture = \"prefix+shift+i\"\ninbox = \"ctrl+alt+i\"\n",
@@ -1181,6 +1230,9 @@ resume_agents_on_restore = true
             loaded.config.keys.capture,
             super::super::BindingConfig::one("prefix+shift+i")
         );
+        let legacy = load_live_config_from_str("[keys]\nmailbox_view = \"prefix+m\"\n")
+            .expect("legacy mailbox_view remains parseable");
+        assert!(legacy.diagnostics.is_empty(), "{:?}", legacy.diagnostics);
     }
 
     #[test]

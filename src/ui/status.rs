@@ -27,7 +27,7 @@ use crate::platform::status_metrics::metric_segment_visible;
 
 /// Full-width top bar.
 ///
-/// Left: one icon per view (Home, Focus, Orchestration, Scratch, Mailbox), the
+/// Left: one icon per view (Home, Focus, Orchestration, Board, Scratch), the
 /// one on screen highlighted. Centre: view name and focused pane title. Right:
 /// CPU, memory, disk and `⋯`; host details and actions live in the popover.
 ///
@@ -151,6 +151,12 @@ fn view_title_rect(
     buttons: &[StatusButton],
     segments_used: usize,
 ) -> Option<(Rect, String)> {
+    if matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Inbox(_)
+    ) {
+        return None;
+    }
     let name = app.top_bar_view().name();
     let left = buttons
         .iter()
@@ -249,24 +255,24 @@ fn fit_status_segments(mut segments: Vec<Segment>, width: usize) -> Vec<Segment>
 pub(crate) fn view_button_tooltip(app: &AppState, view: TopBarView) -> String {
     let (what, binding) = match view {
         TopBarView::Home => (
-            "All tabs and their agents. Click to return here from any view.",
+            "Home launcher. Compose and configure a new agent session.",
             &app.keybinds.home_view,
         ),
         TopBarView::Focus => (
-            "Hide panes and write in a full-screen notepad. Esc returns Home.",
+            "Hide panes and write in a full-screen notepad. Esc returns to Orchestration.",
             &app.keybinds.focus_view,
         ),
         TopBarView::Orchestration => (
-            "Board of every agent: working, blocked, done. Opens the board view.",
+            "Show the panes, sidebar and tabs.",
             &app.keybinds.orchestration_view,
+        ),
+        TopBarView::Board => (
+            "Board of every agent: working, blocked, done.",
+            &app.keybinds.board_view,
         ),
         TopBarView::Scratch => (
             "Your scratch pad, full screen. Opens the scratch notes writer.",
             &app.keybinds.scratch_view,
-        ),
-        TopBarView::Mailbox => (
-            "Agent requests waiting for you. Opens the blocked inbox.",
-            &app.keybinds.mailbox_view,
         ),
     };
     let shortcut = binding
@@ -284,6 +290,10 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         return Vec::new();
     }
     let current = app.top_bar_view();
+    let inbox_open = matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Inbox(_)
+    );
     let content_width = area
         .width
         .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, area));
@@ -310,7 +320,7 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
             rect: Rect::new(x, area.y, cell_width, 1),
             label,
             action: StatusButtonAction::View(view),
-            active: view == current,
+            active: !inbox_open && view == current,
         });
         x = x.saturating_add(cell_width);
         used += width;
@@ -1778,11 +1788,11 @@ mod tests {
                 .map(|button| (button.rect.x, button.label.as_str(), button.active))
                 .collect::<Vec<_>>(),
             vec![
-                (0, " H ", true),
+                (0, " H ", false),
                 (3, " F ", false),
-                (6, " O ", false),
-                (9, " S ", false),
-                (12, " M ", false),
+                (6, " O ", true),
+                (9, " B ", false),
+                (12, " S ", false),
             ]
         );
         assert_eq!(
@@ -1818,8 +1828,8 @@ mod tests {
                 " \u{F06A1} ",
                 " \u{F04FE} ",
                 " \u{F199C} ",
+                " \u{F1487} ",
                 " \u{F0CB6} ",
-                " \u{F1274} "
             ]
         );
     }
@@ -1832,8 +1842,8 @@ mod tests {
         app.ensure_test_terminals();
         for width in [80, 120, 200] {
             let rendered = render_status_row(&app, width);
-            assert!(rendered.starts_with(" H  F  O  S  M "), "{rendered:?}");
-            assert!(rendered.contains("Home"), "{rendered:?}");
+            assert!(rendered.starts_with(" H  F  O  B  S "), "{rendered:?}");
+            assert!(rendered.contains("Orchestration"), "{rendered:?}");
             assert!(rendered.matches('\u{25cf}').count() >= 3, "{rendered:?}");
         }
 
@@ -1910,8 +1920,16 @@ mod tests {
         terminal
             .draw(|frame| render_status_bar(&app, frame, Rect::new(0, 0, 80, 1)))
             .unwrap();
-        let cell = &terminal.backend().buffer()[((80 - 4) / 2, 0)];
-        assert_eq!(cell.symbol(), "H");
+        let row = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        let title_start = row.find("Orchestration").expect("view title");
+        let cell = &terminal.backend().buffer()[(title_start as u16, 0)];
+        assert_eq!(cell.symbol(), "O");
         assert_eq!(cell.fg, app.palette.overlay1);
         assert!(!cell.modifier.contains(Modifier::BOLD));
     }
@@ -1919,7 +1937,7 @@ mod tests {
     #[test]
     fn view_names_follow_the_surface_on_screen() {
         let mut app = AppState::test_new();
-        assert_eq!(app.top_bar_view(), TopBarView::Home);
+        assert_eq!(app.top_bar_view(), TopBarView::Orchestration);
         app.open_focus_view();
         assert_eq!(app.top_bar_view(), TopBarView::Focus);
         app.close_top_bar_views();
@@ -1927,12 +1945,12 @@ mod tests {
         assert_eq!(app.top_bar_view(), TopBarView::Scratch);
         app.close_top_bar_views();
         app.toggle_inbox();
-        assert_eq!(app.top_bar_view(), TopBarView::Mailbox);
-        app.close_top_bar_views();
         assert_eq!(app.top_bar_view(), TopBarView::Home);
+        app.close_top_bar_views();
+        assert_eq!(app.top_bar_view(), TopBarView::Orchestration);
         assert_eq!(
             TopBarView::ALL.map(TopBarView::name),
-            ["Home", "Focus", "Orchestration", "Scratch", "Mailbox"]
+            ["Home", "Focus", "Orchestration", "Board", "Scratch"]
         );
     }
 
@@ -1944,11 +1962,11 @@ mod tests {
             .map(|view| view_button_tooltip(&app, view))
             .collect::<Vec<_>>();
         for (tooltip, (name, shortcut)) in tooltips.iter().zip([
-            ("Home", "prefix+a"),
-            ("Focus", "prefix+ctrl+f"),
-            ("Orchestration", "prefix+ctrl+o"),
-            ("Scratch", "prefix+ctrl+s"),
-            ("Mailbox", "prefix+m"),
+            ("Home", "ctrl+alt+h"),
+            ("Focus", "ctrl+alt+f"),
+            ("Orchestration", "ctrl+alt+o"),
+            ("Board", "ctrl+alt+w"),
+            ("Scratch", "ctrl+alt+s"),
         ]) {
             let lines = tooltip.lines().collect::<Vec<_>>();
             assert_eq!(lines.len(), 3, "{tooltip}");
@@ -1956,8 +1974,8 @@ mod tests {
             assert!(!lines[1].is_empty(), "{tooltip}");
             assert_eq!(lines[2], shortcut, "{tooltip}");
         }
-        assert!(tooltips[0].contains("Click to return here from any view"));
-        assert!(tooltips[1].contains("Esc returns Home"));
+        assert!(tooltips[0].contains("launcher"));
+        assert!(tooltips[1].contains("Esc returns to Orchestration"));
     }
 
     #[test]

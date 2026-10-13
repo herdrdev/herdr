@@ -1323,19 +1323,6 @@ impl HomeState {
         });
     }
 
-    pub(crate) fn close_composer_or_home(&mut self) -> bool {
-        if self.pending_dispatch.is_some() {
-            return false;
-        }
-        if self.picker.take().is_some() {
-            return false;
-        }
-        if self.focus.take().is_some() {
-            return false;
-        }
-        true
-    }
-
     pub(crate) fn profiles(&self) -> &[crate::app::launch_profiles::LaunchProfile] {
         &self.profiles
     }
@@ -1724,7 +1711,7 @@ pub(crate) struct HomeCounts {
     pub blocked: usize,
     pub attention: usize,
     pub agents: usize,
-    pub spaces: usize,
+    pub machines: usize,
 }
 
 pub(crate) fn home_workspace_options_from_entries(
@@ -1868,12 +1855,17 @@ impl crate::app::state::AppState {
             // the other away rather than stacking two overlays.
             self.inbox = None;
             self.board_view = None;
-            self.home = Some(self.new_home_state());
+            let mut home = self.new_home_state();
+            home.focus = None;
+            self.home = Some(home);
         }
         if self.home.is_some() {
             // Resolve the directory's repository once, here: the headline names
             // it on every frame and the render path must not run `git`.
             self.reset_home_ref_context(false);
+            // Home replaces startup onboarding and must own keyboard input as
+            // well as the rendered terminal area.
+            self.set_server_mode(crate::app::Mode::Terminal);
         }
     }
 
@@ -1985,9 +1977,15 @@ impl crate::app::state::AppState {
     /// is a concern of the thing that starts a session, not of the constructor.
     pub(crate) fn open_home_on_launch(&mut self, config: &crate::config::Config) {
         if config.ui.show_home_on_start {
-            self.home = Some(self.new_home_state());
+            let mut home = self.new_home_state();
+            home.focus = None;
+            self.home = Some(home);
             self.inbox = None;
             self.reset_home_ref_context(false);
+            // A fresh install starts in onboarding mode. Home is the launch
+            // surface, so clear that modal input owner before the first client
+            // attaches.
+            self.set_server_mode(crate::app::Mode::Terminal);
         }
     }
 
@@ -2109,7 +2107,7 @@ impl crate::app::state::AppState {
                 })
                 .count(),
             agents,
-            spaces: self.workspaces.len(),
+            machines: self.machines.len(),
         }
     }
 
@@ -3599,20 +3597,6 @@ mod tests {
             HomeWorkspace::PreviousWorktree(PathBuf::from("/worktrees/old"))
         );
         assert_eq!(previous.argv, expected_argv);
-    }
-
-    #[test]
-    fn pending_worktree_creation_keeps_home_open() {
-        let mut home = HomeState {
-            prompt: "wait for the worktree".into(),
-            workspace: HomeWorkspace::NewWorktree,
-            ..Default::default()
-        };
-        home.pending_dispatch = Some(home.dispatch_plan().expect("pending plan"));
-
-        assert!(!home.close_composer_or_home());
-        assert_eq!(home.focus, Some(HomeFocus::Prompt));
-        assert!(home.pending_dispatch.is_some());
     }
 
     #[test]

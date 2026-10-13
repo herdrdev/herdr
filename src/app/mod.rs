@@ -3940,6 +3940,15 @@ impl App {
         if self.handle_sidebar_areas_menu_key(key_event, owner) {
             return;
         }
+        if !matches!(
+            owner,
+            state::InputOwner::Pane
+                | state::InputOwner::Popup
+                | state::InputOwner::Dock(state::DockInputOwner::Editor)
+        ) && self.handle_direct_screen_key(&key)
+        {
+            return;
+        }
         match owner {
             state::InputOwner::Pomodoro | state::InputOwner::Popup | state::InputOwner::Pane => {}
             state::InputOwner::Capture => self.handle_capture_key(key_event),
@@ -4694,20 +4703,65 @@ mod tests {
     }
 
     #[test]
-    fn opening_home_on_launch_is_a_no_op_unless_the_config_asks_for_it() {
+    fn opening_home_on_launch_defaults_to_the_home_launcher() {
         let mut app = test_app();
         assert!(app.state.home.is_none(), "the constructor opens nothing");
 
         app.state.open_home_on_launch(&Config::default());
         assert!(
-            app.state.home.is_none(),
-            "home is opt-in: the launch screen hides the panes you asked for"
+            app.state.home.is_some(),
+            "the launch screen is Home by default"
+        );
+        assert_eq!(
+            app.state.home.as_ref().and_then(|home| home.focus),
+            None,
+            "the launcher opens with action shortcuts available"
         );
 
         let mut config = Config::default();
-        config.ui.show_home_on_start = true;
+        config.ui.show_home_on_start = false;
+        app.state.clear_home();
         app.state.open_home_on_launch(&config);
-        assert!(app.state.home.is_some());
+        assert!(app.state.home.is_none());
+    }
+
+    #[test]
+    fn headless_home_routes_direct_screen_and_capture_shortcuts() {
+        let mut app = test_app();
+        app.state = state::AppState::test_new();
+        app.state.keybinds = Config::default().keybinds();
+        let mut home = app.state.new_home_state();
+        home.focus = None;
+        app.state.home = Some(home);
+        let home_owner = state::InputOwner::Surface(state::SurfaceInputOwner::Home);
+
+        app.handle_non_terminal_key_headless(
+            home_owner,
+            crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Char('f'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert!(app.state.focus_open);
+        assert!(app.state.home.is_none());
+
+        app.handle_non_terminal_key_headless(
+            state::InputOwner::Surface(state::SurfaceInputOwner::Focus),
+            crate::input::TerminalKey::new(
+                crossterm::event::KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ),
+        );
+        assert!(app.state.capture.is_some());
+        app.handle_non_terminal_key_headless(
+            state::InputOwner::Capture,
+            crate::input::TerminalKey::from(KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                KeyModifiers::NONE,
+            )),
+        );
+        assert!(app.state.capture.is_none());
+        assert!(app.state.focus_open);
     }
 
     #[cfg(unix)]

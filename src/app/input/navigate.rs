@@ -768,12 +768,16 @@ impl App {
                 self.toggle_missive_view();
                 leave_navigate_mode(&mut self.state);
             }
-            NavigateAction::OpenInbox | NavigateAction::OpenMailboxView => {
-                self.activate_top_bar_view(TopBarView::Mailbox);
+            NavigateAction::OpenInbox => {
+                let was_open = self.state.inbox.is_some();
+                self.state.close_top_bar_views();
+                if !was_open {
+                    self.state.toggle_inbox();
+                }
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::OpenHome => {
-                self.state.toggle_home();
+                self.activate_top_bar_view(TopBarView::Home);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::OpenHomeView => {
@@ -786,6 +790,10 @@ impl App {
             }
             NavigateAction::OpenOrchestrationView => {
                 self.activate_top_bar_view(TopBarView::Orchestration);
+                leave_navigate_mode(&mut self.state);
+            }
+            NavigateAction::OpenBoardView => {
+                self.activate_top_bar_view(TopBarView::Board);
                 leave_navigate_mode(&mut self.state);
             }
             NavigateAction::OpenScratchView => {
@@ -2786,8 +2794,8 @@ pub(crate) enum NavigateAction {
     OpenHomeView,
     OpenFocusView,
     OpenOrchestrationView,
+    OpenBoardView,
     OpenScratchView,
-    OpenMailboxView,
     EditScratchpad,
     ShowScratchpad,
     ToggleNotepad,
@@ -2971,7 +2979,6 @@ fn action_matches(
     }
 }
 
-#[cfg(test)]
 fn action_for_key(
     state: &AppState,
     key: TerminalKey,
@@ -2979,6 +2986,25 @@ fn action_for_key(
 ) -> Option<NavigateAction> {
     non_indexed_action_for_key(state, &key, dispatch)
         .or_else(|| indexed_navigation_action(state, &key, dispatch))
+}
+
+pub(super) fn direct_screen_action_for_key(
+    state: &AppState,
+    key: &TerminalKey,
+) -> Option<NavigateAction> {
+    let action = action_for_key(state, key.clone(), BindingDispatch::Direct)?;
+    matches!(
+        action,
+        NavigateAction::Capture
+            | NavigateAction::OpenInbox
+            | NavigateAction::OpenHome
+            | NavigateAction::OpenHomeView
+            | NavigateAction::OpenFocusView
+            | NavigateAction::OpenOrchestrationView
+            | NavigateAction::OpenBoardView
+            | NavigateAction::OpenScratchView
+    )
+    .then_some(action)
 }
 
 #[cfg(test)]
@@ -3103,8 +3129,8 @@ macro_rules! non_indexed_action_bindings {
                 &kb.orchestration_view,
                 NavigateAction::OpenOrchestrationView,
             ),
+            (&kb.board_view, NavigateAction::OpenBoardView),
             (&kb.scratch_view, NavigateAction::OpenScratchView),
-            (&kb.mailbox_view, NavigateAction::OpenMailboxView),
             (&kb.reload_config, NavigateAction::ReloadConfig),
             (
                 &kb.open_notification_target,
@@ -3732,7 +3758,7 @@ pub(super) fn execute_navigate_action_in_context(
             state.toggle_usage_view();
             leave_navigate_mode(state);
         }
-        NavigateAction::OpenInbox | NavigateAction::OpenMailboxView => {
+        NavigateAction::OpenInbox => {
             let was_open = state.inbox.is_some();
             state.close_top_bar_views();
             if !was_open {
@@ -3741,11 +3767,13 @@ pub(super) fn execute_navigate_action_in_context(
             leave_navigate_mode(state);
         }
         NavigateAction::OpenHome => {
+            state.close_top_bar_views();
             state.toggle_home();
             leave_navigate_mode(state);
         }
         NavigateAction::OpenHomeView => {
             state.close_top_bar_views();
+            state.toggle_home();
             leave_navigate_mode(state);
         }
         NavigateAction::OpenFocusView => {
@@ -3756,10 +3784,19 @@ pub(super) fn execute_navigate_action_in_context(
             }
             leave_navigate_mode(state);
         }
-        // Opening the board reads the vault, which this state-only executor
-        // cannot do; it can still close the board.
         NavigateAction::OpenOrchestrationView => {
-            state.board_view = None;
+            state.close_top_bar_views();
+            leave_navigate_mode(state);
+        }
+        NavigateAction::OpenBoardView => {
+            if state.board_view.is_some() {
+                state.board_view = None;
+            } else {
+                match crate::board::BoardView::open() {
+                    Ok(view) => state.open_board_view(view),
+                    Err(error) => state.config_diagnostic = Some(format!("board: {error}")),
+                }
+            }
             leave_navigate_mode(state);
         }
         NavigateAction::OpenScratchView => {
@@ -9990,6 +10027,41 @@ navigate_pane_down = "ctrl+j"
     }
 
     #[test]
+    fn board_view_navigate_action_opens_and_closes_board() {
+        let vault = super::super::unique_temp_path("board-vault");
+        std::fs::create_dir_all(vault.join(".obsidian")).expect("create vault marker");
+        std::fs::create_dir_all(vault.join("todos")).expect("create todos directory");
+        let previous_vault = std::env::var_os("OBSIDIAN_VAULT");
+        std::env::set_var("OBSIDIAN_VAULT", &vault);
+
+        let mut state = AppState::test_new();
+        let mut terminal_runtimes = TerminalRuntimeRegistry::new();
+        execute_navigate_action_in_context(
+            &mut state,
+            &mut terminal_runtimes,
+            NavigateAction::OpenBoardView,
+            ActionContext::Navigate,
+        );
+        assert!(state.board_view.is_some());
+        assert_ne!(state.top_bar_view(), TopBarView::Orchestration);
+        assert!(state.pane_cycling_suppressed());
+
+        execute_navigate_action_in_context(
+            &mut state,
+            &mut terminal_runtimes,
+            NavigateAction::OpenBoardView,
+            ActionContext::Navigate,
+        );
+        assert!(state.board_view.is_none());
+
+        match previous_vault {
+            Some(value) => std::env::set_var("OBSIDIAN_VAULT", value),
+            None => std::env::remove_var("OBSIDIAN_VAULT"),
+        }
+        std::fs::remove_dir_all(vault).expect("remove temporary vault");
+    }
+
+    #[test]
     fn closing_linked_worktree_closes_workspace_without_removing_checkout() {
         let mut state = state_with_workspaces(&["main", "issue"]);
         state.selected = 1;
@@ -10470,9 +10542,11 @@ navigate_pane_down = "ctrl+j"
         app.state.active = Some(0);
         let pane_before = app.state.workspaces[0].focused_pane_id();
 
-        app.state.set_server_mode(Mode::Prefix);
-        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
-            .await;
+        app.handle_key(TerminalKey::new(
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ))
+        .await;
 
         assert!(app.state.capture.is_some());
         assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);

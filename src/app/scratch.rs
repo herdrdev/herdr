@@ -17,6 +17,13 @@ fn save_editor(editor: &mut scratch::Editor, dir: &std::path::Path) -> std::io::
 }
 impl App {
     pub(crate) fn handle_scratch_key(&mut self, key: crossterm::event::KeyEvent) {
+        if key.code == crossterm::event::KeyCode::Esc
+            && key.modifiers.is_empty()
+            && self.state.scratch.open
+        {
+            self.activate_top_bar_view(crate::app::state::TopBarView::Orchestration);
+            return;
+        }
         if self
             .state
             .is_prefix_key(&crate::input::TerminalKey::from(key))

@@ -597,7 +597,7 @@
         {
           "key": "keys.capture",
           "type": "keybinding",
-          "default": "\"prefix+t\"",
+          "default": "\"ctrl+alt+u\"",
           "description": "Capture a thought to the local focus list."
         },
         {
@@ -1239,38 +1239,44 @@
         {
           "key": "keys.home",
           "type": "keybinding",
-          "default": "\"ctrl+alt+h\"",
-          "description": "Open the home overview."
+          "default": "unset",
+          "description": "Retired home overview binding. Unset by default."
         },
         {
           "key": "keys.home_view",
           "type": "keybinding",
-          "default": "\"prefix+a\"",
-          "description": "Close every top-bar view and return to the panes (the top bar's Home)."
+          "default": "[\"ctrl+alt+h\", \"prefix+a\"]",
+          "description": "Open the Home launcher."
         },
         {
           "key": "keys.focus_view",
           "type": "keybinding",
-          "default": "\"prefix+ctrl+f\"",
-          "description": "Toggle the top bar's Focus view, a full-screen notepad."
+          "default": "[\"ctrl+alt+f\", \"prefix+ctrl+f\"]",
+          "description": "Toggle the Focus view, a full-screen notepad."
         },
         {
           "key": "keys.orchestration_view",
           "type": "keybinding",
-          "default": "\"prefix+ctrl+o\"",
-          "description": "Toggle the top bar's Orchestration view, the board."
+          "default": "[\"ctrl+alt+o\", \"prefix+ctrl+o\"]",
+          "description": "Show the panes with sidebar and tabs."
+        },
+        {
+          "key": "keys.board_view",
+          "type": "keybinding",
+          "default": "\"ctrl+alt+w\"",
+          "description": "Toggle the weekly board."
         },
         {
           "key": "keys.scratch_view",
           "type": "keybinding",
-          "default": "\"prefix+ctrl+s\"",
-          "description": "Toggle the top bar's Scratch view, the notes writer."
+          "default": "[\"ctrl+alt+s\", \"prefix+ctrl+s\"]",
+          "description": "Toggle the Scratch view, the notes writer."
         },
         {
           "key": "keys.mailbox_view",
           "type": "keybinding",
-          "default": "\"prefix+m\"",
-          "description": "Toggle the top bar's Mailbox view, the blocked inbox."
+          "default": "unset",
+          "description": "Retired compatibility setting. Ignored when loading old configuration."
         },
         {
           "key": "keys.git_pull",
@@ -1604,8 +1610,8 @@
         {
           "key": "ui.show_home_on_start",
           "type": "boolean",
-          "default": "false",
-          "description": "Open the home view when Herdr starts."
+          "default": "true",
+          "description": "Open the Home launcher when Herdr starts."
         },
         {
           "key": "ui.agent_panel_sort",

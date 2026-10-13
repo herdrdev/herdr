@@ -4694,7 +4694,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_view_icons_switches_views_and_the_active_one_returns_home() {
+    fn clicking_view_icons_switches_views_and_the_active_one_returns_orchestration() {
         use crate::app::state::{StatusButtonAction, TopBarView};
 
         let mut app = app_for_mouse_test();
@@ -4721,14 +4721,16 @@ mod tests {
 
         click(&mut app, TopBarView::Focus);
         assert_eq!(app.state.top_bar_view(), TopBarView::Focus);
-        click(&mut app, TopBarView::Mailbox);
-        assert_eq!(app.state.top_bar_view(), TopBarView::Mailbox);
+        click(&mut app, TopBarView::Scratch);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Scratch);
         assert!(!app.state.focus_open, "views replace each other");
-        click(&mut app, TopBarView::Mailbox);
-        assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        click(&mut app, TopBarView::Scratch);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
         click(&mut app, TopBarView::Focus);
         click(&mut app, TopBarView::Home);
         assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        click(&mut app, TopBarView::Home);
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
         assert!(app.state.focus_editor.is_some(), "the Focus text survives");
     }
 

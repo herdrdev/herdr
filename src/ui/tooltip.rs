@@ -1139,11 +1139,11 @@ mod status_segments {
         let area = Rect::new(0, 0, 120, 1);
         app.view.status_buttons = crate::ui::status::status_buttons(&app, area);
         let expected = [
-            ("Home", "prefix+a"),
-            ("Focus", "prefix+ctrl+f"),
-            ("Orchestration", "prefix+ctrl+o"),
-            ("Scratch", "prefix+ctrl+s"),
-            ("Mailbox", "prefix+m"),
+            ("Home", "ctrl+alt+h"),
+            ("Focus", "ctrl+alt+f"),
+            ("Orchestration", "ctrl+alt+o"),
+            ("Board", "ctrl+alt+w"),
+            ("Scratch", "ctrl+alt+s"),
         ];
         for (index, (name, shortcut)) in expected.iter().enumerate() {
             let (rect, text) =

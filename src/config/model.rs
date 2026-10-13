@@ -965,7 +965,7 @@ pub struct KeysConfig {
     pub new_thread: BindingConfig,
     /// Open the spawn dock at the bottom of the pane area. Default: "prefix+y"
     pub new_agent_dock: BindingConfig,
-    /// Capture a thought to the local focus list. Default: "prefix+t".
+    /// Capture a thought to the local focus list. Default: "ctrl+alt+u".
     pub capture: BindingConfig,
     /// Create a Git worktree from the selected workspace. Default: "prefix+shift+g"
     pub new_worktree: BindingConfig,
@@ -1163,18 +1163,20 @@ pub struct KeysConfig {
     pub missive: BindingConfig,
     /// Open the blocked-agent inbox. Default: ["prefix+shift+i", "ctrl+alt+i"]
     pub inbox: BindingConfig,
-    /// Open the home overview. Default: "ctrl+alt+h"
+    /// Legacy home overview binding. Unset by default.
     pub home: BindingConfig,
-    /// Close every top-bar view and return to the panes (the top bar's Home).
-    /// Default: "prefix+a"
+    /// Open the Home launcher. Default: ["ctrl+alt+h", "prefix+a"]
     pub home_view: BindingConfig,
-    /// Toggle the top bar's Focus view, a full-screen notepad. Default: "prefix+ctrl+f"
+    /// Toggle the top bar's Focus view, a full-screen notepad.
+    /// Default: ["ctrl+alt+f", "prefix+ctrl+f"]
     pub focus_view: BindingConfig,
-    /// Toggle the top bar's Orchestration view, the board. Default: "prefix+ctrl+o"
+    /// Show the panes with sidebar and tabs. Default: ["ctrl+alt+o", "prefix+ctrl+o"]
     pub orchestration_view: BindingConfig,
-    /// Toggle the top bar's Scratch view, the notes writer. Default: "prefix+ctrl+s"
+    /// Toggle the weekly board. Default: "ctrl+alt+w"
+    pub board_view: BindingConfig,
+    /// Toggle the Scratch view, the notes writer. Default: ["ctrl+alt+s", "prefix+ctrl+s"]
     pub scratch_view: BindingConfig,
-    /// Toggle the top bar's Mailbox view, the blocked inbox. Default: "prefix+m"
+    /// Retired compatibility setting. Ignored when loading old configuration.
     pub mailbox_view: BindingConfig,
     /// Run `git pull --rebase` for the focused repository. Unset by default.
     pub git_pull: BindingConfig,
@@ -1424,6 +1426,7 @@ pub(crate) struct KeysConfigOverlay {
     home_view: Option<BindingConfig>,
     focus_view: Option<BindingConfig>,
     orchestration_view: Option<BindingConfig>,
+    board_view: Option<BindingConfig>,
     scratch_view: Option<BindingConfig>,
     mailbox_view: Option<BindingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1587,6 +1590,7 @@ impl<'de> Deserialize<'de> for KeysConfig {
         apply_field!(home_view);
         apply_field!(focus_view);
         apply_field!(orchestration_view);
+        apply_field!(board_view);
         apply_field!(scratch_view);
         apply_field!(mailbox_view);
         apply_field!(git_pull);
@@ -1758,8 +1762,8 @@ impl KeysConfig {
         copy_effective_action_field!(home_view, keybinds.home_view);
         copy_effective_action_field!(focus_view, keybinds.focus_view);
         copy_effective_action_field!(orchestration_view, keybinds.orchestration_view);
+        copy_effective_action_field!(board_view, keybinds.board_view);
         copy_effective_action_field!(scratch_view, keybinds.scratch_view);
-        copy_effective_action_field!(mailbox_view, keybinds.mailbox_view);
         copy_effective_action_field!(git_pull, keybinds.git_pull);
         copy_effective_action_field!(git_commit, keybinds.git_commit);
         copy_effective_action_field!(git_push, keybinds.git_push);
@@ -2002,7 +2006,7 @@ pub struct UiConfig {
     pub tab_bar_right_separator: String,
     /// Template for the host terminal window title.
     pub window_title: String,
-    /// Open the home view on launch. Default: false.
+    /// Open the Home launcher on launch. Default: true.
     pub show_home_on_start: bool,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
@@ -2282,7 +2286,7 @@ impl Default for KeysConfig {
             new_workspace: BindingConfig::one("prefix+alt+n"),
             new_thread: BindingConfig::one("prefix+c"),
             new_agent_dock: BindingConfig::one("prefix+y"),
-            capture: BindingConfig::one("prefix+t"),
+            capture: BindingConfig::one("ctrl+alt+u"),
             new_worktree: BindingConfig::one("prefix+shift+g"),
             open_worktree: BindingConfig::empty(),
             remove_worktree: BindingConfig::empty(),
@@ -2380,12 +2384,16 @@ impl Default for KeysConfig {
             tickets: BindingConfig::one("prefix+ctrl+t"),
             missive: BindingConfig::empty(),
             inbox: BindingConfig::Many(vec!["prefix+shift+i".into(), "ctrl+alt+i".into()]),
-            home: BindingConfig::one("ctrl+alt+h"),
-            home_view: BindingConfig::one("prefix+a"),
-            focus_view: BindingConfig::one("prefix+ctrl+f"),
-            orchestration_view: BindingConfig::one("prefix+ctrl+o"),
-            scratch_view: BindingConfig::one("prefix+ctrl+s"),
-            mailbox_view: BindingConfig::one("prefix+m"),
+            home: BindingConfig::empty(),
+            home_view: BindingConfig::Many(vec!["ctrl+alt+h".into(), "prefix+a".into()]),
+            focus_view: BindingConfig::Many(vec!["ctrl+alt+f".into(), "prefix+ctrl+f".into()]),
+            orchestration_view: BindingConfig::Many(vec![
+                "ctrl+alt+o".into(),
+                "prefix+ctrl+o".into(),
+            ]),
+            board_view: BindingConfig::one("ctrl+alt+w"),
+            scratch_view: BindingConfig::Many(vec!["ctrl+alt+s".into(), "prefix+ctrl+s".into()]),
+            mailbox_view: BindingConfig::empty(),
             git_pull: BindingConfig::empty(),
             git_commit: BindingConfig::empty(),
             git_push: BindingConfig::empty(),
@@ -2468,7 +2476,7 @@ impl Default for UiConfig {
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
             window_title: super::window_title::default_window_title(),
-            show_home_on_start: false,
+            show_home_on_start: true,
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
@@ -3019,11 +3027,11 @@ tab_bar_position = "bottom"
     }
 
     #[test]
-    fn show_home_on_start_defaults_off_and_can_be_turned_on() {
-        assert!(!Config::default().ui.show_home_on_start);
+    fn show_home_on_start_defaults_on_and_can_be_turned_off() {
+        assert!(Config::default().ui.show_home_on_start);
         let config: Config =
-            toml::from_str("[ui]\nshow_home_on_start = true\n").expect("parse config");
-        assert!(config.ui.show_home_on_start);
+            toml::from_str("[ui]\nshow_home_on_start = false\n").expect("parse config");
+        assert!(!config.ui.show_home_on_start);
     }
 
     #[test]

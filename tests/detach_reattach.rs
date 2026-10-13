@@ -746,9 +746,9 @@ fn pane_created_without_client_uses_configured_headless_size() {
         Duration::from_secs(5),
     );
 
-    // The fork's status row and collapsed dock reserve one row and column from
-    // the configured viewport before the pane runtime is resized.
-    assert_eq!(size, (40, 131));
+    // Home keeps the status row but uses the configured viewport width without
+    // the panes screen's collapsed dock reservation.
+    assert_eq!(size, (40, 132));
 
     cleanup_spawned_herdr(spawned, base);
 }
@@ -790,8 +790,8 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         "ATTACHED_SIZE",
         Duration::from_secs(5),
     );
-    // The attached app viewport has the same fork-specific chrome reservation.
-    assert_eq!(attached_size, (49, 159));
+    // Home is the launch screen and uses the full-width, chrome-free viewport.
+    assert_eq!(attached_size, (49, 160));
 
     send_detach(&mut stream).expect("send detach");
     assert!(
@@ -818,7 +818,7 @@ fn pane_created_after_detach_uses_configured_headless_size() {
         Duration::from_secs(5),
     );
 
-    assert_eq!(headless_size, (40, 131));
+    assert_eq!(headless_size, (40, 132));
     assert_eq!(preserved_size, attached_size);
 
     cleanup_spawned_herdr(spawned, base);

@@ -146,8 +146,8 @@ pub(crate) fn cycle_label(nerd_font: bool) -> &'static str {
 const HOME_OUTLINE: &str = "\u{F06A1}"; // md-home_outline
 const TARGET: &str = "\u{F04FE}"; // md-target
 const SITEMAP_OUTLINE: &str = "\u{F199C}"; // md-sitemap_outline
+const VIEW_COLUMN_OUTLINE: &str = "\u{F1487}"; // md-view_column_outline
 const PENCIL_OUTLINE: &str = "\u{F0CB6}"; // md-pencil_outline
-const INBOX_OUTLINE: &str = "\u{F1274}"; // md-inbox_outline
 const DOTS_HORIZONTAL: &str = "\u{F01D8}"; // md-dots_horizontal
 const FOLDER_OPEN: &str = "\u{F07C}"; // fa-folder_open
 const LIGHTBULB_ON_OUTLINE: &str = "\u{F0A00}"; // md-lightbulb_on_outline
@@ -159,13 +159,13 @@ pub(crate) fn view_icon(view: crate::app::state::TopBarView, nerd_font: bool) ->
         (TopBarView::Home, true) => HOME_OUTLINE,
         (TopBarView::Focus, true) => TARGET,
         (TopBarView::Orchestration, true) => SITEMAP_OUTLINE,
+        (TopBarView::Board, true) => VIEW_COLUMN_OUTLINE,
         (TopBarView::Scratch, true) => PENCIL_OUTLINE,
-        (TopBarView::Mailbox, true) => INBOX_OUTLINE,
         (TopBarView::Home, false) => "H",
         (TopBarView::Focus, false) => "F",
         (TopBarView::Orchestration, false) => "O",
+        (TopBarView::Board, false) => "B",
         (TopBarView::Scratch, false) => "S",
-        (TopBarView::Mailbox, false) => "M",
     }
 }
 
@@ -410,8 +410,8 @@ mod tests {
             (TopBarView::Home, "\u{F06A1}", "H"),
             (TopBarView::Focus, "\u{F04FE}", "F"),
             (TopBarView::Orchestration, "\u{F199C}", "O"),
+            (TopBarView::Board, "\u{F1487}", "B"),
             (TopBarView::Scratch, "\u{F0CB6}", "S"),
-            (TopBarView::Mailbox, "\u{F1274}", "M"),
         ] {
             assert_eq!(view_icon(view, true), glyph);
             assert_eq!(view_icon(view, false), letter);

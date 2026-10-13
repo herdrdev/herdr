@@ -434,8 +434,8 @@ pub struct Keybinds {
     pub home_view: ActionKeybinds,
     pub focus_view: ActionKeybinds,
     pub orchestration_view: ActionKeybinds,
+    pub board_view: ActionKeybinds,
     pub scratch_view: ActionKeybinds,
-    pub mailbox_view: ActionKeybinds,
     pub git_pull: ActionKeybinds,
     pub git_commit: ActionKeybinds,
     pub git_push: ActionKeybinds,
@@ -670,8 +670,8 @@ impl Config {
             home_view: empty_action!(),
             focus_view: empty_action!(),
             orchestration_view: empty_action!(),
+            board_view: empty_action!(),
             scratch_view: empty_action!(),
-            mailbox_view: empty_action!(),
             git_pull: empty_action!(),
             git_commit: empty_action!(),
             git_push: empty_action!(),
@@ -897,8 +897,8 @@ impl Config {
             apply_action!(keybinds.home_view, home_view, source);
             apply_action!(keybinds.focus_view, focus_view, source);
             apply_action!(keybinds.orchestration_view, orchestration_view, source);
+            apply_action!(keybinds.board_view, board_view, source);
             apply_action!(keybinds.scratch_view, scratch_view, source);
-            apply_action!(keybinds.mailbox_view, mailbox_view, source);
             apply_action!(keybinds.git_pull, git_pull, source);
             apply_action!(keybinds.git_commit, git_commit, source);
             apply_action!(keybinds.git_push, git_push, source);

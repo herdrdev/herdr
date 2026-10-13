@@ -485,18 +485,7 @@ impl App {
         }
         match BoardView::open() {
             Ok(view) => {
-                self.state.clear_usage_view();
-                self.state.symphony_detail = None;
-                self.state.loop_run_history_detail = None;
-                self.state.aloop_run_detail = None;
-                self.state.dock_object_preview = None;
-                self.state.work_view = None;
-                self.state.home = None;
-                self.state.inbox = None;
-                self.state
-                    .set_server_mode(crate::app::state::Mode::Terminal);
-                self.state.board_view = Some(view);
-                self.state.release_sidebar_focus_to_surface();
+                self.state.open_board_view(view);
                 self.refresh_board_remote_lines();
             }
             Err(error) => self.state.config_diagnostic = Some(format!("board: {error}")),

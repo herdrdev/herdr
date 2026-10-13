@@ -32,8 +32,8 @@ fn waited_label(agent: &BlockedAgent) -> String {
 /// amber so the two kinds remain distinct at a glance.
 fn header_line(app: &AppState, counts: HomeCounts, width: u16) -> Line<'static> {
     let blocked = format!(" ● {} blocked", counts.blocked);
-    let attention = format!(" · {} attention", counts.attention);
-    let right = format!("{} agents · {} spaces ", counts.agents, counts.spaces,);
+    let attention = format!(" · {} waiting on you", counts.attention);
+    let right = format!("{} agents · {} machines ", counts.agents, counts.machines,);
     let show_attention =
         display_width(&blocked) + display_width(&attention) + display_width(&right)
             <= width as usize;
@@ -211,15 +211,6 @@ fn truncate(s: &str, width: usize) -> String {
     out
 }
 
-fn empty_line(app: &AppState) -> Line<'static> {
-    Line::from(Span::styled(
-        " nothing is waiting on you",
-        Style::default()
-            .fg(app.palette.overlay0)
-            .add_modifier(Modifier::DIM),
-    ))
-}
-
 fn hint_line(
     app: &AppState,
     hidden_above: usize,
@@ -228,11 +219,11 @@ fn hint_line(
     lens_visible: bool,
 ) -> Line<'static> {
     let mut hint = if composer_visible {
-        " ↑↓ browse · tab focus · ⏎ dispatch · esc back".to_string()
+        " tab focus · ⏎ dispatch · esc orchestration".to_string()
     } else if lens_visible {
         " ↑↓ browse · tab reply · ⏎ jump · d detach · esc closes".to_string()
     } else {
-        " ↑↓ browse · ⏎ jump · esc closes".to_string()
+        " ⏎ compose · f focus · o orchestration · s scratch · esc orchestration".to_string()
     };
     // Only mention what is off-screen when something is, so a list that fits
     // carries no chrome about scrolling.
@@ -1577,7 +1568,10 @@ pub(super) fn render_home(
         crate::ui::sidebar::all_agent_panel_entries(app)
     };
     let lines: Vec<Line<'static>> = if queue.is_empty() {
-        vec![empty_line(app)]
+        vec![Line::from(Span::styled(
+            " spawn ↵     focus f     orchestration o",
+            Style::default().fg(app.palette.subtext0),
+        ))]
     } else {
         queue
             .iter()
@@ -1888,7 +1882,7 @@ mod tests {
                         blocked: queue.len(),
                         attention: 0,
                         agents: queue.len(),
-                        spaces: 1,
+                        machines: 1,
                     },
                     area,
                     frame,
@@ -1896,6 +1890,52 @@ mod tests {
             })
             .expect("render home");
         terminal.backend().buffer().clone()
+    }
+
+    #[test]
+    fn home_launcher_shows_pulse_actions_and_composer_without_queue_or_lens() {
+        let mut app = AppState::test_new();
+        let mut home = HomeState::default();
+        home.focus = None;
+        app.home = Some(home);
+        let waiting = vec![blocked(0)];
+        let counts = app.home_counts(&waiting);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("term");
+        terminal
+            .draw(|frame| {
+                render_home(
+                    &app,
+                    &crate::terminal::TerminalRuntimeRegistry::new(),
+                    &[],
+                    counts,
+                    area,
+                    frame,
+                )
+            })
+            .expect("render launcher");
+        let buffer = terminal.backend().buffer();
+        let screen = (area.y..area.bottom())
+            .map(|row| row_text(buffer, area, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for visible in [
+            "blocked",
+            "waiting on you",
+            "agents",
+            "machines",
+            "spawn",
+            "focus",
+            "orchestration",
+            "What should we build in",
+        ] {
+            assert!(screen.contains(visible), "missing {visible:?}: {screen}");
+        }
+        assert!(
+            !screen.contains("agent0"),
+            "attention queue leaked: {screen}"
+        );
+        assert!(!screen.contains("new task"), "lens leaked: {screen}");
     }
 
     fn row_text(buffer: &Buffer, area: Rect, row: u16) -> String {
@@ -2074,7 +2114,7 @@ mod tests {
             blocked: 1,
             attention: 2,
             agents: 3,
-            spaces: 4,
+            machines: 4,
         };
         let text = |width| {
             header_line(&app, counts, width)
@@ -2085,9 +2125,9 @@ mod tests {
         };
 
         let narrow = text(40);
-        assert!(!narrow.contains("attention"));
-        assert!(narrow.ends_with("3 agents · 4 spaces "));
-        assert!(text(80).contains("2 attention"));
+        assert!(!narrow.contains("waiting on you"));
+        assert!(narrow.ends_with("3 agents · 4 machines "));
+        assert!(text(100).contains("2 waiting on you"));
     }
 
     #[test]
@@ -2171,7 +2211,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_home_queue_renders_the_waiting_message_instead_of_a_blank_body() {
+    fn an_empty_home_queue_renders_launcher_actions_instead_of_a_blank_body() {
         let mut app = AppState::test_new();
         app.home = Some(crate::app::home::HomeState::default());
         let area = Rect::new(0, 0, 60, 6);
@@ -2183,7 +2223,10 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(text.contains("nothing is waiting on you"), "{text:?}");
+        assert!(text.contains("spawn"), "{text:?}");
+        assert!(text.contains("focus f"), "{text:?}");
+        assert!(text.contains("orchestration o"), "{text:?}");
+        assert!(!text.contains("jump"), "{text:?}");
     }
 
     #[test]
@@ -2783,16 +2826,6 @@ mod tests {
         );
         assert!(rects.windows(2).all(|pair| pair[0].1.right() < pair[1].1.x));
         assert!(rects.iter().all(|(_, rect)| rect.right() <= area.right()));
-    }
-
-    #[test]
-    fn escape_leaves_the_composer_before_closing_home() {
-        let mut home = HomeState::default();
-
-        assert!(!home.close_composer_or_home());
-        assert_eq!(home.focus, None);
-        assert!(home.picker.is_none());
-        assert!(home.close_composer_or_home());
     }
 
     #[test]

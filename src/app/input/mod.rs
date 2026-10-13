@@ -318,6 +318,13 @@ impl App {
         ) {
             return None;
         }
+        if !matches!(
+            owner,
+            InputOwner::Pane | InputOwner::Popup | InputOwner::Dock(DockInputOwner::Editor)
+        ) && self.handle_direct_screen_key(&key)
+        {
+            return None;
+        }
         match owner {
             InputOwner::Pomodoro => {
                 self.intercept_notepad_key_with_prompt_visibility(&key, true);
@@ -1103,6 +1110,14 @@ impl App {
         self.state.home.is_some() && self.handle_home_key_event(key)
     }
 
+    pub(crate) fn handle_direct_screen_key(&mut self, key: &TerminalKey) -> bool {
+        let Some(action) = navigate::direct_screen_action_for_key(&self.state, key) else {
+            return false;
+        };
+        self.execute_tui_navigate_action(action, navigate::ActionContext::Direct);
+        true
+    }
+
     fn handle_home_text_commit(&mut self, text: &str) -> bool {
         let Some(home) = self.state.home.as_mut() else {
             return false;
@@ -1145,9 +1160,19 @@ impl App {
             return false;
         }
 
+        if self.state.is_prefix_key(&TerminalKey::from(event)) {
+            self.state.set_server_mode(Mode::Prefix);
+            return true;
+        }
+
         if self.state.add_project_active() {
             self.state.handle_add_project_key(event);
             self.start_home_github_refresh_if_requested();
+            return true;
+        }
+
+        if event.code == KeyCode::Esc && !self.state.home_browse_active() {
+            self.activate_top_bar_view(crate::app::state::TopBarView::Orchestration);
             return true;
         }
 
@@ -1165,12 +1190,10 @@ impl App {
                     self.state.home_browse_cancel();
                 }
                 KeyCode::Tab if event.modifiers.is_empty() => {
-                    let queue_empty = self.state.home_attention_agents().is_empty();
-                    self.state.home_move_composer_focus(false, queue_empty);
+                    self.state.home_move_composer_focus(false, true);
                 }
                 KeyCode::BackTab => {
-                    let queue_empty = self.state.home_attention_agents().is_empty();
-                    self.state.home_move_composer_focus(true, queue_empty);
+                    self.state.home_move_composer_focus(true, true);
                 }
                 KeyCode::Up if event.modifiers.is_empty() => {
                     self.state.home_move_picker(-1);
@@ -1230,7 +1253,7 @@ impl App {
         }
 
         let focus = self.state.home.as_ref().and_then(|home| home.focus);
-        let queue = self.state.home_attention_agents();
+        let queue: Vec<crate::app::inbox::BlockedAgent> = Vec::new();
 
         match event.code {
             KeyCode::Tab if event.modifiers.is_empty() => {
@@ -1249,6 +1272,15 @@ impl App {
                     home.select_next(&queue);
                 }
             }
+            KeyCode::Char('f') if event.modifiers.is_empty() && focus.is_none() => {
+                self.activate_top_bar_view(crate::app::state::TopBarView::Focus);
+            }
+            KeyCode::Char('o') if event.modifiers.is_empty() && focus.is_none() => {
+                self.activate_top_bar_view(crate::app::state::TopBarView::Orchestration);
+            }
+            KeyCode::Char('s') if event.modifiers.is_empty() && focus.is_none() => {
+                self.activate_top_bar_view(crate::app::state::TopBarView::Scratch);
+            }
             // Shift+Enter is the newline, so plain Enter stays the submit key
             // the composer already trained the operator on.
             KeyCode::Enter
@@ -1261,7 +1293,7 @@ impl App {
             }
             KeyCode::Enter if event.modifiers.is_empty() => match focus {
                 None => {
-                    self.state.jump_to_selected_home_agent(&queue);
+                    self.state.home_focus_prompt();
                 }
                 Some(crate::app::home::HomeFocus::Reply) => {
                     self.reply_to_selected_home_agent();
@@ -1276,17 +1308,6 @@ impl App {
                     }
                 }
             },
-            KeyCode::Esc => {
-                let close_home = self
-                    .state
-                    .home
-                    .as_mut()
-                    .is_some_and(|home| home.close_composer_or_home());
-                if close_home {
-                    self.state.clear_home();
-                    self.state.set_server_mode(Mode::Terminal);
-                }
-            }
             KeyCode::Char('d')
                 if event.modifiers.is_empty() && focus.is_none() && !queue.is_empty() =>
             {
@@ -1484,8 +1505,7 @@ impl App {
             self.state.set_server_mode(Mode::Terminal);
             return None;
         }
-        // The prefix reaches Herdr's shortcuts rather than the agent, so the
-        // top bar's view keys work from the Mailbox like from any other view.
+        // The prefix reaches Herdr's shortcuts rather than the agent.
         if self.state.is_prefix_key(&key) {
             self.state.set_server_mode(Mode::Prefix);
             return None;
@@ -1559,11 +1579,15 @@ impl App {
     }
 
     /// Switch the screen to one top-bar view. Choosing the view already on
-    /// screen returns Home, the way each view's shortcut toggles it.
+    /// screen returns to Orchestration, the panes screen.
     pub(crate) fn activate_top_bar_view(&mut self, view: crate::app::state::TopBarView) {
         use crate::app::state::TopBarView;
-        let view = if view == self.state.top_bar_view() {
-            TopBarView::Home
+        let inbox_open = matches!(
+            self.state.terminal_area_surface(),
+            crate::app::state::TerminalAreaSurface::Inbox(_)
+        );
+        let view = if view == self.state.top_bar_view() && !inbox_open {
+            TopBarView::Orchestration
         } else {
             view
         };
@@ -1573,14 +1597,14 @@ impl App {
         }
         self.state.close_top_bar_views();
         match view {
-            TopBarView::Home => {}
+            TopBarView::Home => self.state.toggle_home(),
             TopBarView::Focus => self.state.open_focus_view(),
-            TopBarView::Orchestration => self.toggle_board_view(),
+            TopBarView::Orchestration => {}
+            TopBarView::Board => self.toggle_board_view(),
             TopBarView::Scratch => {
                 self.tick_scratch(std::time::Instant::now(), true);
                 self.state.scratch.open_writer();
             }
-            TopBarView::Mailbox => self.state.toggle_inbox(),
         }
     }
 
@@ -5911,10 +5935,7 @@ impl App {
                         self.dispatch_sidebar_work_group_plan(*plan)
                     }
                     MouseAction::Settings(action) => self.apply_settings_action(action),
-                    // Home is a full-terminal overlay, but the sidebar sits
-                    // outside it and its clicks fall through. Picking a session
-                    // there used to move focus behind the overlay, leaving home
-                    // covering the pane the user had just chosen.
+                    // Clear a home surface before applying a sidebar selection.
                     MouseAction::FocusWorkspace { ws_idx } => {
                         self.state.clear_home();
                         self.focus_workspace_idx_via_api(ws_idx)
@@ -6756,6 +6777,7 @@ fn app_for_mouse_test() -> App {
         crate::api::EventHub::default(),
     );
     app.state.set_server_mode(Mode::Terminal);
+    app.state.clear_home();
     app.state.sidebar_collapsed = false;
     // Keep bottom-left dock geometry stable for input tests. Sidebar panel
     // defaults are covered by tests that load `Config::default()` directly.
@@ -7516,7 +7538,7 @@ sidebar_visible = true
     }
 
     #[test]
-    fn topbar_view_buttons_dispatch_to_focus_board_scratch_mailbox_and_home() {
+    fn topbar_view_buttons_dispatch_to_five_screens() {
         use crate::app::state::{StatusButtonAction, TopBarView};
 
         let mut app = test_app();
@@ -7531,9 +7553,9 @@ sidebar_visible = true
         assert!(app.state.scratch.open);
         assert!(app.state.scratch.editor.is_some());
 
-        app.activate_status_button(StatusButtonAction::View(TopBarView::Mailbox));
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Home));
         assert!(!app.state.scratch.open);
-        assert!(app.state.inbox.is_some());
+        assert!(app.state.home.is_some());
 
         let date = time::Date::from_calendar_date(2026, time::Month::September, 28)
             .expect("fixed board date");
@@ -7543,25 +7565,22 @@ sidebar_visible = true
             note,
             crate::board::Board::default(),
         ));
-        app.state.inbox = None;
-        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
-        app.activate_status_button(StatusButtonAction::View(TopBarView::Orchestration));
+        app.state.home = None;
+        assert_eq!(app.state.top_bar_view(), TopBarView::Board);
+        app.activate_status_button(StatusButtonAction::View(TopBarView::Board));
         assert!(
             app.state.board_view.is_none(),
-            "the active view toggles home"
+            "the active view toggles to Orchestration"
         );
 
         app.activate_status_button(StatusButtonAction::View(TopBarView::Focus));
         app.activate_status_button(StatusButtonAction::View(TopBarView::Home));
         assert_eq!(app.state.top_bar_view(), TopBarView::Home);
-        assert!(
-            app.state.home.is_none(),
-            "Home is the panes, not the overview"
-        );
+        assert!(app.state.home.is_some(), "Home opens the launcher");
     }
 
     #[test]
-    fn focus_view_takes_typing_and_esc_returns_home() {
+    fn focus_view_takes_typing_and_esc_returns_to_orchestration() {
         let mut app = test_app();
         app.state = crate::app::state::AppState::test_new();
         app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
@@ -7585,13 +7604,201 @@ sidebar_visible = true
         assert!(!app.state.focus_open);
         assert_eq!(
             app.state.top_bar_view(),
-            crate::app::state::TopBarView::Home
+            crate::app::state::TopBarView::Orchestration
         );
 
         // The prefix still reaches the shortcuts from inside Focus.
         app.activate_top_bar_view(crate::app::state::TopBarView::Focus);
         app.handle_focus_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert_eq!(app.state.server_mode(), Mode::Prefix);
+    }
+
+    #[test]
+    fn home_screen_shortcuts_open_focus_orchestration_scratch_and_escape() {
+        use crate::app::state::TopBarView;
+
+        for (key, expected) in [
+            ('f', TopBarView::Focus),
+            ('o', TopBarView::Orchestration),
+            ('s', TopBarView::Scratch),
+        ] {
+            let mut app = test_app();
+            app.state = crate::app::state::AppState::test_new();
+            let mut home = app.state.new_home_state();
+            home.focus = None;
+            app.state.home = Some(home);
+            assert!(
+                app.handle_home_key_event(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE,))
+            );
+            assert_eq!(app.state.top_bar_view(), expected, "{key}");
+        }
+
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let mut home = app.state.new_home_state();
+        home.focus = None;
+        app.state.home = Some(home);
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(
+            app.state.home.as_ref().and_then(|home| home.focus),
+            Some(crate::app::home::HomeFocus::Prompt)
+        );
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+        assert_eq!(
+            app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("dispatch failed"),
+            "Enter in the focused composer reaches dispatch_home_prompt"
+        );
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE)));
+        assert_eq!(app.state.home.as_ref().expect("home").prompt, "f");
+        app.state.clear_home();
+        let home = app.state.new_home_state();
+        app.state.home = Some(home);
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
+        assert!(app.state.home.is_none());
+
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let home = app.state.new_home_state();
+        app.state.home = Some(home);
+        assert!(
+            app.handle_home_key_event(KeyEvent::new(app.state.prefix_code, app.state.prefix_mods,))
+        );
+        assert_eq!(app.state.server_mode(), Mode::Prefix);
+        app.handle_prefix_key(TerminalKey::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
+    }
+
+    #[test]
+    fn home_escape_cancels_directory_browsing_before_closing_home() {
+        use crate::app::state::TopBarView;
+
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let mut home = app.state.new_home_state();
+        home.picker = Some(crate::app::home::HomePicker::Directory);
+        home.browse = Some(crate::app::home::HomeBrowse::default());
+        app.state.home = Some(home);
+
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        let home = app
+            .state
+            .home
+            .as_ref()
+            .expect("Home stays open while browsing");
+        assert_eq!(app.state.top_bar_view(), TopBarView::Home);
+        assert_eq!(home.picker, Some(crate::app::home::HomePicker::Directory));
+        assert!(home.browse.is_none(), "Esc exits the directory path input");
+
+        assert!(app.handle_home_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert!(app.state.home.is_none(), "a second Esc closes Home");
+        assert_eq!(app.state.top_bar_view(), TopBarView::Orchestration);
+    }
+
+    #[test]
+    fn board_and_scratch_escape_return_to_orchestration() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        let date = time::Date::from_calendar_date(2026, time::Month::October, 12)
+            .expect("fixed board date");
+        let note = crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+            .expect("synthetic board week");
+        app.state.board_view = Some(crate::board::BoardView::test_new(
+            note,
+            crate::board::Board::default(),
+        ));
+        assert!(app.handle_board_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)));
+        assert_eq!(
+            app.state.top_bar_view(),
+            crate::app::state::TopBarView::Orchestration
+        );
+
+        app.state.scratch.open_writer();
+        app.handle_scratch_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.state.scratch.open);
+        assert_eq!(
+            app.state.top_bar_view(),
+            crate::app::state::TopBarView::Orchestration
+        );
+    }
+
+    #[tokio::test]
+    async fn default_capture_shortcut_opens_and_returns_to_each_supported_screen() {
+        use crate::app::state::TopBarView;
+
+        for view in [
+            TopBarView::Home,
+            TopBarView::Orchestration,
+            TopBarView::Board,
+            TopBarView::Scratch,
+        ] {
+            let mut app = test_app();
+            app.state = crate::app::state::AppState::test_new();
+            app.state.keybinds = crate::config::Config::default().keybinds();
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after unix epoch")
+                .as_nanos();
+            let capture_dir = std::env::temp_dir().join(format!(
+                "herdr-topbar-capture-{}-{nonce}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&capture_dir);
+            app.state.focus_dir = capture_dir.clone();
+            match view {
+                TopBarView::Home => {
+                    let mut home = app.state.new_home_state();
+                    home.focus = None;
+                    app.state.home = Some(home);
+                }
+                TopBarView::Orchestration => {
+                    app.state.workspaces = vec![crate::workspace::Workspace::test_new("one")];
+                    app.state.active = Some(0);
+                    app.state.ensure_test_terminals();
+                }
+                TopBarView::Board => {
+                    let date = time::Date::from_calendar_date(2026, time::Month::October, 12)
+                        .expect("fixed board date");
+                    let note =
+                        crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+                            .expect("synthetic board week");
+                    app.state.board_view = Some(crate::board::BoardView::test_new(
+                        note,
+                        crate::board::Board::default(),
+                    ));
+                }
+                TopBarView::Scratch => app.state.scratch.open_writer(),
+                TopBarView::Focus => unreachable!(),
+            }
+            app.state.set_server_mode(Mode::Terminal);
+            app.handle_key(TerminalKey::new(
+                KeyCode::Char('u'),
+                KeyModifiers::CONTROL | KeyModifiers::ALT,
+            ))
+            .await;
+            assert!(app.state.capture.is_some(), "{view:?}");
+            assert_eq!(app.state.top_bar_view(), view, "capture owner {view:?}");
+            app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::NONE))
+                .await;
+            app.handle_key(TerminalKey::from(KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .await;
+            assert!(app.state.capture.is_none());
+            assert_eq!(
+                app.state.top_bar_view(),
+                view,
+                "capture return owner {view:?}"
+            );
+            let saved = std::fs::read_dir(&capture_dir)
+                .expect("capture item directory")
+                .collect::<Result<Vec<_>, _>>()
+                .expect("capture item entry");
+            assert_eq!(saved.len(), 1, "Enter saves the capture for {view:?}");
+            std::fs::remove_dir_all(capture_dir).expect("remove capture test directory");
+        }
     }
 
     #[test]
@@ -7609,8 +7816,25 @@ sidebar_visible = true
         let next_tab = TerminalKey::from(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
         let next_window = TerminalKey::from(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
 
-        for view in [TopBarView::Focus, TopBarView::Scratch, TopBarView::Mailbox] {
-            app.activate_top_bar_view(view);
+        for view in [
+            TopBarView::Home,
+            TopBarView::Focus,
+            TopBarView::Board,
+            TopBarView::Scratch,
+        ] {
+            if view == TopBarView::Board {
+                app.state.close_top_bar_views();
+                let date = time::Date::from_calendar_date(2026, time::Month::October, 12)
+                    .expect("fixed board date");
+                let note = crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+                    .expect("synthetic board week");
+                app.state.board_view = Some(crate::board::BoardView::test_new(
+                    note,
+                    crate::board::Board::default(),
+                ));
+            } else {
+                app.activate_top_bar_view(view);
+            }
             for key in [next_tab.clone(), next_window.clone()] {
                 app.state.set_server_mode(Mode::Prefix);
                 app.handle_prefix_key(key);
@@ -7618,7 +7842,7 @@ sidebar_visible = true
                 assert_ne!(app.state.server_mode(), Mode::Prefix, "{view:?}");
                 assert_eq!(app.state.top_bar_view(), view, "the view stays open");
             }
-            app.activate_top_bar_view(TopBarView::Home);
+            app.activate_top_bar_view(TopBarView::Orchestration);
         }
 
         // The popover is modal: the prefix never even reaches the bindings.
@@ -7663,7 +7887,7 @@ sidebar_visible = true
     async fn the_prefix_reaches_herdr_shortcuts_from_the_mailbox() {
         let mut app = test_app();
         app.state = crate::app::state::AppState::test_new();
-        app.activate_top_bar_view(crate::app::state::TopBarView::Mailbox);
+        app.state.toggle_inbox();
         let prefix = TerminalKey::new(app.state.prefix_code, app.state.prefix_mods);
         assert!(app.handle_inbox_key(prefix.clone()).await.is_none());
         assert_eq!(app.state.server_mode(), Mode::Prefix);
@@ -10539,72 +10763,30 @@ navigate_workspace_down = "ctrl+j"
         (app, pane_ids)
     }
 
-    #[tokio::test]
-    async fn clicking_a_home_row_selects_it_and_jumps_to_that_pane() {
-        let (mut app, pane_ids) = app_with_blocked_home_rows(3);
+    #[test]
+    fn home_launcher_does_not_expose_attention_queue_hit_targets() {
+        let (mut app, _pane_ids) = app_with_blocked_home_rows(3);
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
 
-        let hits = app.state.view.home_row_hit_areas.clone();
-        assert_eq!(hits.len(), 3, "every blocked row should be clickable");
-
-        // Click the second row rather than the first, so a jump proves the
-        // click chose the row instead of the cursor happening to be there.
-        let (index, rect) = hits[1];
-        let queue = app.state.home_attention_agents();
-        let target = queue[index].pane_id;
-        assert_ne!(target, pane_ids[0]);
-
-        app.handle_raw_input_event(crate::raw_input::RawInputEvent::Mouse(
-            crossterm::event::MouseEvent {
-                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                column: rect.x + 1,
-                row: rect.y,
-                modifiers: KeyModifiers::NONE,
-            },
-        ))
-        .await;
-
-        assert!(app.state.home.is_none(), "a jump leaves home");
-        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(target));
+        assert!(app.state.view.home_row_hit_areas.is_empty());
+        assert!(app
+            .state
+            .view
+            .home_hit_areas
+            .iter()
+            .all(|hit| !matches!(hit.target, crate::app::state::HomeHitTarget::QueueRow(_))));
     }
 
-    #[tokio::test]
-    async fn selecting_a_session_in_the_sidebar_leaves_home() {
+    #[test]
+    fn home_screen_hides_the_workspace_sidebar_and_tab_bar() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(2);
         app.state
             .workspaces
             .push(crate::workspace::Workspace::test_new("second"));
         app.state.ensure_test_terminals();
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
-        assert!(app.state.home.is_some(), "home should start open");
-
-        let sidebar = app.state.view.sidebar_rect;
-        assert!(sidebar.width > 0, "the sidebar must be visible");
-        let target = crate::ui::compute_workspace_card_areas(&app.state, sidebar)
-            .into_iter()
-            .find(|card| card.ws_idx == 1)
-            .expect("a card for the second session");
-
-        // A workspace card commits on release, so the press alone is not a choice.
-        for kind in [
-            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            crossterm::event::MouseEventKind::Up(crossterm::event::MouseButton::Left),
-        ] {
-            app.handle_raw_input_event(crate::raw_input::RawInputEvent::Mouse(
-                crossterm::event::MouseEvent {
-                    kind,
-                    column: target.rect.x + 2,
-                    row: target.rect.y,
-                    modifiers: KeyModifiers::NONE,
-                },
-            ))
-            .await;
-        }
-
-        assert!(
-            app.state.home.is_none(),
-            "choosing a session must leave home rather than focus a pane behind it"
-        );
+        assert_eq!(app.state.view.sidebar_rect.width, 0);
+        assert!(app.state.view.tab_bar_rect.is_empty());
     }
 
     #[tokio::test]
@@ -10633,7 +10815,7 @@ navigate_workspace_down = "ctrl+j"
     /// 1a-4: `Shift+Enter` extends the prompt, plain `Enter` still submits, and
     /// `Esc` closes an open picker before it closes the composer.
     #[tokio::test]
-    async fn shift_enter_adds_a_prompt_line_and_escape_closes_the_picker_first() {
+    async fn shift_enter_adds_a_prompt_line_and_escape_returns_to_orchestration() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(1);
         {
             let home = app.state.home.as_mut().expect("home");
@@ -10652,7 +10834,6 @@ navigate_workspace_down = "ctrl+j"
             "shift+enter must insert a newline rather than dispatch"
         );
 
-        // Esc unwinds one layer at a time: picker, then composer, then home.
         {
             let home = app.state.home.as_mut().expect("home");
             home.focus = Some(crate::app::home::HomeFocus::Workspace);
@@ -10660,23 +10841,11 @@ navigate_workspace_down = "ctrl+j"
         }
         app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
             .await;
-        let home = app.state.home.as_ref().expect("home stays open");
-        assert!(home.picker.is_none(), "esc closes the picker first");
-        assert_eq!(home.focus, Some(crate::app::home::HomeFocus::Workspace));
-
-        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
-            .await;
-        assert!(app
-            .state
-            .home
-            .as_ref()
-            .expect("home stays open")
-            .focus
-            .is_none());
-
-        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
-            .await;
-        assert!(app.state.home.is_none(), "the third esc closes home");
+        assert!(app.state.home.is_none(), "Esc leaves Home immediately");
+        assert_eq!(
+            app.state.top_bar_view(),
+            crate::app::state::TopBarView::Orchestration
+        );
     }
 
     #[tokio::test]
@@ -10803,43 +10972,22 @@ navigate_workspace_down = "ctrl+j"
         assert_eq!(home.prompt, "do not lose this");
     }
 
-    #[tokio::test]
-    async fn clicking_new_task_in_the_lens_focuses_the_preserved_prompt() {
+    #[test]
+    fn home_launcher_has_no_attention_lens_action_targets() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(1);
-        let home = app.state.home.as_mut().expect("home");
-        home.prompt = "continue here".into();
-        home.focus = None;
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
-        let new_task = app
-            .state
-            .view
-            .home_hit_areas
-            .iter()
-            .find(|hit| hit.target == crate::app::state::HomeHitTarget::NewTask)
-            .expect("new task should be clickable")
-            .rect;
-
-        app.handle_raw_input_event(crate::raw_input::RawInputEvent::Mouse(
-            crossterm::event::MouseEvent {
-                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                column: new_task.x,
-                row: new_task.y,
-                modifiers: KeyModifiers::NONE,
-            },
-        ))
-        .await;
-
-        let home = app.state.home.as_ref().expect("home");
-        assert_eq!(home.focus, Some(crate::app::home::HomeFocus::Prompt));
-        assert_eq!(home.prompt, "continue here");
+        assert!(app.state.view.home_hit_areas.iter().all(|hit| !matches!(
+            hit.target,
+            crate::app::state::HomeHitTarget::NewTask | crate::app::state::HomeHitTarget::Detach
+        )));
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn n_opens_the_composer_from_the_home_lens() {
+    async fn enter_from_home_opens_the_composer() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(1);
         app.state.home.as_mut().expect("home").focus = None;
 
-        app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::empty()))
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
 
         assert_eq!(
@@ -10864,10 +11012,10 @@ navigate_workspace_down = "ctrl+j"
     }
 
     #[test]
-    fn home_row_hit_areas_are_dropped_as_soon_as_home_closes() {
+    fn home_row_hit_areas_are_empty_for_the_launcher_and_after_it_closes() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(2);
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
-        assert!(!app.state.view.home_row_hit_areas.is_empty());
+        assert!(app.state.view.home_row_hit_areas.is_empty());
 
         app.state.clear_home();
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
@@ -10891,7 +11039,7 @@ navigate_workspace_down = "ctrl+j"
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn pressing_enter_after_the_selected_home_pane_closes_leaves_home_open() {
+    async fn pressing_enter_after_the_selected_home_pane_opens_the_composer() {
         let (mut app, pane_ids) = app_with_blocked_home_rows(1);
         app.state.workspaces[0].tabs[0].panes.remove(&pane_ids[0]);
         app.state.home.as_mut().expect("home overlay").focus = None;
@@ -10899,132 +11047,57 @@ navigate_workspace_down = "ctrl+j"
         app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
 
-        assert!(app.state.home.is_some());
+        assert_eq!(
+            app.state.home.as_ref().and_then(|home| home.focus),
+            Some(crate::app::home::HomeFocus::Prompt)
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn pressing_enter_on_an_existing_home_pane_closes_home() {
+    async fn pressing_enter_with_an_existing_home_pane_opens_the_composer() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(1);
         app.state.home.as_mut().expect("home overlay").focus = None;
 
         app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
             .await;
 
-        assert!(app.state.home.is_none());
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn pressing_enter_in_the_home_reply_sends_and_returns_focus_to_the_queue() {
-        let (mut app, _terminal_id, mut rx) = terminal_app_with_blocked_hook();
-        app.state.toggle_home();
-        app.state.home.as_mut().expect("home overlay").focus = None;
-        app.handle_key(TerminalKey::new(KeyCode::Tab, KeyModifiers::empty()))
-            .await;
         assert_eq!(
             app.state.home.as_ref().and_then(|home| home.focus),
-            Some(crate::app::home::HomeFocus::Reply)
-        );
-
-        for character in "answer".chars() {
-            app.handle_key(TerminalKey::new(
-                KeyCode::Char(character),
-                KeyModifiers::empty(),
-            ))
-            .await;
-        }
-        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
-            .await;
-
-        assert_eq!(rx.recv().await.expect("reply bytes").as_ref(), b"answer\r");
-        assert_eq!(
-            app.state.home.as_ref().and_then(|home| home.focus),
-            None,
-            "a sent reply returns to queue focus"
+            Some(crate::app::home::HomeFocus::Prompt)
         );
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn a_pending_human_draft_rejects_a_home_reply_without_changing_the_draft() {
-        let (mut app, _terminal_id, mut rx) = terminal_app_with_blocked_hook();
-        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
-        app.state
-            .pending_human_drafts
-            .insert(pane_id, "human draft byte exact".into());
-        app.state.toggle_home();
-        let home = app.state.home.as_mut().expect("home overlay");
-        home.focus = Some(crate::app::home::HomeFocus::Reply);
-        home.reply = "answer anyway".into();
-
-        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
-            .await;
-
-        assert_eq!(
-            app.state
-                .pending_human_drafts
-                .get(&pane_id)
-                .map(String::as_bytes),
-            Some(b"human draft byte exact".as_slice())
-        );
-        assert_eq!(
-            app.state
-                .home
-                .as_ref()
-                .and_then(|home| home.reply_error.as_deref()),
-            Some("human draft pending · clear it in the pane")
-        );
-        assert!(
-            rx.try_recv().is_err(),
-            "the protected pane must not receive bytes"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn pressing_escape_leaves_the_composer_before_closing_home() {
+    async fn pressing_escape_returns_from_home_to_orchestration() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(1);
 
         app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
             .await;
 
-        assert!(app.state.home.is_some());
-        assert_eq!(app.state.home.as_ref().and_then(|home| home.focus), None);
-
-        app.handle_key(TerminalKey::new(KeyCode::Esc, KeyModifiers::empty()))
-            .await;
         assert!(app.state.home.is_none());
+        assert_eq!(
+            app.state.top_bar_view(),
+            crate::app::state::TopBarView::Orchestration
+        );
         assert_eq!(app.state.server_mode(), Mode::Terminal);
     }
 
-    #[tokio::test]
-    async fn clicking_detach_jumps_to_the_selected_pane_and_closes_home() {
-        let (mut app, pane_ids) = app_with_blocked_home_rows(2);
+    #[test]
+    fn clicking_detach_is_not_available_from_the_home_launcher() {
+        let (mut app, _pane_ids) = app_with_blocked_home_rows(2);
         app.state.home.as_mut().expect("home overlay").focus = None;
         crate::ui::compute_view(&mut app.state, ratatui::layout::Rect::new(0, 0, 120, 40));
-        let detach = app
+        assert!(app
             .state
             .view
             .home_hit_areas
             .iter()
-            .find(|hit| hit.target == crate::app::state::HomeHitTarget::Detach)
-            .expect("detach should be clickable")
-            .rect;
-        let target = pane_ids[0];
-
-        app.handle_raw_input_event(crate::raw_input::RawInputEvent::Mouse(
-            crossterm::event::MouseEvent {
-                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-                column: detach.x,
-                row: detach.y,
-                modifiers: KeyModifiers::NONE,
-            },
-        ))
-        .await;
-
-        assert!(app.state.home.is_none());
-        assert_eq!(app.state.workspaces[0].focused_pane_id(), Some(target));
+            .all(|hit| { hit.target != crate::app::state::HomeHitTarget::Detach }));
+        assert!(app.state.home.is_some());
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn home_cursor_moves_with_vi_and_arrow_keys_without_wrapping() {
+    async fn home_keyboard_does_not_navigate_hidden_attention_rows() {
         let (mut app, _pane_ids) = app_with_blocked_home_rows(3);
         app.state.home.as_mut().expect("home overlay").focus = None;
         let selected = |app: &App| {
@@ -11038,16 +11111,16 @@ navigate_workspace_down = "ctrl+j"
         assert_eq!(selected(&app), 0);
         app.handle_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()))
             .await;
-        assert_eq!(selected(&app), 1);
+        assert_eq!(selected(&app), 0);
         app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
             .await;
-        assert_eq!(selected(&app), 2);
+        assert_eq!(selected(&app), 0);
         app.handle_key(TerminalKey::new(KeyCode::Down, KeyModifiers::empty()))
             .await;
-        assert_eq!(selected(&app), 2);
+        assert_eq!(selected(&app), 0);
         app.handle_key(TerminalKey::new(KeyCode::Char('k'), KeyModifiers::empty()))
             .await;
-        assert_eq!(selected(&app), 1);
+        assert_eq!(selected(&app), 0);
         app.handle_key(TerminalKey::new(KeyCode::Up, KeyModifiers::empty()))
             .await;
         assert_eq!(selected(&app), 0);
@@ -11060,6 +11133,8 @@ navigate_workspace_down = "ctrl+j"
     async fn home_prompt_typing_is_consumed_by_the_composer() {
         let (mut app, _terminal_id, mut rx) = terminal_app_with_blocked_hook();
         app.state.toggle_home();
+        app.handle_key(TerminalKey::new(KeyCode::Enter, KeyModifiers::empty()))
+            .await;
 
         let target = app
             .handle_key(TerminalKey::new(KeyCode::Char('j'), KeyModifiers::empty()))
@@ -11104,10 +11179,15 @@ navigate_workspace_down = "ctrl+j"
         app.state.toggle_home();
 
         app.route_client_events(
-            vec![crate::raw_input::RawInputEvent::Key(TerminalKey::new(
-                KeyCode::Char('x'),
-                KeyModifiers::empty(),
-            ))],
+            [KeyCode::Enter, KeyCode::Char('x')]
+                .into_iter()
+                .map(|code| {
+                    crate::raw_input::RawInputEvent::Key(TerminalKey::new(
+                        code,
+                        KeyModifiers::empty(),
+                    ))
+                })
+                .collect(),
             false,
         );
 

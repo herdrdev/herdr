@@ -422,8 +422,17 @@ fn compute_view_internal_at(
         (Rect::default(), area)
     };
 
+    let chrome_visible = !matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Home
+            | crate::app::state::TerminalAreaSurface::Focus
+            | crate::app::state::TerminalAreaSurface::Board
+            | crate::app::state::TerminalAreaSurface::Scratch
+    );
     let finder_sidebar = app.agent_finder_saved_query.is_some();
-    let sidebar_w = if app.sidebar_collapsed && !finder_sidebar {
+    let sidebar_w = if !chrome_visible {
+        0
+    } else if app.sidebar_collapsed && !finder_sidebar {
         match app.sidebar_collapsed_mode {
             crate::config::SidebarCollapsedModeConfig::Compact => COLLAPSED_WIDTH,
             crate::config::SidebarCollapsedModeConfig::Hidden => 0,
@@ -444,7 +453,7 @@ fn compute_view_internal_at(
         || app.home.is_some()
         || app.inbox.is_some()
         || app.scratch.open;
-    let dock_w = if app.scratch.open {
+    let dock_w = if !chrome_visible || app.scratch.open {
         0
     } else if app.dock_collapsed {
         DOCK_COLLAPSED_WIDTH
@@ -474,11 +483,14 @@ fn compute_view_internal_at(
     ])
     .areas(body_area);
 
-    let (tab_bar_rect, terminal_area) = app
-        .active
-        .and_then(|i| app.workspaces.get(i))
-        .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, main_area))
-        .unwrap_or((Rect::default(), main_area));
+    let (tab_bar_rect, terminal_area) = if chrome_visible {
+        app.active
+            .and_then(|i| app.workspaces.get(i))
+            .map(|ws| desktop_tab_bar_and_terminal_area(app, ws, main_area))
+            .unwrap_or((Rect::default(), main_area))
+    } else {
+        (Rect::default(), main_area)
+    };
 
     if !app.sidebar_collapsed {
         app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
@@ -824,15 +836,19 @@ fn compute_view_internal_at(
         (Vec::new(), Vec::new(), Vec::new(), Vec::new())
     };
 
-    let home_row_hit_areas = if app.home.is_some() {
-        let queue = app.home_attention_agents();
-        home::row_hit_areas(app, &queue, terminal_area)
+    let home_row_hit_areas = if matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Home
+    ) {
+        home::row_hit_areas(app, &[], terminal_area)
     } else {
         Vec::new()
     };
-    let home_hit_areas = if app.home.is_some() {
-        let queue = app.home_attention_agents();
-        home::home_hit_areas(app, &queue, terminal_area)
+    let home_hit_areas = if matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Home
+    ) {
+        home::home_hit_areas(app, &[], terminal_area)
     } else {
         Vec::new()
     };
@@ -1198,15 +1214,19 @@ fn compute_mobile_view(
         .map(|_| mobile_toast_banner_rect(area, app.config_diagnostic.is_some()))
         .unwrap_or_default();
 
-    let home_row_hit_areas = if app.home.is_some() {
-        let queue = app.home_attention_agents();
-        home::row_hit_areas(app, &queue, terminal_area)
+    let home_row_hit_areas = if matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Home
+    ) {
+        home::row_hit_areas(app, &[], terminal_area)
     } else {
         Vec::new()
     };
-    let home_hit_areas = if app.home.is_some() {
-        let queue = app.home_attention_agents();
-        home::home_hit_areas(app, &queue, terminal_area)
+    let home_hit_areas = if matches!(
+        app.terminal_area_surface(),
+        crate::app::state::TerminalAreaSurface::Home
+    ) {
+        home::home_hit_areas(app, &[], terminal_area)
     } else {
         Vec::new()
     };
@@ -1414,7 +1434,7 @@ fn render_with_runtime_registry_inner(
         crate::app::state::TerminalAreaSurface::Home => {
             let queue = app.home_attention_agents();
             let counts = app.home_counts(&queue);
-            home::render_home(app, terminal_runtimes, &queue, counts, terminal_area, frame);
+            home::render_home(app, terminal_runtimes, &[], counts, terminal_area, frame);
         }
         crate::app::state::TerminalAreaSurface::Inbox(inbox) => {
             let queue = app.blocked_agents();
@@ -1900,6 +1920,79 @@ mod tests {
     use super::keybind_help::keybind_help_groups;
     use super::scrollbar::scrollbar_thumb;
     use super::*;
+
+    #[test]
+    fn only_orchestration_and_inbox_keep_navigation_chrome() {
+        use crate::app::state::TopBarView;
+
+        let area = Rect::new(0, 0, 120, 40);
+        for view in [
+            TopBarView::Home,
+            TopBarView::Focus,
+            TopBarView::Board,
+            TopBarView::Scratch,
+        ] {
+            let mut app = crate::app::state::AppState::test_new();
+            app.workspaces = vec![Workspace::test_new("one")];
+            app.workspaces[0].test_add_tab(Some("two"));
+            app.active = Some(0);
+            app.set_server_mode(Mode::Terminal);
+            match view {
+                TopBarView::Home => app.home = Some(app.new_home_state()),
+                TopBarView::Focus => app.focus_open = true,
+                TopBarView::Board => {
+                    let date = time::Date::from_calendar_date(2026, time::Month::October, 12)
+                        .expect("fixed board date");
+                    let note =
+                        crate::board::WeekNote::for_date(std::path::Path::new("/vault"), date)
+                            .expect("synthetic board week");
+                    app.board_view = Some(crate::board::BoardView::test_new(
+                        note,
+                        crate::board::Board::default(),
+                    ));
+                }
+                TopBarView::Scratch => app.scratch.open_writer(),
+                TopBarView::Orchestration => unreachable!(),
+            }
+            compute_view_internal_at(
+                &mut app,
+                &TerminalRuntimeRegistry::new(),
+                area,
+                false,
+                crate::kitty_graphics::HostCellSize::default(),
+                std::time::Instant::now(),
+                0,
+            );
+            assert_eq!(app.top_bar_view(), view, "{view:?}");
+            assert_eq!(app.view.sidebar_rect.width, 0, "{view:?}");
+            assert_eq!(app.view.dock_rect.width, 0, "{view:?}");
+            assert_eq!(app.view.tab_bar_rect, Rect::default(), "{view:?}");
+        }
+
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.workspaces[0].test_add_tab(Some("two"));
+        app.active = Some(0);
+        app.sidebar_collapsed = false;
+        app.sidebar_width = 26;
+        app.sidebar_min_width = 26;
+        app.sidebar_max_width = 26;
+        app.dock_collapsed = false;
+        app.dock_width = 24;
+        app.dock_open_surfaces
+            .push(crate::app::DockSurface::Terminal);
+        app.set_server_mode(Mode::Terminal);
+        compute_view(&mut app, area);
+        assert_eq!(app.top_bar_view(), TopBarView::Orchestration);
+        assert_eq!(app.view.sidebar_rect.width, 26);
+        assert_eq!(app.view.dock_rect.width, 24);
+        assert_ne!(app.view.tab_bar_rect, Rect::default());
+
+        app.toggle_inbox();
+        compute_view(&mut app, area);
+        assert!(app.view.sidebar_rect.width > 0);
+        assert!(app.view.status_buttons.iter().all(|button| !button.active));
+    }
     use crate::{app::state::ViewLayout, layout::PaneInfo, workspace::Workspace};
     use ratatui::style::Color;
     use ratatui::{backend::TestBackend, Terminal};
@@ -2292,7 +2385,7 @@ mod tests {
     }
 
     #[test]
-    fn home_render_dispatch_wins_over_an_inbox_that_is_also_open() {
+    fn home_launcher_render_dispatch_wins_over_an_inbox_that_is_also_open() {
         let mut app = crate::app::state::AppState::test_new();
         app.home = Some(crate::app::home::HomeState::default());
         app.inbox = Some(crate::app::inbox::InboxState::default());
@@ -2309,7 +2402,8 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect::<String>();
 
-        assert!(screen.contains("nothing is waiting on you"), "{screen}");
+        assert!(screen.contains("spawn"), "{screen}");
+        assert!(screen.contains("orchestration o"), "{screen}");
         assert!(!screen.contains("nothing is blocked"), "{screen}");
     }
 
@@ -3601,10 +3695,10 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        assert!(row0.starts_with(" H  F  O  S  M "), "{row0:?}");
+        assert!(row0.starts_with(" H  F  O  B  S "), "{row0:?}");
         assert_eq!(
-            row0.find("Home"),
-            Some((usize::from(width) - 4) / 2),
+            row0.find("Orchestration"),
+            Some((usize::from(width) - "Orchestration".len()) / 2),
             "{row0:?}"
         );
         assert!(row0.trim_end().ends_with("..."), "{row0:?}");
@@ -3656,7 +3750,7 @@ mod tests {
         assert!(row0.contains("CPU 92%"), "{row0:?}");
         assert!(row0.contains("MEM 13.0/16G"), "{row0:?}");
         assert_eq!(row0.matches('\u{25cf}').count(), 1, "{row0:?}");
-        assert!(row0.starts_with(" H  F  O  S  M "), "{row0:?}");
+        assert!(row0.starts_with(" H  F  O  B  S "), "{row0:?}");
     }
 
     #[test]
@@ -3683,7 +3777,7 @@ mod tests {
                 app.view.status_bar_rect,
                 app.view.status_bar_rect.y,
             );
-            assert!(row0.contains("Home"), "{row0:?}");
+            assert!(row0.contains("Orchestration"), "{row0:?}");
             assert_eq!(row0.matches('\u{25cf}').count(), 3, "{row0:?}");
             for hidden_value in ["CPU 12%", "MEM 8.0/16G", "DSK 41%"] {
                 assert!(!row0.contains(hidden_value), "{row0:?}");
