@@ -11,3 +11,8 @@ retries = 2
 # 2026-09-21 an ubuntu CI job sat 15m19s on a suite that normally takes 6m,
 # and was cancelled with the test binary still alive, reporting nothing.
 slow-timeout = { period = "60s", terminate-after = 2 }
+
+[[profile.default.overrides]]
+filter = "all()"
+# Bound intermittent unit-test hangs like the ubuntu focus-room regression after #579.
+slow-timeout = { period = "60s", terminate-after = 3 }
