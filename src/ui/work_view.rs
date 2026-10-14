@@ -3468,7 +3468,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("Ticket body with"), "{text}");
-        assert!(text.contains("https://example.invalid"), "{text}");
+        assert!(text.contains("example.invalid/a/very/long/path"), "{text}");
         assert!(text.contains("Acceptance criteria"), "{text}");
         assert!(text.contains("[Start thread ▾] [⋯]"), "{text}");
     }
