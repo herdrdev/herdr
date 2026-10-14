@@ -843,6 +843,7 @@ pub struct TerminalState {
     pub(crate) claude_transcript_session_id: Option<String>,
     transcript_turn_state: Option<AgentState>,
     transcript_turn_last_at: Option<SystemTime>,
+    transcript_turn_observed_at: Option<Instant>,
     codex_completion_since: Option<Instant>,
     transcript_turn_sequence: u64,
     pub(crate) transcript_turn_flips: Vec<serde_json::Value>,
@@ -974,6 +975,7 @@ impl TerminalState {
             claude_transcript_session_id: None,
             transcript_turn_state: None,
             transcript_turn_last_at: None,
+            transcript_turn_observed_at: None,
             codex_completion_since: None,
             transcript_turn_sequence: 0,
             transcript_turn_flips: Vec::new(),
@@ -2432,12 +2434,22 @@ impl TerminalState {
         now: Instant,
     ) -> Option<TerminalStateMutation> {
         let previous = self.unchanged_effective_state_change_at(now);
-        if sequence != self.transcript_turn_sequence {
+        let last_at_advanced = last_at.is_some_and(|last_at| {
+            self.transcript_turn_last_at
+                .is_none_or(|previous| last_at > previous)
+        });
+        let sequence_changed = sequence != self.transcript_turn_sequence;
+        let started_working = state == Some(AgentState::Working)
+            && self.transcript_turn_state != Some(AgentState::Working);
+        if sequence_changed {
             self.transcript_turn_sequence = sequence;
             self.transcript_turn_flips.clear();
         }
         self.transcript_turn_state = state;
         self.transcript_turn_last_at = last_at;
+        if last_at_advanced || started_working || sequence_changed {
+            self.transcript_turn_observed_at = Some(now);
+        }
         if state == Some(AgentState::Idle) && last_at.is_none() {
             // An empty-session reset is not a completed model turn.
             self.agent_process_acquisition_pending = true;
@@ -2469,6 +2481,7 @@ impl TerminalState {
             self.clear_claude_subagent_transcript_activity();
             self.transcript_turn_state = None;
             self.transcript_turn_last_at = None;
+            self.transcript_turn_observed_at = None;
             self.transcript_turn_flips.clear();
             self.transcript_turn_sequence = 0;
             if self
@@ -2847,6 +2860,7 @@ impl TerminalState {
             self.claude_transcript_path = None;
             self.transcript_turn_state = None;
             self.transcript_turn_last_at = None;
+            self.transcript_turn_observed_at = None;
             self.session_name_write_target = None;
             self.set_active_subagents(None);
             let mut reset_sources = Vec::new();
@@ -3601,7 +3615,16 @@ impl TerminalState {
             return quiet_since.checked_add(age);
         }
         if let Some(turn_started_at) = self.unreported_turn_started_at {
-            return turn_started_at.checked_add(AGENT_BUSY_STALE_SILENCE);
+            let quiet_since = [
+                Some(turn_started_at),
+                self.transcript_turn_observed_at,
+                pane_activity_at,
+            ]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(turn_started_at);
+            return quiet_since.checked_add(AGENT_BUSY_STALE_SILENCE);
         }
         let authority = self.hook_authority.as_ref().filter(|authority| {
             authority.retired_at.is_none() && self.hook_authority_is_effective(authority)
@@ -5892,6 +5915,7 @@ impl TerminalState {
         self.claude_transcript_path = None;
         self.transcript_turn_state = None;
         self.transcript_turn_last_at = None;
+        self.transcript_turn_observed_at = None;
         self.session_name_write_target = None;
         self.set_active_subagents(None);
         self.agent_metadata.clear();
@@ -9288,6 +9312,180 @@ mod tests {
             ),
             now.checked_add(AGENT_BUSY_STALE_SILENCE)
         );
+    }
+
+    #[test]
+    fn a_recent_transcript_row_restarts_the_unreported_turn_watchdog_budget() {
+        let now = Instant::now();
+        let turn_started_at = now - Duration::from_secs(25 * 60);
+        let transcript_observed_at = now - Duration::from_secs(60);
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.unreported_turn_started_at = Some(turn_started_at);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Working),
+            Some(SystemTime::now() - Duration::from_secs(60)),
+            1,
+            transcript_observed_at,
+        );
+
+        assert_eq!(
+            terminal.agent_status_watchdog_deadline_with_activity(
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            ),
+            transcript_observed_at.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+        assert!(terminal
+            .mark_agent_status_stale_at_with_activity(
+                now,
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn an_old_transcript_row_does_not_restart_the_unreported_turn_watchdog_budget() {
+        let now = Instant::now();
+        let turn_started_at = now - Duration::from_secs(25 * 60);
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.unreported_turn_started_at = Some(turn_started_at);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Working),
+            Some(SystemTime::now() - Duration::from_secs(25 * 60)),
+            1,
+            turn_started_at,
+        );
+
+        assert_eq!(
+            terminal.agent_status_watchdog_deadline_with_activity(
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            ),
+            turn_started_at.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+        assert!(terminal
+            .mark_agent_status_stale_at_with_activity(
+                now,
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            )
+            .is_some());
+        assert!(terminal.supervisor_stale);
+    }
+
+    #[test]
+    fn repeated_working_polls_do_not_refresh_a_stale_transcript_anchor() {
+        let now = Instant::now();
+        let turn_started_at = now - Duration::from_secs(25 * 60);
+        let last_at = SystemTime::now() - Duration::from_secs(25 * 60);
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.unreported_turn_started_at = Some(turn_started_at);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Working),
+            Some(last_at),
+            1,
+            turn_started_at,
+        );
+
+        for _ in 0..5 {
+            terminal.set_transcript_turn_state(Some(AgentState::Working), Some(last_at), 1, now);
+        }
+
+        assert_eq!(
+            terminal.agent_status_watchdog_deadline_with_activity(
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            ),
+            turn_started_at.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+        assert!(terminal
+            .mark_agent_status_stale_at_with_activity(
+                now,
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            )
+            .is_some());
+        assert!(terminal.supervisor_stale);
+    }
+
+    #[test]
+    fn repeated_working_polls_keep_a_recent_transcript_row_fresh() {
+        let now = Instant::now();
+        let turn_started_at = now - Duration::from_secs(25 * 60);
+        let old_last_at = SystemTime::now() - Duration::from_secs(25 * 60);
+        let recent_last_at = SystemTime::now() - Duration::from_secs(60);
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.unreported_turn_started_at = Some(turn_started_at);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Working),
+            Some(old_last_at),
+            1,
+            turn_started_at,
+        );
+
+        for _ in 0..5 {
+            terminal.set_transcript_turn_state(
+                Some(AgentState::Working),
+                Some(recent_last_at),
+                1,
+                now,
+            );
+        }
+
+        assert_eq!(
+            terminal.agent_status_watchdog_deadline_with_activity(
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            ),
+            now.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+        assert!(terminal
+            .mark_agent_status_stale_at_with_activity(
+                now,
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                None,
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn recent_pane_output_restarts_the_unreported_turn_watchdog_budget() {
+        let now = Instant::now();
+        let turn_started_at = now - Duration::from_secs(25 * 60);
+        let activity_at = now - Duration::from_secs(60);
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal.unreported_turn_started_at = Some(turn_started_at);
+
+        assert_eq!(
+            terminal.agent_status_watchdog_deadline_with_activity(
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                Some(activity_at),
+            ),
+            activity_at.checked_add(AGENT_BUSY_STALE_SILENCE)
+        );
+        assert!(terminal
+            .mark_agent_status_stale_at_with_activity(
+                now,
+                TEST_AGENT_STALE_AFTER,
+                TEST_SUBAGENT_STALE_AFTER,
+                Some(activity_at),
+            )
+            .is_none());
     }
 
     #[test]
