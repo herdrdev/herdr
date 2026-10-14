@@ -1068,6 +1068,7 @@ struct PaneAgentState {
     transcript_tasks: Option<Vec<AgentTask>>,
     transcript_tasks_at: Option<SystemTime>,
     reported_subagents: Vec<AgentSubagent>,
+    reported_subagents_at: Option<SystemTime>,
     observed_subagents: Vec<AgentSubagent>,
     links: Vec<StoredLink>,
 }
@@ -1089,6 +1090,13 @@ pub(crate) struct AgentStateStore {
 impl AgentStateStore {
     pub(crate) fn remove(&mut self, pane_id: PaneId) {
         self.panes.remove(&pane_id);
+    }
+
+    pub(crate) fn reported_subagents(&self, pane_id: PaneId) -> Option<Vec<AgentSubagent>> {
+        self.panes.get(&pane_id).and_then(|pane| {
+            pane.reported_subagents_at
+                .map(|_| pane.reported_subagents.clone())
+        })
     }
 
     pub(crate) fn report(
@@ -1119,6 +1127,7 @@ impl AgentStateStore {
                     subagent
                 })
                 .collect();
+            pane.reported_subagents_at = Some(observed_at);
         }
         Ok(())
     }

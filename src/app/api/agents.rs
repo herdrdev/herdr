@@ -557,6 +557,16 @@ impl App {
         ) {
             return encode_error(id, "invalid_agent_report", message);
         }
+        let reported_subagents = self.state.agent_states.reported_subagents(resolved.pane_id);
+        let stale_after = self.state.agent_subagent_stale_after;
+        if let Some(terminal) = self
+            .state
+            .terminals
+            .values_mut()
+            .find(|terminal| terminal.id.to_string() == resolved.terminal_id)
+        {
+            terminal.set_reported_subagents(reported_subagents, stale_after);
+        }
         self.emit_pane_updated(resolved.ws_idx, resolved.pane_id);
         let status = self
             .pane_info(resolved.ws_idx, resolved.pane_id)
