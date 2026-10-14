@@ -651,7 +651,7 @@ fn compute_view_internal_at(
         })
         .unwrap_or_default();
     app.tab_scroll = tab_bar_view.scroll;
-    // A hidden tab row leaves the toggles homeless; the status row takes them.
+    // Only drawn tab controls own row hit areas; fallback actions live in ⋯.
     let (
         repo_editor_button_hit_area,
         add_action_button_hit_area,
@@ -670,13 +670,6 @@ fn compute_view_internal_at(
             tab_bar_view.pane_toggle_below_hit_area,
             tab_bar_view.pane_toggle_right_hit_area,
         )
-    } else if app.active.is_some() {
-        tabs::tab_action_fallback_hit_areas(
-            status_bar_rect,
-            app.mouse_capture,
-            &visible_user_actions,
-            tabs::TabActionVisibility::from_state(app),
-        )
     } else {
         (
             Rect::default(),
@@ -690,8 +683,21 @@ fn compute_view_internal_at(
 
     let git_menu_layout = (app.server_mode() == Mode::GitMenu).then(|| {
         let in_git_repo = dock::chooser::focused_in_git_repo(app);
+        // Preserve the fallback popup anchor without making it a clickable
+        // status-row button. Only controls actually drawn there own hit areas.
+        let anchor = if git_menu_button_hit_area.width == 0 && app.active.is_some() {
+            tabs::tab_action_fallback_hit_areas(
+                status_bar_rect,
+                app.mouse_capture,
+                &visible_user_actions,
+                tabs::TabActionVisibility::from_state(app),
+            )
+            .3
+        } else {
+            git_menu_button_hit_area
+        };
         tabs::git_menu_dropdown_layout(
-            git_menu_button_hit_area,
+            anchor,
             area,
             app.git_menu.highlighted,
             app.status_git_ahead_behind,
@@ -3357,10 +3363,33 @@ mod tests {
                 let below = app.view.pane_toggle_below_hit_area;
                 let right = app.view.pane_toggle_right_hit_area;
                 let add = app.view.add_action_button_hit_area;
-                assert!(add.width > 0, "{label}");
-                assert_eq!(menu.width > 0, pull, "{label}");
-                assert_eq!(below.width > 0, toggles, "{label}");
-                assert_eq!(right.width > 0, toggles, "{label}");
+                assert_eq!(add.width > 0, on_tab_row, "{label}");
+                assert_eq!(menu.width > 0, on_tab_row && pull, "{label}");
+                assert_eq!(below.width > 0, on_tab_row && toggles, "{label}");
+                assert_eq!(right.width > 0, on_tab_row && toggles, "{label}");
+                if !on_tab_row {
+                    app.status_more_open = true;
+                    compute_view(&mut app, Rect::new(0, 0, 120, 40));
+                    let has = |action| {
+                        app.view.status_segment_hit_areas.iter().any(|(kind, _)| {
+                            *kind == crate::app::state::StatusSegmentKind::MoreAction(action)
+                        })
+                    };
+                    assert!(has(crate::app::state::TopBarAction::AddAction));
+                    assert_eq!(has(crate::app::state::TopBarAction::GitMenu), pull);
+                    assert_eq!(
+                        has(crate::app::state::TopBarAction::PaneToggle(
+                            crate::app::state::PaneToggleDirection::Below
+                        )),
+                        toggles
+                    );
+                    assert_eq!(
+                        has(crate::app::state::TopBarAction::PaneToggle(
+                            crate::app::state::PaneToggleDirection::Right
+                        )),
+                        toggles
+                    );
+                }
                 // Every drawn control shares the row and never overlaps.
                 let mut spans: Vec<(u16, u16)> = [add, menu, below, right]
                     .into_iter()
@@ -3469,7 +3498,7 @@ mod tests {
     /// Every unit test used `AppState::test_new()`, whose tab row is `Top`, so
     /// the whole feature was invisible at runtime while the tests were green.
     #[test]
-    fn opted_in_pane_toggles_fall_back_to_the_status_row_under_the_default_config() {
+    fn opted_in_pane_toggles_live_in_more_under_the_default_config() {
         assert_eq!(
             crate::config::Config::default().ui.tab_bar_position,
             crate::config::TabBarPositionConfig::Hidden,
@@ -3496,15 +3525,28 @@ mod tests {
             let git = app.view.git_menu_button_hit_area;
             let below = app.view.pane_toggle_below_hit_area;
             let right = app.view.pane_toggle_right_hit_area;
-            assert_eq!(
-                git,
-                Rect::new(status.x + status.width - 16, status.y, 10, 1)
-            );
-            assert_eq!(
-                below,
-                Rect::new(status.x + status.width - 6, status.y, 3, 1)
-            );
-            assert_eq!(right, Rect::new(below.x + 3, status.y, 3, 1));
+            assert_eq!(git, Rect::default());
+            assert_eq!(below, Rect::default());
+            assert_eq!(right, Rect::default());
+            app.status_more_open = true;
+            compute_view(&mut app, Rect::new(0, 0, width, height));
+            for action in [
+                crate::app::state::TopBarAction::GitMenu,
+                crate::app::state::TopBarAction::PaneToggle(
+                    crate::app::state::PaneToggleDirection::Below,
+                ),
+                crate::app::state::TopBarAction::PaneToggle(
+                    crate::app::state::PaneToggleDirection::Right,
+                ),
+            ] {
+                assert!(app
+                    .view
+                    .status_segment_hit_areas
+                    .iter()
+                    .any(|(kind, rect)| *kind
+                        == crate::app::state::StatusSegmentKind::MoreAction(action)
+                        && rect.y > status.y));
+            }
 
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal.draw(|frame| render(&app, frame)).unwrap();
@@ -3546,10 +3588,21 @@ mod tests {
 
             compute_view(&mut app, Rect::new(0, 0, width, height));
 
-            assert_eq!(app.view.git_menu_button_hit_area.width, 10);
+            assert_eq!(app.view.git_menu_button_hit_area, Rect::default());
             assert_eq!(
                 app.view.git_menu_popup_rect.y,
-                app.view.git_menu_button_hit_area.y + 1
+                app.view.status_bar_rect.y + 1
+            );
+            let anchor = tabs::tab_action_fallback_hit_areas(
+                app.view.status_bar_rect,
+                app.mouse_capture,
+                &tabs::visible_user_actions(&app),
+                tabs::TabActionVisibility::from_state(&app),
+            )
+            .3;
+            assert_eq!(
+                app.view.git_menu_popup_rect.x,
+                anchor.x.min(width - app.view.git_menu_popup_rect.width)
             );
             assert_eq!(app.view.git_menu_row_hit_areas.len(), 5);
             assert!(app
@@ -3928,9 +3981,7 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        assert!(row0.contains("CPU 92%"), "{row0:?}");
-        assert!(row0.contains("MEM 13.0/16G"), "{row0:?}");
-        assert_eq!(row0.matches('\u{25cf}').count(), 1, "{row0:?}");
+        assert_eq!(row0.matches('\u{25cf}').count(), 3, "{row0:?}");
         assert!(row0.starts_with(" H  F  O  B  S "), "{row0:?}");
     }
 
@@ -3984,9 +4035,7 @@ mod tests {
             app.view.status_bar_rect,
             app.view.status_bar_rect.y,
         );
-        assert!(row0.contains("MEM --"), "{row0:?}");
-        assert!(row0.contains("CPU --"), "{row0:?}");
-        assert!(row0.contains("DSK --"), "{row0:?}");
+        assert_eq!(row0.matches('\u{25cf}').count(), 3, "{row0:?}");
         assert!(row0.trim_end().ends_with("..."), "{row0:?}");
         rendered.push((
             "unavailable fallback",

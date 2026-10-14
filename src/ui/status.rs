@@ -258,30 +258,7 @@ pub(crate) fn fitted_status_segments(app: &AppState, area: Rect) -> Vec<Segment>
     if usize::from(content_width) < minimum_required_status_width(app) {
         return Vec::new();
     }
-    fit_status_segments(
-        status_segments(app, metrics_or_unavailable(app), &app.palette),
-        usize::from(content_width),
-    )
-}
-
-fn fit_status_segments(mut segments: Vec<Segment>, width: usize) -> Vec<Segment> {
-    if segment_width(&segments) > width {
-        for (kind, short) in [
-            (StatusSegmentKind::Cpu, "C"),
-            (StatusSegmentKind::Memory, "M"),
-            (StatusSegmentKind::Disk, "D"),
-        ] {
-            if let Some(segment) = segments.iter_mut().find(|segment| segment.kind == kind) {
-                let value = segment
-                    .text
-                    .trim()
-                    .split_once(' ')
-                    .map(|(_, value)| value.trim());
-                segment.text = format!(" {short} {} ", value.unwrap_or("--"));
-            }
-        }
-    }
-    segments
+    status_segments(app, metrics_or_unavailable(app), &app.palette)
 }
 
 /// What a view icon's tooltip says: its name, what a click does, and the
@@ -333,9 +310,10 @@ pub(crate) fn status_buttons(app: &AppState, area: Rect) -> Vec<StatusButton> {
         .saturating_sub(super::tabs::tab_action_status_bar_reserved_width(app, area));
     // The right-aligned segments are load-bearing; icons yield to them rather
     // than overlapping, and drop whole rather than truncating to a stub.
-    let reserved = segment_width(&fit_status_segments(
-        status_segments(app, metrics_or_unavailable(app), &app.palette),
-        usize::from(content_width),
+    let reserved = segment_width(&status_segments(
+        app,
+        metrics_or_unavailable(app),
+        &app.palette,
     ));
     let budget = usize::from(content_width).saturating_sub(reserved);
     let mut buttons = Vec::new();
@@ -420,9 +398,9 @@ fn segment_width(segments: &[Segment]) -> usize {
         .sum()
 }
 
-/// The narrowest bar that still keeps all three compact metrics and `⋯`.
-pub(crate) fn minimum_required_status_width(_app: &AppState) -> usize {
-    display_width(" C 100%  M 999/999G  D 100%  ... ")
+/// The narrowest bar that still keeps all three metric dots and `⋯`.
+pub(crate) fn minimum_required_status_width(app: &AppState) -> usize {
+    display_width(" ●  ●  ● ") + display_width(crate::ui::icons::more_label(app.nerd_font)) + 2
 }
 
 const WARN_PERCENT: u8 = 80;
@@ -469,43 +447,12 @@ fn status_segments(
     let cpu = metrics.cpu_percent.filter(|value| *value <= 100);
     let memory = memory_percent(metrics);
     let disk = metrics.disk_percent.filter(|value| *value <= 100);
-    let memory_value = match (metrics.mem_used_gib, metrics.mem_total_gib) {
-        (Some(used), Some(total)) if used.is_finite() && total.is_finite() && total > 0.0 => {
-            Some(format!("{used:.1}/{total:.0}G"))
-        }
-        _ => None,
-    };
-    for (kind, label, value, percent, was_visible) in [
-        (
-            StatusSegmentKind::Cpu,
-            "CPU",
-            cpu.map(|n| format!("{n}%")),
-            cpu,
-            app.status_cpu_visible,
-        ),
-        (
-            StatusSegmentKind::Memory,
-            "MEM",
-            memory_value,
-            memory,
-            app.status_mem_visible,
-        ),
-        (
-            StatusSegmentKind::Disk,
-            "DSK",
-            disk.map(|n| format!("{n}%")),
-            disk,
-            app.status_disk_visible,
-        ),
+    for (kind, percent, was_visible) in [
+        (StatusSegmentKind::Cpu, cpu, app.status_cpu_visible),
+        (StatusSegmentKind::Memory, memory, app.status_mem_visible),
+        (StatusSegmentKind::Disk, disk, app.status_disk_visible),
     ] {
-        out.push(compact_metric_segment(
-            kind,
-            label,
-            value.as_deref(),
-            percent,
-            was_visible,
-            p,
-        ));
+        out.push(compact_metric_segment(kind, percent, was_visible, p));
     }
     out.push(Segment {
         text: format!(" {} ", crate::ui::icons::more_label(app.nerd_font)),
@@ -634,6 +581,26 @@ fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
         }
     }
 
+    // Fallback controls live only in the popover. Their prospective geometry
+    // decides which actions fit, without registering invisible row hit areas.
+    let (editor, add, user_actions, git_menu, below, right) =
+        if app.view.add_action_button_hit_area.width == 0 {
+            super::tabs::tab_action_fallback_hit_areas(
+                app.view.status_bar_rect,
+                app.mouse_capture && app.active.is_some(),
+                &super::tabs::visible_user_actions(app),
+                super::tabs::TabActionVisibility::from_state(app),
+            )
+        } else {
+            (
+                app.view.repo_editor_button_hit_area,
+                app.view.add_action_button_hit_area,
+                app.view.user_action_hit_areas.clone(),
+                app.view.git_menu_button_hit_area,
+                app.view.pane_toggle_below_hit_area,
+                app.view.pane_toggle_right_hit_area,
+            )
+        };
     let on_status_bar = |rect: Rect| {
         app.mouse_capture
             && rect.width > 0
@@ -643,12 +610,12 @@ fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
     let mut panes = Vec::new();
     for (rect, direction, label) in [
         (
-            app.view.pane_toggle_below_hit_area,
+            below,
             crate::app::state::PaneToggleDirection::Below,
             "Split below",
         ),
         (
-            app.view.pane_toggle_right_hit_area,
+            right,
             crate::app::state::PaneToggleDirection::Right,
             "Split right",
         ),
@@ -671,21 +638,21 @@ fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
     }
 
     let mut actions = Vec::new();
-    if on_status_bar(app.view.repo_editor_button_hit_area) {
+    if on_status_bar(editor) {
         actions.push(item(
             StatusSegmentKind::MoreAction(TopBarAction::RepoEditor),
             "Open editor".into(),
             Style::default().fg(p.overlay1),
         ));
     }
-    if on_status_bar(app.view.add_action_button_hit_area) {
+    if on_status_bar(add) {
         actions.push(item(
             StatusSegmentKind::MoreAction(TopBarAction::AddAction),
             "New action".into(),
             Style::default().fg(p.overlay1),
         ));
     }
-    for (index, rect) in &app.view.user_action_hit_areas {
+    for (index, rect) in &user_actions {
         if on_status_bar(*rect) {
             if let Some(action) = app.keybinds.user_actions.get(*index) {
                 actions.push(item(
@@ -696,7 +663,7 @@ fn status_more_rows(app: &AppState, p: &Palette) -> Vec<Vec<MoreItem>> {
             }
         }
     }
-    if on_status_bar(app.view.git_menu_button_hit_area) {
+    if on_status_bar(git_menu) {
         actions.push(item(
             StatusSegmentKind::MoreAction(TopBarAction::GitMenu),
             "Git actions".into(),
@@ -853,24 +820,17 @@ pub(crate) fn resolve_focused_remote_host(
 
 fn compact_metric_segment(
     kind: StatusSegmentKind,
-    label: &str,
-    value: Option<&str>,
     percent: Option<u8>,
     was_visible: bool,
     p: &Palette,
 ) -> Segment {
-    let healthy =
-        percent.is_some_and(|value| value < WARN_PERCENT && !(was_visible && value >= 78));
     Segment {
-        text: if healthy {
-            format!(" {DOT} ")
-        } else {
-            format!(" {label} {} ", value.unwrap_or("--"))
-        },
+        text: format!(" {DOT} "),
         style: Style::default().fg(match percent {
             Some(value) if value >= CRITICAL_PERCENT => p.red,
             Some(value) if value >= WARN_PERCENT || (was_visible && value >= 78) => p.yellow,
-            _ => p.green,
+            Some(_) => p.green,
+            None => p.overlay1,
         }),
         preserve_bg: false,
         kind,
@@ -1659,6 +1619,30 @@ mod tests {
     }
 
     #[test]
+    fn every_metric_keeps_its_dot_across_thresholds_and_invalid_samples() {
+        for (percent, color) in [(31, None), (80, Some(false)), (90, Some(true)), (101, None)] {
+            let mut app =
+                app_with_metrics(metrics(percent, f32::from(percent) / 100.0 * 32.0, percent));
+            for nerd_font in [false, true] {
+                app.nerd_font = nerd_font;
+                let area = Rect::new(7, 2, minimum_required_status_width(&app) as u16, 1);
+                let segments = fitted_status_segments(&app, area);
+                assert_eq!(segments.len(), 4);
+                for segment in &segments[..3] {
+                    assert_eq!(segment.text, " ● ");
+                    let expected = match color {
+                        Some(true) => app.palette.red,
+                        Some(false) => app.palette.yellow,
+                        None if percent > 100 => app.palette.overlay1,
+                        None => app.palette.green,
+                    };
+                    assert_eq!(segment.style.fg, Some(expected));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn healthy_machine_shows_only_green_metric_icons() {
         let app = app_with_metrics(metrics(31, 19.8, 41));
         let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
@@ -1699,7 +1683,7 @@ mod tests {
             ]
         );
         assert_eq!(segments[2].style.fg, Some(app.palette.yellow));
-        assert_eq!(segments[2].text, " DSK 84% ");
+        assert_eq!(segments[2].text, " ● ");
 
         // Memory 93% and disk 84%: red then amber, in CPU, memory, disk order.
         let app = app_with_metrics(metrics(31, 29.8, 84));
@@ -1722,7 +1706,7 @@ mod tests {
         app.nerd_font = true;
         let segments = status_segments(&app, metrics_or_unavailable(&app), &app.palette);
         assert_eq!(segments[0].kind, StatusSegmentKind::Cpu);
-        assert_eq!(segments[0].text, " CPU 88% ");
+        assert_eq!(segments[0].text, " ● ");
         assert_eq!(segments[0].style.fg, Some(app.palette.yellow));
     }
 
@@ -1749,16 +1733,28 @@ mod tests {
         app.status_cpu_visible = true;
         app.status_mem_visible = true;
         app.status_disk_visible = true;
-        assert!(segment_text(&app).contains("DSK 79%"));
+        assert_eq!(segment_text(&app), " ●  ●  ●  ... ");
+        assert!(
+            status_segments(&app, metrics_or_unavailable(&app), &app.palette)[..3]
+                .iter()
+                .all(|segment| segment.style.fg == Some(app.palette.yellow))
+        );
     }
 
     #[test]
-    fn unsampled_metrics_keep_placeholders() {
+    fn unsampled_metrics_keep_muted_dots() {
         let mut app = AppState::test_new();
         app.nerd_font = false;
         app.status_cpu_visible = true;
         app.status_mem_visible = true;
         app.status_disk_visible = true;
+        let segments = status_segments(&app, &StatusMetrics::default(), &app.palette);
+        assert!(
+            segments[..3]
+                .iter()
+                .all(|segment| segment.text == " ● "
+                    && segment.style.fg == Some(app.palette.overlay1))
+        );
         assert_eq!(
             status_segments(&app, &StatusMetrics::default(), &app.palette)
                 .iter()
@@ -1794,21 +1790,16 @@ mod tests {
     }
 
     #[test]
-    fn narrowest_desktop_bar_fits_every_metric_expanded_and_the_more_control() {
+    fn narrowest_desktop_bar_keeps_dots_and_the_more_control() {
         let mut app = app_with_metrics(metrics(100, 32.0, 100));
         app.status_bar_expanded = true;
         let width = minimum_required_status_width(&app);
-        let segments = fit_status_segments(
-            status_segments(&app, metrics_or_unavailable(&app), &app.palette),
-            width,
-        );
+        let segments = fitted_status_segments(&app, Rect::new(0, 0, width as u16, 1));
         assert_eq!(segments.len(), 4);
         assert!(segment_width(&segments) <= width);
 
         let rendered = render_status_row(&app, u16::try_from(width).unwrap());
-        for label in ["C 100%", "M 32.0/32G", "D 100%", "..."] {
-            assert!(rendered.contains(label), "{label}: {rendered}");
-        }
+        assert_eq!(rendered, " ●  ●  ●  ... ");
     }
 
     #[test]

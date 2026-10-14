@@ -1181,6 +1181,77 @@ mod status_segments {
     }
 
     #[test]
+    fn resource_dots_have_stable_geometry_without_editor_overlap() {
+        use crate::app::state::{StatusSegmentKind, TopBarAction};
+        use crate::platform::status_metrics::{StatusMetrics, StatusMetricsSnapshot};
+        use crate::workspace::Workspace;
+        for width in [60, 120, 200] {
+            for sample in [Some(31), Some(80), Some(90), None] {
+                let mut app = AppState::test_new();
+                app.nerd_font = false;
+                app.mouse_capture = true;
+                app.mobile_width_threshold = 0;
+                app.tab_bar_position = crate::config::TabBarPositionConfig::Hidden;
+                app.workspaces = vec![Workspace::test_new("one")];
+                app.active = Some(0);
+                app.status_metrics = Some(StatusMetricsSnapshot {
+                    metrics: StatusMetrics {
+                        cpu_percent: sample,
+                        mem_used_gib: sample.map(f32::from),
+                        mem_total_gib: Some(100.0),
+                        disk_percent: sample,
+                        ..Default::default()
+                    },
+                    sampled_at: std::time::Instant::now(),
+                });
+                crate::ui::compute_view(&mut app, Rect::new(0, 0, width, 24));
+                let areas = &app.view.status_segment_hit_areas;
+                for (index, kind) in [
+                    StatusSegmentKind::Cpu,
+                    StatusSegmentKind::Memory,
+                    StatusSegmentKind::Disk,
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let rect = areas.iter().find(|(k, _)| *k == kind).unwrap().1;
+                    assert_eq!(rect, Rect::new(width - 14 + index as u16 * 3, 0, 3, 1));
+                    for col in rect.x..rect.right() {
+                        assert_eq!(
+                            hovered_control_at(&app, col, rect.y),
+                            Some(ControlId::StatusSegment(kind))
+                        );
+                    }
+                    let (_, text) = tooltip_target(&app, ControlId::StatusSegment(kind)).unwrap();
+                    assert!(!text.contains("nvim"));
+                    if kind == StatusSegmentKind::Disk {
+                        assert!(text.starts_with("Disk"));
+                    }
+                }
+                assert_eq!(app.view.repo_editor_button_hit_area, Rect::default());
+                app.status_more_open = true;
+                crate::ui::compute_view(&mut app, Rect::new(0, 0, width, 24));
+                let editor = app
+                    .view
+                    .status_segment_hit_areas
+                    .iter()
+                    .find(|(kind, _)| {
+                        *kind == StatusSegmentKind::MoreAction(TopBarAction::RepoEditor)
+                    })
+                    .expect("editor remains in more menu")
+                    .1;
+                assert!(editor.y > 0);
+                assert_eq!(
+                    hovered_control_at(&app, editor.x, editor.y),
+                    Some(ControlId::StatusSegment(StatusSegmentKind::MoreAction(
+                        TopBarAction::RepoEditor
+                    )))
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hit_areas_cover_the_drawn_row_right_aligned() {
         let mut app = AppState::test_new();
         let mut metrics = crate::platform::status_metrics::status_metrics_fixture();
