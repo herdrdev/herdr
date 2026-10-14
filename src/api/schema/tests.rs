@@ -1367,6 +1367,7 @@ fn worktree_request_and_response_round_trip() {
                 scroll: None,
                 revision: 0,
                 last_turn_at: None,
+                background_tasks: None,
             },
             worktree: WorktreeInfo {
                 path: "/worktrees/herdr/worktree-api".into(),
@@ -1848,6 +1849,7 @@ fn create_response_round_trips_with_root_pane() {
                 scroll: None,
                 revision: 0,
                 last_turn_at: None,
+                background_tasks: None,
             },
         },
     };

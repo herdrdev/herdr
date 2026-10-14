@@ -67,6 +67,7 @@ pub(crate) struct Turn {
     pub sequence: u64,
     pub recorded: bool,
     pub projected: Option<AgentState>,
+    pub background_outstanding: usize,
 }
 
 pub(crate) fn message_text(value: &Value) -> String {
@@ -180,6 +181,17 @@ impl Turn {
         }
         self.last_at = Some(at);
         self.last_observed = Some(observed);
+        if text.contains("<task-notification") {
+            // Notifications identify tasks independently of tool-use IDs.
+            if let Some(id) = text
+                .split_once("<task-id>")
+                .and_then(|(_, tail)| tail.split_once("</task-id>"))
+                .map(|(id, _)| id.trim())
+            {
+                self.background.remove(id);
+            }
+        }
+        self.background_outstanding = self.background.len() + self.background_calls.len();
         // Once an ask settled, incidental output cannot clear it. Only real_user does.
         if self.blocked {
             return;
@@ -191,16 +203,6 @@ impl Turn {
         self.recorded = false;
         if value["isMeta"] == true && text.contains("Stop hook feedback") {
             self.stop_rejections += 1;
-        }
-        if text.contains("<task-notification") {
-            // Notifications identify tasks independently of tool-use IDs.
-            if let Some(id) = text
-                .split_once("<task-id>")
-                .and_then(|(_, tail)| tail.split_once("</task-id>"))
-                .map(|(id, _)| id.trim())
-            {
-                self.background.remove(id);
-            }
         }
         if let Some(items) = value["message"]["content"].as_array() {
             for item in items {
@@ -224,7 +226,8 @@ impl Turn {
                     self.ask_tools.remove(id);
                     self.pending_tools.remove(id);
                     let result = &value["toolUseResult"];
-                    if self.background_calls.remove(id)
+                    let was_background_call = self.background_calls.remove(id);
+                    if was_background_call
                         || result["isAsync"] == true
                         || result["backgroundTaskId"].is_string()
                     {
@@ -234,7 +237,10 @@ impl Turn {
                             .or(result["agentId"].as_str())
                         {
                             self.background.insert(task_id.to_owned());
-                        } else if item["is_error"] != true {
+                        } else if result.is_object()
+                            && result["is_error"] != true
+                            && item["is_error"] != true
+                        {
                             // Unknown background identity is conservative: no premature done.
                             self.background_calls.insert(id.to_owned());
                         }
@@ -251,6 +257,7 @@ impl Turn {
                     .as_array()
                     .is_some_and(|items| items.iter().any(|i| i["type"] == "tool_use"));
         }
+        self.background_outstanding = self.background.len() + self.background_calls.len();
     }
 
     pub(crate) fn state(&mut self, now: SystemTime) -> Option<AgentState> {
@@ -269,8 +276,6 @@ impl Turn {
             .is_some_and(|age| age >= SETTLE);
         if quiet
             && (self.final_reply && self.pending_tools.is_empty() || !self.ask_tools.is_empty())
-            && self.background.is_empty()
-            && self.background_calls.is_empty()
         {
             let closing = parse_closing(&self.text);
             self.blocked = !self.ask_tools.is_empty() || closing.needs_you > 0;
@@ -300,6 +305,7 @@ impl Turn {
             "detected_kind": if self.blocked { "ask" } else { "done" },
             "signal_source": "transcript", "closing_block": self.closing,
             "state_at_settle": if self.blocked { "blocked" } else { "idle" },
+            "background_outstanding": self.background_outstanding,
             "stop_hook_rejections": self.stop_rejections,
             "closing_tail": redact_tail(&bounded_tail(&self.text)),
         }))
@@ -604,31 +610,63 @@ mod tests {
         assert!(turn.record().is_none());
     }
     #[test]
-    fn background_agent_and_bash_hold_done_until_notification() {
-        for name in ["Agent", "Bash"] {
+    fn final_reply_settles_with_background_task_and_notification_reopens_turn() {
+        for (reply, expected) in [
+            ("Done.\n**Needs you:** nothing.\n**Now:** Done here", AgentState::Idle),
+            ("**Needs you (1):**\n1. **Choose** Pick one.\n   a) A\n   b) B\nReply 1a / 1b. Silence holds.", AgentState::Blocked),
+        ] {
             let mut turn = Turn::default();
             feed(&mut turn, user("work"), 0);
             feed(
                 &mut turn,
-                json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"launch1","name":name,"input":{"run_in_background":true}}]}}),
+                json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"sleep 30","run_in_background":true}}]}}),
                 1,
             );
             feed(
                 &mut turn,
-                json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"launch1","content":"started"}]},"toolUseResult":{"taskId":"background1"}}),
+                json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"Command running in background with ID: task_01"}]},"toolUseResult":{"backgroundTaskId":"task_01"}}),
                 2,
             );
-            feed(&mut turn, final_reply("Launched."), 3);
-            assert_eq!(state(&mut turn, 9), Some(AgentState::Working));
+            feed(&mut turn, final_reply(reply), 3);
+            assert_eq!(state(&mut turn, 9), Some(expected));
+            assert_eq!(turn.background_outstanding, 1);
+            assert_eq!(turn.record().unwrap()["background_outstanding"], 1);
             feed(
                 &mut turn,
-                user("<task-notification><task-id>background1</task-id>done</task-notification>"),
+                user("<task-notification><task-id>task_01</task-id>done</task-notification>"),
                 10,
             );
-            feed(&mut turn, final_reply("Finished."), 11);
-            assert_eq!(state(&mut turn, 14), Some(AgentState::Idle));
+            if expected == AgentState::Idle {
+                assert_eq!(state(&mut turn, 10), Some(AgentState::Working));
+                assert_eq!(turn.background_outstanding, 0);
+                feed(&mut turn, final_reply("Finished."), 11);
+                assert_eq!(state(&mut turn, 14), Some(AgentState::Idle));
+            } else {
+                assert_eq!(state(&mut turn, 10), Some(AgentState::Blocked));
+                assert_eq!(turn.background_outstanding, 0);
+            }
         }
     }
+
+    #[test]
+    fn string_background_tool_result_does_not_leave_an_outstanding_call() {
+        let mut turn = Turn::default();
+        feed(&mut turn, user("work"), 0);
+        feed(
+            &mut turn,
+            json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Bash","input":{"command":"sleep 30","run_in_background":true}}]}}),
+            1,
+        );
+        feed(
+            &mut turn,
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"rejected","is_error":true}]},"toolUseResult":"hook rejected"}),
+            2,
+        );
+        feed(&mut turn, final_reply("Done."), 3);
+        assert_eq!(state(&mut turn, 9), Some(AgentState::Idle));
+        assert_eq!(turn.background_outstanding, 0);
+    }
+
     #[test]
     fn question_tool_answer_is_a_real_user_action_and_background_ids_match_exactly() {
         let mut turn = Turn::default();
@@ -653,7 +691,9 @@ mod tests {
             10,
         );
         feed(&mut turn, final_reply("Done"), 11);
-        assert_eq!(state(&mut turn, 20), Some(AgentState::Working));
+        // Outstanding background work is recorded, but does not keep a replied turn Working.
+        assert_eq!(state(&mut turn, 20), Some(AgentState::Idle));
+        assert_eq!(turn.background_outstanding, 1);
     }
 
     #[test]

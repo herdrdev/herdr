@@ -3746,6 +3746,7 @@ impl AppState {
                                     .map(|_| crate::detect::AgentState::Idle),
                                 None,
                                 0,
+                                0,
                                 std::time::Instant::now(),
                             ) {
                                 if let Some(mutation) = mutation.as_mut() {
@@ -6767,6 +6768,7 @@ mod tests {
                 .set_transcript_turn_state(
                     Some(AgentState::Working),
                     Some(std::time::SystemTime::now()),
+                    0,
                     1,
                     Instant::now(),
                 );

@@ -962,6 +962,7 @@ mod tests {
             scroll,
             revision: 0,
             last_turn_at: None,
+            background_tasks: None,
         }
     }
 

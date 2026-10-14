@@ -1060,6 +1060,7 @@ mod tests {
             scroll: None,
             revision: 0,
             last_turn_at: None,
+            background_tasks: None,
         }
     }
 

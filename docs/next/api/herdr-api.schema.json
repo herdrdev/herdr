@@ -71,6 +71,14 @@
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
             },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "cwd": {
               "type": [
                 "string",
@@ -1621,6 +1629,14 @@
             },
             "agent_status": {
               "$ref": "#/schemas/event/$defs/AgentStatus"
+            },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -9059,6 +9075,14 @@
             "agent_status": {
               "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
             },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "cwd": {
               "type": [
                 "string",
@@ -9492,6 +9516,14 @@
             },
             "agent_status": {
               "$ref": "#/schemas/subscription_event/$defs/AgentStatus"
+            },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -10421,6 +10453,14 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [
@@ -13149,6 +13189,14 @@
             },
             "agent_status": {
               "$ref": "#/schemas/success_response/$defs/AgentStatus"
+            },
+            "background_tasks": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "cwd": {
               "type": [

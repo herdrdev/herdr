@@ -844,6 +844,7 @@ pub struct TerminalState {
     transcript_turn_state: Option<AgentState>,
     transcript_turn_last_at: Option<SystemTime>,
     transcript_turn_observed_at: Option<Instant>,
+    pub(crate) transcript_background_outstanding: u32,
     codex_completion_since: Option<Instant>,
     transcript_turn_sequence: u64,
     pub(crate) transcript_turn_flips: Vec<serde_json::Value>,
@@ -976,6 +977,7 @@ impl TerminalState {
             transcript_turn_state: None,
             transcript_turn_last_at: None,
             transcript_turn_observed_at: None,
+            transcript_background_outstanding: 0,
             codex_completion_since: None,
             transcript_turn_sequence: 0,
             transcript_turn_flips: Vec::new(),
@@ -2430,6 +2432,7 @@ impl TerminalState {
         &mut self,
         state: Option<AgentState>,
         last_at: Option<SystemTime>,
+        background_outstanding: u32,
         sequence: u64,
         now: Instant,
     ) -> Option<TerminalStateMutation> {
@@ -2438,6 +2441,7 @@ impl TerminalState {
             self.transcript_turn_last_at
                 .is_none_or(|previous| last_at > previous)
         });
+        let background_changed = self.transcript_background_outstanding != background_outstanding;
         let sequence_changed = sequence != self.transcript_turn_sequence;
         let started_working = state == Some(AgentState::Working)
             && self.transcript_turn_state != Some(AgentState::Working);
@@ -2450,6 +2454,7 @@ impl TerminalState {
         if last_at_advanced || started_working || sequence_changed {
             self.transcript_turn_observed_at = Some(now);
         }
+        self.transcript_background_outstanding = background_outstanding;
         if state == Some(AgentState::Idle) && last_at.is_none() {
             // An empty-session reset is not a completed model turn.
             self.agent_process_acquisition_pending = true;
@@ -2459,16 +2464,24 @@ impl TerminalState {
         if let Some(at) = last_at.and_then(crate::agent_state::format_rfc3339) {
             self.set_last_turn_at(Some(at));
         }
-        self.recompute_effective_state(
-            previous.agent_label,
-            previous.known_agent,
-            previous.state,
-            previous.presentation,
-            now,
-        )
-        .map(|change| TerminalStateMutation {
-            effective_state_change: Some(change),
-            ..TerminalStateMutation::default()
+        let mutation = self
+            .recompute_effective_state(
+                previous.agent_label,
+                previous.known_agent,
+                previous.state,
+                previous.presentation,
+                now,
+            )
+            .map(|change| TerminalStateMutation {
+                effective_state_change: Some(change),
+                sidebar_projection_changed: background_changed,
+                ..TerminalStateMutation::default()
+            });
+        mutation.or_else(|| {
+            background_changed.then_some(TerminalStateMutation {
+                sidebar_projection_changed: true,
+                ..TerminalStateMutation::default()
+            })
         })
     }
 
@@ -2482,6 +2495,7 @@ impl TerminalState {
             self.transcript_turn_state = None;
             self.transcript_turn_last_at = None;
             self.transcript_turn_observed_at = None;
+            self.transcript_background_outstanding = 0;
             self.transcript_turn_flips.clear();
             self.transcript_turn_sequence = 0;
             if self
@@ -2861,6 +2875,7 @@ impl TerminalState {
             self.transcript_turn_state = None;
             self.transcript_turn_last_at = None;
             self.transcript_turn_observed_at = None;
+            self.transcript_background_outstanding = 0;
             self.session_name_write_target = None;
             self.set_active_subagents(None);
             let mut reset_sources = Vec::new();
@@ -5916,6 +5931,7 @@ impl TerminalState {
         self.transcript_turn_state = None;
         self.transcript_turn_last_at = None;
         self.transcript_turn_observed_at = None;
+        self.transcript_background_outstanding = 0;
         self.session_name_write_target = None;
         self.set_active_subagents(None);
         self.agent_metadata.clear();
@@ -6549,7 +6565,13 @@ mod tests {
         let mut terminal = test_terminal();
         let now = Instant::now();
         terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
-        terminal.set_transcript_turn_state(Some(AgentState::Idle), Some(SystemTime::now()), 1, now);
+        terminal.set_transcript_turn_state(
+            Some(AgentState::Idle),
+            Some(SystemTime::now()),
+            0,
+            1,
+            now,
+        );
         terminal.apply_closing_task_report(
             Some(crate::api::schema::ClosingCompletion::Incomplete),
             None,
@@ -9325,6 +9347,7 @@ mod tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(SystemTime::now() - Duration::from_secs(60)),
+            0,
             1,
             transcript_observed_at,
         );
@@ -9357,6 +9380,7 @@ mod tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(SystemTime::now() - Duration::from_secs(25 * 60)),
+            0,
             1,
             turn_started_at,
         );
@@ -9391,12 +9415,13 @@ mod tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(last_at),
+            0,
             1,
             turn_started_at,
         );
 
         for _ in 0..5 {
-            terminal.set_transcript_turn_state(Some(AgentState::Working), Some(last_at), 1, now);
+            terminal.set_transcript_turn_state(Some(AgentState::Working), Some(last_at), 0, 1, now);
         }
 
         assert_eq!(
@@ -9430,6 +9455,7 @@ mod tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(old_last_at),
+            0,
             1,
             turn_started_at,
         );
@@ -9438,6 +9464,7 @@ mod tests {
             terminal.set_transcript_turn_state(
                 Some(AgentState::Working),
                 Some(recent_last_at),
+                0,
                 1,
                 now,
             );
@@ -15694,6 +15721,7 @@ mod transcript_turn_tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Blocked),
             Some(SystemTime::now()),
+            0,
             1,
             Instant::now(),
         );
@@ -15702,6 +15730,7 @@ mod transcript_turn_tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(SystemTime::now()),
+            0,
             2,
             Instant::now(),
         );
@@ -15718,6 +15747,7 @@ mod transcript_turn_tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(idle_observed_at - Duration::from_secs(1)),
+            0,
             1,
             now,
         );
@@ -15741,6 +15771,7 @@ mod transcript_turn_tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(idle_observed_at + Duration::from_secs(1)),
+            0,
             2,
             now + Duration::from_secs(1),
         );
@@ -15756,12 +15787,14 @@ mod transcript_turn_tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Blocked),
             Some(SystemTime::now()),
+            3,
             1,
             Instant::now(),
         );
         assert!(terminal.last_turn_at().is_some());
         terminal.set_claude_transcript_target(Some("two".into()), Some("/tmp/two.jsonl".into()));
         assert!(terminal.transcript_turn_state.is_none());
+        assert_eq!(terminal.transcript_background_outstanding, 0);
         assert!(terminal.last_turn_at().is_none());
         assert!(terminal.transcript_turn_flips.is_empty());
     }

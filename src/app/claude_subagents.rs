@@ -1085,7 +1085,14 @@ impl crate::app::App {
                 .get(&terminal_id)
                 .map(|tracker| tracker.session_id.clone());
             let transcript_activity = transcript_activities.remove(&terminal_id);
-            let (turn_state, turn_at, turn_sequence, turn_record, next_action) = self
+            let (
+                turn_state,
+                turn_at,
+                background_outstanding,
+                turn_sequence,
+                turn_record,
+                next_action,
+            ) = self
                 .claude_subagent_trackers
                 .get_mut(&terminal_id)
                 .map(|tracker| {
@@ -1100,6 +1107,7 @@ impl crate::app::App {
                     (
                         state,
                         cursor.turn.last_at,
+                        cursor.turn.background_outstanding.min(u32::MAX as usize) as u32,
                         cursor.turn.sequence,
                         record,
                         cursor.turn.next_action.take(),
@@ -1165,6 +1173,7 @@ impl crate::app::App {
                         let turn_mutation = terminal.set_transcript_turn_state(
                             turn_state,
                             turn_at,
+                            background_outstanding,
                             turn_sequence,
                             now,
                         );

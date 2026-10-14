@@ -2340,6 +2340,7 @@ mod tests {
         terminal.set_transcript_turn_state(
             Some(AgentState::Working),
             Some(idle_observed_at - std::time::Duration::from_secs(1)),
+            0,
             1,
             now,
         );
