@@ -112,8 +112,15 @@ impl ClientShellState {
     /// so any plain text is a commit (kitty sends those as text too). A legacy
     /// host sends both as plain text; non-ASCII text has no key in the
     /// keyboard model, so only that is treated as a commit there.
+    /// Only text bound for the focused pane is a commit. In prefix, navigate
+    /// and other Herdr-owned input, plain text is still a key that may run a
+    /// binding (#5255).
     fn host_text_commit(&self, key: &crate::input::TerminalKey) -> Option<String> {
-        if !self.host_reports_all_keys || key.kind != KeyEventKind::Press {
+        if !self.host_reports_all_keys
+            || key.kind != KeyEventKind::Press
+            || self.mode != ClientShellMode::Terminal
+            || self.overlay.is_some()
+        {
             return None;
         }
         let plain_text = key
