@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.09.27.1"
+version = "2026.10.14.1"
 min_engine_version = 2
-updated_at = "2026-09-27T00:00:00Z"
+updated_at = "2026-10-14T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -21,7 +21,12 @@ region = "bottom_non_empty_lines(12)"
 visible_working = true
 any = [
   { line_regex = ['^\s*(?:--\s*\w+\s*--\s*)?[⏸⏵].*esc to interrupt(?:\s|·|$)'] },
+  # Captured 2026-10-14 from three live panes; current spinner rows use ● and omit the interrupt footer:
+  # ● Photosynthesizing… (1m 52s · ↓ 3.3k tokens)
+  # ● Contemplating… (running PostToolUse hooks… 2/3 · 6m 45s · ↓ 10.5k tokens · thought for 1s)
+  # ● Choreographing… (12m 53s · ↓ 16.6k tokens)
   { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)'] },
+  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}\x{25CF}]\s+\S.*…\s+\((?:\d+[smh]|running .*hooks…)'] },
 ]
 
 [[rules]]
@@ -58,7 +63,7 @@ state = "working"
 priority = 965
 region = "last_non_empty_above_prompt_box"
 visible_working = true
-line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}]\s+Waiting for [1-9]\d* background agents? to finish\s*$']
+line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}\x{25CF}]\s+Waiting for [1-9]\d* background agents? to finish\s*$']
 
 [[rules]]
 id = "background_mcp_task_working"
@@ -68,7 +73,7 @@ region = "bottom_non_empty_lines(12)"
 visible_working = true
 # Claude renders activity summaries at column zero; wrapped continuations are indented.
 # Keeping that shape prevents user prompt text from impersonating this signal.
-regex = ['(?m)^[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}][ \t]+\S[^\n]*?(?:\n[ \t]+[^\n]*?){0,3}·(?:[ \t]+|\n[ \t]*)[1-9]\d*(?:[ \t]+|\n[ \t]*)MCP(?:[ \t]+|\n[ \t]*)tasks?(?:[ \t]+|\n[ \t]*)still(?:[ \t]+|\n[ \t]*)running[ \t]*$']
+regex = ['(?m)^[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}\x{25CF}][ \t]+\S[^\n]*?(?:\n[ \t]+[^\n]*?){0,3}·(?:[ \t]+|\n[ \t]*)[1-9]\d*(?:[ \t]+|\n[ \t]*)MCP(?:[ \t]+|\n[ \t]*)tasks?(?:[ \t]+|\n[ \t]*)still(?:[ \t]+|\n[ \t]*)running[ \t]*$']
 not = [
   { contains = ["do you want to proceed?"] },
   { contains = ["esc to cancel"] },

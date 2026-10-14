@@ -1119,6 +1119,44 @@ fn claude_osc_title_static_prefix_is_idle() {
 }
 
 #[test]
+fn claude_current_spinner_lines_are_working_even_with_idle_osc_title() {
+    for screen in [
+        "✻ Thinking…\n",
+        "✻ Thinking… (12s · ↓ 1.2k tok\n",
+        "● Photosynthesizing… (1m 52s · ↓ 3.3k tokens)\n",
+        "● Contemplating… (running PostToolUse hooks… 2/3 · 6m 45s · ↓ 10.5k tokens · thought for 1s)\n",
+        "● Choreographing… (12m 53s · ↓ 16.6k tokens)\n",
+        "● Choreographing… (12m 53s\n",
+    ] {
+        let result = osc_explain(Agent::Claude, screen, "✳ Claude Code", "");
+        assert_eq!(result.state, AgentState::Working, "{screen:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_turn_working"),
+            "{screen:?}"
+        );
+        assert!(result.visible_working, "{screen:?}");
+        assert!(!result.visible_idle, "{screen:?}");
+    }
+}
+
+#[test]
+fn claude_assistant_bullet_rows_remain_idle() {
+    for screen in [
+        "● I'll check the logs…\n──────────\n❯\n──────────\n",
+        "● Bash(ls -la)\n──────────\n❯\n──────────\n",
+    ] {
+        let result = osc_explain(Agent::Claude, screen, "", "");
+        assert_eq!(result.state, AgentState::Idle, "{screen:?}");
+        assert_eq!(
+            result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+            Some("live_prompt_box"),
+            "{screen:?}"
+        );
+    }
+}
+
+#[test]
 fn claude_osc_progress_4_3_alone_does_not_force_working() {
     // Claude leaves progress stuck at 4;3 while waiting for permission, so
     // 4;3 must not be a working signal on its own. With no other evidence it
@@ -1530,7 +1568,7 @@ fn fresh_hook_working_overrides_stale_native_claude_permission() {
 fn bundled_manifest_versions_cover_deployed_and_upstream_floors() {
     let claude: toml::Value = toml::from_str(include_str!("../manifests/claude.toml")).unwrap();
     let kimi: toml::Value = toml::from_str(include_str!("../manifests/kimi.toml")).unwrap();
-    assert_eq!(claude["version"].as_str(), Some("2026.09.27.1"));
+    assert_eq!(claude["version"].as_str(), Some("2026.10.14.1"));
     assert!(kimi["version"]
         .as_str()
         .is_some_and(|version| version > "2026.06.10.1"));
