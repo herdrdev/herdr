@@ -1698,6 +1698,18 @@ pub(super) fn discover_remote_api_metadata(
 }
 
 fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform> {
+    // Interactive setup forwards SSH stderr to the terminal, so a Windows host
+    // whose default shell is PowerShell would print a raw
+    // `CommandNotFoundException` for the POSIX `/bin/sh` probe below. Probe for
+    // Windows first there so such hosts never receive a `/bin/sh` command.
+    // Background bridges capture stderr instead, so they keep the POSIX-first
+    // probe to avoid an extra round trip on Unix hosts.
+    if !ssh.noninteractive {
+        if let Some(platform) = detect_windows_remote_platform(ssh)? {
+            return Ok(platform);
+        }
+    }
+
     let output = ssh.sh_output("uname -s\nuname -m\n")?;
     let mut windows_uname_hint = false;
     let posix_error = if output.status.success() {
@@ -1721,22 +1733,38 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform>
         command_failed("remote platform detection failed", &output)
     };
 
-    if !should_try_windows_probe(
+    // A POSIX-compatible shell on Windows (MINGW/MSYS/Cygwin) reports a Windows
+    // `uname`; retry the direct probe for hosts the first attempt could not
+    // confirm so the hint is not lost.
+    if should_try_windows_probe(
         output.status.success(),
         output.status.code(),
         windows_uname_hint,
     ) {
-        return Err(posix_error);
+        if let Some(platform) = detect_windows_remote_platform(ssh)? {
+            return Ok(platform);
+        }
     }
-    let windows_output = match ssh.framed_user_shell_output(&windows_platform_probe_command()) {
-        Ok(output) if output.status.success() => output,
-        _ => return Err(posix_error),
-    };
-    match parse_windows_platform_probe(&String::from_utf8_lossy(&windows_output.stdout)) {
-        Ok(Some(platform)) => Ok(platform),
-        Ok(None) => Err(posix_error),
-        Err(message) => Err(io::Error::other(message)),
+    Err(posix_error)
+}
+
+fn detect_windows_remote_platform(ssh: &RemoteSsh) -> io::Result<Option<DetectedRemotePlatform>> {
+    // `2>&1` merges a Unix login shell's "command not found" into stdout, where
+    // the failed-command preamble parser discards it, so probing Windows never
+    // prints a raw error on a Unix host. Windows PowerShell ignores the merge
+    // because the probe succeeds there.
+    let command = format!("{} 2>&1", windows_platform_probe_command());
+    // Propagate cancellation, spawn failures, and SSH transport failures (exit
+    // 255) rather than retrying them against the POSIX probe, which would repeat
+    // an authentication failure. An ordinary command failure means "not Windows".
+    let output = ssh.framed_user_shell_output(&command)?;
+    if output.status.code() == Some(255) {
+        return Err(command_failed("remote platform detection failed", &output));
     }
+    if !output.status.success() {
+        return Ok(None);
+    }
+    parse_windows_platform_probe(&String::from_utf8_lossy(&output.stdout)).map_err(io::Error::other)
 }
 
 fn should_try_windows_probe(
@@ -1755,8 +1783,12 @@ fn looks_like_windows_uname(os: &str) -> bool {
 }
 
 fn windows_platform_probe_command() -> String {
+    // WSL can run `powershell.exe` through interop, so a Windows process is not
+    // proof of a Windows endpoint. Native Windows and WSL both name the WSL
+    // working directory with the `\\wsl$`/`\\wsl.localhost` UNC prefix, so reject
+    // the probe there and let the POSIX probe identify the Unix endpoint.
     windows_powershell_script_command(
-        "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
+        "$cwd = [System.IO.Directory]::GetCurrentDirectory(); if ($cwd.StartsWith('\\\\wsl$') -or $cwd.StartsWith('\\\\wsl.localhost')) { exit 1 }; $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
     )
 }
 
@@ -4959,7 +4991,7 @@ mod tests {
             (
                 "platform probe",
                 windows_platform_probe_command(),
-                "$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
+                "$cwd = [System.IO.Directory]::GetCurrentDirectory(); if ($cwd.StartsWith('\\\\wsl$') -or $cwd.StartsWith('\\\\wsl.localhost')) { exit 1 }; $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }; [Console]::Out.WriteLine('herdr-windows:' + $arch); exit 0",
             ),
             (
                 "PATH lookup",

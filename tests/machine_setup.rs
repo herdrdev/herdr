@@ -11,6 +11,13 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 // No real SSH connection or server is started. Stop at startup after recording setup actions.
 const SSH: &str = r#"#!/bin/sh
+case "$*" in
+    *powershell.exe*)
+        echo windows >>"$FAKE_ROOT/command-order"
+        if [ "$FAKE_WINDOWS" = yes ]; then printf '\n%s\n%s\n' 'herdr-remote-output-ready:1' 'herdr-windows:AMD64'; exit 0; fi
+        exit 1 ;;
+    *'/bin/sh -s'*) echo posix-probe >>"$FAKE_ROOT/command-order" ;;
+esac
 for arg do
     last=$arg
     if [ "$arg" = 'StrictHostKeyChecking=yes' ]; then strict_host_key_check=yes; fi
@@ -74,6 +81,7 @@ struct SetupResult {
     prompts: usize,
     success: bool,
     probes: String,
+    command_order: String,
     start_command: String,
 }
 
@@ -83,6 +91,7 @@ struct SetupOptions<'a> {
     selection: &'a [u8],
     explicit_session: Option<&'a str>,
     noninteractive: bool,
+    windows: bool,
 }
 
 fn setup(installed: &str, answer: &str, handoff: bool) -> SetupResult {
@@ -173,6 +182,7 @@ fn setup_options(
         "FAKE_STRICT_HOST_KEY_FAILURE",
         if strict_host_key_failure { "yes" } else { "no" },
     );
+    command.env("FAKE_WINDOWS", if options.windows { "yes" } else { "no" });
     command.env(
         "FAKE_CLIENT_STATUS",
         String::from_utf8(status.stdout).unwrap(),
@@ -252,6 +262,7 @@ fn setup_options(
     reading.join().unwrap();
     let actions = fs::read_to_string(root.join("actions")).unwrap_or_default();
     let probes = fs::read_to_string(root.join("probes")).unwrap_or_default();
+    let command_order = fs::read_to_string(root.join("command-order")).unwrap_or_default();
     let start_command = fs::read_to_string(root.join("start-command")).unwrap_or_default();
     // Every scenario either cancels or reaches the intentionally failed startup.
     let saved = root
@@ -271,6 +282,7 @@ fn setup_options(
         prompts,
         success: status.success(),
         probes,
+        command_order,
         start_command,
     }
 }
@@ -339,6 +351,40 @@ fn machine_add_fresh_host_offers_installation_and_cancellation_saves_nothing() {
         result.output
     );
     assert!(result.actions.is_empty(), "{}", result.output);
+}
+
+#[test]
+fn machine_setup_probes_windows_before_the_posix_shell() {
+    // A Windows OpenSSH host with a PowerShell default shell cannot run
+    // `/bin/sh`, so the encoded PowerShell probe must run first.
+    let result = setup("new", "y\n", false);
+    let order: Vec<&str> = result.command_order.lines().collect();
+    assert_eq!(order.first().copied(), Some("windows"), "{}", result.output);
+    assert!(order.contains(&"posix-probe"), "{}", result.output);
+}
+
+#[test]
+fn machine_setup_accepts_a_native_windows_probe_without_a_posix_probe() {
+    // A successful Windows probe must short-circuit so a native Windows host
+    // never falls through to the POSIX `/bin/sh` probe.
+    let result = setup_options(
+        "new",
+        "n\n",
+        false,
+        false,
+        SetupOptions {
+            windows: true,
+            ..Default::default()
+        },
+    );
+    let order: Vec<&str> = result.command_order.lines().collect();
+    assert_eq!(order.first().copied(), Some("windows"), "{}", result.output);
+    assert!(!order.contains(&"posix-probe"), "{}", result.output);
+    assert!(
+        result.output.contains("installation cancelled"),
+        "{}",
+        result.output
+    );
 }
 
 #[test]

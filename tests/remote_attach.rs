@@ -75,6 +75,9 @@ fn check_authentication_output(framed_shell: bool) {
         &ssh_path,
         format!(
             r#"#!/bin/sh
+case "$*" in
+    *powershell.exe*) exit 1 ;;
+esac
 authenticate() {{
     : > "$FAKE_SSH_STARTED"
     printf '/bin/sh: expected probe noise\n%s\n%s' '{CHECK_NOTICE}' '{CHECK_URL}' >&2
