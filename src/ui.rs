@@ -117,7 +117,9 @@ pub(crate) use self::sidebar::tests::sidebar_work_item_fixture;
 #[cfg(test)]
 pub(crate) use self::sidebar::SPACES_SECTION_TITLE;
 #[cfg(test)]
-pub(crate) use self::sidebar::{compute_agent_card_areas, workspace_drop_indicator_row};
+pub(crate) use self::sidebar::{
+    compute_agent_card_areas, compute_workspace_card_areas, workspace_drop_indicator_row,
+};
 pub(crate) use self::sidebar::{
     compute_sidebar_section_header_areas, initial_collapsed_sidebar_groups,
     sidebar_blocker_scope_anchor_rect, sidebar_blocker_scope_menu_layout,
@@ -164,12 +166,12 @@ pub(crate) use self::{
         agent_counts_by_workspace, agent_panel_entries, all_agent_panel_entries,
         collapsed_sidebar_row_scroll, collapsed_sidebar_scroll_for_target,
         collapsed_sidebar_sections, collapsed_sidebar_toggle_rect, compute_sidebar_row_areas,
-        compute_workspace_card_areas, expanded_sidebar_toggle_rect, needs_you_more_at,
-        needs_you_row_at, normalized_workspace_scroll, relative_agent_navigation_entry,
-        remote_agent_panel_entries, remote_agent_panel_entries_at, remote_agent_row_at,
-        repo_group_focus_plan, sidebar_agent_run_at, sidebar_aloop_target_at, sidebar_coverage,
-        sidebar_dim_header_at, sidebar_filter_anchor_rect, sidebar_filter_menu_layout,
-        sidebar_filter_options, sidebar_group_menu_layout, sidebar_group_mode_anchor_rect_for_app,
+        expanded_sidebar_toggle_rect, needs_you_more_at, needs_you_row_at,
+        normalized_workspace_scroll, relative_agent_navigation_entry, remote_agent_panel_entries,
+        remote_agent_panel_entries_at, remote_agent_row_at, repo_group_focus_plan,
+        sidebar_agent_run_at, sidebar_aloop_target_at, sidebar_coverage, sidebar_dim_header_at,
+        sidebar_filter_anchor_rect, sidebar_filter_menu_layout, sidebar_filter_options,
+        sidebar_group_menu_layout, sidebar_group_mode_anchor_rect_for_app,
         sidebar_header_new_menu_rect, sidebar_header_new_thread_rect, sidebar_header_overflow_rect,
         sidebar_header_search_rect_for_app, sidebar_header_star_filter_rect,
         sidebar_missive_copy_url, sidebar_nested_header_at, sidebar_new_menu_layout,
@@ -627,11 +629,14 @@ fn compute_view_internal_at(
         (Rect::default(), main_area)
     };
 
-    if !app.sidebar_collapsed {
-        app.workspace_scroll = normalized_workspace_scroll(app, sidebar_area, app.workspace_scroll);
+    let sidebar_list_layout = if !app.sidebar_collapsed {
+        let list_area = workspace_list_rect_for_app(app, sidebar_area);
+        let layout = sidebar::SidebarListLayout::new(app, list_area);
+        app.workspace_scroll = layout.normalize_scroll(app.workspace_scroll);
         if let Some(active) = app.take_pending_workspace_reveal() {
             app.ensure_workspace_visible_in_sidebar(active, sidebar_area);
         }
+        Some(layout)
     } else {
         let (ws_area, _, _) = collapsed_sidebar_sections(sidebar_area);
         app.workspace_scroll = collapsed_sidebar_row_scroll(app, ws_area);
@@ -641,13 +646,19 @@ fn compute_view_internal_at(
                     collapsed_sidebar_scroll_for_target(app, ws_area, app.workspace_scroll, target);
             }
         }
-    }
-
-    let workspace_card_areas = if app.sidebar_collapsed {
-        Vec::new()
-    } else {
-        compute_workspace_card_areas(app, sidebar_area)
+        None
     };
+
+    let (workspace_card_areas, computed_agent_card_areas) =
+        if let Some(layout) = sidebar_list_layout.as_ref() {
+            sidebar::compute_sidebar_row_areas_from_layout(
+                app,
+                workspace_list_rect_for_app(app, sidebar_area),
+                layout,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
 
     let visible_user_actions = tabs::visible_user_actions(app);
     let tab_bar_view = app
@@ -773,20 +784,16 @@ fn compute_view_internal_at(
         })
         .unwrap_or_default();
 
-    let agent_card_areas = if app.sidebar_collapsed {
-        Vec::new()
+    let agent_card_areas = computed_agent_card_areas;
+    let tab_card_areas = if let Some(layout) = sidebar_list_layout.as_ref() {
+        sidebar::compute_tab_card_areas_from_layout(app, layout)
     } else {
-        sidebar::compute_agent_card_areas(app, sidebar_area)
+        Vec::new()
     };
-    let tab_card_areas = if app.sidebar_collapsed {
-        Vec::new()
+    let sidebar_hover_targets = if let Some(layout) = sidebar_list_layout.as_ref() {
+        sidebar::compute_sidebar_hover_targets_from_layout(app, sidebar_area, layout)
     } else {
-        sidebar::compute_tab_card_areas(app, sidebar_area)
-    };
-    let sidebar_hover_targets = if app.sidebar_collapsed {
         Vec::new()
-    } else {
-        sidebar::compute_sidebar_hover_targets(app, sidebar_area)
     };
     let sidebar_footer_work_hit_area = if app.sidebar_collapsed {
         Rect::default()

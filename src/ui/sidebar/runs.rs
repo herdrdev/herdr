@@ -10,13 +10,12 @@ use ratatui::{
 
 use super::{
     compact_dot_for_state, compact_row_widths, pad_left, pad_right, section_is_collapsed,
-    short_fleet_host_names, sidebar_row_gap, sidebar_row_height, sidebar_rows,
-    workspace_list_body_rect, workspace_list_rect_for_app, SidebarHostCount, SidebarRow,
-    RUNS_SECTION_TITLE, SIDEBAR_AGE_FIELD_WIDTH, SIDEBAR_DOT_FIELD_WIDTH,
+    short_fleet_host_names, sidebar_row_gap, sidebar_row_height, workspace_list_rect_for_app,
+    SidebarHostCount, SidebarRow, RUNS_SECTION_TITLE, SIDEBAR_AGE_FIELD_WIDTH,
+    SIDEBAR_DOT_FIELD_WIDTH,
 };
 use crate::app::AppState;
 use crate::detect::AgentState;
-use crate::ui::scrollbar::should_show_scrollbar;
 use crate::ui::status::state_label_color;
 use crate::ui::text::truncate_end;
 
@@ -132,9 +131,15 @@ pub(super) struct Area {
 
 pub(super) fn areas(app: &AppState, area: Rect) -> Vec<Area> {
     let ws_area = workspace_list_rect_for_app(app, area);
-    let metrics = super::workspace_list_scroll_metrics(app, ws_area);
-    let body = workspace_list_body_rect(app, ws_area, should_show_scrollbar(metrics));
-    let rows = sidebar_rows(app);
+    let layout = super::SidebarListLayout::new(app, ws_area);
+    areas_from_layout(app, &layout)
+}
+
+pub(super) fn areas_from_layout(app: &AppState, layout: &super::SidebarListLayout) -> Vec<Area> {
+    let metrics = layout.metrics(app);
+    let body = layout.body(app, metrics);
+    let rows = layout.rows();
+    let workspace_spacing = layout.workspace_spacing();
     let mut y = body.y;
     let mut out = Vec::new();
     for (idx, row) in rows
@@ -153,9 +158,12 @@ pub(super) fn areas(app: &AppState, area: Rect) -> Vec<Area> {
                 rect: Rect::new(body.x, y, body.width, height),
             });
         }
-        y = y
-            .saturating_add(height)
-            .saturating_add(sidebar_row_gap(app, &rows, idx));
+        y = y.saturating_add(height).saturating_add(sidebar_row_gap(
+            app,
+            rows,
+            idx,
+            workspace_spacing,
+        ));
     }
     out
 }
@@ -174,19 +182,21 @@ pub(super) fn target_at(app: &AppState, row: u16) -> Option<(String, String)> {
 }
 
 pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::time::SystemTime) {
-    if area.rect.width == 0 || area.rect.height == 0 {
+    let row_rect = area.rect;
+    let rect = super::sidebar_row_content_rect(row_rect);
+    if row_rect.width == 0 || row_rect.height == 0 || rect.width == 0 {
         return;
     }
     let Some(summary) = area.summary.as_ref() else {
         let line = format!("{}no recent runs", " ".repeat(ROW_DEPTH * 2));
         frame.render_widget(
             Paragraph::new(Line::from(Span::styled(
-                truncate_end(&line, usize::from(area.rect.width)),
+                truncate_end(&line, usize::from(rect.width)),
                 Style::default()
                     .fg(app.palette.overlay0)
                     .add_modifier(Modifier::DIM),
             ))),
-            area.rect,
+            rect,
         );
         return;
     };
@@ -230,10 +240,10 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::t
     } else {
         Modifier::empty()
     };
-    let width = usize::from(area.rect.width);
+    let width = usize::from(row_rect.width);
     let widths = compact_row_widths(title, &status, None, width, ROW_DEPTH);
     let fixed = widths.prefix + SIDEBAR_DOT_FIELD_WIDTH + widths.provider + widths.age;
-    let title_width = width.saturating_sub(fixed);
+    let title_width = usize::from(rect.width).saturating_sub(fixed);
     let age = if widths.age == SIDEBAR_AGE_FIELD_WIDTH {
         crate::ui::symphony::age_label_since(Some(summary.started_at.as_str()), now)
     } else {
@@ -270,7 +280,7 @@ pub(super) fn render(app: &AppState, frame: &mut Frame, area: &Area, now: std::t
                 Style::default().fg(app.palette.overlay0),
             ),
         ])),
-        area.rect,
+        rect,
     );
 }
 
