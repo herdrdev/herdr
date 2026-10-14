@@ -61,7 +61,7 @@ Herdr 对 Linux/macOS 上的集成配置和所有平台的新文件使用原子�
 
 每个集成都会告诉 Herdr 智能体当前所在的会话,这样 Herdr 就能在服务器重启后恢复它。用 `[session] resume_agents_on_restore = false` 可以关闭。
 
-Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI 和 MastraCode 的集成还会上报智能体的状态。在它们上报期间,Herdr 使用这些上报,而不是读取屏幕。Codex 使用 `--no-daemon` 运行时会上报轮次状态,可见的阻塞提示仍由屏幕检测处理。其他集成则把状态交给屏幕检测。
+Pi、OMP、Kimi Code CLI、OpenCode、Kilo Code CLI 和 MastraCode 的集成还会上报智能体的状态。在它们上报期间,Herdr 使用这些上报,而不是读取屏幕。其他集成则把状态交给屏幕检测。
 
 原生会话恢复需要最新的 Herdr 集成: Pi 集成版本 `2`、OMP 版本 `3`、Claude Code 版本 `6`、Codex 版本 `5`、GitHub Copilot CLI 版本 `2`、Devin CLI 版本 `2`、Droid 版本 `2`、Kimi Code CLI 版本 `3`、Qoder CLI 版本 `2`、Qwen Code 版本 `1`、Letta Code 版本 `1`、Cursor Agent CLI 版本 `1`、Grok CLI 版本 `2`、OpenCode 版本 `5`、Kilo Code CLI 版本 `1`、Hermes Agent 版本 `5`、MastraCode 版本 `1`、Antigravity CLI 版本 `1`。用 `herdr integration status` 查看已安装版本。
 
@@ -125,7 +125,7 @@ Herdr 默认使用 `~/.claude`,设置了 `CLAUDE_CONFIG_DIR` 时使用后者。C
 herdr integration install codex
 ```
 
-Codex 使用 `--no-daemon` 运行时,钩子通过本地 socket API 上报会话身份和轮次开始／停止状态。屏幕检测仍处理可见的阻塞提示,并在钩子不可用时补充状态。共享的 Codex 守护进程可能把钩子发到错误的窗格,因此请使用 `--no-daemon` 获得可靠的上报;仅禁用自动启动不会停止已经运行的守护进程。
+Codex 钩子通过与其他集成相同的本地 socket API 上报会话身份。Codex 的状态来自 Herdr 的屏幕清单检测。
 
 Herdr 默认使用 `~/.codex`,设置了 `CODEX_HOME` 时使用后者。Codex 配置目录必须已经存在。安装会写入 `herdr-agent-state.sh`、更新 `hooks.json`,并确保 `config.toml` 中有 `[features] hooks = true`。如果存在已弃用的顶层 `codex_hooks` 标志,它也会一并移除。卸载会从 `hooks.json` 中移除 Herdr 条目并删除钩子脚本,但不改动 `config.toml`。
 

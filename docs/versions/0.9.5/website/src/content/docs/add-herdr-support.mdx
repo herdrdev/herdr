@@ -1,0 +1,114 @@
+---
+title: Add Herdr support to your agent
+description: Report your coding agent's state and resume command to Herdr from your own code, without adding native support to Herdr.
+---
+
+If you build a coding agent, you can make it a first-class citizen in Herdr from your own code. You don't need a pull request to Herdr, and you don't need to wait for a Herdr release.
+
+Once your agent reports to Herdr, users get:
+
+- your agent's name and `idle`, `working`, or `blocked` state in the sidebar and in `herdr agent list`
+- notifications when it finishes or needs a decision
+- `herdr agent wait` and other automation that waits on agent state
+- the same session back in the same pane after a Herdr server restart
+
+Herdr owns the integrations for agents whose vendors don't ship one. If you maintain your agent, owning the integration yourself means you can fix it on your own release schedule.
+
+## How it works
+
+Every process in a Herdr pane inherits these environment variables:
+
+| Variable | Meaning |
+| --- | --- |
+| `HERDR_ENV` | `1` inside Herdr |
+| `HERDR_PANE_ID` | The pane your agent runs in |
+| `HERDR_BIN_PATH` | The Herdr binary that owns this pane |
+| `HERDR_SOCKET_PATH` | Herdr's API socket |
+
+Your agent makes three kinds of reports through `"$HERDR_BIN_PATH"`:
+
+1. **State.** Report `idle`, `working`, or `blocked` whenever it changes.
+2. **Resume command.** Report the command that reopens the current session.
+3. **Release.** Release the pane when your agent exits.
+
+Only report when `HERDR_ENV=1` and the other variables are set. Outside Herdr, your integration should do nothing.
+
+## Report state
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --state working \
+  --seq 1
+```
+
+- Report `working` when a turn starts, `idle` when your agent is ready for input, and `blocked` when it needs the user to decide something. Add `--message` to explain a block.
+- `--agent` is the name users see. Use your own agent's name, not the name of an agent Herdr already supports.
+- `--source` identifies your integration. Keep it stable and unique. Don't start it with `herdr:`, because Herdr's own integrations use that prefix.
+- `--seq` is optional but recommended. It must increase with every report from your source, including across sessions and restarts of your agent. A timestamp works well. Herdr ignores reports whose number is not higher than the last one it accepted, so late or out-of-order reports can't overwrite newer state.
+
+To change how your agent appears without changing its state, such as a title or custom status text, see [Custom status labels](/docs/integrations/#custom-status-labels).
+
+## Report the resume command
+
+Put the command that resumes the current session after `--`. Include the options that session needs, such as the model or permission mode, so the resumed session behaves the same:
+
+```bash
+"$HERDR_BIN_PATH" pane report-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --state idle \
+  --seq 2 \
+  --agent-session-id "$SESSION_ID" \
+  -- my-agent --resume "$SESSION_ID" --model my-model
+```
+
+You can attach the command to any state report, or send it with `pane report-agent-session` when only the session changes. Report it again whenever your agent switches sessions.
+
+After a Herdr server restart, Herdr opens the pane in the same directory and runs that command there. The command must follow these rules:
+
+- The first word is a plain command name on the user's `PATH`, such as `my-agent`, not a path.
+- No argument contains an apostrophe or a control character.
+- At most 64 arguments and 8 KiB in total.
+- Your source must hold the pane first, so send a state report with `report-agent` before or along with the command. Otherwise Herdr answers with `resume_not_accepted`.
+
+Herdr rejects a command that breaks the first three rules with `invalid_resume_argv` and does not apply that report. Users can turn off resume with `[session] resume_agents_on_restore = false`.
+
+## Release on exit
+
+```bash
+"$HERDR_BIN_PATH" pane release-agent "$HERDR_PANE_ID" \
+  --source my-agent \
+  --agent my-agent \
+  --seq 3
+```
+
+Releasing clears your agent's name, state, and resume command from the pane right away. Only release when the user actually quits. If your agent replaces one session with another in the same process, report the new session instead of releasing.
+
+If your agent exits without releasing, Herdr notices once the pane is back at its idle shell prompt and clears the agent and its resume command. This usually takes a second or two. It is a safety net, not a replacement for releasing.
+
+## Keep it out of the way
+
+- Don't let Herdr slow your agent down. Send reports in the background or with a short timeout, and ignore failures.
+- Send only the latest state. If several changes queue up while a report is in flight, drop the older ones.
+- Resume commands need Herdr 0.9.2 or later. Older versions ignore them, so state reports and release keep working there.
+
+## Use the socket directly
+
+`HERDR_BIN_PATH` and the CLI are the portable choice, including on Windows. If your agent needs direct IPC, send the equivalent `pane.report_agent`, `pane.report_agent_session`, and `pane.release_agent` requests described in the [Socket API](/docs/socket-api/#agent-state-reporting). The resume command goes in the `resume_argv` array.
+
+## Check your integration
+
+Start your agent in a Herdr pane, then check what Herdr sees:
+
+```bash
+herdr pane get "$HERDR_PANE_ID"
+herdr agent list
+```
+
+To test restore without touching your normal session, use a separate named session:
+
+1. Start `herdr --session my-agent-test`, then run your agent in a pane.
+2. Stop that session with `herdr session stop my-agent-test`.
+3. Start `herdr --session my-agent-test` again. The pane should run your resume command and your agent should report again.

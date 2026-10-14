@@ -1,0 +1,164 @@
+---
+title: Persistence and remote access
+description: Detach from Herdr, reattach later, use named sessions, and connect over SSH.
+---
+
+Herdr keeps panes running in a background server. Your terminal client can detach and reconnect later.
+
+For the local, SSH, and `herdr --remote` workflows, see [How to work with Herdr](/docs/how-to-work/).
+
+## Detach and reattach
+
+Detach the client with `ctrl+b q`; panes and agents keep running. Reattach by running `herdr` again. Stop the session and its panes with `herdr server stop`.
+
+When Herdr starts again after a full server stop, it restores the saved session shape. For what survives detach, server restart, screen history replay, native agent session restore, and live handoff, see [Session state and restore](/docs/session-state/).
+
+On Linux and macOS, the server ignores `SIGHUP`, so a hangup from its launching shell does not stop the panes. To stop it deliberately, use `herdr server stop` or `SIGTERM`; scripts that previously used `SIGHUP` must change. Shutdown logs record the reason.
+
+## Named sessions
+
+Use named sessions when you want independent Herdr servers.
+
+```bash
+herdr session list
+herdr session attach work
+herdr session attach side-project
+herdr session stop work
+herdr session delete side-project
+```
+
+A named session has its own panes, tabs, workspaces, sockets, and runtime state. It still shares the same global config file.
+
+When deleting a session, use the exact name shown by `herdr session list`, including letter case. On case-insensitive filesystems, `herdr session delete foo` refuses to delete a session named `Foo`.
+
+Use `--json` for scripts:
+
+```bash
+herdr session list --json
+herdr session stop work --json
+herdr session delete side-project --json
+```
+
+## Saved SSH machines
+
+To keep Local and several SSH machines in one Herdr window, see [Connecting machines](/docs/connecting-machines/). That guide covers setup, switching, reconnects, settings, and remote automation. Removing a saved machine only disconnects the client; it does not stop that machine's sessions.
+
+## Remote attach over SSH
+
+[How to work with Herdr](/docs/how-to-work/) compares the connection paths. SSH to the server and run `herdr` there for the tmux-style path, use [saved SSH machines](/docs/connecting-machines/) for multi-machine work, or attach through SSH from your local machine:
+
+```bash
+herdr --remote workbox
+herdr --remote ssh://you@server:2222
+```
+
+Sidebar width, section split, collapsed groups, and agent sorting are saved locally for each remote target and session. Reattaching to the same target and session restores these preferences. Different SSH aliases or sessions have separate preferences.
+
+In this mode, the remote server owns the running panes and sends their terminal content and session state over SSH. Your local Herdr draws the UI, including its sidebar, menus, and theme. Because the client runs locally, Herdr can bridge local desktop features such as image clipboard paste into the remote session by copying the image to a remote temp file and pasting that path.
+
+By default, `herdr --remote` uses your local Herdr keybindings for that attach. This keeps local muscle memory even when the remote server has different config. After editing local keybindings, use the UI's `reload config` action to apply them without detaching. Use `--remote-keybindings server` when you want the remote server config instead. Local custom command keybindings are not sent, because those commands would run on the remote host.
+
+For repeat targets, use your SSH config:
+
+```text
+Host workbox
+  HostName server.example.com
+  User you
+  Port 2222
+```
+
+Then attach with:
+
+```bash
+herdr --remote workbox
+```
+
+Remote attach and saved SSH machines support Linux, macOS, and Windows local clients connecting to Linux or macOS hosts on x86_64 and aarch64, or Windows hosts on x86_64. Windows ARM64 hosts are supported on a best-effort basis using the x64 build under Windows emulation; bugs and issues are expected. Explicit remote attach and saved-machine setup display an emulation note when the host reports ARM64. Local and remote versions do not need to match once both support the stable endpoint generation. On Linux and macOS hosts, Herdr prefers a compatible `herdr` already on the remote `PATH`, then checks common direct, Homebrew, mise, and Nix profile install paths. On Windows hosts, Herdr checks `PATH` and the active managed release. If no compatible binary exists, interactive runs prompt to install or update one; non-interactive runs fail instead of modifying the host. Linux and macOS installs use `~/.local/bin/herdr`; Windows installs use the complete Windows package and its app-local ConPTY runtime. If `~/.local/bin` is not on the remote `PATH`, Herdr warns after install.
+
+By default, `herdr --remote` runs remote setup and the bridge through a temporary SSH config that includes your SSH config first, then adds fallback keepalive settings. Existing user keepalive settings win. Linux and macOS clients also use a private per-attach control socket for connection reuse; Windows OpenSSH does not. Set `[remote].manage_ssh_config = false` to use plain `ssh` without Herdr's generated config or control socket.
+
+Remote attach uses your normal OpenSSH authentication. If the target uses a passphrase-protected key in a non-interactive shell, script, CI job, or mobile terminal that cannot show the passphrase prompt, load the key into ssh-agent first:
+
+```bash
+ssh-add
+herdr --remote workbox
+```
+
+For any remote authentication failure, verify plain SSH access first with `ssh workbox`, then run `herdr --remote workbox` again.
+
+A version difference alone does not replace or restart a running remote server. Remote attach asks before stopping a server that lacks required compatibility or detached-daemon support. For saved machines, this also includes the surface and health-check capabilities described in [Connecting machines](/docs/connecting-machines/#updates-and-saved-data). The default answer is No; stopping the server ends its pane processes. To opt into experimental live handoff when that one-time upgrade is needed, pass `--handoff`:
+
+```bash
+herdr --remote workbox --handoff
+```
+
+If you SSH into the server first and run `herdr` there, Herdr runs entirely on the server and cannot access your local desktop clipboard beyond normal terminal text paste.
+
+For Linux and macOS hosts, Herdr can copy the current local binary when the platforms match. For Homebrew, mise, and Nix installs, when the platforms differ, or for Windows hosts, it downloads the matching release asset for the current client version from `https://herdr.dev/latest.json`.
+
+For local builds or custom packages, set `HERDR_REMOTE_BINARY` to a local file path before running remote attach. Use a bare Herdr executable for Linux or macOS targets and a complete `herdr-windows-x86_64.zip` package for Windows targets.
+
+```bash
+HERDR_REMOTE_BINARY=target/release/herdr herdr --remote workbox
+```
+
+## Remote named sessions
+
+Use `--session` with `--remote` to attach to a named session on the remote host:
+
+```bash
+herdr --remote workbox --session agents
+```
+
+## Direct terminal attach
+
+Full Herdr attach opens the whole workspace UI. Direct attach opens one server-owned terminal in your current terminal.
+
+Direct terminal attach is available on Linux and macOS, not native Windows.
+
+Attach by agent target:
+
+```bash
+herdr agent attach reviewer
+```
+
+Attach by terminal ID:
+
+```bash
+herdr terminal attach term_abc123
+```
+
+Direct attach streams the current rendered terminal state, then live ANSI frames. Input goes straight to that terminal.
+
+Detach with `ctrl+b q`. Send a literal `ctrl+b` with `ctrl+b ctrl+b`.
+
+Only one writable direct attach client owns input and resize for a terminal. Use `--takeover` to replace an existing owner:
+
+```bash
+herdr terminal attach term_abc123 --takeover
+```
+
+For third-party bridges that only need rendered terminal bytes, use a read-only
+terminal session observer:
+
+```bash
+herdr terminal session observe w1:p1 --cols 120 --rows 40
+```
+
+It prints newline-delimited JSON `terminal.frame` records with base64 ANSI
+bytes, then a `terminal.closed` record when the server closes the stream.
+Multiple observers can watch the same terminal without taking input, resize,
+scroll, or takeover ownership.
+
+For an interactive bridge, use a writable terminal session controller:
+
+```bash
+herdr terminal session control w1:p1 --takeover --cols 120 --rows 40
+```
+
+Control mode prints the same newline-delimited frame records and reads
+newline-delimited JSON commands on stdin. `terminal.input` sends text or
+base64 bytes, `terminal.resize` changes the controller viewport,
+`terminal.scroll` scrolls the attached viewport, `terminal.mouse` sends a mouse
+event at a cell to applications that enabled mouse reporting, and
+`terminal.release` closes the controller. Only one controller owns input and resize at a time.
