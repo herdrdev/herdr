@@ -84,6 +84,15 @@ impl App {
             return;
         }
 
+        if key.code == KeyCode::Char('t')
+            && key.modifiers.is_empty()
+            && prefix_binding_for_key(&self.state, &raw_key).is_none()
+        {
+            self.toggle_transcript_chat_for_focused_pane();
+            leave_command_mode(&mut self.state);
+            return;
+        }
+
         match prefix_binding_for_key(&self.state, &raw_key) {
             Some(PrefixBindingMatch::Action(action)) => self.execute_prefix_key_action(action),
             Some(PrefixBindingMatch::Command(binding)) => {

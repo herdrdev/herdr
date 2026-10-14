@@ -273,6 +273,8 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # prefix = "ctrl+b"
 
 # Prefix-mode actions
+# prefix+t toggles the Claude transcript chat view. In chat view, o expands
+# tool summaries; PageUp/PageDown and the mouse wheel scroll; G returns to bottom.
 # help = "prefix+?"
 # settings = "prefix+s"
 # command_palette = ["ctrl+alt+p", "super+p"]

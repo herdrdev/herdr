@@ -4623,6 +4623,8 @@ pub struct AppState {
     /// Unsent text typed by a human in each pane. Home replies must not touch a
     /// pane while this draft exists because the terminal owns that edit buffer.
     pub(crate) pending_human_drafts: std::collections::HashMap<PaneId, String>,
+    /// Client presentation state and cached transcript projection keyed by pane.
+    pub(crate) transcript_views: std::collections::HashMap<PaneId, TranscriptViewState>,
     /// Server-owned native metric snapshot consumed by pure rendering.
     pub(crate) status_metrics: Option<crate::platform::status_metrics::StatusMetricsSnapshot>,
     pub(crate) status_git_cwd: Option<std::path::PathBuf>,
@@ -5247,6 +5249,14 @@ pub struct AppState {
     /// Terminal runtimes that should be shut down by the app/runtime layer
     /// after state has detached their terminal metadata.
     pub(crate) terminal_runtime_shutdowns: Vec<crate::terminal::TerminalId>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TranscriptViewState {
+    pub open: bool,
+    pub scroll: usize,
+    pub expand_tools: bool,
+    pub chat: crate::ui::transcript_view::TranscriptChat,
 }
 
 #[derive(Clone, Copy)]
@@ -8211,6 +8221,7 @@ impl AppState {
             request_home_ref_refresh: None,
             request_tool_probes: false,
             pending_human_drafts: std::collections::HashMap::new(),
+            transcript_views: std::collections::HashMap::new(),
             status_metrics: Some(crate::platform::status_metrics::StatusMetricsSnapshot {
                 metrics: crate::platform::status_metrics::status_metrics_fixture(),
                 sampled_at: std::time::Instant::now(),

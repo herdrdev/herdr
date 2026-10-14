@@ -63,6 +63,7 @@ pub(crate) struct TranscriptCursor {
     pub(crate) last_tasks_at: Option<SystemTime>,
     pub(crate) caught_up_once: bool,
     pub(crate) trustworthy: bool,
+    pub(crate) chat: crate::ui::transcript_view::TranscriptChat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -476,6 +477,7 @@ impl TranscriptCursor {
                         match parse_transcript_row(line) {
                             Ok((value, event, observed_at)) => {
                                 self.turn.ingest(&value, observed_at, SystemTime::now());
+                                self.chat.ingest(&value, observed_at);
                                 if let Some(event) = event {
                                     self.apply_event(event);
                                 }
@@ -1033,6 +1035,7 @@ impl crate::app::App {
         let mut counts_changed = 0_u64;
         let mut observations_changed = 0_u64;
         let mut transcript_activities_changed = 0_u64;
+        let mut chat_changed_any = false;
         let mut changed_panes = Vec::new();
         let mut pane_updates = Vec::new();
         let previous_toast = self.state.toast.clone();
@@ -1116,6 +1119,24 @@ impl crate::app::App {
                             })
                         })
                     });
+            let chat_snapshot = self
+                .claude_subagent_trackers
+                .get(&terminal_id)
+                .map(|tracker| tracker.cursor.chat.clone());
+            let chat_changed = location.is_some_and(|(_, pane_id, _)| {
+                let Some(chat) = chat_snapshot.as_ref() else {
+                    return false;
+                };
+                let Some(view) = self.state.transcript_views.get_mut(&pane_id) else {
+                    return false;
+                };
+                if !view.open || view.chat == *chat {
+                    return false;
+                }
+                view.chat.update_from(chat.clone());
+                true
+            });
+            chat_changed_any |= chat_changed;
             let state_at_next_action = self.state.terminals.get(&terminal_id).map(|terminal| {
                 crate::detect::manifest::agent_state_label(terminal.raw_agent_state())
             });
@@ -1279,6 +1300,7 @@ impl crate::app::App {
                 && !observation_changed
                 && !transcript_activity_changed
                 && !transcript_changed
+                && !chat_changed
                 && state_update.is_none()
             {
                 continue;
@@ -1328,7 +1350,79 @@ impl crate::app::App {
             active_subagents_total,
             "refreshed Claude subagent transcripts"
         );
-        counts_changed > 0 || observations_changed > 0 || transcript_activities_changed > 0
+        counts_changed > 0
+            || observations_changed > 0
+            || transcript_activities_changed > 0
+            || chat_changed_any
+    }
+
+    pub(crate) fn toggle_transcript_chat_for_focused_pane(&mut self) {
+        let Some(ws_idx) = self.state.active else {
+            return;
+        };
+        let Some(pane_id) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.focused_pane_id())
+        else {
+            return;
+        };
+        let Some(terminal_id) = self.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .map(|pane| pane.attached_terminal_id.clone())
+        else {
+            return;
+        };
+        let claude = self
+            .state
+            .terminals
+            .get(&terminal_id)
+            .is_some_and(|terminal| {
+                terminal.effective_known_agent() == Some(crate::detect::Agent::Claude)
+            });
+        if !claude {
+            self.state.toast = Some(crate::app::state::ToastNotification {
+                kind: crate::app::state::ToastKind::NeedsAttention,
+                title: "Chat view is only available for Claude Code panes".into(),
+                context: String::new(),
+                position: None,
+                target: None,
+            });
+            self.sync_toast_deadline(None);
+            return;
+        }
+        let open = self
+            .state
+            .transcript_views
+            .get(&pane_id)
+            .is_some_and(|view| view.open);
+        if open {
+            if let Some(view) = self.state.transcript_views.get_mut(&pane_id) {
+                view.open = false;
+            }
+        } else {
+            let Some(chat) = self
+                .claude_subagent_trackers
+                .get(&terminal_id)
+                .map(|tracker| tracker.cursor.chat.clone())
+            else {
+                self.state.toast = Some(crate::app::state::ToastNotification {
+                    kind: crate::app::state::ToastKind::NeedsAttention,
+                    title: "Claude transcript is not available yet".into(),
+                    context: String::new(),
+                    position: None,
+                    target: None,
+                });
+                self.sync_toast_deadline(None);
+                return;
+            };
+            let view = self.state.transcript_views.entry(pane_id).or_default();
+            view.chat.update_from(chat);
+            view.scroll = 0;
+            view.open = true;
+        }
+        self.render_notify.notify_one();
     }
 }
 

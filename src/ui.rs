@@ -65,6 +65,7 @@ mod bar;
 pub(crate) mod board;
 pub(crate) mod text;
 pub(crate) mod ticket_actions;
+pub(crate) mod transcript_view;
 pub(crate) mod usage;
 mod user_actions;
 mod widgets;
@@ -352,6 +353,7 @@ fn compute_view_internal(
         std::time::Instant::now(),
         crate::app::settled::unix_seconds(std::time::SystemTime::now()),
     );
+    prepare_transcript_layouts(app);
 }
 
 #[cfg(test)]
@@ -370,6 +372,21 @@ pub(crate) fn compute_view_at(
         observed_at,
         observed_unix_s,
     );
+    prepare_transcript_layouts(app);
+}
+
+fn prepare_transcript_layouts(app: &mut AppState) {
+    let palette = &app.palette;
+    let views = &mut app.transcript_views;
+    for info in &app.view.pane_infos {
+        if info.inner_rect.width == 0 {
+            continue;
+        }
+        if let Some(view) = views.get_mut(&info.id).filter(|view| view.open) {
+            view.chat
+                .prepare_layout(palette, info.inner_rect.width, view.expand_tools);
+        }
+    }
 }
 
 fn compute_view_internal_at(

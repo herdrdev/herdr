@@ -61,6 +61,16 @@ pub(crate) fn transcript_body_lines(
     body_lines_with_list_style(palette, body, width, indent, true)
 }
 
+/// Chat prose uses the shared transcript styling.
+pub(crate) fn transcript_chat_body_lines(
+    palette: &Palette,
+    body: Option<&str>,
+    width: usize,
+    indent: &str,
+) -> Vec<Line<'static>> {
+    transcript_body_lines(palette, body, width, indent)
+}
+
 fn body_lines_with_list_style(
     palette: &Palette,
     body: Option<&str>,

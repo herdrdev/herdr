@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use tracing::{debug, warn};
 
 use crate::{
@@ -63,6 +63,83 @@ impl App {
         }
 
         let key_event = key.as_key_event();
+        if let Some(ws_idx) = self.state.active {
+            if let Some(pane_id) = self
+                .state
+                .workspaces
+                .get(ws_idx)
+                .and_then(|ws| ws.focused_pane_id())
+            {
+                let chat_open = self
+                    .state
+                    .transcript_views
+                    .get(&pane_id)
+                    .is_some_and(|view| view.open);
+                if chat_open {
+                    if key_event.kind == KeyEventKind::Release
+                        && matches!(
+                            key_event.code,
+                            KeyCode::Char('G' | 'g' | 'o') | KeyCode::PageUp | KeyCode::PageDown
+                        )
+                    {
+                        return None;
+                    }
+                    match key_event.code {
+                        KeyCode::Char('G' | 'g')
+                            if key_event.modifiers.is_empty()
+                                || key_event.modifiers == KeyModifiers::SHIFT =>
+                        {
+                            if !matches!(key_event.kind, KeyEventKind::Press | KeyEventKind::Repeat)
+                            {
+                                return None;
+                            }
+                            if let Some(view) = self.state.transcript_views.get_mut(&pane_id) {
+                                view.scroll = 0;
+                            }
+                            self.render_notify.notify_one();
+                            return None;
+                        }
+                        KeyCode::Char('o')
+                            if key_event.modifiers.is_empty()
+                                && matches!(
+                                    key_event.kind,
+                                    KeyEventKind::Press | KeyEventKind::Repeat
+                                ) =>
+                        {
+                            if let Some(view) = self.state.transcript_views.get_mut(&pane_id) {
+                                view.expand_tools = !view.expand_tools;
+                            }
+                            self.render_notify.notify_one();
+                            return None;
+                        }
+                        KeyCode::PageUp | KeyCode::PageDown
+                            if key_event.modifiers.is_empty()
+                                && matches!(
+                                    key_event.kind,
+                                    KeyEventKind::Press | KeyEventKind::Repeat
+                                ) =>
+                        {
+                            let amount = self
+                                .state
+                                .pane_info_by_id(pane_id)
+                                .map(|info| info.inner_rect.height as usize)
+                                .unwrap_or(10)
+                                .max(1);
+                            if let Some(view) = self.state.transcript_views.get_mut(&pane_id) {
+                                view.scroll = if key_event.code == KeyCode::PageUp {
+                                    view.scroll.saturating_add(amount)
+                                } else {
+                                    view.scroll.saturating_sub(amount)
+                                };
+                            }
+                            self.render_notify.notify_one();
+                            return None;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
         if self.handle_status_more_menu_key(key_event, self.state.input_owner())
             || self.handle_window_cycle_menu_key(key_event, self.state.input_owner())
             || self.handle_sidebar_areas_menu_key(key_event, self.state.input_owner())
@@ -792,6 +869,44 @@ mod tests {
     use super::super::{unique_temp_path, wait_for_file};
     use super::*;
     use crate::{config::Config, events::AppEvent, workspace::Workspace};
+
+    #[test]
+    fn transcript_tool_toggle_invalidates_cached_layout() {
+        let mut app = app_for_mouse_test();
+        app.state.workspaces.push(Workspace::test_new("transcript"));
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        {
+            let palette = app.state.palette.clone();
+            let view = app.state.transcript_views.entry(pane_id).or_default();
+            view.open = true;
+            view.chat.ingest(
+                &serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":"file.rs"}]}}),
+                None,
+            );
+            view.chat.ingest(
+                &serde_json::json!({"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]}}),
+                None,
+            );
+            assert!(view.chat.prepare_layout(&palette, 80, false));
+            assert!(!view.chat.prepare_layout(&palette, 80, false));
+        }
+
+        app.handle_terminal_key_headless(TerminalKey::new(
+            KeyCode::Char('o'),
+            KeyModifiers::empty(),
+        ));
+
+        let palette = app.state.palette.clone();
+        let view = app
+            .state
+            .transcript_views
+            .get_mut(&pane_id)
+            .expect("transcript view");
+        assert!(view.expand_tools);
+        assert!(view.chat.prepare_layout(&palette, 80, view.expand_tools));
+    }
 
     #[test]
     fn settled_transcript_scrolling_is_read_only_and_enter_resumes() {

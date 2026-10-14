@@ -283,6 +283,51 @@ impl AppState {
         }
         if matches!(
             mouse.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        ) {
+            if let Some(ws_idx) = self.active {
+                let pane_id = self
+                    .view
+                    .pane_infos
+                    .iter()
+                    .find(|info| {
+                        mouse.column >= info.rect.x
+                            && mouse.column < info.rect.x.saturating_add(info.rect.width)
+                            && mouse.row >= info.rect.y
+                            && mouse.row < info.rect.y.saturating_add(info.rect.height)
+                    })
+                    .map(|info| info.id)
+                    .or_else(|| {
+                        self.workspaces
+                            .get(ws_idx)
+                            .and_then(|ws| ws.focused_pane_id())
+                    });
+                if let Some(pane_id) = pane_id {
+                    if let Some(view) = self
+                        .transcript_views
+                        .get_mut(&pane_id)
+                        .filter(|view| view.open)
+                    {
+                        let amount = self
+                            .view
+                            .pane_infos
+                            .iter()
+                            .find(|info| info.id == pane_id)
+                            .map(|info| info.inner_rect.height as usize)
+                            .unwrap_or(3)
+                            .max(1);
+                        view.scroll = if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+                            view.scroll.saturating_add(amount)
+                        } else {
+                            view.scroll.saturating_sub(amount)
+                        };
+                        return None;
+                    }
+                }
+            }
+        }
+        if matches!(
+            mouse.kind,
             MouseEventKind::ScrollUp
                 | MouseEventKind::ScrollDown
                 | MouseEventKind::ScrollLeft

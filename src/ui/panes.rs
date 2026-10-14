@@ -356,6 +356,17 @@ pub(super) fn render_panes(
                 && !pane_is_scrolled_back(rt)
                 && app.pane_exposes_host_cursor(ws_idx, info.id);
             rt.render(frame, info.inner_rect, show_cursor);
+            if let Some(view) = app.transcript_views.get(&info.id).filter(|view| view.open) {
+                super::transcript_view::render(
+                    frame,
+                    info.inner_rect,
+                    &view.chat,
+                    &app.palette,
+                    view.scroll,
+                    "prefix+t",
+                );
+                continue;
+            }
             if let Some(view) = app
                 .settled_view
                 .as_ref()
