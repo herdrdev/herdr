@@ -2144,6 +2144,49 @@ impl Default for FleetConfig {
 }
 
 impl FleetConfig {
+    pub fn device_code(host: &str) -> Option<char> {
+        let host = host.trim();
+        if host == "om1" {
+            return Some('o');
+        }
+        let last = host.chars().last()?;
+        if last.is_ascii_digit() {
+            return Some(last);
+        }
+        host.chars().next().map(|c| c.to_ascii_lowercase())
+    }
+
+    pub(crate) fn device_badge_collisions_with_hostname(
+        &self,
+        hostname: Option<String>,
+    ) -> Vec<(String, String, char)> {
+        let resolved = self.resolved_self_name_with_hostname(hostname);
+        let local = resolved.trim();
+        let mut identities = vec![local.to_string()];
+        for host in &self.hosts {
+            let name = if host.local { local } else { host.name.trim() };
+            if !name.is_empty() && !identities.iter().any(|item| item == name) {
+                identities.push(name.to_string());
+            }
+        }
+        let mut collisions = Vec::new();
+        for (index, left) in identities.iter().enumerate() {
+            let Some(code) = Self::device_code(left) else {
+                continue;
+            };
+            for right in identities.iter().skip(index + 1) {
+                if Self::device_code(right) == Some(code) {
+                    collisions.push((left.clone(), right.clone(), code));
+                }
+            }
+        }
+        collisions
+    }
+
+    pub(crate) fn device_badge_collisions(&self) -> Vec<(String, String, char)> {
+        self.device_badge_collisions_with_hostname(crate::platform::hostname())
+    }
+
     pub(crate) fn chrome_host_label_for_resolved_name(&self, resolved: &str) -> String {
         let is_configured = self.configured_self_name().is_some();
         let name = if is_configured {
@@ -2604,6 +2647,102 @@ impl Default for AdvancedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn device_code_maps_exact_om1_to_o() {
+        assert_eq!(FleetConfig::device_code("om1"), Some('o'));
+    }
+
+    #[test]
+    fn device_code_maps_padded_om1_to_o() {
+        assert_eq!(FleetConfig::device_code(" om1 "), Some('o'));
+    }
+
+    #[test]
+    fn device_badge_collision_pairs_include_local_identity_and_keep_distinct_hosts() {
+        assert_eq!(FleetConfig::device_code(" om1 "), Some('o'));
+        assert_eq!(FleetConfig::device_code("OM1"), Some('1'));
+        assert_eq!(FleetConfig::device_code("om2"), Some('2'));
+        assert_eq!(FleetConfig::device_code("ub1"), Some('1'));
+        assert_eq!(FleetConfig::device_code("ub2"), Some('2'));
+        assert_eq!(FleetConfig::device_code("mbpro"), Some('m'));
+        assert_eq!(FleetConfig::device_code("hetzner"), Some('h'));
+        assert_eq!(FleetConfig::device_code("MBAir"), Some('m'));
+        assert_eq!(FleetConfig::device_code("x"), Some('x'));
+        assert_eq!(FleetConfig::device_code("  "), None);
+
+        let fleet: FleetConfig = toml::from_str(
+            "self_name = 'om1'\n[[hosts]]\nname = 'om1'\nlocal = true\n[[hosts]]\nname = 'ub1'\n[[hosts]]\nname = 'offline1'",
+        ).expect("fleet config");
+        assert_eq!(
+            fleet.device_badge_collisions_with_hostname(Some("ignored".into())),
+            vec![("ub1".into(), "offline1".into(), '1')]
+        );
+    }
+
+    #[test]
+    fn device_badge_collision_detects_an_implicit_local_name() {
+        let fleet: FleetConfig = toml::from_str("[[hosts]]\nname = 'macmini'\ntarget = 'macmini'")
+            .expect("fleet config");
+
+        assert_eq!(
+            fleet.device_badge_collisions_with_hostname(Some("mbpro".into())),
+            vec![("mbpro".into(), "macmini".into(), 'm')]
+        );
+    }
+
+    #[test]
+    fn device_badge_collision_counts_self_name_override_once() {
+        let fleet: FleetConfig = toml::from_str(
+            "self_name = 'om1'\n[[hosts]]\nname = 'local-alias'\nlocal = true\n[[hosts]]\nname = 'other'\ntarget = 'other'",
+        )
+        .expect("fleet config");
+
+        assert_eq!(
+            fleet.device_badge_collisions_with_hostname(Some("ignored".into())),
+            vec![("om1".into(), "other".into(), 'o')]
+        );
+    }
+
+    #[test]
+    fn device_badge_collision_checks_offline_and_filtered_peer_entries() {
+        let fleet: FleetConfig = toml::from_str(
+            "self_name = 'om1'\n[[hosts]]\nname = 'ub1'\ntarget = 'ub1'\n[[hosts]]\nname = 'offline1'\ntarget = 'unreachable'\n[[hosts]]\nname = 'filtered1'\ntarget = 'filtered1'",
+        )
+        .expect("fleet config");
+
+        let selected = std::collections::HashSet::from(["ub1".to_owned()]);
+        assert_eq!(
+            crate::fleet::select_hosts(&fleet, Some(&selected))
+                .expect("filtered fleet")
+                .iter()
+                .map(|host| host.name.as_str())
+                .collect::<Vec<_>>(),
+            ["ub1"]
+        );
+
+        // Collision membership still includes offline and unselected peers.
+        assert_eq!(
+            fleet.device_badge_collisions_with_hostname(Some("ignored".into())),
+            vec![
+                ("ub1".into(), "offline1".into(), '1'),
+                ("ub1".into(), "filtered1".into(), '1'),
+                ("offline1".into(), "filtered1".into(), '1'),
+            ]
+        );
+    }
+
+    #[test]
+    fn device_badge_collision_allows_an_unused_code() {
+        let fleet: FleetConfig = toml::from_str(
+            "self_name = 'om1'\n[[hosts]]\nname = 'ub1'\ntarget = 'ub1'\n[[hosts]]\nname = 'hetzner'\ntarget = 'hetzner'",
+        )
+        .expect("fleet config");
+
+        assert!(fleet
+            .device_badge_collisions_with_hostname(Some("ignored".into()))
+            .is_empty());
+    }
 
     #[test]
     fn stalled_agent_nudge_config_defaults_are_opt_in_and_bounded() {

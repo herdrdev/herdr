@@ -398,12 +398,7 @@ fn sidebar_machine_host<'a>(app: &'a AppState, entry: &'a AgentPanelEntry) -> &'
 /// One-column device code: the host's trailing digit when it ends in one
 /// (`ub1` → `1`, `ub2` → `2`), else its first letter (`mbpro` → `m`).
 fn device_code(host: &str) -> Option<char> {
-    let host = host.trim();
-    let last = host.chars().last()?;
-    if last.is_ascii_digit() {
-        return Some(last);
-    }
-    host.chars().next().map(|c| c.to_ascii_lowercase())
+    crate::config::FleetConfig::device_code(host)
 }
 
 /// The device character rides inside the provider tag only when the row's
@@ -36155,6 +36150,9 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
     #[test]
     fn device_code_is_trailing_digit_or_first_letter() {
+        assert_eq!(device_code("om1"), Some('o'));
+        assert_eq!(device_code(" om1 "), Some('o'));
+        assert_eq!(device_code("OM1"), Some('1'));
         assert_eq!(device_code("ub1"), Some('1'));
         assert_eq!(device_code("ub2"), Some('2'));
         assert_eq!(device_code("mbpro"), Some('m'));

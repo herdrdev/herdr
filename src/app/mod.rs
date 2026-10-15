@@ -2881,6 +2881,30 @@ impl App {
         let mut diagnostics = load_diagnostics.to_vec();
         let invalid_section =
             |section: &str| invalid_sections.iter().any(|invalid| invalid == section);
+        let previous_remote = self.fleet_poller_config.fleet();
+        let hostname = crate::platform::hostname();
+        let previous_pairs =
+            previous_remote.device_badge_collisions_with_hostname(hostname.clone());
+        let new_collision = if invalid_section("remote") {
+            None
+        } else {
+            config
+                .remote
+                .fleet
+                .device_badge_collisions_with_hostname(hostname)
+                .into_iter()
+                .find(|pair| {
+                    !previous_pairs.iter().any(|old| {
+                        (old.0 == pair.0 && old.1 == pair.1) || (old.0 == pair.1 && old.1 == pair.0)
+                    })
+                })
+        };
+        let reject_remote = new_collision.is_some();
+        if let Some((left, right, code)) = new_collision {
+            diagnostics.push(format!(
+                "device badge '{code}' collision between fleet hosts {left} and {right}; keeping previous [remote] settings"
+            ));
+        }
 
         if !invalid_section("agent_detection") {
             self.state.full_lifecycle_hook_authority_timeout = std::time::Duration::from_secs(
@@ -2973,7 +2997,7 @@ impl App {
             self.state.dock_default_surfaces = dock_surfaces_from_config(&config.panel);
         }
 
-        if !invalid_section("remote") {
+        if !invalid_section("remote") && !reject_remote {
             let revoked_operations = self
                 .remote_focus_transport
                 .reload_fleet(&config.remote.fleet);
@@ -3104,7 +3128,6 @@ impl App {
                 self.state.launch_profiles =
                     crate::app::launch_profiles::resolve(&config.launch_profiles);
                 self.state.projects = crate::app::projects::resolve(&config.projects);
-                self.state.machines = crate::app::machines::resolve(&config.remote.fleet);
                 self.state
                     .add_project_start_dir
                     .clone_from(&config.ui.add_project_start_dir);
@@ -3185,6 +3208,10 @@ impl App {
                 }
                 self.state.toast_config = config.ui.toast.clone();
             }
+        }
+
+        if !invalid_section("remote") && !reject_remote {
+            self.state.machines = crate::app::machines::resolve(&config.remote.fleet);
         }
 
         // Their own gates: these sidebar companions read nothing out of `[ui]`,
@@ -4676,6 +4703,70 @@ mod tests {
         let mut config = Config::default();
         config.work_index.enabled = false;
         App::new(&config, true, None, api_rx, crate::api::EventHub::default())
+    }
+
+    fn device_badge_fleet(hosts: &[&str]) -> crate::config::FleetConfig {
+        crate::config::FleetConfig {
+            self_name: Some("om1".into()),
+            hosts: hosts
+                .iter()
+                .map(|name| crate::config::FleetHostConfig {
+                    name: (*name).into(),
+                    target: if *name == "om1" {
+                        String::new()
+                    } else {
+                        format!("user@{name}")
+                    },
+                    local: *name == "om1",
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    fn device_badge_config(hosts: &[&str]) -> Config {
+        let mut config = Config::default();
+        config.remote.fleet = device_badge_fleet(hosts);
+        config
+    }
+
+    fn device_badge_config_toml(hosts: &[&str]) -> String {
+        let mut content =
+            String::from("[theme]\nname = 'catppuccin'\n[remote.fleet]\nself_name = 'om1'\n");
+        for host in hosts {
+            content.push_str(&format!("\n[[remote.fleet.hosts]]\nname = '{host}'\n"));
+            if *host == "om1" {
+                content.push_str("local = true\n");
+            } else {
+                content.push_str(&format!("target = 'user@{host}'\n"));
+            }
+        }
+        content
+    }
+
+    #[derive(Clone)]
+    struct CountingRemoteFocusTransport(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::app::remote_focus::RemoteFocusTransport for CountingRemoteFocusTransport {
+        fn reload_fleet(&mut self, _fleet: &crate::config::FleetConfig) -> Vec<String> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Vec::new()
+        }
+
+        fn start(
+            &mut self,
+            _operation_id: &str,
+            _agent_ref: &crate::api::schema::AgentRef,
+            _proxy_pane_id: &str,
+            _channels: crate::pane::RemoteProxyChannels,
+            _event_tx: tokio::sync::mpsc::Sender<crate::events::AppEvent>,
+        ) -> Result<(), crate::api::schema::ErrorBody> {
+            Err(crate::api::schema::ErrorBody {
+                code: "test_transport".into(),
+                message: "test transport does not start sessions".into(),
+            })
+        }
     }
 
     #[test]
@@ -6676,6 +6767,246 @@ mod tests {
         env.remove(crate::config::CONFIG_PATH_ENV_VAR);
         restore_xdg_state_home(original_xdg_state_home);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn device_badge_collision_rejects_new_remote_without_mutating_remote_runtime() {
+        let mut app = test_app();
+        let transport_reloads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        app.remote_focus_transport =
+            Box::new(CountingRemoteFocusTransport(transport_reloads.clone()));
+
+        let accepted = device_badge_config(&["om1", "ub1", "ub2", "mbpro", "hetzner"]);
+        let accepted_report = app.apply_live_config(&accepted, &[], &[], false);
+        assert_eq!(
+            accepted_report.status,
+            crate::config::ConfigReloadStatus::Applied
+        );
+        let accepted_generation = app.fleet_poller_config.generation();
+        let accepted_router_generation = app.authority_mutation_router.config_generation_for_test();
+        let accepted_transport_reloads =
+            transport_reloads.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(accepted_transport_reloads, 1);
+        let accepted_snapshot = app.state.fleet_snapshot.clone();
+        let accepted_identity = app.state.agent_host_name.clone();
+        let accepted_chrome_label = app.state.chrome_host_label.clone();
+        let accepted_machines = app.state.machines.clone();
+
+        let mut candidate =
+            device_badge_config(&["om1", "ub1", "ub2", "mbpro", "hetzner", "other1"]);
+        candidate.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        let report = app.apply_live_config(&candidate, &[], &[], false);
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("device badge '1'")
+                && diagnostic.contains("ub1")
+                && diagnostic.contains("other1")
+        }));
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+        assert_eq!(app.fleet_poller_config.generation(), accepted_generation);
+        assert_eq!(
+            app.authority_mutation_router.config_generation_for_test(),
+            accepted_router_generation
+        );
+        assert_eq!(
+            transport_reloads.load(std::sync::atomic::Ordering::Relaxed),
+            accepted_transport_reloads
+        );
+        assert_eq!(app.state.fleet_snapshot, accepted_snapshot);
+        assert_eq!(app.state.agent_host_name, accepted_identity);
+        assert_eq!(app.state.chrome_host_label, accepted_chrome_label);
+        assert_eq!(app.state.machines, accepted_machines);
+        assert_eq!(
+            app.fleet_poller_config
+                .fleet()
+                .hosts
+                .iter()
+                .map(|host| host.name.as_str())
+                .collect::<Vec<_>>(),
+            ["om1", "ub1", "ub2", "mbpro", "hetzner"]
+        );
+    }
+
+    #[test]
+    fn device_badge_collision_live_reload_keeps_legacy_pairs_and_rejects_new_pairs() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = temp_config_path("device-badge-legacy-reload");
+        std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+
+        let legacy = device_badge_config_toml(&["om1", "ub1", "other1"]);
+        std::fs::write(&path, &legacy).unwrap();
+        let startup = Config::load();
+        assert!(startup.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("device badge '1'")
+                && diagnostic.contains("ub1")
+                && diagnostic.contains("other1")
+        }));
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &startup.config,
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+
+        let unchanged = app.reload_config();
+        assert_eq!(unchanged.status, crate::config::ConfigReloadStatus::Applied);
+        let without_legacy_pair = device_badge_config_toml(&["om1", "ub1"]);
+        std::fs::write(&path, &without_legacy_pair).unwrap();
+        let removed = app.reload_config();
+        assert_eq!(removed.status, crate::config::ConfigReloadStatus::Applied);
+        let accepted_generation = app.fleet_poller_config.generation();
+        let accepted_snapshot = app.state.fleet_snapshot.clone();
+
+        let third_member = device_badge_config_toml(&["om1", "ub1", "other1", "third1"]);
+        std::fs::write(&path, &third_member).unwrap();
+        for _ in 0..2 {
+            let report = app.reload_config();
+            assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+            assert!(report.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("device badge '1'") && diagnostic.contains("ub1")
+            }));
+            assert_eq!(app.fleet_poller_config.generation(), accepted_generation);
+            assert_eq!(app.state.fleet_snapshot, accepted_snapshot);
+        }
+
+        let replacement = device_badge_config_toml(&["om1", "ub1", "fresh1"]);
+        std::fs::write(&path, &replacement).unwrap();
+        let replaced_pair = app.reload_config();
+        assert_eq!(
+            replaced_pair.status,
+            crate::config::ConfigReloadStatus::Partial
+        );
+        assert!(replaced_pair
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("fresh1")));
+        assert_eq!(app.fleet_poller_config.generation(), accepted_generation);
+        assert_eq!(app.state.fleet_snapshot, accepted_snapshot);
+        assert_eq!(
+            app.fleet_poller_config
+                .fleet()
+                .hosts
+                .iter()
+                .map(|host| host.name.as_str())
+                .collect::<Vec<_>>(),
+            ["om1", "ub1"]
+        );
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().expect("config parent"));
+    }
+
+    #[test]
+    fn device_badge_collision_first_reload_compares_against_malformed_startup_defaults() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = temp_config_path("device-badge-defaulted-startup");
+        std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
+        std::fs::write(&path, "[remote.fleet]\nself_name = [\n").unwrap();
+        env.set(crate::config::CONFIG_PATH_ENV_VAR, &path);
+        let startup = Config::load();
+        assert!(startup
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("config parse error")
+                && diagnostic.contains("using defaults")));
+        assert!(startup.config.remote.fleet.hosts.is_empty());
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &startup.config,
+            true,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let accepted_machines = app.state.machines.clone();
+        let candidate = format!(
+            "{}\n[ui]\nagent_panel_sort = 'priority'\n",
+            device_badge_config_toml(&["om1", "ub1", "other1"])
+        );
+        std::fs::write(&path, candidate).unwrap();
+
+        let report = app.reload_config();
+
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(report.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("device badge '1'")
+                && diagnostic.contains("ub1")
+                && diagnostic.contains("other1")
+        }));
+        assert_eq!(app.fleet_poller_config.generation(), 0);
+        assert!(app.fleet_poller_config.fleet().hosts.is_empty());
+        assert_eq!(app.state.machines, accepted_machines);
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+
+        env.remove(crate::config::CONFIG_PATH_ENV_VAR);
+        let _ = std::fs::remove_dir_all(path.parent().expect("config parent"));
+    }
+
+    #[test]
+    fn device_badge_collision_gates_composer_machines_on_remote_validity() {
+        let mut app = test_app();
+        let initial = device_badge_config(&["om1", "ub1"]);
+        assert_eq!(
+            app.apply_live_config(&initial, &[], &[], false).status,
+            crate::config::ConfigReloadStatus::Applied
+        );
+
+        let mut remote_valid_ui_invalid = device_badge_config(&["om1", "ub1", "mbpro"]);
+        remote_valid_ui_invalid.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        let report = app.apply_live_config(
+            &remote_valid_ui_invalid,
+            &["invalid ui config; keeping current ui settings".into()],
+            &["ui".into()],
+            false,
+        );
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Spaces);
+        assert!(app
+            .state
+            .machines
+            .iter()
+            .any(|machine| machine.name == "mbpro"));
+
+        let machines_after_valid_remote = app.state.machines.clone();
+        let generation_after_valid_remote = app.fleet_poller_config.generation();
+        let mut remote_invalid_ui_valid = device_badge_config(&["om1", "ub1", "mbpro", "other1"]);
+        remote_invalid_ui_valid.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Priority;
+        let report = app.apply_live_config(
+            &remote_invalid_ui_valid,
+            &["invalid remote config; keeping current remote settings".into()],
+            &["remote".into()],
+            false,
+        );
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(!report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("device badge")));
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Priority);
+        assert_eq!(app.state.machines, machines_after_valid_remote);
+        assert_eq!(
+            app.fleet_poller_config.generation(),
+            generation_after_valid_remote
+        );
+
+        let mut remote_collision_ui_valid = device_badge_config(&["om1", "ub1", "mbpro", "other1"]);
+        remote_collision_ui_valid.ui.agent_panel_sort = crate::config::AgentPanelSortConfig::Spaces;
+        let report = app.apply_live_config(&remote_collision_ui_valid, &[], &[], false);
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("other1")));
+        assert_eq!(app.state.agent_panel_sort, state::AgentPanelSort::Spaces);
+        assert_eq!(app.state.machines, machines_after_valid_remote);
+        assert_eq!(
+            app.fleet_poller_config.generation(),
+            generation_after_valid_remote
+        );
     }
 
     #[test]

@@ -1136,6 +1136,38 @@ mod tests {
     }
 
     #[test]
+    fn device_badge_collision_startup_warns_without_resetting_theme_or_fleet() {
+        let mut env = crate::config::TestConfigEnvGuard::acquire();
+        let path = std::env::temp_dir()
+            .join(format!(
+                "herdr-device-badge-{}",
+                crate::config::test_unique_suffix()
+            ))
+            .join("config.toml");
+        std::fs::create_dir_all(path.parent().expect("config parent")).unwrap();
+        std::fs::write(
+            &path,
+            "[theme]\nname = 'catppuccin'\n[remote.fleet]\nself_name = 'om1'\n[[remote.fleet.hosts]]\nname = 'om1'\nlocal = true\n[[remote.fleet.hosts]]\nname = 'ub1'\ntarget = 'ub1'\n[[remote.fleet.hosts]]\nname = 'other1'\ntarget = 'other1'\n",
+        )
+        .unwrap();
+        env.set(CONFIG_PATH_ENV_VAR, &path);
+
+        let loaded = Config::load();
+
+        assert!(loaded.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("device badge '1'")
+                && diagnostic.contains("ub1")
+                && diagnostic.contains("other1")
+        }));
+        assert_eq!(loaded.config.theme.name.as_deref(), Some("catppuccin"));
+        assert_eq!(loaded.config.remote.fleet.hosts.len(), 3);
+        assert_eq!(loaded.config.remote.fleet.self_name.as_deref(), Some("om1"));
+
+        drop(env);
+        let _ = std::fs::remove_dir_all(path.parent().expect("config parent"));
+    }
+
+    #[test]
     fn load_live_config_parses_session_section() {
         let loaded = load_live_config_from_str(
             r#"

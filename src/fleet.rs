@@ -1180,6 +1180,12 @@ impl AuthorityMutationRouter {
             .store(config_generation, std::sync::atomic::Ordering::Release);
     }
 
+    #[cfg(test)]
+    pub(crate) fn config_generation_for_test(&self) -> u64 {
+        self.config_generation
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
     pub(crate) fn observe_snapshot(&self, snapshot: &Snapshot) {
         let conflicts = snapshot.identity_conflicts();
         let mut routes = BTreeMap::new();
@@ -2151,6 +2157,14 @@ pub(crate) struct FleetPollerConfig {
 pub(crate) type FleetPollerHandle = Arc<FleetPollerConfig>;
 
 impl FleetPollerConfig {
+    pub(crate) fn fleet(&self) -> FleetConfig {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .fleet
+            .clone()
+    }
+
     fn new(fleet: FleetConfig) -> Self {
         Self {
             state: std::sync::Mutex::new(FleetPollerState {

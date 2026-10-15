@@ -203,6 +203,11 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.remote.fleet.device_badge_collisions().into_iter().map(
+                |(left, right, code)| {
+                    format!("device badge '{code}' is shared by fleet hosts {left} and {right}")
+                },
+            ))
             .collect()
     }
 
