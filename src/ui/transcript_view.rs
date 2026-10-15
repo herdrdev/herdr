@@ -376,13 +376,21 @@ pub(crate) fn render(
     }
     let footer = Rect::new(area.x, area.bottom() - footer_height, area.width, 1);
     frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            format!("chat view · {return_key} to return"),
+        Paragraph::new(footer_line(
+            return_key,
             Style::default().fg(palette.overlay0),
-        )))
+        ))
         .block(Block::default().borders(Borders::NONE)),
         footer,
     );
+}
+
+fn footer_line<'a>(return_key: &'a str, style: Style) -> Line<'a> {
+    Line::from(vec![
+        Span::styled("chat view · ", style),
+        Span::styled(return_key, style),
+        Span::styled(" to return", style),
+    ])
 }
 
 #[cfg(test)]
@@ -489,6 +497,34 @@ mod tests {
                 (9, 16).into()
             );
         }
+    }
+
+    #[test]
+    fn transcript_footer_reuses_borrowed_text_for_unchanged_and_changed_return_keys() {
+        fn key_span<'a>(line: &Line<'a>) -> &'a str {
+            match &line.spans[1].content {
+                std::borrow::Cow::Borrowed(value) => value,
+                _ => panic!("footer return key should remain borrowed"),
+            }
+        }
+
+        let first_key = String::from("prefix+t");
+        let first = footer_line(&first_key, Style::default());
+        let repeated = footer_line(&first_key, Style::default());
+        assert!(std::ptr::eq(key_span(&first).as_ptr(), first_key.as_ptr()));
+        assert!(std::ptr::eq(
+            key_span(&repeated).as_ptr(),
+            first_key.as_ptr()
+        ));
+        assert_eq!(first.to_string(), "chat view · prefix+t to return");
+
+        let changed_key = String::from("ctrl+c");
+        let changed = footer_line(&changed_key, Style::default());
+        assert!(std::ptr::eq(
+            key_span(&changed).as_ptr(),
+            changed_key.as_ptr()
+        ));
+        assert_eq!(changed.to_string(), "chat view · ctrl+c to return");
     }
 
     #[test]
