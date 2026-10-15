@@ -273,7 +273,24 @@ fn runtime_base() -> PathBuf {
     #[cfg(unix)]
     {
         #[cfg(test)]
-        let root = std::env::temp_dir();
+        let root = {
+            let thread_name = std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() || character == '-' {
+                        character
+                    } else {
+                        '-'
+                    }
+                })
+                .collect::<String>();
+            std::env::temp_dir().join(format!(
+                "herdr-graphics-test-{}-{thread_name}",
+                std::process::id()
+            ))
+        };
         #[cfg(not(test))]
         let root = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
@@ -462,6 +479,18 @@ mod tests {
             .unwrap();
         file.write_all(data).unwrap();
         path
+    }
+
+    #[test]
+    fn test_runtime_base_is_isolated_by_test_thread() {
+        let current = runtime_base();
+        let other = std::thread::Builder::new()
+            .name("graphics-runtime-base-isolation".into())
+            .spawn(runtime_base)
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_ne!(current, other);
     }
 
     #[test]

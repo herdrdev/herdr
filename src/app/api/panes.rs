@@ -5269,13 +5269,13 @@ mod tests {
         let cwd = runtime.cwd().expect("live shell cwd");
         app.terminal_runtimes.insert(terminal_id.clone(), runtime);
 
-        let runtime = app.lookup_runtime_sender(workspace_idx, pane_id).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
-        let observation = loop {
-            if shell_process_matches(shell_pid, &cwd) {
-                if let Some(observation) = runtime.input_observation() {
-                    break observation;
-                }
+        let mut observation = loop {
+            if let Some(observation) = app
+                .lookup_runtime_sender(workspace_idx, pane_id)
+                .and_then(crate::terminal::TerminalRuntime::input_observation)
+            {
+                break observation;
             }
             assert!(
                 Instant::now() < deadline,
@@ -5284,7 +5284,8 @@ mod tests {
                 crate::detect::foreground_process_group_id(shell_pid),
                 crate::detect::foreground_job(shell_pid),
                 crate::platform::process_cwd(shell_pid),
-                runtime.input_observation(),
+                app.lookup_runtime_sender(workspace_idx, pane_id)
+                    .and_then(crate::terminal::TerminalRuntime::input_observation),
             );
             tokio::time::sleep(Duration::from_millis(10)).await;
         };
@@ -5331,6 +5332,29 @@ mod tests {
                 "must-not-send",
             ),
         );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        observation = loop {
+            if shell_process_matches(shell_pid, &cwd) {
+                if let Some(observation) = app
+                    .lookup_runtime_sender(workspace_idx, pane_id)
+                    .and_then(crate::terminal::TerminalRuntime::input_observation)
+                {
+                    break observation;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "isolated shell did not return to idle before conditional send: pid={shell_pid} cwd={cwd:?} descendants={:?} fg_pgid={:?} job={:?} live_cwd={:?} observation={:?}",
+                crate::platform::descendant_processes(shell_pid),
+                crate::detect::foreground_process_group_id(shell_pid),
+                crate::detect::foreground_job(shell_pid),
+                crate::platform::process_cwd(shell_pid),
+                app.lookup_runtime_sender(workspace_idx, pane_id)
+                    .and_then(crate::terminal::TerminalRuntime::input_observation),
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
 
         let response = app.handle_pane_send_text_if_shell(
             "real-shell".into(),
