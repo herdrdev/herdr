@@ -295,6 +295,17 @@ impl App {
             self.handle_spawn_dock_key(key_event);
             return None;
         }
+        if !self.state.focus_room.active
+            && self.state.settings.keybind_capture.is_none()
+            && !matches!(owner, InputOwner::Server(ServerInputOwner::Prefix))
+            && !matches!(
+                owner,
+                InputOwner::Pomodoro | InputOwner::Dock(DockInputOwner::Editor)
+            )
+            && self.handle_global_capture_key(&key)
+        {
+            return None;
+        }
         if self.state.board_return.is_some()
             && key_event.code == KeyCode::Esc
             && key_event.modifiers.is_empty()
@@ -1122,6 +1133,21 @@ impl App {
             return false;
         };
         self.execute_tui_navigate_action(action, navigate::ActionContext::Direct);
+        true
+    }
+
+    /// Capture is a reserved direct key across screens, including while a
+    /// pane owns input. Text-entry owners above this call keep their chord.
+    fn handle_global_capture_key(&mut self, key: &TerminalKey) -> bool {
+        if self.state.server_mode() == Mode::Prefix
+            || !self.state.keybinds.capture.matches_direct_key(key)
+        {
+            return false;
+        }
+        self.execute_tui_navigate_action(
+            navigate::NavigateAction::Capture,
+            navigate::ActionContext::Direct,
+        );
         true
     }
 
@@ -7882,6 +7908,7 @@ sidebar_visible = true
             TopBarView::Orchestration,
             TopBarView::Board,
             TopBarView::Scratch,
+            TopBarView::Focus,
         ] {
             let mut app = test_app();
             app.state = crate::app::state::AppState::test_new();
@@ -7919,14 +7946,11 @@ sidebar_visible = true
                     ));
                 }
                 TopBarView::Scratch => app.state.scratch.open_writer(),
-                TopBarView::Focus => unreachable!(),
+                TopBarView::Focus => app.state.open_focus_view(),
             }
             app.state.set_server_mode(Mode::Terminal);
-            app.handle_key(TerminalKey::new(
-                KeyCode::Char('r'),
-                KeyModifiers::CONTROL | KeyModifiers::ALT,
-            ))
-            .await;
+            app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
+                .await;
             assert!(app.state.capture.is_some(), "{view:?}");
             assert_eq!(app.state.top_bar_view(), view, "capture owner {view:?}");
             app.handle_key(TerminalKey::new(KeyCode::Char('n'), KeyModifiers::NONE))
@@ -7949,6 +7973,20 @@ sidebar_visible = true
             assert_eq!(saved.len(), 1, "Enter saves the capture for {view:?}");
             std::fs::remove_dir_all(capture_dir).expect("remove capture test directory");
         }
+    }
+
+    #[tokio::test]
+    async fn capture_shortcut_opens_over_the_status_modal() {
+        let mut app = test_app();
+        app.state = crate::app::state::AppState::test_new();
+        app.state.keybinds = crate::config::Config::default().keybinds();
+        app.state.status_more_open = true;
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .await;
+
+        assert!(app.state.capture.is_some());
+        assert!(app.state.status_more_open);
     }
 
     #[test]

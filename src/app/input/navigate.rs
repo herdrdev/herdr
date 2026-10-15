@@ -3085,6 +3085,9 @@ pub(super) fn direct_screen_action_for_key(
     state: &AppState,
     key: &TerminalKey,
 ) -> Option<NavigateAction> {
+    if state.server_mode() == Mode::Prefix && prefix_binding_for_key(state, key).is_some() {
+        return None;
+    }
     let action = action_for_key(state, key.clone(), BindingDispatch::Direct)?;
     matches!(
         action,
@@ -10656,11 +10659,8 @@ navigate_pane_down = "ctrl+j"
         app.state.set_server_mode(Mode::Terminal);
         let pane_before = app.state.workspaces[0].focused_pane_id();
 
-        app.handle_key(TerminalKey::new(
-            KeyCode::Char('r'),
-            KeyModifiers::CONTROL | KeyModifiers::ALT,
-        ))
-        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .await;
 
         assert!(app.state.capture.is_some());
         assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);

@@ -8768,8 +8768,8 @@ mod tests {
             1,
             vec![crate::raw_input::RawInputEvent::Key(
                 crate::input::TerminalKey::new(
-                    crossterm::event::KeyCode::Char('r'),
-                    KeyModifiers::CONTROL | KeyModifiers::ALT,
+                    crossterm::event::KeyCode::Char('t'),
+                    KeyModifiers::ALT,
                 ),
             )],
             false,
@@ -9142,14 +9142,14 @@ mod tests {
         server.sync_foreground_client_state();
         assert!(server.app.state.keybinds.capture.matches_direct_key(
             &crate::input::TerminalKey::new(
-                crossterm::event::KeyCode::Char('r'),
-                crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT,
+                crossterm::event::KeyCode::Char('t'),
+                crossterm::event::KeyModifiers::ALT,
             )
         ));
 
         assert!(server.handle_server_event(ServerEvent::ClientInput {
             client_id: 1,
-            data: b"\x1b[114;7u".to_vec(),
+            data: b"\x1b[116;3u".to_vec(),
         }));
         assert!(server.clients[&1].sidebar_presentation.capture.is_some());
         assert!(server.handle_server_event(ServerEvent::ClientInput {

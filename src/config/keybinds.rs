@@ -1086,6 +1086,15 @@ pub fn validate_focus_room_leave_key(config: &mut Config, key: &str) -> Result<S
     result
 }
 
+/// Validate the globally reserved capture chord as it will run from any
+/// screen, replacing its current value while checking the direct registry.
+pub fn validate_capture_key(config: &mut Config, key: &str) -> Result<String, String> {
+    let previous = std::mem::replace(&mut config.keys.capture, BindingConfig::empty());
+    let result = validate_user_action_key(config, key);
+    config.keys.capture = previous;
+    result
+}
+
 fn append_user_actions(
     config: &Config,
     prefix: KeyCombo,
