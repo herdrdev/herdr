@@ -4,7 +4,7 @@ use std::{
     os::fd::{AsRawFd, OwnedFd, RawFd},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc as std_mpsc, Arc, Mutex,
+        mpsc as std_mpsc, Arc, Mutex, TryLockError,
     },
     time::{Duration, Instant},
 };
@@ -218,8 +218,19 @@ impl PtyIoActorHandle {
     }
 
     pub(crate) fn try_acquire_remote_owner(&self, owner_id: u64) -> RemoteOwnerAcquireResult {
-        let Some(mut user_writes) = self.lock_user_writes() else {
+        if self.user_writes_poisoned.load(Ordering::Acquire) {
             return RemoteOwnerAcquireResult::RefusedForSafety;
+        }
+        let mut user_writes = match self.user_writes.try_lock() {
+            Ok(user_writes) => user_writes,
+            // A local writer may hold this gate while it waits for pty_write.
+            // Remote acquisition is advisory: refuse rather than blocking in
+            // the opposite lock order and deadlocking with an in-flight write.
+            Err(TryLockError::WouldBlock) => return RemoteOwnerAcquireResult::RefusedForSafety,
+            Err(TryLockError::Poisoned(_)) => {
+                self.mark_user_writes_poisoned();
+                return RemoteOwnerAcquireResult::RefusedForSafety;
+            }
         };
         match user_writes.remote_owner {
             Some(existing) if existing == owner_id => RemoteOwnerAcquireResult::Acquired,
@@ -1813,6 +1824,19 @@ mod tests {
             ControlledWriteResult::Refused
         );
         assert!(handle.user_writes_poisoned.load(Ordering::Acquire));
+        assert_eq!(
+            handle.try_acquire_remote_owner(8),
+            RemoteOwnerAcquireResult::RefusedForSafety
+        );
+        assert_eq!(
+            handle
+                .user_writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remote_owner,
+            Some(7),
+            "refusal must not overwrite the existing remote owner"
+        );
         handle.shutdown();
     }
 
@@ -1888,6 +1912,68 @@ mod tests {
     }
 
     #[test]
+    fn remote_owner_acquire_refuses_without_waiting_for_contended_write_gate() {
+        let (handle, _peer, _read_rx) = actor_with_socket_pair(false);
+        let user_writes = Arc::clone(&handle.user_writes);
+        let (locked_tx, locked_rx) = std_mpsc::sync_channel(0);
+        let (release_tx, release_rx) = std_mpsc::sync_channel(0);
+        let gate_holder = std::thread::spawn(move || {
+            let _guard = user_writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            locked_tx.send(()).expect("test observes held gate");
+            release_rx.recv().expect("test releases held gate");
+        });
+        locked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("test thread holds the user-write gate");
+
+        let (started_tx, started_rx) = std_mpsc::sync_channel(0);
+        let (result_tx, result_rx) = std_mpsc::sync_channel(0);
+        let acquire_handle = handle.clone();
+        let acquire = std::thread::spawn(move || {
+            started_tx
+                .send(())
+                .expect("test observes acquisition start");
+            result_tx
+                .send(acquire_handle.try_acquire_remote_owner(7))
+                .expect("test receives acquisition result");
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("acquisition thread reached the gate operation");
+        let while_contended = result_rx.recv_timeout(Duration::from_millis(250));
+
+        release_tx.send(()).expect("release test gate holder");
+        gate_holder.join().expect("gate holder exits");
+        let after_release = match while_contended {
+            Ok(result) => Some(result),
+            Err(_) => result_rx.recv_timeout(Duration::from_secs(1)).ok(),
+        };
+        acquire.join().expect("acquisition thread exits");
+        handle.shutdown();
+
+        assert_eq!(
+            while_contended,
+            Ok(RemoteOwnerAcquireResult::RefusedForSafety),
+            "remote acquisition must fail closed immediately while a local writer owns the gate"
+        );
+        assert_eq!(
+            after_release,
+            Some(RemoteOwnerAcquireResult::RefusedForSafety)
+        );
+        assert_eq!(
+            handle
+                .user_writes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .remote_owner,
+            None,
+            "contention refusal must not acquire or replace ownership"
+        );
+    }
+
+    #[test]
     fn remote_owner_refuses_while_local_input_is_queued_then_acquires_after_drain() {
         let (handle, mut peer, _read_rx) = actor_with_socket_pair(false);
         let write_guard = handle
@@ -1908,10 +1994,18 @@ mod tests {
         peer.read_exact(&mut delivered)
             .expect("queued local input reaches the PTY in full");
         assert_eq!(&delivered, b"queued-local");
-        assert_eq!(
-            handle.try_acquire_remote_owner(7),
-            RemoteOwnerAcquireResult::Acquired
-        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match handle.try_acquire_remote_owner(7) {
+                RemoteOwnerAcquireResult::Acquired => break,
+                RemoteOwnerAcquireResult::RefusedForSafety if Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                result => {
+                    panic!("remote ownership did not become available after drain: {result:?}")
+                }
+            }
+        }
         handle.shutdown();
     }
 
@@ -1960,10 +2054,18 @@ mod tests {
             .expect("partial local input remainder reaches the PTY");
         prefix.extend_from_slice(&remainder);
         assert_eq!(prefix, payload);
-        assert_eq!(
-            handle.try_acquire_remote_owner(7),
-            RemoteOwnerAcquireResult::Acquired
-        );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match handle.try_acquire_remote_owner(7) {
+                RemoteOwnerAcquireResult::Acquired => break,
+                RemoteOwnerAcquireResult::RefusedForSafety if Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                result => {
+                    panic!("remote ownership did not become available after drain: {result:?}")
+                }
+            }
+        }
         handle.shutdown();
     }
 
