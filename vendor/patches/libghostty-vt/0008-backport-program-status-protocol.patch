@@ -1,0 +1,2609 @@
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/osc.h b/vendor/libghostty-vt/include/ghostty/vt/osc.h
+index 7a681c3b..bd367631 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/osc.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/osc.h
+@@ -67,6 +67,16 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   GHOSTTY_OSC_COMMAND_KITTY_DND_PROTOCOL = 24,
+   GHOSTTY_OSC_COMMAND_CONTEXT_SIGNAL = 25,
+   GHOSTTY_OSC_COMMAND_KITTY_DESKTOP_NOTIFICATION = 26,
++
++  /**
++   * A program status report or support query (OSC 7501), which a program
++   * sends to say what it is doing, such as working or waiting on the user.
++   *
++   * The OSC parser only identifies this command. To receive the report's
++   * contents, use a terminal with GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS
++   * instead (see GhosttyTerminalProgramStatus).
++   */
++  GHOSTTY_OSC_COMMAND_PROGRAM_STATUS = 27,
+   GHOSTTY_OSC_COMMAND_TYPE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyOscCommandType;
+ 
+diff --git a/vendor/libghostty-vt/include/ghostty/vt/terminal.h b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+index 6404af53..3994e414 100644
+--- a/vendor/libghostty-vt/include/ghostty/vt/terminal.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/terminal.h
+@@ -133,6 +133,9 @@ typedef bool (*GhosttyKittyImageSnapshotFileFn)(
+  * | `GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION`| `GhosttyTerminalDesktopNotificationFn` | Desktop notification via OSC 9 / OSC 777 |
+  * | `GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT`  | `GhosttyTerminalProgressReportFn` | Progress report via OSC 9;4               |
+  * | `GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE` | `GhosttyTerminalUnknownSequenceFn` | Unsupported sequence identifier          |
++ * | `GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS`   | `GhosttyTerminalProgramStatusFn`  | Program status report via OSC 7501        |
++ * | `GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT`  | `GhosttyTerminalSemanticPromptFn` | Shell reports a prompt or command step via OSC 133 |
++ * | `GHOSTTY_TERMINAL_OPT_RESET`            | `GhosttyTerminalResetFn`          | Full reset (RIS, ESC c)                   |
+  *
+  * ### Defining a write_pty callback
+  * @snippet c-vt-effects/src/main.c effects-write-pty
+@@ -944,6 +947,408 @@ typedef void (*GhosttyTerminalProgressReportFn)(
+     void* userdata,
+     const GhosttyTerminalProgressReport* report);
+ 
++/**
++ * What a program says it is doing, in a program status report (OSC 7501).
++ *
++ * See GhosttyTerminalProgramStatus for an overview of the protocol.
++ *
++ * @ingroup terminal
++ */
++typedef enum GHOSTTY_ENUM_TYPED {
++  /** At rest, waiting for the user's next instruction. For example, an
++   * interactive tool sitting at its own prompt. */
++  GHOSTTY_PROGRAM_STATUS_STATE_IDLE = 0,
++
++  /** Running on its own. The report may include a progress percentage. */
++  GHOSTTY_PROGRAM_STATUS_STATE_WORKING = 1,
++
++  /** Finished a piece of work, and the result is ready for the user to
++   * look at. */
++  GHOSTTY_PROGRAM_STATUS_STATE_DONE = 2,
++
++  /** Can't continue until the user does something. `kind` says what the
++   * program needs and `message` says why. The report may include a
++   * progress percentage. */
++  GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED = 3,
++
++  /** Failed and stopped. */
++  GHOSTTY_PROGRAM_STATUS_STATE_ERROR = 4,
++
++  /** Not a real state. Remove the record with this report's id and every
++   * record beneath it. If the id is empty, remove every record. */
++  GHOSTTY_PROGRAM_STATUS_STATE_CLEAR = 5,
++  GHOSTTY_PROGRAM_STATUS_STATE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
++} GhosttyProgramStatusState;
++
++/**
++ * What a blocked program needs from the user, in a program status report
++ * (OSC 7501).
++ *
++ * @ingroup terminal
++ */
++typedef enum GHOSTTY_ENUM_TYPED {
++  /** The program didn't say, or the state isn't
++   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. */
++  GHOSTTY_PROGRAM_STATUS_KIND_NONE = 0,
++
++  /** Approval to do something, such as "Apply these changes?". */
++  GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION = 1,
++
++  /** An answer the user has to type. */
++  GHOSTTY_PROGRAM_STATUS_KIND_QUESTION = 2,
++
++  /** A login, password, token, or other credential. */
++  GHOSTTY_PROGRAM_STATUS_KIND_AUTH = 3,
++  GHOSTTY_PROGRAM_STATUS_KIND_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
++} GhosttyProgramStatusKind;
++
++/**
++ * A program status report (OSC 7501).
++ *
++ * The program status protocol lets a program tell the terminal what it is
++ * doing: idle, working, done, waiting on the user, or failed, and why. It
++ * is meant for long-running work like builds, deploys, and coding agents,
++ * where the user is often looking at something else and wants to know when
++ * the work finishes or needs them. The protocol only describes state. How
++ * to show it, if at all, is up to your application.
++ *
++ * The full specification is at
++ * https://www.superlogical.com/rex/docs/build/program-status
++ *
++ * For example, a program waiting for the user to approve a change sends
++ * this, where ST is the string terminator (ESC \ or BEL):
++ *
++ * @code
++ * ESC ] 7501 ; state=blocked:kind=permission:app=terraform:msg=QXBwbHk/ ST
++ * @endcode
++ *
++ * The callback then receives a report with:
++ *
++ * - `state`: GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED
++ * - `kind`: GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION
++ * - `progress`: -1, because the program didn't send one, so the work is
++ *   indeterminate
++ * - `id`: empty, because this is the root record
++ * - `app`: "terraform"
++ * - `title`: empty
++ * - `message`: "Apply?", decoded from the base64 in `msg`
++ *
++ * Only reports that pass every check in the specification reach the
++ * callback. Text that the program didn't send is an empty string (len=0),
++ * never NULL. All strings are only valid during the callback, so copy any
++ * you want to keep.
++ *
++ * This is a sized struct. Later versions may add fields at the end, and
++ * `size` tells you which fields are present. Every field below has been
++ * present since this struct was introduced.
++ *
++ * @ingroup terminal
++ */
++typedef struct {
++  /** Size of this struct in bytes. */
++  size_t size;
++
++  /** What the program is doing. */
++  GhosttyProgramStatusState state;
++
++  /** What the program needs from the user. Only set for
++   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. It is
++   * GHOSTTY_PROGRAM_STATUS_KIND_NONE for other states, when the program
++   * didn't say, or when it sent a kind this version doesn't know. */
++  GhosttyProgramStatusKind kind;
++
++  /** How far along the work is, from 0 through 100, or -1 when there is
++   * no percentage. Only set for GHOSTTY_PROGRAM_STATUS_STATE_WORKING and
++   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. For those states, -1 means the
++   * work is indeterminate: the program is busy but has no percentage to
++   * report. It is also -1 for other states and when the program sent a
++   * value outside that range. */
++  int8_t progress;
++
++  /** Which record this report is about. Empty for the root record.
++   *
++   * A program that only reports on itself leaves this empty. A program
++   * that reports on several things at once gives each its own id, such as
++   * "us-east" and "eu-west" for a deploy to two regions. A "/" makes one
++   * record the child of another, so "build/test" is a child of "build".
++   * The parent record doesn't have to exist. */
++  GhosttyString id;
++
++  /** A stable name for the program that a machine can match on, such as
++   * "cargo", "terraform", or "claude-code". Use it as a key for grouping,
++   * filtering, or choosing an icon. It is not a label. The label is
++   * `title`. Empty when the report didn't include one. See
++   * GhosttyTerminalProgramStatusFn for how an empty app is filled in from
++   * a parent record. */
++  GhosttyString app;
++
++  /** A short label for the record, meant for people. Programs that report
++   * several records use this to tell them apart. */
++  GhosttyString title;
++
++  /** One line of text for people, saying what the record is doing,
++   * waiting for, or has finished. You may shorten it to fit, but don't
++   * try to read meaning into it. */
++  GhosttyString message;
++} GhosttyTerminalProgramStatus;
++
++/**
++ * Callback function type for program status reports (OSC 7501).
++ *
++ * Called synchronously each time the running program sends a valid
++ * report. See GhosttyTerminalProgramStatus for what a report contains.
++ *
++ * The terminal doesn't store reports, so your application keeps them. To
++ * follow the specification, keep one record per id. A report with an empty
++ * id is about the root record, the program itself. The records follow
++ * these rules:
++ *
++ * - A report replaces its record completely. A value the report leaves
++ *   out is gone from the record afterwards. It doesn't keep its old value.
++ * - A GHOSTTY_PROGRAM_STATUS_STATE_CLEAR report removes the record with
++ *   its id and every record beneath it, so clearing "build" also removes
++ *   "build/test". A clear report with an empty id removes every record.
++ * - A record without an app takes it from its nearest ancestor that has
++ *   one. If the root record has app "deploy" and the record "us-east"
++ *   has none, show "us-east" with app "deploy" too.
++ * - When a new shell prompt starts (GHOSTTY_SEMANTIC_PROMPT_PROMPT_START
++ *   from the GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT callback) or the program
++ *   running in the terminal exits, remove `working` and `blocked` records.
++ *   You may remove `idle` records too. Keep `done` and `error` records
++ *   until the user has seen them, for example until they next focus the
++ *   terminal.
++ * - Keep at most 256 records, and allow at least 64. When a new record
++ *   would go over your limit, remove the one that was updated longest ago.
++ *
++ * A full reset (RIS, `ESC c`) removes every record. When that happens,
++ * the terminal calls this with a GHOSTTY_PROGRAM_STATUS_STATE_CLEAR report
++ * and an empty id, and then calls the GHOSTTY_TERMINAL_OPT_RESET callback.
++ *
++ * `title` and `message` are already decoded and contain no control
++ * characters, but they are still untrusted text from the program. Don't
++ * treat them as markup. If you show them outside the terminal, such as in
++ * a tab or a notification, remove invisible formatting characters like
++ * text direction overrides, and say which terminal the text came from so
++ * a program can't pretend to be one running elsewhere.
++ *
++ * Example, where `Records`, `records_clear`, and `records_put` stand in for
++ * your application's own storage:
++ *
++ * @code
++ * void on_program_status(GhosttyTerminal terminal,
++ *                        void* userdata,
++ *                        const GhosttyTerminalProgramStatus* report) {
++ *   (void)terminal;
++ *   Records* records = userdata;
++ *
++ *   if (report->state == GHOSTTY_PROGRAM_STATUS_STATE_CLEAR) {
++ *     // Remove this record and every record beneath it. An empty id
++ *     // removes every record.
++ *     records_clear(records, report->id);
++ *     return;
++ *   }
++ *
++ *   // Replace the whole record. The strings are only valid during this
++ *   // call, so records_put must copy them.
++ *   records_put(records, report->id, report->state, report->message);
++ * }
++ *
++ * // Set write_pty too, so programs that check for support get a reply.
++ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, records);
++ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
++ *                      (const void*)on_write_pty);
++ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS,
++ *                      (const void*)on_program_status);
++ * @endcode
++ *
++ * @param terminal The terminal handle
++ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
++ * @param report The report. It and its strings are only valid during the
++ *               call.
++ *
++ * @ingroup terminal
++ */
++typedef void (*GhosttyTerminalProgramStatusFn)(
++    GhosttyTerminal terminal,
++    void* userdata,
++    const GhosttyTerminalProgramStatus* report);
++
++/**
++ * The step of a command that a shell integration event reports.
++ *
++ * More kinds may be added in later versions, so ignore any kind you don't
++ * handle.
++ *
++ * @ingroup terminal
++ */
++typedef enum GHOSTTY_ENUM_TYPED {
++  /** Never reported. This exists so that a zeroed value is not mistaken
++   * for a real event. */
++  GHOSTTY_SEMANTIC_PROMPT_INVALID = 0,
++
++  /** The shell started drawing a prompt. `prompt_kind` says which one. */
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_START = 1,
++
++  /** The prompt is drawn and the user can start typing a command. */
++  GHOSTTY_SEMANTIC_PROMPT_INPUT_START = 2,
++
++  /** The user submitted the command and it started running. Anything the
++   * terminal receives after this is the command's output. */
++  GHOSTTY_SEMANTIC_PROMPT_OUTPUT_START = 3,
++
++  /** The command finished running. */
++  GHOSTTY_SEMANTIC_PROMPT_COMMAND_END = 4,
++  GHOSTTY_SEMANTIC_PROMPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
++} GhosttySemanticPromptKind;
++
++/**
++ * Which prompt a `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` event starts.
++ *
++ * Most shells only draw a primary prompt. Some also draw a prompt on the
++ * right side of the line, or a prompt at the start of each extra line
++ * when a command spans several lines.
++ *
++ * @ingroup terminal
++ */
++typedef enum GHOSTTY_ENUM_TYPED {
++  /** The main prompt shown before each command. This is used when the
++   * shell doesn't say which prompt it is drawing. */
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_PRIMARY = 0,
++
++  /** A prompt drawn at the right edge of the line, such as zsh's
++   * RPROMPT. */
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_RIGHT = 1,
++
++  /** A prompt at the start of an extra line of a command that spans
++   * several lines. */
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_CONTINUATION = 2,
++
++  /** Another prompt for an extra line of input, such as bash's PS2.
++   * Shells differ in whether they report extra lines as continuation or
++   * secondary prompts, so most applications should treat the two the
++   * same. */
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_SECONDARY = 3,
++  GHOSTTY_SEMANTIC_PROMPT_PROMPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
++} GhosttySemanticPromptPromptKind;
++
++/**
++ * A shell integration event, passed to the
++ * `GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT` callback.
++ *
++ * `kind` says which step of the command this is. The other fields only
++ * carry information for the kinds listed on each field, and are zero or
++ * empty otherwise.
++ *
++ * Strings are only valid during the callback. Copy them if you need them
++ * later.
++ *
++ * This is a sized struct. Later versions may add fields at the end, and
++ * `size` tells you which fields are present. Every field below has been
++ * present since this struct was introduced, so you only need to check
++ * `size` before reading fields added later. Two fields are likely to be
++ * added in the future:
++ *
++ * - An identifier the shell assigns to each command.
++ * - A flag on `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` that says the shell
++ *   redrew a prompt it had already drawn, instead of starting a new one.
++ *
++ * Neither exists yet.
++ *
++ * @ingroup terminal
++ */
++typedef struct {
++  /** Size of this struct in bytes. */
++  size_t size;
++
++  /** Which step of the command this event reports. */
++  GhosttySemanticPromptKind kind;
++
++  /** Which prompt is starting. Set for
++   * `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START`. Always
++   * `GHOSTTY_SEMANTIC_PROMPT_PROMPT_PRIMARY` for other kinds. */
++  GhosttySemanticPromptPromptKind prompt_kind;
++
++  /** True if the shell reported the command's exit code. Only ever true
++   * for `GHOSTTY_SEMANTIC_PROMPT_COMMAND_END`. */
++  bool has_exit_code;
++
++  /** The command's exit code. Only meaningful when `has_exit_code` is
++   * true. Exit codes can be negative, for example on Windows, so use
++   * `has_exit_code` rather than a special value to tell whether one was
++   * reported. */
++  int32_t exit_code;
++
++  /** The command line that is about to run, for
++   * `GHOSTTY_SEMANTIC_PROMPT_OUTPUT_START`. The shell sends it encoded,
++   * and this is the decoded text. Empty (len=0) if the shell didn't send
++   * one or it couldn't be decoded. */
++  GhosttyString command;
++
++  /** A description of what went wrong, for
++   * `GHOSTTY_SEMANTIC_PROMPT_COMMAND_END` when the shell sent one. Empty
++   * (len=0) otherwise. Few shells send this. The exit code is the usual
++   * way to tell whether a command failed. */
++  GhosttyString error;
++} GhosttyTerminalSemanticPrompt;
++
++/**
++ * Callback function type for semantic_prompt.
++ *
++ * Called when the shell reports a step of a command. Each command goes
++ * through four steps, in this order: the prompt starts, input starts,
++ * output starts, and the command ends. Then the next prompt starts.
++ *
++ * Shells differ in what they report. Many don't send the command line or
++ * the exit code, and some skip steps, so handle each event on its own
++ * instead of expecting a strict order. A shell may also start the same
++ * prompt more than once, for example when it redraws the prompt after a
++ * resize, so treat a repeated `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` as
++ * harmless.
++ *
++ * The terminal has already updated its screen when this is called. A
++ * sequence the terminal rejects as malformed is never reported.
++ *
++ * @param terminal The terminal handle
++ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
++ * @param event The event. It and its strings are only valid during the
++ *              call.
++ *
++ * @ingroup terminal
++ */
++typedef void (*GhosttyTerminalSemanticPromptFn)(
++    GhosttyTerminal terminal,
++    void* userdata,
++    const GhosttyTerminalSemanticPrompt* event);
++
++/**
++ * Callback function type for reset.
++ *
++ * Called when the running program performs a full reset (RIS, `ESC c`).
++ * A full reset clears the screen and scrollback, returns modes to their
++ * defaults, and clears the title and working directory. Use this callback
++ * to reset any state your application keeps about what's running in the
++ * terminal, such as the current command.
++ *
++ * The terminal has already reset itself when this is called. The
++ * GHOSTTY_TERMINAL_OPT_TITLE_CHANGED and GHOSTTY_TERMINAL_OPT_PWD_CHANGED
++ * callbacks are not called for the cleared title and working directory,
++ * so update anything you show for them here. A full reset also removes
++ * any progress report and program status records. If you set
++ * GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT or
++ * GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS, those callbacks are called before
++ * this one.
++ *
++ * A soft reset (DECSTR, `CSI ! p`) only resets a few modes and doesn't
++ * call this.
++ *
++ * @param terminal The terminal handle
++ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
++ *
++ * @ingroup terminal
++ */
++typedef void (*GhosttyTerminalResetFn)(GhosttyTerminal terminal,
++                                       void* userdata);
++
+ /**
+  * Callback function type for color scheme queries (CSI ? 996 n).
+  *
+@@ -1586,6 +1991,46 @@ typedef enum GHOSTTY_ENUM_TYPED {
+   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
+   /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
+   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
++
++  /**
++   * Callback invoked when the shell reports a step of a command: a prompt
++   * starts, input starts, output starts, or the command ends. Set to NULL
++   * to ignore these events.
++   *
++   * Input type: GhosttyTerminalSemanticPromptFn
++   */
++  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT = 42,
++
++  /**
++   * Callback invoked after the running program performs a full reset
++   * (RIS, ESC c). Set to NULL to ignore resets.
++   *
++   * Input type: GhosttyTerminalResetFn
++   */
++  GHOSTTY_TERMINAL_OPT_RESET = 43,
++
++  /**
++   * Callback invoked when the running program sends a program status
++   * report via OSC 7501. Set to NULL to ignore these reports.
++   *
++   * Programs may ask whether the terminal supports the protocol by
++   * sending `OSC 7501 ; ?`. While this callback is set, the terminal
++   * answers through GHOSTTY_TERMINAL_OPT_WRITE_PTY with `?` followed by
++   * the states and kinds it accepts:
++   *
++   * @code
++   * program:  ESC ] 7501 ; ? ST
++   * terminal: ESC ] 7501 ; ?:states=idle,working,done,blocked,error:kinds=permission,question,auth ST
++   * @endcode
++   *
++   * While this callback is NULL, the query gets no reply, so a program
++   * that asks sees the protocol as unsupported. Asking is optional, so
++   * programs may send reports anyway. Those are dropped. Set a write_pty
++   * callback too, or programs never see the reply.
++   *
++   * Input type: GhosttyTerminalProgramStatusFn
++   */
++  GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS = 46,
+   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+ } GhosttyTerminalOption;
+ 
+diff --git a/vendor/libghostty-vt/src/lib_vt.zig b/vendor/libghostty-vt/src/lib_vt.zig
+index 05bc0baa..37cc1f41 100644
+--- a/vendor/libghostty-vt/src/lib_vt.zig
++++ b/vendor/libghostty-vt/src/lib_vt.zig
+@@ -95,6 +95,7 @@ pub const Terminal = terminal.Terminal;
+ pub const TerminalStream = terminal.TerminalStream;
+ pub const Stream = terminal.Stream;
+ pub const StreamAction = terminal.StreamAction;
++pub const SemanticPrompt = terminal.SemanticPrompt;
+ pub const UnknownSequence = terminal.UnknownSequence;
+ 
+ pub const Paste = terminal.Paste;
+diff --git a/vendor/libghostty-vt/src/terminal/c/terminal.zig b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+index e825183e..10b97104 100644
+--- a/vendor/libghostty-vt/src/terminal/c/terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/c/terminal.zig
+@@ -191,6 +191,56 @@ pub const ProgressReport = extern struct {
+     progress: i8,
+ };
+ 
++/// C: GhosttyProgramStatusState
++pub const ProgramStatusState = osc.Command.ProgramStatus.State;
++
++/// What a blocked program needs from the user. This matches
++/// `osc.Command.ProgramStatus.Kind` but adds `none` first, because C has
++/// no optional enums and a zeroed value must mean "no kind".
++///
++/// C: GhosttyProgramStatusKind
++pub const ProgramStatusKind = lib.Enum(lib.target, &.{
++    "none",
++    "permission",
++    "question",
++    "auth",
++});
++
++/// A program status report (OSC 7501). Absent text is an empty string,
++/// an absent kind is `none`, and absent progress is -1. See the header
++/// for the meaning of each field.
++///
++/// C: GhosttyTerminalProgramStatus
++pub const ProgramStatus = extern struct {
++    size: usize,
++    state: ProgramStatusState,
++    kind: ProgramStatusKind,
++    progress: i8,
++    id: lib.String,
++    app: lib.String,
++    title: lib.String,
++    message: lib.String,
++};
++
++/// C: GhosttySemanticPromptKind
++pub const SemanticPromptKind = Handler.SemanticPrompt.Kind;
++
++/// C: GhosttySemanticPromptPromptKind
++pub const SemanticPromptPromptKind = Handler.SemanticPrompt.PromptKind;
++
++/// A shell integration event. See `Handler.SemanticPrompt`.
++///
++/// C: GhosttyTerminalSemanticPrompt
++pub const SemanticPrompt = extern struct {
++    size: usize,
++    kind: SemanticPromptKind,
++    prompt_kind: SemanticPromptPromptKind,
++    has_exit_code: bool,
++    exit_code: i32,
++    command: lib.String,
++    @"error": lib.String,
++};
++
+ /// A borrowed unsupported string sequence.
+ ///
+ /// C: GhosttyTerminalUnknownStringSequence
+@@ -234,14 +284,22 @@ pub const ModeConfig = extern struct {
+     }
+ };
+ 
+-/// C callback state for terminal effects. Most trampolines are always
+-/// installed on the stream handler; they check these fields and no-op when
+-/// the corresponding callback is null. The unknown-sequence and
+-/// clipboard trampolines are installed dynamically to preserve their
+-/// null fast paths (for clipboard_write, a null Zig-level effect makes
+-/// Kitty clipboard writes fail up front instead of spooling a
+-/// transaction that can never commit; for clipboard_read it keeps
+-/// reads denied).
++/// C callback state for terminal effects.
++///
++/// Most trampolines are always installed on the stream handler. They check
++/// these fields and do nothing when the C callback is null.
++///
++/// A few trampolines are only installed while their C callback is set,
++/// because the stream handler behaves differently when the Zig effect is
++/// null:
++///
++/// - `unknown_sequence`: unknown sequences are skipped without being
++///   captured.
++/// - `clipboard_write`: Kitty clipboard writes fail up front instead of
++///   collecting data for a write that can never finish.
++/// - `clipboard_read`: clipboard reads are denied.
++/// - `program_status`: the OSC 7501 support query gets no reply, so
++///   programs know not to send reports.
+ const Effects = struct {
+     userdata: ?*anyopaque = null,
+     write_pty: ?WritePtyFn = null,
+@@ -254,6 +312,9 @@ const Effects = struct {
+     title_changed: ?TitleChangedFn = null,
+     pwd_changed: ?PwdChangedFn = null,
+     progress_report: ?ProgressReportFn = null,
++    program_status: ?ProgramStatusFn = null,
++    semantic_prompt: ?SemanticPromptFn = null,
++    reset: ?ResetFn = null,
+     size_cb: ?SizeFn = null,
+     clipboard_write: ?ClipboardWriteFn = null,
+     clipboard_read: ?ClipboardReadFn = null,
+@@ -320,6 +381,17 @@ const Effects = struct {
+     /// C function pointer type for the progress_report callback.
+     pub const ProgressReportFn = *const fn (Terminal, ?*anyopaque, *const ProgressReport) callconv(lib.calling_conv) void;
+ 
++    /// C function pointer type for the program_status callback. The report
++    /// and its strings are borrowed for the callback duration.
++    pub const ProgramStatusFn = *const fn (Terminal, ?*anyopaque, *const ProgramStatus) callconv(lib.calling_conv) void;
++
++    /// C function pointer type for the semantic_prompt callback. The event
++    /// and its strings are borrowed for the callback duration.
++    pub const SemanticPromptFn = *const fn (Terminal, ?*anyopaque, *const SemanticPrompt) callconv(lib.calling_conv) void;
++
++    /// C function pointer type for the reset callback.
++    pub const ResetFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
++
+     /// C function pointer type for the unknown_sequence callback. The request
+     /// and its content are borrowed for the callback duration.
+     pub const UnknownSequenceFn = *const fn (Terminal, ?*anyopaque, *const UnknownSequence.C) callconv(lib.calling_conv) void;
+@@ -618,6 +690,61 @@ const Effects = struct {
+         func(@ptrCast(wrapper), wrapper.effects.userdata, &c_report);
+     }
+ 
++    fn programStatusTrampoline(
++        handler: *Handler,
++        report: osc.Command.ProgramStatus.Report,
++    ) void {
++        const wrapper = TerminalWrapper.fromHandler(handler);
++        const func = wrapper.effects.program_status orelse return;
++
++        // Both buffers hold the longest text the parser accepts, so
++        // writing to them can't fail.
++        var title_buf: [osc.program_status.max_title_bytes]u8 = undefined;
++        var title: std.Io.Writer = .fixed(&title_buf);
++        report.writeText(.title, &title) catch unreachable;
++        var message_buf: [osc.program_status.max_msg_bytes]u8 = undefined;
++        var message: std.Io.Writer = .fixed(&message_buf);
++        report.writeText(.msg, &message) catch unreachable;
++
++        const c_report: ProgramStatus = .{
++            .size = @sizeOf(ProgramStatus),
++            .state = report.state,
++            .kind = if (report.readOption(.kind)) |kind| switch (kind) {
++                inline else => |tag| @field(ProgramStatusKind, @tagName(tag)),
++            } else .none,
++            .progress = if (report.readOption(.progress)) |value| @intCast(value) else -1,
++            .id = .init(report.readOption(.id) orelse ""),
++            .app = .init(report.readOption(.app) orelse ""),
++            .title = .init(title.buffered()),
++            .message = .init(message.buffered()),
++        };
++        func(@ptrCast(wrapper), wrapper.effects.userdata, &c_report);
++    }
++
++    fn semanticPromptTrampoline(
++        handler: *Handler,
++        event: Handler.SemanticPrompt,
++    ) void {
++        const wrapper = TerminalWrapper.fromHandler(handler);
++        const func = wrapper.effects.semantic_prompt orelse return;
++        const c_event: SemanticPrompt = .{
++            .size = @sizeOf(SemanticPrompt),
++            .kind = event.kind,
++            .prompt_kind = event.prompt_kind,
++            .has_exit_code = event.exit_code != null,
++            .exit_code = event.exit_code orelse 0,
++            .command = .init(event.command),
++            .@"error" = .init(event.err),
++        };
++        func(@ptrCast(wrapper), wrapper.effects.userdata, &c_event);
++    }
++
++    fn resetTrampoline(handler: *Handler) void {
++        const wrapper = TerminalWrapper.fromHandler(handler);
++        const func = wrapper.effects.reset orelse return;
++        func(@ptrCast(wrapper), wrapper.effects.userdata);
++    }
++
+     fn unknownSequenceTrampoline(
+         handler: *Handler,
+         sequence: Handler.UnknownSequence,
+@@ -683,11 +810,14 @@ fn wrap(
+         .title_changed = &Effects.titleChangedTrampoline,
+         .pwd_changed = &Effects.pwdChangedTrampoline,
+         .progress_report = &Effects.progressReportTrampoline,
++        .semantic_prompt = &Effects.semanticPromptTrampoline,
++        .reset = &Effects.resetTrampoline,
+         .size = &Effects.sizeTrampoline,
+ 
+         // Installed dynamically when the callback is set; see Effects.
+         .clipboard_write = null,
+         .clipboard_read = null,
++        .program_status = null,
+     };
+ 
+     wrapper.* = .{
+@@ -1186,6 +1316,9 @@ pub const Option = enum(c_int) {
+     clipboard_write_max_bytes = 39,
+     kitty_image_preserve_png = 40,
+     kitty_image_snapshot_file = 41,
++    semantic_prompt = 42,
++    reset = 43,
++    program_status = 46,
+ 
+     /// Input type expected for setting the option.
+     pub fn InType(comptime self: Option) type {
+@@ -1202,10 +1335,13 @@ pub const Option = enum(c_int) {
+             .title_changed => ?Effects.TitleChangedFn,
+             .pwd_changed => ?Effects.PwdChangedFn,
+             .progress_report => ?Effects.ProgressReportFn,
++            .program_status => ?Effects.ProgramStatusFn,
+             .size_cb => ?Effects.SizeFn,
+             .clipboard_write => ?Effects.ClipboardWriteFn,
+             .clipboard_read => ?Effects.ClipboardReadFn,
+             .unknown_sequence => ?Effects.UnknownSequenceFn,
++            .semantic_prompt => ?Effects.SemanticPromptFn,
++            .reset => ?Effects.ResetFn,
+             .title, .pwd, .terminfo_name => ?*const lib.String,
+             .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
+             .color_palette => ?*const color.PaletteC,
+@@ -1285,6 +1421,8 @@ fn setTyped(
+         .pwd_changed => wrapper.effects.pwd_changed = value,
+         .progress_report => wrapper.effects.progress_report = value,
+         .size_cb => wrapper.effects.size_cb = value,
++        .semantic_prompt => wrapper.effects.semantic_prompt = value,
++        .reset => wrapper.effects.reset = value,
+         .clipboard_write => {
+             wrapper.effects.clipboard_write = value;
+             wrapper.stream.handler.effects.clipboard_write = if (value != null)
+@@ -1299,6 +1437,15 @@ fn setTyped(
+             else
+                 null;
+         },
++        .program_status => {
++            // Installed dynamically because the terminal only answers the
++            // OSC 7501 support query when something consumes reports.
++            wrapper.effects.program_status = value;
++            wrapper.stream.handler.effects.program_status = if (value != null)
++                &Effects.programStatusTrampoline
++            else
++                null;
++        },
+         .unknown_sequence => {
+             wrapper.effects.unknown_sequence = value;
+             wrapper.stream.handler.unknown_sequence = if (value != null)
+@@ -4566,6 +4713,266 @@ test "set progress_report callback" {
+     try testing.expectEqual(@as(usize, cases.len), S.count);
+ }
+ 
++test "set program_status callback" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(
++        &lib.alloc.test_allocator,
++        &t,
++        80,
++        24,
++    ));
++    defer free(t);
++
++    const S = struct {
++        var count: usize = 0;
++        var last_userdata: ?*anyopaque = null;
++        var last_size: usize = 0;
++        var last_state: ProgramStatusState = .idle;
++        var last_kind: ProgramStatusKind = .none;
++        var last_progress: i8 = -1;
++        var last_id: [64]u8 = undefined;
++        var last_id_len: usize = 0;
++        var last_app: [64]u8 = undefined;
++        var last_app_len: usize = 0;
++        var last_title: [64]u8 = undefined;
++        var last_title_len: usize = 0;
++        var last_message: [64]u8 = undefined;
++        var last_message_len: usize = 0;
++        var written: [128]u8 = undefined;
++        var written_len: usize = 0;
++
++        fn programStatus(
++            _: Terminal,
++            ud: ?*anyopaque,
++            report: *const ProgramStatus,
++        ) callconv(lib.calling_conv) void {
++            count += 1;
++            last_userdata = ud;
++            last_size = report.size;
++            last_state = report.state;
++            last_kind = report.kind;
++            last_progress = report.progress;
++            last_id_len = copy(&last_id, report.id);
++            last_app_len = copy(&last_app, report.app);
++            last_title_len = copy(&last_title, report.title);
++            last_message_len = copy(&last_message, report.message);
++        }
++
++        fn writePty(
++            _: Terminal,
++            _: ?*anyopaque,
++            ptr: [*]const u8,
++            len: usize,
++        ) callconv(lib.calling_conv) void {
++            @memcpy(written[written_len..][0..len], ptr[0..len]);
++            written_len += len;
++        }
++
++        fn copy(dst: []u8, src: lib.String) usize {
++            if (src.len > 0) @memcpy(dst[0..src.len], src.ptr[0..src.len]);
++            return src.len;
++        }
++    };
++    S.count = 0;
++    S.written_len = 0;
++
++    var sentinel: u8 = 100;
++    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
++    try testing.expectEqual(Result.success, set(t, .write_pty, @ptrCast(&S.writePty)));
++
++    // Without the callback, the support query is not answered.
++    const query = "\x1B]7501;?\x1B\\";
++    vt_write(t, query, query.len);
++    try testing.expectEqual(@as(usize, 0), S.written_len);
++
++    try testing.expectEqual(Result.success, set(
++        t,
++        .program_status,
++        @ptrCast(&S.programStatus),
++    ));
++
++    // With the callback, it is answered with the states and kinds we
++    // accept and the same terminator.
++    vt_write(t, query, query.len);
++    try testing.expectEqualStrings(
++        "\x1B]7501;?:states=idle,working,done,blocked,error" ++
++            ":kinds=permission,question,auth\x1B\\",
++        S.written[0..S.written_len],
++    );
++    try testing.expectEqual(@as(usize, 0), S.count);
++
++    // "Plan" and "Apply?"
++    const report = "\x1B]7501;state=blocked:kind=permission:progress=40:id=a/b" ++
++        ":app=terraform:title=UGxhbg==:msg=QXBwbHk/\x07";
++    vt_write(t, report, report.len);
++    try testing.expectEqual(@as(usize, 1), S.count);
++    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
++    try testing.expectEqual(@sizeOf(ProgramStatus), S.last_size);
++    try testing.expectEqual(ProgramStatusState.blocked, S.last_state);
++    try testing.expectEqual(ProgramStatusKind.permission, S.last_kind);
++    try testing.expectEqual(@as(i8, 40), S.last_progress);
++    try testing.expectEqualStrings("a/b", S.last_id[0..S.last_id_len]);
++    try testing.expectEqualStrings("terraform", S.last_app[0..S.last_app_len]);
++    try testing.expectEqualStrings("Plan", S.last_title[0..S.last_title_len]);
++    try testing.expectEqualStrings("Apply?", S.last_message[0..S.last_message_len]);
++
++    // Absent values are empty, none, or -1.
++    const minimal = "\x1B]7501;state=done\x1B\\";
++    vt_write(t, minimal, minimal.len);
++    try testing.expectEqual(@as(usize, 2), S.count);
++    try testing.expectEqual(ProgramStatusState.done, S.last_state);
++    try testing.expectEqual(ProgramStatusKind.none, S.last_kind);
++    try testing.expectEqual(@as(i8, -1), S.last_progress);
++    try testing.expectEqual(@as(usize, 0), S.last_id_len);
++    try testing.expectEqual(@as(usize, 0), S.last_app_len);
++    try testing.expectEqual(@as(usize, 0), S.last_title_len);
++    try testing.expectEqual(@as(usize, 0), S.last_message_len);
++
++    // Unsetting the callback ignores reports and the query again.
++    try testing.expectEqual(Result.success, set(t, .program_status, null));
++    S.written_len = 0;
++    vt_write(t, query, query.len);
++    vt_write(t, minimal, minimal.len);
++    try testing.expectEqual(@as(usize, 0), S.written_len);
++    try testing.expectEqual(@as(usize, 2), S.count);
++}
++
++test "set semantic_prompt callback" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(
++        &lib.alloc.test_allocator,
++        &t,
++        80,
++        24,
++    ));
++    defer free(t);
++
++    const S = struct {
++        var count: usize = 0;
++        var last_userdata: ?*anyopaque = null;
++        var last_size: usize = 0;
++        var last_kind: SemanticPromptKind = .invalid;
++        var last_prompt_kind: SemanticPromptPromptKind = .primary;
++        var last_has_exit_code: bool = false;
++        var last_exit_code: i32 = 0;
++        var command_buf: [64]u8 = undefined;
++        var command_len: usize = 0;
++        var error_buf: [64]u8 = undefined;
++        var error_len: usize = 0;
++
++        fn semanticPrompt(
++            _: Terminal,
++            ud: ?*anyopaque,
++            event: *const SemanticPrompt,
++        ) callconv(lib.calling_conv) void {
++            count += 1;
++            last_userdata = ud;
++            last_size = event.size;
++            last_kind = event.kind;
++            last_prompt_kind = event.prompt_kind;
++            last_has_exit_code = event.has_exit_code;
++            last_exit_code = event.exit_code;
++            command_len = event.command.len;
++            @memcpy(command_buf[0..command_len], event.command.ptr[0..command_len]);
++            error_len = event.@"error".len;
++            @memcpy(error_buf[0..error_len], event.@"error".ptr[0..error_len]);
++        }
++    };
++    S.count = 0;
++    S.last_userdata = null;
++    S.last_size = 0;
++
++    var sentinel: u8 = 100;
++    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
++    try testing.expectEqual(Result.success, set(
++        t,
++        .semantic_prompt,
++        @ptrCast(&S.semanticPrompt),
++    ));
++
++    const prompt = "\x1B]133;P;k=r\x07";
++    vt_write(t, prompt, prompt.len);
++    try testing.expectEqual(@as(usize, 1), S.count);
++    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
++    try testing.expectEqual(@sizeOf(SemanticPrompt), S.last_size);
++    try testing.expectEqual(SemanticPromptKind.prompt_start, S.last_kind);
++    try testing.expectEqual(SemanticPromptPromptKind.right, S.last_prompt_kind);
++    try testing.expect(!S.last_has_exit_code);
++
++    const input = "\x1B]133;B\x07";
++    vt_write(t, input, input.len);
++    try testing.expectEqual(@as(usize, 2), S.count);
++    try testing.expectEqual(SemanticPromptKind.input_start, S.last_kind);
++    try testing.expectEqual(SemanticPromptPromptKind.primary, S.last_prompt_kind);
++
++    const output = "\x1B]133;C;cmdline_url=ls%20-la\x07";
++    vt_write(t, output, output.len);
++    try testing.expectEqual(@as(usize, 3), S.count);
++    try testing.expectEqual(SemanticPromptKind.output_start, S.last_kind);
++    try testing.expectEqualStrings("ls -la", S.command_buf[0..S.command_len]);
++
++    const end = "\x1B]133;D;-1;err=boom\x07";
++    vt_write(t, end, end.len);
++    try testing.expectEqual(@as(usize, 4), S.count);
++    try testing.expectEqual(SemanticPromptKind.command_end, S.last_kind);
++    try testing.expect(S.last_has_exit_code);
++    try testing.expectEqual(@as(i32, -1), S.last_exit_code);
++    try testing.expectEqualStrings("boom", S.error_buf[0..S.error_len]);
++    try testing.expectEqual(@as(usize, 0), S.command_len);
++
++    const end_no_code = "\x1B]133;D\x07";
++    vt_write(t, end_no_code, end_no_code.len);
++    try testing.expectEqual(@as(usize, 5), S.count);
++    try testing.expect(!S.last_has_exit_code);
++    try testing.expectEqual(@as(i32, 0), S.last_exit_code);
++    try testing.expectEqual(@as(usize, 0), S.error_len);
++
++    try testing.expectEqual(Result.success, set(t, .semantic_prompt, null));
++    vt_write(t, prompt, prompt.len);
++    try testing.expectEqual(@as(usize, 5), S.count);
++}
++
++test "set reset callback" {
++    var t: Terminal = null;
++    try testing.expectEqual(Result.success, new(
++        &lib.alloc.test_allocator,
++        &t,
++        80,
++        24,
++    ));
++    defer free(t);
++
++    const S = struct {
++        var count: usize = 0;
++        var last_userdata: ?*anyopaque = null;
++
++        fn reset(_: Terminal, ud: ?*anyopaque) callconv(lib.calling_conv) void {
++            count += 1;
++            last_userdata = ud;
++        }
++    };
++    S.count = 0;
++    S.last_userdata = null;
++
++    var sentinel: u8 = 100;
++    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
++    try testing.expectEqual(Result.success, set(t, .reset, @ptrCast(&S.reset)));
++
++    // A soft reset (DECSTR) doesn't report a reset.
++    const soft = "\x1B[!p";
++    vt_write(t, soft, soft.len);
++    try testing.expectEqual(@as(usize, 0), S.count);
++
++    const full = "\x1Bc";
++    vt_write(t, full, full.len);
++    try testing.expectEqual(@as(usize, 1), S.count);
++    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
++
++    try testing.expectEqual(Result.success, set(t, .reset, null));
++    vt_write(t, full, full.len);
++    try testing.expectEqual(@as(usize, 1), S.count);
++}
++
+ test "set unknown_sequence callback" {
+     var t: Terminal = null;
+     try testing.expectEqual(Result.success, new(
+diff --git a/vendor/libghostty-vt/src/terminal/c/types.zig b/vendor/libghostty-vt/src/terminal/c/types.zig
+index 4184de82..ee281430 100644
+--- a/vendor/libghostty-vt/src/terminal/c/types.zig
++++ b/vendor/libghostty-vt/src/terminal/c/types.zig
+@@ -220,8 +220,10 @@ const type_decls = [_]TypeDecl{
+     .initStruct("GhosttySysImage", sys.Image),
+     .initStruct("GhosttyTerminalDesktopNotification", terminal.DesktopNotification),
+     .initStruct("GhosttyTerminalModeConfig", terminal.ModeConfig),
++    .initStruct("GhosttyTerminalProgramStatus", terminal.ProgramStatus),
+     .initStruct("GhosttyTerminalProgressReport", terminal.ProgressReport),
+     .initStruct("GhosttyTerminalScrollbar", terminal.TerminalScrollbar),
++    .initStruct("GhosttyTerminalSemanticPrompt", terminal.SemanticPrompt),
+     .initTaggedStruct("GhosttyTerminalScrollViewport", terminal.ScrollViewport, "tag", "value", .generated),
+     .initUnion(
+         "GhosttyTerminalScrollViewportValue",
+@@ -280,6 +282,8 @@ const type_decls = [_]TypeDecl{
+     ),
+     .initEnum("GhosttyPasteSource", paste.Source, "GHOSTTY_PASTE_SOURCE_"),
+     .initEnum("GhosttyPointTag", point.Tag, "GHOSTTY_POINT_TAG_"),
++    .initEnum("GhosttyProgramStatusKind", terminal.ProgramStatusKind, "GHOSTTY_PROGRAM_STATUS_KIND_"),
++    .initEnum("GhosttyProgramStatusState", terminal.ProgramStatusState, "GHOSTTY_PROGRAM_STATUS_STATE_"),
+     .initEnum("GhosttyRenderStateCursorVisualStyle", render.CursorVisualStyle, "GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_"),
+     .initEnum("GhosttyRenderStateData", render.Data, "GHOSTTY_RENDER_STATE_DATA_"),
+     .initEnum("GhosttyRenderStateDirty", render.Dirty, "GHOSTTY_RENDER_STATE_DIRTY_"),
+@@ -300,6 +304,8 @@ const type_decls = [_]TypeDecl{
+     .initEnum("GhosttySelectionGestureEventOption", selection_gesture.EventOption, "GHOSTTY_SELECTION_GESTURE_EVENT_OPT_"),
+     .initEnum("GhosttySelectionGestureEventType", selection_gesture.EventType, "GHOSTTY_SELECTION_GESTURE_EVENT_TYPE_"),
+     .initEnum("GhosttySelectionOrder", Selection.Order, "GHOSTTY_SELECTION_ORDER_"),
++    .initEnum("GhosttySemanticPromptKind", terminal.SemanticPromptKind, "GHOSTTY_SEMANTIC_PROMPT_"),
++    .initEnum("GhosttySemanticPromptPromptKind", terminal.SemanticPromptPromptKind, "GHOSTTY_SEMANTIC_PROMPT_PROMPT_"),
+     .initEnum("GhosttySgrAttributeTag", sgr.Attribute.Tag, "GHOSTTY_SGR_ATTR_"),
+     .initEnum("GhosttySgrUnderline", sgr.Attribute.Underline, "GHOSTTY_SGR_UNDERLINE_"),
+     .initEnumSentinel("GhosttySizeReportStyle", size_report.Style, "GHOSTTY_SIZE_REPORT_", "STYLE_MAX_VALUE"),
+@@ -1009,6 +1015,15 @@ test "manifest uses public enum names" {
+     const terminal_values = manifest_types.get("GhosttyTerminalOption").?.object.get("values").?.object;
+     try std.testing.expectEqual(@as(i64, 6), terminal_values.get("SIZE").?.integer);
+     try std.testing.expect(!terminal_values.contains("SIZE_CB"));
++    try std.testing.expectEqual(@as(i64, 42), terminal_values.get("SEMANTIC_PROMPT").?.integer);
++    try std.testing.expectEqual(@as(i64, 43), terminal_values.get("RESET").?.integer);
++
++    const semantic_prompt_values = manifest_types.get("GhosttySemanticPromptKind").?.object.get("values").?.object;
++    try std.testing.expectEqual(@as(i64, 0), semantic_prompt_values.get("INVALID").?.integer);
++    try std.testing.expectEqual(@as(i64, 4), semantic_prompt_values.get("COMMAND_END").?.integer);
++
++    const prompt_kind_values = manifest_types.get("GhosttySemanticPromptPromptKind").?.object.get("values").?.object;
++    try std.testing.expectEqual(@as(i64, 3), prompt_kind_values.get("SECONDARY").?.integer);
+ 
+     const osc_values = manifest_types.get("GhosttyOscCommandType").?.object.get("values").?.object;
+     try std.testing.expectEqual(@as(i64, 22), osc_values.get("KITTY_TEXT_SIZING").?.integer);
+diff --git a/vendor/libghostty-vt/src/terminal/main.zig b/vendor/libghostty-vt/src/terminal/main.zig
+index 5d7c7387..814b74c0 100644
+--- a/vendor/libghostty-vt/src/terminal/main.zig
++++ b/vendor/libghostty-vt/src/terminal/main.zig
+@@ -60,6 +60,7 @@ pub const Terminal = @import("Terminal.zig");
+ pub const TerminalStream = stream_terminal.Stream;
+ pub const Stream = stream.Stream;
+ pub const StreamAction = stream.Action;
++pub const SemanticPrompt = stream_terminal.Handler.SemanticPrompt;
+ pub const UnknownSequence = stream_terminal.Handler.UnknownSequence;
+ pub const Paste = paste.Request;
+ pub const PasteContents = paste.Contents;
+diff --git a/vendor/libghostty-vt/src/terminal/osc.zig b/vendor/libghostty-vt/src/terminal/osc.zig
+index dbc35492..698ea6bf 100644
+--- a/vendor/libghostty-vt/src/terminal/osc.zig
++++ b/vendor/libghostty-vt/src/terminal/osc.zig
+@@ -19,6 +19,7 @@ const encoding = @import("osc/encoding.zig");
+ 
+ pub const color = parsers.color;
+ pub const semantic_prompt = parsers.semantic_prompt;
++pub const program_status = parsers.program_status;
+ 
+ const log = std.log.scoped(.osc);
+ 
+@@ -167,6 +168,11 @@ pub const Command = union(Key) {
+     /// Kitty desktop notifications (OSC 99)
+     kitty_desktop_notification: KittyDesktopNotification,
+ 
++    /// Program status protocol (OSC 7501). A program reports what it is
++    /// doing, such as working or waiting on the user, or asks whether the
++    /// terminal supports the protocol. See `ProgramStatus`.
++    program_status: ProgramStatus,
++
+     pub const SemanticPrompt = parsers.semantic_prompt.Command;
+ 
+     pub const KittyClipboardProtocol = parsers.kitty_clipboard_protocol.OSC;
+@@ -175,6 +181,8 @@ pub const Command = union(Key) {
+ 
+     pub const KittyDesktopNotification = parsers.kitty_desktop_notification.OSC;
+ 
++    pub const ProgramStatus = parsers.program_status.Command;
++
+     pub const Key = LibEnum(
+         lib.target,
+         // NOTE: Order matters, see LibEnum documentation.
+@@ -206,6 +214,7 @@ pub const Command = union(Key) {
+             "kitty_dnd_protocol",
+             "context_signal",
+             "kitty_desktop_notification",
++            "program_status",
+         },
+     );
+ 
+@@ -370,6 +379,9 @@ pub const Parser = struct {
+         @"55",
+         @"66",
+         @"72",
++        @"75",
++        @"750",
++        @"7501",
+         @"77",
+         @"99",
+         @"104",
+@@ -454,6 +466,7 @@ pub const Parser = struct {
+             .kitty_dnd_protocol,
+             .kitty_desktop_notification,
+             .context_signal,
++            .program_status,
+             => {},
+         }
+ 
+@@ -814,10 +827,26 @@ pub const Parser = struct {
+             .@"7" => switch (c) {
+                 ';' => self.captureTrailing(.fixed),
+                 '2' => self.state = .@"72",
++                '5' => self.state = .@"75",
+                 '7' => self.state = .@"77",
+                 else => self.state = .invalid,
+             },
+ 
++            .@"75" => switch (c) {
++                '0' => self.state = .@"750",
++                else => self.state = .invalid,
++            },
++
++            .@"750" => switch (c) {
++                '1' => self.state = .@"7501",
++                else => self.state = .invalid,
++            },
++
++            .@"7501" => switch (c) {
++                ';' => self.captureTrailing(.allocating),
++                else => self.state = .invalid,
++            },
++
+             .@"72" => switch (c) {
+                 ';' => self.captureTrailing(.allocating),
+                 else => self.state = .invalid,
+@@ -948,10 +977,15 @@ pub const Parser = struct {
+ 
+             .@"72" => parsers.kitty_dnd_protocol.parse(self, terminator_ch),
+ 
+-            .@"77" => null,
++            .@"75",
++            .@"750",
++            .@"77",
++            => null,
+ 
+             .@"99" => parsers.kitty_desktop_notification.parse(self, terminator_ch),
+ 
++            .@"7501" => parsers.program_status.parse(self, terminator_ch),
++
+             .@"133" => parsers.semantic_prompt.parse(self, terminator_ch),
+ 
+             .@"552" => null,
+diff --git a/vendor/libghostty-vt/src/terminal/osc/parsers.zig b/vendor/libghostty-vt/src/terminal/osc/parsers.zig
+index 148bfa33..8e0ed0fe 100644
+--- a/vendor/libghostty-vt/src/terminal/osc/parsers.zig
++++ b/vendor/libghostty-vt/src/terminal/osc/parsers.zig
+@@ -14,6 +14,7 @@ pub const kitty_desktop_notification = @import("parsers/kitty_desktop_notificati
+ pub const kitty_text_sizing = @import("parsers/kitty_text_sizing.zig");
+ pub const mouse_shape = @import("parsers/mouse_shape.zig");
+ pub const osc9 = @import("parsers/osc9.zig");
++pub const program_status = @import("parsers/program_status.zig");
+ pub const report_pwd = @import("parsers/report_pwd.zig");
+ pub const rxvt_extension = @import("parsers/rxvt_extension.zig");
+ pub const semantic_prompt = @import("parsers/semantic_prompt.zig");
+diff --git a/vendor/libghostty-vt/src/terminal/osc/parsers/program_status.zig b/vendor/libghostty-vt/src/terminal/osc/parsers/program_status.zig
+new file mode 100644
+index 00000000..d37be18f
+--- /dev/null
++++ b/vendor/libghostty-vt/src/terminal/osc/parsers/program_status.zig
+@@ -0,0 +1,791 @@
++//! OSC 7501: Program Status Protocol
++//!
++//! Specification: https://www.superlogical.com/rex/docs/build/program-status
++//!
++//! A program uses this protocol to tell the terminal what it is doing:
++//! idle, working, done, waiting on the user, or failed. Each report is a
++//! list of `key=value` pairs separated by colons:
++//!
++//! ```
++//! ESC ] 7501 ; state=working:app=cargo:progress=40 ESC \
++//! ```
++//!
++//! A terminal keeps one record per id, and each report replaces its
++//! record completely. This parser only reads and validates one report at
++//! a time. Keeping records is up to the code that handles the command.
++//! In libghostty-vt, that is the `program_status` effect of
++//! `stream_terminal.Handler`.
++//!
++//! A program can check whether the terminal supports the protocol by
++//! sending `?` as the body. A terminal that supports it replies with `?`
++//! and may list the states and kinds it accepts. See `Command.query` and
++//! `query_reply`. Checking is optional, so a program may also send
++//! reports without asking first.
++//!
++//! Example:
++//!
++//! ```zig
++//! var p: osc.Parser = .init(alloc);
++//! defer p.deinit();
++//!
++//! p.nextSlice("7501;state=working:id=sync:progress=40");
++//! const report = p.end('\x1b').?.program_status.report;
++//! report.state; // .working
++//! report.readOption(.id); // "sync"
++//! report.readOption(.progress); // 40
++//! report.readOption(.app); // null, the program didn't send one
++//! ```
++
++const program_status = @This();
++
++const std = @import("std");
++const lib = @import("../../lib.zig");
++const osc = @import("../../osc.zig");
++const encoding = @import("../encoding.zig");
++const kitty_metadata = @import("../kitty_metadata.zig");
++
++const assert = @import("../../../quirks.zig").inlineAssert;
++const Parser = osc.Parser;
++const OSCCommand = osc.Command;
++const Terminator = osc.Terminator;
++
++const log = std.log.scoped(.osc_program_status);
++
++// Size limits from the specification. Every limit counts bytes, not
++// characters. A report that breaks any limit is discarded as a whole.
++
++/// The longest whole sequence, from `ESC ]` through the terminator.
++pub const max_sequence_bytes = 4096;
++
++/// The longest body, everything after `7501;`. This assumes the
++/// longer terminator (`ESC \`), so a sequence ended with BEL is limited
++/// to one byte less than the specification allows. The specification
++/// lets terminals choose lower limits.
++pub const max_body_bytes = max_sequence_bytes - "\x1b]7501;".len - "\x1b\\".len;
++
++/// The longest key, including keys this parser doesn't know.
++pub const max_key_bytes = 16;
++
++/// The longest `msg` value before and after base64 decoding.
++pub const max_msg_encoded_bytes = 2732;
++pub const max_msg_bytes = 2048;
++
++/// The longest `title` value before and after base64 decoding.
++pub const max_title_encoded_bytes = 256;
++pub const max_title_bytes = 192;
++
++/// The longest `app` value.
++pub const max_app_bytes = 32;
++
++/// The longest `id` value, the longest part between two slashes, and the
++/// most parts an id can have.
++pub const max_id_bytes = 128;
++pub const max_id_segment_bytes = 32;
++pub const max_id_depth = 8;
++
++/// The body of the reply to a support query.
++///
++/// A program asks whether the terminal supports the protocol by sending
++/// `?` as the body. A terminal that does answers with another OSC 7501
++/// whose body is this value, ended with the same terminator the query
++/// used:
++///
++/// ```
++/// program:  ESC ] 7501 ; ? ESC \
++/// terminal: ESC ] 7501 ; ?:states=idle,working,done,blocked,error:kinds=permission,question,auth ESC \
++/// ```
++///
++/// The specification only requires the `?`. The rest lists the states
++/// and kinds this parser accepts. `clear` is left out because it isn't a
++/// state. A program that wants a state or kind from a later revision of
++/// the specification checks these lists and falls back to one that is
++/// present. The lists come from `State` and `Kind`, so adding a value to
++/// either updates the reply.
++pub const query_reply = "?:states=" ++
++    names(State, &.{.clear}) ++
++    ":kinds=" ++
++    names(Kind, &.{});
++
++/// The names of the values of `E`, comma separated, leaving out `skip`.
++fn names(comptime E: type, comptime skip: []const E) []const u8 {
++    comptime {
++        var result: []const u8 = "";
++        for (@typeInfo(E).@"enum".fields) |field| {
++            const value = @field(E, field.name);
++            if (std.mem.indexOfScalar(E, skip, value) != null) continue;
++            if (result.len > 0) result = result ++ ",";
++            result = result ++ field.name;
++        }
++        return result;
++    }
++}
++
++/// A parsed OSC 7501 sequence: either a support query or a report.
++pub const Command = union(enum) {
++    pub const C = void;
++    pub const Report = program_status.Report;
++    pub const State = program_status.State;
++    pub const Kind = program_status.Kind;
++    pub const Option = program_status.Option;
++
++    /// The program asked whether the terminal supports the protocol by
++    /// sending `OSC 7501 ; ? ST`. A terminal that supports it answers
++    /// with `query_reply`, ended with this terminator so the program
++    /// recognizes it. A program that gets no reply treats the protocol as
++    /// unsupported. Asking is optional, so reports may arrive without a
++    /// query first.
++    query: Terminator,
++
++    /// A valid status report for one record.
++    report: program_status.Report,
++};
++
++/// The value of the required `state` key.
++///
++/// - `idle`: at rest, waiting for the user's next instruction.
++/// - `working`: running. May carry a progress percentage.
++/// - `done`: finished a piece of work the user hasn't looked at yet.
++/// - `blocked`: can't continue until the user does something. The
++///   report's `kind` says what. May carry a progress percentage.
++/// - `error`: failed and stopped.
++/// - `clear`: not a real state. Removes the addressed record and every
++///   record beneath it. Without an id, it removes every record.
++pub const State = lib.Enum(lib.target, &.{
++    "idle",
++    "working",
++    "done",
++    "blocked",
++    "error",
++    "clear",
++});
++
++/// The value of the `kind` key, which says what a blocked program needs
++/// from the user.
++///
++/// - `permission`: approval to do something.
++/// - `question`: an answer the user has to type.
++/// - `auth`: a login, token, or other credential.
++pub const Kind = lib.Enum(lib.target, &.{
++    "permission",
++    "question",
++    "auth",
++});
++
++/// A status report that passed every check in the specification.
++///
++/// `state` is always present. Read everything else with `readOption`,
++/// and the text values with `writeText`:
++///
++/// ```zig
++/// const report = cmd.program_status.report;
++/// if (report.readOption(.progress)) |percent| showProgress(percent);
++///
++/// var buf: [program_status.max_msg_bytes]u8 = undefined;
++/// var writer: std.Io.Writer = .fixed(&buf);
++/// try report.writeText(.msg, &writer);
++/// showMessage(writer.buffered());
++/// ```
++///
++/// The values point into the parser's buffer, so they are only valid
++/// until the next call to the parser. Copy anything you want to keep.
++///
++/// A key the program didn't send reads as null. A report replaces its
++/// record completely, so a null value means the record no longer has
++/// that value, not that the old value should be kept.
++pub const Report = struct {
++    /// What the program is doing.
++    state: State,
++
++    /// Everything after `7501;`, already validated by the parser. Read
++    /// it with `readOption` and `writeText`.
++    data: []const u8 = "",
++
++    /// Read the value of a key, or null if the program didn't send it.
++    /// If the program sent a key more than once, the last value wins.
++    pub fn readOption(
++        self: Report,
++        comptime option: Option,
++    ) ?option.Type() {
++        const v = lastValue(@tagName(option), self.data) orelse return null;
++
++        return switch (option) {
++            // The parser already discarded reports with an invalid id.
++            .id => v,
++            .app => if (isName(v)) v else null,
++            .kind => if (self.state == .blocked) std.meta.stringToEnum(Kind, v) else null,
++            .progress => switch (self.state) {
++                .working, .blocked => parseProgress(v),
++                else => null,
++            },
++            .title, .msg => if (v.len > 0) v else null,
++        };
++    }
++
++    /// Write the decoded text of `title` or `msg` to `writer`. Writes
++    /// nothing if the program didn't send it.
++    ///
++    /// The text is valid UTF-8 with no control characters, but it is
++    /// still untrusted text from the program. It is at most
++    /// `max_title_bytes` or `max_msg_bytes` long.
++    pub fn writeText(
++        self: Report,
++        comptime option: Option,
++        writer: *std.Io.Writer,
++    ) std.Io.Writer.Error!void {
++        comptime assert(option == .title or option == .msg);
++        const encoded = self.readOption(option) orelse return;
++
++        // The parser already checked that this decodes, so it can't fail.
++        var buf: [max_msg_bytes]u8 = undefined;
++        try writer.writeAll(decodeText(encoded, &buf) catch unreachable);
++    }
++};
++
++/// The keys of a report, other than `state`.
++///
++/// - `id`: the record this report is about. Without it, the report is
++///   about the root record, the program itself. A program that reports on
++///   several things at once, like a deploy to several regions, gives each
++///   one an id. A `/` makes one record the child of another, so
++///   `deploy/us-east` is a child of `deploy`. The parent doesn't have to
++///   exist.
++/// - `kind`: what a blocked program needs from the user. Only read when
++///   the state is `blocked`. An unknown kind reads as null.
++/// - `progress`: how far along the work is, from 0 to 100. Only read when
++///   the state is `working` or `blocked`. Null means indeterminate: the
++///   program is busy but has no percentage to report. A value outside
++///   that range reads as null too.
++/// - `app`: a stable name for the program that a machine can match on,
++///   such as `cargo`, `terraform`, or `claude-code`. It is a key for
++///   grouping, filtering, choosing an icon, and so on, not a label. The
++///   label is `title`. A record without `app` takes it from its nearest
++///   ancestor that has one.
++/// - `title`: a short label for the record, meant for people. Programs
++///   that report several records use this to tell them apart.
++/// - `msg`: one line of text for people, saying what the record is
++///   doing, waiting for, or has finished. Don't try to read meaning into
++///   it.
++///
++/// `readOption` returns `title` and `msg` still encoded as base64. Use
++/// `writeText` to read their text.
++pub const Option = enum {
++    id,
++    kind,
++    progress,
++    app,
++    title,
++    msg,
++
++    pub fn Type(comptime self: Option) type {
++        return switch (self) {
++            .kind => Kind,
++            .progress => u8,
++            .id, .app, .title, .msg => []const u8,
++        };
++    }
++};
++
++/// Parse OSC 7501. The body is everything after `7501;`.
++///
++/// The parser is forgiving about single pairs and strict about the
++/// report as a whole, as the specification requires. It skips a pair
++/// that is malformed or has a key it doesn't know, and keeps going:
++///
++/// ```
++/// state=idle:future=yes:oops   ->  a report with state idle
++/// ```
++///
++/// It returns null, so nothing from the report is applied, when:
++///
++/// - `state` is missing or isn't a state this parser knows.
++/// - Any key or value is longer than its limit, even one that a later
++///   pair with the same key replaces.
++/// - The id isn't made of valid names joined by single slashes. This
++///   throws out the report instead of skipping the pair, so a report
++///   meant for one record never falls back to the root record. For
++///   `state=clear`, that would remove every record.
++/// - `title` or `msg` isn't valid base64, or decodes to text that isn't
++///   UTF-8 or contains a control character.
++pub fn parse(parser: *Parser, terminator_ch: ?u8) ?*OSCCommand {
++    assert(parser.state == .@"7501");
++
++    const cap = if (parser.capture) |*c| c else {
++        parser.state = .invalid;
++        return null;
++    };
++
++    const data = cap.trailing();
++    if (data.len > max_body_bytes) {
++        log.warn("OSC 7501 sequence too long len={d}", .{data.len});
++        parser.state = .invalid;
++        return null;
++    }
++
++    if (std.mem.eql(u8, data, "?")) {
++        parser.command = .{ .program_status = .{ .query = .init(terminator_ch) } };
++        return &parser.command;
++    }
++
++    const state = validate(data) catch |err| {
++        log.warn("invalid OSC 7501 report err={}", .{err});
++        parser.state = .invalid;
++        return null;
++    };
++
++    parser.command = .{ .program_status = .{ .report = .{
++        .state = state,
++        .data = data,
++    } } };
++    return &parser.command;
++}
++
++/// Check a report body against the specification and return its state.
++fn validate(data: []const u8) error{
++    InvalidState,
++    InvalidId,
++    InvalidText,
++    TooLong,
++}!State {
++    // A key that is too long breaks a limit, even a key we don't know.
++    var pairs = std.mem.splitScalar(u8, data, ':');
++    while (pairs.next()) |pair| {
++        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
++        const key = std.mem.trim(u8, pair[0..eq], &std.ascii.whitespace);
++        if (key.len > max_key_bytes) return error.TooLong;
++    }
++
++    // Every value is checked against its limit, even one a later pair
++    // replaces, because any limit violation discards the whole report.
++    // An id is checked as written. Filtering by the value alphabet first
++    // would skip an id with a byte outside it instead of rejecting it.
++    var ids: kitty_metadata.ValueIterator("id", null) = .init(data);
++    while (ids.next()) |v| try validateId(v);
++    inline for (.{
++        .{ "app", max_app_bytes },
++        .{ "title", max_title_encoded_bytes },
++        .{ "msg", max_msg_encoded_bytes },
++    }) |limit| {
++        var it: kitty_metadata.ValueIterator(limit[0], value_bytes) = .init(data);
++        while (it.next()) |v| if (v.len > limit[1]) return error.TooLong;
++    }
++
++    var buf: [max_msg_bytes]u8 = undefined;
++    if (lastValue("title", data)) |v| {
++        if ((try decodeText(v, &buf)).len > max_title_bytes) return error.TooLong;
++    }
++    if (lastValue("msg", data)) |v| _ = try decodeText(v, &buf);
++
++    // An unknown state discards the report rather than guessing, so a
++    // state added in a later revision never turns into something else.
++    return std.meta.stringToEnum(
++        State,
++        lastValue("state", data) orelse return error.InvalidState,
++    ) orelse error.InvalidState;
++}
++
++/// The last value of `key` in a report body. Pairs without an `=` and
++/// values with bytes outside the value alphabet are skipped.
++fn lastValue(comptime key: []const u8, data: []const u8) ?[]const u8 {
++    var it: kitty_metadata.ValueIterator(key, value_bytes) = .init(data);
++    var last: ?[]const u8 = null;
++    while (it.next()) |v| last = v;
++    return last;
++}
++
++/// The bytes allowed in a name and a value. A name is the form of an
++/// `app` value and of each part of an `id`.
++const name_bytes = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.+-";
++const value_bytes = name_bytes ++ ",/=";
++
++fn isName(s: []const u8) bool {
++    return s.len > 0 and std.mem.indexOfNone(u8, s, name_bytes) == null;
++}
++
++/// Validate an id: names joined by single slashes, within the limits.
++fn validateId(value: []const u8) error{ InvalidId, TooLong }!void {
++    if (value.len > max_id_bytes) return error.TooLong;
++    var depth: usize = 0;
++    var it = std.mem.splitScalar(u8, value, '/');
++    while (it.next()) |segment| {
++        depth += 1;
++        if (depth > max_id_depth) return error.TooLong;
++        if (segment.len > max_id_segment_bytes) return error.TooLong;
++        if (!isName(segment)) return error.InvalidId;
++    }
++}
++
++/// Parse a whole number from 0 to 100. Anything else is treated as
++/// absent. This doesn't use std.fmt because it accepts underscores.
++fn parseProgress(value: []const u8) ?u8 {
++    if (value.len == 0) return null;
++    var n: u16 = 0;
++    for (value) |c| {
++        const digit = std.fmt.charToDigit(c, 10) catch return null;
++        n = n * 10 + digit;
++        if (n > 100) return null;
++    }
++    return @intCast(n);
++}
++
++/// Decode a base64 title or msg into `buf` and check that the text is
++/// safe to show. Padding is optional. The caller must have checked the
++/// encoded length against `max_msg_encoded_bytes`.
++fn decodeText(
++    encoded: []const u8,
++    buf: *[max_msg_bytes]u8,
++) error{ InvalidText, TooLong }![]const u8 {
++    const decoder = if (std.mem.endsWith(u8, encoded, "="))
++        std.base64.standard.Decoder
++    else
++        std.base64.standard_no_pad.Decoder;
++
++    const len = decoder.calcSizeForSlice(encoded) catch
++        return error.InvalidText;
++    if (len > buf.len) return error.TooLong;
++
++    const decoded = buf[0..len];
++    decoder.decode(decoded, encoded) catch return error.InvalidText;
++    if (!encoding.isSafeUtf8(decoded)) return error.InvalidText;
++    return decoded;
++}
++
++test "OSC 7501: query" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;?");
++    try testing.expectEqual(Terminator.st, p.end('\x1b').?.program_status.query);
++
++    p.reset();
++    p.nextSlice("7501;?");
++    try testing.expectEqual(Terminator.bel, p.end(0x07).?.program_status.query);
++}
++
++test "OSC 7501: query reply lists every state and kind" {
++    const testing = std.testing;
++
++    // The specification fixes these lists for the states and kinds it
++    // defines. A new state or kind must be added to the specification
++    // before it can appear here.
++    try testing.expectEqualStrings(
++        "?:states=idle,working,done,blocked,error:kinds=permission,question,auth",
++        query_reply,
++    );
++}
++
++test "OSC 7501: minimal report" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=idle");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.idle, report.state);
++    try testing.expect(report.readOption(.kind) == null);
++    try testing.expect(report.readOption(.progress) == null);
++    try testing.expect(report.readOption(.id) == null);
++    try testing.expect(report.readOption(.app) == null);
++    try testing.expect(report.readOption(.title) == null);
++    try testing.expect(report.readOption(.msg) == null);
++}
++
++test "OSC 7501: all keys" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    // "Plan" and "Apply 3 to add, 1 to change, 0 to destroy?"
++    p.nextSlice("7501;state=blocked:kind=permission:progress=42:id=tf/plan:app=terraform" ++
++        ":title=UGxhbg==:msg=QXBwbHkgMyB0byBhZGQsIDEgdG8gY2hhbmdlLCAwIHRvIGRlc3Ryb3k/");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.blocked, report.state);
++    try testing.expectEqual(Kind.permission, report.readOption(.kind).?);
++    try testing.expectEqual(@as(u8, 42), report.readOption(.progress).?);
++    try testing.expectEqualStrings("tf/plan", report.readOption(.id).?);
++    try testing.expectEqualStrings("terraform", report.readOption(.app).?);
++
++    var buf: [max_msg_bytes]u8 = undefined;
++    var title: std.Io.Writer = .fixed(&buf);
++    try report.writeText(.title, &title);
++    try testing.expectEqualStrings("Plan", title.buffered());
++
++    var msg: std.Io.Writer = .fixed(&buf);
++    try report.writeText(.msg, &msg);
++    try testing.expectEqualStrings(
++        "Apply 3 to add, 1 to change, 0 to destroy?",
++        msg.buffered(),
++    );
++}
++
++test "OSC 7501: base64 padding is optional" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=done:msg=UGxhbg");
++    const report = p.end('\x1b').?.program_status.report;
++
++    var buf: [max_msg_bytes]u8 = undefined;
++    var msg: std.Io.Writer = .fixed(&buf);
++    try report.writeText(.msg, &msg);
++    try testing.expectEqualStrings("Plan", msg.buffered());
++}
++
++test "OSC 7501: whitespace around keys and values" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501; state = working :\tapp=cargo\t");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.working, report.state);
++    try testing.expectEqualStrings("cargo", report.readOption(.app).?);
++}
++
++test "OSC 7501: last value wins" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=idle:app=a:state=done:app=b");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.done, report.state);
++    try testing.expectEqualStrings("b", report.readOption(.app).?);
++}
++
++test "OSC 7501: malformed pairs and unknown keys are skipped" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;garbage:=x:Bad=1:app=b@d:future=yes:state=working:app=ok:::");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.working, report.state);
++    try testing.expectEqualStrings("ok", report.readOption(.app).?);
++}
++
++test "OSC 7501: kind and progress only apply to some states" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=working:kind=auth:progress=10");
++    var report = p.end('\x1b').?.program_status.report;
++    try testing.expect(report.readOption(.kind) == null);
++    try testing.expectEqual(@as(u8, 10), report.readOption(.progress).?);
++
++    p.reset();
++    p.nextSlice("7501;state=done:kind=auth:progress=10");
++    report = p.end('\x1b').?.program_status.report;
++    try testing.expect(report.readOption(.kind) == null);
++    try testing.expect(report.readOption(.progress) == null);
++
++    p.reset();
++    p.nextSlice("7501;state=blocked:kind=dance");
++    report = p.end('\x1b').?.program_status.report;
++    try testing.expect(report.readOption(.kind) == null);
++}
++
++test "OSC 7501: out of range progress is absent" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    const cases = [_]struct { []const u8, ?u8 }{
++        .{ "0", 0 },
++        .{ "100", 100 },
++        .{ "101", null },
++        .{ "256", null },
++        .{ "99999999999999999999", null },
++        .{ "-1", null },
++        .{ "+1", null },
++        .{ "4.5", null },
++        .{ "1_0", null },
++        .{ "007", 7 },
++        .{ "", null },
++    };
++
++    for (cases) |case| {
++        p.reset();
++        p.nextSlice("7501;state=working:progress=");
++        p.nextSlice(case[0]);
++        const report = p.end('\x1b').?.program_status.report;
++        try testing.expectEqual(case[1], report.readOption(.progress));
++    }
++}
++
++test "OSC 7501: invalid app is ignored" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=idle:app=a/b");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expect(report.readOption(.app) == null);
++}
++
++test "OSC 7501: ids" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    const max_segment = "a" ** max_id_segment_bytes;
++    const valid = [_][]const u8{
++        "a",
++        "build/test",
++        "A-Z_0.9+",
++        max_segment,
++        "a/b/c/d/e/f/g/h",
++    };
++    for (valid) |id| {
++        p.reset();
++        p.nextSlice("7501;state=clear:id=");
++        p.nextSlice(id);
++        const report = p.end('\x1b').?.program_status.report;
++        try testing.expectEqualStrings(id, report.readOption(.id).?);
++    }
++
++    // An invalid id discards the report so that it can never fall back
++    // to the root record.
++    const invalid = [_][]const u8{
++        "",
++        "/",
++        "a/",
++        "/a",
++        "a//b",
++        "a,b",
++        "a=b",
++        "a?b",
++        "a b",
++        max_segment ++ "a",
++        "a/b/c/d/e/f/g/h/i",
++        ("a" ** 31 ++ "/") ** 4 ++ "a",
++    };
++    for (invalid) |id| {
++        p.reset();
++        p.nextSlice("7501;state=clear:id=");
++        p.nextSlice(id);
++        try testing.expect(p.end('\x1b') == null);
++    }
++}
++
++test "OSC 7501: text must decode to safe UTF-8" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    const invalid = [_][]const u8{
++        // Not base64.
++        "7501;state=done:msg=a",
++        "7501;state=done:msg=QQ=",
++        "7501;state=done:title=a",
++        // "a\nb", a control character.
++        "7501;state=done:msg=YQpi",
++        // "\x9b", a C1 control character as UTF-8.
++        "7501;state=done:msg=wps=",
++        // Invalid UTF-8.
++        "7501;state=done:msg=/w==",
++    };
++    for (invalid) |input| {
++        p.reset();
++        p.nextSlice(input);
++        try testing.expect(p.end('\x1b') == null);
++    }
++
++    // Unicode is fine. "安全"
++    p.reset();
++    p.nextSlice("7501;state=done:msg=5a6J5YWo");
++    const report = p.end('\x1b').?.program_status.report;
++    var buf: [max_msg_bytes]u8 = undefined;
++    var msg: std.Io.Writer = .fixed(&buf);
++    try report.writeText(.msg, &msg);
++    try testing.expectEqualStrings("安全", msg.buffered());
++}
++
++test "OSC 7501: empty text is absent" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=done:msg=:title=");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expect(report.readOption(.msg) == null);
++    try testing.expect(report.readOption(.title) == null);
++}
++
++test "OSC 7501: discarded reports" {
++    const testing = std.testing;
++
++    var p: Parser = .init(testing.allocator);
++    defer p.deinit();
++
++    // 192 bytes of title and 2048 bytes of message are the most allowed.
++    // "QUFB" decodes to "AAA" and "QUE" to "AA".
++    const title = "QUFB" ** (max_title_encoded_bytes / 4);
++    const msg = "QUFB" ** (max_msg_bytes / 3) ++ "QUE";
++    const fill = max_sequence_bytes - "\x1b]7501;state=idle:".len - "\x1b\\".len;
++
++    const cases = [_]struct { []const u8, bool }{
++        // A missing or unknown state.
++        .{ "7501;", false },
++        .{ "7501;app=cargo", false },
++        .{ "7501;state=sleeping", false },
++        .{ "7501;state=", false },
++        .{ "7501;state=IDLE", false },
++
++        // A key that is too long, even one we don't know.
++        .{ "7501;state=idle:" ++ "a" ** max_key_bytes ++ "=1", true },
++        .{ "7501;state=idle:" ++ "a" ** (max_key_bytes + 1) ++ "=1", false },
++
++        // An app that is too long, even if a later pair replaces it.
++        .{ "7501;state=idle:app=" ++ "a" ** (max_app_bytes + 1), false },
++        .{ "7501;state=idle:app=" ++ "a" ** (max_app_bytes + 1) ++ ":app=ok", false },
++
++        // Text at its limits and one step over.
++        .{ "7501;state=idle:title=" ++ title, true },
++        .{ "7501;state=idle:title=" ++ title ++ "QUFB", false },
++        .{ "7501;state=idle:msg=" ++ msg, true },
++        .{ "7501;state=idle:msg=" ++ "QUFB" ** (max_msg_bytes / 3 + 1), false },
++
++        // The whole sequence, including the terminator.
++        .{ "7501;state=idle:" ++ "x" ** fill, true },
++        .{ "7501;state=idle:" ++ "x" ** (fill + 1), false },
++
++        // Numbers that only start like 7501.
++        .{ "75;state=idle", false },
++        .{ "750;state=idle", false },
++        .{ "75010;state=idle", false },
++        .{ "7501", false },
++    };
++    for (cases) |case| {
++        p.reset();
++        p.nextSlice(case[0]);
++        try testing.expectEqual(case[1], p.end('\x1b') != null);
++    }
++}
++
++test "OSC 7501: no allocator" {
++    const testing = std.testing;
++
++    var p: Parser = .init(null);
++    defer p.deinit();
++
++    p.nextSlice("7501;state=working:app=cargo");
++    const report = p.end('\x1b').?.program_status.report;
++    try testing.expectEqual(State.working, report.state);
++    try testing.expectEqualStrings("cargo", report.readOption(.app).?);
++}
+diff --git a/vendor/libghostty-vt/src/terminal/stream.zig b/vendor/libghostty-vt/src/terminal/stream.zig
+index 29bdde7d..a15816eb 100644
+--- a/vendor/libghostty-vt/src/terminal/stream.zig
++++ b/vendor/libghostty-vt/src/terminal/stream.zig
+@@ -130,6 +130,7 @@ pub const Action = union(Key) {
+     semantic_prompt: SemanticPrompt,
+     kitty_clipboard: KittyClipboard,
+     kitty_dnd: KittyDnd,
++    program_status: ProgramStatus,
+ 
+     pub const Key = lib.Enum(
+         lib.target,
+@@ -231,6 +232,7 @@ pub const Action = union(Key) {
+             "semantic_prompt",
+             "kitty_clipboard",
+             "kitty_dnd",
++            "program_status",
+         },
+     );
+ 
+@@ -453,6 +455,8 @@ pub const Action = union(Key) {
+     pub const KittyClipboard = osc.Command.KittyClipboardProtocol;
+ 
+     pub const KittyDnd = osc.Command.KittyDndProtocol;
++
++    pub const ProgramStatus = osc.Command.ProgramStatus;
+ };
+ 
+ /// Returns a type that can process a stream of tty control characters.
+@@ -2683,6 +2687,10 @@ pub fn Stream(comptime H: type) type {
+                     self.handler.vt(.kitty_dnd, v);
+                 },
+ 
++                .program_status => |v| {
++                    self.handler.vt(.program_status, v);
++                },
++
+                 .conemu_sleep,
+                 .conemu_show_message_box,
+                 .conemu_change_tab_title,
+diff --git a/vendor/libghostty-vt/src/terminal/stream_terminal.zig b/vendor/libghostty-vt/src/terminal/stream_terminal.zig
+index 61172423..1f7c2835 100644
+--- a/vendor/libghostty-vt/src/terminal/stream_terminal.zig
++++ b/vendor/libghostty-vt/src/terminal/stream_terminal.zig
+@@ -19,6 +19,7 @@ const kitty_clipboard = @import("kitty/clipboard.zig");
+ const kitty_color = @import("kitty/color.zig");
+ const paste_pkg = @import("paste.zig");
+ const kitty_dnd = @import("kitty/dnd.zig");
++const lib = @import("lib.zig");
+ const size_report = @import("size_report.zig");
+ const simd = @import("../simd/main.zig");
+ const terminfo = @import("../terminfo/main.zig");
+@@ -166,6 +167,49 @@ pub const Handler = struct {
+         /// Called when the running program reports progress via OSC 9;4.
+         progress_report: ?*const fn (*Handler, osc.Command.ProgressReport) void,
+ 
++        /// Called when the running program sends a program status report
++        /// (OSC 7501). Programs use these to say what they are doing, such
++        /// as working, done, or waiting on the user. The report's
++        /// text is only valid until this returns, so copy what you keep.
++        ///
++        /// A full reset (RIS) removes every record. When that happens, the
++        /// terminal calls this with a `clear` report without an id, and
++        /// then calls `reset`.
++        ///
++        /// Setting this also makes the terminal answer the support query,
++        /// `OSC 7501 ; ?`, through `write_pty`. The reply is
++        /// `osc.program_status.query_reply`, which lists the states and
++        /// kinds the terminal accepts. While this is null, the query gets
++        /// no reply, so a program that asks sees the protocol as
++        /// unsupported. Asking is optional, so reports may still arrive.
++        /// They are dropped.
++        program_status: ?*const fn (*Handler, osc.Command.ProgramStatus.Report) void,
++
++        /// Called when the shell reports a step of a command through
++        /// shell integration: a prompt starts, input starts, output
++        /// starts, or the command ends. See `SemanticPrompt` for the
++        /// steps and an example.
++        ///
++        /// The terminal has already applied the sequence when this is
++        /// called. A sequence the terminal rejects is never reported.
++        semantic_prompt: ?*const fn (*Handler, SemanticPrompt) void,
++
++        /// Called after the running program performs a full reset (RIS,
++        /// `ESC c`). The terminal has already reset itself, which clears
++        /// the screen, scrollback, title, and pwd. `title_changed` and
++        /// `pwd_changed` are not called for this, so update anything that
++        /// shows them here.
++        ///
++        /// A full reset also removes the progress report and program
++        /// status records, and `progress_report` and `program_status` are
++        /// called for that before this is called. A soft reset (DECSTR)
++        /// doesn't call this.
++        ///
++        /// Shells don't report the end of a command that a reset
++        /// interrupts, so clear any state you keep for the current
++        /// command here.
++        reset: ?*const fn (*Handler) void,
++
+         /// Called when the running program writes to a clipboard.
+         clipboard_write: ?*const fn (*Handler, clipboard.Write) void,
+ 
+@@ -214,6 +258,9 @@ pub const Handler = struct {
+             .drag_and_drop = null,
+             .enquiry = null,
+             .progress_report = null,
++            .program_status = null,
++            .reset = null,
++            .semantic_prompt = null,
+             .size = null,
+             .title_changed = null,
+             .pwd_changed = null,
+@@ -234,6 +281,113 @@ pub const Handler = struct {
+         };
+     };
+ 
++    /// A shell integration event, passed to the `semantic_prompt` effect.
++    ///
++    /// Many shells tell the terminal where each prompt, command, and
++    /// command output begins. Each command goes through four steps, and
++    /// the effect is called once for each step the shell reports:
++    ///
++    ///   1. `prompt_start`: the shell starts drawing a prompt.
++    ///   2. `input_start`: the prompt is drawn and the user can type.
++    ///   3. `output_start`: the user submitted the command and it runs.
++    ///   4. `command_end`: the command finished.
++    ///
++    /// Then the shell draws the next prompt and the steps start over.
++    ///
++    /// Shells differ in what they report. Many don't send the command
++    /// line or the exit code, and some skip steps, so handle each event
++    /// on its own instead of expecting a strict order. A shell may also
++    /// start the same prompt more than once, for example when it redraws
++    /// the prompt after a resize, so treat a repeated `prompt_start` as
++    /// harmless.
++    ///
++    /// The event describes what happened, not how the shell said it.
++    /// Today events come from OSC 133. More shell integration protocols
++    /// may report through this same type later.
++    ///
++    /// The strings are only valid until the callback returns. Copy them
++    /// if you need them later.
++    ///
++    /// This example logs each command's result:
++    ///
++    /// ```zig
++    /// fn onSemanticPrompt(handler: *Handler, event: Handler.SemanticPrompt) void {
++    ///     _ = handler;
++    ///     switch (event.kind) {
++    ///         .command_end => if (event.exit_code) |code| {
++    ///             log.info("command exited with {}", .{code});
++    ///         } else {
++    ///             log.info("command finished", .{});
++    ///         },
++    ///         else => {},
++    ///     }
++    /// }
++    ///
++    /// var handler: Handler = .init(&terminal);
++    /// handler.effects.semantic_prompt = &onSemanticPrompt;
++    /// ```
++    pub const SemanticPrompt = struct {
++        /// Which step of the command this event reports.
++        kind: Kind,
++
++        /// Which prompt is starting, for `prompt_start`. Always
++        /// `primary` for other kinds.
++        prompt_kind: PromptKind = .primary,
++
++        /// The command's exit code, for `command_end` when the shell
++        /// reported one. Null otherwise.
++        exit_code: ?i32 = null,
++
++        /// The command line about to run, for `output_start`. The shell
++        /// sends it encoded, and this is the decoded text. Empty if the
++        /// shell didn't send one or it couldn't be decoded.
++        command: []const u8 = "",
++
++        /// A description of what went wrong, for `command_end` when the
++        /// shell sent one. Empty otherwise. Few shells send this, and the
++        /// exit code is the usual way to tell whether a command failed.
++        err: []const u8 = "",
++
++        /// C: GhosttySemanticPromptKind
++        pub const Kind = lib.Enum(lib.target, &.{
++            // Never reported. This exists so that a zeroed C value is not
++            // mistaken for a real event.
++            "invalid",
++
++            // The shell started drawing a prompt.
++            "prompt_start",
++
++            // The prompt is drawn and the user can start typing.
++            "input_start",
++
++            // The user submitted the command and it started running.
++            "output_start",
++
++            // The command finished running.
++            "command_end",
++        });
++
++        /// C: GhosttySemanticPromptPromptKind
++        pub const PromptKind = lib.Enum(lib.target, &.{
++            // The main prompt shown before each command. This is used
++            // when the shell doesn't say which prompt it is drawing.
++            "primary",
++
++            // A prompt drawn at the right edge of the line.
++            "right",
++
++            // A prompt at the start of an extra line of a command that
++            // spans several lines.
++            "continuation",
++
++            // Another prompt for an extra line of input, such as bash's
++            // PS2. Shells differ in whether they report extra lines as
++            // continuation or secondary prompts, so most callers should
++            // treat the two the same.
++            "secondary",
++        });
++    };
++
+     pub fn init(terminal: *Terminal) Handler {
+         return .{
+             .terminal = terminal,
+@@ -457,12 +611,15 @@ pub const Handler = struct {
+                 self.kitty_clipboard_grants.deinit(self.terminal.gpa());
+                 self.kitty_clipboard_grants = .{};
+ 
+-                // Clear the progress bar
++                // Clear the progress bar and program status records
+                 self.progressReport(.{ .state = .remove });
++                self.programStatusReport(.{ .state = .clear });
++
++                if (self.effects.reset) |func| func(self);
+             },
+             .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
+             .end_hyperlink => self.terminal.screens.active.endHyperlink(),
+-            .semantic_prompt => try self.terminal.semanticPrompt(value),
++            .semantic_prompt => try self.semanticPrompt(value),
+             .mouse_shape => self.terminal.mouse_shape = value,
+             .color_operation => self.colorOperation(
+                 &value.requests,
+@@ -496,6 +653,7 @@ pub const Handler = struct {
+             .window_title => try self.windowTitle(value.title),
+             .report_pwd => try self.reportPwd(value.url),
+             .progress_report => self.progressReport(value),
++            .program_status => self.programStatus(value),
+             .xtversion => self.reportXtversion(),
+             .clipboard_contents => self.clipboardContents(
+                 value.kind,
+@@ -621,11 +779,93 @@ pub const Handler = struct {
+         func(self, notification);
+     }
+ 
++    fn semanticPrompt(self: *Handler, cmd: osc.Command.SemanticPrompt) !void {
++        try self.terminal.semanticPrompt(cmd);
++        const func = self.effects.semantic_prompt orelse return;
++        switch (cmd.action) {
++            .fresh_line => {},
++
++            // A and N accept the same k= option as P, and the terminal
++            // applies it, so report it for all three.
++            .fresh_line_new_prompt,
++            .new_command,
++            .prompt_start,
++            => func(self, .{
++                .kind = .prompt_start,
++                .prompt_kind = if (cmd.readOption(.prompt_kind)) |v| switch (v) {
++                    .initial => .primary,
++                    .right => .right,
++                    .continuation => .continuation,
++                    .secondary => .secondary,
++                } else .primary,
++            }),
++
++            .end_prompt_start_input,
++            .end_prompt_start_input_terminate_eol,
++            => func(self, .{ .kind = .input_start }),
++
++            .end_input_start_output => {
++                // Decoding never makes the command line longer, so a
++                // buffer the size of the raw options always fits it. If
++                // the buffer can't be allocated or the command line
++                // can't be decoded, we still report the step with an
++                // empty command.
++                const alloc = self.terminal.gpa();
++                const buf = alloc.alloc(u8, cmd.options_unvalidated.len) catch |err| {
++                    log.warn("error allocating semantic prompt command line err={}", .{err});
++                    func(self, .{ .kind = .output_start });
++                    return;
++                };
++                defer alloc.free(buf);
++                var writer: std.Io.Writer = .fixed(buf);
++                const command: []const u8 = if (cmd.writeCommandLine(&writer))
++                    writer.buffered()
++                else |_|
++                    "";
++                func(self, .{ .kind = .output_start, .command = command });
++            },
++
++            .end_command => func(self, .{
++                .kind = .command_end,
++                .exit_code = cmd.readOption(.exit_code),
++                .err = cmd.readOption(.err) orelse "",
++            }),
++        }
++    }
++
+     fn progressReport(self: *Handler, report: osc.Command.ProgressReport) void {
+         const func = self.effects.progress_report orelse return;
+         func(self, report);
+     }
+ 
++    fn programStatus(self: *Handler, cmd: osc.Command.ProgramStatus) void {
++        switch (cmd) {
++            .report => |report| self.programStatusReport(report),
++
++            // Only claim support when something handles the reports. The
++            // reply is always the same fixed bytes: `?` and the lists of
++            // states and kinds we accept. The specification never allows
++            // sending report contents back to the program.
++            .query => |terminator| if (self.effects.program_status != null) {
++                switch (terminator) {
++                    inline else => |t| self.writePty(
++                        "\x1b]7501;" ++
++                            osc.program_status.query_reply ++
++                            comptime t.string(),
++                    ),
++                }
++            },
++        }
++    }
++
++    fn programStatusReport(
++        self: *Handler,
++        report: osc.Command.ProgramStatus.Report,
++    ) void {
++        const func = self.effects.program_status orelse return;
++        func(self, report);
++    }
++
+     fn clipboardContents(
+         self: *Handler,
+         kind: u8,
+@@ -3347,6 +3587,261 @@ test "progress_report effect callback" {
+     try testing.expectEqual(@as(?u8, null), S.last_progress);
+ }
+ 
++test "program_status effect callback" {
++    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
++    defer t.deinit(testing.allocator);
++
++    const S = struct {
++        var count: usize = 0;
++        var last_state: ?osc.Command.ProgramStatus.State = null;
++        var last_id: [64]u8 = undefined;
++        var last_id_len: ?usize = null;
++        var last_message: [64]u8 = undefined;
++        var last_message_len: ?usize = null;
++        var written: [128]u8 = undefined;
++        var written_len: usize = 0;
++
++        fn reset() void {
++            count = 0;
++            last_state = null;
++            last_id_len = null;
++            last_message_len = null;
++            written_len = 0;
++        }
++
++        fn programStatus(_: *Handler, report: osc.Command.ProgramStatus.Report) void {
++            count += 1;
++            last_state = report.state;
++            last_id_len = if (report.readOption(.id)) |v| copy(&last_id, v) else null;
++            var message: std.Io.Writer = .fixed(&last_message);
++            report.writeText(.msg, &message) catch unreachable;
++            last_message_len = message.buffered().len;
++        }
++
++        fn writePty(_: *Handler, data: []const u8) void {
++            written_len += copy(written[written_len..], data);
++        }
++
++        fn copy(dst: []u8, src: []const u8) usize {
++            @memcpy(dst[0..src.len], src);
++            return src.len;
++        }
++    };
++
++    // Without a callback, reports are ignored and the query isn't
++    // answered so the program sees the protocol as unsupported.
++    {
++        S.reset();
++        var handler: Handler = .init(&t);
++        handler.effects.write_pty = &S.writePty;
++        var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
++        defer s.deinit();
++        s.nextSlice("\x1B]7501;?\x1B\\\x1B]7501;state=idle\x1B\\");
++        try testing.expectEqual(@as(usize, 0), S.written_len);
++    }
++
++    S.reset();
++    var handler: Handler = .init(&t);
++    handler.effects.write_pty = &S.writePty;
++    handler.effects.program_status = &S.programStatus;
++    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
++    defer s.deinit();
++
++    // The query is answered with `?`, the states and kinds we accept,
++    // and the same terminator the query used.
++    const reply = "\x1B]7501;?:states=idle,working,done,blocked,error" ++
++        ":kinds=permission,question,auth";
++    s.nextSlice("\x1B]7501;?\x1B\\");
++    try testing.expectEqualStrings(reply ++ "\x1B\\", S.written[0..S.written_len]);
++    S.written_len = 0;
++    s.nextSlice("\x1B]7501;?\x07");
++    try testing.expectEqualStrings(reply ++ "\x07", S.written[0..S.written_len]);
++    try testing.expectEqual(@as(usize, 0), S.count);
++    S.written_len = 0;
++
++    // A report split across writes. "Syncing photos"
++    s.nextSlice("\x1B]7501;state=working:id=sync:msg=U3lu");
++    try testing.expectEqual(@as(usize, 0), S.count);
++    s.nextSlice("Y2luZyBwaG90b3M=\x1B\\");
++    try testing.expectEqual(@as(usize, 1), S.count);
++    try testing.expectEqual(.working, S.last_state.?);
++    try testing.expectEqualStrings("sync", S.last_id[0..S.last_id_len.?]);
++    try testing.expectEqualStrings("Syncing photos", S.last_message[0..S.last_message_len.?]);
++
++    // A full reset clears every record.
++    s.nextSlice("\x1Bc");
++    try testing.expectEqual(@as(usize, 2), S.count);
++    try testing.expectEqual(.clear, S.last_state.?);
++    try testing.expect(S.last_id_len == null);
++    try testing.expectEqual(@as(?usize, 0), S.last_message_len);
++
++    // Nothing from the reports was echoed back.
++    try testing.expectEqual(@as(usize, 0), S.written_len);
++}
++
++test "semantic_prompt effect callback" {
++    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
++    defer t.deinit(testing.allocator);
++
++    // A null callback (the default readonly effects) silently ignores events.
++    {
++        var s: Stream = .init(.{ .allocator = testing.allocator, .handler = .init(&t) });
++        defer s.deinit();
++        s.nextSlice("\x1B]133;C;cmdline_url=ls\x1B\\");
++    }
++
++    const S = struct {
++        var count: usize = 0;
++        var last: Handler.SemanticPrompt = .{ .kind = .invalid };
++        var last_cursor_x: usize = 0;
++        var command_buf: [64]u8 = undefined;
++        var err_buf: [64]u8 = undefined;
++
++        fn semanticPrompt(handler: *Handler, event: Handler.SemanticPrompt) void {
++            count += 1;
++            last = event;
++            last_cursor_x = handler.terminal.screens.active.cursor.x;
++
++            // The strings are borrowed, so copy them.
++            @memcpy(command_buf[0..event.command.len], event.command);
++            last.command = command_buf[0..event.command.len];
++            @memcpy(err_buf[0..event.err.len], event.err);
++            last.err = err_buf[0..event.err.len];
++        }
++    };
++    S.count = 0;
++
++    var handler: Handler = .init(&t);
++    handler.effects.semantic_prompt = &S.semanticPrompt;
++
++    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
++    defer s.deinit();
++
++    // The effect fires after the terminal applied the fresh line.
++    s.nextSlice("abc");
++    s.nextSlice("\x1B]133;A\x07");
++    try testing.expectEqual(@as(usize, 1), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
++    try testing.expectEqual(@as(usize, 0), S.last_cursor_x);
++
++    s.nextSlice("\x1B]133;P;k=r\x07");
++    try testing.expectEqual(@as(usize, 2), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.right, S.last.prompt_kind);
++
++    s.nextSlice("\x1B]133;P;k=c\x07");
++    try testing.expectEqual(@as(usize, 3), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.continuation, S.last.prompt_kind);
++
++    s.nextSlice("\x1B]133;P;k=s\x07");
++    try testing.expectEqual(@as(usize, 4), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.secondary, S.last.prompt_kind);
++
++    // An unknown prompt kind is primary.
++    s.nextSlice("\x1B]133;P;k=x\x07");
++    try testing.expectEqual(@as(usize, 5), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
++
++    s.nextSlice("\x1B]133;N\x07");
++    try testing.expectEqual(@as(usize, 6), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
++    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
++
++    s.nextSlice("\x1B]133;B\x07");
++    try testing.expectEqual(@as(usize, 7), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.input_start, S.last.kind);
++
++    s.nextSlice("\x1B]133;I\x07");
++    try testing.expectEqual(@as(usize, 8), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.input_start, S.last.kind);
++
++    s.nextSlice("\x1B]133;C;cmdline_url=ls%20-la\x07");
++    try testing.expectEqual(@as(usize, 9), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.output_start, S.last.kind);
++    try testing.expectEqualStrings("ls -la", S.last.command);
++
++    s.nextSlice("\x1B]133;C;cmdline='echo hi'\x07");
++    try testing.expectEqual(@as(usize, 10), S.count);
++    try testing.expectEqualStrings("echo hi", S.last.command);
++
++    // No command line, and an undecodable one, are both empty.
++    s.nextSlice("\x1B]133;C\x07");
++    try testing.expectEqual(@as(usize, 11), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.output_start, S.last.kind);
++    try testing.expectEqualStrings("", S.last.command);
++
++    s.nextSlice("\x1B]133;C;cmdline='bad\x07");
++    try testing.expectEqual(@as(usize, 12), S.count);
++    try testing.expectEqualStrings("", S.last.command);
++
++    s.nextSlice("\x1B]133;D;1\x07");
++    try testing.expectEqual(@as(usize, 13), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.command_end, S.last.kind);
++    try testing.expectEqual(@as(?i32, 1), S.last.exit_code);
++    try testing.expectEqualStrings("", S.last.err);
++
++    s.nextSlice("\x1B]133;D\x07");
++    try testing.expectEqual(@as(usize, 14), S.count);
++    try testing.expectEqual(Handler.SemanticPrompt.Kind.command_end, S.last.kind);
++    try testing.expectEqual(@as(?i32, null), S.last.exit_code);
++
++    s.nextSlice("\x1B]133;D;-2;err=boom\x07");
++    try testing.expectEqual(@as(usize, 15), S.count);
++    try testing.expectEqual(@as(?i32, -2), S.last.exit_code);
++    try testing.expectEqualStrings("boom", S.last.err);
++
++    // Fresh line alone is layout, not lifecycle.
++    s.nextSlice("\x1B]133;L\x07");
++    try testing.expectEqual(@as(usize, 15), S.count);
++
++    // Sequences the parser rejects report nothing.
++    s.nextSlice("\x1B]133;Lx\x07");
++    s.nextSlice("\x1B]133;Z\x07");
++    try testing.expectEqual(@as(usize, 15), S.count);
++}
++
++test "reset effect callback" {
++    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
++    defer t.deinit(testing.allocator);
++
++    const S = struct {
++        var events: [8]u8 = undefined;
++        var len: usize = 0;
++        var reset_cursor_x: usize = 0;
++
++        fn progressReport(_: *Handler, _: osc.Command.ProgressReport) void {
++            events[len] = 'p';
++            len += 1;
++        }
++
++        fn reset(handler: *Handler) void {
++            reset_cursor_x = handler.terminal.screens.active.cursor.x;
++            events[len] = 'r';
++            len += 1;
++        }
++    };
++    S.len = 0;
++    S.reset_cursor_x = 0;
++
++    var handler: Handler = .init(&t);
++    handler.effects.progress_report = &S.progressReport;
++    handler.effects.reset = &S.reset;
++
++    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
++    defer s.deinit();
++
++    // A soft reset (DECSTR) doesn't report a reset.
++    s.nextSlice("\x1B[!p");
++    try testing.expectEqualStrings("", S.events[0..S.len]);
++
++    // A full reset reports the progress removal first, and the terminal
++    // already reset itself when the reset is reported.
++    s.nextSlice("abc\x1Bc");
++    try testing.expectEqualStrings("pr", S.events[0..S.len]);
++    try testing.expectEqual(@as(usize, 0), S.reset_cursor_x);
++}
++
+ test "clipboard_write effect callback" {
+     var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
+     defer t.deinit(testing.allocator);
+diff --git a/vendor/libghostty-vt/src/termio/stream_handler.zig b/vendor/libghostty-vt/src/termio/stream_handler.zig
+index 27e06dcb..c2a7cfe2 100644
+--- a/vendor/libghostty-vt/src/termio/stream_handler.zig
++++ b/vendor/libghostty-vt/src/termio/stream_handler.zig
+@@ -373,6 +373,7 @@ pub const StreamHandler = struct {
+             .title_push,
+             .title_pop,
+             .kitty_dnd,
++            .program_status,
+             => {},
+         }
+     }

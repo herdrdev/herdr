@@ -108,6 +108,18 @@ impl HeadlessServer {
         ))
     }
 
+    /// Seeing a result can uncover the status it was shown over, which
+    /// clients are told about like any other change. Returns true when a
+    /// pane's presented status changed.
+    pub(super) fn acknowledge_seen_program_results(&mut self) -> bool {
+        let updates = self.app.acknowledge_seen_program_results();
+        for update in &updates {
+            self.forward_semantic_agent_notification(update);
+            self.forward_pane_state_update_notifications_to_clients(update);
+        }
+        !updates.is_empty()
+    }
+
     fn forward_pane_state_update_notifications_to_clients(
         &mut self,
         update: &crate::app::actions::PaneStateUpdate,
@@ -429,22 +441,34 @@ impl HeadlessServer {
 
                 true
             }
-            AppEvent::HookStateReported {
-                pane_id,
-                agent_label,
-                ..
-            } => {
-                // Hook reports can be stale or no-op after sequence rejection.
+            AppEvent::HookStateReported { pane_id, .. }
+            | AppEvent::ProgramStatusReported { pane_id, .. } => {
+                // Hook reports can be stale or no-op after sequence rejection,
+                // and a program's report may leave the pane's status alone.
                 // Forward only effective state changes observed after handling.
                 let toast_before = self.app.state.toast.clone();
                 let pane_id_val = *pane_id;
-                let agent_val = crate::detect::parse_agent_label(agent_label);
+                let hook_agent = match &ev {
+                    AppEvent::HookStateReported { agent_label, .. } => {
+                        Some(crate::detect::parse_agent_label(agent_label))
+                    }
+                    _ => None,
+                };
 
                 // Hook reports are already folded into the effective state.
                 let prev_state = self.pane_effective_state(pane_id_val);
 
                 self.sync_foreground_client_state();
                 let pane_updates = self.app.handle_internal_event_with_pane_updates(ev);
+                // A program's report does not say which agent it is; the pane does.
+                let agent_val = hook_agent.unwrap_or_else(|| {
+                    pane_updates
+                        .iter()
+                        .find(|update| update.pane_id == pane_id_val)
+                        .and_then(|update| update.known_agent)
+                });
+                // A hook report always redraws; a program's only when it changed the pane.
+                let needs_render = hook_agent.is_some() || !pane_updates.is_empty();
                 let suppress_completion = pane_updates
                     .iter()
                     .any(|update| update.pane_id == pane_id_val && update.suppress_completion);
@@ -521,7 +545,7 @@ impl HeadlessServer {
                     );
                 }
 
-                true
+                needs_render
             }
             AppEvent::UpdateReady {
                 version,

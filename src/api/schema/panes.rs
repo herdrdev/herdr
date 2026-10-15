@@ -530,7 +530,55 @@ pub struct PaneInfo {
     pub agent_session: Option<AgentSessionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scroll: Option<PaneScrollInfo>,
+    /// Status records the pane's program reported through OSC 7501, least
+    /// recently updated first. Herdr does not verify them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub program_status: Vec<ProgramStatusInfo>,
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ProgramStatusInfo {
+    /// Which record this is. Empty for the program itself; `/` separates a
+    /// child record from its parent.
+    pub id: String,
+    pub state: ProgramStatusState,
+    /// What a blocked program needs from the user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ProgramStatusKind>,
+    /// Percentage from 0 through 100. Absent means indeterminate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    /// The program's own identifier, inherited from the nearest parent
+    /// record when this record has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramStatusState {
+    Idle,
+    Working,
+    Done,
+    Blocked,
+    Error,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramStatusKind {
+    Permission,
+    Question,
+    Auth,
+    #[serde(other)]
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

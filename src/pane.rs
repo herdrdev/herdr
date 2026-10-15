@@ -19,7 +19,7 @@ use tracing::debug;
 use tracing::{error, info, warn};
 
 use crate::detect::{Agent, AgentState};
-use crate::events::AppEvent;
+use crate::events::{AppEvent, ProgramStatusMailbox};
 use crate::layout::PaneId;
 use crate::pty::actor::{PtyIoActor, PtyIoActorConfig, PtyIoActorHandle, PtyReadResult};
 use crate::render_signal::RenderSignal;
@@ -1504,6 +1504,7 @@ pub struct PaneRuntime {
     current_size: Cell<(u16, u16, u32, u32)>,
     child_pid: Arc<AtomicU32>,
     reported_cwd: Arc<Mutex<Option<std::path::PathBuf>>>,
+    program_status: Arc<ProgramStatusMailbox>,
     persistence_cwd: Mutex<Option<std::path::PathBuf>>,
     cwd_process_exited: Arc<AtomicBool>,
     child_wait_completed: Option<Arc<AtomicBool>>,
@@ -1706,6 +1707,8 @@ impl Drop for PaneRuntime {
         if let Some(handle) = &self.detect_handle {
             handle.abort();
         }
+        // A delivery still in flight must not reach the shell that replaces this one.
+        self.program_status.retire();
         self.compression.abort();
         self.io.shutdown();
         if !self.preserve_processes_on_drop {
@@ -2206,6 +2209,30 @@ fn publish_terminal_bells(pane_id: PaneId, count: u16, events: &mpsc::Sender<App
     }
 }
 
+fn publish_program_status(
+    pane_id: PaneId,
+    reports: Vec<crate::ghostty::ProgramStatusEvent>,
+    mailbox: &Arc<ProgramStatusMailbox>,
+    events: &mpsc::Sender<AppEvent>,
+    rt: &tokio::runtime::Handle,
+) {
+    if reports.is_empty() || !mailbox.push(reports) {
+        return;
+    }
+    let wakeup = AppEvent::ProgramStatusReported {
+        pane_id,
+        reports: mailbox.clone(),
+    };
+    if let Err(mpsc::error::TrySendError::Full(wakeup)) = events.try_send(wakeup) {
+        // The reader must not block, so wait for room on the runtime. The
+        // mailbox allows one pending wakeup per pane, which bounds these tasks.
+        let events = events.clone();
+        rt.spawn(async move {
+            let _ = events.send(wakeup).await;
+        });
+    }
+}
+
 fn publish_reported_cwd(
     pane_id: PaneId,
     cwd: std::path::PathBuf,
@@ -2564,6 +2591,7 @@ impl PaneRuntime {
         let content_write_lock = Arc::new(Mutex::new(()));
         let detection_content_seq = Arc::new(AtomicU64::new(0));
 
+        let program_status = Arc::new(ProgramStatusMailbox::default());
         let io = {
             let terminal = terminal.clone();
             let response_writer = response_tx.clone();
@@ -2578,6 +2606,7 @@ impl PaneRuntime {
             let compression_wake = compression.notifier();
             let rt = tokio::runtime::Handle::current();
             let delay_rt = rt.clone();
+            let program_status = program_status.clone();
             let on_read = Box::new(move |bytes: &[u8]| {
                 let _content_write_guard = match content_write_lock.lock() {
                     Ok(guard) => guard,
@@ -2591,6 +2620,13 @@ impl PaneRuntime {
                 drop(_content_write_guard);
                 compression_wake.wake();
                 publish_terminal_bells(pane_id, result.terminal_bells, &read_events);
+                publish_program_status(
+                    pane_id,
+                    result.program_status,
+                    &program_status,
+                    &read_events,
+                    &delay_rt,
+                );
                 observe_detection_content_change(bytes, &detection_content_seq);
                 let title_requested =
                     result.terminal_title_changed && render_dirty.request_terminal_title(pane_id);
@@ -2665,6 +2701,7 @@ impl PaneRuntime {
             current_size: Cell::new((rows, cols, cell_width_px, cell_height_px)),
             child_pid,
             reported_cwd,
+            program_status,
             persistence_cwd: Mutex::new(None),
             cwd_process_exited,
             child_wait_completed: None,
@@ -2768,6 +2805,7 @@ impl PaneRuntime {
             });
         }
 
+        let program_status = Arc::new(ProgramStatusMailbox::default());
         let io = {
             let terminal = terminal.clone();
             let response_writer = response_tx.clone();
@@ -2781,6 +2819,7 @@ impl PaneRuntime {
             let reported_cwd = reported_cwd.clone();
             let compression_wake = compression.notifier();
             let rt = tokio::runtime::Handle::current();
+            let program_status = program_status.clone();
             let on_read = Box::new(move |bytes: &[u8]| {
                 let _content_write_guard = match content_write_lock.lock() {
                     Ok(guard) => guard,
@@ -2794,6 +2833,13 @@ impl PaneRuntime {
                 drop(_content_write_guard);
                 compression_wake.wake();
                 publish_terminal_bells(pane_id, result.terminal_bells, &events);
+                publish_program_status(
+                    pane_id,
+                    result.program_status,
+                    &program_status,
+                    &events,
+                    &rt,
+                );
                 if agent_detection == AgentDetection::Enabled {
                     observe_detection_content_change(bytes, &detection_content_seq);
                 }
@@ -3278,6 +3324,7 @@ impl PaneRuntime {
             current_size: Cell::new((rows, cols, 0, 0)),
             child_pid,
             reported_cwd,
+            program_status,
             persistence_cwd: Mutex::new(None),
             cwd_process_exited: child_wait_completed.clone(),
             child_wait_completed: Some(child_wait_completed),
@@ -4071,6 +4118,7 @@ impl PaneRuntime {
                 current_size: Cell::new((rows, cols, 0, 0)),
                 child_pid: Arc::new(AtomicU32::new(0)),
                 reported_cwd: Arc::new(Mutex::new(None)),
+                program_status: Arc::default(),
                 persistence_cwd: Mutex::new(None),
                 cwd_process_exited: Arc::new(AtomicBool::new(false)),
                 child_wait_completed: None,
@@ -4465,6 +4513,96 @@ mod tests {
         for (key, value) in extra {
             assert_eq!(cmd.get_env(key), Some(OsStr::new(&value)));
         }
+    }
+
+    #[tokio::test]
+    async fn program_status_survives_a_full_event_channel() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+        let pane_id = PaneId::from_raw(1);
+        let (events, mut event_rx) = mpsc::channel(1);
+        events
+            .try_send(AppEvent::TerminalBell { pane_id, count: 1 })
+            .unwrap();
+        let mailbox = Arc::new(ProgramStatusMailbox::default());
+        let rt = tokio::runtime::Handle::current();
+        let report = |id: &str, state| {
+            ProgramStatusEvent::Report(ProgramStatusReport {
+                id: id.into(),
+                state,
+                kind: None,
+                progress: None,
+                app: None,
+                title: None,
+                message: None,
+            })
+        };
+
+        // All of this arrives while the channel is full, and the program
+        // says nothing more afterwards.
+        for events_in_chunk in [
+            vec![report("", ProgramStatusState::Done)],
+            vec![report("job", ProgramStatusState::Blocked)],
+            vec![ProgramStatusEvent::Clear("job".into())],
+            vec![ProgramStatusEvent::PromptStart],
+            vec![ProgramStatusEvent::CommandStart],
+            vec![report("next", ProgramStatusState::Working)],
+        ] {
+            publish_program_status(pane_id, events_in_chunk, &mailbox, &events, &rt);
+        }
+
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppEvent::TerminalBell { .. })
+        ));
+        let Some(AppEvent::ProgramStatusReported { reports, .. }) = event_rx.recv().await else {
+            panic!("expected the delayed program status wakeup");
+        };
+        let records = reports.take().unwrap();
+        let states: Vec<_> = records
+            .records()
+            .iter()
+            .map(|record| (record.report.id.as_str(), record.report.state))
+            .collect();
+        // The cleared child and the result the next command ended are gone;
+        // that command's own report is there.
+        assert_eq!(states, [("next", ProgramStatusState::Working)]);
+
+        // One wakeup covered every chunk, and later reports are announced again.
+        assert!(event_rx.try_recv().is_err());
+        publish_program_status(
+            pane_id,
+            vec![ProgramStatusEvent::Clear(String::new())],
+            &mailbox,
+            &events,
+            &rt,
+        );
+        assert!(matches!(
+            event_rx.recv().await,
+            Some(AppEvent::ProgramStatusReported { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_replaced_runtime_withholds_program_status_it_never_delivered() {
+        let (runtime, _rx) = PaneRuntime::test_with_channel(80, 24);
+        let mailbox = runtime.program_status.clone();
+        mailbox.push(vec![crate::ghostty::ProgramStatusEvent::Report(
+            crate::ghostty::ProgramStatusReport {
+                id: String::new(),
+                state: crate::ghostty::ProgramStatusState::Working,
+                kind: None,
+                progress: None,
+                app: None,
+                title: None,
+                message: None,
+            },
+        )]);
+
+        // The shell is respawned before the wakeup for that report arrives.
+        drop(runtime);
+
+        assert!(mailbox.take().is_none());
     }
 
     #[tokio::test]
@@ -5426,6 +5564,7 @@ mod tests {
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
+            program_status: Arc::default(),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),
@@ -5466,6 +5605,7 @@ mod tests {
             current_size: Cell::new((80, 24, 0, 0)),
             child_pid: Arc::new(AtomicU32::new(0)),
             reported_cwd: Arc::new(Mutex::new(None)),
+            program_status: Arc::default(),
             child_wait_completed: None,
             kitty_keyboard_flags: Arc::new(AtomicU16::new(0)),
             content_seq: Arc::new(AtomicU64::new(0)),

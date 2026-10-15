@@ -712,6 +712,8 @@ herdr agent wait w1:p1 --until blocked
 }
 ```
 
+プログラムが OSC 7501 で状態を報告しているペインには、レコードごとに 1 エントリの `program_status` 配列も含まれます。各エントリは `id`、`state`(`idle`、`working`、`done`、`blocked`、`error` のいずれか)と、任意の `kind`、`progress`、`app`、`title`、`message` を持ちます。Herdr は報告された内容をそのまま渡し、検証はしません。[ターミナル経由で報告する](/ja/docs/add-herdr-support/)を参照してください。
+
 `server.agent_manifests` は、ルールをリロードせずに、アクティブなエージェント検出マニフェストのソースとリモート更新の診断情報を返します:
 
 ```json

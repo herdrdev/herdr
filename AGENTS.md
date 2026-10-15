@@ -212,7 +212,7 @@ Local patches on top of the vendored source must be tracked in `vendor/libghostt
 
 When updating libghostty-vt, check every active patch in `vendor/libghostty-vt.patches.md`. If the new upstream commit contains the fix, remove the local patch and index entry, then rerun the listed verification. If not, reapply the patch on top of the new vendored source.
 
-`just check` runs maintenance tests that verify local libghostty-vt patch files are listed in the index and reverse-apply cleanly against the vendored tree. Do not leave a patch file untracked or an indexed patch unapplied.
+`just check` runs maintenance tests that verify local libghostty-vt patch files are listed in the index and reverse-apply cleanly, newest first, against the vendored tree. Do not leave a patch file untracked or an indexed patch unapplied.
 
 ## Docs
 

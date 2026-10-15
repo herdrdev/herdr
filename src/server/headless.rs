@@ -491,6 +491,11 @@ impl HeadlessServer {
             }
 
             self.app.sync_focus_events();
+            if self.acknowledge_seen_program_results() {
+                needs_render = true;
+                needs_full_render = true;
+                crate::render_prof::event("full_render_cause.program_results_seen");
+            }
             self.app.sync_session_save_schedule();
 
             // 4. Accept new client connections.

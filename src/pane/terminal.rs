@@ -170,6 +170,7 @@ pub(crate) struct ProcessBytesResult {
     pub clipboard_writes: Vec<Vec<u8>>,
     pub reported_cwd: Option<std::path::PathBuf>,
     pub terminal_responses: Vec<Bytes>,
+    pub program_status: Vec<crate::ghostty::ProgramStatusEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1368,6 +1369,7 @@ impl GhosttyPaneTerminal {
                 clipboard_writes: Vec::new(),
                 reported_cwd: None,
                 terminal_responses: Vec::new(),
+                program_status: Vec::new(),
             };
         };
 
@@ -1376,6 +1378,7 @@ impl GhosttyPaneTerminal {
         // Those effects must not be delivered as live pane output.
         let _ = core.terminal.take_bell_count();
         let _ = core.terminal.take_clipboard_writes();
+        let _ = core.terminal.take_program_status_events();
         let default_color_observation = core.default_color_tracker.observe(bytes);
         if shell_pid > 0 && default_color_observation {
             if let Some(owner_pgid) = current_transient_default_color_owner(shell_pid) {
@@ -1421,6 +1424,7 @@ impl GhosttyPaneTerminal {
         );
         let terminal_bells = core.terminal.take_bell_count();
         let clipboard_writes = core.terminal.take_clipboard_writes();
+        let program_status = core.terminal.take_program_status_events();
         let reported_cwd = core
             .terminal
             .take_pwd_changes()
@@ -1485,6 +1489,7 @@ impl GhosttyPaneTerminal {
             clipboard_writes,
             reported_cwd,
             terminal_responses,
+            program_status,
         }
     }
 
@@ -6939,6 +6944,41 @@ mod tests {
             Bytes::from_static(b"\x1b]11;rgb:0000/2b2b/3636\x1b\\")
         );
         assert!(String::from_utf8_lossy(&result.terminal_responses[1]).contains('c'));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn process_pty_bytes_answers_program_status_query_in_order_and_returns_reports() {
+        let (tx, mut rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        pane.apply_host_terminal_theme(crate::terminal_theme::TerminalTheme {
+            background: Some(crate::terminal_theme::RgbColor { r: 0, g: 0, b: 0 }),
+            ..Default::default()
+        });
+
+        // The color query goes through Herdr's own reply merging.
+        let result = pane.process_pty_bytes(
+            PaneId::from_raw(1),
+            0,
+            b"\x1b]7501;?\x07\x1b]11;?\x07\x1b[c\x1b]7501;state=working\x07",
+            &tx,
+        );
+
+        let replies: Vec<_> = result
+            .terminal_responses
+            .iter()
+            .map(|reply| String::from_utf8_lossy(reply).into_owned())
+            .collect();
+        assert_eq!(replies.len(), 3, "{replies:?}");
+        assert!(replies[0].starts_with("\x1b]7501;?") && replies[0].ends_with('\x07'));
+        assert!(replies[1].starts_with("\x1b]11;"));
+        assert!(replies[2].ends_with('c'));
+        assert!(matches!(
+            result.program_status.as_slice(),
+            [crate::ghostty::ProgramStatusEvent::Report(report)]
+                if report.state == crate::ghostty::ProgramStatusState::Working
+        ));
         assert!(rx.try_recv().is_err());
     }
 

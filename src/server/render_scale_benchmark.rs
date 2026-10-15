@@ -233,10 +233,19 @@ fn profile_snapshot_encoding(
     count: usize,
     client_count: usize,
     hidden_output: bool,
+    reporting: bool,
 ) -> (StageStats, StageStats) {
     let mut pipeline = RenderPipeline::new(build(count));
     pipeline.app.state.ensure_test_terminals();
     for terminal in pipeline.app.state.terminals.values_mut() {
+        if reporting {
+            let mut records = crate::terminal::program_status::ProgramStatusRecords::default();
+            for event in reporting_program_records() {
+                records.apply(event);
+            }
+            terminal.set_program_status(records, Instant::now());
+            continue;
+        }
         terminal.set_detected_state(
             Some(crate::detect::Agent::Pi),
             crate::detect::AgentState::Idle,
@@ -298,6 +307,39 @@ fn profile_snapshot_encoding(
     (summarize(construction), summarize(total))
 }
 
+/// An unknown program's OSC 7501 records: a named root and a chain of children
+/// down to the protocol's depth limit, so the pane's name is inherited.
+fn reporting_program_records() -> Vec<crate::ghostty::ProgramStatusEvent> {
+    let ids = "a/b/c/d/e/f/g/h";
+    std::iter::once("")
+        .chain(ids.match_indices('/').map(|(end, _)| &ids[..end]))
+        .chain(std::iter::once(ids))
+        .map(|id| {
+            crate::ghostty::ProgramStatusEvent::Report(crate::ghostty::ProgramStatusReport {
+                id: id.into(),
+                state: crate::ghostty::ProgramStatusState::Working,
+                kind: None,
+                progress: Some(40),
+                app: id.is_empty().then(|| "bench".into()),
+                title: None,
+                message: Some("working".into()),
+            })
+        })
+        .collect()
+}
+
+fn print_reporting_snapshot_profiles() {
+    println!("active panes reporting OSC 7501 (root + 8 child records) snapshots + completions + JSON framing");
+    println!("       panes  clients  construction_us  median_us  p95_us  max_us");
+    for count in [1, 15, 118] {
+        let (construction, stats) = profile_snapshot_encoding(active_panes, count, 1, false, true);
+        println!(
+            "  {count:>10}  {:>7}  {:>15}  {:>9}  {:>6}  {:>6}",
+            1, construction.median_us, stats.median_us, stats.p95_us, stats.max_us
+        );
+    }
+}
+
 fn print_snapshot_encoding_profiles(label: &str, build: fn(usize) -> Vec<Workspace>) {
     println!("{label} populated agent snapshots + completions + JSON framing");
     println!("       panes  clients  hidden_output  construction_us  median_us  p95_us  max_us");
@@ -308,7 +350,7 @@ fn print_snapshot_encoding_profiles(label: &str, build: fn(usize) -> Vec<Workspa
                     continue;
                 }
                 let (construction, stats) =
-                    profile_snapshot_encoding(build, count, client_count, hidden_output);
+                    profile_snapshot_encoding(build, count, client_count, hidden_output, false);
                 println!(
                     "  {count:>10}  {client_count:>7}  {hidden_output:>13}  {:>15}  {:>9}  {:>6}  {:>6}",
                     construction.median_us, stats.median_us, stats.p95_us, stats.max_us
@@ -610,6 +652,7 @@ async fn render_scale_profile() {
     print_snapshot_encoding_profiles("background workspaces", workspaces);
     print_profiles("active panes (one workspace)", active_panes);
     print_snapshot_encoding_profiles("active panes", active_panes);
+    print_reporting_snapshot_profiles();
     print_token_rule_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();

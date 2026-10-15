@@ -236,6 +236,7 @@ fn reply_to_probe(request: ApiRequestMessage) {
                 tokens: Default::default(),
                 agent_session: None,
                 scroll: None,
+                program_status: Vec::new(),
                 revision: 0,
             },
         },

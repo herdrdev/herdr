@@ -19,6 +19,7 @@ const kitty_clipboard = @import("kitty/clipboard.zig");
 const kitty_color = @import("kitty/color.zig");
 const paste_pkg = @import("paste.zig");
 const kitty_dnd = @import("kitty/dnd.zig");
+const lib = @import("lib.zig");
 const size_report = @import("size_report.zig");
 const simd = @import("../simd/main.zig");
 const terminfo = @import("../terminfo/main.zig");
@@ -166,6 +167,49 @@ pub const Handler = struct {
         /// Called when the running program reports progress via OSC 9;4.
         progress_report: ?*const fn (*Handler, osc.Command.ProgressReport) void,
 
+        /// Called when the running program sends a program status report
+        /// (OSC 7501). Programs use these to say what they are doing, such
+        /// as working, done, or waiting on the user. The report's
+        /// text is only valid until this returns, so copy what you keep.
+        ///
+        /// A full reset (RIS) removes every record. When that happens, the
+        /// terminal calls this with a `clear` report without an id, and
+        /// then calls `reset`.
+        ///
+        /// Setting this also makes the terminal answer the support query,
+        /// `OSC 7501 ; ?`, through `write_pty`. The reply is
+        /// `osc.program_status.query_reply`, which lists the states and
+        /// kinds the terminal accepts. While this is null, the query gets
+        /// no reply, so a program that asks sees the protocol as
+        /// unsupported. Asking is optional, so reports may still arrive.
+        /// They are dropped.
+        program_status: ?*const fn (*Handler, osc.Command.ProgramStatus.Report) void,
+
+        /// Called when the shell reports a step of a command through
+        /// shell integration: a prompt starts, input starts, output
+        /// starts, or the command ends. See `SemanticPrompt` for the
+        /// steps and an example.
+        ///
+        /// The terminal has already applied the sequence when this is
+        /// called. A sequence the terminal rejects is never reported.
+        semantic_prompt: ?*const fn (*Handler, SemanticPrompt) void,
+
+        /// Called after the running program performs a full reset (RIS,
+        /// `ESC c`). The terminal has already reset itself, which clears
+        /// the screen, scrollback, title, and pwd. `title_changed` and
+        /// `pwd_changed` are not called for this, so update anything that
+        /// shows them here.
+        ///
+        /// A full reset also removes the progress report and program
+        /// status records, and `progress_report` and `program_status` are
+        /// called for that before this is called. A soft reset (DECSTR)
+        /// doesn't call this.
+        ///
+        /// Shells don't report the end of a command that a reset
+        /// interrupts, so clear any state you keep for the current
+        /// command here.
+        reset: ?*const fn (*Handler) void,
+
         /// Called when the running program writes to a clipboard.
         clipboard_write: ?*const fn (*Handler, clipboard.Write) void,
 
@@ -214,6 +258,9 @@ pub const Handler = struct {
             .drag_and_drop = null,
             .enquiry = null,
             .progress_report = null,
+            .program_status = null,
+            .reset = null,
+            .semantic_prompt = null,
             .size = null,
             .title_changed = null,
             .pwd_changed = null,
@@ -232,6 +279,113 @@ pub const Handler = struct {
             content: []const u8,
             truncated: bool,
         };
+    };
+
+    /// A shell integration event, passed to the `semantic_prompt` effect.
+    ///
+    /// Many shells tell the terminal where each prompt, command, and
+    /// command output begins. Each command goes through four steps, and
+    /// the effect is called once for each step the shell reports:
+    ///
+    ///   1. `prompt_start`: the shell starts drawing a prompt.
+    ///   2. `input_start`: the prompt is drawn and the user can type.
+    ///   3. `output_start`: the user submitted the command and it runs.
+    ///   4. `command_end`: the command finished.
+    ///
+    /// Then the shell draws the next prompt and the steps start over.
+    ///
+    /// Shells differ in what they report. Many don't send the command
+    /// line or the exit code, and some skip steps, so handle each event
+    /// on its own instead of expecting a strict order. A shell may also
+    /// start the same prompt more than once, for example when it redraws
+    /// the prompt after a resize, so treat a repeated `prompt_start` as
+    /// harmless.
+    ///
+    /// The event describes what happened, not how the shell said it.
+    /// Today events come from OSC 133. More shell integration protocols
+    /// may report through this same type later.
+    ///
+    /// The strings are only valid until the callback returns. Copy them
+    /// if you need them later.
+    ///
+    /// This example logs each command's result:
+    ///
+    /// ```zig
+    /// fn onSemanticPrompt(handler: *Handler, event: Handler.SemanticPrompt) void {
+    ///     _ = handler;
+    ///     switch (event.kind) {
+    ///         .command_end => if (event.exit_code) |code| {
+    ///             log.info("command exited with {}", .{code});
+    ///         } else {
+    ///             log.info("command finished", .{});
+    ///         },
+    ///         else => {},
+    ///     }
+    /// }
+    ///
+    /// var handler: Handler = .init(&terminal);
+    /// handler.effects.semantic_prompt = &onSemanticPrompt;
+    /// ```
+    pub const SemanticPrompt = struct {
+        /// Which step of the command this event reports.
+        kind: Kind,
+
+        /// Which prompt is starting, for `prompt_start`. Always
+        /// `primary` for other kinds.
+        prompt_kind: PromptKind = .primary,
+
+        /// The command's exit code, for `command_end` when the shell
+        /// reported one. Null otherwise.
+        exit_code: ?i32 = null,
+
+        /// The command line about to run, for `output_start`. The shell
+        /// sends it encoded, and this is the decoded text. Empty if the
+        /// shell didn't send one or it couldn't be decoded.
+        command: []const u8 = "",
+
+        /// A description of what went wrong, for `command_end` when the
+        /// shell sent one. Empty otherwise. Few shells send this, and the
+        /// exit code is the usual way to tell whether a command failed.
+        err: []const u8 = "",
+
+        /// C: GhosttySemanticPromptKind
+        pub const Kind = lib.Enum(lib.target, &.{
+            // Never reported. This exists so that a zeroed C value is not
+            // mistaken for a real event.
+            "invalid",
+
+            // The shell started drawing a prompt.
+            "prompt_start",
+
+            // The prompt is drawn and the user can start typing.
+            "input_start",
+
+            // The user submitted the command and it started running.
+            "output_start",
+
+            // The command finished running.
+            "command_end",
+        });
+
+        /// C: GhosttySemanticPromptPromptKind
+        pub const PromptKind = lib.Enum(lib.target, &.{
+            // The main prompt shown before each command. This is used
+            // when the shell doesn't say which prompt it is drawing.
+            "primary",
+
+            // A prompt drawn at the right edge of the line.
+            "right",
+
+            // A prompt at the start of an extra line of a command that
+            // spans several lines.
+            "continuation",
+
+            // Another prompt for an extra line of input, such as bash's
+            // PS2. Shells differ in whether they report extra lines as
+            // continuation or secondary prompts, so most callers should
+            // treat the two the same.
+            "secondary",
+        });
     };
 
     pub fn init(terminal: *Terminal) Handler {
@@ -457,12 +611,15 @@ pub const Handler = struct {
                 self.kitty_clipboard_grants.deinit(self.terminal.gpa());
                 self.kitty_clipboard_grants = .{};
 
-                // Clear the progress bar
+                // Clear the progress bar and program status records
                 self.progressReport(.{ .state = .remove });
+                self.programStatusReport(.{ .state = .clear });
+
+                if (self.effects.reset) |func| func(self);
             },
             .start_hyperlink => try self.terminal.screens.active.startHyperlink(value.uri, value.id),
             .end_hyperlink => self.terminal.screens.active.endHyperlink(),
-            .semantic_prompt => try self.terminal.semanticPrompt(value),
+            .semantic_prompt => try self.semanticPrompt(value),
             .mouse_shape => self.terminal.mouse_shape = value,
             .color_operation => self.colorOperation(
                 &value.requests,
@@ -496,6 +653,7 @@ pub const Handler = struct {
             .window_title => try self.windowTitle(value.title),
             .report_pwd => try self.reportPwd(value.url),
             .progress_report => self.progressReport(value),
+            .program_status => self.programStatus(value),
             .xtversion => self.reportXtversion(),
             .clipboard_contents => self.clipboardContents(
                 value.kind,
@@ -621,8 +779,90 @@ pub const Handler = struct {
         func(self, notification);
     }
 
+    fn semanticPrompt(self: *Handler, cmd: osc.Command.SemanticPrompt) !void {
+        try self.terminal.semanticPrompt(cmd);
+        const func = self.effects.semantic_prompt orelse return;
+        switch (cmd.action) {
+            .fresh_line => {},
+
+            // A and N accept the same k= option as P, and the terminal
+            // applies it, so report it for all three.
+            .fresh_line_new_prompt,
+            .new_command,
+            .prompt_start,
+            => func(self, .{
+                .kind = .prompt_start,
+                .prompt_kind = if (cmd.readOption(.prompt_kind)) |v| switch (v) {
+                    .initial => .primary,
+                    .right => .right,
+                    .continuation => .continuation,
+                    .secondary => .secondary,
+                } else .primary,
+            }),
+
+            .end_prompt_start_input,
+            .end_prompt_start_input_terminate_eol,
+            => func(self, .{ .kind = .input_start }),
+
+            .end_input_start_output => {
+                // Decoding never makes the command line longer, so a
+                // buffer the size of the raw options always fits it. If
+                // the buffer can't be allocated or the command line
+                // can't be decoded, we still report the step with an
+                // empty command.
+                const alloc = self.terminal.gpa();
+                const buf = alloc.alloc(u8, cmd.options_unvalidated.len) catch |err| {
+                    log.warn("error allocating semantic prompt command line err={}", .{err});
+                    func(self, .{ .kind = .output_start });
+                    return;
+                };
+                defer alloc.free(buf);
+                var writer: std.Io.Writer = .fixed(buf);
+                const command: []const u8 = if (cmd.writeCommandLine(&writer))
+                    writer.buffered()
+                else |_|
+                    "";
+                func(self, .{ .kind = .output_start, .command = command });
+            },
+
+            .end_command => func(self, .{
+                .kind = .command_end,
+                .exit_code = cmd.readOption(.exit_code),
+                .err = cmd.readOption(.err) orelse "",
+            }),
+        }
+    }
+
     fn progressReport(self: *Handler, report: osc.Command.ProgressReport) void {
         const func = self.effects.progress_report orelse return;
+        func(self, report);
+    }
+
+    fn programStatus(self: *Handler, cmd: osc.Command.ProgramStatus) void {
+        switch (cmd) {
+            .report => |report| self.programStatusReport(report),
+
+            // Only claim support when something handles the reports. The
+            // reply is always the same fixed bytes: `?` and the lists of
+            // states and kinds we accept. The specification never allows
+            // sending report contents back to the program.
+            .query => |terminator| if (self.effects.program_status != null) {
+                switch (terminator) {
+                    inline else => |t| self.writePty(
+                        "\x1b]7501;" ++
+                            osc.program_status.query_reply ++
+                            comptime t.string(),
+                    ),
+                }
+            },
+        }
+    }
+
+    fn programStatusReport(
+        self: *Handler,
+        report: osc.Command.ProgramStatus.Report,
+    ) void {
+        const func = self.effects.program_status orelse return;
         func(self, report);
     }
 
@@ -3345,6 +3585,261 @@ test "progress_report effect callback" {
     try testing.expectEqual(@as(usize, cases.len + 2), S.count);
     try testing.expectEqual(osc.Command.ProgressReport.State.remove, S.last_state);
     try testing.expectEqual(@as(?u8, null), S.last_progress);
+}
+
+test "program_status effect callback" {
+    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(testing.allocator);
+
+    const S = struct {
+        var count: usize = 0;
+        var last_state: ?osc.Command.ProgramStatus.State = null;
+        var last_id: [64]u8 = undefined;
+        var last_id_len: ?usize = null;
+        var last_message: [64]u8 = undefined;
+        var last_message_len: ?usize = null;
+        var written: [128]u8 = undefined;
+        var written_len: usize = 0;
+
+        fn reset() void {
+            count = 0;
+            last_state = null;
+            last_id_len = null;
+            last_message_len = null;
+            written_len = 0;
+        }
+
+        fn programStatus(_: *Handler, report: osc.Command.ProgramStatus.Report) void {
+            count += 1;
+            last_state = report.state;
+            last_id_len = if (report.readOption(.id)) |v| copy(&last_id, v) else null;
+            var message: std.Io.Writer = .fixed(&last_message);
+            report.writeText(.msg, &message) catch unreachable;
+            last_message_len = message.buffered().len;
+        }
+
+        fn writePty(_: *Handler, data: []const u8) void {
+            written_len += copy(written[written_len..], data);
+        }
+
+        fn copy(dst: []u8, src: []const u8) usize {
+            @memcpy(dst[0..src.len], src);
+            return src.len;
+        }
+    };
+
+    // Without a callback, reports are ignored and the query isn't
+    // answered so the program sees the protocol as unsupported.
+    {
+        S.reset();
+        var handler: Handler = .init(&t);
+        handler.effects.write_pty = &S.writePty;
+        var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+        defer s.deinit();
+        s.nextSlice("\x1B]7501;?\x1B\\\x1B]7501;state=idle\x1B\\");
+        try testing.expectEqual(@as(usize, 0), S.written_len);
+    }
+
+    S.reset();
+    var handler: Handler = .init(&t);
+    handler.effects.write_pty = &S.writePty;
+    handler.effects.program_status = &S.programStatus;
+    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+    defer s.deinit();
+
+    // The query is answered with `?`, the states and kinds we accept,
+    // and the same terminator the query used.
+    const reply = "\x1B]7501;?:states=idle,working,done,blocked,error" ++
+        ":kinds=permission,question,auth";
+    s.nextSlice("\x1B]7501;?\x1B\\");
+    try testing.expectEqualStrings(reply ++ "\x1B\\", S.written[0..S.written_len]);
+    S.written_len = 0;
+    s.nextSlice("\x1B]7501;?\x07");
+    try testing.expectEqualStrings(reply ++ "\x07", S.written[0..S.written_len]);
+    try testing.expectEqual(@as(usize, 0), S.count);
+    S.written_len = 0;
+
+    // A report split across writes. "Syncing photos"
+    s.nextSlice("\x1B]7501;state=working:id=sync:msg=U3lu");
+    try testing.expectEqual(@as(usize, 0), S.count);
+    s.nextSlice("Y2luZyBwaG90b3M=\x1B\\");
+    try testing.expectEqual(@as(usize, 1), S.count);
+    try testing.expectEqual(.working, S.last_state.?);
+    try testing.expectEqualStrings("sync", S.last_id[0..S.last_id_len.?]);
+    try testing.expectEqualStrings("Syncing photos", S.last_message[0..S.last_message_len.?]);
+
+    // A full reset clears every record.
+    s.nextSlice("\x1Bc");
+    try testing.expectEqual(@as(usize, 2), S.count);
+    try testing.expectEqual(.clear, S.last_state.?);
+    try testing.expect(S.last_id_len == null);
+    try testing.expectEqual(@as(?usize, 0), S.last_message_len);
+
+    // Nothing from the reports was echoed back.
+    try testing.expectEqual(@as(usize, 0), S.written_len);
+}
+
+test "semantic_prompt effect callback" {
+    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(testing.allocator);
+
+    // A null callback (the default readonly effects) silently ignores events.
+    {
+        var s: Stream = .init(.{ .allocator = testing.allocator, .handler = .init(&t) });
+        defer s.deinit();
+        s.nextSlice("\x1B]133;C;cmdline_url=ls\x1B\\");
+    }
+
+    const S = struct {
+        var count: usize = 0;
+        var last: Handler.SemanticPrompt = .{ .kind = .invalid };
+        var last_cursor_x: usize = 0;
+        var command_buf: [64]u8 = undefined;
+        var err_buf: [64]u8 = undefined;
+
+        fn semanticPrompt(handler: *Handler, event: Handler.SemanticPrompt) void {
+            count += 1;
+            last = event;
+            last_cursor_x = handler.terminal.screens.active.cursor.x;
+
+            // The strings are borrowed, so copy them.
+            @memcpy(command_buf[0..event.command.len], event.command);
+            last.command = command_buf[0..event.command.len];
+            @memcpy(err_buf[0..event.err.len], event.err);
+            last.err = err_buf[0..event.err.len];
+        }
+    };
+    S.count = 0;
+
+    var handler: Handler = .init(&t);
+    handler.effects.semantic_prompt = &S.semanticPrompt;
+
+    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+    defer s.deinit();
+
+    // The effect fires after the terminal applied the fresh line.
+    s.nextSlice("abc");
+    s.nextSlice("\x1B]133;A\x07");
+    try testing.expectEqual(@as(usize, 1), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
+    try testing.expectEqual(@as(usize, 0), S.last_cursor_x);
+
+    s.nextSlice("\x1B]133;P;k=r\x07");
+    try testing.expectEqual(@as(usize, 2), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.right, S.last.prompt_kind);
+
+    s.nextSlice("\x1B]133;P;k=c\x07");
+    try testing.expectEqual(@as(usize, 3), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.continuation, S.last.prompt_kind);
+
+    s.nextSlice("\x1B]133;P;k=s\x07");
+    try testing.expectEqual(@as(usize, 4), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.secondary, S.last.prompt_kind);
+
+    // An unknown prompt kind is primary.
+    s.nextSlice("\x1B]133;P;k=x\x07");
+    try testing.expectEqual(@as(usize, 5), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
+
+    s.nextSlice("\x1B]133;N\x07");
+    try testing.expectEqual(@as(usize, 6), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.prompt_start, S.last.kind);
+    try testing.expectEqual(Handler.SemanticPrompt.PromptKind.primary, S.last.prompt_kind);
+
+    s.nextSlice("\x1B]133;B\x07");
+    try testing.expectEqual(@as(usize, 7), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.input_start, S.last.kind);
+
+    s.nextSlice("\x1B]133;I\x07");
+    try testing.expectEqual(@as(usize, 8), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.input_start, S.last.kind);
+
+    s.nextSlice("\x1B]133;C;cmdline_url=ls%20-la\x07");
+    try testing.expectEqual(@as(usize, 9), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.output_start, S.last.kind);
+    try testing.expectEqualStrings("ls -la", S.last.command);
+
+    s.nextSlice("\x1B]133;C;cmdline='echo hi'\x07");
+    try testing.expectEqual(@as(usize, 10), S.count);
+    try testing.expectEqualStrings("echo hi", S.last.command);
+
+    // No command line, and an undecodable one, are both empty.
+    s.nextSlice("\x1B]133;C\x07");
+    try testing.expectEqual(@as(usize, 11), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.output_start, S.last.kind);
+    try testing.expectEqualStrings("", S.last.command);
+
+    s.nextSlice("\x1B]133;C;cmdline='bad\x07");
+    try testing.expectEqual(@as(usize, 12), S.count);
+    try testing.expectEqualStrings("", S.last.command);
+
+    s.nextSlice("\x1B]133;D;1\x07");
+    try testing.expectEqual(@as(usize, 13), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.command_end, S.last.kind);
+    try testing.expectEqual(@as(?i32, 1), S.last.exit_code);
+    try testing.expectEqualStrings("", S.last.err);
+
+    s.nextSlice("\x1B]133;D\x07");
+    try testing.expectEqual(@as(usize, 14), S.count);
+    try testing.expectEqual(Handler.SemanticPrompt.Kind.command_end, S.last.kind);
+    try testing.expectEqual(@as(?i32, null), S.last.exit_code);
+
+    s.nextSlice("\x1B]133;D;-2;err=boom\x07");
+    try testing.expectEqual(@as(usize, 15), S.count);
+    try testing.expectEqual(@as(?i32, -2), S.last.exit_code);
+    try testing.expectEqualStrings("boom", S.last.err);
+
+    // Fresh line alone is layout, not lifecycle.
+    s.nextSlice("\x1B]133;L\x07");
+    try testing.expectEqual(@as(usize, 15), S.count);
+
+    // Sequences the parser rejects report nothing.
+    s.nextSlice("\x1B]133;Lx\x07");
+    s.nextSlice("\x1B]133;Z\x07");
+    try testing.expectEqual(@as(usize, 15), S.count);
+}
+
+test "reset effect callback" {
+    var t: Terminal = try .init(testing.io, testing.allocator, .{ .cols = 80, .rows = 24 });
+    defer t.deinit(testing.allocator);
+
+    const S = struct {
+        var events: [8]u8 = undefined;
+        var len: usize = 0;
+        var reset_cursor_x: usize = 0;
+
+        fn progressReport(_: *Handler, _: osc.Command.ProgressReport) void {
+            events[len] = 'p';
+            len += 1;
+        }
+
+        fn reset(handler: *Handler) void {
+            reset_cursor_x = handler.terminal.screens.active.cursor.x;
+            events[len] = 'r';
+            len += 1;
+        }
+    };
+    S.len = 0;
+    S.reset_cursor_x = 0;
+
+    var handler: Handler = .init(&t);
+    handler.effects.progress_report = &S.progressReport;
+    handler.effects.reset = &S.reset;
+
+    var s: Stream = .init(.{ .allocator = testing.allocator, .handler = handler });
+    defer s.deinit();
+
+    // A soft reset (DECSTR) doesn't report a reset.
+    s.nextSlice("\x1B[!p");
+    try testing.expectEqualStrings("", S.events[0..S.len]);
+
+    // A full reset reports the progress removal first, and the terminal
+    // already reset itself when the reset is reported.
+    s.nextSlice("abc\x1Bc");
+    try testing.expectEqualStrings("pr", S.events[0..S.len]);
+    try testing.expectEqual(@as(usize, 0), S.reset_cursor_x);
 }
 
 test "clipboard_write effect callback" {

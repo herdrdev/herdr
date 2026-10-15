@@ -713,6 +713,7 @@ mod tests {
             tokens: HashMap::new(),
             agent_session: None,
             scroll,
+            program_status: Vec::new(),
             revision: 0,
         }
     }

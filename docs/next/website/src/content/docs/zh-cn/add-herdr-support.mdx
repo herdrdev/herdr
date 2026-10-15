@@ -98,6 +98,25 @@ Herdr 服务器重启后,Herdr 会在同一目录中打开该窗格并在其中�
 
 `HERDR_BIN_PATH` 和 CLI 是可移植的选择,包括在 Windows 上。如果你的智能体需要直接 IPC,可以发送 [Socket API](/zh-cn/docs/socket-api/) 中说明的等效 `pane.report_agent`、`pane.report_agent_session` 和 `pane.release_agent` 请求。恢复命令放在 `resume_argv` 数组中。
 
+## 通过终端上报
+
+Herdr 也接受 [program status protocol](https://www.superlogical.com/rex/docs/build/program-status)(OSC 7501)。窗格中的任何程序都可以向自己的终端写入上报,不需要 Herdr 专用代码,也不需要上面的环境变量:
+
+```bash
+printf '\033]7501;state=working:app=my-agent\033\\'
+printf '\033]7501;state=blocked:kind=permission:app=my-agent:msg=%s\033\\' "$(printf 'Apply the change?' | base64)"
+printf '\033]7501;state=done:app=my-agent\033\\'
+```
+
+- `working`、`blocked` 和 `idle` 会成为窗格的状态。`done` 和 `error` 算作已完成的工作:在你查看窗格之前显示 `done`,之后显示 `idle`。只有这两种状态会告知用户工作已完成:从 `working` 直接变为 `idle` 的程序会安静地结束,不会发出通知。窗格跟随当前的上报,因此之后的 `idle` 或 `working` 上报会立即取代 `done`。
+- Herdr 信任有效的上报。它不会用屏幕内容或正在运行的进程来核对上报;只要上报存在,它就优先于该窗格的钩子和屏幕检测。从不上报的程序照常工作。
+- 当 Herdr 无法通过其他方式识别程序时,`app` 就是用户看到的名称。没有它时,窗格显示 `program`。
+- 新的 shell 提示符(OSC 133 `A`)会结束 `working`、`blocked` 和 `idle` 上报。`done` 或 `error` 结果会一直保留,直到用户查看过该窗格,或 shell 在该提示符之后开始执行下一条命令(OSC 133 `C`),以先发生者为准。不标记提示符的 shell 不会结束任何上报,因此没有上报 `done` 或 `error` 结果就退出的程序应在退出时发送 `state=clear`。`clear` 也会移除结果,所以不要在希望用户看到的结果之后发送它。
+- 要同时上报多个对象,请给每个对象一个 `id`,例如 `id=deploy/us-east`。窗格显示最需要关注的记录:依次为 blocked、working、用户尚未查看的结果、idle。因此,程序完成后等待后台工作再继续时,会再次显示为 working。`herdr pane get` 会在 `program_status` 下列出所有记录。
+- 要先检查是否支持,请发送 `OSC 7501 ; ? ST`。Herdr 会回复它接受的状态和类型。检查是可选的。
+
+这种方式只上报状态。恢复命令和会话恢复仍然需要上面介绍的上报。
+
 ## 检查你的集成
 
 在 Herdr 窗格中启动你的智能体,然后查看 Herdr 看到了什么:

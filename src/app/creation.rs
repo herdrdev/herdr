@@ -310,6 +310,16 @@ impl App {
         pane_id: crate::layout::PaneId,
     ) -> Option<crate::api::schema::PaneInfo> {
         let mut pane = self.pane_metadata(ws_idx, pane_id)?;
+        // Records are copied for API responses only, not for client snapshots.
+        if let Some(terminal) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|ws| ws.pane_state(pane_id))
+            .and_then(|pane| self.state.terminals.get(&pane.attached_terminal_id))
+        {
+            pane.program_status = program_status_info(terminal.program_status().records());
+        }
         pane.scroll = self
             .state
             .runtime_for_pane_in_workspace(&self.terminal_runtimes, ws_idx, pane_id)
@@ -361,6 +371,7 @@ impl App {
             tokens: terminal.metadata_tokens.values(),
             agent_session: terminal_agent_session_info(terminal),
             scroll: None,
+            program_status: Vec::new(),
             revision: terminal.revision,
         })
     }
@@ -411,6 +422,37 @@ impl App {
                 }),
         }
     }
+}
+
+fn program_status_info(
+    records: &crate::terminal::program_status::ProgramStatusRecords,
+) -> Vec<crate::api::schema::ProgramStatusInfo> {
+    use crate::api::schema::{ProgramStatusKind as Kind, ProgramStatusState as State};
+    use crate::ghostty::{ProgramStatusKind, ProgramStatusState};
+
+    records
+        .records()
+        .iter()
+        .map(|record| crate::api::schema::ProgramStatusInfo {
+            id: record.report.id.clone(),
+            state: match record.report.state {
+                ProgramStatusState::Idle => State::Idle,
+                ProgramStatusState::Working => State::Working,
+                ProgramStatusState::Done => State::Done,
+                ProgramStatusState::Blocked => State::Blocked,
+                ProgramStatusState::Error => State::Error,
+            },
+            kind: record.report.kind.map(|kind| match kind {
+                ProgramStatusKind::Permission => Kind::Permission,
+                ProgramStatusKind::Question => Kind::Question,
+                ProgramStatusKind::Auth => Kind::Auth,
+            }),
+            progress: record.report.progress,
+            app: records.app(record).map(str::to_string),
+            title: record.report.title.clone(),
+            message: record.report.message.clone(),
+        })
+        .collect()
 }
 
 fn terminal_agent_session_info(

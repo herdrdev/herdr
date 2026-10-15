@@ -495,6 +495,52 @@ impl CellWide {
 
 type WritePtyCallback = dyn FnMut(&[u8]) + Send;
 
+/// What a program says it is doing in an OSC 7501 report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramStatusState {
+    Idle,
+    Working,
+    Done,
+    Blocked,
+    Error,
+}
+
+/// What a blocked program needs from the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProgramStatusKind {
+    Permission,
+    Question,
+    Auth,
+}
+
+/// One validated OSC 7501 report. It replaces the whole record for `id`;
+/// an empty `id` is the root record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgramStatusReport {
+    pub id: String,
+    pub state: ProgramStatusState,
+    pub kind: Option<ProgramStatusKind>,
+    pub progress: Option<u8>,
+    pub app: Option<String>,
+    pub title: Option<String>,
+    pub message: Option<String>,
+}
+
+/// Program status effects, in terminal stream order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramStatusEvent {
+    Report(ProgramStatusReport),
+    /// Remove the record with this id and every record beneath it. An empty
+    /// id removes every record; a full reset (RIS) reports that too.
+    Clear(String),
+    /// A new primary shell prompt started (OSC 133 A). Only reported once the
+    /// terminal has received a program status report.
+    PromptStart,
+    /// The shell started running a command (OSC 133 C). Only reported once
+    /// the terminal has received a program status report.
+    CommandStart,
+}
+
 const MAX_CLIPBOARD_BYTES: usize = 192 * 1024;
 
 #[derive(Default)]
@@ -505,6 +551,8 @@ struct TerminalCallbackState {
     clipboard_writes: Vec<Vec<u8>>,
     size_report: ffi::GhosttySizeReportSize,
     color_scheme: Option<ColorScheme>,
+    program_status_events: Vec<ProgramStatusEvent>,
+    program_status_reported: bool,
 }
 
 unsafe extern "C" fn bell_trampoline(_terminal: ffi::GhosttyTerminal, userdata: *mut c_void) {
@@ -692,6 +740,103 @@ unsafe extern "C" fn pwd_changed_trampoline(terminal: ffi::GhosttyTerminal, user
     };
     let state = unsafe { &mut *(userdata.cast::<TerminalCallbackState>()) };
     state.pwd_changes.push(bytes);
+}
+
+unsafe extern "C" fn program_status_trampoline(
+    _terminal: ffi::GhosttyTerminal,
+    userdata: *mut c_void,
+    report: *const ffi::GhosttyTerminalProgramStatus,
+) {
+    if userdata.is_null() || report.is_null() {
+        return;
+    }
+    // SAFETY: userdata is the TerminalCallbackState installed with this terminal,
+    // and libghostty keeps the report and its strings alive for this call.
+    let (state, report) = unsafe { (&mut *userdata.cast::<TerminalCallbackState>(), &*report) };
+    let text = |value: ffi::GhosttyString| {
+        (!value.ptr.is_null() && value.len > 0).then(|| {
+            // SAFETY: a non-null GhosttyString points at `len` readable bytes.
+            String::from_utf8_lossy(unsafe { slice::from_raw_parts(value.ptr, value.len) })
+                .into_owned()
+        })
+    };
+    let id = text(report.id).unwrap_or_default();
+    let status = match report.state {
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_IDLE => {
+            ProgramStatusState::Idle
+        }
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_WORKING => {
+            ProgramStatusState::Working
+        }
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_DONE => {
+            ProgramStatusState::Done
+        }
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED => {
+            ProgramStatusState::Blocked
+        }
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_ERROR => {
+            ProgramStatusState::Error
+        }
+        ffi::GhosttyProgramStatusState_GHOSTTY_PROGRAM_STATUS_STATE_CLEAR => {
+            state
+                .program_status_events
+                .push(ProgramStatusEvent::Clear(id));
+            return;
+        }
+        _ => return,
+    };
+    state.program_status_reported = true;
+    state
+        .program_status_events
+        .push(ProgramStatusEvent::Report(ProgramStatusReport {
+            id,
+            state: status,
+            kind: match report.kind {
+                ffi::GhosttyProgramStatusKind_GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION => {
+                    Some(ProgramStatusKind::Permission)
+                }
+                ffi::GhosttyProgramStatusKind_GHOSTTY_PROGRAM_STATUS_KIND_QUESTION => {
+                    Some(ProgramStatusKind::Question)
+                }
+                ffi::GhosttyProgramStatusKind_GHOSTTY_PROGRAM_STATUS_KIND_AUTH => {
+                    Some(ProgramStatusKind::Auth)
+                }
+                _ => None,
+            },
+            progress: u8::try_from(report.progress).ok(),
+            app: text(report.app),
+            title: text(report.title),
+            message: text(report.message),
+        }));
+}
+
+unsafe extern "C" fn semantic_prompt_trampoline(
+    _terminal: ffi::GhosttyTerminal,
+    userdata: *mut c_void,
+    event: *const ffi::GhosttyTerminalSemanticPrompt,
+) {
+    if userdata.is_null() || event.is_null() {
+        return;
+    }
+    // SAFETY: userdata is the TerminalCallbackState installed with this terminal,
+    // and libghostty keeps the event alive for this call.
+    let (state, event) = unsafe { (&mut *userdata.cast::<TerminalCallbackState>(), &*event) };
+    if !state.program_status_reported {
+        return;
+    }
+    let boundary = match event.kind {
+        ffi::GhosttySemanticPromptKind_GHOSTTY_SEMANTIC_PROMPT_PROMPT_START
+            if event.prompt_kind
+                == ffi::GhosttySemanticPromptPromptKind_GHOSTTY_SEMANTIC_PROMPT_PROMPT_PRIMARY =>
+        {
+            ProgramStatusEvent::PromptStart
+        }
+        ffi::GhosttySemanticPromptKind_GHOSTTY_SEMANTIC_PROMPT_OUTPUT_START => {
+            ProgramStatusEvent::CommandStart
+        }
+        _ => return,
+    };
+    state.program_status_events.push(boundary);
 }
 
 fn install_png_decoder_once() {
@@ -962,6 +1107,18 @@ impl Terminal {
                 (&glyph_protocol as *const bool).cast(),
             )
             .into_result()?;
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS,
+                (program_status_trampoline as *const ()).cast(),
+            )
+            .into_result()?;
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT,
+                (semantic_prompt_trampoline as *const ()).cast(),
+            )
+            .into_result()?;
         }
         // Disabling storage advances its generation even though it is empty.
         terminal
@@ -1171,6 +1328,10 @@ impl Terminal {
 
     pub fn take_clipboard_writes(&mut self) -> Vec<Vec<u8>> {
         mem::take(&mut self.callback_state.clipboard_writes)
+    }
+
+    pub fn take_program_status_events(&mut self) -> Vec<ProgramStatusEvent> {
+        mem::take(&mut self.callback_state.program_status_events)
     }
 
     pub fn mode_get(&self, mode: u16) -> Result<bool, Error> {
@@ -5075,5 +5236,69 @@ mod tests {
         assert!(basic.has_styling);
         assert_eq!(basic.style.fg_color, Some(CellColor::Palette(1)));
         assert!(!basic.has_hyperlink);
+    }
+
+    #[test]
+    fn program_status_events_and_replies_follow_stream_order() {
+        let mut terminal = Terminal::new(80, 24, 0).unwrap();
+        let replies = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&replies);
+        terminal
+            .set_write_pty_callback(move |bytes| captured.lock().unwrap().push(bytes.to_vec()))
+            .unwrap();
+
+        // A support query split across writes, then a device attributes query.
+        terminal.write(b"\x1b]7501;");
+        terminal.write(b"?\x1b\\\x1b[c");
+        let replies = replies.lock().unwrap();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            replies[0],
+            b"\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\"
+        );
+        assert!(replies[1].starts_with(b"\x1b[?"));
+        assert!(terminal.take_program_status_events().is_empty());
+
+        // Shell marks before any report are not program status boundaries.
+        terminal.write(b"\x1b]133;A\x07\x1b]133;C\x07");
+        // "Apply?" split inside its base64 text; invalid reports are dropped whole.
+        terminal.write(b"\x1b]7501;state=blocked:kind=permission:progress=40:id=tf/plan");
+        terminal.write(b":app=terraform:msg=QXBw");
+        terminal.write(b"bHk/\x07\x1b]7501;state=sleeping\x07\x1b]7501;state=done:id=a//b\x07");
+        // A clear with a malformed id must not turn into a clear of everything.
+        terminal.write(b"\x1b]7501;state=clear:id=a?b\x07");
+        // The next command starts, split across writes, and reports.
+        terminal.write(b"\x1b]133;A\x07\x1b]133;");
+        terminal.write(b"C\x07\x1b]7501;state=working\x07");
+        terminal.write(b"\x1b]7501;state=clear:id=tf\x07\x1bc");
+
+        assert_eq!(
+            terminal.take_program_status_events(),
+            [
+                ProgramStatusEvent::Report(ProgramStatusReport {
+                    id: "tf/plan".into(),
+                    state: ProgramStatusState::Blocked,
+                    kind: Some(ProgramStatusKind::Permission),
+                    progress: Some(40),
+                    app: Some("terraform".into()),
+                    title: None,
+                    message: Some("Apply?".into()),
+                }),
+                ProgramStatusEvent::PromptStart,
+                ProgramStatusEvent::CommandStart,
+                ProgramStatusEvent::Report(ProgramStatusReport {
+                    id: String::new(),
+                    state: ProgramStatusState::Working,
+                    kind: None,
+                    progress: None,
+                    app: None,
+                    title: None,
+                    message: None,
+                }),
+                ProgramStatusEvent::Clear("tf".into()),
+                ProgramStatusEvent::Clear(String::new()),
+            ]
+        );
+        assert_eq!(replies.len(), 2);
     }
 }

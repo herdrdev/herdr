@@ -50,6 +50,10 @@ impl App {
                 self.handle_internal_event(ev);
                 false
             }
+            // Records that leave the pane's presentation alone need no render.
+            ev @ AppEvent::ProgramStatusReported { .. } => {
+                !self.handle_internal_event_with_pane_updates(ev).is_empty()
+            }
             ev => {
                 self.handle_internal_event(ev);
                 true

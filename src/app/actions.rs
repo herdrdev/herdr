@@ -1621,6 +1621,38 @@ impl AppState {
             // foreground client; they never touch AppState. Kept for AppEvent exhaustiveness.
             AppEvent::TerminalBell { .. } => Vec::new(),
             AppEvent::ClipboardWrite { .. } => Vec::new(),
+            AppEvent::ProgramStatusReported { pane_id, reports } => {
+                // A delivery from a pane runtime that is gone changes nothing,
+                // including what the shell that replaced it has reported.
+                let Some(records) = reports.take() else {
+                    return Vec::new();
+                };
+                let mut unseen_result = false;
+                let mut dismissed = false;
+                let mut update = self.update_terminal_state(pane_id, |terminal| {
+                    let showed_result = terminal.shows_unseen_program_result();
+                    let was_reported = terminal.has_program_status();
+                    let mutation = terminal.set_program_status(records, Instant::now());
+                    unseen_result = terminal.has_unseen_program_result();
+                    // The current report decides: done lasts only while an
+                    // unseen result is what the pane shows. That ends a
+                    // result that is no longer shown, and a completion Herdr
+                    // inferred before a report took over the status.
+                    let took_over = !was_reported && terminal.has_program_status();
+                    dismissed =
+                        (showed_result || took_over) && !terminal.shows_unseen_program_result();
+                    Some(mutation)
+                });
+                if unseen_result {
+                    self.unseen_program_results.insert(pane_id);
+                } else {
+                    self.unseen_program_results.remove(&pane_id);
+                }
+                if dismissed {
+                    update = self.dismiss_program_result(pane_id, update);
+                }
+                update.into_iter().collect()
+            }
             AppEvent::TerminalCwdReported { pane_id, cwd } => {
                 if !cwd.is_absolute() || !cwd.is_dir() {
                     return Vec::new();
@@ -1704,10 +1736,12 @@ impl AppState {
             agent_name_changed,
             unchanged_change,
             suppress_acquisition_completion,
+            reported_without_result,
             completion_reset,
         ) = {
             let terminal = self.terminals.get_mut(&terminal_id)?;
             let previous_agent_name = terminal.agent_name.clone();
+            let was_reported = terminal.has_program_status();
             let had_completion = terminal.last_agent_completion_seq.is_some() || !previous_seen;
             let resume_revision = terminal.reported_resume_revision();
             let mutation = update(terminal);
@@ -1717,14 +1751,22 @@ impl AppState {
                 self.session_dirty = true;
             }
             let mutation = mutation?;
-            let completion_reset = mutation.session_ref_changed
+            // A new agent in the pane makes the old one's completion moot. A
+            // reported result the user has not seen is not the old agent's: it
+            // stays unseen whatever the pane is called now.
+            let completion_reset = (mutation.session_ref_changed
                 || mutation
                     .effective_state_change
                     .as_ref()
-                    .is_some_and(|change| change.previous_agent_label != change.agent_label);
+                    .is_some_and(|change| change.previous_agent_label != change.agent_label))
+                && !terminal.shows_unseen_program_result();
             if completion_reset {
                 terminal.last_agent_completion_seq = None;
             }
+            // Reported work finishes only as a result the user has not seen.
+            // Going idle or away without one is not a completion.
+            let reported_without_result = (was_reported || terminal.has_program_status())
+                && !terminal.shows_unseen_program_result();
             let managed_changed = terminal.reconcile_managed_agent_at(now, false);
             let suppress_acquisition_completion = terminal.finish_agent_process_acquisition();
             let agent_name_changed = terminal.agent_name != previous_agent_name;
@@ -1738,6 +1780,7 @@ impl AppState {
                 agent_name_changed,
                 unchanged_change,
                 suppress_acquisition_completion,
+                reported_without_result,
                 completion_reset,
             )
         };
@@ -1751,7 +1794,8 @@ impl AppState {
         let agent_released = mutation.agent_released;
         let change = mutation.effective_state_change.or(unchanged_change)?;
         let suppress_completion = force_suppress_completion
-            || (change.state == AgentState::Idle && suppress_acquisition_completion);
+            || (change.state == AgentState::Idle && suppress_acquisition_completion)
+            || (reported_without_result && is_completion_transition(&change));
         if change.previous_state != change.state {
             self.next_agent_state_change_seq += 1;
             if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
@@ -1789,6 +1833,91 @@ impl AppState {
             suppress_completion,
         };
         Some(update)
+    }
+
+    /// What the pane showed as done is no longer its status: the unseen
+    /// result was cleared, ended by the shell's next command, or followed by
+    /// a newer report, or a report took over from a completion Herdr had
+    /// inferred. The pane is no longer done, even when nothing else about it
+    /// changed.
+    fn dismiss_program_result(
+        &mut self,
+        pane_id: PaneId,
+        update: Option<PaneStateUpdate>,
+    ) -> Option<PaneStateUpdate> {
+        let has_completion = self
+            .workspaces
+            .iter()
+            .find_map(|ws| ws.pane_state(pane_id))
+            .is_some_and(|pane| {
+                !pane.seen
+                    || self
+                        .terminals
+                        .get(&pane.attached_terminal_id)
+                        .is_some_and(|terminal| terminal.last_agent_completion_seq.is_some())
+            });
+        if !has_completion {
+            return update;
+        }
+        // Describe the pane before marking it seen, so the update reports the
+        // change from done. The shared update also drops the old completion's
+        // queued notification and keeps one a new status just queued.
+        let mut update = update.or_else(|| {
+            self.update_terminal_state(pane_id, |terminal| {
+                Some(TerminalStateMutation {
+                    effective_state_change: Some(
+                        terminal.unchanged_effective_state_change_at(Instant::now()),
+                    ),
+                    session_ref_changed: false,
+                    agent_released: false,
+                })
+            })
+        })?;
+        let pane = self
+            .workspaces
+            .iter_mut()
+            .find_map(|ws| ws.pane_state_mut(pane_id))?;
+        pane.seen = true;
+        update.seen = true;
+        let terminal_id = pane.attached_terminal_id.clone();
+        if let Some(terminal) = self.terminals.get_mut(&terminal_id) {
+            terminal.last_agent_completion_seq = None;
+        }
+        Some(update)
+    }
+
+    /// Applies Herdr's existing notion of a seen pane to reported results:
+    /// once the pane is seen while a result is what it shows, its results
+    /// stop asking for attention. A result hidden behind a record that is
+    /// blocked or working waits until it is shown.
+    pub(crate) fn acknowledge_seen_program_results(&mut self) -> Vec<PaneStateUpdate> {
+        let seen: Vec<PaneId> = self
+            .unseen_program_results
+            .iter()
+            .copied()
+            .filter(|pane_id| {
+                self.workspaces
+                    .iter()
+                    .find_map(|ws| ws.pane_state(*pane_id))
+                    .is_none_or(|pane| {
+                        self.terminals
+                            .get(&pane.attached_terminal_id)
+                            .is_none_or(|terminal| {
+                                // Nothing left to acknowledge also ends the wait.
+                                !terminal.has_unseen_program_result()
+                                    || (pane.seen && terminal.shows_unseen_program_result())
+                            })
+                    })
+            })
+            .collect();
+        seen.into_iter()
+            .filter_map(|pane_id| {
+                self.unseen_program_results.remove(&pane_id);
+                self.update_terminal_state(pane_id, |terminal| {
+                    terminal.acknowledge_program_results(Instant::now())
+                })
+            })
+            .collect()
     }
 
     pub(crate) fn next_managed_agent_deadline(&self) -> Option<Instant> {

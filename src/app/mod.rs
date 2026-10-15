@@ -526,6 +526,7 @@ impl App {
             config_diagnostic,
             toast: None,
             pending_agent_notifications: std::collections::HashMap::new(),
+            unseen_program_results: std::collections::HashSet::new(),
             outer_terminal_focus: None,
             prefix_keys,
             headless_size: config.headless_size(),

@@ -8,7 +8,11 @@ use std::time::{Duration, Instant};
 // Process-exit updates clear matching hook authority before recomputing state.
 
 use crate::detect::{Agent, AgentState};
+use crate::terminal::program_status::{ProgramStatus, ProgramStatusRecords, ProgramStatusSummary};
 use crate::terminal::TerminalId;
+
+/// Shown for a reporting program that names no `app` and is not a known agent.
+const UNNAMED_PROGRAM_LABEL: &str = "program";
 
 #[path = "metadata.rs"]
 mod metadata;
@@ -134,6 +138,7 @@ pub struct TerminalState {
     fallback_visible_blocker: bool,
     fallback_observed_at: Option<Instant>,
     pub hook_authority: Option<HookAuthority>,
+    program_status: ProgramStatus,
     pub agent_metadata: HashMap<String, AgentMetadata>,
     pub metadata_tokens: crate::metadata_tokens::MetadataTokens,
     pub persisted_agent_session: Option<crate::agent_resume::PersistedAgentSession>,
@@ -174,6 +179,7 @@ impl TerminalState {
             fallback_visible_blocker: false,
             fallback_observed_at: None,
             hook_authority: None,
+            program_status: ProgramStatus::default(),
             agent_metadata: HashMap::new(),
             metadata_tokens: crate::metadata_tokens::MetadataTokens::default(),
             persisted_agent_session: None,
@@ -2047,6 +2053,95 @@ impl TerminalState {
                     .then(|| self.detected_agent.map(crate::detect::agent_label))
                     .flatten()
             })
+            .or_else(|| {
+                self.reported_status()
+                    .map(|status| status.app.as_deref().unwrap_or(UNNAMED_PROGRAM_LABEL))
+            })
+    }
+
+    pub fn program_status(&self) -> &ProgramStatus {
+        &self.program_status
+    }
+
+    /// The program-reported status. While there is one it owns this
+    /// terminal: Herdr trusts it over hooks and detection.
+    fn reported_status(&self) -> Option<&ProgramStatusSummary> {
+        self.program_status.summary()
+    }
+
+    /// Takes the pane reader's current records.
+    pub fn set_program_status(
+        &mut self,
+        records: ProgramStatusRecords,
+        now: Instant,
+    ) -> TerminalStateMutation {
+        self.update_program_status(now, |status| status.replace(records))
+    }
+
+    /// The user has seen this terminal, so its reported results no longer
+    /// need attention.
+    pub fn acknowledge_program_results(&mut self, now: Instant) -> Option<TerminalStateMutation> {
+        self.program_status.has_unseen_result().then(|| {
+            self.update_program_status(now, |status| {
+                status.acknowledge_results();
+                false
+            })
+        })
+    }
+
+    /// A program's report is the pane's status.
+    pub fn has_program_status(&self) -> bool {
+        self.reported_status().is_some()
+    }
+
+    pub fn has_unseen_program_result(&self) -> bool {
+        self.program_status.has_unseen_result()
+    }
+
+    /// The pane's status is a reported result the user has not seen. Its
+    /// completion belongs to that result, whatever name the pane goes by.
+    pub fn shows_unseen_program_result(&self) -> bool {
+        self.reported_status()
+            .is_some_and(|status| status.unseen_result)
+    }
+
+    /// `update` returns true when it brought in a newly reported result.
+    fn update_program_status(
+        &mut self,
+        now: Instant,
+        update: impl FnOnce(&mut ProgramStatus) -> bool,
+    ) -> TerminalStateMutation {
+        let previous_agent_label = self.effective_agent_label().map(str::to_string);
+        let previous_known_agent = self.effective_known_agent();
+        let previous_presentation = self.effective_presentation_for_state_at(self.state, now);
+        let result_reported = update(&mut self.program_status);
+        let (unseen_result, active) = self.reported_status().map_or((false, false), |status| {
+            (status.unseen_result, status.state != AgentState::Idle)
+        });
+        // A newly reported result is finished work, even from a program that
+        // never reported the work itself, so present it as a completion.
+        let completed = result_reported && unseen_result;
+        let previous_state = if completed {
+            AgentState::Working
+        } else {
+            self.state
+        };
+        // Reported work and unseen results are not the idle an agent shows
+        // while it starts up, whenever Herdr happened to notice its process.
+        if active || unseen_result {
+            self.agent_process_acquisition_pending = false;
+        }
+        TerminalStateMutation {
+            effective_state_change: self.recompute_effective_state(
+                previous_agent_label,
+                previous_known_agent,
+                previous_state,
+                previous_presentation,
+                now,
+            ),
+            session_ref_changed: false,
+            agent_released: false,
+        }
     }
 
     pub fn effective_known_agent(&self) -> Option<Agent> {
@@ -2330,6 +2425,7 @@ impl TerminalState {
         self.fallback_visible_blocker = false;
         self.fallback_observed_at = None;
         self.hook_authority = None;
+        self.program_status.clear();
         self.persisted_agent_session = None;
         self.agent_metadata.clear();
         self.metadata_report_agents.clear();
@@ -2409,7 +2505,9 @@ impl TerminalState {
         previous_presentation: EffectivePresentation,
         now: Instant,
     ) -> Option<EffectiveStateChange> {
-        let state = if self.visible_blocker_overrides_hook() {
+        let state = if let Some(status) = self.reported_status() {
+            status.state
+        } else if self.visible_blocker_overrides_hook() {
             AgentState::Blocked
         } else {
             self.hook_authority
@@ -6416,5 +6514,222 @@ mod tests {
             terminal.hook_authority.as_ref().unwrap().source,
             "custom:pi"
         );
+    }
+
+    fn program_report(
+        state: crate::ghostty::ProgramStatusState,
+        app: Option<&str>,
+    ) -> crate::ghostty::ProgramStatusEvent {
+        crate::ghostty::ProgramStatusEvent::Report(crate::ghostty::ProgramStatusReport {
+            id: String::new(),
+            state,
+            kind: None,
+            progress: None,
+            app: app.map(str::to_string),
+            title: None,
+            message: None,
+        })
+    }
+
+    /// Delivers events the way a pane reader does.
+    fn report_program_status(
+        terminal: &mut TerminalState,
+        reader: &crate::events::ProgramStatusMailbox,
+        events: Vec<crate::ghostty::ProgramStatusEvent>,
+    ) -> Option<EffectiveStateChange> {
+        reader.push(events);
+        terminal
+            .set_program_status(reader.take()?, Instant::now())
+            .effective_state_change
+    }
+
+    #[test]
+    fn program_status_owns_status_until_its_records_are_gone() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusState};
+
+        let mut terminal = test_terminal();
+        let reader = crate::events::ProgramStatusMailbox::default();
+
+        // A program Herdr does not know is presented from its report alone.
+        let change = report_program_status(
+            &mut terminal,
+            &reader,
+            vec![program_report(ProgramStatusState::Working, Some("cargo"))],
+        )
+        .unwrap();
+        assert_eq!(change.agent_label.as_deref(), Some("cargo"));
+        assert_eq!(change.state, AgentState::Working);
+        assert!(terminal.is_agent_terminal());
+
+        // Conflicting hook and screen signals do not overwrite the report,
+        // and an agent Herdr does know keeps its own identity.
+        terminal.set_detected_state(Some(Agent::Pi), AgentState::Idle);
+        terminal.set_hook_authority(
+            "custom:pi".into(),
+            "pi".into(),
+            AgentState::Blocked,
+            None,
+            None,
+        );
+        assert_eq!(terminal.state, AgentState::Working);
+        assert_eq!(terminal.effective_agent_label(), Some("pi"));
+
+        // Without records, inferred status is in charge again.
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![ProgramStatusEvent::Clear(String::new())],
+        );
+        assert_eq!(terminal.state, AgentState::Blocked);
+    }
+
+    #[test]
+    fn a_reported_result_surfacing_after_a_late_detection_still_completes() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+        let mut terminal = test_terminal();
+        let reader = crate::events::ProgramStatusMailbox::default();
+        let child_done = ProgramStatusEvent::Report(ProgramStatusReport {
+            id: "child".into(),
+            state: ProgramStatusState::Done,
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            message: None,
+        });
+
+        // The agent is already working, with a finished child, when Herdr
+        // notices its process and starts waiting for its first idle.
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![
+                program_report(ProgramStatusState::Working, None),
+                child_done,
+            ],
+        );
+        terminal.set_detected_agent_process_at(Agent::Codex, Instant::now());
+        assert_eq!(terminal.state, AgentState::Working);
+
+        // When the root goes idle the child's result is what shows. That is
+        // finished work, not the agent starting up.
+        let change = report_program_status(
+            &mut terminal,
+            &reader,
+            vec![program_report(ProgramStatusState::Idle, None)],
+        )
+        .unwrap();
+        assert_eq!(change.previous_state, AgentState::Working);
+        assert_eq!(change.state, AgentState::Idle);
+        assert!(terminal.shows_unseen_program_result());
+        assert!(!terminal.finish_agent_process_acquisition());
+    }
+
+    #[test]
+    fn reported_result_completes_and_lasts_until_the_next_marked_command() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusState};
+
+        let mut terminal = test_terminal();
+        let reader = crate::events::ProgramStatusMailbox::default();
+        let error = || program_report(ProgramStatusState::Error, None);
+
+        // A program that only ever reports its result still completes, even
+        // when the prompt that follows arrives in the same batch.
+        let change = report_program_status(
+            &mut terminal,
+            &reader,
+            vec![error(), ProgramStatusEvent::PromptStart],
+        )
+        .unwrap();
+        assert_eq!(change.previous_state, AgentState::Working);
+        assert_eq!(change.state, AgentState::Idle);
+        assert_eq!(change.agent_label.as_deref(), Some("program"));
+
+        // The same result from the next run completes again. Repeating it
+        // while that run goes on does not, and neither does a result that is
+        // reported and cleared before it is delivered.
+        let change = report_program_status(&mut terminal, &reader, vec![error()]).unwrap();
+        assert_eq!(change.previous_state, AgentState::Working);
+        assert!(report_program_status(&mut terminal, &reader, vec![error()]).is_none());
+        let child_done = ProgramStatusEvent::Report(crate::ghostty::ProgramStatusReport {
+            id: "child".into(),
+            state: ProgramStatusState::Done,
+            kind: None,
+            progress: None,
+            app: None,
+            title: None,
+            message: None,
+        });
+        assert!(report_program_status(
+            &mut terminal,
+            &reader,
+            vec![child_done, ProgramStatusEvent::Clear("child".into())],
+        )
+        .is_none());
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![ProgramStatusEvent::PromptStart],
+        );
+
+        // Herdr detecting an agent is not a command boundary: the unseen
+        // result stays in charge, and the agent's own reported result is not
+        // mistaken for the idle it shows while starting up.
+        terminal.set_detected_agent_process_at(Agent::Codex, Instant::now());
+        assert_eq!(terminal.effective_agent_label(), Some("codex"));
+        assert!(terminal.shows_unseen_program_result());
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![program_report(ProgramStatusState::Done, Some("codex-cli"))],
+        );
+        assert!(!terminal.finish_agent_process_acquisition());
+
+        // Its prompt can arrive before Herdr notices the process has exited.
+        // The result stays in charge then, after the exit, and when the same
+        // agent or another one is detected afterwards.
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![ProgramStatusEvent::PromptStart],
+        );
+        terminal.set_detected_state_with_visible_blocker(
+            Some(Agent::Codex),
+            AgentState::Idle,
+            false,
+            false,
+            true,
+        );
+        assert_eq!(terminal.effective_agent_label(), Some("codex-cli"));
+        for agent in [Agent::Codex, Agent::Claude] {
+            terminal.set_detected_agent_process_at(agent, Instant::now());
+            assert_eq!(terminal.state, AgentState::Idle);
+            assert!(terminal.shows_unseen_program_result());
+        }
+
+        // The next marked command ends it. That command's own report is kept
+        // and is not hidden by what Herdr detects.
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![
+                ProgramStatusEvent::CommandStart,
+                program_report(ProgramStatusState::Working, None),
+            ],
+        );
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Idle);
+        assert_eq!(terminal.state, AgentState::Working);
+        assert!(!terminal.has_unseen_program_result());
+        assert_eq!(terminal.program_status().records().records().len(), 1);
+
+        // Without records, detection is in charge again.
+        report_program_status(
+            &mut terminal,
+            &reader,
+            vec![ProgramStatusEvent::Clear(String::new())],
+        );
+        assert_eq!(terminal.state, AgentState::Idle);
+        assert_eq!(terminal.effective_agent_label(), Some("claude"));
     }
 }

@@ -130,6 +130,7 @@ pub const Action = union(Key) {
     semantic_prompt: SemanticPrompt,
     kitty_clipboard: KittyClipboard,
     kitty_dnd: KittyDnd,
+    program_status: ProgramStatus,
 
     pub const Key = lib.Enum(
         lib.target,
@@ -231,6 +232,7 @@ pub const Action = union(Key) {
             "semantic_prompt",
             "kitty_clipboard",
             "kitty_dnd",
+            "program_status",
         },
     );
 
@@ -453,6 +455,8 @@ pub const Action = union(Key) {
     pub const KittyClipboard = osc.Command.KittyClipboardProtocol;
 
     pub const KittyDnd = osc.Command.KittyDndProtocol;
+
+    pub const ProgramStatus = osc.Command.ProgramStatus;
 };
 
 /// Returns a type that can process a stream of tty control characters.
@@ -2681,6 +2685,10 @@ pub fn Stream(comptime H: type) type {
 
                 .kitty_dnd_protocol => |v| {
                     self.handler.vt(.kitty_dnd, v);
+                },
+
+                .program_status => |v| {
+                    self.handler.vt(.program_status, v);
                 },
 
                 .conemu_sleep,

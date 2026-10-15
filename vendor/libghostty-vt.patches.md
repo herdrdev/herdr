@@ -228,3 +228,94 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 backport the program status protocol (OSC 7501)
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-backport-program-status-protocol.patch`
+
+herdr issue: none; OSC 7501 agent reporting
+
+upstream discussion: specification at
+https://www.superlogical.com/rex/docs/build/program-status (revision 0.4)
+
+upstream pr: merged upstream, newer than the vendored base. This patch is a
+backport of three upstream commits, in this order:
+
+- `36ec90a07fcb58e3033296c06c82438bf30d2e42` libghostty: add semantic prompt
+  and reset effects (https://github.com/ghostty-org/ghostty/pull/14479)
+- `a4aacd918ba9e79929ff608034c60a4341773ef0` libghostty-vt: program status
+  protocol (OSC 7501) (https://github.com/ghostty-org/ghostty/pull/14560)
+- `9cd19b40de63f5bd172d1fcf30b667c8186d8923` libghostty-vt: update program
+  status protocol to revision 0.4
+  (https://github.com/ghostty-org/ghostty/pull/14630)
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/osc.h`
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/lib_vt.zig`
+- `vendor/libghostty-vt/src/terminal/main.zig`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+- `vendor/libghostty-vt/src/terminal/c/types.zig`
+- `vendor/libghostty-vt/src/terminal/osc.zig`
+- `vendor/libghostty-vt/src/terminal/osc/parsers.zig`
+- `vendor/libghostty-vt/src/terminal/osc/parsers/program_status.zig`
+- `vendor/libghostty-vt/src/terminal/stream.zig`
+- `vendor/libghostty-vt/src/terminal/stream_terminal.zig`
+- `vendor/libghostty-vt/src/termio/stream_handler.zig`
+
+reason: Herdr reads program status reports through libghostty's own parser
+and typed callback instead of maintaining a second OSC 7501 parser. The
+vendored base predates the protocol. A full vendor update would also bring
+unrelated terminal, build, and C API changes that overlap patches 0004 and
+0007, so only the protocol and the prompt callback its lifecycle needs are
+backported. The parser, its tests, and the callback code are upstream's,
+apart from the id check noted below.
+
+The commits were cherry-picked onto the vendored base with the local patches
+applied. Every conflict came from upstream context that names features this
+base does not have, and was resolved by keeping only the backported lines:
+
+- Terminal options keep upstream's values `SEMANTIC_PROMPT = 42`, `RESET = 43`
+  and `PROGRAM_STATUS = 46`. Upstream's 40, 41, 44 and 45 (resize scrollback
+  pull, render hold, checksum reports) are not included, and 40 and 41 remain
+  the local options from patch 0007.
+- `GHOSTTY_OSC_COMMAND_PROGRAM_STATUS` is 27 here and 28 upstream, because
+  this base has no `GHOSTTY_OSC_COMMAND_UNKNOWN`. Herdr does not use the
+  standalone OSC parser's command type.
+- The OSC number parser has no unknown-sequence capture in this base, so the
+  new `75`, `750` and `7501` states take the existing `.invalid` transition
+  where upstream calls `unknownOrInvalid`, and ending on `75` or `750`
+  returns no command, like `77`.
+
+One line of the parser differs from upstream. Upstream collects the `id`
+values to validate through the value-alphabet filter, which skips an id with a
+byte outside that alphabet, such as `a?b`, instead of rejecting it. The report
+then reads as addressed to the root record, and for `state=clear` it removes
+every record, which the parser's own documentation rules out. Here the id
+values are validated as written, with two cases added to upstream's invalid-id
+test. Upstream `main` still had the original line when this was written.
+
+This patch applies after patch 0007: its option lines follow 0007's in both
+option lists, so the two can only be taken off newest first.
+
+remove when: the vendored source commit contains all three upstream commits
+and rejects an `id` with a byte outside the value alphabet. If it does not,
+keep that one change as its own patch.
+Drop this patch and its index entry, renumber the local options from patch
+0007 if they still collide with upstream's, and rerun the verification.
+
+verification:
+
+```sh
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='OSC 7501')
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='program_status')
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='semantic_prompt')
+just test-one program_status
+just maintenance-test
+just check
+```

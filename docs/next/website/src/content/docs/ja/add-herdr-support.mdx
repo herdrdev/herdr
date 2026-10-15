@@ -98,6 +98,25 @@ Herdr サーバーの再起動後、Herdr は同じディレクトリでペイ�
 
 `HERDR_BIN_PATH` と CLI は Windows を含めて移植性のある選択肢です。エージェントに直接の IPC が必要な場合は、[Socket API](/ja/docs/socket-api/) に記載された同等の `pane.report_agent`、`pane.report_agent_session`、`pane.release_agent` リクエストを送信します。resume コマンドは `resume_argv` 配列に入れます。
 
+## ターミナル経由で報告する
+
+Herdr は [program status protocol](https://www.superlogical.com/rex/docs/build/program-status)(OSC 7501)も受け付けます。ペイン内のどのプログラムも、Herdr 固有のコードや上記の環境変数なしに、自分のターミナルへ報告を書き込めます:
+
+```bash
+printf '\033]7501;state=working:app=my-agent\033\\'
+printf '\033]7501;state=blocked:kind=permission:app=my-agent:msg=%s\033\\' "$(printf 'Apply the change?' | base64)"
+printf '\033]7501;state=done:app=my-agent\033\\'
+```
+
+- `working`、`blocked`、`idle` はそのままペインの状態になります。`done` と `error` は完了した作業として扱われ、ペインを見るまでは `done`、その後は `idle` と表示されます。ユーザーに作業の完了を知らせるのはこの 2 つだけです。`working` から直接 `idle` に移ったプログラムは、通知なしで静かに終わります。ペインは現在の報告に従うため、その後の `idle` や `working` の報告はすぐに `done` を置き換えます。
+- Herdr は有効な報告を信頼します。画面や実行中のプロセスと照合することはなく、報告がある間はそのペインのフックや画面検出より優先されます。報告しないプログラムはこれまでどおり動作します。
+- `app` は、Herdr がそのプログラムを他の方法で認識できないときにユーザーに表示される名前です。指定がなければ、ペインには `program` と表示されます。
+- 新しいシェルプロンプト(OSC 133 `A`)で `working`、`blocked`、`idle` の報告は終了します。`done` や `error` の結果は、ユーザーがペインを見るか、そのプロンプトの後でシェルが次のコマンドを開始する(OSC 133 `C`)か、どちらか早いほうまで残ります。プロンプトをマークしないシェルでは何も終了しないため、`done` や `error` の結果を出さずに終了するプログラムは、終了時に `state=clear` を送信してください。`clear` は結果も消すため、ユーザーに見せたい結果の後には送信しないでください。
+- 複数の対象を同時に報告するには、`id=deploy/us-east` のようにそれぞれに `id` を付けます。ペインには最も注意が必要なレコードが表示されます。順序は blocked、working、ユーザーがまだ見ていない結果、idle です。そのため、完了後にバックグラウンド作業を待ってから再開したプログラムは、再び working と表示されます。`herdr pane get` は `program_status` にすべてのレコードを一覧表示します。
+- 先に対応状況を確認するには `OSC 7501 ; ? ST` を送信します。Herdr は受け付ける状態と種類を返します。確認は任意です。
+
+この経路で報告できるのは状態だけです。resume コマンドとセッションの復元には、引き続き上記の報告が必要です。
+
 ## インテグレーションを確認する
 
 Herdr のペインでエージェントを起動し、Herdr から見える内容を確認します:

@@ -887,6 +887,8 @@ Successful responses look like this:
 }
 ```
 
+A pane whose program reports status through OSC 7501 also has a `program_status` array with one entry per record: `id`, `state` (`idle`, `working`, `done`, `blocked`, or `error`), and the optional `kind`, `progress`, `app`, `title`, and `message`. Herdr passes these on as reported and does not verify them. See [Report through the terminal](/docs/add-herdr-support/#report-through-the-terminal).
+
 `server.agent_manifests` returns the active agent detection manifest sources and remote update diagnostics without reloading rules:
 
 ```json

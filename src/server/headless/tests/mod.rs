@@ -6076,6 +6076,113 @@ fn terminal_attach_page_key_forwards_in_alternate_screen_without_mouse_reporting
 }
 
 #[test]
+fn program_status_notifies_clients_and_redraws_only_when_the_pane_changes() {
+    use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+    let mut server = test_headless_server();
+    let workspace = crate::workspace::Workspace::test_new("reports");
+    let pane_id = workspace.tabs[0].root_pane;
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    let (shell_tx, shell_control, _shell_frames) = test_client_writer();
+    server.clients.insert(
+        1,
+        ClientConnection::new_with_mode(
+            ClientConnectionMode::ClientShell,
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            1,
+            RenderEncoding::SemanticFrame,
+            Some(shell_tx),
+        ),
+    );
+    let reports = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+    let report = |server: &mut HeadlessServer, message: &str| {
+        reports.push(vec![ProgramStatusEvent::Report(ProgramStatusReport {
+            id: String::new(),
+            state: ProgramStatusState::Blocked,
+            kind: None,
+            progress: None,
+            app: Some("deploy".into()),
+            title: None,
+            message: Some(message.into()),
+        })]);
+        server.handle_internal_event_with_forwarding(AppEvent::ProgramStatusReported {
+            pane_id,
+            reports: reports.clone(),
+        })
+    };
+
+    // A program that becomes blocked notifies clients like any other agent.
+    assert!(report(&mut server, "Apply?"));
+    let ServerMessage::SemanticNotification(notification) = read_server_message(
+        shell_control
+            .recv_timeout(Duration::from_millis(100))
+            .expect("semantic notification"),
+    ) else {
+        panic!("expected a semantic notification");
+    };
+    assert_eq!(
+        notification.kind,
+        protocol::SemanticNotificationKind::NeedsAttention
+    );
+
+    // A report that only changes the record's text asks for nothing.
+    assert!(!report(&mut server, "Apply the change?"));
+    assert!(shell_control
+        .recv_timeout(Duration::from_millis(50))
+        .is_err());
+
+    // A result left at the prompt is shown over an agent that became blocked
+    // behind it. Seeing the result uncovers the block, and clients hear of it.
+    server.app.state.active = Some(0);
+    server.app.state.outer_terminal_focus = Some(false);
+    reports.push(vec![
+        ProgramStatusEvent::Report(ProgramStatusReport {
+            id: String::new(),
+            state: ProgramStatusState::Done,
+            kind: None,
+            progress: None,
+            app: Some("deploy".into()),
+            title: None,
+            message: None,
+        }),
+        ProgramStatusEvent::PromptStart,
+    ]);
+    server.handle_internal_event_with_forwarding(AppEvent::ProgramStatusReported {
+        pane_id,
+        reports: reports.clone(),
+    });
+    server.handle_internal_event_with_forwarding(AppEvent::HookStateReported {
+        pane_id,
+        source: "custom:pi".into(),
+        agent_label: "pi".into(),
+        state: crate::detect::AgentState::Blocked,
+        message: None,
+        seq: None,
+        session_ref: None,
+    });
+    while shell_control
+        .recv_timeout(Duration::from_millis(50))
+        .is_ok()
+    {}
+    server.app.state.outer_terminal_focus = Some(true);
+    server.app.state.mark_active_tab_seen();
+    assert!(server.acknowledge_seen_program_results());
+    let uncovered =
+        std::iter::from_fn(|| shell_control.recv_timeout(Duration::from_millis(100)).ok())
+            .map(read_server_message)
+            .find_map(|message| match message {
+                ServerMessage::SemanticNotification(notification) => Some(notification.kind),
+                _ => None,
+            });
+    assert_eq!(
+        uncovered,
+        Some(protocol::SemanticNotificationKind::NeedsAttention)
+    );
+}
+
+#[test]
 fn headless_scheduled_tasks_expire_agent_metadata() {
     let mut server = test_headless_server();
     let workspace = crate::workspace::Workspace::test_new("metadata");

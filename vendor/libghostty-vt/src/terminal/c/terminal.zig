@@ -191,6 +191,56 @@ pub const ProgressReport = extern struct {
     progress: i8,
 };
 
+/// C: GhosttyProgramStatusState
+pub const ProgramStatusState = osc.Command.ProgramStatus.State;
+
+/// What a blocked program needs from the user. This matches
+/// `osc.Command.ProgramStatus.Kind` but adds `none` first, because C has
+/// no optional enums and a zeroed value must mean "no kind".
+///
+/// C: GhosttyProgramStatusKind
+pub const ProgramStatusKind = lib.Enum(lib.target, &.{
+    "none",
+    "permission",
+    "question",
+    "auth",
+});
+
+/// A program status report (OSC 7501). Absent text is an empty string,
+/// an absent kind is `none`, and absent progress is -1. See the header
+/// for the meaning of each field.
+///
+/// C: GhosttyTerminalProgramStatus
+pub const ProgramStatus = extern struct {
+    size: usize,
+    state: ProgramStatusState,
+    kind: ProgramStatusKind,
+    progress: i8,
+    id: lib.String,
+    app: lib.String,
+    title: lib.String,
+    message: lib.String,
+};
+
+/// C: GhosttySemanticPromptKind
+pub const SemanticPromptKind = Handler.SemanticPrompt.Kind;
+
+/// C: GhosttySemanticPromptPromptKind
+pub const SemanticPromptPromptKind = Handler.SemanticPrompt.PromptKind;
+
+/// A shell integration event. See `Handler.SemanticPrompt`.
+///
+/// C: GhosttyTerminalSemanticPrompt
+pub const SemanticPrompt = extern struct {
+    size: usize,
+    kind: SemanticPromptKind,
+    prompt_kind: SemanticPromptPromptKind,
+    has_exit_code: bool,
+    exit_code: i32,
+    command: lib.String,
+    @"error": lib.String,
+};
+
 /// A borrowed unsupported string sequence.
 ///
 /// C: GhosttyTerminalUnknownStringSequence
@@ -234,14 +284,22 @@ pub const ModeConfig = extern struct {
     }
 };
 
-/// C callback state for terminal effects. Most trampolines are always
-/// installed on the stream handler; they check these fields and no-op when
-/// the corresponding callback is null. The unknown-sequence and
-/// clipboard trampolines are installed dynamically to preserve their
-/// null fast paths (for clipboard_write, a null Zig-level effect makes
-/// Kitty clipboard writes fail up front instead of spooling a
-/// transaction that can never commit; for clipboard_read it keeps
-/// reads denied).
+/// C callback state for terminal effects.
+///
+/// Most trampolines are always installed on the stream handler. They check
+/// these fields and do nothing when the C callback is null.
+///
+/// A few trampolines are only installed while their C callback is set,
+/// because the stream handler behaves differently when the Zig effect is
+/// null:
+///
+/// - `unknown_sequence`: unknown sequences are skipped without being
+///   captured.
+/// - `clipboard_write`: Kitty clipboard writes fail up front instead of
+///   collecting data for a write that can never finish.
+/// - `clipboard_read`: clipboard reads are denied.
+/// - `program_status`: the OSC 7501 support query gets no reply, so
+///   programs know not to send reports.
 const Effects = struct {
     userdata: ?*anyopaque = null,
     write_pty: ?WritePtyFn = null,
@@ -254,6 +312,9 @@ const Effects = struct {
     title_changed: ?TitleChangedFn = null,
     pwd_changed: ?PwdChangedFn = null,
     progress_report: ?ProgressReportFn = null,
+    program_status: ?ProgramStatusFn = null,
+    semantic_prompt: ?SemanticPromptFn = null,
+    reset: ?ResetFn = null,
     size_cb: ?SizeFn = null,
     clipboard_write: ?ClipboardWriteFn = null,
     clipboard_read: ?ClipboardReadFn = null,
@@ -319,6 +380,17 @@ const Effects = struct {
 
     /// C function pointer type for the progress_report callback.
     pub const ProgressReportFn = *const fn (Terminal, ?*anyopaque, *const ProgressReport) callconv(lib.calling_conv) void;
+
+    /// C function pointer type for the program_status callback. The report
+    /// and its strings are borrowed for the callback duration.
+    pub const ProgramStatusFn = *const fn (Terminal, ?*anyopaque, *const ProgramStatus) callconv(lib.calling_conv) void;
+
+    /// C function pointer type for the semantic_prompt callback. The event
+    /// and its strings are borrowed for the callback duration.
+    pub const SemanticPromptFn = *const fn (Terminal, ?*anyopaque, *const SemanticPrompt) callconv(lib.calling_conv) void;
+
+    /// C function pointer type for the reset callback.
+    pub const ResetFn = *const fn (Terminal, ?*anyopaque) callconv(lib.calling_conv) void;
 
     /// C function pointer type for the unknown_sequence callback. The request
     /// and its content are borrowed for the callback duration.
@@ -618,6 +690,61 @@ const Effects = struct {
         func(@ptrCast(wrapper), wrapper.effects.userdata, &c_report);
     }
 
+    fn programStatusTrampoline(
+        handler: *Handler,
+        report: osc.Command.ProgramStatus.Report,
+    ) void {
+        const wrapper = TerminalWrapper.fromHandler(handler);
+        const func = wrapper.effects.program_status orelse return;
+
+        // Both buffers hold the longest text the parser accepts, so
+        // writing to them can't fail.
+        var title_buf: [osc.program_status.max_title_bytes]u8 = undefined;
+        var title: std.Io.Writer = .fixed(&title_buf);
+        report.writeText(.title, &title) catch unreachable;
+        var message_buf: [osc.program_status.max_msg_bytes]u8 = undefined;
+        var message: std.Io.Writer = .fixed(&message_buf);
+        report.writeText(.msg, &message) catch unreachable;
+
+        const c_report: ProgramStatus = .{
+            .size = @sizeOf(ProgramStatus),
+            .state = report.state,
+            .kind = if (report.readOption(.kind)) |kind| switch (kind) {
+                inline else => |tag| @field(ProgramStatusKind, @tagName(tag)),
+            } else .none,
+            .progress = if (report.readOption(.progress)) |value| @intCast(value) else -1,
+            .id = .init(report.readOption(.id) orelse ""),
+            .app = .init(report.readOption(.app) orelse ""),
+            .title = .init(title.buffered()),
+            .message = .init(message.buffered()),
+        };
+        func(@ptrCast(wrapper), wrapper.effects.userdata, &c_report);
+    }
+
+    fn semanticPromptTrampoline(
+        handler: *Handler,
+        event: Handler.SemanticPrompt,
+    ) void {
+        const wrapper = TerminalWrapper.fromHandler(handler);
+        const func = wrapper.effects.semantic_prompt orelse return;
+        const c_event: SemanticPrompt = .{
+            .size = @sizeOf(SemanticPrompt),
+            .kind = event.kind,
+            .prompt_kind = event.prompt_kind,
+            .has_exit_code = event.exit_code != null,
+            .exit_code = event.exit_code orelse 0,
+            .command = .init(event.command),
+            .@"error" = .init(event.err),
+        };
+        func(@ptrCast(wrapper), wrapper.effects.userdata, &c_event);
+    }
+
+    fn resetTrampoline(handler: *Handler) void {
+        const wrapper = TerminalWrapper.fromHandler(handler);
+        const func = wrapper.effects.reset orelse return;
+        func(@ptrCast(wrapper), wrapper.effects.userdata);
+    }
+
     fn unknownSequenceTrampoline(
         handler: *Handler,
         sequence: Handler.UnknownSequence,
@@ -683,11 +810,14 @@ fn wrap(
         .title_changed = &Effects.titleChangedTrampoline,
         .pwd_changed = &Effects.pwdChangedTrampoline,
         .progress_report = &Effects.progressReportTrampoline,
+        .semantic_prompt = &Effects.semanticPromptTrampoline,
+        .reset = &Effects.resetTrampoline,
         .size = &Effects.sizeTrampoline,
 
         // Installed dynamically when the callback is set; see Effects.
         .clipboard_write = null,
         .clipboard_read = null,
+        .program_status = null,
     };
 
     wrapper.* = .{
@@ -1186,6 +1316,9 @@ pub const Option = enum(c_int) {
     clipboard_write_max_bytes = 39,
     kitty_image_preserve_png = 40,
     kitty_image_snapshot_file = 41,
+    semantic_prompt = 42,
+    reset = 43,
+    program_status = 46,
 
     /// Input type expected for setting the option.
     pub fn InType(comptime self: Option) type {
@@ -1202,10 +1335,13 @@ pub const Option = enum(c_int) {
             .title_changed => ?Effects.TitleChangedFn,
             .pwd_changed => ?Effects.PwdChangedFn,
             .progress_report => ?Effects.ProgressReportFn,
+            .program_status => ?Effects.ProgramStatusFn,
             .size_cb => ?Effects.SizeFn,
             .clipboard_write => ?Effects.ClipboardWriteFn,
             .clipboard_read => ?Effects.ClipboardReadFn,
             .unknown_sequence => ?Effects.UnknownSequenceFn,
+            .semantic_prompt => ?Effects.SemanticPromptFn,
+            .reset => ?Effects.ResetFn,
             .title, .pwd, .terminfo_name => ?*const lib.String,
             .color_foreground, .color_background, .color_cursor => ?*const color.RGB.C,
             .color_palette => ?*const color.PaletteC,
@@ -1285,6 +1421,8 @@ fn setTyped(
         .pwd_changed => wrapper.effects.pwd_changed = value,
         .progress_report => wrapper.effects.progress_report = value,
         .size_cb => wrapper.effects.size_cb = value,
+        .semantic_prompt => wrapper.effects.semantic_prompt = value,
+        .reset => wrapper.effects.reset = value,
         .clipboard_write => {
             wrapper.effects.clipboard_write = value;
             wrapper.stream.handler.effects.clipboard_write = if (value != null)
@@ -1296,6 +1434,15 @@ fn setTyped(
             wrapper.effects.clipboard_read = value;
             wrapper.stream.handler.effects.clipboard_read = if (value != null)
                 &Effects.clipboardReadTrampoline
+            else
+                null;
+        },
+        .program_status => {
+            // Installed dynamically because the terminal only answers the
+            // OSC 7501 support query when something consumes reports.
+            wrapper.effects.program_status = value;
+            wrapper.stream.handler.effects.program_status = if (value != null)
+                &Effects.programStatusTrampoline
             else
                 null;
         },
@@ -4564,6 +4711,266 @@ test "set progress_report callback" {
     const ignored = "\x1B]9;4;1;90\x1B\\";
     vt_write(t, ignored, ignored.len);
     try testing.expectEqual(@as(usize, cases.len), S.count);
+}
+
+test "set program_status callback" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib.alloc.test_allocator,
+        &t,
+        80,
+        24,
+    ));
+    defer free(t);
+
+    const S = struct {
+        var count: usize = 0;
+        var last_userdata: ?*anyopaque = null;
+        var last_size: usize = 0;
+        var last_state: ProgramStatusState = .idle;
+        var last_kind: ProgramStatusKind = .none;
+        var last_progress: i8 = -1;
+        var last_id: [64]u8 = undefined;
+        var last_id_len: usize = 0;
+        var last_app: [64]u8 = undefined;
+        var last_app_len: usize = 0;
+        var last_title: [64]u8 = undefined;
+        var last_title_len: usize = 0;
+        var last_message: [64]u8 = undefined;
+        var last_message_len: usize = 0;
+        var written: [128]u8 = undefined;
+        var written_len: usize = 0;
+
+        fn programStatus(
+            _: Terminal,
+            ud: ?*anyopaque,
+            report: *const ProgramStatus,
+        ) callconv(lib.calling_conv) void {
+            count += 1;
+            last_userdata = ud;
+            last_size = report.size;
+            last_state = report.state;
+            last_kind = report.kind;
+            last_progress = report.progress;
+            last_id_len = copy(&last_id, report.id);
+            last_app_len = copy(&last_app, report.app);
+            last_title_len = copy(&last_title, report.title);
+            last_message_len = copy(&last_message, report.message);
+        }
+
+        fn writePty(
+            _: Terminal,
+            _: ?*anyopaque,
+            ptr: [*]const u8,
+            len: usize,
+        ) callconv(lib.calling_conv) void {
+            @memcpy(written[written_len..][0..len], ptr[0..len]);
+            written_len += len;
+        }
+
+        fn copy(dst: []u8, src: lib.String) usize {
+            if (src.len > 0) @memcpy(dst[0..src.len], src.ptr[0..src.len]);
+            return src.len;
+        }
+    };
+    S.count = 0;
+    S.written_len = 0;
+
+    var sentinel: u8 = 100;
+    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
+    try testing.expectEqual(Result.success, set(t, .write_pty, @ptrCast(&S.writePty)));
+
+    // Without the callback, the support query is not answered.
+    const query = "\x1B]7501;?\x1B\\";
+    vt_write(t, query, query.len);
+    try testing.expectEqual(@as(usize, 0), S.written_len);
+
+    try testing.expectEqual(Result.success, set(
+        t,
+        .program_status,
+        @ptrCast(&S.programStatus),
+    ));
+
+    // With the callback, it is answered with the states and kinds we
+    // accept and the same terminator.
+    vt_write(t, query, query.len);
+    try testing.expectEqualStrings(
+        "\x1B]7501;?:states=idle,working,done,blocked,error" ++
+            ":kinds=permission,question,auth\x1B\\",
+        S.written[0..S.written_len],
+    );
+    try testing.expectEqual(@as(usize, 0), S.count);
+
+    // "Plan" and "Apply?"
+    const report = "\x1B]7501;state=blocked:kind=permission:progress=40:id=a/b" ++
+        ":app=terraform:title=UGxhbg==:msg=QXBwbHk/\x07";
+    vt_write(t, report, report.len);
+    try testing.expectEqual(@as(usize, 1), S.count);
+    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
+    try testing.expectEqual(@sizeOf(ProgramStatus), S.last_size);
+    try testing.expectEqual(ProgramStatusState.blocked, S.last_state);
+    try testing.expectEqual(ProgramStatusKind.permission, S.last_kind);
+    try testing.expectEqual(@as(i8, 40), S.last_progress);
+    try testing.expectEqualStrings("a/b", S.last_id[0..S.last_id_len]);
+    try testing.expectEqualStrings("terraform", S.last_app[0..S.last_app_len]);
+    try testing.expectEqualStrings("Plan", S.last_title[0..S.last_title_len]);
+    try testing.expectEqualStrings("Apply?", S.last_message[0..S.last_message_len]);
+
+    // Absent values are empty, none, or -1.
+    const minimal = "\x1B]7501;state=done\x1B\\";
+    vt_write(t, minimal, minimal.len);
+    try testing.expectEqual(@as(usize, 2), S.count);
+    try testing.expectEqual(ProgramStatusState.done, S.last_state);
+    try testing.expectEqual(ProgramStatusKind.none, S.last_kind);
+    try testing.expectEqual(@as(i8, -1), S.last_progress);
+    try testing.expectEqual(@as(usize, 0), S.last_id_len);
+    try testing.expectEqual(@as(usize, 0), S.last_app_len);
+    try testing.expectEqual(@as(usize, 0), S.last_title_len);
+    try testing.expectEqual(@as(usize, 0), S.last_message_len);
+
+    // Unsetting the callback ignores reports and the query again.
+    try testing.expectEqual(Result.success, set(t, .program_status, null));
+    S.written_len = 0;
+    vt_write(t, query, query.len);
+    vt_write(t, minimal, minimal.len);
+    try testing.expectEqual(@as(usize, 0), S.written_len);
+    try testing.expectEqual(@as(usize, 2), S.count);
+}
+
+test "set semantic_prompt callback" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib.alloc.test_allocator,
+        &t,
+        80,
+        24,
+    ));
+    defer free(t);
+
+    const S = struct {
+        var count: usize = 0;
+        var last_userdata: ?*anyopaque = null;
+        var last_size: usize = 0;
+        var last_kind: SemanticPromptKind = .invalid;
+        var last_prompt_kind: SemanticPromptPromptKind = .primary;
+        var last_has_exit_code: bool = false;
+        var last_exit_code: i32 = 0;
+        var command_buf: [64]u8 = undefined;
+        var command_len: usize = 0;
+        var error_buf: [64]u8 = undefined;
+        var error_len: usize = 0;
+
+        fn semanticPrompt(
+            _: Terminal,
+            ud: ?*anyopaque,
+            event: *const SemanticPrompt,
+        ) callconv(lib.calling_conv) void {
+            count += 1;
+            last_userdata = ud;
+            last_size = event.size;
+            last_kind = event.kind;
+            last_prompt_kind = event.prompt_kind;
+            last_has_exit_code = event.has_exit_code;
+            last_exit_code = event.exit_code;
+            command_len = event.command.len;
+            @memcpy(command_buf[0..command_len], event.command.ptr[0..command_len]);
+            error_len = event.@"error".len;
+            @memcpy(error_buf[0..error_len], event.@"error".ptr[0..error_len]);
+        }
+    };
+    S.count = 0;
+    S.last_userdata = null;
+    S.last_size = 0;
+
+    var sentinel: u8 = 100;
+    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
+    try testing.expectEqual(Result.success, set(
+        t,
+        .semantic_prompt,
+        @ptrCast(&S.semanticPrompt),
+    ));
+
+    const prompt = "\x1B]133;P;k=r\x07";
+    vt_write(t, prompt, prompt.len);
+    try testing.expectEqual(@as(usize, 1), S.count);
+    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
+    try testing.expectEqual(@sizeOf(SemanticPrompt), S.last_size);
+    try testing.expectEqual(SemanticPromptKind.prompt_start, S.last_kind);
+    try testing.expectEqual(SemanticPromptPromptKind.right, S.last_prompt_kind);
+    try testing.expect(!S.last_has_exit_code);
+
+    const input = "\x1B]133;B\x07";
+    vt_write(t, input, input.len);
+    try testing.expectEqual(@as(usize, 2), S.count);
+    try testing.expectEqual(SemanticPromptKind.input_start, S.last_kind);
+    try testing.expectEqual(SemanticPromptPromptKind.primary, S.last_prompt_kind);
+
+    const output = "\x1B]133;C;cmdline_url=ls%20-la\x07";
+    vt_write(t, output, output.len);
+    try testing.expectEqual(@as(usize, 3), S.count);
+    try testing.expectEqual(SemanticPromptKind.output_start, S.last_kind);
+    try testing.expectEqualStrings("ls -la", S.command_buf[0..S.command_len]);
+
+    const end = "\x1B]133;D;-1;err=boom\x07";
+    vt_write(t, end, end.len);
+    try testing.expectEqual(@as(usize, 4), S.count);
+    try testing.expectEqual(SemanticPromptKind.command_end, S.last_kind);
+    try testing.expect(S.last_has_exit_code);
+    try testing.expectEqual(@as(i32, -1), S.last_exit_code);
+    try testing.expectEqualStrings("boom", S.error_buf[0..S.error_len]);
+    try testing.expectEqual(@as(usize, 0), S.command_len);
+
+    const end_no_code = "\x1B]133;D\x07";
+    vt_write(t, end_no_code, end_no_code.len);
+    try testing.expectEqual(@as(usize, 5), S.count);
+    try testing.expect(!S.last_has_exit_code);
+    try testing.expectEqual(@as(i32, 0), S.last_exit_code);
+    try testing.expectEqual(@as(usize, 0), S.error_len);
+
+    try testing.expectEqual(Result.success, set(t, .semantic_prompt, null));
+    vt_write(t, prompt, prompt.len);
+    try testing.expectEqual(@as(usize, 5), S.count);
+}
+
+test "set reset callback" {
+    var t: Terminal = null;
+    try testing.expectEqual(Result.success, new(
+        &lib.alloc.test_allocator,
+        &t,
+        80,
+        24,
+    ));
+    defer free(t);
+
+    const S = struct {
+        var count: usize = 0;
+        var last_userdata: ?*anyopaque = null;
+
+        fn reset(_: Terminal, ud: ?*anyopaque) callconv(lib.calling_conv) void {
+            count += 1;
+            last_userdata = ud;
+        }
+    };
+    S.count = 0;
+    S.last_userdata = null;
+
+    var sentinel: u8 = 100;
+    try testing.expectEqual(Result.success, set(t, .userdata, @ptrCast(&sentinel)));
+    try testing.expectEqual(Result.success, set(t, .reset, @ptrCast(&S.reset)));
+
+    // A soft reset (DECSTR) doesn't report a reset.
+    const soft = "\x1B[!p";
+    vt_write(t, soft, soft.len);
+    try testing.expectEqual(@as(usize, 0), S.count);
+
+    const full = "\x1Bc";
+    vt_write(t, full, full.len);
+    try testing.expectEqual(@as(usize, 1), S.count);
+    try testing.expectEqual(@as(?*anyopaque, @ptrCast(&sentinel)), S.last_userdata);
+
+    try testing.expectEqual(Result.success, set(t, .reset, null));
+    vt_write(t, full, full.len);
+    try testing.expectEqual(@as(usize, 1), S.count);
 }
 
 test "set unknown_sequence callback" {

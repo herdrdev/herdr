@@ -98,6 +98,25 @@ If your agent exits without releasing, Herdr notices once the pane is back at it
 
 `HERDR_BIN_PATH` and the CLI are the portable choice, including on Windows. If your agent needs direct IPC, send the equivalent `pane.report_agent`, `pane.report_agent_session`, and `pane.release_agent` requests described in the [Socket API](/docs/socket-api/#agent-state-reporting). The resume command goes in the `resume_argv` array.
 
+## Report through the terminal
+
+Herdr also accepts the [program status protocol](https://www.superlogical.com/rex/docs/build/program-status) (OSC 7501). Any program in a pane can write a report to its own terminal, without Herdr-specific code or the environment variables above:
+
+```bash
+printf '\033]7501;state=working:app=my-agent\033\\'
+printf '\033]7501;state=blocked:kind=permission:app=my-agent:msg=%s\033\\' "$(printf 'Apply the change?' | base64)"
+printf '\033]7501;state=done:app=my-agent\033\\'
+```
+
+- `working`, `blocked`, and `idle` become the pane's state. `done` and `error` count as finished work: the pane shows `done` until you look at it, then `idle`. Only those two tell the user that work finished: a program that goes from `working` straight to `idle` ends quietly, without a notification. The pane follows the current report, so a later `idle` or `working` report replaces `done` straight away.
+- Herdr trusts a valid report. It does not check the report against the screen or the running process, and while a report is in place it takes priority over hooks and screen detection for that pane. Programs that never report work as before.
+- `app` is the name users see when Herdr does not otherwise recognize the program. Without one, the pane shows `program`.
+- A new shell prompt (OSC 133 `A`) ends `working`, `blocked`, and `idle` reports. A `done` or `error` result stays until the user has looked at the pane or the shell starts its next command after that prompt (OSC 133 `C`), whichever comes first. A shell that does not mark its prompts ends nothing, so a program that exits without a `done` or `error` result should send `state=clear` on its way out. `clear` removes results too, so don't send it after a result you want the user to see.
+- To report on several things at once, give each an `id`, such as `id=deploy/us-east`. The pane shows the record that needs the most attention: blocked, then working, then a result the user has not seen yet, then idle. So a program that finishes, waits on background work, and continues shows as working again. `herdr pane get` lists every record under `program_status`.
+- To check for support first, send `OSC 7501 ; ? ST`. Herdr replies with the states and kinds it accepts. Asking is optional.
+
+This path reports status only. Resume commands and session restore still need the reports described above.
+
 ## Check your integration
 
 Start your agent in a Herdr pane, then check what Herdr sees:

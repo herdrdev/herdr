@@ -808,6 +808,13 @@
             "pane_id": {
               "type": "string"
             },
+            "program_status": {
+              "description": "Status records the pane's program reported through OSC 7501, least\nrecently updated first. Herdr does not verify them.",
+              "items": {
+                "$ref": "#/schemas/event/$defs/ProgramStatusInfo"
+              },
+              "type": "array"
+            },
             "restore_error": {
               "type": [
                 "string",
@@ -1027,6 +1034,82 @@
             "viewport_rows"
           ],
           "type": "object"
+        },
+        "ProgramStatusInfo": {
+          "properties": {
+            "app": {
+              "description": "The program's own identifier, inherited from the nearest parent\nrecord when this record has none.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Which record this is. Empty for the program itself; `/` separates a\nchild record from its parent.",
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/event/$defs/ProgramStatusKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What a blocked program needs from the user."
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "progress": {
+              "description": "Percentage from 0 through 100. Absent means indeterminate.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/schemas/event/$defs/ProgramStatusState"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "state"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusKind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusState": {
+          "enum": [
+            "idle",
+            "working",
+            "done",
+            "blocked",
+            "error",
+            "unknown"
+          ],
+          "type": "string"
         },
         "SplitDirection": {
           "enum": [
@@ -7916,6 +7999,13 @@
             "pane_id": {
               "type": "string"
             },
+            "program_status": {
+              "description": "Status records the pane's program reported through OSC 7501, least\nrecently updated first. Herdr does not verify them.",
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/ProgramStatusInfo"
+              },
+              "type": "array"
+            },
             "restore_error": {
               "type": [
                 "string",
@@ -9148,6 +9238,82 @@
               "type": "string"
             }
           ]
+        },
+        "ProgramStatusInfo": {
+          "properties": {
+            "app": {
+              "description": "The program's own identifier, inherited from the nearest parent\nrecord when this record has none.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "Which record this is. Empty for the program itself; `/` separates a\nchild record from its parent.",
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/ProgramStatusKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "What a blocked program needs from the user."
+            },
+            "message": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "progress": {
+              "description": "Percentage from 0 through 100. Absent means indeterminate.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/ProgramStatusState"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "state"
+          ],
+          "type": "object"
+        },
+        "ProgramStatusKind": {
+          "enum": [
+            "permission",
+            "question",
+            "auth",
+            "unknown"
+          ],
+          "type": "string"
+        },
+        "ProgramStatusState": {
+          "enum": [
+            "idle",
+            "working",
+            "done",
+            "blocked",
+            "error",
+            "unknown"
+          ],
+          "type": "string"
         },
         "ReadFormat": {
           "enum": [

@@ -373,6 +373,7 @@ pub const StreamHandler = struct {
             .title_push,
             .title_pop,
             .kitty_dnd,
+            .program_status,
             => {},
         }
     }

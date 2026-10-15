@@ -133,6 +133,9 @@ typedef bool (*GhosttyKittyImageSnapshotFileFn)(
  * | `GHOSTTY_TERMINAL_OPT_DESKTOP_NOTIFICATION`| `GhosttyTerminalDesktopNotificationFn` | Desktop notification via OSC 9 / OSC 777 |
  * | `GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT`  | `GhosttyTerminalProgressReportFn` | Progress report via OSC 9;4               |
  * | `GHOSTTY_TERMINAL_OPT_UNKNOWN_SEQUENCE` | `GhosttyTerminalUnknownSequenceFn` | Unsupported sequence identifier          |
+ * | `GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS`   | `GhosttyTerminalProgramStatusFn`  | Program status report via OSC 7501        |
+ * | `GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT`  | `GhosttyTerminalSemanticPromptFn` | Shell reports a prompt or command step via OSC 133 |
+ * | `GHOSTTY_TERMINAL_OPT_RESET`            | `GhosttyTerminalResetFn`          | Full reset (RIS, ESC c)                   |
  *
  * ### Defining a write_pty callback
  * @snippet c-vt-effects/src/main.c effects-write-pty
@@ -945,6 +948,408 @@ typedef void (*GhosttyTerminalProgressReportFn)(
     const GhosttyTerminalProgressReport* report);
 
 /**
+ * What a program says it is doing, in a program status report (OSC 7501).
+ *
+ * See GhosttyTerminalProgramStatus for an overview of the protocol.
+ *
+ * @ingroup terminal
+ */
+typedef enum GHOSTTY_ENUM_TYPED {
+  /** At rest, waiting for the user's next instruction. For example, an
+   * interactive tool sitting at its own prompt. */
+  GHOSTTY_PROGRAM_STATUS_STATE_IDLE = 0,
+
+  /** Running on its own. The report may include a progress percentage. */
+  GHOSTTY_PROGRAM_STATUS_STATE_WORKING = 1,
+
+  /** Finished a piece of work, and the result is ready for the user to
+   * look at. */
+  GHOSTTY_PROGRAM_STATUS_STATE_DONE = 2,
+
+  /** Can't continue until the user does something. `kind` says what the
+   * program needs and `message` says why. The report may include a
+   * progress percentage. */
+  GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED = 3,
+
+  /** Failed and stopped. */
+  GHOSTTY_PROGRAM_STATUS_STATE_ERROR = 4,
+
+  /** Not a real state. Remove the record with this report's id and every
+   * record beneath it. If the id is empty, remove every record. */
+  GHOSTTY_PROGRAM_STATUS_STATE_CLEAR = 5,
+  GHOSTTY_PROGRAM_STATUS_STATE_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+} GhosttyProgramStatusState;
+
+/**
+ * What a blocked program needs from the user, in a program status report
+ * (OSC 7501).
+ *
+ * @ingroup terminal
+ */
+typedef enum GHOSTTY_ENUM_TYPED {
+  /** The program didn't say, or the state isn't
+   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. */
+  GHOSTTY_PROGRAM_STATUS_KIND_NONE = 0,
+
+  /** Approval to do something, such as "Apply these changes?". */
+  GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION = 1,
+
+  /** An answer the user has to type. */
+  GHOSTTY_PROGRAM_STATUS_KIND_QUESTION = 2,
+
+  /** A login, password, token, or other credential. */
+  GHOSTTY_PROGRAM_STATUS_KIND_AUTH = 3,
+  GHOSTTY_PROGRAM_STATUS_KIND_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+} GhosttyProgramStatusKind;
+
+/**
+ * A program status report (OSC 7501).
+ *
+ * The program status protocol lets a program tell the terminal what it is
+ * doing: idle, working, done, waiting on the user, or failed, and why. It
+ * is meant for long-running work like builds, deploys, and coding agents,
+ * where the user is often looking at something else and wants to know when
+ * the work finishes or needs them. The protocol only describes state. How
+ * to show it, if at all, is up to your application.
+ *
+ * The full specification is at
+ * https://www.superlogical.com/rex/docs/build/program-status
+ *
+ * For example, a program waiting for the user to approve a change sends
+ * this, where ST is the string terminator (ESC \ or BEL):
+ *
+ * @code
+ * ESC ] 7501 ; state=blocked:kind=permission:app=terraform:msg=QXBwbHk/ ST
+ * @endcode
+ *
+ * The callback then receives a report with:
+ *
+ * - `state`: GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED
+ * - `kind`: GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION
+ * - `progress`: -1, because the program didn't send one, so the work is
+ *   indeterminate
+ * - `id`: empty, because this is the root record
+ * - `app`: "terraform"
+ * - `title`: empty
+ * - `message`: "Apply?", decoded from the base64 in `msg`
+ *
+ * Only reports that pass every check in the specification reach the
+ * callback. Text that the program didn't send is an empty string (len=0),
+ * never NULL. All strings are only valid during the callback, so copy any
+ * you want to keep.
+ *
+ * This is a sized struct. Later versions may add fields at the end, and
+ * `size` tells you which fields are present. Every field below has been
+ * present since this struct was introduced.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. */
+  size_t size;
+
+  /** What the program is doing. */
+  GhosttyProgramStatusState state;
+
+  /** What the program needs from the user. Only set for
+   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. It is
+   * GHOSTTY_PROGRAM_STATUS_KIND_NONE for other states, when the program
+   * didn't say, or when it sent a kind this version doesn't know. */
+  GhosttyProgramStatusKind kind;
+
+  /** How far along the work is, from 0 through 100, or -1 when there is
+   * no percentage. Only set for GHOSTTY_PROGRAM_STATUS_STATE_WORKING and
+   * GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED. For those states, -1 means the
+   * work is indeterminate: the program is busy but has no percentage to
+   * report. It is also -1 for other states and when the program sent a
+   * value outside that range. */
+  int8_t progress;
+
+  /** Which record this report is about. Empty for the root record.
+   *
+   * A program that only reports on itself leaves this empty. A program
+   * that reports on several things at once gives each its own id, such as
+   * "us-east" and "eu-west" for a deploy to two regions. A "/" makes one
+   * record the child of another, so "build/test" is a child of "build".
+   * The parent record doesn't have to exist. */
+  GhosttyString id;
+
+  /** A stable name for the program that a machine can match on, such as
+   * "cargo", "terraform", or "claude-code". Use it as a key for grouping,
+   * filtering, or choosing an icon. It is not a label. The label is
+   * `title`. Empty when the report didn't include one. See
+   * GhosttyTerminalProgramStatusFn for how an empty app is filled in from
+   * a parent record. */
+  GhosttyString app;
+
+  /** A short label for the record, meant for people. Programs that report
+   * several records use this to tell them apart. */
+  GhosttyString title;
+
+  /** One line of text for people, saying what the record is doing,
+   * waiting for, or has finished. You may shorten it to fit, but don't
+   * try to read meaning into it. */
+  GhosttyString message;
+} GhosttyTerminalProgramStatus;
+
+/**
+ * Callback function type for program status reports (OSC 7501).
+ *
+ * Called synchronously each time the running program sends a valid
+ * report. See GhosttyTerminalProgramStatus for what a report contains.
+ *
+ * The terminal doesn't store reports, so your application keeps them. To
+ * follow the specification, keep one record per id. A report with an empty
+ * id is about the root record, the program itself. The records follow
+ * these rules:
+ *
+ * - A report replaces its record completely. A value the report leaves
+ *   out is gone from the record afterwards. It doesn't keep its old value.
+ * - A GHOSTTY_PROGRAM_STATUS_STATE_CLEAR report removes the record with
+ *   its id and every record beneath it, so clearing "build" also removes
+ *   "build/test". A clear report with an empty id removes every record.
+ * - A record without an app takes it from its nearest ancestor that has
+ *   one. If the root record has app "deploy" and the record "us-east"
+ *   has none, show "us-east" with app "deploy" too.
+ * - When a new shell prompt starts (GHOSTTY_SEMANTIC_PROMPT_PROMPT_START
+ *   from the GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT callback) or the program
+ *   running in the terminal exits, remove `working` and `blocked` records.
+ *   You may remove `idle` records too. Keep `done` and `error` records
+ *   until the user has seen them, for example until they next focus the
+ *   terminal.
+ * - Keep at most 256 records, and allow at least 64. When a new record
+ *   would go over your limit, remove the one that was updated longest ago.
+ *
+ * A full reset (RIS, `ESC c`) removes every record. When that happens,
+ * the terminal calls this with a GHOSTTY_PROGRAM_STATUS_STATE_CLEAR report
+ * and an empty id, and then calls the GHOSTTY_TERMINAL_OPT_RESET callback.
+ *
+ * `title` and `message` are already decoded and contain no control
+ * characters, but they are still untrusted text from the program. Don't
+ * treat them as markup. If you show them outside the terminal, such as in
+ * a tab or a notification, remove invisible formatting characters like
+ * text direction overrides, and say which terminal the text came from so
+ * a program can't pretend to be one running elsewhere.
+ *
+ * Example, where `Records`, `records_clear`, and `records_put` stand in for
+ * your application's own storage:
+ *
+ * @code
+ * void on_program_status(GhosttyTerminal terminal,
+ *                        void* userdata,
+ *                        const GhosttyTerminalProgramStatus* report) {
+ *   (void)terminal;
+ *   Records* records = userdata;
+ *
+ *   if (report->state == GHOSTTY_PROGRAM_STATUS_STATE_CLEAR) {
+ *     // Remove this record and every record beneath it. An empty id
+ *     // removes every record.
+ *     records_clear(records, report->id);
+ *     return;
+ *   }
+ *
+ *   // Replace the whole record. The strings are only valid during this
+ *   // call, so records_put must copy them.
+ *   records_put(records, report->id, report->state, report->message);
+ * }
+ *
+ * // Set write_pty too, so programs that check for support get a reply.
+ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_USERDATA, records);
+ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_WRITE_PTY,
+ *                      (const void*)on_write_pty);
+ * ghostty_terminal_set(terminal, GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS,
+ *                      (const void*)on_program_status);
+ * @endcode
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
+ * @param report The report. It and its strings are only valid during the
+ *               call.
+ *
+ * @ingroup terminal
+ */
+typedef void (*GhosttyTerminalProgramStatusFn)(
+    GhosttyTerminal terminal,
+    void* userdata,
+    const GhosttyTerminalProgramStatus* report);
+
+/**
+ * The step of a command that a shell integration event reports.
+ *
+ * More kinds may be added in later versions, so ignore any kind you don't
+ * handle.
+ *
+ * @ingroup terminal
+ */
+typedef enum GHOSTTY_ENUM_TYPED {
+  /** Never reported. This exists so that a zeroed value is not mistaken
+   * for a real event. */
+  GHOSTTY_SEMANTIC_PROMPT_INVALID = 0,
+
+  /** The shell started drawing a prompt. `prompt_kind` says which one. */
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_START = 1,
+
+  /** The prompt is drawn and the user can start typing a command. */
+  GHOSTTY_SEMANTIC_PROMPT_INPUT_START = 2,
+
+  /** The user submitted the command and it started running. Anything the
+   * terminal receives after this is the command's output. */
+  GHOSTTY_SEMANTIC_PROMPT_OUTPUT_START = 3,
+
+  /** The command finished running. */
+  GHOSTTY_SEMANTIC_PROMPT_COMMAND_END = 4,
+  GHOSTTY_SEMANTIC_PROMPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+} GhosttySemanticPromptKind;
+
+/**
+ * Which prompt a `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` event starts.
+ *
+ * Most shells only draw a primary prompt. Some also draw a prompt on the
+ * right side of the line, or a prompt at the start of each extra line
+ * when a command spans several lines.
+ *
+ * @ingroup terminal
+ */
+typedef enum GHOSTTY_ENUM_TYPED {
+  /** The main prompt shown before each command. This is used when the
+   * shell doesn't say which prompt it is drawing. */
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_PRIMARY = 0,
+
+  /** A prompt drawn at the right edge of the line, such as zsh's
+   * RPROMPT. */
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_RIGHT = 1,
+
+  /** A prompt at the start of an extra line of a command that spans
+   * several lines. */
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_CONTINUATION = 2,
+
+  /** Another prompt for an extra line of input, such as bash's PS2.
+   * Shells differ in whether they report extra lines as continuation or
+   * secondary prompts, so most applications should treat the two the
+   * same. */
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_SECONDARY = 3,
+  GHOSTTY_SEMANTIC_PROMPT_PROMPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
+} GhosttySemanticPromptPromptKind;
+
+/**
+ * A shell integration event, passed to the
+ * `GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT` callback.
+ *
+ * `kind` says which step of the command this is. The other fields only
+ * carry information for the kinds listed on each field, and are zero or
+ * empty otherwise.
+ *
+ * Strings are only valid during the callback. Copy them if you need them
+ * later.
+ *
+ * This is a sized struct. Later versions may add fields at the end, and
+ * `size` tells you which fields are present. Every field below has been
+ * present since this struct was introduced, so you only need to check
+ * `size` before reading fields added later. Two fields are likely to be
+ * added in the future:
+ *
+ * - An identifier the shell assigns to each command.
+ * - A flag on `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` that says the shell
+ *   redrew a prompt it had already drawn, instead of starting a new one.
+ *
+ * Neither exists yet.
+ *
+ * @ingroup terminal
+ */
+typedef struct {
+  /** Size of this struct in bytes. */
+  size_t size;
+
+  /** Which step of the command this event reports. */
+  GhosttySemanticPromptKind kind;
+
+  /** Which prompt is starting. Set for
+   * `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START`. Always
+   * `GHOSTTY_SEMANTIC_PROMPT_PROMPT_PRIMARY` for other kinds. */
+  GhosttySemanticPromptPromptKind prompt_kind;
+
+  /** True if the shell reported the command's exit code. Only ever true
+   * for `GHOSTTY_SEMANTIC_PROMPT_COMMAND_END`. */
+  bool has_exit_code;
+
+  /** The command's exit code. Only meaningful when `has_exit_code` is
+   * true. Exit codes can be negative, for example on Windows, so use
+   * `has_exit_code` rather than a special value to tell whether one was
+   * reported. */
+  int32_t exit_code;
+
+  /** The command line that is about to run, for
+   * `GHOSTTY_SEMANTIC_PROMPT_OUTPUT_START`. The shell sends it encoded,
+   * and this is the decoded text. Empty (len=0) if the shell didn't send
+   * one or it couldn't be decoded. */
+  GhosttyString command;
+
+  /** A description of what went wrong, for
+   * `GHOSTTY_SEMANTIC_PROMPT_COMMAND_END` when the shell sent one. Empty
+   * (len=0) otherwise. Few shells send this. The exit code is the usual
+   * way to tell whether a command failed. */
+  GhosttyString error;
+} GhosttyTerminalSemanticPrompt;
+
+/**
+ * Callback function type for semantic_prompt.
+ *
+ * Called when the shell reports a step of a command. Each command goes
+ * through four steps, in this order: the prompt starts, input starts,
+ * output starts, and the command ends. Then the next prompt starts.
+ *
+ * Shells differ in what they report. Many don't send the command line or
+ * the exit code, and some skip steps, so handle each event on its own
+ * instead of expecting a strict order. A shell may also start the same
+ * prompt more than once, for example when it redraws the prompt after a
+ * resize, so treat a repeated `GHOSTTY_SEMANTIC_PROMPT_PROMPT_START` as
+ * harmless.
+ *
+ * The terminal has already updated its screen when this is called. A
+ * sequence the terminal rejects as malformed is never reported.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
+ * @param event The event. It and its strings are only valid during the
+ *              call.
+ *
+ * @ingroup terminal
+ */
+typedef void (*GhosttyTerminalSemanticPromptFn)(
+    GhosttyTerminal terminal,
+    void* userdata,
+    const GhosttyTerminalSemanticPrompt* event);
+
+/**
+ * Callback function type for reset.
+ *
+ * Called when the running program performs a full reset (RIS, `ESC c`).
+ * A full reset clears the screen and scrollback, returns modes to their
+ * defaults, and clears the title and working directory. Use this callback
+ * to reset any state your application keeps about what's running in the
+ * terminal, such as the current command.
+ *
+ * The terminal has already reset itself when this is called. The
+ * GHOSTTY_TERMINAL_OPT_TITLE_CHANGED and GHOSTTY_TERMINAL_OPT_PWD_CHANGED
+ * callbacks are not called for the cleared title and working directory,
+ * so update anything you show for them here. A full reset also removes
+ * any progress report and program status records. If you set
+ * GHOSTTY_TERMINAL_OPT_PROGRESS_REPORT or
+ * GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS, those callbacks are called before
+ * this one.
+ *
+ * A soft reset (DECSTR, `CSI ! p`) only resets a few modes and doesn't
+ * call this.
+ *
+ * @param terminal The terminal handle
+ * @param userdata The userdata pointer set via GHOSTTY_TERMINAL_OPT_USERDATA
+ *
+ * @ingroup terminal
+ */
+typedef void (*GhosttyTerminalResetFn)(GhosttyTerminal terminal,
+                                       void* userdata);
+
+/**
  * Callback function type for color scheme queries (CSI ? 996 n).
  *
  * Called when the terminal receives a color scheme device status report
@@ -1586,6 +1991,46 @@ typedef enum GHOSTTY_ENUM_TYPED {
   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
   /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
   GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
+
+  /**
+   * Callback invoked when the shell reports a step of a command: a prompt
+   * starts, input starts, output starts, or the command ends. Set to NULL
+   * to ignore these events.
+   *
+   * Input type: GhosttyTerminalSemanticPromptFn
+   */
+  GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT = 42,
+
+  /**
+   * Callback invoked after the running program performs a full reset
+   * (RIS, ESC c). Set to NULL to ignore resets.
+   *
+   * Input type: GhosttyTerminalResetFn
+   */
+  GHOSTTY_TERMINAL_OPT_RESET = 43,
+
+  /**
+   * Callback invoked when the running program sends a program status
+   * report via OSC 7501. Set to NULL to ignore these reports.
+   *
+   * Programs may ask whether the terminal supports the protocol by
+   * sending `OSC 7501 ; ?`. While this callback is set, the terminal
+   * answers through GHOSTTY_TERMINAL_OPT_WRITE_PTY with `?` followed by
+   * the states and kinds it accepts:
+   *
+   * @code
+   * program:  ESC ] 7501 ; ? ST
+   * terminal: ESC ] 7501 ; ?:states=idle,working,done,blocked,error:kinds=permission,question,auth ST
+   * @endcode
+   *
+   * While this callback is NULL, the query gets no reply, so a program
+   * that asks sees the protocol as unsupported. Asking is optional, so
+   * programs may send reports anyway. Those are dropped. Set a write_pty
+   * callback too, or programs never see the reply.
+   *
+   * Input type: GhosttyTerminalProgramStatusFn
+   */
+  GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS = 46,
   GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
 } GhosttyTerminalOption;
 

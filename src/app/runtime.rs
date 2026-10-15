@@ -71,6 +71,22 @@ impl App {
         self.sync_agent_metadata_deadline();
     }
 
+    /// Returns the panes whose presented status changed.
+    pub(crate) fn acknowledge_seen_program_results(
+        &mut self,
+    ) -> Vec<crate::app::actions::PaneStateUpdate> {
+        if self.state.unseen_program_results.is_empty() {
+            return Vec::new();
+        }
+        let previous_toast = self.state.toast.clone();
+        let updates = self.state.acknowledge_seen_program_results();
+        for update in &updates {
+            self.refresh_new_herdr_toast_context_for_update(update, &previous_toast);
+            self.emit_pane_state_update(update);
+        }
+        updates
+    }
+
     pub(crate) fn can_render_now(&self, now: Instant) -> bool {
         match self.last_render_at {
             Some(last_render_at) => now.duration_since(last_render_at) >= MIN_RENDER_INTERVAL,

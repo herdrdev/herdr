@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -118,20 +119,40 @@ class VendorLibghosttyVtTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parent.parent
         patch_dir = project_root / "vendor" / "patches" / "libghostty-vt"
 
-        for patch in sorted(patch_dir.glob("*.patch")):
-            result = subprocess.run(
-                ["git", "apply", "--check", "--reverse", str(patch.relative_to(project_root))],
-                cwd=project_root,
-                text=True,
-                capture_output=True,
-            )
-            self.assertEqual(
-                result.returncode,
-                0,
-                f"{patch.relative_to(project_root)} is not applied cleanly:\n"
-                f"stdout:\n{result.stdout}\n"
-                f"stderr:\n{result.stderr}",
-            )
+        # A later patch can build on an earlier one, so the patches are taken
+        # off newest first. That also proves they apply in order to the tree
+        # that is left. A scratch index holds the vendored tree as it is on
+        # disk, so the real index and the working tree are not touched.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            env = {**os.environ, "GIT_INDEX_FILE": str(Path(temp_dir) / "index")}
+            for command in (
+                ["git", "read-tree", "HEAD"],
+                ["git", "add", "--all", "--", "vendor/libghostty-vt"],
+            ):
+                subprocess.run(
+                    command, cwd=project_root, env=env, check=True, capture_output=True
+                )
+            for patch in sorted(patch_dir.glob("*.patch"), reverse=True):
+                result = subprocess.run(
+                    [
+                        "git",
+                        "apply",
+                        "--cached",
+                        "--reverse",
+                        str(patch.relative_to(project_root)),
+                    ],
+                    cwd=project_root,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    f"{patch.relative_to(project_root)} is not applied cleanly:\n"
+                    f"stdout:\n{result.stdout}\n"
+                    f"stderr:\n{result.stderr}",
+                )
 
     def test_embedded_libghostty_logging_is_silenced(self) -> None:
         root = Path(__file__).resolve().parent.parent / "vendor" / "libghostty-vt"

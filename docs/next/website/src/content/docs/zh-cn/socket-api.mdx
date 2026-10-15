@@ -706,6 +706,8 @@ herdr agent wait w1:p1 --until blocked
 }
 ```
 
+如果窗格中的程序通过 OSC 7501 上报状态,窗格还会带有 `program_status` 数组,每条记录一项:`id`、`state`(`idle`、`working`、`done`、`blocked` 或 `error`),以及可选的 `kind`、`progress`、`app`、`title` 和 `message`。Herdr 按上报内容原样传递,不做验证。参见[通过终端上报](/zh-cn/docs/add-herdr-support/)。
+
 `server.agent_manifests` 返回生效的智能体检测清单来源和远程更新诊断信息,不重载规则:
 
 ```json

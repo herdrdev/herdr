@@ -4445,6 +4445,439 @@ mod tests {
     }
 
     #[test]
+    fn program_status_from_an_unknown_program_reaches_pane_get() {
+        use crate::ghostty::{
+            ProgramStatusEvent, ProgramStatusKind, ProgramStatusReport, ProgramStatusState,
+        };
+
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        let report = |id: &str, state, kind, app: Option<&str>| {
+            ProgramStatusEvent::Report(ProgramStatusReport {
+                id: id.into(),
+                state,
+                kind,
+                progress: None,
+                app: app.map(str::to_string),
+                title: None,
+                message: (!id.is_empty()).then(|| "Apply?".to_string()),
+            })
+        };
+        let reports = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+        reports.push(vec![
+            report("", ProgramStatusState::Working, None, Some("deploy")),
+            report(
+                "us-east",
+                ProgramStatusState::Blocked,
+                Some(ProgramStatusKind::Permission),
+                None,
+            ),
+        ]);
+        app.handle_internal_event(crate::events::AppEvent::ProgramStatusReported {
+            pane_id: internal_pane_id,
+            reports,
+        });
+
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent"], "deploy");
+        assert_eq!(pane["agent_status"], "blocked");
+        assert_eq!(
+            pane["program_status"],
+            serde_json::json!([
+                { "id": "", "state": "working", "app": "deploy" },
+                {
+                    "id": "us-east",
+                    "state": "blocked",
+                    "kind": "permission",
+                    "app": "deploy",
+                    "message": "Apply?"
+                }
+            ])
+        );
+    }
+
+    fn pane_get(app: &mut App, pane_id: &str) -> serde_json::Value {
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "get".into(),
+            method: crate::api::schema::Method::PaneGet(PaneTarget {
+                pane_id: pane_id.to_string(),
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+        response["result"]["pane"].clone()
+    }
+
+    #[test]
+    fn reported_results_wait_to_be_seen_then_stop_hiding_work_or_the_shell() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        // Only the root record names its app; the children inherit it.
+        let report = |id: &str, state| {
+            ProgramStatusEvent::Report(ProgramStatusReport {
+                id: id.into(),
+                state,
+                kind: None,
+                progress: None,
+                app: id.is_empty().then(|| "deploy".into()),
+                title: None,
+                message: None,
+            })
+        };
+        let reports = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+        let send = |app: &mut App, events| {
+            reports.push(events);
+            app.handle_internal_event(crate::events::AppEvent::ProgramStatusReported {
+                pane_id: internal_pane_id,
+                reports: reports.clone(),
+            });
+            app.acknowledge_seen_program_results();
+        };
+        let look_at_pane = |app: &mut App| {
+            app.state.outer_terminal_focus = Some(true);
+            app.state.mark_active_tab_seen();
+            app.acknowledge_seen_program_results();
+        };
+
+        // The shell was respawned while a report from its old runtime was
+        // still on its way.
+        let replaced = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+        replaced.push(vec![report("", ProgramStatusState::Blocked)]);
+        replaced.retire();
+
+        // While the user is elsewhere, a finished child does not hide the
+        // root that is still working, whatever the root calls itself.
+        app.state.active = Some(0);
+        app.state.outer_terminal_focus = Some(false);
+        send(
+            &mut app,
+            vec![
+                report("", ProgramStatusState::Working),
+                report("job", ProgramStatusState::Done),
+            ],
+        );
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "working");
+        send(
+            &mut app,
+            vec![ProgramStatusEvent::Report(ProgramStatusReport {
+                id: String::new(),
+                state: ProgramStatusState::Working,
+                kind: None,
+                progress: None,
+                app: Some("release".into()),
+                title: None,
+                message: None,
+            })],
+        );
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent"], "release");
+        assert_eq!(pane["agent_status"], "working");
+
+        // A program that finishes and then continues is working again.
+        send(&mut app, vec![report("", ProgramStatusState::Done)]);
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "done");
+        send(&mut app, vec![report("", ProgramStatusState::Working)]);
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "working");
+
+        // Looking at the pane while it works is not seeing the child's
+        // result. When the program returns to the prompt, that result is
+        // what the pane shows, under the name it had.
+        look_at_pane(&mut app);
+        app.state.outer_terminal_focus = Some(false);
+        for _ in 0..2 {
+            send(&mut app, vec![ProgramStatusEvent::PromptStart]);
+            let pane = pane_get(&mut app, &pane_id);
+            assert_eq!(pane["agent_status"], "done");
+            assert_eq!(pane["agent"], "deploy");
+            // The root it inherited from is gone, so the record has no app.
+            assert_eq!(pane["program_status"][0]["id"], "job");
+            assert!(pane["program_status"][0].get("app").is_none());
+            // Attached clients read the completion from here.
+            assert!(completion_seq(&app, internal_pane_id).is_some());
+        }
+
+        // The late delivery changes neither the status nor what is unseen.
+        app.handle_internal_event(crate::events::AppEvent::ProgramStatusReported {
+            pane_id: internal_pane_id,
+            reports: replaced,
+        });
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "done");
+
+        // A blocked record outranks the result, and looking at that is not
+        // seeing the result either. It shows again once the block is over.
+        send(&mut app, vec![report("", ProgramStatusState::Blocked)]);
+        look_at_pane(&mut app);
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "blocked");
+        app.state.outer_terminal_focus = Some(false);
+        send(&mut app, vec![report("", ProgramStatusState::Idle)]);
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "done");
+
+        // Seeing it ends it. What the running program reports stays.
+        look_at_pane(&mut app);
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent_status"], "idle");
+        assert_eq!(pane["program_status"].as_array().unwrap().len(), 1);
+        send(&mut app, vec![ProgramStatusEvent::Clear(String::new())]);
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent_status"], "unknown");
+        assert!(pane.get("agent").is_none() && pane.get("program_status").is_none());
+
+        // So does the shell starting its next command, seen or not. The copy
+        // of the result the app already held does not bring it back.
+        app.state.outer_terminal_focus = Some(false);
+        send(
+            &mut app,
+            vec![
+                report("job", ProgramStatusState::Done),
+                ProgramStatusEvent::PromptStart,
+            ],
+        );
+        assert_eq!(pane_get(&mut app, &pane_id)["agent_status"], "done");
+        send(&mut app, vec![ProgramStatusEvent::CommandStart]);
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent_status"], "unknown");
+        assert!(pane.get("agent").is_none() && pane.get("program_status").is_none());
+    }
+
+    fn completion_seq(app: &App, pane_id: crate::layout::PaneId) -> Option<u64> {
+        let terminal_id = &app.state.workspaces[0]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id;
+        app.state.terminals[terminal_id].last_agent_completion_seq
+    }
+
+    #[test]
+    fn a_detected_agent_exiting_keeps_its_reported_result_unseen() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        app.state.active = Some(0);
+        app.state.outer_terminal_focus = Some(false);
+        let detected = |app: &mut App, state, process_exited| {
+            app.handle_internal_event(crate::events::AppEvent::StateChanged {
+                pane_id: internal_pane_id,
+                agent: Some(Agent::Codex),
+                state,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited,
+                observed_at: std::time::Instant::now(),
+            });
+        };
+
+        // Herdr detects Codex working; Codex reports its result under its own name.
+        detected(&mut app, AgentState::Working, false);
+        let reports = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+        reports.push(vec![ProgramStatusEvent::Report(ProgramStatusReport {
+            id: String::new(),
+            state: ProgramStatusState::Done,
+            kind: None,
+            progress: None,
+            app: Some("codex-cli".into()),
+            title: None,
+            message: None,
+        })]);
+        app.handle_internal_event(crate::events::AppEvent::ProgramStatusReported {
+            pane_id: internal_pane_id,
+            reports,
+        });
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(
+            (&pane["agent"], &pane["agent_status"]),
+            (&"codex".into(), &"done".into())
+        );
+
+        // Its process exits, so the pane goes by the result's own name. That
+        // is not the user seeing the result.
+        detected(&mut app, AgentState::Idle, true);
+        app.acknowledge_seen_program_results();
+        let pane = pane_get(&mut app, &pane_id);
+        assert_eq!(pane["agent"], "codex-cli");
+        assert_eq!(pane["agent_status"], "done");
+        assert!(completion_seq(&app, internal_pane_id).is_some());
+    }
+
+    #[test]
+    fn a_dismissed_result_stops_showing_as_done_under_an_unchanged_agent() {
+        use crate::ghostty::{ProgramStatusEvent, ProgramStatusReport, ProgramStatusState};
+
+        let (mut app, pane_id) = app_with_test_workspace();
+        let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
+        app.state.active = Some(0);
+        app.state.outer_terminal_focus = Some(false);
+        let detected = |app: &mut App, state| {
+            app.handle_internal_event(crate::events::AppEvent::StateChanged {
+                pane_id: internal_pane_id,
+                agent: Some(Agent::Codex),
+                state,
+                visible_blocker: false,
+                visible_working: false,
+                process_exited: false,
+                observed_at: std::time::Instant::now(),
+            });
+        };
+        // Herdr sees Codex finish here before the program reports anything.
+        detected(&mut app, AgentState::Working);
+        detected(&mut app, AgentState::Idle);
+        let reports = std::sync::Arc::new(crate::events::ProgramStatusMailbox::default());
+        let send = |app: &mut App, events| {
+            reports.push(events);
+            app.handle_internal_event(crate::events::AppEvent::ProgramStatusReported {
+                pane_id: internal_pane_id,
+                reports: reports.clone(),
+            });
+        };
+        let root = |state| {
+            ProgramStatusEvent::Report(ProgramStatusReport {
+                id: String::new(),
+                state,
+                kind: None,
+                progress: None,
+                app: None,
+                title: None,
+                message: None,
+            })
+        };
+        let done = || root(ProgramStatusState::Done);
+        let status = |app: &mut App| pane_get(app, &pane_id)["agent_status"].clone();
+
+        // That inferred completion ends when a report takes over and says
+        // idle. From here Herdr sees Codex idle the whole time, so nothing
+        // else about the pane changes when a reported result comes and goes.
+        assert_eq!(status(&mut app), "done");
+        assert!(completion_seq(&app, internal_pane_id).is_some());
+        reports.push(vec![root(ProgramStatusState::Idle)]);
+        let updates = app.handle_internal_event_with_pane_updates(
+            crate::events::AppEvent::ProgramStatusReported {
+                pane_id: internal_pane_id,
+                reports: reports.clone(),
+            },
+        );
+        assert!(matches!(updates.as_slice(), [update] if !update.previous_seen && update.seen));
+        assert_eq!(status(&mut app), "idle");
+        assert_eq!(completion_seq(&app, internal_pane_id), None);
+        send(&mut app, vec![ProgramStatusEvent::Clear(String::new())]);
+
+        // The shell's next command ends an unseen result, and subscribers are
+        // told the pane is no longer done.
+        send(&mut app, vec![done(), ProgramStatusEvent::PromptStart]);
+        assert_eq!(status(&mut app), "done");
+        reports.push(vec![ProgramStatusEvent::CommandStart]);
+        let updates = app.handle_internal_event_with_pane_updates(
+            crate::events::AppEvent::ProgramStatusReported {
+                pane_id: internal_pane_id,
+                reports: reports.clone(),
+            },
+        );
+        assert!(matches!(updates.as_slice(), [update] if !update.previous_seen && update.seen));
+        assert_eq!(status(&mut app), "idle");
+        assert_eq!(completion_seq(&app, internal_pane_id), None);
+
+        // That holds when the next command's own report reuses the record's
+        // id in the same delivery.
+        send(&mut app, vec![done(), ProgramStatusEvent::PromptStart]);
+        send(
+            &mut app,
+            vec![
+                ProgramStatusEvent::CommandStart,
+                root(ProgramStatusState::Idle),
+            ],
+        );
+        assert_eq!(status(&mut app), "idle");
+
+        // The program clearing the result ends it too.
+        send(&mut app, vec![done()]);
+        assert_eq!(status(&mut app), "done");
+        send(&mut app, vec![ProgramStatusEvent::Clear(String::new())]);
+        assert_eq!(status(&mut app), "idle");
+        assert_eq!(completion_seq(&app, internal_pane_id), None);
+        assert_eq!(pane_get(&mut app, &pane_id)["agent"], "codex");
+
+        // So does an idle report that replaces it, on its own or after other
+        // reports in the same delivery. The pane follows the current report.
+        send(&mut app, vec![done()]);
+        assert_eq!(status(&mut app), "done");
+        send(&mut app, vec![root(ProgramStatusState::Idle)]);
+        assert_eq!(status(&mut app), "idle");
+        assert_eq!(completion_seq(&app, internal_pane_id), None);
+        send(&mut app, vec![done()]);
+        send(
+            &mut app,
+            vec![
+                root(ProgramStatusState::Working),
+                root(ProgramStatusState::Idle),
+            ],
+        );
+        assert_eq!(status(&mut app), "idle");
+
+        // When the next command is blocked straight away, the notification
+        // queued for that is not dropped along with the old result.
+        app.state.toast_config.delay_seconds = 60;
+        send(&mut app, vec![done(), ProgramStatusEvent::PromptStart]);
+        send(
+            &mut app,
+            vec![
+                ProgramStatusEvent::CommandStart,
+                root(ProgramStatusState::Blocked),
+            ],
+        );
+        assert_eq!(status(&mut app), "blocked");
+        assert!(app
+            .state
+            .pending_agent_notifications
+            .contains_key(&internal_pane_id));
+
+        // A program that finishes and then continues is working again.
+        send(&mut app, vec![done()]);
+        assert_eq!(status(&mut app), "done");
+        send(&mut app, vec![root(ProgramStatusState::Working)]);
+        assert_eq!(status(&mut app), "working");
+
+        // Work that ends without a result is not a finish. The pane goes idle
+        // and nobody is notified, whether the program reports idle, replaced
+        // its result before it was delivered, or stops reporting.
+        let endings = [
+            (
+                ProgramStatusState::Working,
+                vec![root(ProgramStatusState::Idle)],
+            ),
+            (
+                ProgramStatusState::Blocked,
+                vec![root(ProgramStatusState::Idle)],
+            ),
+            (
+                ProgramStatusState::Working,
+                vec![done(), root(ProgramStatusState::Idle)],
+            ),
+            (
+                ProgramStatusState::Working,
+                vec![done(), ProgramStatusEvent::Clear(String::new())],
+            ),
+        ];
+        for (before, ending) in endings {
+            send(&mut app, vec![root(before)]);
+            reports.push(ending);
+            let updates = app.handle_internal_event_with_pane_updates(
+                crate::events::AppEvent::ProgramStatusReported {
+                    pane_id: internal_pane_id,
+                    reports: reports.clone(),
+                },
+            );
+            assert!(matches!(
+                updates.as_slice(),
+                [update] if update.state == AgentState::Idle && update.seen && update.suppress_completion
+            ));
+            assert_eq!(status(&mut app), "idle");
+            assert_eq!(completion_seq(&app, internal_pane_id), None);
+            let later = std::time::Instant::now() + std::time::Duration::from_secs(120);
+            assert!(app.state.drain_due_agent_notifications(later).is_empty());
+        }
+    }
+
+    #[test]
     fn pane_tokens_are_independent_from_presentation_guards() {
         let (mut app, pane_id) = app_with_test_workspace();
         let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
