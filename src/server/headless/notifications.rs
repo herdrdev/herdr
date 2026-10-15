@@ -303,7 +303,7 @@ impl HeadlessServer {
             return false;
         }
         let focus_response = match &mut ev {
-            AppEvent::WorktreeAddFinished(result) => result
+            AppEvent::WorktreeAddFinished(result) if result.result.is_ok() => result
                 .api_request
                 .as_mut()
                 .filter(|request| request.focus)

@@ -1214,6 +1214,164 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
     assert_eq!(state.mode, ClientShellMode::Terminal);
 }
 
+fn prepared_worktree_create() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    let mut prepare = ClientShellInput::default();
+    state.record_binding(
+        crate::input::KeybindMatch::Action(crate::input::KeybindAction::NewWorktree),
+        &mut prepare,
+    );
+    let [ClientShellAction::Endpoint { request, .. }] = &prepare.actions[..] else {
+        panic!("new worktree should prepare through worktree.list");
+    };
+    state.handle_endpoint_result("boot-1", &request.id, Ok(worktree_list_result(None)));
+    state
+}
+
+#[test]
+fn worktree_create_automatic_starts_blank_with_visible_placeholders() {
+    let mut state = prepared_worktree_create();
+    let Some(ClientShellOverlay::WorktreeCreate(create)) = &state.overlay else {
+        panic!("new worktree overlay");
+    };
+    assert!(create.branch.is_empty());
+    assert_eq!(
+        create.checkout_path,
+        "/tmp/herdr-worktrees/repo/<automatic>"
+    );
+
+    let frame = state.compose(106, 30).expect("new worktree modal");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Automatic (leave blank)"));
+    assert!(text.contains("/tmp/herdr-worktrees/repo/<automatic>"));
+    assert!(frame.cursor.as_ref().is_some_and(|cursor| cursor.visible));
+}
+
+#[test]
+fn worktree_create_automatic_submits_blank_or_whitespace_as_none() {
+    for input in ["", "   "] {
+        let mut state = prepared_worktree_create();
+        state.handle_input_bytes(input.as_bytes());
+        let submit = state.handle_input_bytes(b"\r");
+        let [ClientShellAction::Endpoint { request, .. }] = &submit.actions[..] else {
+            panic!("blank branch should request an automatic worktree name");
+        };
+        assert!(matches!(
+            &request.method,
+            crate::api::schema::Method::WorktreeCreate(params)
+                if params.branch.is_none()
+                    && params.workspace_id.as_deref() == Some("ws_1")
+                    && params.base.as_deref() == Some("HEAD")
+                    && params.cwd.is_none()
+                    && params.path.is_none()
+                    && !params.focus
+        ));
+        assert!(matches!(
+            &state.overlay,
+            Some(ClientShellOverlay::WorktreeCreate(create))
+                if create.branch.is_empty() && create.creating && create.error.is_none()
+        ));
+    }
+}
+
+#[test]
+fn worktree_create_automatic_is_restored_after_clearing_explicit_input() {
+    let mut state = prepared_worktree_create();
+    state.handle_input_bytes(b"feature/temporary");
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::WorktreeCreate(create))
+            if create.checkout_path == "/tmp/herdr-worktrees/repo/feature-temporary"
+    ));
+    state.handle_raw_events(vec![RawInputEvent::Key(crate::input::TerminalKey::new(
+        KeyCode::Char('u'),
+        KeyModifiers::CONTROL,
+    ))]);
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::WorktreeCreate(create))
+            if create.branch.is_empty()
+                && create.checkout_path == "/tmp/herdr-worktrees/repo/<automatic>"
+    ));
+    let submit = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        &submit.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(&request.method,
+                crate::api::schema::Method::WorktreeCreate(params) if params.branch.is_none())
+    ));
+}
+
+#[test]
+fn worktree_create_automatic_and_explicit_retry_preserve_intent_and_source_workspace() {
+    for input in ["", "  feature/retry  "] {
+        let mut state = prepared_worktree_create();
+        state.handle_input_bytes(input.as_bytes());
+        // A newer snapshot can change focus while the dialog stays open. The
+        // request must still refer to the workspace that opened the dialog.
+        let mut updated = snapshot();
+        updated.revision += 1;
+        updated.focused_workspace_id = Some("ws_2".into());
+        updated.workspaces[0].focused = false;
+        let mut second = updated.workspaces[0].clone();
+        second.workspace_id = "ws_2".into();
+        second.focused = true;
+        updated.workspaces.push(second);
+        state.set_snapshot(Box::new(updated));
+
+        let expected_branch = if input.is_empty() {
+            None
+        } else {
+            Some(input.trim())
+        };
+        let mut previous_id = None;
+        for _ in 0..2 {
+            let submit = state.handle_input_bytes(b"\r");
+            let [ClientShellAction::Endpoint { request, .. }] = &submit.actions[..] else {
+                panic!("worktree create should submit or retry");
+            };
+            assert!(matches!(
+                &request.method,
+                crate::api::schema::Method::WorktreeCreate(params)
+                    if params.branch.as_deref() == expected_branch
+                        && params.workspace_id.as_deref() == Some("ws_1")
+                        && params.path.is_none()
+                        && !params.focus
+            ));
+            assert_ne!(previous_id.as_ref(), Some(&request.id));
+            previous_id = Some(request.id.clone());
+            assert!(state.handle_input_bytes(b"\r").actions.is_empty());
+            let (_, follow_up) = state.handle_endpoint_result(
+                "boot-1",
+                &request.id,
+                Err(ClientShellEndpointError {
+                    code: Some("worktree_create_failed".into()),
+                    message: "creation failed".into(),
+                }),
+            );
+            assert!(follow_up.is_empty());
+            assert!(matches!(
+                &state.overlay,
+                Some(ClientShellOverlay::WorktreeCreate(create))
+                    if !create.creating
+                        && create.error.as_deref() == Some("creation failed")
+                        && create.branch.as_str() == input.trim()
+            ));
+        }
+    }
+}
+
 #[test]
 fn worktree_create_previews_the_endpoint_owned_checkout_path() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -1254,7 +1412,7 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
     assert!(frame.cursor.as_ref().is_some_and(|cursor| cursor.visible));
 
     assert!(state
-        .handle_input_bytes(b"feature/client-shell")
+        .handle_input_bytes(b"  feature/client-shell  ")
         .actions
         .is_empty());
     assert!(matches!(
