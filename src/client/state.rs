@@ -53,6 +53,8 @@ pub(super) struct ClientState {
     pub(super) pixel_geometry_exact: bool,
     /// The host's answer to the SGR pixel mouse probe; None when unknown.
     pub(super) host_sgr_pixel_mouse: Option<bool>,
+    /// Palette sweeps written but not yet armed on the stdin framer.
+    pub(super) host_theme_query_pending: Arc<AtomicU32>,
     #[cfg(unix)]
     pub(super) direct_graphics_response: Arc<Mutex<direct_graphics::ResponseMatcher>>,
     #[cfg(unix)]
@@ -121,6 +123,7 @@ impl ClientState {
             pixel_geometry_enabled: false,
             pixel_geometry_exact: false,
             host_sgr_pixel_mouse: None,
+            host_theme_query_pending: Arc::new(AtomicU32::new(0)),
             #[cfg(unix)]
             direct_graphics_response: Default::default(),
             #[cfg(unix)]
@@ -148,6 +151,15 @@ impl ClientState {
 
     pub(super) fn request_repaint(&mut self) {
         self.repaint_pending = true;
+    }
+
+    /// Queries the host palette. On Unix the stdin thread arms its split-reply
+    /// guard from the counter before framing the next read, so the increment
+    /// must precede the write.
+    pub(super) fn query_host_terminal_theme(&self) {
+        #[cfg(unix)]
+        self.host_theme_query_pending.fetch_add(1, Ordering::AcqRel);
+        terminal_geometry::query_host_terminal_theme();
     }
 
     pub(super) fn freeze_presentation(&mut self) {
