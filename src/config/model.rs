@@ -967,7 +967,7 @@ pub struct KeysConfig {
     pub new_thread: BindingConfig,
     /// Open the spawn dock at the bottom of the pane area. Default: "prefix+y"
     pub new_agent_dock: BindingConfig,
-    /// Capture a thought to the local focus list. Default: "ctrl+alt+r".
+    /// Capture a thought to the local focus list. Default: "alt+t".
     pub capture: BindingConfig,
     /// Enter the Focus Room. Default: "prefix+shift+z".
     pub focus_enter: BindingConfig,
@@ -2300,7 +2300,7 @@ impl Default for KeysConfig {
             new_workspace: BindingConfig::one("prefix+alt+n"),
             new_thread: BindingConfig::one("prefix+c"),
             new_agent_dock: BindingConfig::one("prefix+y"),
-            capture: BindingConfig::one("ctrl+alt+r"),
+            capture: BindingConfig::one("alt+t"),
             focus_enter: BindingConfig::one("prefix+shift+z"),
             focus_leave: BindingConfig::one("prefix+o"),
             new_worktree: BindingConfig::one("prefix+shift+g"),

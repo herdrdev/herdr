@@ -2063,6 +2063,13 @@ fn prefix_binding_for_key(state: &AppState, key: &TerminalKey) -> Option<PrefixB
     })
 }
 
+pub(crate) fn is_capture_prefix_key(state: &AppState, key: &TerminalKey) -> bool {
+    matches!(
+        prefix_binding_for_key(state, key),
+        Some(PrefixBindingMatch::Action(NavigateAction::Capture))
+    )
+}
+
 pub(crate) fn is_window_cycle_key(state: &AppState, key: &TerminalKey) -> bool {
     let action = match state.server_mode() {
         Mode::Prefix => match prefix_binding_for_key(state, key) {
@@ -3085,6 +3092,9 @@ pub(super) fn direct_screen_action_for_key(
     state: &AppState,
     key: &TerminalKey,
 ) -> Option<NavigateAction> {
+    if state.server_mode() == Mode::Prefix && prefix_binding_for_key(state, key).is_some() {
+        return None;
+    }
     let action = action_for_key(state, key.clone(), BindingDispatch::Direct)?;
     matches!(
         action,
@@ -10656,11 +10666,8 @@ navigate_pane_down = "ctrl+j"
         app.state.set_server_mode(Mode::Terminal);
         let pane_before = app.state.workspaces[0].focused_pane_id();
 
-        app.handle_key(TerminalKey::new(
-            KeyCode::Char('r'),
-            KeyModifiers::CONTROL | KeyModifiers::ALT,
-        ))
-        .await;
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT))
+            .await;
 
         assert!(app.state.capture.is_some());
         assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
@@ -10677,6 +10684,25 @@ navigate_pane_down = "ctrl+j"
             .await;
 
         assert!(app.state.capture.is_none());
+    }
+
+    #[tokio::test]
+    async fn configured_prefix_t_opens_capture_from_a_pane() {
+        let mut app = app_with_test_workspaces(&["local"]);
+        let mut config = crate::config::Config::default();
+        config.keys.capture = crate::config::BindingConfig::one("prefix+t");
+        app.state.keybinds = config.keybinds();
+        app.state.active = Some(0);
+        app.state.set_server_mode(Mode::Terminal);
+        let pane_before = app.state.workspaces[0].focused_pane_id();
+
+        app.handle_key(TerminalKey::new(KeyCode::Char('b'), KeyModifiers::CONTROL))
+            .await;
+        app.handle_key(TerminalKey::new(KeyCode::Char('t'), KeyModifiers::empty()))
+            .await;
+
+        assert!(app.state.capture.is_some());
+        assert_eq!(app.state.workspaces[0].focused_pane_id(), pane_before);
     }
 
     #[tokio::test]

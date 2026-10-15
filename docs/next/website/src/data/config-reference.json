@@ -597,7 +597,7 @@
         {
           "key": "keys.capture",
           "type": "keybinding",
-          "default": "\"ctrl+alt+r\"",
+          "default": "\"alt+t\"",
           "description": "Capture a thought to the local focus list."
         },
         {

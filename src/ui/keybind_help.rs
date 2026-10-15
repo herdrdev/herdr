@@ -635,6 +635,6 @@ mod tests {
 
         assert!(entries
             .iter()
-            .any(|(key, label)| key == "ctrl+alt+r" && label == "capture to focus list"));
+            .any(|(key, label)| key == "alt+t" && label == "capture to focus list"));
     }
 }

@@ -445,6 +445,9 @@ fn validate_keybinding_capture(
         crate::app::settings_keybindings::KeybindTarget::BuiltIn {
             field: "focus_leave",
         } => crate::config::validate_focus_room_leave_key(config, key),
+        crate::app::settings_keybindings::KeybindTarget::BuiltIn { field: "capture" } => {
+            crate::config::validate_capture_key(config, key)
+        }
         _ => crate::config::validate_user_action_key(config, key),
     }
 }
@@ -747,6 +750,41 @@ mod tests {
             "prefix+o"
         );
         assert!(validate_keybinding_capture(&mut config, &target, "prefix+f").is_err());
+    }
+
+    #[test]
+    fn capture_key_capture_accepts_alt_t_and_keeps_prefix_alt_t_available() {
+        let mut config = crate::config::Config::default();
+        let target = crate::app::settings_keybindings::KeybindTarget::BuiltIn { field: "capture" };
+
+        assert_eq!(
+            validate_keybinding_capture(&mut config, &target, "alt+t").unwrap(),
+            "alt+t"
+        );
+        assert!(validate_keybinding_capture(&mut config, &target, "ctrl+alt+i").is_err());
+        assert_eq!(
+            config.keys.capture,
+            crate::config::BindingConfig::one("alt+t")
+        );
+        assert!(config
+            .keybinds()
+            .capture
+            .matches_direct_key(&crate::input::TerminalKey::new(
+                KeyCode::Char('t'),
+                KeyModifiers::ALT
+            )));
+        config.actions.push(crate::config::ActionConfig {
+            name: "prefixed_capture_neighbor".into(),
+            command: "true".into(),
+            key: Some("prefix+alt+t".into()),
+            ..Default::default()
+        });
+        let diagnostics = config.collect_diagnostics();
+        let keybinds = config.keybinds();
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert!(keybinds.user_actions[0].bindings.matches_prefix_key(
+            &crate::input::TerminalKey::new(KeyCode::Char('t'), KeyModifiers::ALT)
+        ));
     }
 
     #[test]

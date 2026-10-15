@@ -1086,6 +1086,26 @@ pub fn validate_focus_room_leave_key(config: &mut Config, key: &str) -> Result<S
     result
 }
 
+/// Validate capture against existing bindings while allowing its override to
+/// displace a default `new_tab` binding.
+pub fn validate_capture_key(config: &mut Config, key: &str) -> Result<String, String> {
+    let previous_capture = std::mem::replace(&mut config.keys.capture, BindingConfig::empty());
+    let previous_new_tab = if !config.keys.key_field_is_user_configured("new_tab") {
+        Some(std::mem::replace(
+            &mut config.keys.new_tab,
+            BindingConfig::empty(),
+        ))
+    } else {
+        None
+    };
+    let result = validate_user_action_key(config, key);
+    config.keys.capture = previous_capture;
+    if let Some(previous_new_tab) = previous_new_tab {
+        config.keys.new_tab = previous_new_tab;
+    }
+    result
+}
+
 fn append_user_actions(
     config: &Config,
     prefix: KeyCombo,
@@ -2113,6 +2133,32 @@ next_tab = "prefix+n"
         );
         assert!(validate_focus_room_leave_key(&mut config, "prefix+f").is_err());
         assert!(validate_user_action_key(&mut config, "prefix+o").is_err());
+    }
+
+    #[test]
+    fn capture_key_override_wins_default_new_tab_conflict() {
+        let mut config: Config = toml::from_str("[keys]\ncapture = 'prefix+t'").unwrap();
+        // Model a future default change without marking the field as user-set.
+        config.keys.new_tab = BindingConfig::one("prefix+t");
+
+        assert_eq!(
+            validate_capture_key(&mut config, "prefix+t").unwrap(),
+            "prefix+t"
+        );
+        let (.., diagnostics, keybinds) = config.validated_keybinds();
+
+        assert!(keybinds
+            .capture
+            .matches_prefix_key(&crate::input::TerminalKey::new(
+                KeyCode::Char('t'),
+                KeyModifiers::empty(),
+            )));
+        assert!(keybinds.new_tab.bindings.is_empty());
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+        let mut conflicting: Config =
+            toml::from_str("[keys]\ncapture = 'prefix+t'\nnew_tab = 'prefix+t'").unwrap();
+        assert!(validate_capture_key(&mut conflicting, "prefix+t").is_err());
     }
 
     #[test]
