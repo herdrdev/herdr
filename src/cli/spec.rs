@@ -993,15 +993,19 @@ fn pane_command() -> Command {
                 .arg(required("text", "TEXT"))
                 .arg(option("workspace", "ID").required(true))
                 .arg(option("terminal", "ID").required(true))
-                .arg(option("agent-ref", "HOST::PANE").required(true))
-                .arg(option("agent-source", "SOURCE").required(true))
-                .arg(option("agent", "LABEL").required(true))
+                .arg(option("agent-ref", "HOST::PANE").required_unless_present("expect-shell").conflicts_with("expect-shell"))
+                .arg(option("agent-source", "SOURCE").required_unless_present("expect-shell").conflicts_with("expect-shell"))
+                .arg(option("agent", "LABEL").required_unless_present("expect-shell").conflicts_with("expect-shell"))
                 .arg(
                     option("session-kind", "KIND")
-                        .required(true)
+                        .required_unless_present("expect-shell")
+                        .conflicts_with("expect-shell")
                         .value_parser(["id", "path"]),
                 )
-                .arg(option("session", "VALUE").required(true))
+                .arg(option("session", "VALUE").required_unless_present("expect-shell").conflicts_with("expect-shell"))
+                .arg(flag("expect-shell").requires_all(["shell-pid", "cwd"]).conflicts_with_all(["agent-ref", "agent-source", "agent", "session-kind", "session"]))
+                .arg(option("shell-pid", "PID").requires("expect-shell"))
+                .arg(option("cwd", "PATH").requires("expect-shell"))
                 .arg(
                     option("condition", "CONDITION")
                         .required(true)
@@ -1692,6 +1696,81 @@ mod tests {
                 .try_get_matches_from(["herdr", "pane", command])
                 .is_err());
         }
+    }
+
+    #[test]
+    fn pane_send_text_if_requires_one_complete_guard_mode() {
+        let shell = [
+            "herdr",
+            "pane",
+            "send-text-if",
+            "w1:p1",
+            "codex resume x",
+            "--workspace",
+            "w1",
+            "--terminal",
+            "t1",
+            "--expect-shell",
+            "--shell-pid",
+            "42",
+            "--cwd",
+            "/tmp",
+            "--condition",
+            "detection-snapshot-unchanged",
+            "--observation-token",
+            "token",
+        ];
+        assert!(super::command().try_get_matches_from(shell).is_ok());
+        assert!(super::command()
+            .try_get_matches_from([
+                "herdr",
+                "pane",
+                "send-text-if",
+                "w1:p1",
+                "resume",
+                "--workspace",
+                "w1",
+                "--terminal",
+                "t1",
+                "--expect-shell",
+                "--condition",
+                "detection-snapshot-unchanged",
+                "--observation-token",
+                "token",
+            ])
+            .is_err());
+        assert!(super::command()
+            .try_get_matches_from([
+                "herdr",
+                "pane",
+                "send-text-if",
+                "w1:p1",
+                "resume",
+                "--workspace",
+                "w1",
+                "--terminal",
+                "t1",
+                "--expect-shell",
+                "--shell-pid",
+                "42",
+                "--cwd",
+                "/tmp",
+                "--agent-ref",
+                "host::w1:p1",
+                "--agent-source",
+                "herdr:codex",
+                "--agent",
+                "codex",
+                "--session-kind",
+                "id",
+                "--session",
+                "session",
+                "--condition",
+                "detection-snapshot-unchanged",
+                "--observation-token",
+                "token",
+            ])
+            .is_err());
     }
 
     #[test]

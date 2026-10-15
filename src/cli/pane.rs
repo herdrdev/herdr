@@ -4,9 +4,10 @@ use crate::api::schema::{
     PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
     PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
-    PaneSendKeysParams, PaneSendTextCondition, PaneSendTextIfParams, PaneSendTextParams,
-    PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams, PaneWorkContextSetParams,
-    PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request, SplitDirection,
+    PaneSendKeysParams, PaneSendTextCondition, PaneSendTextIfParams, PaneSendTextIfShellParams,
+    PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget, PaneWaitForOutputParams,
+    PaneWorkContextSetParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
+    SplitDirection,
 };
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
@@ -1271,7 +1272,7 @@ fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr pane send-text-if <pane_id> <text> --workspace <id> --terminal <id> --agent-ref <host::pane> --agent-source <source> --agent <label> --session-kind <id|path> --session <value> --condition detection-snapshot-unchanged --observation-token <token>";
+    const USAGE: &str = "usage: herdr pane send-text-if <pane_id> <text> --workspace <id> --terminal <id> (--agent-ref <host::pane> --agent-source <source> --agent <label> --session-kind <id|path> --session <value> | --expect-shell --shell-pid <pid> --cwd <path>) --condition detection-snapshot-unchanged --observation-token <token>";
     if args.len() < 2 {
         eprintln!("{USAGE}");
         return Ok(2);
@@ -1279,9 +1280,19 @@ fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
     let pane_id = super::normalize_pane_id(&args[0]);
     let text = args[1].clone();
     let mut values = std::collections::HashMap::<&str, String>::new();
+    let mut expect_shell = false;
     let mut index = 2;
     while index < args.len() {
         let option = args[index].as_str();
+        if option == "--expect-shell" {
+            if expect_shell {
+                eprintln!("invalid or duplicate option: {option}");
+                return Ok(2);
+            }
+            expect_shell = true;
+            index += 1;
+            continue;
+        }
         let Some(value) = args.get(index + 1) else {
             eprintln!("missing value for {option}");
             return Ok(2);
@@ -1295,6 +1306,8 @@ fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
                 | "--agent"
                 | "--session-kind"
                 | "--session"
+                | "--shell-pid"
+                | "--cwd"
                 | "--condition"
                 | "--observation-token"
         ) || values.insert(option, value.clone()).is_some()
@@ -1313,32 +1326,29 @@ fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
         eprintln!("{USAGE}");
         return Ok(2);
     };
-    let Ok(agent_ref) =
-        required("--agent-ref").and_then(|value| value.parse().map_err(|_| "--agent-ref"))
-    else {
-        eprintln!("invalid --agent-ref");
-        return Ok(2);
-    };
-    let Ok(source) = required("--agent-source") else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let Ok(agent) = required("--agent") else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let Ok(session) = required("--session") else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let kind = match values.get("--session-kind").map(String::as_str) {
-        Some("id") => crate::agent_resume::AgentSessionRefKind::Id,
-        Some("path") => crate::agent_resume::AgentSessionRefKind::Path,
-        _ => {
-            eprintln!("invalid --session-kind (expected id or path)");
+    let agent_options = [
+        "--agent-ref",
+        "--agent-source",
+        "--agent",
+        "--session-kind",
+        "--session",
+    ];
+    let shell_options = ["--shell-pid", "--cwd"];
+    if expect_shell {
+        if agent_options
+            .iter()
+            .any(|option| values.contains_key(option))
+        {
+            eprintln!("shell and agent options are mutually exclusive");
             return Ok(2);
         }
-    };
+    } else if shell_options
+        .iter()
+        .any(|option| values.contains_key(option))
+    {
+        eprintln!("shell and agent options are mutually exclusive");
+        return Ok(2);
+    }
     if values.get("--condition").map(String::as_str) != Some("detection-snapshot-unchanged") {
         eprintln!("unsupported --condition");
         return Ok(2);
@@ -1348,9 +1358,59 @@ fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     };
 
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:send-text-if".into(),
-        method: Method::PaneSendTextIf(PaneSendTextIfParams {
+    let method = if expect_shell {
+        let Ok(shell_pid) = required("--shell-pid").and_then(|value| {
+            value
+                .parse::<u32>()
+                .ok()
+                .filter(|pid| *pid > 0)
+                .ok_or("--shell-pid")
+        }) else {
+            eprintln!("invalid --shell-pid");
+            return Ok(2);
+        };
+        let Ok(cwd) = required("--cwd") else {
+            eprintln!("{USAGE}");
+            return Ok(2);
+        };
+        Method::PaneSendTextIfShell(PaneSendTextIfShellParams {
+            pane_id,
+            text,
+            workspace_id,
+            terminal_id,
+            shell_pid,
+            cwd,
+            condition: PaneSendTextCondition::DetectionSnapshotUnchanged,
+            observation_token,
+        })
+    } else {
+        let Ok(agent_ref) =
+            required("--agent-ref").and_then(|value| value.parse().map_err(|_| "--agent-ref"))
+        else {
+            eprintln!("invalid --agent-ref");
+            return Ok(2);
+        };
+        let Ok(source) = required("--agent-source") else {
+            eprintln!("{USAGE}");
+            return Ok(2);
+        };
+        let Ok(agent) = required("--agent") else {
+            eprintln!("{USAGE}");
+            return Ok(2);
+        };
+        let Ok(session) = required("--session") else {
+            eprintln!("{USAGE}");
+            return Ok(2);
+        };
+        let kind = match values.get("--session-kind").map(String::as_str) {
+            Some("id") => crate::agent_resume::AgentSessionRefKind::Id,
+            Some("path") => crate::agent_resume::AgentSessionRefKind::Path,
+            _ => {
+                eprintln!("invalid --session-kind (expected id or path)");
+                return Ok(2);
+            }
+        };
+        Method::PaneSendTextIf(PaneSendTextIfParams {
             pane_id,
             text,
             workspace_id,
@@ -1364,7 +1424,12 @@ fn pane_send_text_if(args: &[String]) -> std::io::Result<i32> {
             },
             condition: PaneSendTextCondition::DetectionSnapshotUnchanged,
             observation_token,
-        }),
+        })
+    };
+
+    super::print_response(&super::send_request(&Request {
+        id: "cli:pane:send-text-if".into(),
+        method,
     })?)
 }
 

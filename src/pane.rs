@@ -4206,6 +4206,15 @@ impl PaneRuntime {
         observation_token: &str,
         bytes: Bytes,
     ) -> ConditionalInputResult {
+        self.try_send_bytes_if_observation_with_guard(observation_token, bytes, || true)
+    }
+
+    pub(crate) fn try_send_bytes_if_observation_with_guard(
+        &self,
+        observation_token: &str,
+        bytes: Bytes,
+        guard: impl FnOnce() -> bool,
+    ) -> ConditionalInputResult {
         if self.suspended || self.is_remote_proxy() {
             return ConditionalInputResult::Failed;
         }
@@ -4236,6 +4245,9 @@ impl PaneRuntime {
                         text,
                     ) != observation_token
                 {
+                    return ConditionalInputResult::ConditionMismatch;
+                }
+                if !guard() {
                     return ConditionalInputResult::ConditionMismatch;
                 }
                 match self.io.try_send_bytes(bytes) {

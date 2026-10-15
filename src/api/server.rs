@@ -485,6 +485,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::PaneWorkContextSet(_) => "pane.work_context.set",
         Method::PaneSendText(_) => "pane.send_text",
         Method::PaneSendTextIf(_) => "pane.send_text_if",
+        Method::PaneSendTextIfShell(_) => "pane.send_text_if_shell",
         Method::PaneSendKeys(_) => "pane.send_keys",
         Method::PaneSendInput(_) => "pane.send_input",
         Method::PaneRead(_) => "pane.read",

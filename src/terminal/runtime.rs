@@ -553,6 +553,16 @@ impl TerminalRuntime {
             .try_send_bytes_if_observation(observation_token, bytes)
     }
 
+    pub(crate) fn try_send_bytes_if_observation_with_guard(
+        &self,
+        observation_token: &str,
+        bytes: Bytes,
+        guard: impl FnOnce() -> bool,
+    ) -> crate::pane::ConditionalInputResult {
+        self.0
+            .try_send_bytes_if_observation_with_guard(observation_token, bytes, guard)
+    }
+
     #[cfg(unix)]
     pub(crate) fn try_acquire_remote_owner(
         &self,

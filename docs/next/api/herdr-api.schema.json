@@ -5062,6 +5062,48 @@
           ],
           "type": "object"
         },
+        "PaneSendTextIfShellParams": {
+          "description": "A separate endpoint keeps the agent-session send contract immutable while\nallowing a narrowly guarded send to an observed idle shell.",
+          "properties": {
+            "condition": {
+              "$ref": "#/schemas/request/$defs/PaneSendTextCondition"
+            },
+            "cwd": {
+              "type": "string"
+            },
+            "observation_token": {
+              "type": "string"
+            },
+            "pane_id": {
+              "type": "string"
+            },
+            "shell_pid": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "terminal_id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "workspace_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "text",
+            "workspace_id",
+            "terminal_id",
+            "shell_pid",
+            "cwd",
+            "condition",
+            "observation_token"
+          ],
+          "type": "object"
+        },
         "PaneSendTextParams": {
           "properties": {
             "pane_id": {
@@ -8557,6 +8599,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneSendTextIfParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.send_text_if_shell",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneSendTextIfShellParams"
             }
           },
           "required": [

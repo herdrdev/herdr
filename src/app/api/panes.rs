@@ -11,9 +11,9 @@ use crate::api::schema::{
     PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
     PaneSendInputParams, PaneSendKeysParams, PaneSendTextIfOutcome, PaneSendTextIfParams,
-    PaneSendTextParams, PaneSnoozeParams, PaneSplitParams, PaneSwapParams, PaneSwapReason,
-    PaneSwapResult, PaneTarget, PaneWorkContextSetParams, PaneZoomMode, PaneZoomParams,
-    PaneZoomReason, PaneZoomResult, ResponseResult,
+    PaneSendTextIfShellParams, PaneSendTextParams, PaneSnoozeParams, PaneSplitParams,
+    PaneSwapParams, PaneSwapReason, PaneSwapResult, PaneTarget, PaneWorkContextSetParams,
+    PaneZoomMode, PaneZoomParams, PaneZoomReason, PaneZoomResult, ResponseResult,
 };
 use crate::app::actions::{PaneZoomCommand, PaneZoomNoopReason};
 use crate::app::App;
@@ -46,6 +46,78 @@ enum UniqueAgentSessionPane {
     None,
     One((usize, PaneId)),
     Several,
+}
+
+fn shell_process_matches(expected_pid: u32, expected_cwd: &std::path::Path) -> bool {
+    if expected_pid == 0 || !expected_cwd.is_absolute() {
+        return false;
+    }
+    let no_descendants = crate::platform::descendant_processes(expected_pid).is_empty();
+    let foreground_pgid = crate::detect::foreground_process_group_id(expected_pid);
+    let Some(job) = crate::detect::foreground_job(expected_pid) else {
+        return false;
+    };
+    shell_process_observation_matches(
+        expected_pid,
+        expected_cwd,
+        no_descendants,
+        foreground_pgid,
+        &job,
+        crate::platform::process_cwd(expected_pid).as_deref(),
+    )
+}
+
+fn shell_process_observation_matches(
+    expected_pid: u32,
+    expected_cwd: &std::path::Path,
+    no_descendants: bool,
+    foreground_pgid: Option<u32>,
+    job: &crate::platform::ForegroundJob,
+    observed_cwd: Option<&std::path::Path>,
+) -> bool {
+    if expected_pid == 0
+        || !expected_cwd.is_absolute()
+        || !no_descendants
+        || foreground_pgid != Some(expected_pid)
+        || job.process_group_id != expected_pid
+        || job.processes.len() != 1
+        || observed_cwd != Some(expected_cwd)
+    {
+        return false;
+    }
+    let Some(leader) = job.processes.first() else {
+        return false;
+    };
+    if leader.pid != expected_pid {
+        return false;
+    }
+    let name = leader
+        .argv0
+        .as_deref()
+        .unwrap_or(&leader.name)
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim_start_matches('-')
+        .to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "sh" | "bash"
+            | "dash"
+            | "zsh"
+            | "fish"
+            | "ksh"
+            | "mksh"
+            | "tcsh"
+            | "csh"
+            | "elvish"
+            | "xonsh"
+            | "nu"
+            | "pwsh"
+            | "powershell"
+            | "cmd"
+            | "cmd.exe"
+    )
 }
 
 impl App {
@@ -2623,6 +2695,79 @@ impl App {
         }
     }
 
+    pub(super) fn handle_pane_send_text_if_shell(
+        &mut self,
+        id: String,
+        params: PaneSendTextIfShellParams,
+    ) -> String {
+        let mismatch = || {
+            encode_success(
+                id.clone(),
+                ResponseResult::PaneTextSend {
+                    outcome: PaneSendTextIfOutcome::ConditionMismatch,
+                },
+            )
+        };
+        let Some((ws_idx, pane_id)) = self.parse_current_public_pane_id(&params.pane_id) else {
+            return mismatch();
+        };
+        if self.public_workspace_id(ws_idx) != params.workspace_id {
+            return mismatch();
+        }
+        let Some(terminal_id) = self
+            .state
+            .workspaces
+            .get(ws_idx)
+            .and_then(|workspace| workspace.terminal_id(pane_id))
+            .cloned()
+        else {
+            return mismatch();
+        };
+        if terminal_id.as_str() != params.terminal_id {
+            return mismatch();
+        }
+        let Some(terminal) = self.state.terminals.get(&terminal_id) else {
+            return mismatch();
+        };
+        if terminal.effective_agent_label().is_some()
+            || crate::app::creation::terminal_agent_session_info(terminal).is_some()
+        {
+            return mismatch();
+        }
+        let expected_cwd = std::path::PathBuf::from(&params.cwd);
+        if !expected_cwd.is_absolute() {
+            return mismatch();
+        }
+        let Some(runtime) = self.lookup_runtime_sender(ws_idx, pane_id) else {
+            return mismatch();
+        };
+        if runtime.child_pid() != Some(params.shell_pid) || runtime.child_has_exited() {
+            return mismatch();
+        }
+        let outcome = runtime.try_send_bytes_if_observation_with_guard(
+            &params.observation_token,
+            Bytes::copy_from_slice(params.text.as_bytes()),
+            || shell_process_matches(params.shell_pid, &expected_cwd),
+        );
+        match outcome {
+            ConditionalInputResult::Sent => {
+                if !params.text.is_empty() {
+                    self.retire_blocked_hook_authority_for_pane(pane_id, std::time::Instant::now());
+                }
+                encode_success(
+                    id,
+                    ResponseResult::PaneTextSend {
+                        outcome: PaneSendTextIfOutcome::Sent,
+                    },
+                )
+            }
+            ConditionalInputResult::ConditionMismatch => mismatch(),
+            ConditionalInputResult::Failed => {
+                encode_error(id, "pane_send_failed", "pane input queue unavailable")
+            }
+        }
+    }
+
     pub(super) fn handle_pane_send_input(
         &mut self,
         id: String,
@@ -4979,6 +5124,331 @@ mod tests {
             );
         }
         assert!(rx.try_recv().is_err());
+    }
+
+    fn conditional_shell_send_params(app: &mut App, pane_id: &str) -> PaneSendTextIfShellParams {
+        let (workspace_idx, internal_pane_id) = app.parse_current_public_pane_id(pane_id).unwrap();
+        let terminal_id = app.state.workspaces[workspace_idx]
+            .terminal_id(internal_pane_id)
+            .unwrap()
+            .clone();
+        let observation = app
+            .lookup_runtime_sender(workspace_idx, internal_pane_id)
+            .unwrap()
+            .input_observation()
+            .expect("coherent input observation");
+        PaneSendTextIfShellParams {
+            pane_id: pane_id.into(),
+            text: "codex resume session".into(),
+            workspace_id: app.public_workspace_id(workspace_idx),
+            terminal_id: terminal_id.to_string(),
+            shell_pid: 1,
+            cwd: std::env::current_dir().unwrap().display().to_string(),
+            condition: crate::api::schema::PaneSendTextCondition::DetectionSnapshotUnchanged,
+            observation_token: observation.token,
+        }
+    }
+
+    #[tokio::test]
+    async fn api_shell_conditional_send_rejects_agent_identity_and_wrong_pane_facts() {
+        let (mut app, pane_id, mut rx) = app_with_send_key_runtime(8);
+        let params = conditional_shell_send_params(&mut app, &pane_id);
+        let mut mismatches = Vec::new();
+        let mut changed = params.clone();
+        changed.pane_id = "missing-pane".into();
+        mismatches.push(changed);
+        let mut changed = params.clone();
+        changed.workspace_id.push_str("-stale");
+        mismatches.push(changed);
+        let mut changed = params.clone();
+        changed.terminal_id.push_str("-stale");
+        mismatches.push(changed);
+        let mut changed = params.clone();
+        changed.shell_pid = 99;
+        mismatches.push(changed);
+        let mut changed = params.clone();
+        changed.observation_token.push_str("-stale");
+        mismatches.push(changed);
+
+        for params in mismatches {
+            let response = app.handle_pane_send_text_if_shell("shell".into(), params);
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                success.result,
+                ResponseResult::PaneTextSend {
+                    outcome: crate::api::schema::PaneSendTextIfOutcome::ConditionMismatch
+                }
+            );
+        }
+
+        let terminal_id = app.state.workspaces[0].tabs[0].panes
+            [&app.parse_current_public_pane_id(&pane_id).unwrap().1]
+            .attached_terminal_id
+            .clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+                source: "herdr:codex".into(),
+                agent: "codex".into(),
+                session_ref: crate::agent_resume::AgentSessionRef::id("codex-session")
+                    .expect("valid test session id"),
+            });
+        let params = conditional_shell_send_params(&mut app, &pane_id);
+        let response = app.handle_pane_send_text_if_shell("agent-present".into(), params);
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            success.result,
+            ResponseResult::PaneTextSend {
+                outcome: crate::api::schema::PaneSendTextIfOutcome::ConditionMismatch
+            }
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn conditional_input_guard_rechecks_races_after_the_observation() {
+        let (app, pane_id, mut rx) = app_with_send_key_runtime(1);
+        let (workspace_idx, pane_id) = app.parse_current_public_pane_id(&pane_id).unwrap();
+        let runtime = app.lookup_runtime_sender(workspace_idx, pane_id).unwrap();
+        let observation = runtime.input_observation().expect("fresh observation");
+        let result = runtime.try_send_bytes_if_observation_with_guard(
+            &observation.token,
+            Bytes::from_static(b"must-not-send"),
+            || false,
+        );
+        assert_eq!(result, ConditionalInputResult::ConditionMismatch);
+        assert!(rx.try_recv().is_err());
+
+        let entered_guard = std::cell::Cell::new(false);
+        let stale = runtime.try_send_bytes_if_observation_with_guard(
+            "stale-token",
+            Bytes::from_static(b"must-not-send"),
+            || {
+                entered_guard.set(true);
+                true
+            },
+        );
+        assert_eq!(stale, ConditionalInputResult::ConditionMismatch);
+        assert!(
+            !entered_guard.get(),
+            "stale snapshots must fail before process checks"
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shell_conditional_input_guards_a_real_idle_pty_shell() {
+        use std::time::{Duration, Instant};
+
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let (workspace_idx, pane_id) = app.parse_pane_id(&public_pane_id).unwrap();
+        let terminal_id = app.state.workspaces[workspace_idx].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let spawn_cwd = std::env::temp_dir();
+        let (events, _event_rx) = tokio::sync::mpsc::channel(8);
+        let runtime = crate::terminal::TerminalRuntime::spawn(
+            pane_id,
+            24,
+            80,
+            spawn_cwd,
+            0,
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            crate::pane::PaneShellConfig::new("/bin/sh", crate::config::ShellModeConfig::NonLogin),
+            &crate::pane::PaneLaunchEnv::default(),
+            events,
+            app.render_notify.clone(),
+            app.render_dirty.clone(),
+        )
+        .expect("spawn isolated test shell");
+        let shell_pid = runtime.child_pid().expect("live shell pid");
+        let cwd = runtime.cwd().expect("live shell cwd");
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+
+        let runtime = app.lookup_runtime_sender(workspace_idx, pane_id).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let observation = loop {
+            if shell_process_matches(shell_pid, &cwd) {
+                if let Some(observation) = runtime.input_observation() {
+                    break observation;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "isolated shell did not become observable: pid={shell_pid} cwd={cwd:?} descendants={:?} fg_pgid={:?} job={:?} live_cwd={:?} observation={:?}",
+                crate::platform::descendant_processes(shell_pid),
+                crate::detect::foreground_process_group_id(shell_pid),
+                crate::detect::foreground_job(shell_pid),
+                crate::platform::process_cwd(shell_pid),
+                runtime.input_observation(),
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        let workspace_id = app.public_workspace_id(workspace_idx);
+        let params = |shell_pid, cwd: &std::path::Path, observation_token: &str, text: &str| {
+            PaneSendTextIfShellParams {
+                pane_id: public_pane_id.clone(),
+                text: text.into(),
+                workspace_id: workspace_id.clone(),
+                terminal_id: terminal_id.to_string(),
+                shell_pid,
+                cwd: cwd.display().to_string(),
+                condition: crate::api::schema::PaneSendTextCondition::DetectionSnapshotUnchanged,
+                observation_token: observation_token.into(),
+            }
+        };
+        let assert_mismatch = |app: &mut App, params| {
+            let response = app.handle_pane_send_text_if_shell("real-shell".into(), params);
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(
+                success.result,
+                ResponseResult::PaneTextSend {
+                    outcome: crate::api::schema::PaneSendTextIfOutcome::ConditionMismatch
+                }
+            );
+        };
+
+        assert_mismatch(
+            &mut app,
+            params(
+                shell_pid.saturating_add(1),
+                &cwd,
+                &observation.token,
+                "must-not-send",
+            ),
+        );
+        assert_mismatch(
+            &mut app,
+            params(
+                shell_pid,
+                std::path::Path::new("/not-the-pane-cwd"),
+                &observation.token,
+                "must-not-send",
+            ),
+        );
+
+        let response = app.handle_pane_send_text_if_shell(
+            "real-shell".into(),
+            params(
+                shell_pid,
+                &cwd,
+                &observation.token,
+                "codex resume isolated-test",
+            ),
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            success.result,
+            ResponseResult::PaneTextSend {
+                outcome: crate::api::schema::PaneSendTextIfOutcome::Sent
+            }
+        );
+
+        assert_mismatch(
+            &mut app,
+            params(shell_pid, &cwd, &observation.token, "must-not-send"),
+        );
+        crate::app::api::test_support::shutdown_test_runtimes(&mut app);
+    }
+
+    #[test]
+    fn shell_process_observation_accepts_only_one_known_shell_at_the_expected_identity() {
+        let cwd = std::path::Path::new("/tmp");
+        let shell = crate::platform::ForegroundProcess {
+            pid: 42,
+            name: "zsh".into(),
+            argv0: Some("/bin/zsh".into()),
+            argv: Some(vec!["/bin/zsh".into()]),
+            cmdline: Some("/bin/zsh".into()),
+        };
+        let job = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![shell.clone()],
+        };
+        assert!(shell_process_observation_matches(
+            42,
+            cwd,
+            true,
+            Some(42),
+            &job,
+            Some(cwd)
+        ));
+        assert!(!shell_process_observation_matches(
+            43,
+            cwd,
+            true,
+            Some(42),
+            &job,
+            Some(cwd)
+        ));
+        assert!(!shell_process_observation_matches(
+            42,
+            cwd,
+            true,
+            Some(44),
+            &job,
+            Some(cwd)
+        ));
+        assert!(!shell_process_observation_matches(
+            42,
+            cwd,
+            true,
+            Some(42),
+            &job,
+            Some(std::path::Path::new("/var"))
+        ));
+        let job_with_child = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![
+                shell,
+                crate::platform::ForegroundProcess {
+                    pid: 43,
+                    name: "codex".into(),
+                    argv0: Some("codex".into()),
+                    argv: None,
+                    cmdline: None,
+                },
+            ],
+        };
+        assert!(!shell_process_observation_matches(
+            42,
+            cwd,
+            true,
+            Some(42),
+            &job_with_child,
+            Some(cwd)
+        ));
+        let unknown = crate::platform::ForegroundJob {
+            process_group_id: 42,
+            processes: vec![crate::platform::ForegroundProcess {
+                pid: 42,
+                name: "mystery".into(),
+                argv0: None,
+                argv: None,
+                cmdline: None,
+            }],
+        };
+        assert!(!shell_process_observation_matches(
+            42,
+            cwd,
+            true,
+            Some(42),
+            &unknown,
+            Some(cwd)
+        ));
+        assert!(!shell_process_observation_matches(
+            42,
+            cwd,
+            false,
+            Some(42),
+            &job,
+            Some(cwd)
+        ));
     }
 
     #[tokio::test]

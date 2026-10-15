@@ -73,6 +73,7 @@ impl App {
             Method::AgentStart(params) => Some(params.pane_id.as_str()),
             Method::PaneSendText(params) => Some(params.pane_id.as_str()),
             Method::PaneSendTextIf(params) => Some(params.pane_id.as_str()),
+            Method::PaneSendTextIfShell(params) => Some(params.pane_id.as_str()),
             Method::PaneSendKeys(params) => Some(params.pane_id.as_str()),
             Method::PaneSendInput(params) => Some(params.pane_id.as_str()),
             Method::PaneRead(params) => Some(params.pane_id.as_str()),
@@ -2640,6 +2641,9 @@ impl App {
             Method::PaneSendText(params) => return self.handle_pane_send_text(request.id, params),
             Method::PaneSendTextIf(params) => {
                 return self.handle_pane_send_text_if(request.id, params)
+            }
+            Method::PaneSendTextIfShell(params) => {
+                return self.handle_pane_send_text_if_shell(request.id, params)
             }
             Method::PaneSendInput(params) => {
                 return self.handle_pane_send_input(request.id, params)

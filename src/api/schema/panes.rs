@@ -298,6 +298,20 @@ pub struct PaneSendTextIfParams {
     pub observation_token: String,
 }
 
+/// A separate endpoint keeps the agent-session send contract immutable while
+/// allowing a narrowly guarded send to an observed idle shell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneSendTextIfShellParams {
+    pub pane_id: String,
+    pub text: String,
+    pub workspace_id: String,
+    pub terminal_id: String,
+    pub shell_pid: u32,
+    pub cwd: String,
+    pub condition: PaneSendTextCondition,
+    pub observation_token: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PaneSendTextIfOutcome {

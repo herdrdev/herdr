@@ -776,6 +776,7 @@ fn pane_send_text_if_is_a_distinct_method_that_legacy_servers_reject_before_send
         #[serde(flatten)]
         method: LegacyMethod,
     }
+
     #[derive(serde::Deserialize)]
     #[serde(tag = "method", content = "params")]
     enum LegacyMethod {
@@ -826,6 +827,43 @@ fn pane_send_text_if_is_a_distinct_method_that_legacy_servers_reject_before_send
 
     assert!(legacy_dispatch(&encoded, &mut sent).is_err());
     assert!(sent.is_empty());
+}
+
+#[test]
+fn pane_send_text_if_shell_uses_a_new_endpoint_with_shell_identity() {
+    let request = Request {
+        id: "shell-guarded".into(),
+        method: Method::PaneSendTextIfShell(PaneSendTextIfShellParams {
+            pane_id: "w1:p1".into(),
+            text: "codex resume session".into(),
+            workspace_id: "workspace".into(),
+            terminal_id: "terminal".into(),
+            shell_pid: 42,
+            cwd: "/tmp".into(),
+            condition: PaneSendTextCondition::DetectionSnapshotUnchanged,
+            observation_token: "token".into(),
+        }),
+    };
+    let encoded = serde_json::to_string(&request).unwrap();
+    assert!(encoded.contains(r#""method":"pane.send_text_if_shell""#));
+    assert!(encoded.contains(r#""shell_pid":42"#));
+    assert!(encoded.contains(r#""cwd":"/tmp""#));
+
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "method", content = "params")]
+    enum LegacyMethod {
+        #[serde(rename = "pane.send_text_if")]
+        PaneSendTextIf(PaneSendTextIfParams),
+    }
+    match serde_json::from_str::<LegacyMethod>(&encoded) {
+        Err(_) => {}
+        Ok(LegacyMethod::PaneSendTextIf(params)) => {
+            panic!(
+                "legacy server unexpectedly decoded shell method: {}",
+                params.text
+            )
+        }
+    }
 }
 
 #[test]
