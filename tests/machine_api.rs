@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 
+use base64::Engine as _;
+
 const PROFILE_ID: &str = "0123456789abcdef0123456789abcdef";
 const SSH: &str = r#"#!/bin/sh
 printf 'ssh\n' >> "$TEST_ROOT/ssh-calls"
@@ -47,19 +49,23 @@ if [ -n "$TEST_CONTROL" ] && [ -S "$TEST_CONTROL" ]; then
     fi
 fi
 if [ "$TEST_MODE" = cold_then_broken ] && [ "$last" != '/bin/sh -s' ]; then
-    case "$last" in *herdr-machine-metadata-stale-v1*) echo 'test new transport failed' >&2; exit 255;; esac
+    case "$last" in *base64*) echo 'test new transport failed' >&2; exit 255;; esac
 fi
 case "$last" in
     '/bin/sh -c '*)
+        case "$last" in
+            *base64*) : ;;
+            *) echo "script must use stdin, not a command argument: $last" >&2; exit 2 ;;
+        esac
         if [ "$TEST_MODE" = offline ]; then echo 'test remote connection failed' >&2; exit 255; fi
         printf 'login banner\n'
         PATH="$TEST_ROOT/remote bin:/usr/bin:/bin" exec /bin/sh -c "$last" ;;
     '/bin/sh -s')
         script=$(cat)
-        printf 'login banner\nherdr-remote-output-ready:1\n'
+        printf 'login banner\n'
         case "$script" in
-            *'uname -s'*) uname -s; uname -m ;;
-            *) echo "unexpected discovery: $script" >&2; exit 2 ;;
+            *'uname -s'*) printf 'herdr-remote-output-ready:1\n'; uname -s; uname -m ;;
+            *) PATH="$TEST_ROOT/remote bin:/usr/bin:/bin" exec /bin/sh -c "$script" ;;
         esac ;;
     *) echo "unexpected command: $last" >&2; exit 2 ;;
 esac
@@ -279,9 +285,25 @@ fn machine_api_routes_structured_payload_and_remote_errors_without_local_fallbac
     let ssh_args = fs::read_to_string(harness.root.join("ssh-args")).unwrap();
     assert!(ssh_args.contains("StrictHostKeyChecking=yes"));
     assert!(ssh_args.contains("BatchMode=yes"));
-    assert!(ssh_args.contains("remote-api-bridge"));
-    assert!(ssh_args.contains("fleet"));
     assert!(!ssh_args.contains("should-not-exist"));
+    // The POSIX bridge script is base64-encoded so Windows OpenSSH cannot expand
+    // it; decode the forwarding command it carries.
+    let bridge = ssh_args
+        .lines()
+        .find(|line| line.contains("base64"))
+        .expect("base64 bridge command");
+    let encoded = bridge
+        .split_whitespace()
+        .nth(5)
+        .expect("base64-encoded bridge script");
+    let script = String::from_utf8(
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64 bridge script"),
+    )
+    .expect("UTF-8 bridge script");
+    assert!(script.contains("remote-api-bridge"), "{script}");
+    assert!(script.contains("fleet"), "{script}");
     harness.assert_local_untouched();
 }
 

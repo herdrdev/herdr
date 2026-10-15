@@ -555,6 +555,21 @@ fn posix_remote_output_command(command: &str) -> String {
     format!("printf '\n%s\n' '{REMOTE_OUTPUT_READY_MARKER}'\n{command}")
 }
 
+fn posix_base64_command(script: &str) -> String {
+    // OpenSSH for Windows hands the SSH command argument to the login shell
+    // wrapped in double quotes, which expands `$`, backticks, and `"` inside the
+    // command even when it is single-quoted, and does so for any value it embeds
+    // (such as a discovered executable path). Base64 keeps the whole script out
+    // of the command argument. The decoded script runs from `/bin/sh -s`; its
+    // stdin carries the script, so the API payload is preserved on fd 3 and
+    // handed to the bridge explicitly. Duplicate fd 0 inside the POSIX body
+    // because the SSH login shell is not guaranteed to be POSIX either.
+    let encoded = base64::engine::general_purpose::STANDARD.encode(script);
+    format!(
+        "/bin/sh -c 'exec 3<&0; echo {encoded} | (base64 --decode 2>/dev/null || base64 -d 2>/dev/null || base64 -D 2>/dev/null) | /bin/sh -s'"
+    )
+}
+
 fn windows_powershell_script_command(script: &str) -> String {
     let encoded = windows_powershell_encoded_script(script);
     format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}")
@@ -1661,8 +1676,12 @@ pub(super) fn discover_remote_api_metadata(
 ) -> io::Result<crate::client::endpoint::SshMachineMetadata> {
     let platform = detect_remote_platform(ssh)?.platform;
     if !platform.is_windows() {
-        let output =
-            ssh.framed_user_shell_output(&posix_remote_api_discovery_command(&platform, session))?;
+        // Deliver the discovery script on stdin (`/bin/sh -s`). OpenSSH for
+        // Windows hands the SSH command argument to the login shell wrapped in
+        // double quotes, which would expand the `$` and `$(...)` this script
+        // needs before the intended `/bin/sh` parses it. Stdin is not
+        // re-expanded, so a WSL-backed Windows host is discovered correctly.
+        let output = ssh.sh_output(&posix_remote_api_discovery_script(&platform, session))?;
         if !output.status.success() {
             return Err(command_failed("remote binary discovery failed", &output));
         }
@@ -2862,8 +2881,8 @@ fn confirm_remote_install(
     Ok(())
 }
 
-fn posix_remote_api_discovery_command(platform: &RemotePlatform, session: &str) -> String {
-    let script = format!(
+fn posix_remote_api_discovery_script(platform: &RemotePlatform, session: &str) -> String {
+    format!(
         r#"set -f
 candidates=$(
 command -v herdr
@@ -2887,10 +2906,6 @@ printf '%s\n' 'remote Herdr does not support machine API forwarding; update Herd
 exit 2"#,
         discovery = known_remote_binary_candidate_script(platform),
         session = shell_quote(session),
-    );
-    format!(
-        "/bin/sh -c {}",
-        shell_quote(&posix_remote_output_command(&script))
     )
 }
 
@@ -2918,9 +2933,11 @@ pub(super) fn cached_remote_api_command(
     let session = shell_quote(session);
     let script = format!(
         "if capability=$({path} --session {session} remote-api-bridge --check </dev/null 2>/dev/null) && [ \"$capability\" = herdr-api-bridge-v1 ]; then\n{}\nelse\n    printf '%s\\n' '{STALE_API_METADATA}' >&2\n    exit 78\nfi",
-        posix_remote_output_command(&format!("exec {path} --session {session} remote-api-bridge")),
+        posix_remote_output_command(&format!(
+            "exec {path} --session {session} remote-api-bridge <&3"
+        )),
     );
-    format!("/bin/sh -c {}", shell_quote(&script))
+    posix_base64_command(&script)
 }
 
 pub(super) fn remote_api_bridge_command(
@@ -4996,6 +5013,117 @@ mod tests {
         assert!(script.contains("$LASTEXITCODE -ne 0"));
         assert!(script.contains("-NoNewWindow -PassThru"));
         assert!(script.contains("--session fleet remote-api-bridge"));
+    }
+
+    #[test]
+    fn cached_posix_api_command_survives_a_double_quoting_login_shell() {
+        // OpenSSH for Windows wraps the SSH command argument in double quotes
+        // and runs it through the login shell, expanding `$`, backticks, and `"`
+        // before `/bin/sh` sees the script. Even the discovered executable path
+        // can contain those characters, so the whole script travels base64
+        // encoded and the command argument itself must stay free of them.
+        for executable in [
+            "/opt/herdr",
+            "/home/a b/herdr",
+            "/home/o'brien/herdr",
+            "/opt/herdr-$build/herdr",
+            "/opt/herdr`id`/herdr",
+            "/opt/herdr\"quote/herdr",
+        ] {
+            let command = cached_remote_api_command(
+                &crate::client::endpoint::SshMachineMetadata {
+                    os: "linux".into(),
+                    executable: executable.into(),
+                },
+                "fleet",
+            );
+            assert!(command.starts_with("/bin/sh -c "), "{command}");
+            assert!(command.contains("exec 3<&0; "), "{command}");
+            assert!(command.ends_with("| /bin/sh -s'"), "{command}");
+            for banned in ['$', '`', '"'] {
+                assert!(!command.contains(banned), "{banned} in {command}");
+            }
+            let encoded = command
+                .split_whitespace()
+                .nth(5)
+                .expect("base64-encoded script");
+            let script = String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .expect("valid base64 script"),
+            )
+            .expect("UTF-8 script");
+            assert!(script.contains(&shell_quote(executable)), "{script}");
+            assert!(script.contains("herdr-api-bridge-v1"), "{script}");
+            assert!(script.contains(STALE_API_METADATA), "{script}");
+            assert!(script.contains("remote-api-bridge <&3"), "{script}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cached_posix_api_command_forwards_payload_and_exit_status() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory =
+            std::env::temp_dir().join(format!("herdr-posix-bridge-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("herdr");
+        fs::write(
+            &executable,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--session\" ] && [ \"$3\" = \"remote-api-bridge\" ]; then\n\
+             \x20 if [ \"$4\" = \"--check\" ]; then printf 'herdr-api-bridge-v1\\n'; exit 0; fi\n\
+             \x20 cat\n\
+             \x20 exit 23\n\
+             fi\n\
+             exit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let run = |command: &str, payload: Option<&[u8]>| {
+            let mut child = Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .stdin(if payload.is_some() {
+                    Stdio::piped()
+                } else {
+                    Stdio::null()
+                })
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            if let Some(bytes) = payload {
+                child.stdin.take().unwrap().write_all(bytes).unwrap();
+            }
+            child.wait_with_output().unwrap()
+        };
+
+        let metadata = || crate::client::endpoint::SshMachineMetadata {
+            os: "linux".into(),
+            executable: executable.display().to_string(),
+        };
+        let output = run(
+            &cached_remote_api_command(&metadata(), "fleet"),
+            Some(b"API-PAYLOAD"),
+        );
+        assert_eq!(output.status.code(), Some(23), "{output:?}");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains(REMOTE_OUTPUT_READY_MARKER), "{stdout}");
+        assert!(stdout.contains("API-PAYLOAD"), "{stdout}");
+
+        fs::remove_file(&executable).unwrap();
+        let output = run(&cached_remote_api_command(&metadata(), "fleet"), None);
+        assert_eq!(output.status.code(), Some(78), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(STALE_API_METADATA),
+            "{output:?}"
+        );
+        let _ = fs::remove_dir_all(&directory);
     }
 
     #[test]
