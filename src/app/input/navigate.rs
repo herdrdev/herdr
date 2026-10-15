@@ -5083,8 +5083,8 @@ mod tests {
         assert!(crate::ui::sidebar::section_is_collapsed(
             &app.state, working
         ));
-        assert_eq!(app.state.visible_workspace_order(), vec![0, 1, 2]);
-        assert_eq!(app.state.workspace_at_visible_position(2), Some(2));
+        assert_eq!(app.state.visible_workspace_order(), vec![0, 1]);
+        assert_eq!(app.state.workspace_at_visible_position(2), None);
         let third_workspace = navigate_reserved_action_for_key(
             &app.state,
             &TerminalKey::new(KeyCode::Char('3'), KeyModifiers::empty()),
@@ -5094,15 +5094,15 @@ mod tests {
         execute_navigate_action(&mut app.state, third_workspace);
         assert_eq!(
             app.state.active,
-            Some(2),
-            "device rows have jump numbers even while Working is collapsed"
+            Some(0),
+            "a collapsed Working session has no visible-row jump number"
         );
-        app.state.selected = 2;
+        app.state.selected = 1;
         app.state.move_selected_workspace_by_visible_delta(-1);
-        assert_eq!(app.state.selected, 1, "up follows the previous device row");
-        app.state.selected = 2;
+        assert_eq!(app.state.selected, 0, "up follows the previous device row");
+        app.state.selected = 1;
         app.state.move_selected_workspace_by_visible_delta(1);
-        assert_eq!(app.state.selected, 2, "down stays at the final device row");
+        assert_eq!(app.state.selected, 1, "down stays at the final visible row");
 
         app.state.toggle_sidebar_group(working);
         assert_eq!(app.state.visible_workspace_order(), vec![0, 1, 2]);

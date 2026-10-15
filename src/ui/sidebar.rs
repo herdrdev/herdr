@@ -4093,10 +4093,17 @@ fn collapsed_sidebar_placement(
             .then(|| (section.to_string(), section.to_string()));
     }
 
+    let working_collapsed = section_is_collapsed(app, WORKING_SECTION_TITLE);
     let working_shelf = app.sidebar_sections_layout
-        && !section_is_collapsed(app, WORKING_SECTION_TITLE)
-        && sidebar_entry_has_working_state(entry);
+        && sidebar_entry_has_working_state(entry)
+        && (!entry.pinned || !working_collapsed);
     if working_shelf {
+        if section_is_collapsed(app, WORKING_SECTION_TITLE) {
+            return Some((
+                WORKING_SECTION_TITLE.to_string(),
+                WORKING_SECTION_TITLE.to_string(),
+            ));
+        }
         if devices::group_is_collapsed(app, "working", &app.agent_host_name, true, true) {
             return Some((
                 WORKING_SECTION_TITLE.to_string(),
@@ -4622,12 +4629,15 @@ fn compact_sidebar_rows_inner(
         let mut space_entries = Vec::new();
         let mut remote_main_entries = Vec::new();
         // Pinned windows also remain in their normal lifecycle section.
-        // Working panes stay in the device tree when Working is collapsed;
-        // otherwise they live in the Working shelf.
+        // Working panes live in the Working shelf even when it is collapsed.
         for entry in visible_entries.iter().cloned() {
             if entry.remote_entry.is_some() {
-                remote_main_entries.push(entry);
-            } else if working_collapsed || !sidebar_entry_has_working_state(&entry) {
+                if !sidebar_entry_has_working_state(&entry) {
+                    remote_main_entries.push(entry);
+                }
+            } else if !sidebar_entry_has_working_state(&entry)
+                || (working_collapsed && entry.pinned)
+            {
                 space_entries.push(entry);
             }
         }
@@ -4635,7 +4645,11 @@ fn compact_sidebar_rows_inner(
         let mut remote_settled = Vec::new();
         for entry in remote_entries.iter().cloned() {
             match sidebar_entry_lifecycle(app, &entry) {
-                SidebarEntryLifecycle::Active => remote_main_entries.push(entry),
+                SidebarEntryLifecycle::Active => {
+                    if !sidebar_entry_has_working_state(&entry) {
+                        remote_main_entries.push(entry);
+                    }
+                }
                 SidebarEntryLifecycle::Snoozed => remote_snoozed.push(entry),
                 SidebarEntryLifecycle::Settled => remote_settled.push(entry),
             }
@@ -4670,7 +4684,7 @@ fn compact_sidebar_rows_inner(
             }
             rows.push(SidebarRow::Divider);
         }
-        let workspace_activity = sidebar_workspace_activity(&space_entries);
+        let workspace_activity = sidebar_workspace_activity(&visible_entries);
         let local_main_agent_count = ordered_tab_entries(app, &space_entries).len();
         if local_main_agent_count > 0 {
             let key = devices::group_key("main", &app.agent_host_name);
@@ -16969,7 +16983,7 @@ pub(crate) mod tests {
         let root_pane = app.workspaces[0].tabs[0].root_pane;
         let split_pane = app.workspaces[0].test_split(Direction::Horizontal);
         app.sidebar_sections_layout = true;
-        set_sections_group_collapsed(&mut app, WORKING_SECTION_TITLE, true);
+        set_sections_group_collapsed(&mut app, WORKING_SECTION_TITLE, false);
         app.ensure_test_terminals();
         for pane_id in [root_pane, split_pane] {
             app.workspaces[0].tabs[0]
@@ -16980,10 +16994,12 @@ pub(crate) mod tests {
         }
 
         let rows = sidebar_rows(&app);
-        let main_key = devices::group_key("main", &app.agent_host_name);
+        let working_key = devices::group_key("working", &app.agent_host_name);
         let header_idx = rows
             .iter()
-            .position(|row| matches!(row, SidebarRow::NestedHeader { key, .. } if key == &main_key))
+            .position(
+                |row| matches!(row, SidebarRow::NestedHeader { key, .. } if key == &working_key),
+            )
             .expect("local device header");
         let header_count = match &rows[header_idx] {
             SidebarRow::NestedHeader { count, .. } => *count,
@@ -25705,6 +25721,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 app.sidebar_width = width;
                 app.nerd_font = true;
                 app.set_sidebar_group_mode(SidebarGroupMode::Spaces);
+                set_sections_group_collapsed(&mut app, WORKING_SECTION_TITLE, false);
                 expand_section_for_all_views(&mut app, SNOOZED_SECTION_TITLE);
                 set_sections_group_collapsed(&mut app, SNOOZED_SECTION_TITLE, false);
                 app.view.layout = if mobile {
@@ -34122,6 +34139,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             AgentState::Idle,
         ];
         let mut expected_tabs = Vec::new();
+        let mut expected_main_tabs = Vec::new();
         let mut settled_tabs = Vec::new();
         let mut working_tabs = 0;
         let observed_at = std::time::Instant::now();
@@ -34132,13 +34150,14 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 let pane_id = tab.root_pane;
                 let pane = tab.panes.get_mut(&pane_id).expect("root pane");
                 pane.seen = true;
+                let state = states[state_index];
                 if (ws_idx, tab_idx) == (2, 1) {
                     pane.settled_at = Some(1_725_000_000);
                     settled_tabs.push((ws_idx, tab_idx));
-                } else {
+                } else if state != AgentState::Working {
                     expected_tabs.push((ws_idx, tab_idx));
+                    expected_main_tabs.push((ws_idx, tab_idx));
                 }
-                let state = states[state_index];
                 working_tabs += usize::from(state == AgentState::Working);
                 let terminal = app
                     .terminals
@@ -34167,7 +34186,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             })
             .collect::<Vec<_>>();
         workspace_headers.sort_unstable();
-        assert_eq!(workspace_headers, [0, 1, 2]);
+        assert_eq!(workspace_headers, [0, 1]);
 
         let mut actual_tabs = rows
             .iter()
@@ -34182,8 +34201,24 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
         expected_tabs.sort_unstable();
         assert_eq!(
             actual_tabs, expected_tabs,
-            "every active local tab must appear once in the default tree"
+            "every active local tab must appear once across the default tree and Working shelf"
         );
+        let mut actual_main_tabs = rows
+            .iter()
+            .filter_map(|row| match row {
+                SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                    if !entry.working_shelf =>
+                {
+                    entry
+                        .local_target()
+                        .map(|target| (target.ws_idx, target.tab_idx))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        actual_main_tabs.sort_unstable();
+        expected_main_tabs.sort_unstable();
+        assert_eq!(actual_main_tabs, expected_main_tabs);
         assert_eq!(
             rows.iter().find_map(|row| match row {
                 SidebarRow::NestedHeader { key, count, .. } if key == "device:main/ub2" => {
@@ -34191,8 +34226,8 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 }
                 _ => None,
             }),
-            Some(expected_tabs.len()),
-            "the main device count must exclude tabs moved into Settled"
+            Some(expected_main_tabs.len()),
+            "the main device count must exclude tabs moved to other shelves"
         );
 
         let section = |title| {
@@ -34242,6 +34277,60 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn collapsed_working_shelf_hides_working_tabs_from_the_device_tree() {
+        let mut app = sort_app(&[
+            sort_tab("build", "owner/herdr", AgentState::Working, 1),
+            sort_tab("read", "owner/herdr", AgentState::Idle, 2),
+        ]);
+        app.sidebar_sections_layout = true;
+
+        let rows = sidebar_rows(&app);
+
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
+                collapsed: true,
+                ..
+            }
+        )));
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. }
+                if entry.state == AgentState::Idle && !entry.working_shelf
+        )));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                if entry.state == AgentState::Working && !entry.working_shelf
+        )));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::Tab { entry, .. } | SidebarRow::Agent { entry, .. }
+                if entry.state == AgentState::Working && entry.working_shelf
+        )));
+    }
+
+    #[test]
+    fn focusing_working_pane_targets_collapsed_working_header() {
+        let mut app = sort_app(&[sort_tab("build", "owner/herdr", AgentState::Working, 1)]);
+        app.sidebar_sections_layout = true;
+        let entry = sidebar_thread_entries(&app)
+            .into_iter()
+            .next()
+            .expect("working entry");
+
+        assert_eq!(
+            collapsed_sidebar_placement(&app, &entry, "main"),
+            Some((
+                WORKING_SECTION_TITLE.to_string(),
+                WORKING_SECTION_TITLE.to_string()
+            ))
+        );
     }
 
     #[test]
@@ -34573,7 +34662,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             rows.iter()
                 .filter(|row| matches!(row, SidebarRow::Tab { .. }))
                 .count(),
-            3
+            2
         );
         assert!(rows.iter().any(|row| matches!(
             row,
@@ -34888,7 +34977,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             rows.iter()
                 .filter(|row| matches!(row, SidebarRow::Tab { .. }))
                 .count(),
-            2
+            1
         );
     }
 
@@ -34945,13 +35034,27 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
                 row,
                 SidebarRow::NestedHeader {
                     key,
-                    count: 2,
+                    count: 1,
                     activity_count: Some((1, 2)),
                     ..
                 } if key.starts_with("remote-space:ub2:")
             )),
             "nested keys: {nested_keys:?}"
         );
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
+                collapsed: true,
+                ..
+            }
+        )));
+        assert!(!rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::RemoteAgent { entry, .. }
+                if entry.entry.state == AgentState::Working
+        )));
         let area = Rect::new(0, 0, 42, 32);
         let mut rendered = Terminal::new(TestBackend::new(area.width, area.height))
             .expect("remote focus sidebar terminal");
@@ -35151,10 +35254,11 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
 
         let mut app = app_with_agents(&["working device row"]);
         app.sidebar_sections_layout = true;
+        app.toggle_sidebar_group(WORKING_SECTION_TITLE);
         let device_key = sidebar_rows(&app)
             .iter()
             .find_map(|row| match row {
-                SidebarRow::NestedHeader { key, .. } if key.starts_with("device:main/") => {
+                SidebarRow::NestedHeader { key, .. } if key.starts_with("device:working/") => {
                     Some(key.clone())
                 }
                 _ => None,
@@ -35559,7 +35663,7 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
-    fn main_device_count_excludes_agents_moved_to_lifecycle_shelves() {
+    fn working_agents_are_excluded_from_main_device_count() {
         let mut app = app_with_agents(&["active", "settled"]);
         app.sidebar_sections_layout = true;
         let settled = app.workspaces[1].tabs[0].root_pane;
@@ -35571,7 +35675,16 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             SidebarRow::NestedHeader { key, count, .. } if key == &main_key => Some(*count),
             _ => None,
         });
-        assert_eq!(main_count, Some(1));
+        assert_eq!(main_count, None);
+        assert!(rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::SectionHeader {
+                title: WORKING_SECTION_TITLE,
+                count: 1,
+                collapsed: true,
+                ..
+            }
+        )));
     }
 
     #[test]
