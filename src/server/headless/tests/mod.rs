@@ -1,5 +1,6 @@
 use super::*;
 
+mod agent_status;
 mod event_fairness;
 mod native_graphics;
 #[path = "pane_move.rs"]

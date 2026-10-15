@@ -29,7 +29,16 @@ pub struct ApiRequestMessage {
     pub response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 }
 
-pub type ApiRequestSender = mpsc::UnboundedSender<ApiRequestMessage>;
+pub enum ApiMessage {
+    Request(Box<ApiRequestMessage>),
+    PaneAgentStatus {
+        pane_id: String,
+        respond_to:
+            std::sync::mpsc::Sender<Result<schema::PaneAgentStatusChangedEvent, schema::ErrorBody>>,
+    },
+}
+
+pub type ApiRequestSender = mpsc::UnboundedSender<ApiMessage>;
 
 pub fn socket_path() -> PathBuf {
     crate::session::active_api_socket_path()
