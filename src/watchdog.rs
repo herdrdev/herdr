@@ -908,7 +908,7 @@ pub(crate) fn classify_pane_v3(
     } else if stale_draft_age.is_some_and(|age| age < opt.stale_draft_secs) {
         class = PaneClass::Working;
         ev = "human is typing".into();
-    } else if evidence::closing_block_waiting(&o.tail) || o.transcript_waiting {
+    } else if o.transcript_waiting {
         class = PaneClass::WaitingHuman;
         ev = if o.status == AgentStatus::Working {
             "open blocker while working".into()
@@ -1809,11 +1809,24 @@ mod tests {
         )
     }
 
+    fn closing_wait_record(items: serde_json::Value) -> String {
+        let record = serde_json::json!({
+            "v": 3,
+            "state": "blocked",
+            "completion": "incomplete",
+            "items": items,
+            "decisions": [],
+            "workers": [],
+            "wait": null,
+            "now": {"kind": "waiting_on_you"}
+        });
+        format!("<!-- closing-state {record} -->")
+    }
+
     #[test]
-    fn expected_to_continue_requires_active_now_work_without_human_or_background_wait() {
-        assert!(evidence::expected_to_continue(
-            "Now: continuing implementation\n────────────────\n❯ cont\n────────────────\n0 shells"
-        ));
+    fn expected_to_continue_requires_a_record_with_active_work() {
+        let working_record = r#"<!-- closing-state {"v":3,"state":"working","completion":"incomplete","items":[],"decisions":[],"workers":[{"name":"Codex","activity":"implementation"}],"wait":null,"now":{"kind":"worker"}} -->"#;
+        assert!(evidence::expected_to_continue(working_record));
         assert!(!evidence::expected_to_continue(
             "Done here.\n────────────────\n❯ \n────────────────\n0 shells"
         ));
@@ -1823,21 +1836,44 @@ mod tests {
         assert!(!evidence::expected_to_continue(
             "Now: stopped — waiting\n────────────────\n❯ \n────────────────\n0 shells"
         ));
-        assert!(!evidence::expected_to_continue("**Needs you (1)**\n1. **Approve** release\nNow: continuing work\n────────────────\n❯ \n────────────────\n0 shells"));
+        let prose_only = "**Needs you (1)**\n1. **Approve** release\nNow: continuing work\n────────────────\n❯ \n────────────────\n0 shells";
+        assert!(!evidence::expected_to_continue(prose_only));
+        let record = closing_wait_record(serde_json::json!([{
+            "n": 1, "kind": "Approve", "text": "Release", "options": []
+        }]));
+        assert!(!evidence::expected_to_continue(&format!(
+            "{prose_only}\n{record}"
+        )));
     }
 
     #[test]
     fn pane_v3_handles_claude_closing_blocks_finished_replies_and_watchers() {
         for reply in [
-            "Now: waiting on you — about 10 dashboard spot-checks",
-            "**Needs you (2)**\n1. Approve release\n2. Decide rollout",
-            "**A renamed heading**\nReply 1a / 1b. Silence holds.",
+            (
+                "Now: waiting on you — about 10 dashboard spot-checks",
+                serde_json::json!([]),
+            ),
+            (
+                "**Needs you (2)**\n1. Approve release\n2. Decide rollout",
+                serde_json::json!([
+                    {"n": 1, "kind": "Approve", "text": "Release", "options": []},
+                    {"n": 2, "kind": "Decide", "text": "Rollout", "options": []}
+                ]),
+            ),
+            (
+                "**A renamed heading**\nReply 1a / 1b. Silence holds.",
+                serde_json::json!([
+                    {"n": 1, "kind": "Decide", "text": "Choose", "options": []}
+                ]),
+            ),
         ] {
+            let reply = format!("{}\n{}", reply.0, closing_wait_record(reply.1));
             let mut o = pane_v3(
                 AgentStatus::Working,
-                &claude_pane(reply, "", "2h 48m ago │ 🖥7.47 │ 132k · 0 shells"),
+                &claude_pane(&reply, "", "2h 48m ago │ 🖥7.47 │ 132k · 0 shells"),
             );
             o.status = AgentStatus::Unknown;
+            o.transcript_waiting = true;
             let mut memory = old_pane_memory(&o, 1);
             assert_eq!(
                 classify_pane_v3(&o, &mut memory, 2000, v3opt()).class,
@@ -1906,6 +1942,16 @@ mod tests {
 
     #[test]
     fn pane_v3_classifies_human_now_waits_before_promised_work() {
+        let prose = claude_pane("Now: waiting for your review", "", "0 shells");
+        let prose_observation = pane_v3(AgentStatus::Working, &prose);
+        let prose_decision = classify_pane_v3(
+            &prose_observation,
+            &mut PaneV3Memory::default(),
+            1000,
+            v3opt(),
+        );
+        assert_ne!(prose_decision.class, PaneClass::WaitingHuman);
+
         for line in [
             "Now: waiting on you to approve",
             "Now: waiting at the /hcode review gate.",
@@ -1917,8 +1963,10 @@ mod tests {
             "Now: awaiting approval",
             "Now: awaiting review",
         ] {
-            let tail = claude_pane(line, "", "0 shells");
-            let observation = pane_v3(AgentStatus::Working, &tail);
+            let record = closing_wait_record(serde_json::json!([]));
+            let tail = claude_pane(&format!("{line}\n{record}"), "", "0 shells");
+            let mut observation = pane_v3(AgentStatus::Working, &tail);
+            observation.transcript_waiting = true;
             let decision =
                 classify_pane_v3(&observation, &mut PaneV3Memory::default(), 1000, v3opt());
             assert_eq!(
@@ -1940,11 +1988,12 @@ mod tests {
 
     #[test]
     fn pane_v3_keeps_open_blocker_visible_while_working_and_from_transcript() {
-        let blocker = "**Needs you (1)**\n1. **Approve** — Merge X?\nReply 1a / 1b. Silence holds.\n**Now:** Codex — fixing Y";
-        let o = pane_v3(
+        let blocker = "**Needs you: nothing.**\n**Now:** Codex — fixing Y";
+        let mut o = pane_v3(
             AgentStatus::Working,
             &claude_pane(&format!("{blocker}\nRunning tests"), "", "0 shells"),
         );
+        o.transcript_waiting = true;
         let decision = classify_pane_v3(&o, &mut PaneV3Memory::default(), 100, v3opt());
         assert_eq!(decision.class, PaneClass::WaitingHuman);
         assert!(decision.evidence.contains("open blocker while working"));

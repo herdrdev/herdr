@@ -1261,46 +1261,16 @@ impl TerminalState {
         true
     }
 
-    pub(crate) fn merge_closing_blockers(
+    pub(crate) fn merge_closing_display_items(
         &mut self,
-        gates: Vec<crate::api::schema::ClosingBlockItem>,
         items: Vec<crate::api::schema::ClosingBlockItem>,
     ) -> bool {
-        let gates: Vec<_> = gates
-            .into_iter()
-            .filter(crate::api::schema::ClosingBlockItem::requires_human_input)
-            .collect();
-        let items: Vec<_> = items
-            .into_iter()
-            .filter(crate::api::schema::ClosingBlockItem::requires_human_input)
-            .collect();
-        let has_blockers = !gates.is_empty() || !items.is_empty();
-        let agent_label = self
-            .hook_authority
-            .as_ref()
-            .map(|authority| authority.agent_label.clone());
-        let report = self.closing_report.get_or_insert_default();
-        if report.unanswered.is_none() && has_blockers {
-            report.unanswered = Some(UnansweredClosingBlockers {
-                agent_label,
-                ..UnansweredClosingBlockers::default()
-            });
-        }
         let mut changed = false;
-        if let Some(unanswered) = report.unanswered.as_mut() {
-            changed |= merge_unanswered_closing_blockers(unanswered, &gates, &items);
-        }
-        for gate in gates {
-            if !report
-                .closing_gates
-                .iter()
-                .any(|existing| same_closing_blocker(existing, &gate))
-            {
-                report.closing_gates.push(gate);
-                changed = true;
-            }
-        }
-        for item in items {
+        let report = self.closing_report.get_or_insert_default();
+        for item in items
+            .into_iter()
+            .filter(|item| !item.requires_human_input())
+        {
             if !report
                 .closing_items
                 .iter()

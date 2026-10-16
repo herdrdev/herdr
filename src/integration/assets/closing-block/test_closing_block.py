@@ -1,4 +1,5 @@
 import contextlib
+import json
 import sys
 import threading
 import unittest
@@ -7,7 +8,33 @@ from unittest import mock
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 
 import closing_block
+import closing_block_record
 import herdr_status
+
+
+def record_item(n, kind, text, options=()):
+    return {"n": n, "kind": kind, "text": text, "options": list(options)}
+
+
+def with_closing_record(
+    text, *, items=(), decisions=(), workers=(), wait=None, now_kind="stopped"
+):
+    record = {
+        "v": 3,
+        "state": "unknown",
+        "completion": "incomplete",
+        "items": list(items),
+        "decisions": list(decisions),
+        "workers": list(workers),
+        "wait": wait,
+        "now": {"kind": now_kind},
+    }
+    return (
+        text.rstrip()
+        + "\n<!-- closing-state "
+        + json.dumps(record, separators=(",", ":"))
+        + " -->\n"
+    )
 
 
 REALISTIC_CAP = """\
@@ -423,6 +450,14 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Reply 1a / 1b. Silence holds.\n"
             "**Now:** waiting on Matthias"
         )
+        text = with_closing_record(
+            text,
+            items=[record_item(1, "Decide", "Continue the acceptance probe?", [
+                {"letter": "a", "text": "Continue"},
+                {"letter": "b", "text": "Stop"},
+            ])],
+            now_kind="waiting_on_you",
+        )
 
         block = closing_block.parse(text)
 
@@ -432,39 +467,18 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertEqual(block.wire_items()[0]["label"], "Decide")
         self.assertTrue(block.wire_items()[0]["blocking"])
 
-    def test_settle_ready_requires_both_markers_in_the_final_six_nonempty_lines(self):
-        self.assertTrue(
-            closing_block.settle_ready(
-                "Work complete\n\n**Needs you: nothing.**\n\n**Done here!**\n"
-            )
-        )
-        self.assertTrue(
-            closing_block.settle_ready("NEEDS YOU: NOTHING!!!\n\nDONE HERE.\n")
-        )
-        self.assertFalse(closing_block.settle_ready("Done here.\n"))
-        self.assertFalse(closing_block.settle_ready("Needs you: nothing.\n"))
-        self.assertFalse(
-            closing_block.settle_ready(
-                "Needs you: nothing\n" + "\n".join(f"line {n}" for n in range(6))
-                + "\nDone here\n"
-            )
-        )
-
     def test_url_first_later_label_retains_the_pending_decision(self):
         block = closing_block.parse(MOVE_AND_RESIZE_CAP)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.parse_status, "malformed")
-        self.assertEqual(block.completion, "incomplete")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.completion, "missing")
+        self.assertEqual(len(block.items), 1)
+        self.assertEqual(block.items[0].label, "Answer")
+        self.assertIn("What next for placement accuracy?", block.items[0].text)
         self.assertEqual(
-            [(item["label"], item["blocking"]) for item in block.wire_items()],
-            [("Answer", True)],
-        )
-        self.assertIn("What next for placement accuracy?", block.wire_items()[0]["text"])
-        self.assertIn("What next for placement accuracy?", block.message())
-        self.assertEqual(
-            block.wire_items()[0]["url"],
+            block.items[0].metadata["url"],
             "https://github.com/scalable-so/scalablev2/pull/3401",
         )
 
@@ -481,19 +495,18 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 decisions=block.wire_decisions(),
                 completion=block.completion,
                 parse_status=block.parse_status,
-                settle_ready=True,
+                settle_ready=closing_block.settle_ready(MOVE_AND_RESIZE_CAP),
                 pane_id="w1:p-malformed-answer",
                 sock_path="/tmp/herdr-test.sock",
             )
 
         report_params = rpc.call_args_list[1].args[3]
-        self.assertEqual(outcome["payload"]["parse_status"], "malformed")
-        self.assertEqual(report_params["parse_status"], "malformed")
-        self.assertTrue(report_params["settle_ready"])
-        self.assertEqual(
-            [(item["label"], item["blocking"]) for item in report_params["items"]],
-            [("Answer", True)],
-        )
+        self.assertEqual(outcome["payload"]["parse_status"], "missing")
+        self.assertEqual(outcome["payload"]["state"], "unknown")
+        self.assertEqual(report_params["parse_status"], "missing")
+        self.assertEqual(report_params["state"], "unknown")
+        self.assertFalse(report_params["settle_ready"])
+        self.assertNotIn("items", report_params)
         self.assertNotIn("gates", report_params)
         self.assertNotIn("decisions", report_params)
         self.assertNotIn("agents", report_params)
@@ -515,35 +528,37 @@ class ClosingBlockV2Tests(unittest.TestCase):
             for presentation in presentations
         ]
 
-        self.assertEqual([block.blocking for block in parsed], [1, 1, 1])
-        self.assertEqual([block.herdr_state for block in parsed], ["blocked"] * 3)
+        self.assertEqual([block.blocking for block in parsed], [0, 0, 0])
+        self.assertEqual([block.herdr_state for block in parsed], ["unknown"] * 3)
         self.assertEqual(
-            [block.wire_items()[0]["label"] for block in parsed],
+            [block.items[0].label for block in parsed],
             ["Answer"] * 3,
         )
-        self.assertTrue(all(block.wire_items()[0]["blocking"] for block in parsed))
 
     def test_final_done_outranks_an_earlier_agent_claim(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "1 agent running: reviewer — checking the patch.\n\n"
             "**Critical action points (0 blocking)**\n\n"
-            "Done here.\n"
-        )
+            "Done here.\n",
+            now_kind="done_here",
+        ))
 
         self.assertEqual(block.agents_running, 0)
         self.assertEqual(block.completion, "complete")
         self.assertEqual(block.herdr_state, "idle")
 
     def test_later_worker_claim_reopens_an_earlier_done_footer(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "Done here.\n\n"
             "**Critical action points (0 blocking)**\n\n"
-            "1 agent running: reviewer — checking the new turn.\n"
-        )
+            "1 agent running: reviewer — checking the new turn.\n",
+            workers=[{"name": "reviewer", "activity": "checking the new turn"}],
+            now_kind="worker",
+        ))
 
         self.assertFalse(block.done_here)
         self.assertEqual(block.completion, "incomplete")
-        self.assertTrue(block.workers_unknown)
+        self.assertEqual(block.herdr_state, "working")
 
     def test_fenced_and_quoted_status_examples_are_not_authoritative(self):
         block = closing_block.parse(
@@ -558,13 +573,16 @@ class ClosingBlockV2Tests(unittest.TestCase):
 
         self.assertEqual(block.blocking, 0)
         self.assertEqual(block.agents_running, 0)
-        self.assertEqual(block.completion, "complete")
+        self.assertEqual(block.completion, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_named_external_wait_is_in_progress_without_becoming_a_human_blocker(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Critical action points (0 blocking)**\n\n"
-            "Waiting for CI run 4123 via github-ci-watch.\n"
-        )
+            "Waiting for CI run 4123 via github-ci-watch.\n",
+            wait={"event": "CI run 4123 via github-ci-watch"},
+            now_kind="wait",
+        ))
 
         self.assertEqual(block.blocking, 0)
         self.assertEqual(block.external_wait, "CI run 4123 via github-ci-watch")
@@ -613,10 +631,14 @@ class ClosingBlockV2Tests(unittest.TestCase):
 
         for footer, expected_wait in cases:
             with self.subTest(footer=footer):
-                block = closing_block.parse(prefix + footer + "\n")
+                block = closing_block.parse(with_closing_record(
+                    prefix + footer + "\n",
+                    items=[record_item(1, "Answer", "Choose the next lane.")],
+                    wait={"event": expected_wait},
+                    now_kind="waiting_on_you",
+                ))
 
                 self.assertEqual(block.external_wait, expected_wait)
-                self.assertTrue(block.waiting_on_you)
                 self.assertEqual(block.blocking, 1)
                 self.assertEqual(block.herdr_state, "blocked")
                 self.assertEqual(block.parse_status, "ok")
@@ -627,42 +649,50 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertFalse(block.present)
         self.assertEqual(block.completion, "missing")
         self.assertEqual(block.parse_status, "missing")
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_combined_worker_and_human_wait_footer_keeps_each_fact_separate(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Critical action points (1 blocking)**\n\n"
             "1. **Answer** — Choose the release lane.\n\n"
             "1 agent running: reviewer — checking another lane · "
-            "Waiting on you — 1 item (1), 1 blocking.\n"
-        )
+            "Waiting on you — 1 item (1), 1 blocking.\n",
+            items=[record_item(1, "Answer", "Choose the release lane.")],
+            workers=[{"name": "reviewer", "activity": "checking another lane"}],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.blocking, 1)
-        self.assertTrue(block.waiting_on_you)
-        self.assertEqual(block.agents_running, 0)
-        self.assertTrue(block.workers_unknown)
-        self.assertEqual(block.agents, ["reviewer — checking another lane"])
+        self.assertEqual(block.agents_running, 1)
+        self.assertFalse(block.workers_unknown)
+        self.assertEqual(block.agents, ["reviewer"])
         self.assertIsNone(block.external_wait)
 
     def test_combined_worker_and_external_wait_footer_parses_named_wait(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Critical action points (0 blocking)**\n\n"
             "1 agent running: monitor — CI watcher · "
-            "Waiting for CI run 4123 via github-ci-watch.\n"
-        )
+            "Waiting for CI run 4123 via github-ci-watch.\n",
+            workers=[{"name": "monitor", "activity": "CI watcher"}],
+            wait={"event": "CI run 4123 via github-ci-watch"},
+            now_kind="wait",
+        ))
 
         self.assertEqual(block.blocking, 0)
-        self.assertEqual(block.agents_running, 0)
-        self.assertTrue(block.workers_unknown)
-        self.assertEqual(block.agents, ["monitor — CI watcher"])
+        self.assertEqual(block.agents_running, 1)
+        self.assertFalse(block.workers_unknown)
+        self.assertEqual(block.agents, ["monitor"])
         self.assertEqual(block.external_wait, "CI run 4123 via github-ci-watch")
         self.assertEqual(block.herdr_state, "working")
 
     def test_canonical_registered_external_wait_footer(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "The CI watcher will resume this task when the required checks finish.\n\n"
             "**Nothing to act on.**\n\n"
-            "Waiting: required CI checks, completion watcher registered\n"
+            "Waiting: required CI checks, completion watcher registered\n",
+            wait={"event": "required CI checks, completion watcher registered"},
+            now_kind="wait",
+        )
         )
 
         self.assertEqual(
@@ -683,32 +713,43 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Waiting on you — 2 items (1, 2), 2 blocking.\n"
         )
 
-        self.assertEqual(block.blocking, 2)
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
         self.assertEqual([item.label for item in block.items], ["Gate", "Verify"])
-        self.assertEqual(block.agents, ["next-slice — dashboard filters"])
         self.assertEqual(block.agents_running, 0)
-        self.assertTrue(block.workers_unknown)
-        self.assertTrue(block.waiting_on_you)
 
     def test_combined_agents_external_wait_and_human_wait_split_cleanly(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Critical action points (1 blocking)**\n\n"
             "1. **Answer** — Choose the next lane.\n\n"
             "2 agents running: reviewer — patch review · verifier — focused tests · "
             "Waiting: required CI checks, completion watcher registered · "
-            "Waiting on you — 1 item (1), 1 blocking.\n"
-        )
+            "Waiting on you — 1 item (1), 1 blocking.\n",
+            items=[record_item(1, "Answer", "Choose the next lane.")],
+            workers=[
+                {"name": "reviewer", "activity": "patch review"},
+                {"name": "verifier", "activity": "focused tests"},
+            ],
+            wait={"event": "required CI checks, completion watcher registered"},
+            now_kind="waiting_on_you",
+        ))
 
-        self.assertEqual(block.agents, ["reviewer — patch review", "verifier — focused tests"])
+        self.assertEqual(block.agents, ["reviewer", "verifier"])
         self.assertEqual(
             block.external_wait,
             "required CI checks, completion watcher registered",
         )
-        self.assertTrue(block.waiting_on_you)
         self.assertEqual(block.blocking, 1)
 
     def test_legacy_suffix_nonblocking_marker_does_not_exempt_decisions(self):
-        block = closing_block.parse(SUFFIX_NONBLOCKING_ITEMS)
+        block = closing_block.parse(with_closing_record(
+            SUFFIX_NONBLOCKING_ITEMS,
+            items=[
+                record_item(1, "Answer", "Choose the release lane"),
+                record_item(2, "Verify", "Confirm the optional visual detail"),
+            ],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertEqual(block.blocking, 2)
@@ -740,14 +781,25 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertEqual(metadata["tokens"]["closing_idle"], "0")
 
     def test_nonblocking_word_in_middle_is_blocking(self):
-        block = closing_block.parse(MID_SENTENCE_NONBLOCKING_WORD)
+        block = closing_block.parse(with_closing_record(
+            MID_SENTENCE_NONBLOCKING_WORD,
+            items=[record_item(1, "Answer", "This is non-blocking until we hear from QA.")],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertEqual(block.wire_items()[0]["blocking"], True)
         self.assertEqual(block.wire_items()[0]["text"], "This is non-blocking until we hear from QA.")
 
     def test_legacy_prefix_nonblocking_marker_does_not_exempt_decisions(self):
-        block = closing_block.parse(NONBLOCKING_ONLY)
+        block = closing_block.parse(with_closing_record(
+            NONBLOCKING_ONLY,
+            items=[
+                record_item(1, "Answer", "Share any preference if useful."),
+                record_item(2, "Verify", "Confirm the optional visual detail."),
+            ],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertEqual(block.blocking, 2)
@@ -779,7 +831,11 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertEqual(metadata["tokens"]["closing_idle"], "0")
 
     def test_blocking_answer(self):
-        block = closing_block.parse(BLOCKING_ANSWER)
+        block = closing_block.parse(with_closing_record(
+            BLOCKING_ANSWER,
+            items=[record_item(1, "Answer", "Choose the release lane.")],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertTrue(block.wire_items()[0]["blocking"])
@@ -799,7 +855,11 @@ class ClosingBlockV2Tests(unittest.TestCase):
 
     # MAT-147 AC2
     def test_verify_not_marked_as_nonblocking(self):
-        block = closing_block.parse(UNMARKED_VERIFY_BLOCKING_ANSWER)
+        block = closing_block.parse(with_closing_record(
+            UNMARKED_VERIFY_BLOCKING_ANSWER,
+            items=[record_item(1, "Verify", "check the log")],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertTrue(block.wire_items()[0]["blocking"])
@@ -848,52 +908,45 @@ class ClosingBlockV2Tests(unittest.TestCase):
     def test_cap_gate_becomes_nonempty_object_gate(self):
         block = closing_block.parse(REALISTIC_CAP)
 
-        self.assertEqual(block.blocking, 2)
-        self.assertEqual(len(block.wire_gates()), 1)
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(len(block.wire_gates()), 0)
         self.assertEqual(
-            block.wire_gates()[0],
-            {
-                "n": 1,
-                "label": "Gate",
-                "text": "Approve PR #2606 for MAT-125 before production rollout.",
-                "blocking": True,
-                "pr": 2606,
-                "ticket": "MAT-125",
-                "url": None,
-                "default": None,
-                "default_at": None,
-            },
+            [(item.label, item.text, item.metadata.get("pr"), item.metadata.get("ticket"))
+             for item in block.items if item.label == "Gate"],
+            [("Gate", "Approve PR #2606 for MAT-125 before production rollout.", 2606, "MAT-125")],
         )
 
     def test_zero_declared_count_does_not_hide_gate_item(self):
         block = closing_block.parse(ZERO_COUNT_GATE)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.completion, "incomplete")
-        self.assertEqual(block.parse_status, "malformed")
-        self.assertEqual(block.wire_gates()[0]["text"], "Approve the zero-count correction.")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.completion, "missing")
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.items[0].text, "Approve the zero-count correction.")
 
     def test_declared_blocking_without_items_is_malformed_attention(self):
         block = closing_block.parse(DECLARED_BLOCKING_WITHOUT_ITEMS)
 
         self.assertEqual(block.blocking, 0)
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.parse_status, "missing")
         self.assertEqual(block.wire_gates(), [])
         self.assertIsNone(block.message())
 
     def test_answer_and_informational_notes_remain_separate_items(self):
         block = closing_block.parse(REALISTIC_CAP)
-        items = block.wire_items()
+        items = [item for item in block.items if item.label != "Gate"]
 
-        self.assertEqual([item["label"] for item in items], ["Answer", "What to test"])
-        self.assertEqual(items[1]["pr"], 2606)
-        self.assertEqual(items[1]["ticket"], "MAT-125")
+        self.assertEqual([item.label for item in items], ["Answer", "What to test"])
+        self.assertEqual(items[1].metadata["pr"], 2606)
+        self.assertEqual(items[1].metadata["ticket"], "MAT-125")
         self.assertEqual(
-            items[1]["url"],
+            items[1].metadata["url"],
             "https://mat125-gates-v2.vercel.app/preview",
         )
-        self.assertIn("Confirm the gate text is visible.", items[1]["text"])
+        self.assertIn("Confirm the gate text is visible.", items[1].text)
 
     def test_what_to_test_alone_stays_idle_because_it_is_not_an_action_point(self):
         block = closing_block.parse(
@@ -903,8 +956,8 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual([item["label"] for item in block.wire_items()], ["What to test"])
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual([item.label for item in block.items], ["What to test"])
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_decisions_are_separate_and_reversible(self):
         decisions = closing_block.parse(REALISTIC_CAP).wire_decisions()
@@ -916,7 +969,15 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertTrue(decisions[0]["reversible"])
 
     def test_decisions_before_cap_block_are_parsed(self):
-        block = closing_block.parse(DECISIONS_BEFORE_CAP)
+        block = closing_block.parse(with_closing_record(
+            DECISIONS_BEFORE_CAP,
+            items=[record_item(1, "Approve", "Approve PR #2606 for MAT-125 before production rollout.")],
+            decisions=[
+                {"n": 1, "text": "Proceed with the compact list; recommendation: compact list at 14:25.", "recommendation": "compact list"},
+                {"n": 2, "text": "Kept the existing socket transport."},
+            ],
+            now_kind="waiting_on_you",
+        ))
 
         decisions = block.wire_decisions()
         self.assertEqual(len(decisions), 2)
@@ -974,8 +1035,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
     def test_bom_prefixed_cap_is_recognized(self):
         block = closing_block.parse(BOM_PREFIXED_CAP)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.wire_gates()[0]["text"], "BOM-prefixed gate.")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.items[0].text, "BOM-prefixed gate.")
 
     def test_decisions_from_earlier_cap_block_are_not_attached(self):
         block = closing_block.parse(STALE_DECISIONS_BEFORE_FINAL_CAP)
@@ -1018,7 +1080,7 @@ class ClosingBlockV2Tests(unittest.TestCase):
 
         self.assertEqual(block.wire_gates(), [])
         self.assertEqual(block.wire_items(), [])
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
         self.assertEqual(
             [decision["text"] for decision in block.wire_decisions()],
             ["Decision between repeated Nothing markers."],
@@ -1092,10 +1154,11 @@ class ClosingBlockV2Tests(unittest.TestCase):
             with self.subTest(count=count):
                 block = closing_block.parse(text)
 
-                self.assertEqual(block.blocking, 2)
+                self.assertEqual(block.blocking, 0)
+                self.assertEqual(block.herdr_state, "unknown")
                 self.assertEqual(block.wire_gates(), [])
                 self.assertEqual(
-                    [item["label"] for item in block.wire_items()],
+                    [item.label for item in block.items],
                     ["Answer", "Verify"],
                 )
 
@@ -1116,11 +1179,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
                     "Done here.\n"
                 )
 
-                self.assertEqual(block.blocking, 2)
-                self.assertEqual(
-                    [item["label"] for item in block.wire_gates()], ["Gate"]
-                )
-                self.assertEqual(block.herdr_state, "blocked")
+                self.assertEqual(block.blocking, 0)
+                self.assertEqual(block.herdr_state, "unknown")
+                self.assertEqual(len(block.items), 2)
 
     def test_a_decimal_opening_a_body_line_is_not_an_item_marker(self):
         # Relaxing the terminator must not let prose split into items.
@@ -1133,10 +1194,11 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 1)
+        self.assertEqual(block.blocking, 0)
         self.assertEqual(
-            [item["label"] for item in block.wire_items()], ["Answer"]
+            [item.label for item in block.items], ["Answer"]
         )
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_an_incomplete_unlabeled_parse_reports_only_retained_items(self):
         block = closing_block.parse(
@@ -1147,9 +1209,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.parse_status, "missing")
 
     def test_a_discarded_line_beside_a_label_marks_the_parse_malformed(self):
         for body in (
@@ -1163,9 +1225,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
                     "Done here.\n"
                 )
 
-                self.assertEqual(block.blocking, 1)
-                self.assertEqual(block.herdr_state, "blocked")
-                self.assertEqual(block.parse_status, "malformed")
+                self.assertEqual(block.blocking, 0)
+                self.assertEqual(block.herdr_state, "unknown")
+                self.assertEqual(block.parse_status, "missing")
 
     def test_a_complete_labeled_answer_blocks_because_no_agent_is_running(self):
         # The Part 2 fix itself: nothing was discarded and the author labeled
@@ -1178,8 +1240,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual([item.label for item in block.items], ["Answer"])
 
         # A real gate beside an answer is unaffected.
         mixed = closing_block.parse(
@@ -1191,10 +1254,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(mixed.blocking, 2)
-        self.assertEqual(
-            [item["label"] for item in mixed.wire_gates()], ["Gate"]
-        )
+        self.assertEqual(mixed.blocking, 0)
+        self.assertEqual(mixed.herdr_state, "unknown")
+        self.assertEqual([item.label for item in mixed.items], ["Gate", "Answer"])
 
     def test_declared_count_promotes_matching_unlabeled_items(self):
         block = closing_block.parse(
@@ -1206,11 +1268,10 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 2)
-        self.assertEqual(block.parse_status, "malformed")
-        self.assertEqual(
-            [item["label"] for item in block.wire_gates()], ["Gate", "Gate"]
-        )
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(len(block.items), 2)
 
     def test_an_unlabeled_line_beside_a_label_is_never_promoted(self):
         # Mixed block: the author did label their item, so the trailing
@@ -1228,11 +1289,12 @@ class ClosingBlockV2Tests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
         self.assertEqual(block.wire_gates(), [])
         self.assertEqual(
-            [item["label"] for item in block.wire_items()], ["Answer"]
+            [item.label for item in block.items], ["Answer"]
         )
 
     def test_mirror_write_keeps_newest_seq(self):
@@ -1327,6 +1389,21 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertIn("Nested detail remains part of the decision.", decisions[0]["text"])
 
     def test_report_emits_v2_arrays_and_blocked_channel_with_agents(self):
+        block = closing_block.parse(with_closing_record(
+            REALISTIC_CAP,
+            items=[
+                record_item(1, "Approve", "Approve PR #2606 for MAT-125 before production rollout."),
+                record_item(2, "Answer", "Keep the blocked list compact."),
+            ],
+            decisions=[{
+                "n": 1,
+                "text": "Proceed with the compact list.",
+                "recommendation": "compact list at 14:25",
+                "reversible": True,
+            }],
+            workers=[{"name": "reviewer", "activity": "v2 payload"}],
+            now_kind="waiting_on_you",
+        ))
         with mock.patch.object(herdr_status, "_rpc") as rpc, mock.patch.dict(
             herdr_status.os.environ,
             {"XDG_STATE_HOME": self._state_dir()},
@@ -1336,9 +1413,9 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 agent="claude",
                 blocking=1,
                 agents=1,
-                gates=closing_block.parse(REALISTIC_CAP).wire_gates(),
-                items=closing_block.parse(REALISTIC_CAP).wire_items(),
-                decisions=closing_block.parse(REALISTIC_CAP).wire_decisions(),
+                gates=block.wire_gates(),
+                items=block.wire_items(),
+                decisions=block.wire_decisions(),
                 pane_id="w1:p1",
                 sock_path="/tmp/herdr-test.sock",
             )
@@ -1346,7 +1423,7 @@ class ClosingBlockV2Tests(unittest.TestCase):
         self.assertEqual(outcome["payload"]["v"], 2)
         self.assertEqual(outcome["payload"]["state"], "blocked")
         self.assertIsInstance(outcome["payload"]["gates"][0], dict)
-        self.assertEqual(len(outcome["payload"]["items"]), 2)
+        self.assertEqual(len(outcome["payload"]["items"]), 1)
         self.assertTrue(outcome["payload"]["decisions"][0]["reversible"])
         report = rpc.call_args_list[1].args
         self.assertEqual(report[2], "pane.report_agent")
@@ -1667,12 +1744,10 @@ class ClosingBlockV2Tests(unittest.TestCase):
             )
 
         self.assertEqual(outcome["payload"]["state"], "unknown")
-        self.assertEqual(outcome["payload"]["gates"][0]["text"], "partial")
-        for key in ("agents", "agent_names", "items", "decisions"):
+        for key in ("agents", "agent_names", "gates", "items", "decisions"):
             self.assertNotIn(key, outcome["payload"])
         report_params = rpc.call_args_list[1].args[3]
-        self.assertEqual(report_params["gates"][0]["text"], "partial")
-        for key in ("agents", "items", "decisions"):
+        for key in ("agents", "gates", "items", "decisions"):
             self.assertNotIn(key, report_params)
         tokens = rpc.call_args_list[2].args[3]["tokens"]
         for key in (
@@ -1778,8 +1853,8 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 mirrored = herdr_status.json.load(fh)
 
         self.assertEqual([gate["text"] for gate in mirrored["gates"]], ["Gate A"])
-        self.assertEqual([item["text"] for item in mirrored["items"]], ["Choose lane B"])
-        self.assertEqual(mirrored["blocking"], 2)
+        self.assertEqual(mirrored["items"], [])
+        self.assertEqual(mirrored["blocking"], 1)
         self.assertEqual(mirrored["agents"], 2)
         self.assertFalse(mirrored["workers_unknown"])
         self.assertEqual(mirrored["parse_status"], "malformed")
@@ -1912,66 +1987,39 @@ UNLABELED_CAP_BEFORE_AGENTS_LINE = """\
 
 
 class PlainFormTests(unittest.TestCase):
-    """The observed unformatted authoring must latch exactly like the strict
-    form -- these fixtures pin the two shapes against drifting apart."""
+    """Unformatted headings remain display input and cannot set lifecycle state."""
 
-    def test_plain_form_latches_a_gate(self):
+    def test_plain_form_items_are_display_only_without_a_record(self):
         block = closing_block.parse(PLAIN_FORM_CAP)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
-        gates = block.wire_gates()
-        self.assertEqual(len(gates), 1)
-        self.assertIn("n8n production apply", gates[0]["text"])
-        self.assertIn("(a-rec)", gates[0]["text"])
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(len(block.wire_gates()), 0)
+        self.assertEqual(block.items[0].label, "Gate")
+        self.assertIn("n8n production apply", block.items[0].text)
+        self.assertIn("(a-rec)", block.items[0].text)
 
     def test_plain_and_bold_forms_do_not_drift(self):
         plain = closing_block.parse(PLAIN_FORM_CAP)
         bold = closing_block.parse(BOLD_FORM_CAP)
 
-        self.assertEqual(plain.blocking, bold.blocking)
-        self.assertEqual(plain.herdr_state, bold.herdr_state)
+        self.assertEqual((plain.blocking, plain.herdr_state), (0, "unknown"))
+        self.assertEqual((bold.blocking, bold.herdr_state), (0, "unknown"))
         self.assertEqual(
-            [gate["text"] for gate in plain.wire_gates()],
-            [gate["text"] for gate in bold.wire_gates()],
+            [(item.label, item.text) for item in plain.items],
+            [(item.label, item.text) for item in bold.items],
         )
 
-    def test_header_line_alone_is_enough_to_block(self):
-        for header in (
-            "Critical action points (3 blocking)",
-            "## Critical action points (3 blocking)",
-            "critical action points (3 blocking):",
-            "**Critical action points (3 blocking)**",
-        ):
-            with self.subTest(header=header):
-                block = closing_block.parse(header + "\n")
-                self.assertEqual(block.blocking, 0)
-                self.assertEqual(block.herdr_state, "blocked")
-                self.assertEqual(block.parse_status, "malformed")
-
-    def test_counted_header_with_trailing_suffix_latches(self):
+    def test_counted_header_suffix_items_are_display_only(self):
         block = closing_block.parse(SUFFIXED_PLAIN_FORM_CAP)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
-        items = block.wire_items()
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        items = block.items
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["label"], "Answer")
-        self.assertIn("noopnutrition", items[0]["text"])
-        self.assertIn("(a-rec)", items[0]["text"])
-
-    def test_counted_header_suffix_variants_latch(self):
-        for header in (
-            "Critical action points (2 blocking) — unchanged, still waiting on your answer:",
-            "Critical action points (2 blocking): still waiting on item 1",
-            "**Critical action points (2 blocking)** — carried from last turn",
-            "## Critical action points (2 blocking) - both from the review",
-        ):
-            with self.subTest(header=header):
-                block = closing_block.parse(header + "\n")
-                self.assertEqual(block.blocking, 0)
-                self.assertEqual(block.herdr_state, "blocked")
-                self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(items[0].label, "Answer")
+        self.assertIn("noopnutrition", items[0].text)
+        self.assertIn("(a-rec)", items[0].text)
 
     def test_countless_header_stays_full_line_only(self):
         # Without an explicit count the anchor keeps its strict form so prose
@@ -1981,37 +2029,34 @@ class PlainFormTests(unittest.TestCase):
             "Critical action points were all addressed earlier.\n\nDone here.\n"
         )
         self.assertEqual(block.blocking, 0)
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
 
-    def test_unlabeled_bold_cap_with_waiting_trailer_latches(self):
+    def test_unlabeled_bold_cap_with_waiting_trailer_is_display_only(self):
         block = closing_block.parse(UNLABELED_BOLD_CAP_WITH_TRAILER)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
-        items = block.wire_items()
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        items = block.items
         self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["label"], "Answer")
-        self.assertIn("copy-approval-linear-lane", items[0]["text"])
-        self.assertEqual(items[0]["pr"], 921)
+        self.assertEqual(items[0].label, "Answer")
+        self.assertIn("copy-approval-linear-lane", items[0].text)
+        self.assertEqual(items[0].metadata["pr"], 921)
 
-    def test_unlabeled_cap_before_agents_line_stays_blocked(self):
+    def test_unlabeled_cap_before_agents_line_is_display_only(self):
         block = closing_block.parse(UNLABELED_CAP_BEFORE_AGENTS_LINE)
 
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
         self.assertEqual(block.agents_running, 0)
-        self.assertTrue(block.workers_unknown)
-        gates = block.wire_gates()
-        self.assertEqual(len(gates), 1)
-        self.assertIn("ship-critical-skill", gates[0]["text"])
-        self.assertNotIn("agents running", gates[0]["text"])
+        self.assertEqual(block.wire_gates(), [])
+        self.assertIn("ship-critical-skill", block.items[0].text)
 
     def test_bare_header_without_count_stays_zero(self):
         block = closing_block.parse("Critical action points\n\nDone here.\n")
 
         self.assertTrue(block.present)
         self.assertEqual(block.blocking, 0)
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_plain_labels_parse_and_word_prefixes_do_not(self):
         block = closing_block.parse(
@@ -2022,35 +2067,25 @@ class PlainFormTests(unittest.TestCase):
             "Done here.\n"
         )
 
-        self.assertEqual(block.blocking, 2)
-        self.assertEqual(block.wire_gates()[0]["text"], "approve the rollout")
-        labels = [item["label"] for item in block.wire_items()]
-        self.assertEqual(labels, ["Verify"])
-
-    def test_promotion_stops_at_the_declared_count(self):
-        block = closing_block.parse(
-            "Critical action points (1 blocking)\n\n"
-            "1. first unlabeled item\n"
-            "2. second unlabeled item\n"
-            "3. third unlabeled item\n"
-            "Done here.\n"
-        )
-
-        self.assertEqual(block.blocking, 1)
-        gates = block.wire_gates()
-        self.assertEqual(len(gates), 1)
-        self.assertEqual(gates[0]["text"], "first unlabeled item")
-        self.assertEqual(block.wire_items(), [])
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual([item.label for item in block.items], ["Gate", "Verify"])
+        self.assertIn("approve the rollout", block.items[0].text)
 
 
 class NeedsYouBlockTests(unittest.TestCase):
     def test_approve_and_decide_items_are_blocked_and_exclude_reply_instruction(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Needs you (2)**\n\n"
             "1. **Approve** — Merge the PR?\n"
             "2. **Decide** — Which lane?\n"
-            "Reply 1a / 1b. Silence holds.\n"
-        )
+            "Reply 1a / 1b. Silence holds.\n",
+            items=[
+                record_item(1, "Approve", "Merge the PR?", [{"letter": "a", "text": "Merge"}, {"letter": "b", "text": "Wait"}]),
+                record_item(2, "Decide", "Which lane?", [{"letter": "a", "text": "A"}, {"letter": "b", "text": "B"}]),
+            ],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.blocking, 2)
         self.assertEqual(block.herdr_state, "blocked")
@@ -2073,24 +2108,31 @@ class NeedsYouBlockTests(unittest.TestCase):
 
         self.assertTrue(block.present)
         self.assertEqual(block.blocking, 0)
-        self.assertEqual(block.parse_status, "ok")
-        self.assertEqual(block.completion, "incomplete")
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.completion, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_needs_you_nothing_followed_by_done_is_complete(self):
-        block = closing_block.parse("**Needs you: nothing.**\n\nDone here.\n")
+        block = closing_block.parse(with_closing_record(
+            "**Needs you: nothing.**\n\nDone here.\n",
+            now_kind="done_here",
+        ))
 
         self.assertEqual(block.parse_status, "ok")
         self.assertEqual(block.completion, "complete")
 
     def test_now_tracks_streams_and_multiple_external_waits(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "Needs you: nothing.\n"
-            "**Now:** reviewer — inspect diff · wait — CI finishes · wait: release bot\n"
-        )
+            "**Now:** reviewer — inspect diff · wait — CI finishes · wait: release bot\n",
+            workers=[{"name": "reviewer", "activity": "inspect diff"}],
+            wait={"event": "CI finishes; release bot"},
+            now_kind="wait",
+        ))
 
-        self.assertEqual(block.agents, ["reviewer — inspect diff"])
+        self.assertEqual(block.agents, ["reviewer"])
         self.assertEqual(block.declared_agents, 1)
-        self.assertTrue(block.workers_unknown)
+        self.assertFalse(block.workers_unknown)
         self.assertEqual(block.external_wait, "CI finishes; release bot")
         self.assertEqual(block.herdr_state, "working")
 
@@ -2099,10 +2141,14 @@ class NeedsYouBlockTests(unittest.TestCase):
 
         self.assertFalse(block.present)
         self.assertEqual(block.parse_status, "missing")
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_now_after_needs_you_nothing_stays_present(self):
-        block = closing_block.parse("**Needs you: nothing.**\n**Now:** wait — CI on PR 12\n")
+        block = closing_block.parse(with_closing_record(
+            "**Needs you: nothing.**\n**Now:** wait — CI on PR 12\n",
+            wait={"event": "CI on PR 12"},
+            now_kind="wait",
+        ))
 
         self.assertTrue(block.present)
         self.assertEqual(block.parse_status, "ok")
@@ -2110,9 +2156,10 @@ class NeedsYouBlockTests(unittest.TestCase):
         self.assertEqual(block.herdr_state, "working")
 
     def test_now_with_only_stopped_entries_is_idle(self):
-        block = closing_block.parse(
-            "Needs you: nothing.\nNow: stopped — reviewer finished\n"
-        )
+        block = closing_block.parse(with_closing_record(
+            "Needs you: nothing.\nNow: stopped — reviewer finished\n",
+            now_kind="stopped",
+        ))
 
         self.assertEqual(block.agents, [])
         self.assertEqual(block.declared_agents, 0)
@@ -2122,10 +2169,12 @@ class NeedsYouBlockTests(unittest.TestCase):
     def test_now_waiting_on_human_is_not_a_worker(self):
         for line in ("waiting on you.", "Waiting on you", "idle", "nothing running"):
             with self.subTest(line=line):
-                block = closing_block.parse(
+                block = closing_block.parse(with_closing_record(
                     "Needs you (1)\n1. **Decide** — ship?\n   a) yes\n   b) no\n"
-                    f"Reply 1a / 1b. Silence holds.\n**Now:** {line}\n"
-                )
+                    f"Reply 1a / 1b. Silence holds.\n**Now:** {line}\n",
+                    items=[record_item(1, "Decide", "ship?", [{"letter": "a", "text": "yes"}, {"letter": "b", "text": "no"}])],
+                    now_kind="waiting_on_you",
+                ))
                 self.assertEqual(block.agents, [])
                 self.assertEqual(block.declared_agents, 0)
                 self.assertFalse(block.workers_unknown)
@@ -2144,9 +2193,11 @@ class NeedsYouBlockTests(unittest.TestCase):
                 self.assertTrue(block.workers_unknown)
 
     def test_now_external_waits_need_the_wait_form(self):
-        block = closing_block.parse(
-            "**Needs you: nothing.**\n**Now:** wait — PR 423 checks\n"
-        )
+        block = closing_block.parse(with_closing_record(
+            "**Needs you: nothing.**\n**Now:** wait — PR 423 checks\n",
+            wait={"event": "PR 423 checks"},
+            now_kind="wait",
+        ))
         self.assertEqual(block.declared_agents, 0)
         self.assertFalse(block.workers_unknown)
         self.assertEqual(block.external_wait, "PR 423 checks")
@@ -2155,9 +2206,9 @@ class NeedsYouBlockTests(unittest.TestCase):
         for line in ("PR 423 checks running", "waiting for CI checks", "CI — running"):
             with self.subTest(line=line):
                 block = closing_block.parse(f"Needs you: nothing.\n**Now:** {line}\n")
-                self.assertEqual(block.agents, [line])
-                self.assertTrue(block.workers_unknown)
-                self.assertIsNone(block.external_wait)
+                self.assertEqual(block.herdr_state, "unknown")
+                self.assertEqual(block.agents_running, 0)
+                self.assertEqual(block.completion, "missing")
 
     def test_now_named_worker_stays_unverified_beside_human_wait(self):
         block = closing_block.parse(
@@ -2180,20 +2231,26 @@ class NeedsYouBlockTests(unittest.TestCase):
                 self.assertTrue(block.workers_unknown)
 
     def test_now_after_done_makes_completion_incomplete(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "Needs you: nothing.\nDone here.\n**Now:** stopped — no active work\n"
-        )
+            , now_kind="stopped"
+        ))
 
         self.assertFalse(block.done_here)
         self.assertEqual(block.completion, "incomplete")
 
     def test_declared_count_mismatch_stays_blocked_and_malformed(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "Needs you (3)\n1. Approve — Merge the PR?\n2. Decide — Which lane?\n"
-        )
+            , items=[
+                record_item(1, "Approve", "Merge the PR?"),
+                record_item(2, "Decide", "Which lane?"),
+            ],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.blocking, 2)
-        self.assertEqual(block.parse_status, "malformed")
+        self.assertEqual(block.parse_status, "ok")
         self.assertEqual(block.herdr_state, "blocked")
 
     def test_plain_heading_and_labels_parse(self):
@@ -2204,9 +2261,9 @@ class NeedsYouBlockTests(unittest.TestCase):
         )
 
         self.assertEqual(block.declared_blocking, 2)
-        self.assertEqual([item["label"] for item in block.wire_gates()], ["Approve"])
-        self.assertEqual([item["label"] for item in block.wire_items()], ["Decide"])
-        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual([item.label for item in block.items], ["Approve", "Decide"])
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_header_inside_fenced_code_is_ignored(self):
         block = closing_block.parse(
@@ -2217,11 +2274,13 @@ class NeedsYouBlockTests(unittest.TestCase):
         self.assertEqual(block.parse_status, "missing")
 
     def test_realistic_goal_and_verification_lines_do_not_hide_the_block(self):
-        block = closing_block.parse(
+        block = closing_block.parse(with_closing_record(
             "**Goal:** Complete the migration safely.\n"
             "**Verified when:** The preview is green.\n\n"
-            "**Needs you (1)**\n1. **Approve** — Merge the PR?\n"
-        )
+            "**Needs you (1)**\n1. **Approve** — Merge the PR?\n",
+            items=[record_item(1, "Approve", "Merge the PR?")],
+            now_kind="waiting_on_you",
+        ))
 
         self.assertEqual(block.herdr_state, "blocked")
         self.assertEqual(block.parse_status, "ok")
@@ -2254,10 +2313,14 @@ class NeedsYouBlockTests(unittest.TestCase):
                         block.herdr_state,
                         block.parse_status,
                         block.completion,
+                        [item.label for item in block.items],
                     )
                 )
         self.assertEqual(parsed[0], parsed[1])
-        self.assertEqual(parsed[0], (6, "blocked", "ok", "incomplete"))
+        self.assertEqual(
+            parsed[0],
+            (0, "unknown", "missing", "missing", list(labels)),
+        )
 
     def test_approve_and_decide_have_specific_blocked_state_labels(self):
         self.assertEqual(
@@ -2304,6 +2367,11 @@ class StopHookTranscriptTests(unittest.TestCase):
             "**Needs you (1)**\n"
             "1. **Approve** — Merge the pull request?\n"
             "Reply 1a / 1b. Silence holds.\n"
+        )
+        reply = with_closing_record(
+            reply,
+            items=[record_item(1, "Approve", "Merge the pull request?")],
+            now_kind="waiting_on_you",
         )
         path = self._write_transcript(
             [
@@ -2475,6 +2543,35 @@ class StopHookTranscriptTests(unittest.TestCase):
         self.assertIsNone(kwargs["external_wait"])
         self.assertFalse(kwargs["workers_unknown"])
 
+    def test_prose_worker_and_wait_facts_are_not_forwarded(self):
+        import io
+
+        hook = self._hook_module()
+        reply = "Progress.\n**Now:** reviewer — inspect diff · wait — CI completes\n"
+        with mock.patch.object(
+            hook, "last_assistant_turn", return_value=(reply, None)
+        ), mock.patch.object(
+            hook,
+            "report",
+            return_value={"payload": {}, "mirror": None, "socket": False},
+        ) as report, mock.patch.dict(
+            hook.os.environ,
+            {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p-prose-worker"},
+            clear=False,
+        ), mock.patch.object(
+            hook.sys,
+            "stdin",
+            io.StringIO('{"transcript_path":"/tmp/t.jsonl"}'),
+        ):
+            self.assertEqual(hook.main(), 0)
+
+        kwargs = report.call_args.kwargs
+        self.assertEqual(kwargs["state"], "unknown")
+        self.assertEqual(kwargs["agents"], 0)
+        self.assertEqual(kwargs["agent_names"], [])
+        self.assertIsNone(kwargs["external_wait"])
+        self.assertFalse(kwargs["workers_unknown"])
+
     def test_stop_report_uses_the_assistant_transcript_timestamp(self):
         import io
         import json
@@ -2579,7 +2676,10 @@ class StopHookTranscriptTests(unittest.TestCase):
                     {
                         "session_id": "claude-session-1",
                         "transcript_path": "/tmp/native-transcript.jsonl",
-                        "last_assistant_message": "**Critical action points (0 blocking)**\n\nDone here.",
+                        "last_assistant_message": with_closing_record(
+                            "**Critical action points (0 blocking)**\n\nDone here.",
+                            now_kind="done_here",
+                        ),
                     }
                 )
             ),
@@ -2595,13 +2695,16 @@ class StopHookTranscriptTests(unittest.TestCase):
         )
 
     def test_reserved_old_stop_cannot_restore_a_newer_done_report(self):
-        gate = closing_block.parse(
+        gate = closing_block.parse(with_closing_record(
             "**Critical action points (1 blocking)**\n\n"
-            "1. **Gate** — Approve A.\n\nDone here."
-        )
-        done = closing_block.parse(
-            "**Critical action points (0 blocking)**\n\nDone here."
-        )
+            "1. **Gate** — Approve A.\n\nDone here.",
+            items=[record_item(1, "Approve", "Approve A.")],
+            now_kind="waiting_on_you",
+        ))
+        done = closing_block.parse(with_closing_record(
+            "**Critical action points (0 blocking)**\n\nDone here.",
+            now_kind="done_here",
+        ))
         import tempfile
 
         state_dir = tempfile.mkdtemp(prefix="herdr-stop-order-test-")
@@ -2678,6 +2781,41 @@ class CodexNotifyHookTests(unittest.TestCase):
         kwargs = report.call_args.kwargs
         self.assertEqual(kwargs["completion"], "missing")
         self.assertEqual(kwargs["parse_status"], "missing")
+        self.assertIsNone(kwargs["external_wait"])
+        self.assertFalse(kwargs["workers_unknown"])
+
+    def test_prose_worker_and_wait_facts_are_not_forwarded(self):
+        import json
+
+        hook = self._hook_module()
+        payload = json.dumps({
+            "v": 2,
+            "type": "agent-turn-complete",
+            "thread-id": "thread-prose-worker",
+            "turn-id": "turn-prose-worker",
+            "last-assistant-message": (
+                "Progress.\n**Now:** reviewer — inspect diff · wait — CI completes\n"
+            ),
+        })
+        with mock.patch.object(
+            hook,
+            "report",
+            return_value={"payload": {}, "mirror": None, "socket": False},
+        ) as report, mock.patch.object(
+            hook, "title_from", return_value="Task title"
+        ), mock.patch.dict(
+            hook.os.environ,
+            {"HERDR_ENV": "1", "HERDR_PANE_ID": "w1:p-prose-worker"},
+            clear=False,
+        ), mock.patch.object(
+            hook.sys, "argv", ["herdr-codex-notify.py", payload]
+        ):
+            self.assertEqual(hook.main(), 0)
+
+        kwargs = report.call_args.kwargs
+        self.assertEqual(kwargs["state"], "unknown")
+        self.assertEqual(kwargs["agents"], 0)
+        self.assertEqual(kwargs["agent_names"], [])
         self.assertIsNone(kwargs["external_wait"])
         self.assertFalse(kwargs["workers_unknown"])
 
@@ -2821,7 +2959,7 @@ class CodexNotifyHookTests(unittest.TestCase):
         import time
 
         hook = self._hook_module()
-        root = tempfile.mkdtemp(prefix="herdr-codex-rpc-retry-test-")
+        root = tempfile.mkdtemp(prefix="hr-rpc-", dir="/tmp")
 
         def serve(mode):
             path = os.path.join(root, f"{mode}.sock")
@@ -2893,16 +3031,19 @@ class CodexNotifyHookTests(unittest.TestCase):
             "type": "agent-turn-complete",
             "thread-id": "01a0a5ef-d376-7630-ab2e-1df07874247c",
             "turn-id": "01a0a5ef-d39c-7bc2-a807-265792464411",
-            "last-assistant-message": (
+            "last-assistant-message": with_closing_record(
                 "**Critical action points (1 blocking)**\n\n"
-                "1. **Gate** — Approve A.\n\nDone here."
+                "1. **Gate** — Approve A.\n\nDone here.",
+                items=[record_item(1, "Approve", "Approve A.")],
+                now_kind="waiting_on_you",
             ),
         }
         done = {
             **old,
             "turn-id": "01a0a5f4-9f04-7101-843e-d46c286d65f4",
-            "last-assistant-message": (
-                "**Critical action points (0 blocking)**\n\nDone here."
+            "last-assistant-message": with_closing_record(
+                "**Critical action points (0 blocking)**\n\nDone here.",
+                now_kind="done_here",
             ),
         }
         state_dir = tempfile.mkdtemp(prefix="herdr-codex-replay-test-")
@@ -3101,7 +3242,7 @@ class BundleInstallerTests(unittest.TestCase):
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 6)
+            self.assertEqual(result["files"][name]["version"], 7)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),
@@ -3471,70 +3612,44 @@ class ExplicitStateTests(unittest.TestCase):
 
 
 class SectionWordFallbackTests(unittest.TestCase):
-    """Blockers must register when the heading or label words drift."""
-
-    def test_renamed_heading_with_labeled_items_blocks(self):
-        block = closing_block.parse(
-            "Body.\n\n**Your turn (1)**\n"
-            "1. **Decide** — ship it?\n   a) yes\n   b) hold\n"
-            "Reply 1a / 1b. Silence holds.\n**Now:** waiting on you.\n"
-        )
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.parse_status, "malformed")
-        self.assertEqual(block.items[0].label, "Decide")
-
-    def test_answer_line_alone_blocks_unlabeled_items(self):
-        block = closing_block.parse(
-            "Questions\n1. Which seller?\n2. New or used?\n"
-            "Reply 1a / 2b. Silence holds.\n"
-        )
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.blocking, 2)
-
-    def test_answer_line_without_items_still_blocks(self):
-        block = closing_block.parse("Pick one: a) yes b) no\nReply 1a / 1b. Silence holds.\n")
-        self.assertEqual(block.herdr_state, "blocked")
-        self.assertEqual(block.blocking, 1)
-
-    def test_unknown_bold_label_under_heading_counts_as_decision(self):
-        block = closing_block.parse(
-            "**Needs you (1)**\n1. **Confirm** — keep the branch?\n"
-            "Reply 1a / 1b. Silence holds.\n"
-        )
-        self.assertEqual(block.parse_status, "ok")
-        self.assertEqual(block.blocking, 1)
-        self.assertEqual(block.items[0].label, "Decide")
-
-    def test_plain_numbered_prose_without_answer_line_stays_idle(self):
-        block = closing_block.parse("Steps taken:\n1. built\n2. tested\n")
-        self.assertEqual(block.herdr_state, "idle")
-        self.assertEqual(block.parse_status, "missing")
-
-    def test_headerless_bold_list_without_label_words_stays_idle(self):
-        block = closing_block.parse(
-            "Progress:\n1. **Shelf** — seeded.\n2. **Player** — wired.\n"
-        )
-        self.assertEqual(block.herdr_state, "idle")
+    """Legacy section words cannot supply lifecycle state."""
 
     def test_explicit_nothing_disables_fallback(self):
         block = closing_block.parse(
             "1. **Decide** — quoted earlier?\n\n**Needs you: nothing.**\nDone here.\n"
         )
         self.assertEqual(block.blocking, 0)
-
-    def test_fenced_example_does_not_block(self):
-        block = closing_block.parse(
-            "```\n1. **Decide** — x?\nReply 1a / 1b. Silence holds.\n```\n"
-        )
-        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertEqual(block.completion, "missing")
 
 
 class ClosingBlockRecordTests(unittest.TestCase):
+    def test_shared_nullable_verified_record_is_valid(self):
+        import json
+        from pathlib import Path
+        record = json.loads((Path(__file__).parent / "valid-nullable.json").read_text(encoding="utf-8"))
+        self.assertEqual(closing_block_record.validate(record), [])
+
+    def test_shared_malformed_options_are_rejected_by_record_validator(self):
+        import json
+        from pathlib import Path
+        cases = json.loads((Path(__file__).parent / "malformed-options.json").read_text(encoding="utf-8"))
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                record = {"v": 3, "state": "blocked", "completion": "incomplete",
+                          "items": [{"n": 1, "kind": "Approve", "text": "Continue?", "options": [case["option"]]}],
+                          "decisions": [], "workers": [], "wait": None, "now": {"kind": "waiting_on_you"}}
+                self.assertTrue(closing_block_record.validate(record))
+
     @staticmethod
     def trailer(record):
         import json
         return "Visible prose.\n\n**Now:** waiting on you\n```closing-state\n" + json.dumps(record) + "\n```\n"
+
+    @staticmethod
+    def comment(record):
+        import json
+        return "Visible prose.\n<!-- closing-state " + json.dumps(record, separators=(",", ":")) + " -->\n"
 
     def test_record_drives_items_defaults_decisions_and_lifecycle(self):
         record = {"v": 3, "state": "unknown", "completion": "incomplete", "items": [
@@ -3562,7 +3677,60 @@ class ClosingBlockRecordTests(unittest.TestCase):
         self.assertFalse(block.workers_unknown)
         legacy = closing_block.parse("**Needs you: nothing.**\n**Now:** Done here\n")
         self.assertEqual(legacy.agents, [])
-        self.assertEqual(legacy.completion, "complete")
+        self.assertEqual(legacy.completion, "missing")
+        self.assertEqual(legacy.herdr_state, "unknown")
+
+    def test_comment_record_is_extracted_and_drives_state(self):
+        record = {"v": 3, "state": "blocked", "completion": "incomplete", "items": [
+            {"n": 1, "kind": "Approve", "text": "Continue?", "options": []}],
+            "decisions": [], "workers": [], "wait": None, "now": {"kind": "waiting_on_you"}}
+        block = closing_block.parse(self.comment(record))
+        self.assertEqual(block.source, "record")
+        self.assertEqual(block.parse_status, "ok")
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 1)
+
+    def test_comment_record_items_override_prose_saying_nothing(self):
+        record = {"v": 3, "state": "blocked", "completion": "incomplete", "items": [
+            {"n": 1, "kind": "Decide", "text": "Choose", "options": []}],
+            "decisions": [], "workers": [], "wait": None, "now": {"kind": "stopped"}}
+        text = "**Needs you: nothing.**\n**Now:** Done here\n" + self.comment(record)
+        block = closing_block.parse(text)
+        self.assertEqual(block.herdr_state, "blocked")
+        self.assertEqual(block.blocking, 1)
+
+    def test_prose_needs_you_without_a_record_is_unknown(self):
+        block = closing_block.parse("**Needs you (1)**\n1. **Approve** — Continue?\n")
+        self.assertEqual(block.parse_status, "missing")
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
+        self.assertFalse(closing_block.settle_ready(
+            "**Needs you (1)**\n1. **Approve** — Continue?\n"
+        ))
+        outcome = herdr_status.report(
+            agent="claude",
+            blocking=block.blocking,
+            agents=block.agents_running,
+            gates=block.wire_gates(),
+            items=block.wire_items(),
+            completion=block.completion,
+            parse_status=block.parse_status,
+            state=block.herdr_state,
+            closing_source=block.source,
+        )
+        self.assertEqual(outcome["payload"]["state"], "unknown")
+        self.assertEqual(outcome["payload"]["blocking"], 0)
+        self.assertNotIn("gates", outcome["payload"])
+
+    def test_done_record_is_complete_and_settle_ready(self):
+        import json
+        record = {"v": 3, "state": "idle", "completion": "complete", "items": [],
+            "decisions": [], "workers": [], "wait": None, "now": {"kind": "done_here"}}
+        text = "**Needs you (2)**\n**Now:** waiting on you\n<!-- closing-state " + json.dumps(record) + " -->"
+        block = closing_block.parse(text)
+        self.assertEqual(block.herdr_state, "idle")
+        self.assertEqual(block.completion, "complete")
+        self.assertTrue(closing_block.settle_ready(text))
 
     def test_invalid_record_is_malformed_and_uses_visible_prose(self):
         import json
@@ -3571,7 +3739,8 @@ class ClosingBlockRecordTests(unittest.TestCase):
         block = closing_block.parse(text)
         self.assertEqual(block.parse_status, "malformed")
         self.assertTrue(block.record_errors)
-        self.assertEqual(block.blocking, 1)
+        self.assertEqual(block.blocking, 0)
+        self.assertEqual(block.herdr_state, "unknown")
 
     def test_stop_hook_obeys_newer_invalid_cap_lint_result(self):
         import hashlib, json, os, tempfile

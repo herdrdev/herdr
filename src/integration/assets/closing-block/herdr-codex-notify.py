@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 """Codex `notify` handler -> herdr turn-end status.
 
 Codex invokes the notify program with a single JSON argument. For a finished
@@ -28,7 +28,7 @@ import tempfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from closing_block import parse, settle_ready  # noqa: E402
+from closing_block import parse  # noqa: E402
 from herdr_status import accepts_payload, mirror_path, report, reserve_sequence  # noqa: E402
 
 # Codex has used both spellings across versions.
@@ -169,6 +169,7 @@ def main() -> int:
     # Missing task evidence is reported explicitly so an abbreviated reply does
     # not clear unresolved decisions from an earlier authoritative report.
     block = parse(text)
+    has_record = block.source == "record" and not block.record_errors
     outcome = report_unreported_turn(
         pane_id,
         session_id,
@@ -176,17 +177,17 @@ def main() -> int:
         lambda: report(
             agent="codex",
             blocking=block.blocking,
-            agents=block.agents_running,
+            agents=block.agents_running if has_record else 0,
             gates=block.wire_gates(),
             items=block.wire_items(),
             decisions=block.wire_decisions(),
-            agent_names=block.agents,
+            agent_names=block.agents if has_record else [],
             completion=block.completion,
-            external_wait=block.external_wait,
+            external_wait=block.external_wait if has_record else None,
             parse_status=block.parse_status,
-            workers_unknown=block.workers_unknown,
+            workers_unknown=block.workers_unknown if has_record else False,
             state=block.herdr_state,
-            settle_ready=(block.completion == "complete" if block.source == "record" else settle_ready(text)),
+            settle_ready=block.completion == "complete",
             closing_source=block.source,
             parse_message=(block.message() if block.record_errors else None),
             session_id=session_id or None,

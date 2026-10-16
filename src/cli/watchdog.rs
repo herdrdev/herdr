@@ -107,15 +107,7 @@ fn replay_observations(inputs: &[ReplayObservation]) -> Vec<ReplayDecision> {
         .map(|input| {
             let mem = memory.entry(input.pane_id.clone()).or_default();
             let hash = watchdog::evidence::semantic_hash(&input.tail);
-            let expected = watchdog::evidence::expected_to_continue(&input.tail)
-                && matches!(input.status, AgentStatus::Idle | AgentStatus::Done);
-            let track_quiet = expected
-                || (watchdog::evidence::promised_work(&input.tail).is_some()
-                    && matches!(input.status, AgentStatus::Working | AgentStatus::Unknown)
-                    && !watchdog::evidence::closing_block_open(&input.tail)
-                    && watchdog::evidence::background_shell_count(&input.tail) == 0
-                    && watchdog::evidence::background_agent_count(&input.tail) == 0
-                    && watchdog::evidence::background_task_count(&input.tail) == 0);
+            let track_quiet = watchdog::evidence::expected_to_continue(&input.tail);
             let rebound = (mem.terminal_id.is_some()
                 && mem.terminal_id.as_deref() != Some(input.pane_id.as_str()))
                 || (mem.agent_session.is_some()
@@ -415,15 +407,8 @@ fn run_scan(options: &WatchdogOptions) -> io::Result<i32> {
     let mut promised = Vec::with_capacity(observations.len());
     for o in &observations {
         let mem = memory.entry(o.pane_id.clone()).or_default();
-        let expected = watchdog::evidence::expected_to_continue(&o.tail)
-            && matches!(o.status, AgentStatus::Idle | AgentStatus::Done);
-        let track_quiet = expected
-            || (watchdog::evidence::promised_work(&o.tail).is_some()
-                && matches!(o.status, AgentStatus::Working | AgentStatus::Unknown)
-                && !watchdog::evidence::closing_block_open(&o.tail)
-                && watchdog::evidence::background_shell_count(&o.tail) == 0
-                && watchdog::evidence::background_agent_count(&o.tail) == 0
-                && watchdog::evidence::background_task_count(&o.tail) == 0);
+        let expected = watchdog::evidence::expected_to_continue(&o.tail);
+        let track_quiet = expected;
         let hash = watchdog::evidence::semantic_hash(&o.tail);
         let rebound = (mem.terminal_id.is_some()
             && mem.terminal_id.as_ref() != o.terminal_id.as_ref())
@@ -722,7 +707,7 @@ fn claude_transcript_waiting_from_root(session: &str, root: &Path) -> Option<boo
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .collect::<Vec<_>>();
     let assistant_text = assistant_text_after_last_user(&rows)?;
-    (!assistant_text.is_empty()).then(|| watchdog::evidence::closing_block_open(&assistant_text))
+    (!assistant_text.is_empty()).then(|| watchdog::evidence::closing_block_waiting(&assistant_text))
 }
 
 fn assistant_text_after_last_user(rows: &[Value]) -> Option<String> {
@@ -840,7 +825,7 @@ mod transcript_tests {
     fn transcript_fallback_tracks_latest_block_and_real_user_turn() {
         let root = unique_root();
         let session = "transcript-session";
-        let waiting_block = "**Needs you (1)**\n1. Approve deploy\n**Now:** Codex — waiting";
+        let waiting_block = "**Needs you: nothing.**\n<!-- closing-state {\"v\":3,\"state\":\"blocked\",\"completion\":\"incomplete\",\"items\":[{\"n\":1,\"kind\":\"Approve\",\"text\":\"Deploy\",\"options\":[]}],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"waiting_on_you\"}} -->";
         write_transcript(
             &root,
             session,
@@ -860,7 +845,7 @@ mod transcript_tests {
             &[
                 serde_json::json!({"message":{"role":"user","content":"request"}}),
                 serde_json::json!({"message":{"role":"assistant","content":[{"type":"text","text":waiting_block}]}}),
-                serde_json::json!({"message":{"role":"assistant","content":[{"type":"text","text":"**Needs you: nothing.**\n**Now:** Codex — done"}]}}),
+                serde_json::json!({"message":{"role":"assistant","content":[{"type":"text","text":"**Needs you (1)**\n**Now:** waiting on you\n<!-- closing-state {\"v\":3,\"state\":\"idle\",\"completion\":\"complete\",\"items\":[],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"done_here\"}} -->"}]}}),
             ],
         );
         assert_eq!(

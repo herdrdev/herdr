@@ -1,5 +1,5 @@
 """Extraction and stdlib validation for the closing-block v3 record."""
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 from __future__ import annotations
 
 import json
@@ -7,7 +7,10 @@ import re
 from datetime import datetime
 from typing import Any
 
-_TRAILER = re.compile(r"(?:\r?\n)?```closing-state[ \t]*\r?\n(?P<body>[^\r\n]*)\r?\n```[ \t]*\r?\n?\Z")
+_TRAILER = re.compile(
+    r"(?:^|\n)(?:<!-- closing-state (?P<comment>[^\n]*?) -->|"
+    r"```closing-state\n(?P<fenced>[^\r\n]+)\n```)[ \t\r\n]*\Z"
+)
 
 
 def extract(text: str) -> tuple[dict[str, Any] | None, str]:
@@ -16,10 +19,10 @@ def extract(text: str) -> tuple[dict[str, Any] | None, str]:
         marker = re.search(r"(?:\r?\n)?```closing-state[ \t]*\r?\n", text)
         return (None, text[:marker.start()]) if marker else (None, text)
     try:
-        value = json.loads(match.group("body"))
+        value = json.loads(match.group("comment") or match.group("fenced"))
     except (ValueError, TypeError):
         return None, text[:match.start()]
-    return (value if isinstance(value, dict) else None), text[:match.start()]
+    return (value if isinstance(value, dict) else None), text[:match.start()].rstrip()
 
 
 def validate(record: Any) -> list[str]:

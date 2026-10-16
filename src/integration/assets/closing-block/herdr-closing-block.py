@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 """Claude Code `Stop` hook -> herdr turn-end status.
 
 Installed *beside* herdr's managed `herdr-agent-state.sh`, which herdr overwrites
@@ -25,7 +25,7 @@ import time
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from closing_block import parse, settle_ready  # noqa: E402
+from closing_block import parse  # noqa: E402
 from herdr_status import report, reserve_sequence  # noqa: E402
 
 # Claude Code fires Stop hooks concurrently with flushing the final assistant
@@ -173,23 +173,24 @@ def main() -> int:
     # A short reply without task evidence still emits a sequenced report, but
     # marks that evidence missing so the runtime can preserve unresolved state.
     block = parse(text)
+    has_record = block.source == "record" and not block.record_errors
 
     outcome = report(
         agent="claude",
         blocking=block.blocking,
-        agents=block.agents_running,
+        agents=block.agents_running if has_record else 0,
         gates=block.wire_gates(),
         items=block.wire_items(),
         decisions=block.wire_decisions(),
-        agent_names=block.agents,
+        agent_names=block.agents if has_record else [],
         contract=block.contract,
         contract_met=block.contract_met,
         completion=block.completion,
-        external_wait=block.external_wait,
+        external_wait=block.external_wait if has_record else None,
         parse_status=block.parse_status,
-        workers_unknown=block.workers_unknown,
+        workers_unknown=block.workers_unknown if has_record else False,
         state=block.herdr_state,
-        settle_ready=(block.completion == "complete" if block.source == "record" else settle_ready(text)),
+        settle_ready=block.completion == "complete",
         closing_source=block.source,
         parse_message=(block.message() if block.record_errors else None),
         session_id=payload.get("session_id"),

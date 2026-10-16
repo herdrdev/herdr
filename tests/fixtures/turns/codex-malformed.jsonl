@@ -1,5 +1,5 @@
 {"timestamp":"2026-10-07T00:00:00Z","type":"event_msg","payload":{"type":"user_message","message":"work"}}
 {corrupt middle line}
-{"timestamp":"2026-10-07T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}}
-{"timestamp":"2026-10-07T00:00:02Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done."}}
+{"timestamp":"2026-10-07T00:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done.\n<!-- closing-state {\"v\":3,\"state\":\"idle\",\"completion\":\"complete\",\"items\":[],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"done_here\"}} -->"}]}}
+{"timestamp":"2026-10-07T00:00:02Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Done.\n<!-- closing-state {\"v\":3,\"state\":\"idle\",\"completion\":\"complete\",\"items\":[],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"done_here\"}} -->"}}
 {"timestamp":"2026-10-07T00:00:03Z","type":

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://scalable.so/schemas/closing-block/v3",
   "title": "Closing-block record v3",
-  "description": "One machine record per assistant turn. The Markdown closing block is rendered from it and never parsed into it. Carried as the final element of the message in a fenced block with info string `closing-state`, single-line JSON.",
+  "description": "One machine record per assistant turn. The Markdown closing block is rendered from it and never parsed into it. Carried as the final element of the message as a `closing-state` HTML comment containing single-line JSON; the older fenced `closing-state` form remains readable.",
   "type": "object",
   "additionalProperties": false,
   "required": ["v", "state", "completion", "items", "decisions", "workers", "wait", "now"],

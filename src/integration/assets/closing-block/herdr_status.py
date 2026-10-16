@@ -30,7 +30,7 @@ from typing import Any
 
 from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
 
-# HERDR_INTEGRATION_VERSION=6
+# HERDR_INTEGRATION_VERSION=7
 VERSION = 2
 
 
@@ -425,11 +425,13 @@ def report(
         payload["items"] = item_objects
         payload["decisions"] = decision_objects
         payload["agent_names"] = agent_names
-    elif parse_status == "malformed":
-        if gate_objects:
-            payload["gates"] = gate_objects
-        if action_points:
-            payload["items"] = action_points
+    else:
+        display_items = [
+            item for item in item_objects
+            if str(item.get("label") or "").casefold() not in _HUMAN_INPUT_LABELS
+        ]
+        if display_items:
+            payload["items"] = display_items
     if reported_agents is not None:
         payload["agents"] = reported_agents
     if last_turn_at is not None:
@@ -474,11 +476,13 @@ def report(
         agent_params["gates"] = gate_objects
         agent_params["items"] = item_objects
         agent_params["decisions"] = decision_objects
-    elif parse_status == "malformed":
-        if gate_objects:
-            agent_params["gates"] = gate_objects
-        if action_points:
-            agent_params["items"] = action_points
+    else:
+        display_items = [
+            item for item in item_objects
+            if str(item.get("label") or "").casefold() not in _HUMAN_INPUT_LABELS
+        ]
+        if display_items:
+            agent_params["items"] = display_items
     if reported_agents is not None:
         agent_params["agents"] = reported_agents
     if state == "working" and wait and isinstance(eta_s, int) and eta_s >= 0:

@@ -1704,7 +1704,12 @@ impl App {
             Some(crate::api::schema::ClosingParseStatus::Malformed)
         ) && (gates.as_ref().is_some_and(|gates| !gates.is_empty())
             || items.as_ref().is_some_and(|items| !items.is_empty()));
-        let has_arrays = has_complete_arrays || has_malformed_blockers;
+        let has_display_items = !dependencies_authoritative
+            && gates.as_ref().is_some_and(Vec::is_empty)
+            && items
+                .as_ref()
+                .is_some_and(|items| items.iter().all(|item| !item.requires_human_input()));
+        let has_arrays = has_complete_arrays || has_malformed_blockers || has_display_items;
         let report_wait = if dependencies_authoritative {
             params.wait.or_else(|| reported_external_wait.clone())
         } else {
@@ -8004,7 +8009,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_report_preserves_authoritative_dependencies() {
+    fn malformed_report_cannot_add_prose_items_to_authoritative_dependencies() {
         let (mut app, pane_id) = app_with_test_workspace();
         let (_, internal_pane_id) = app.parse_pane_id(&pane_id).unwrap();
         let terminal_id = app.state.workspaces[0]
@@ -8059,10 +8064,7 @@ mod tests {
 
         let terminal = &app.state.terminals[&terminal_id];
         assert_eq!(terminal.closing_gates, vec![gate]);
-        assert_eq!(
-            terminal.closing_items,
-            vec![answer, newly_recognized_answer]
-        );
+        assert_eq!(terminal.closing_items, vec![answer]);
         assert_eq!(terminal.closing_decisions, vec![decision]);
         assert_eq!(terminal.effective_active_subagents(), Some(2));
         assert_eq!(
@@ -8558,7 +8560,7 @@ mod tests {
         assert!(!projection.open_blockers);
         assert_eq!(projection.gate_count, 0);
         let info = app.pane_info(0, internal_pane_id).unwrap();
-        assert_eq!(info.agent_status, crate::api::schema::AgentStatus::Done);
+        assert_eq!(info.agent_status, crate::api::schema::AgentStatus::Unknown);
         assert_eq!(info.items[0].label, "What to test");
     }
 

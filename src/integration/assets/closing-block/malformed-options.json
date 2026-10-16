@@ -1,0 +1,7 @@
+[
+  {"name":"missing letter","option":{"text":"Continue"}},
+  {"name":"uppercase letter","option":{"letter":"A","text":"Continue"}},
+  {"name":"empty text","option":{"letter":"a","text":""}},
+  {"name":"non-boolean recommended","option":{"letter":"a","text":"Continue","recommended":"yes"}},
+  {"name":"extra key","option":{"letter":"a","text":"Continue","extra":true}}
+]

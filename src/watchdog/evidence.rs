@@ -55,38 +55,12 @@ static BACKGROUND_SHELLS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d+) shells?\b").expect("static regex"));
 static BACKGROUND_TASKS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d+) tasks?\b").expect("static regex"));
-static NUMBERED_DECISION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\d+[.)]\s+\*{0,2}(?:approve|decide)\b").expect("static regex")
-});
-static NEEDS_YOU: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\*{0,2}needs you\s*\((\d+)\)\*{0,2}\s*$").expect("static regex")
-});
-static NEEDS_YOU_NOTHING: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\*{0,2}needs you\s*:\s*nothing\.?\s*\*{0,2}\s*$").expect("static regex")
-});
-static CLOSING_MARKER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*\*{0,2}(?:needs you\b|now:)\*{0,2}").expect("static regex")
-});
-// Keep this list explicit: only clear human waits in the Now: work field should
-// override promised-work classification. CI/build waits remain work in progress.
-static NOW_HUMAN_WAIT: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(?:waiting on you\b|waiting on qa and github access\b|waiting for the pending (?:approve or hold )?decision\b|waiting at .{1,120}\bgate\b|waiting for (?:your|human|matthias's) (?:review|approval|sign[ -]?off|reply|decision)\b|awaiting (?:your |human )?(?:approval|review)\b)",
-    )
-    .expect("static regex")
-});
-static REPLY_SILENCE_HOLDS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\breply\b.*(?:\d+)?[a-z]\s*/\s*(?:\d+)?[a-z]\b.*\bsilence holds\b")
-        .expect("static regex")
-});
 static COMPOSER_PROMPT: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^\s*[❯›>]\s*(.*)$").expect("static regex"));
 static CLAUDE_EFFORT_HINT: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^\s*(?:low|medium|high|max|xhigh)\s*·\s*/effort\s*$").expect("static regex")
 });
 const SEMANTIC_SUFFIX_LINES: usize = 12;
-static USER_PROMPT: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^\s*❯\s+\S").expect("static regex"));
 static DONE_HERE: LazyLock<Regex> = LazyLock::new(|| {
     // Terminal Now: values may carry a human-readable suffix. Require
     // whitespace before dash separators so names like `done-here-check`
@@ -104,6 +78,14 @@ static NOW_TERMINAL: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NOW_LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^\s*\*{0,2}now:\*{0,2}\s*(.*)$").expect("static regex"));
+static CLOSING_RECORD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?s)(?:^|\n)(?:<!-- closing-state (?P<comment>[^\n]*?) -->|```closing-state\n(?P<fenced>[^\n]+)\n```)[ \t\r\n]*\z",
+    )
+    .expect("static regex")
+});
+static CLOSING_TICKET: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Z][A-Z0-9]+-[0-9]+$").expect("static regex"));
 
 fn divider(line: &str) -> bool {
     let s = line.trim();
@@ -159,7 +141,7 @@ pub(crate) fn promised_work(text: &str) -> Option<String> {
                 now = Some(value.to_owned());
             }
         }
-        if NEEDS_YOU_NOTHING.is_match(trimmed) || DONE_HERE.is_match(trimmed) {
+        if DONE_HERE.is_match(trimmed) {
             now = None;
         }
     }
@@ -180,31 +162,13 @@ fn is_done_now_status(value: &str) -> bool {
 }
 
 pub(crate) fn expected_to_continue(text: &str) -> bool {
-    if closing_block_open(text)
-        || background_shell_count(text) > 0
-        || background_agent_count(text) > 0
-        || background_task_count(text) > 0
-    {
-        return false;
-    }
-    let reply = reply_text(text);
-    reply
-        .lines()
-        .rev()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            let captures = NOW_LINE.captures(trimmed)?;
-            let work = captures[1].trim().trim_matches('*').trim();
-            Some(
-                !work.is_empty()
-                    && !DONE_HERE.is_match(work)
-                    && !is_done_now_status(work)
-                    && !work.to_ascii_lowercase().starts_with("waiting on you")
-                    && !work.to_ascii_lowercase().starts_with("stopped —")
-                    && !work.to_ascii_lowercase().starts_with("stopped -"),
-            )
-        })
-        .unwrap_or(false)
+    closing_record(text).is_some_and(|record| {
+        matches!(record["now"]["kind"].as_str(), Some("worker" | "wait"))
+            || record["workers"]
+                .as_array()
+                .is_some_and(|workers| !workers.is_empty())
+            || !record["wait"].is_null()
+    })
 }
 
 pub(crate) fn background_task_count(text: &str) -> usize {
@@ -252,67 +216,268 @@ pub(crate) fn background_agent_count(text: &str) -> usize {
 }
 
 pub(crate) fn closing_block_waiting(text: &str) -> bool {
-    let reply = reply_text(text);
-    if !composer_is_empty(text) {
+    closing_record_waiting(&closing_record(text))
+}
+
+fn closing_record_waiting(record: &Option<serde_json::Value>) -> bool {
+    let Some(record) = record else {
         return false;
-    }
-    closing_block_state(&reply)
+    };
+    record["items"]
+        .as_array()
+        .is_some_and(|items| !items.is_empty())
+        || record["now"]["kind"] == "waiting_on_you"
 }
 
-pub(crate) fn closing_block_open(text: &str) -> bool {
-    closing_block_state(text)
-}
-
-fn closing_block_state(text: &str) -> bool {
-    let mut latest = false;
-    let mut block: Option<Vec<&str>> = None;
-    for line in text.lines() {
-        if USER_PROMPT.is_match(line) {
-            if latest || block.is_some() {
-                latest = false;
-                block = None;
-            }
-            continue;
-        }
-        if NEEDS_YOU.is_match(line) || NEEDS_YOU_NOTHING.is_match(line) {
-            block = Some(vec![line]);
-            continue;
-        }
-        if NOW_HUMAN_WAIT.is_match(line) && block.is_none() {
-            latest = true;
-            continue;
-        }
-        if REPLY_SILENCE_HOLDS.is_match(line) && block.is_none() {
-            latest = true;
-            continue;
-        }
-        if let Some(lines) = block.as_mut() {
-            lines.push(line);
-            if CLOSING_MARKER.is_match(line) || DONE_HERE.is_match(line.trim()) {
-                latest = closing_block_lines_waiting(lines);
-                block = None;
-            }
-        }
-    }
-    if let Some(lines) = block {
-        latest = closing_block_lines_waiting(&lines);
-    }
-    latest
-}
-
-fn closing_block_lines_waiting(lines: &[&str]) -> bool {
-    if lines.iter().any(|line| NOW_HUMAN_WAIT.is_match(line))
-        || lines.iter().any(|line| REPLY_SILENCE_HOLDS.is_match(line))
+fn closing_record(text: &str) -> Option<serde_json::Value> {
+    let captures = CLOSING_RECORD.captures(text)?;
+    let raw = captures
+        .name("comment")
+        .or_else(|| captures.name("fenced"))?
+        .as_str();
+    let record: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let object = record.as_object()?;
+    let allowed = [
+        "v",
+        "state",
+        "completion",
+        "goal",
+        "verified_when",
+        "items",
+        "decisions",
+        "workers",
+        "wait",
+        "now",
+        "verified",
+    ];
+    let required = [
+        "v",
+        "state",
+        "completion",
+        "items",
+        "decisions",
+        "workers",
+        "wait",
+        "now",
+    ];
+    if object.keys().any(|key| !allowed.contains(&key.as_str()))
+        || required.iter().any(|key| !object.contains_key(*key))
+        || record["v"].as_u64() != Some(3)
+        || !matches!(
+            record["state"].as_str(),
+            Some("idle" | "working" | "blocked" | "unknown")
+        )
+        || !matches!(
+            record["completion"].as_str(),
+            Some("complete" | "incomplete")
+        )
     {
-        return true;
+        return None;
     }
-    lines.iter().enumerate().any(|(i, line)| {
-        NEEDS_YOU.captures(line).is_some_and(|c| {
-            c[1].parse::<u32>().is_ok_and(|n| n >= 1)
-                && lines[i + 1..]
+    let items = record["items"].as_array()?;
+    let decisions = record["decisions"].as_array()?;
+    let workers = record["workers"].as_array()?;
+    for value in ["goal", "verified_when"] {
+        if object
+            .get(value)
+            .is_some_and(|v| !v.is_null() && !v.is_string())
+        {
+            return None;
+        }
+    }
+    for item in items {
+        let item = item.as_object()?;
+        if !["n", "kind", "text", "options"]
+            .iter()
+            .all(|key| item.contains_key(*key))
+            || item.keys().any(|key| {
+                ![
+                    "n",
+                    "kind",
+                    "text",
+                    "plain",
+                    "exception",
+                    "shadow",
+                    "options",
+                    "refs",
+                    "default",
+                    "default_at",
+                ]
+                .contains(&key.as_str())
+            })
+            || item["n"].as_u64().is_none_or(|n| n == 0)
+            || !matches!(
+                item["kind"].as_str(),
+                Some("Approve" | "Decide" | "Verify" | "Answer")
+            )
+            || item["text"].as_str().is_none_or(str::is_empty)
+            || item["options"].as_array().is_none()
+            || !valid_options(item["options"].as_array()?)
+        {
+            return None;
+        }
+        if ["plain", "exception", "shadow"].iter().any(|key| {
+            item.get(*key)
+                .is_some_and(|v| !v.is_null() && !v.is_string())
+        }) || item
+            .get("default")
+            .is_some_and(|v| !v.is_null() && !valid_letter(v))
+            || item.get("default_at").is_some_and(|v| {
+                !v.is_null()
+                    && v.as_str().is_none_or(|s| {
+                        time::OffsetDateTime::parse(
+                            s,
+                            &time::format_description::well_known::Rfc3339,
+                        )
+                        .is_err()
+                    })
+            })
+        {
+            return None;
+        }
+        if let Some(refs) = item.get("refs") {
+            let refs = refs.as_object()?;
+            if refs
+                .keys()
+                .any(|key| !["pr", "ticket", "url"].contains(&key.as_str()))
+            {
+                return None;
+            }
+            if let Some(tickets) = refs.get("ticket") {
+                if !tickets
+                    .as_array()?
                     .iter()
-                    .any(|item| NUMBERED_DECISION.is_match(item))
-        })
+                    .all(|v| v.as_str().is_some_and(|s| CLOSING_TICKET.is_match(s)))
+                {
+                    return None;
+                }
+            }
+            if let Some(urls) = refs.get("url") {
+                if !urls.as_array()?.iter().all(serde_json::Value::is_string) {
+                    return None;
+                }
+            }
+            if let Some(prs) = refs.get("pr") {
+                for pr in prs.as_array()? {
+                    let pr = pr.as_object()?;
+                    if pr.get("repo")?.as_str().is_none()
+                        || pr.get("number")?.as_i64().is_none()
+                        || pr.get("url").is_some_and(|v| !v.is_string())
+                    {
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    for decision in decisions {
+        let decision = decision.as_object()?;
+        if decision.keys().any(|key| {
+            ![
+                "n",
+                "text",
+                "action",
+                "revert",
+                "recommendation",
+                "reversible",
+                "decided_at",
+            ]
+            .contains(&key.as_str())
+        }) || decision.get("n")?.as_u64().is_none_or(|n| n == 0)
+            || decision.get("text")?.as_str().is_none()
+            || ["action", "revert", "recommendation", "decided_at"]
+                .iter()
+                .any(|key| {
+                    decision
+                        .get(*key)
+                        .is_some_and(|v| !v.is_null() && !v.is_string())
+                })
+            || decision.get("reversible").is_some_and(|v| !v.is_boolean())
+        {
+            return None;
+        }
+    }
+    for worker in workers {
+        let worker = worker.as_object()?;
+        if worker
+            .keys()
+            .any(|key| !["name", "activity", "run_id", "agent"].contains(&key.as_str()))
+            || worker.get("name")?.as_str().is_none()
+            || worker.get("activity")?.as_str().is_none()
+            || ["run_id", "agent"].iter().any(|key| {
+                worker
+                    .get(*key)
+                    .is_some_and(|v| !v.is_null() && !v.is_string())
+            })
+        {
+            return None;
+        }
+    }
+    if let Some(wait) = record["wait"].as_object() {
+        if wait
+            .keys()
+            .any(|key| !["event", "wakeup_id", "eta_s"].contains(&key.as_str()))
+        {
+            return None;
+        }
+        wait.get("event")?.as_str()?;
+        if wait
+            .get("wakeup_id")
+            .is_some_and(|v| !v.is_null() && !v.is_string())
+            || wait
+                .get("eta_s")
+                .is_some_and(|v| !v.is_null() && v.as_i64().is_none())
+        {
+            return None;
+        }
+    } else if !record["wait"].is_null() {
+        return None;
+    }
+    if let Some(verified) = record.get("verified").filter(|value| !value.is_null()) {
+        let verified = verified.as_object()?;
+        if verified.len() != 1 || verified.get("text")?.as_str().is_none_or(str::is_empty) {
+            return None;
+        }
+    }
+    let now = record["now"].as_object()?;
+    if now
+        .keys()
+        .any(|key| !["kind", "text"].contains(&key.as_str()))
+        || !matches!(
+            now.get("kind")?.as_str(),
+            Some("worker" | "wait" | "stopped" | "waiting_on_you" | "done_here")
+        )
+        || now
+            .get("text")
+            .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return None;
+    }
+    Some(record)
+}
+
+fn valid_letter(value: &serde_json::Value) -> bool {
+    value
+        .as_str()
+        .is_some_and(|s| s.len() == 1 && s.as_bytes()[0].is_ascii_lowercase())
+}
+
+fn valid_options(options: &[serde_json::Value]) -> bool {
+    options.iter().all(|option| {
+        let Some(object) = option.as_object() else {
+            return false;
+        };
+        !object
+            .keys()
+            .any(|key| !["letter", "text", "recommended"].contains(&key.as_str()))
+            && object.get("letter").is_some_and(valid_letter)
+            && object
+                .get("text")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|s| !s.is_empty())
+            && object
+                .get("recommended")
+                .is_none_or(serde_json::Value::is_boolean)
     })
 }
 
@@ -805,23 +970,53 @@ mod tests {
 
     #[test]
     fn closing_block_detection_uses_structure_not_heading_copy() {
-        let waiting = |reply: &str| closing_block_waiting(&claude_screen(reply, "", "0 shells"));
-        assert!(waiting(
-            "Now: waiting on you — about 10 dashboard spot-checks"
+        let blocked = r#"<!-- closing-state {"v":3,"state":"blocked","completion":"incomplete","items":[{"n":1,"kind":"Approve","text":"Continue?","options":[]}],"decisions":[],"workers":[],"wait":null,"now":{"kind":"waiting_on_you"}} -->"#;
+        assert!(closing_block_waiting(blocked));
+        assert!(!closing_block_waiting(
+            "**Needs you (1)**\n1. Approve — Continue?"
         ));
-        assert!(waiting(
-            "**Now:** waiting on you — about 10 dashboard spot-checks"
+        let done = r#"<!-- closing-state {"v":3,"state":"idle","completion":"complete","items":[],"decisions":[],"workers":[],"wait":null,"now":{"kind":"done_here"}} -->"#;
+        assert!(!closing_block_waiting(done));
+    }
+
+    #[test]
+    fn closing_block_waiting_requires_a_valid_record() {
+        let record = r#"<!-- closing-state {"v":3,"state":"blocked","completion":"incomplete","items":[{"n":1,"kind":"Approve","text":"Continue?","options":[]}],"decisions":[],"workers":[],"wait":null,"now":{"kind":"waiting_on_you"}} -->"#;
+        assert!(closing_block_waiting(record));
+        assert!(!closing_block_waiting(
+            "**Needs you (1)**\n1. Approve Continue?"
         ));
-        assert!(waiting(
-            "**Needs you (2)**\n1. Approve release\n2. Decide on rollout"
-        ));
-        assert!(waiting(
-            "Now: waiting for the pending approve or hold decision."
-        ));
-        assert!(waiting("Now: Waiting on QA and GitHub access."));
-        assert!(waiting("**Review notes**\nReply 1a / 1b. Silence holds."));
-        assert!(!waiting("**Needs you: nothing.**"));
-        assert!(!closing_block_waiting("Now: waiting on you"));
+    }
+
+    #[test]
+    fn nullable_verified_record_with_worker_is_valid_and_continuable() {
+        let record: serde_json::Value = serde_json::from_str(include_str!(
+            "../integration/assets/closing-block/valid-nullable.json"
+        ))
+        .expect("fixture JSON");
+        let text = format!("<!-- closing-state {} -->", record);
+        assert!(expected_to_continue(&text));
+        assert!(!closing_block_waiting(&text));
+
+        let mut blocked = record;
+        blocked["state"] = serde_json::json!("blocked");
+        blocked["now"]["kind"] = serde_json::json!("waiting_on_you");
+        let text = format!("<!-- closing-state {} -->", blocked);
+        assert!(closing_block_waiting(&text));
+    }
+
+    #[test]
+    fn malformed_closing_options_are_never_waiting_or_continuable() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../integration/assets/closing-block/malformed-options.json"
+        ))
+        .expect("fixture JSON");
+        for case in cases.as_array().expect("fixture list") {
+            let record = serde_json::json!({"v":3,"state":"working","completion":"incomplete","items":[{"n":1,"kind":"Approve","text":"Continue?","options":[case["option"].clone()]}],"decisions":[],"workers":[{"name":"worker","activity":"working"}],"wait":null,"now":{"kind":"worker"}});
+            let text = format!("<!-- closing-state {} -->", record);
+            assert!(!closing_block_waiting(&text), "{}", case["name"]);
+            assert!(!expected_to_continue(&text), "{}", case["name"]);
+        }
     }
 
     #[test]
@@ -847,20 +1042,25 @@ mod tests {
             "Now: done-here-check worker — running",
         ] {
             assert!(promised_work(line).is_some(), "{line}");
-            assert!(expected_to_continue(line), "{line}");
+            assert!(!expected_to_continue(line), "{line}");
         }
+        assert!(expected_to_continue(
+            r#"<!-- closing-state {"v":3,"state":"working","completion":"incomplete","items":[],"decisions":[],"workers":[{"name":"Codex","activity":"finishing X"}],"wait":null,"now":{"kind":"worker"}} -->"#
+        ));
     }
 
     #[test]
-    fn closing_block_stays_open_while_later_activity_continues() {
+    fn prose_closing_block_never_sets_waiting() {
         let block = "**Needs you (1)**\n1. **Approve** — Merge X?\nReply 1a / 1b. Silence holds.\n**Now:** Codex — fixing Y";
-        assert!(closing_block_waiting(&claude_screen(block, "", "0 shells")));
+        assert!(!closing_block_waiting(&claude_screen(
+            block, "", "0 shells"
+        )));
 
         let activity = (0..40)
             .map(|i| format!("tool output / notification {i}"))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(closing_block_waiting(&claude_screen(
+        assert!(!closing_block_waiting(&claude_screen(
             &format!("{block}\n{activity}"),
             "",
             "0 shells"
@@ -879,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_reply_choices_keep_the_latest_human_gate_open() {
+    fn inline_reply_choices_are_not_authoritative_without_a_record() {
         for line in [
             "a) Approve. b) Hold. Reply 1a / 1b. Silence holds.",
             "Reply 1a / 1b / 1c. Silence holds.",
@@ -889,7 +1089,7 @@ mod tests {
                 "**Needs you (1)**\n1. **Approve** — review this change\n{line}\nNow: waiting at the /hcode review gate.\nMore status from later turns"
             );
             assert!(
-                closing_block_waiting(&claude_screen(&block, "", "0 shells")),
+                !closing_block_waiting(&claude_screen(&block, "", "0 shells")),
                 "{line}"
             );
         }
@@ -914,7 +1114,7 @@ mod tests {
     }
 
     #[test]
-    fn now_human_wait_phrases_are_narrowly_recognized() {
+    fn now_human_wait_phrases_are_not_authoritative() {
         for line in [
             "Now: waiting on you to approve",
             "Now: waiting at the /hcode review gate.",
@@ -926,19 +1126,19 @@ mod tests {
             "Now: awaiting approval",
             "Now: awaiting review",
         ] {
-            assert!(closing_block_open(line), "{line}");
+            assert!(!closing_block_waiting(line), "{line}");
         }
 
         for line in ["Now: waiting on CI", "Now: waiting for the build"] {
-            assert!(!closing_block_open(line), "{line}");
+            assert!(!closing_block_waiting(line), "{line}");
             assert!(promised_work(line).is_some(), "{line}");
         }
     }
 
     #[test]
-    fn canonical_numbered_approval_with_now_marker_is_waiting() {
-        assert!(closing_block_open(
-            "**Needs you (1)**\n1. **Approve** — X?\n**Now:** Codex — Y"
+    fn canonical_numbered_approval_with_record_is_waiting() {
+        assert!(closing_block_waiting(
+            "<!-- closing-state {\"v\":3,\"state\":\"blocked\",\"completion\":\"incomplete\",\"items\":[{\"n\":1,\"kind\":\"Approve\",\"text\":\"X?\",\"options\":[]}],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"waiting_on_you\"}} -->"
         ));
     }
 
@@ -1002,7 +1202,10 @@ mod tests {
             assert!(!expected_to_continue(reply), "{reply}");
             assert_eq!(promised_work(reply), None, "{reply}");
         }
-        assert!(expected_to_continue("**Now:** Codex — running tests"));
+        assert!(!expected_to_continue("**Now:** Codex — running tests"));
+        assert!(expected_to_continue(
+            r#"<!-- closing-state {"v":3,"state":"working","completion":"incomplete","items":[],"decisions":[],"workers":[],"wait":{"event":"tests"},"now":{"kind":"wait"}} -->"#
+        ));
     }
 
     #[test]

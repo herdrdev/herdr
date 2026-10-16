@@ -241,9 +241,9 @@ mod tests {
     fn virtual_quiet_window_cancels_stop_rejection_and_preserves_next_action_state() {
         let rows = vec![
             json!({"timestamp":"2026-10-07T00:00:00Z","type":"user","message":{"content":"work"}}),
-            json!({"timestamp":"2026-10-07T00:00:01Z","type":"assistant","message":{"stop_reason":"end_turn","content":"Done"}}),
+            json!({"timestamp":"2026-10-07T00:00:01Z","type":"assistant","message":{"stop_reason":"end_turn","content":"Done\n<!-- closing-state {\"v\":3,\"state\":\"idle\",\"completion\":\"complete\",\"items\":[],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"done_here\"}} -->"}}),
             json!({"timestamp":"2026-10-07T00:00:02Z","type":"user","isMeta":true,"message":{"content":"Stop hook feedback: continue"}}),
-            json!({"timestamp":"2026-10-07T00:00:03Z","type":"assistant","message":{"stop_reason":"end_turn","content":"**Needs you (1):**\n1. **Decide** Pick.\n   a) A\n   b) B\nReply 1a / 1b. Silence holds."}}),
+            json!({"timestamp":"2026-10-07T00:00:03Z","type":"assistant","message":{"stop_reason":"end_turn","content":"**Needs you: nothing.**\n<!-- closing-state {\"v\":3,\"state\":\"blocked\",\"completion\":\"incomplete\",\"items\":[{\"n\":1,\"kind\":\"Decide\",\"text\":\"Pick.\",\"options\":[{\"letter\":\"a\",\"text\":\"A\"},{\"letter\":\"b\",\"text\":\"B\"}]}],\"decisions\":[],\"workers\":[],\"wait\":null,\"now\":{\"kind\":\"waiting_on_you\"}} -->"}}),
             json!({"timestamp":"2026-10-07T00:00:10Z","type":"user","message":{"content":"1a"}}),
         ];
         let records = replay(&rows, "session");
