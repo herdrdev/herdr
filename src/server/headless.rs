@@ -4556,6 +4556,8 @@ impl HeadlessServer {
             } else if let Some(snapshot) = snapshot.clone() {
                 view.replace_snapshot(snapshot);
             }
+            // Client-owned views do not pass through AppState's refresh handler.
+            view.refreshing = false;
         }
     }
 
@@ -10011,6 +10013,42 @@ mod tests {
             work_item_detail_request(&client),
             Some((crate::app::state::DockHomeSection::Prs, Some(key), true))
         );
+    }
+
+    #[test]
+    fn refreshed_work_index_clears_client_owned_work_view_loading_state() {
+        let mut server = test_headless_server();
+        server.app.work_index_config.enabled = true;
+        server.app.work_index_snapshot = Some(crate::work_index::Snapshot {
+            items: Vec::new(),
+            conversations: Vec::new(),
+            missive_users: Vec::new(),
+            unavailable: None,
+            observed_at: std::time::SystemTime::UNIX_EPOCH,
+        });
+
+        let mut client = ClientConnection::new(
+            (120, 40),
+            crate::kitty_graphics::HostCellSize::default(),
+            crate::terminal_theme::TerminalTheme::default(),
+            None,
+            1,
+            RenderEncoding::SemanticFrame,
+            None,
+        );
+        let mut view = crate::app::state::WorkViewState::new(true, None);
+        view.refreshing = true;
+        client.work_view = Some(view);
+        server.clients.insert(1, client);
+
+        server.refresh_client_work_views();
+
+        let view = server.clients[&1]
+            .work_view
+            .as_ref()
+            .expect("full-screen work view remains open");
+        assert!(view.snapshot.is_some());
+        assert!(!view.refreshing);
     }
 
     #[test]
