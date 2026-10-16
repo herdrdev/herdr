@@ -1729,6 +1729,55 @@ class ClosingBlockV2Tests(unittest.TestCase):
             }
         self.assertEqual(merge_base_state, {"gates": ["pending gate"], "agents": 2})
 
+    def test_missing_record_can_report_idle_with_explicit_no_record_flag(self):
+        with self._isolated(), mock.patch.object(herdr_status, "_rpc") as rpc:
+            outcome = herdr_status.report(
+                agent="claude",
+                blocking=0,
+                agents=0,
+                parse_status="missing",
+                state="unknown",
+                no_record=True,
+                pane_id="w9:p-no-record-idle",
+                sock_path="/tmp/herdr-test.sock",
+            )
+
+        self.assertEqual(outcome["payload"]["state"], "idle")
+        self.assertTrue(outcome["payload"]["no_record"])
+        self.assertEqual(
+            rpc.call_args_list[2].args[3]["tokens"]["closing_no_record"], "1"
+        )
+
+    def test_missing_record_with_running_subagent_stays_working(self):
+        with self._isolated():
+            outcome = herdr_status.report(
+                agent="claude",
+                blocking=0,
+                agents=0,
+                parse_status="missing",
+                state="working",
+                pane_id="w9:p-no-record-agent",
+                sock_path="/tmp/herdr-test.sock",
+            )
+
+        self.assertEqual(outcome["payload"]["state"], "working")
+        self.assertNotIn("no_record", outcome["payload"])
+
+    def test_missing_record_with_background_task_stays_working(self):
+        with self._isolated():
+            outcome = herdr_status.report(
+                agent="claude",
+                blocking=0,
+                agents=0,
+                parse_status="missing",
+                state="working",
+                pane_id="w9:p-no-record-background",
+                sock_path="/tmp/herdr-test.sock",
+            )
+
+        self.assertEqual(outcome["payload"]["state"], "working")
+        self.assertNotIn("no_record", outcome["payload"])
+
     def test_malformed_payload_cannot_clear_old_server_dependencies(self):
         with self._isolated(), mock.patch.object(herdr_status, "_rpc") as rpc:
             outcome = herdr_status.report(
@@ -1767,6 +1816,21 @@ class ClosingBlockV2Tests(unittest.TestCase):
                 "agents": report_params.get("agents"),
             }
         self.assertEqual(merge_base_state, {"gates": ["pending gate"], "agents": 2})
+
+    def test_malformed_record_stays_unknown_even_with_no_record_hint(self):
+        with self._isolated():
+            outcome = herdr_status.report(
+                agent="claude",
+                blocking=0,
+                agents=0,
+                parse_status="malformed",
+                no_record=True,
+                pane_id="w9:p-malformed-no-record",
+                sock_path="/tmp/herdr-test.sock",
+            )
+
+        self.assertEqual(outcome["payload"]["state"], "unknown")
+        self.assertNotIn("no_record", outcome["payload"])
 
     def test_report_does_not_honor_legacy_nonblocking_item_flags(self):
         with self._isolated():
@@ -2357,6 +2421,69 @@ class StopHookTranscriptTests(unittest.TestCase):
         '{"type": "assistant", "message": {"content": '
         '[{"type": "text", "text": "Done here."}]}}'
     )
+
+    def test_missing_record_is_idle_only_with_clear_transcript_and_pane_activity(self):
+        hook = self._hook_module()
+        with mock.patch.object(hook, "pane_activity", return_value=(0, False)):
+            state = hook._no_record_activity(
+                {}, "w1:p1", "/tmp/herdr.sock", [], transcript_known=True
+            )
+        self.assertEqual(state, "idle")
+
+    def test_missing_record_with_unfinished_task_call_is_running(self):
+        import json
+
+        hook = self._hook_module()
+        rows = [json.loads(
+            '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+            '"id":"task-1","name":"Task"}]}}'
+        )]
+        with mock.patch.object(hook, "pane_activity", return_value=(0, False)):
+            state = hook._no_record_activity(
+                {}, "w1:p1", "/tmp/herdr.sock", rows, transcript_known=True
+            )
+        self.assertEqual(state, "running")
+
+    def test_missing_record_with_background_task_is_running(self):
+        hook = self._hook_module()
+        with mock.patch.object(hook, "pane_activity", return_value=(1, False)):
+            state = hook._no_record_activity(
+                {}, "w1:p1", "/tmp/herdr.sock", [], transcript_known=True
+            )
+        self.assertEqual(state, "running")
+
+    def test_transcript_background_bash_result_is_running(self):
+        import json
+
+        hook = self._hook_module()
+        rows = [
+            json.loads(
+                '{"type":"assistant","message":{"content":[{"type":"tool_use",'
+                '"id":"bash-1","name":"Bash","input":{"run_in_background":true}}]}}'
+            ),
+            json.loads(
+                '{"type":"user","message":{"content":[{"type":"tool_result",'
+                '"tool_use_id":"bash-1","content":"Command running in background '
+                'with task ID: bg-1"}]}}'
+            ),
+        ]
+        self.assertEqual(hook._pending_agent_calls(rows), "running")
+
+    def test_missing_record_with_unavailable_activity_evidence_is_unknown(self):
+        hook = self._hook_module()
+        with mock.patch.object(hook, "pane_activity", return_value=(None, None)):
+            state = hook._no_record_activity(
+                {}, "w1:p1", "/tmp/herdr.sock", [], transcript_known=True
+            )
+        self.assertEqual(state, "unknown")
+
+    def test_missing_record_with_unavailable_transcript_stays_unknown(self):
+        hook = self._hook_module()
+        with mock.patch.object(hook, "pane_activity", return_value=(0, False)):
+            state = hook._no_record_activity(
+                {}, "w1:p1", "/tmp/herdr.sock", [], transcript_known=False
+            )
+        self.assertEqual(state, "unknown")
 
     def test_needs_you_reply_reaches_report_rpc_as_one_approve_gate(self):
         import json
@@ -3242,7 +3369,7 @@ class BundleInstallerTests(unittest.TestCase):
                 (self.target / name).read_bytes(),
                 (self.source / name).read_bytes(),
             )
-            self.assertEqual(result["files"][name]["version"], 7)
+            self.assertEqual(result["files"][name]["version"], 8)
             self.assertRegex(result["files"][name]["sha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             (self.target / "codex-notify-chain.sh").read_text(encoding="utf-8"),

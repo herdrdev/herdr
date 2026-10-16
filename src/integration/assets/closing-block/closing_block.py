@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 try:
     from closing_block_record import extract as extract_record, validate as validate_record
 except ImportError:  # standalone tooling can display prose but cannot trust it for state

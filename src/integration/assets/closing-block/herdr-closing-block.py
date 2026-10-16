@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 """Claude Code `Stop` hook -> herdr turn-end status.
 
 Installed *beside* herdr's managed `herdr-agent-state.sh`, which herdr overwrites
@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from closing_block import parse  # noqa: E402
-from herdr_status import report, reserve_sequence  # noqa: E402
+from herdr_status import pane_activity, report, reserve_sequence  # noqa: E402
 
 # Claude Code fires Stop hooks concurrently with flushing the final assistant
 # message to the transcript: at hook invocation the transcript usually still
@@ -83,6 +83,89 @@ def _scan_turn(rows: list[dict]) -> tuple[str | None, bool, str | None]:
 def _scan(rows: list[dict]) -> tuple[str | None, bool]:
     text, fresh, _timestamp = _scan_turn(rows)
     return text, fresh
+
+
+def _pending_agent_calls(rows: list[dict]) -> str | None:
+    """Return transcript evidence of running, unknown, or no outstanding work."""
+    pending: dict[str, str] = {}
+    background_bash_ids: set[str] = set()
+    for row in rows:
+        message = row.get("message") if isinstance(row.get("message"), dict) else {}
+        contents = message.get("content")
+        if not isinstance(contents, list):
+            continue
+        for content in contents:
+            if not isinstance(content, dict):
+                continue
+            if content.get("type") == "tool_use":
+                call_id = content.get("id")
+                name = content.get("name")
+                if isinstance(call_id, str) and isinstance(name, str):
+                    pending[call_id] = name.casefold()
+                    tool_input = content.get("input")
+                    if (
+                        name.casefold() == "bash"
+                        and isinstance(tool_input, dict)
+                        and tool_input.get("run_in_background") is True
+                    ):
+                        background_bash_ids.add(call_id)
+            elif content.get("type") == "tool_result":
+                call_id = content.get("tool_use_id")
+                if isinstance(call_id, str):
+                    if call_id in background_bash_ids:
+                        result_content = content.get("content")
+                        if isinstance(result_content, str):
+                            result_text = result_content.casefold()
+                        elif isinstance(result_content, list):
+                            result_text = " ".join(
+                                part.get("text", "")
+                                for part in result_content
+                                if isinstance(part, dict)
+                                and isinstance(part.get("text"), str)
+                            ).casefold()
+                        else:
+                            result_text = ""
+                        if "background" in result_text or "task id" in result_text:
+                            return "running"
+                    pending.pop(call_id, None)
+    if any(name in {"task", "agent"} for name in pending.values()):
+        return "running"
+    return "unknown" if pending else None
+
+
+def _no_record_activity(
+    payload: dict,
+    pane_id: str,
+    sock_path: str,
+    rows: list[dict],
+    *,
+    transcript_known: bool,
+) -> str:
+    """Classify the evidence required before a missing record can mean idle."""
+    pending = _pending_agent_calls(rows)
+    if pending is not None:
+        return pending
+    if not transcript_known:
+        return "unknown"
+    background_tasks = payload.get("background_tasks")
+    waiting_on_agents = payload.get("waiting_on_agents")
+    missing_background_count = (
+        not isinstance(background_tasks, int) or isinstance(background_tasks, bool)
+    )
+    missing_agent_wait = not isinstance(waiting_on_agents, bool)
+    if missing_background_count or missing_agent_wait:
+        api_background_tasks, api_waiting = pane_activity(sock_path, pane_id)
+        if missing_background_count:
+            background_tasks = api_background_tasks
+        if missing_agent_wait:
+            waiting_on_agents = api_waiting
+    if background_tasks is not None and background_tasks > 0:
+        return "running"
+    if waiting_on_agents is True:
+        return "running"
+    if background_tasks == 0 and waiting_on_agents is False:
+        return "idle"
+    return "unknown"
 
 
 def last_assistant_text(transcript_path: str) -> str | None:
@@ -174,6 +257,16 @@ def main() -> int:
     # marks that evidence missing so the runtime can preserve unresolved state.
     block = parse(text)
     has_record = block.source == "record" and not block.record_errors
+    no_record_activity = "unknown"
+    if not has_record and block.parse_status == "missing":
+        transcript_path = payload.get("transcript_path") or ""
+        no_record_activity = _no_record_activity(
+            payload,
+            os.environ.get("HERDR_PANE_ID") or "",
+            os.environ.get("HERDR_SOCKET_PATH") or "",
+            _read_rows(transcript_path),
+            transcript_known=bool(transcript_path and os.path.isfile(transcript_path)),
+        )
 
     outcome = report(
         agent="claude",
@@ -189,7 +282,8 @@ def main() -> int:
         external_wait=block.external_wait if has_record else None,
         parse_status=block.parse_status,
         workers_unknown=block.workers_unknown if has_record else False,
-        state=block.herdr_state,
+        state=("working" if no_record_activity == "running" else block.herdr_state),
+        no_record=no_record_activity == "idle",
         settle_ready=block.completion == "complete",
         closing_source=block.source,
         parse_message=(block.message() if block.record_errors else None),

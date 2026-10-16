@@ -30,7 +30,7 @@ from typing import Any
 
 from closing_block import GATE_LABELS, HUMAN_INPUT_LABELS
 
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 VERSION = 2
 
 
@@ -290,6 +290,10 @@ def write_mirror(pane_id: str, payload: dict) -> str | None:
 
 
 def _rpc(sock_path: str, source: str, method: str, params: dict) -> bool:
+    return isinstance(_rpc_response(sock_path, source, method, params), dict)
+
+
+def _rpc_response(sock_path: str, source: str, method: str, params: dict) -> dict | None:
     req = {
         "id": f"{source}:{int(time.time() * 1000)}:{random.randrange(10**6):06d}",
         "method": method,
@@ -302,18 +306,41 @@ def _rpc(sock_path: str, source: str, method: str, params: dict) -> bool:
         client.sendall((json.dumps(req) + "\n").encode())
         raw = client.recv(4096)
         if not raw:
-            return False
+            return None
         response = json.loads(raw.splitlines()[0])
-        return (
+        if not (
             isinstance(response, dict)
             and response.get("id") == req["id"]
             and "result" in response
             and "error" not in response
-        )
+        ):
+            return None
+        return response
     except (OSError, ValueError, json.JSONDecodeError):
-        return False
+        return None
     finally:
         client.close()
+
+
+def pane_activity(sock_path: str, pane_id: str) -> tuple[int | None, bool | None]:
+    """Return background-task and agent-wait evidence, preserving unknowns."""
+    response = _rpc_response(
+        sock_path, "herdr:closing-block-activity", "pane.get", {"pane_id": pane_id}
+    )
+    result = response.get("result") if isinstance(response, dict) else None
+    pane = result.get("pane") if isinstance(result, dict) else None
+    if not isinstance(pane, dict):
+        return None, None
+    background_tasks = pane.get("background_tasks")
+    waiting_on_agents = pane.get("waiting_on_agents")
+    if waiting_on_agents is None and isinstance(background_tasks, int):
+        # PaneInfo omits false values for this field, so absence is its false
+        # default when the same response includes the newer activity count.
+        waiting_on_agents = False
+    return (
+        background_tasks if isinstance(background_tasks, int) and not isinstance(background_tasks, bool) else None,
+        waiting_on_agents if isinstance(waiting_on_agents, bool) else None,
+    )
 
 
 def accepts_payload(payload: object) -> bool:
@@ -357,6 +384,7 @@ def report(
     state: str | None = None,
     seq: int | None = None,
     last_turn_at: str | None = None,
+    no_record: bool = False,
 ) -> dict:
     """Push one v2 turn-end status. Never raises; returns what it did."""
     gate_objects = [
@@ -406,8 +434,15 @@ def report(
     state = resolve_state(
         blocking, agents, state, len(action_points), external_wait
     )
+    no_record = (
+        parse_status == "missing"
+        and no_record is True
+        and requested_state != "working"
+        and blocking == 0
+        and agents == 0
+    )
     if not dependencies_authoritative and requested_state != "working":
-        state = "unknown"
+        state = "idle" if no_record else "unknown"
     payload = {
         "v": VERSION,
         "agent": agent,
@@ -420,6 +455,8 @@ def report(
         "parse_status": parse_status,
         "workers_unknown": workers_unknown,
     }
+    if no_record:
+        payload["no_record"] = True
     if dependencies_authoritative:
         payload["gates"] = gate_objects
         payload["items"] = item_objects
@@ -496,6 +533,7 @@ def report(
     tokens = {
         "closing_completion": completion,
         "closing_parse": parse_status,
+        "closing_no_record": "1" if no_record else "0",
         "closing_source": closing_source,
         "session_title": (title or "")[:120],
     }

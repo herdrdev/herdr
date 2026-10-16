@@ -1,5 +1,5 @@
 """Extraction and stdlib validation for the closing-block v3 record."""
-# HERDR_INTEGRATION_VERSION=7
+# HERDR_INTEGRATION_VERSION=8
 from __future__ import annotations
 
 import json
