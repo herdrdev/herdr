@@ -1,3 +1,6 @@
+#[cfg(unix)]
+pub(crate) mod channel;
+
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::ffi::OsStr;
@@ -136,6 +139,8 @@ struct StatusOptions {
 }
 
 fn fleet_status(args: &[String]) -> std::io::Result<i32> {
+    #[cfg(unix)]
+    let _channels = channel::Cleanup;
     let options = match parse_status_options(args) {
         Ok(options) => options,
         Err(message) => {
@@ -2302,20 +2307,24 @@ pub(crate) fn start_poller(
     let stream_config = Arc::clone(&poller_config);
     let stream_events = event_tx.clone();
     let poller_config_for_thread = Arc::clone(&poller_config);
-    std::thread::spawn(move || loop {
-        let state = poller_config_for_thread.snapshot();
-        let snapshot = poll_with_generation(&state.fleet, state.generation);
-        match event_tx.try_send(crate::events::AppEvent::FleetRefreshed { snapshot }) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                tracing::warn!("dropped fleet refresh because the event queue is full");
+    std::thread::spawn(move || {
+        #[cfg(unix)]
+        let _channels = channel::Cleanup;
+        loop {
+            let state = poller_config_for_thread.snapshot();
+            let snapshot = poll_with_generation(&state.fleet, state.generation);
+            match event_tx.try_send(crate::events::AppEvent::FleetRefreshed { snapshot }) {
+                Ok(()) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!("dropped fleet refresh because the event queue is full");
+                }
             }
+            poller_config_for_thread.wait_for_change(
+                state.generation,
+                Duration::from_millis(state.fleet.refresh_interval_ms.max(MIN_REFRESH_INTERVAL_MS)),
+            );
         }
-        poller_config_for_thread.wait_for_change(
-            state.generation,
-            Duration::from_millis(state.fleet.refresh_interval_ms.max(MIN_REFRESH_INTERVAL_MS)),
-        );
     });
     let _ = std::thread::Builder::new()
         .name("herdr-fleet-agent-streams".into())
@@ -2730,7 +2739,7 @@ type HostSessionEvidence = Result<
     String,
 >;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct HostEvidence {
     host: FleetHostConfig,
     agents: Result<Vec<AgentInfo>, String>,
@@ -3170,7 +3179,10 @@ impl HostReader for SystemHostReader {
         timeout: Duration,
         include_aloop: bool,
     ) -> HostEvidence {
-        fetch_remote_host(host, timeout, include_aloop)
+        let evidence = fetch_remote_host(host, timeout, include_aloop);
+        #[cfg(unix)]
+        let evidence = channel::retain_during_reconnect(evidence);
+        evidence
     }
 }
 
@@ -3585,6 +3597,10 @@ fn run_ssh_program_with_timeout(
     script: &str,
     timeout: Duration,
 ) -> Result<Vec<u8>, String> {
+    #[cfg(unix)]
+    if program.as_ref() == OsStr::new("ssh") {
+        return channel::run(target, script, timeout);
+    }
     let connect_timeout = timeout.as_secs().max(1).to_string();
     let mut command = crate::noninteractive_process::command(program);
     command
@@ -4642,6 +4658,8 @@ struct TransitionEvent<'a> {
     state_change_seq: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     gate_summary: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tick_ms: Option<f64>,
 }
 
 fn watch_status(
@@ -4661,7 +4679,9 @@ fn watch_status(
         if !running.load(Ordering::SeqCst) {
             break;
         }
+        let tick_start = Instant::now();
         let mut current_snapshot = collect_snapshot(&hosts, &fleet);
+        let tick_ms = tick_start.elapsed().as_secs_f64() * 1_000.0;
         let current = watch_observed_states(&mut current_snapshot, &previous_snapshot);
 
         for (handle, observed) in &current {
@@ -4673,7 +4693,7 @@ fn watch_status(
             {
                 continue;
             }
-            emit_transition(handle, old, observed)?;
+            emit_transition(handle, old, observed, Some(tick_ms))?;
         }
         for (handle, observed) in &current {
             if previous.contains_key(handle) || (blocked_only && !observed.blocked) {
@@ -4686,7 +4706,7 @@ fn watch_status(
                 seq: None,
                 gate_summary: None,
             };
-            emit_transition(handle, &absent, observed)?;
+            emit_transition(handle, &absent, observed, Some(tick_ms))?;
         }
         let missing = previous
             .keys()
@@ -4704,7 +4724,7 @@ fn watch_status(
                 gate_summary: None,
             };
             if !same_observed_state(old, &unknown) && (!blocked_only || old.blocked) {
-                emit_transition(&handle, old, &unknown)?;
+                emit_transition(&handle, old, &unknown, Some(tick_ms))?;
             }
             next.insert(handle, unknown);
         }
@@ -4735,12 +4755,18 @@ fn same_observed_state(left: &ObservedState, right: &ObservedState) -> bool {
     left.state == right.state && left.liveness == right.liveness && left.blocked == right.blocked
 }
 
-fn emit_transition(handle: &str, old: &ObservedState, new: &ObservedState) -> std::io::Result<()> {
+fn emit_transition(
+    handle: &str,
+    old: &ObservedState,
+    new: &ObservedState,
+    tick_ms: Option<f64>,
+) -> std::io::Result<()> {
     let event = TransitionEvent {
         handle,
         old_state: &old.state,
         new_state: &new.state,
         timestamp: format_utc_timestamp(unix_now_s()),
+        tick_ms,
         liveness: new.liveness,
         blocked: new.blocked,
         state_change_seq: new.seq,

@@ -716,13 +716,7 @@ fn apply_managed_ssh_options(command: &mut Command, options: Option<&ManagedSshO
 
     command.arg("-F").arg(&options.config_path);
     if let Some(control_path) = &options.control_path {
-        command
-            .arg("-S")
-            .arg(control_path)
-            .arg("-o")
-            .arg("ControlMaster=auto")
-            .arg("-o")
-            .arg("ControlPersist=yes");
+        super::multiplex::apply(command, control_path);
     }
 }
 
