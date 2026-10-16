@@ -5274,6 +5274,7 @@ mod tests {
             if let Some(observation) = app
                 .lookup_runtime_sender(workspace_idx, pane_id)
                 .and_then(crate::terminal::TerminalRuntime::input_observation)
+                .filter(|observation| !observation.text.trim().is_empty())
             {
                 break observation;
             }
@@ -5339,6 +5340,7 @@ mod tests {
                 if let Some(observation) = app
                     .lookup_runtime_sender(workspace_idx, pane_id)
                     .and_then(crate::terminal::TerminalRuntime::input_observation)
+                    .filter(|observation| !observation.text.trim().is_empty())
                 {
                     break observation;
                 }

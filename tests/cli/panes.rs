@@ -136,12 +136,15 @@ fn pane_send_text_if_sends_only_to_the_observed_idle_shell() {
                 &["pane", "read", &pane_id, "--source", "detection", "--json"],
             );
             let token = read["result"]["read"]["input_observation"]["token"].as_str();
-            if token.is_some_and(|token| previous != Some(token)) {
+            let observed_text = read["result"]["read"]["text"].as_str();
+            if token.is_some_and(|token| previous != Some(token))
+                && observed_text.is_some_and(|text| !text.trim().is_empty())
+            {
                 return read;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("detection read did not publish a fresh observation token");
+        panic!("detection read did not observe an idle shell prompt");
     };
     let read = read_detection(None);
     let observation = read["result"]["read"]["input_observation"]["token"]
@@ -173,20 +176,19 @@ fn pane_send_text_if_sends_only_to_the_observed_idle_shell() {
             ],
         )
     };
+    // Exercise identity mismatches against the same observed idle shell before
+    // sending text. Sending without a newline leaves the shell at its prompt,
+    // so it need not produce another observation token for these checks.
+    let wrong_pid = shell_send(shell_pid.saturating_add(1), &cwd, &observation);
+    assert_eq!(wrong_pid["result"]["outcome"], "condition_mismatch");
+    let wrong_cwd = shell_send(shell_pid, "/not-the-pane-shell-cwd", &observation);
+    assert_eq!(wrong_cwd["result"]["outcome"], "condition_mismatch");
+
     let sent = shell_send(shell_pid, &cwd, &observation);
     assert_eq!(sent["result"]["outcome"], "sent");
 
     let stale = shell_send(shell_pid, &cwd, &observation);
     assert_eq!(stale["result"]["outcome"], "condition_mismatch");
-
-    let next_read = read_detection(Some(&observation));
-    let next_token = next_read["result"]["read"]["input_observation"]["token"]
-        .as_str()
-        .unwrap();
-    let wrong_pid = shell_send(shell_pid.saturating_add(1), &cwd, next_token);
-    assert_eq!(wrong_pid["result"]["outcome"], "condition_mismatch");
-    let wrong_cwd = shell_send(shell_pid, "/not-the-pane-shell-cwd", next_token);
-    assert_eq!(wrong_cwd["result"]["outcome"], "condition_mismatch");
 
     cleanup_spawned_herdr(herdr, base);
 }
