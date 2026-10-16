@@ -4471,23 +4471,23 @@ fn normalize_line(line: &str) -> String {
 
 fn score_descendant_closure(rows: &mut [FleetRow]) {
     let mut handles = HashMap::new();
-    let mut sessions = HashMap::new();
+    let mut sessions: HashMap<String, Vec<(String, String)>> = HashMap::new();
     for (index, row) in rows.iter().enumerate() {
         handles.insert(row.handle.clone(), index);
         if let Some(session) = &row.native_session {
-            sessions.insert(
-                format!("session:{}/{}", row.host, session),
-                row.handle.clone(),
-            );
+            sessions
+                .entry(session.clone())
+                .or_default()
+                .push((row.host.clone(), row.handle.clone()));
         }
     }
     for row in rows.iter_mut() {
         if let Some(parent) = row
             .parent_handle
-            .as_ref()
-            .and_then(|parent| sessions.get(parent))
+            .as_deref()
+            .and_then(|parent| resolve_session_parent(parent, &sessions))
         {
-            row.parent_handle = Some(parent.clone());
+            row.parent_handle = Some(parent);
         }
     }
 
@@ -4511,6 +4511,29 @@ fn score_descendant_closure(rows: &mut [FleetRow]) {
                 closure_liveness(rows[parent_index].liveness, rows[parent_index].descendants);
             parent = rows[parent_index].parent_handle.clone();
         }
+    }
+}
+
+/// Resolve `session:<host>/<id>` (or `session:<id>`) to the pane row owning that
+/// native session. Run-state writers record the machine hostname (for example
+/// `Matthiass-MBP`), which often differs from the configured fleet host name
+/// (`mbpro`), so an exact host match wins and a unique session id is the fallback.
+fn resolve_session_parent(
+    parent: &str,
+    sessions: &HashMap<String, Vec<(String, String)>>,
+) -> Option<String> {
+    let rest = parent.strip_prefix("session:")?;
+    let (host, session) = match rest.rsplit_once('/') {
+        Some((host, session)) => (host, session),
+        None => ("", rest),
+    };
+    let candidates = sessions.get(session)?;
+    if let Some((_, handle)) = candidates.iter().find(|(row_host, _)| row_host == host) {
+        return Some(handle.clone());
+    }
+    match candidates.as_slice() {
+        [(_, handle)] => Some(handle.clone()),
+        _ => None,
     }
 }
 
@@ -8270,6 +8293,91 @@ printf '%s\n' '{"id":"mutation","result":{"type":"ok"}}'
 
         let row = FleetRow::from_agent("ub1", false, agent, 0).expect("valid fleet row");
         assert_eq!(row.title.as_deref(), Some("~/fleet-title-project"));
+    }
+
+    fn session_fixture_pane(host: &str, pane: &str, session: &str) -> FleetRow {
+        let mut row = FleetRow::unknown(
+            host,
+            EvidenceSource::Herdr,
+            crate::api::schema::AgentRef::new(host, pane).expect("valid pane reference"),
+            "fixture".into(),
+        );
+        row.liveness = Liveness::Terminal;
+        row.closure_liveness = Liveness::Terminal;
+        row.native_session = Some(session.into());
+        row
+    }
+
+    fn session_fixture_run(host: &str, run: &str, parent: &str) -> FleetRow {
+        let mut row = FleetRow::unknown(
+            host,
+            EvidenceSource::RunState,
+            crate::api::schema::AgentRef::new(host, run).expect("valid run reference"),
+            "fixture".into(),
+        );
+        row.liveness = Liveness::Live;
+        row.closure_liveness = Liveness::Live;
+        row.parent_handle = Some(parent.into());
+        row
+    }
+
+    // Fixtures from the 2026-10-15 fleet sweep: done Claude panes on mbpro had live
+    // Codex workers on ub2 whose run-state parent used the machine hostname.
+    #[test]
+    fn done_pane_counts_live_worker_across_session_parent_shapes() {
+        let session = "8f1a06c4-d88a-462b-bdcd-5faf5c55c449";
+        for parent in [
+            format!("session:mbpro/{session}"),
+            format!("session:Matthiass-MBP/{session}"),
+            format!("session:ubuntu-direct/{session}"),
+            format!("session:{session}"),
+        ] {
+            let mut rows = vec![
+                session_fixture_pane("mbpro", "w2J:p2W", session),
+                session_fixture_run("ub2", "ra-worker", &parent),
+            ];
+            score_descendant_closure(&mut rows);
+            assert_eq!(rows[0].descendants.live, 1, "parent shape {parent}");
+            assert_eq!(
+                rows[0].closure_liveness,
+                Liveness::Live,
+                "parent shape {parent}"
+            );
+            assert_eq!(rows[1].parent_handle.as_deref(), Some("mbpro::w2J:p2W"));
+        }
+    }
+
+    #[test]
+    fn session_parent_prefers_exact_host_and_refuses_ambiguous_alias() {
+        let session = "860c1521-5315-4428-8789-8b74fbd3d4f7";
+        let mut rows = vec![
+            session_fixture_pane("mbpro", "w33:p3", session),
+            session_fixture_pane("ub1", "w8X:pA", session),
+            session_fixture_run("ub2", "ra-exact", &format!("session:ub1/{session}")),
+            session_fixture_run(
+                "ub2",
+                "ra-alias",
+                &format!("session:Matthiass-MBP/{session}"),
+            ),
+        ];
+        score_descendant_closure(&mut rows);
+        assert_eq!(rows[1].descendants.live, 1);
+        assert_eq!(rows[0].descendants.live, 0);
+        assert_eq!(
+            rows[3].parent_handle.as_deref(),
+            Some(&*format!("session:Matthiass-MBP/{session}"))
+        );
+    }
+
+    #[test]
+    fn unrelated_session_parent_stays_unresolved() {
+        let mut rows = vec![
+            session_fixture_pane("mbpro", "w2J:p2W", "8f1a06c4-d88a-462b-bdcd-5faf5c55c449"),
+            session_fixture_run("ub2", "ra-other", "session:Matthiass-MBP/other-session"),
+        ];
+        score_descendant_closure(&mut rows);
+        assert_eq!(rows[0].descendants.live, 0);
+        assert_eq!(rows[0].closure_liveness, Liveness::Terminal);
     }
 
     #[test]
