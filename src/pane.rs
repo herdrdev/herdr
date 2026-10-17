@@ -917,7 +917,7 @@ fn probe_foreground_process(pid: u32, foreground_pgid: Option<u32>) -> ProcessPr
     probe_foreground_process_from_jobs(
         pid,
         foreground_pgid,
-        foreground_pgid.and_then(crate::detect::foreground_group_leader_job),
+        crate::platform::foreground_agent_leader_candidate(pid, foreground_pgid),
         || crate::detect::foreground_job(pid),
         crate::platform::process_agent_hint,
     )
@@ -6032,6 +6032,143 @@ mod tests {
 
         assert_eq!(result.agent, Some(Agent::Claude));
         assert_eq!(result.process_name.as_deref(), Some("claude"));
+    }
+
+    fn assert_same_process_probe(actual: &ProcessProbeResult, expected: &ProcessProbeResult) {
+        assert_eq!(actual.process_group_id, expected.process_group_id);
+        assert_eq!(
+            actual.foreground_is_pane_shell,
+            expected.foreground_is_pane_shell
+        );
+        assert_eq!(actual.agent, expected.agent);
+        assert_eq!(actual.agent_pid, expected.agent_pid);
+        assert_eq!(actual.process_name, expected.process_name);
+    }
+
+    #[test]
+    fn leader_candidate_matches_complete_job_precedence() {
+        for (leader, leader_hint, child_hint, expected_agent, expected_pid, full_walks) in [
+            (
+                "codex",
+                Some(Agent::Claude),
+                Some(Agent::OpenCode),
+                Agent::Claude,
+                99,
+                0,
+            ),
+            ("codex", None, None, Agent::Codex, 99, 0),
+            ("codex", None, Some(Agent::OpenCode), Agent::Codex, 99, 0),
+            ("wrapper", Some(Agent::Codex), None, Agent::Codex, 99, 0),
+            (
+                "wrapper",
+                None,
+                Some(Agent::OpenCode),
+                Agent::OpenCode,
+                100,
+                1,
+            ),
+            ("wrapper", None, None, Agent::Claude, 100, 1),
+        ] {
+            let candidate = crate::platform::ForegroundJob {
+                process_group_id: 99,
+                processes: vec![foreground_process(99, leader)],
+            };
+            let mut job = candidate.clone();
+            job.processes.push(foreground_process(100, "claude"));
+            let read_hint = |pid| match pid {
+                99 => leader_hint,
+                100 => child_hint,
+                _ => None,
+            };
+            let complete =
+                probe_foreground_process_from_jobs(42, None, None, || Some(job.clone()), read_hint);
+            let walks = std::cell::Cell::new(0);
+            let actual = probe_foreground_process_from_jobs(
+                42,
+                None,
+                Some(candidate),
+                || {
+                    walks.set(walks.get() + 1);
+                    Some(job.clone())
+                },
+                read_hint,
+            );
+            assert_same_process_probe(&actual, &complete);
+            assert_eq!(actual.agent, Some(expected_agent));
+            assert_eq!(actual.agent_pid, Some(expected_pid));
+            assert_eq!(walks.get(), full_walks);
+        }
+    }
+
+    #[test]
+    fn leader_candidate_miss_observes_new_children_and_changed_groups() {
+        for (new_group, has_candidate) in [(99, true), (200, true), (99, false), (200, false)] {
+            let mut job = crate::platform::ForegroundJob {
+                process_group_id: 99,
+                processes: vec![foreground_process(99, "wrapper")],
+            };
+            let candidate = has_candidate.then(|| job.clone());
+            let walks = std::cell::Cell::new(0);
+            let actual = probe_foreground_process_from_jobs(
+                42,
+                None,
+                candidate,
+                || {
+                    walks.set(walks.get() + 1);
+                    job.process_group_id = new_group;
+                    job.processes = vec![
+                        foreground_process(new_group, "wrapper"),
+                        foreground_process(new_group + 1, "claude"),
+                    ];
+                    Some(job.clone())
+                },
+                |_| None,
+            );
+            let complete =
+                probe_foreground_process_from_jobs(42, None, None, || Some(job), |_| None);
+            assert_same_process_probe(&actual, &complete);
+            assert_eq!(actual.process_group_id, Some(new_group));
+            assert_eq!(actual.agent_pid, Some(new_group + 1));
+            assert_eq!(walks.get(), 1);
+        }
+    }
+
+    #[test]
+    fn absent_leader_candidate_keeps_shell_group_membership_and_hint() {
+        for (leader, agent, agent_pid, name) in [
+            ("codex", Agent::Codex, 40, "codex"),
+            ("wrapper", Agent::Claude, 42, "claude"),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 40,
+                processes: vec![
+                    foreground_process(40, leader),
+                    foreground_process(42, "bash"),
+                ],
+            };
+            let walks = std::cell::Cell::new(0);
+            let actual = probe_foreground_process_from_jobs(
+                42,
+                None,
+                None,
+                || {
+                    walks.set(walks.get() + 1);
+                    Some(job)
+                },
+                |pid| (pid == 42).then_some(Agent::Claude),
+            );
+            assert_same_process_probe(
+                &actual,
+                &ProcessProbeResult {
+                    process_group_id: Some(40),
+                    foreground_is_pane_shell: true,
+                    agent: Some(agent),
+                    agent_pid: Some(agent_pid),
+                    process_name: Some(name.to_string()),
+                },
+            );
+            assert_eq!(walks.get(), 1);
+        }
     }
 
     fn process_probe_input() -> ProcessProbeInput {
