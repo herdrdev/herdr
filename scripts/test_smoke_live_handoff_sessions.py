@@ -160,6 +160,46 @@ class LiveHandoffSmokeTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("response exceeded", result.stderr)
 
+    def run_shell(self, body: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory(prefix="h-smoke-", dir="/tmp") as directory:
+            root = Path(directory)
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    'source "$1"; ' + body,
+                    "smoke-test",
+                    str(SCRIPT),
+                    str(root / "missing.sock"),
+                ],
+                env=self.helper_environment(root),
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+
+    def test_wait_for_server_exit_accepts_successful_child(self) -> None:
+        result = self.run_shell('bash -c "exit 0" & child="$!"; wait_for_server_exit "$child"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_wait_for_server_exit_preserves_failed_child_status(self) -> None:
+        result = self.run_shell('bash -c "exit 7" & child="$!"; wait_for_server_exit "$child"')
+        self.assertEqual(result.returncode, 7, result.stderr)
+
+    def test_wait_for_server_exit_rejects_running_child(self) -> None:
+        result = self.run_shell(
+            'command sleep 30 & child="$!"; '
+            'trap \'kill "$child" 2>/dev/null || :; wait "$child" 2>/dev/null || :\' EXIT; '
+            'sleep() { :; }; wait_for_server_exit "$child"'
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not exit", result.stderr)
+
+    def test_wait_for_api_rejects_missing_replacement_socket(self) -> None:
+        result = self.run_shell('sleep() { :; }; wait_for_api "$2"')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("replacement API did not become ready", result.stderr)
+
     def select_replacement(
         self, rows: list[tuple[int, str]], *, symlink_binary: bool = False
     ) -> subprocess.CompletedProcess[str]:
