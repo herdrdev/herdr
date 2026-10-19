@@ -365,16 +365,10 @@ pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std:
 /// Starts the daemon through launchd, so quitting the terminal app that
 /// started it does not take the server down (herdr#4920). Over SSH, or when
 /// launchd cannot carry the command exactly, it spawns a detached child.
-/// Returns the child's pid, or 0 when launchd started it.
+/// Returns the app helper's pid, or 0 when launchd started it.
 #[cfg(target_os = "macos")]
 pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
-    match macos::spawn_launchd_job(command) {
-        Ok(_label) => Ok(0),
-        Err(err) => {
-            tracing::info!(%err, "starting the server directly instead of through launchd");
-            command.spawn().map(|child| child.id())
-        }
-    }
+    macos::launch_server_daemon_command(command)
 }
 
 /// First step of a server process; see `launch_server_daemon_command`.

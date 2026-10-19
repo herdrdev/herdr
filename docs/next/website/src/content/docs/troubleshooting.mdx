@@ -87,6 +87,12 @@ herdr
 
 Stopping the server exits its pane processes. Herdr panes inherit the long-lived server's macOS launch context, so a server started through SSH or a background job may not have access to interactive Keychain services. See [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966) for details.
 
+## Commands cannot reach the local network on macOS
+
+If a command inside Herdr fails with `No route to host` while the same command works outside Herdr, check System Settings > Privacy & Security > Local Network and allow **Herdr Server**. Automatically started servers run under a small app helper so macOS can record this permission independently of your terminal app. The helper is stored below `$XDG_DATA_HOME/herdr/server-app-v1/` (default `~/.local/share/herdr/server-app-v1/`) and kept across CLI updates to preserve its privacy identity.
+
+After upgrading from a version without this helper, stop the affected session and start Herdr again. This ends its pane processes. Live handoff from an old server cannot repair its existing macOS responsibility; newly started servers keep the app helper alive through subsequent handoffs. Explicit `herdr server` launches retain their caller's context. A remote Mac needs the permission granted in its GUI login session. See [Herdr issue #808](https://github.com/herdrdev/herdr/issues/808).
+
 ## SSH or DNS fails after macOS logout
 
 Automatically started macOS servers use a per-user service context so logging out does not leave their panes with a dead connection to macOS services. Explicit `herdr server` launches retain their caller's context.

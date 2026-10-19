@@ -200,7 +200,8 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 ///   socket overrides, etc.), except inherited socket overrides are cleared when
 ///   this CLI invocation explicitly selected a session.
 ///
-/// Returns the PID of the spawned server process.
+/// Returns the spawned process's PID, or zero when launchd starts it. On
+/// macOS the spawned process hosts the server's responsible app identity.
 pub fn spawn_server_daemon() -> io::Result<u32> {
     let exe = std::env::current_exe().map_err(|err| {
         io::Error::new(

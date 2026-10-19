@@ -82,11 +82,15 @@ pub(crate) fn leave_launchd_job() -> Option<String> {
 }
 
 /// A fresh directory only this user can enter, removed with its contents.
-struct PrivateDir(PathBuf);
+pub(super) struct PrivateDir(PathBuf);
 
 impl PrivateDir {
     fn create() -> io::Result<Self> {
-        let template = std::env::temp_dir().join("herdr-launchd.XXXXXXXX");
+        Self::create_in(&std::env::temp_dir())
+    }
+
+    pub(super) fn create_in(parent: &Path) -> io::Result<Self> {
+        let template = parent.join("herdr-launchd.XXXXXXXX");
         let mut bytes = CString::new(template.as_os_str().as_bytes())
             .map_err(|_| io::Error::other("temporary path contains a NUL byte"))?
             .into_bytes_with_nul();
@@ -100,7 +104,7 @@ impl PrivateDir {
         Ok(Self(PathBuf::from(OsStr::from_bytes(&bytes))))
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -206,6 +210,11 @@ fn job_plist(
         "<plist version=\"1.0\">\n<dict>\n",
     ));
     push_key_string(&mut plist, "Label", label)?;
+    if Path::new(command.get_program()).ends_with("Contents/MacOS/herdr-server-launcher") {
+        plist.push_str("<key>AssociatedBundleIdentifiers</key>\n<array>\n");
+        push_string(&mut plist, OsStr::new(super::server_app::BUNDLE_ID))?;
+        plist.push_str("</array>\n");
+    }
     plist.push_str("<key>ProgramArguments</key>\n<array>\n");
     push_string(&mut plist, command.get_program())?;
     for arg in command.get_args() {
@@ -341,6 +350,21 @@ mod tests {
         assert!(plist.contains("<key>KeepAlive</key>\n<false/>"));
         assert!(plist.contains("<key>WorkingDirectory</key>\n<string>/tmp</string>"));
         assert!(plist.contains("<key>Umask</key>\n<integer>63</integer>"));
+    }
+
+    #[test]
+    fn app_jobs_are_associated_with_the_responsible_bundle() {
+        let command = Command::new("/data/Herdr Server.app/Contents/MacOS/herdr-server-launcher");
+        let plist = job_plist("dev.herdr.server.1.2", &command, None, 0o022).unwrap();
+        assert!(plist.contains("<key>AssociatedBundleIdentifiers</key>\n<array>\n<string>dev.herdr.server</string>\n</array>"));
+        let plain = job_plist(
+            "dev.herdr.server.1.2",
+            &Command::new("/bin/true"),
+            None,
+            0o022,
+        )
+        .unwrap();
+        assert!(!plain.contains("AssociatedBundleIdentifiers"));
     }
 
     #[test]

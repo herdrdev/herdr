@@ -87,6 +87,12 @@ herdr
 
 停止服务器会结束窗格进程。Herdr 窗格会继承长期运行服务器的 macOS 启动上下文，因此通过 SSH 或后台任务启动的服务器可能无法访问交互式钥匙串服务。详情见 [Herdr issue #966](https://github.com/herdrdev/herdr/issues/966)。
 
+## macOS 上的命令无法访问本地网络
+
+如果命令在 Herdr 中报错 `No route to host`，但在 Herdr 外正常工作，请在系统设置 > 隐私与安全性 > 本地网络中允许 **Herdr Server**。自动启动的服务器作为小型应用辅助程序的子进程运行，让 macOS 能独立于终端应用记录此权限。辅助程序保存在 `$XDG_DATA_HOME/herdr/server-app-v1/`（默认为 `~/.local/share/herdr/server-app-v1/`），CLI 更新后仍保留原辅助程序，以维持其隐私身份。
+
+从没有辅助程序的版本升级后，请停止受影响的会话，再启动 Herdr。这会结束窗格进程。旧服务器的实时移交无法修复现有的 macOS 责任进程归属；新启动的服务器会在后续移交期间保持应用辅助程序运行。显式运行 `herdr server` 时仍保留调用方的上下文。远程 Mac 需要在其 GUI 登录会话中授予权限。见 [Herdr issue #808](https://github.com/herdrdev/herdr/issues/808)。
+
 ## macOS 注销后 SSH 或 DNS 失败
 
 自动启动的 macOS 服务器使用用户级服务上下文，避免注销后窗格与 macOS 服务的连接失效。显式运行 `herdr server` 时仍会保留调用方的上下文。

@@ -32,7 +32,19 @@ mod power;
 pub(crate) use power::monitor_host_power;
 
 mod launchd_spawn;
-pub(crate) use launchd_spawn::{leave_launchd_job, spawn_launchd_job};
+pub(crate) use launchd_spawn::leave_launchd_job;
+mod server_app;
+
+pub(crate) fn launch_server_daemon_command(command: &mut Command) -> std::io::Result<u32> {
+    let mut command = server_app::daemon_command(command)?;
+    match launchd_spawn::spawn_launchd_job(&command) {
+        Ok(_label) => Ok(0),
+        Err(err) => {
+            tracing::info!(%err, "starting the server app directly instead of through launchd");
+            command.spawn().map(|child| child.id())
+        }
+    }
+}
 
 #[cfg(test)]
 mod config_file_tests;
