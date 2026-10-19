@@ -5,6 +5,7 @@ mod config_edit;
 mod config_file;
 mod env;
 mod file_ops;
+pub(crate) mod omo;
 mod opencode_config;
 mod registry;
 mod targets;
@@ -31,7 +32,7 @@ pub(crate) use types::{
 /// CLI labels for experimental integrations that are intentionally not part of
 /// the frozen client endpoint `IntegrationTarget` enum. Empty this list once the
 /// agent registry provides first-class target registration.
-pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta"];
+pub(crate) const EXPERIMENTAL_INTEGRATION_TARGET_LABELS: &[&str] = &["letta", "omo"];
 
 const PI_EXTENSION_INSTALL_NAME: &str = "herdr-agent-state.ts";
 const PI_EXTENSION_ASSET: &str = include_str!("assets/pi/herdr-agent-state.ts");

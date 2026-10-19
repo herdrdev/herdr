@@ -1147,6 +1147,18 @@ mod tests {
     }
 
     #[test]
+    fn spec_accepts_omo_install_and_uninstall() {
+        for action in ["install", "uninstall"] {
+            assert!(super::command()
+                .try_get_matches_from(["herdr", "integration", action, "omo"])
+                .is_ok());
+            assert!(super::command()
+                .try_get_matches_from(["herdr", "integration", action, "unknown-agent"])
+                .is_err());
+        }
+    }
+
+    #[test]
     fn spec_matches_all_integration_targets() {
         let cmd = super::command();
         let install = command_path(&cmd, &["integration", "install"]);

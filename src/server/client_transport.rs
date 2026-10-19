@@ -78,6 +78,7 @@ struct EndpointRequestHead {
 
 enum DecodedEndpointRequest {
     Dispatch(Box<crate::api::schema::Request>),
+    IntegrationV2(crate::api::integration_v2::Request),
     Error {
         request_id: String,
         code: &'static str,
@@ -102,6 +103,18 @@ fn decode_endpoint_request(request: &str) -> serde_json::Result<DecodedEndpointR
             code: "unsupported_method",
             message: format!("method {:?} is not available on this machine", head.method),
         });
+    }
+    if crate::api::integration_v2::METHOD_NAMES.contains(&head.method.as_str()) {
+        return Ok(
+            match serde_json::from_str::<crate::api::integration_v2::Request>(request) {
+                Ok(request) => DecodedEndpointRequest::IntegrationV2(request),
+                Err(error) => DecodedEndpointRequest::Error {
+                    request_id: head.id,
+                    code: "invalid_request",
+                    message: format!("invalid endpoint request: {error}"),
+                },
+            },
+        );
     }
     Ok(
         match serde_json::from_str::<crate::api::schema::Request>(request) {
@@ -527,6 +540,12 @@ pub(crate) enum ServerEvent {
         client_id: u64,
         boot_id: String,
         request: Box<crate::api::schema::Request>,
+    },
+    /// Optional integration methods use only the opaque JSON request payload.
+    ClientShellIntegrationV2Request {
+        client_id: u64,
+        boot_id: String,
+        request: crate::api::integration_v2::Request,
     },
     /// A well-framed endpoint request could not be dispatched by this server.
     ClientShellEndpointRequestError {
@@ -1305,6 +1324,7 @@ fn client_read_loop_with_endpoint_controls(
                 };
                 let request_id = match &decoded {
                     DecodedEndpointRequest::Dispatch(request) => request.id.as_str(),
+                    DecodedEndpointRequest::IntegrationV2(request) => request.id.as_str(),
                     DecodedEndpointRequest::Error { request_id, .. } => request_id,
                 };
                 if request_id.len() > crate::server::client_commands::MAX_ENDPOINT_REQUEST_ID_BYTES
@@ -1320,6 +1340,13 @@ fn client_read_loop_with_endpoint_controls(
                 match decoded {
                     DecodedEndpointRequest::Dispatch(request) => {
                         ServerEvent::ClientShellEndpointRequest {
+                            client_id,
+                            boot_id,
+                            request,
+                        }
+                    }
+                    DecodedEndpointRequest::IntegrationV2(request) => {
+                        ServerEvent::ClientShellIntegrationV2Request {
                             client_id,
                             boot_id,
                             request,
@@ -1858,6 +1885,40 @@ mod tests {
             16,
         )
         .is_some());
+    }
+
+    #[test]
+    fn integration_v2_endpoint_requests_use_the_opaque_json_lane() {
+        for json in [
+            r#"{"id":"v2-list","method":"integration.list.v2","params":{}}"#,
+            r#"{"id":"v2-install","method":"integration.install.v2","params":{"target":"omo"}}"#,
+        ] {
+            assert!(matches!(
+                decode_endpoint_request(json).unwrap(),
+                DecodedEndpointRequest::IntegrationV2(_)
+            ));
+            assert!(serde_json::from_str::<crate::api::schema::Request>(json).is_err());
+        }
+        assert!(matches!(
+            decode_endpoint_request(r#"{"id":"v1-list","method":"integration.list","params":{}}"#)
+                .unwrap(),
+            DecodedEndpointRequest::Dispatch(_)
+        ));
+    }
+
+    #[test]
+    fn malformed_integration_v2_endpoint_request_returns_correlated_error() {
+        for params in [r#"{}"#, r#"{"target":12}"#] {
+            let json = format!(
+                r#"{{"id":"v2-invalid","method":"integration.install.v2","params":{params}}}"#
+            );
+            assert!(matches!(
+                decode_endpoint_request(&json).unwrap(),
+                DecodedEndpointRequest::Error {
+                    request_id, code: "invalid_request", ..
+                } if request_id == "v2-invalid"
+            ));
+        }
     }
 
     #[test]

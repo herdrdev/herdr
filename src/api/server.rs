@@ -347,6 +347,12 @@ fn handle_connection_with_stop(
         return Ok(());
     }
 
+    // Optional JSON methods must not extend the published Request/Method codecs.
+    if let Ok(request) = serde_json::from_str::<crate::api::integration_v2::Request>(line) {
+        let response = crate::api::integration_v2::dispatch(request);
+        return write_text_line_allow_disconnect(&mut stream, &response);
+    }
+
     let request = match serde_json::from_str::<Request>(line) {
         Ok(request) => request,
         Err(request_error) => {
@@ -1185,6 +1191,31 @@ mod tests {
         let client = crate::ipc::connect_local_stream(&path).unwrap();
         let server = listener.accept().unwrap();
         (client, server, path)
+    }
+
+    #[test]
+    fn integration_v2_api_socket_dispatch_rejects_unknown_target() {
+        let (mut client, server, path) = local_stream_pair("integration-v2");
+        client.write_all(
+            b"{\"id\":\"v2-api\",\"method\":\"integration.install.v2\",\"params\":{\"target\":\"unknown-agent\"}}\n"
+        ).unwrap();
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel();
+        handle_connection(
+            server,
+            &api_tx,
+            &EventHub::default(),
+            &Arc::new(AtomicBool::new(true)),
+            None,
+        )
+        .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(response["id"], "v2-api");
+        assert_eq!(response["error"]["code"], "invalid_target");
+        assert!(
+            api_rx.try_recv().is_err(),
+            "v2 must not enter the frozen v1 request path"
+        );
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

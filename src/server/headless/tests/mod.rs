@@ -1,6 +1,7 @@
 use super::*;
 
 mod event_fairness;
+mod integration_v2;
 mod native_graphics;
 #[path = "pane_move.rs"]
 mod pane_move_tests;

@@ -12,6 +12,7 @@ Open settings inside Herdr and use the integrations tab to install recommended i
 ```bash
 herdr integration install pi
 herdr integration install omp
+herdr integration install omo
 herdr integration install claude
 herdr integration install codex
 herdr integration install copilot
@@ -35,6 +36,7 @@ herdr integration install grok
 ```bash
 herdr integration uninstall pi
 herdr integration uninstall omp
+herdr integration uninstall omo
 herdr integration uninstall claude
 herdr integration uninstall codex
 herdr integration uninstall copilot
@@ -59,7 +61,7 @@ Herdr saves integration configs atomically on Linux/macOS and for new files; exi
 
 Every integration tells Herdr which session the agent is in, so Herdr can resume it after a server restart. Turn this off with `[session] resume_agents_on_restore = false`.
 
-The Pi, OMP, Kimi Code CLI, OpenCode, Kilo Code CLI, and MastraCode integrations also report the agent's state. While they report, Herdr uses them instead of reading the screen. The others leave state to screen detection.
+The Pi, OMP, Omo, Kimi Code CLI, OpenCode, Kilo Code CLI, and MastraCode integrations also report the agent's state. While they report, Herdr uses them instead of reading the screen. The others leave state to screen detection.
 
 Native session restore requires current Herdr integrations: Pi integration version `2`, OMP version `3`, Claude Code version `6`, Codex version `5`, GitHub Copilot CLI version `2`, Devin CLI version `2`, Droid version `2`, Kimi Code CLI version `3`, Qoder CLI version `2`, Qwen Code version `1`, Letta Code version `1`, Cursor Agent CLI version `1`, Grok CLI version `2`, OpenCode version `5`, Kilo Code CLI version `1`, Hermes Agent version `5`, MastraCode version `1`, or Antigravity CLI version `1`. Check installed versions with `herdr integration status`.
 
@@ -82,6 +84,35 @@ Herdr writes the bundled extension to:
 ```
 
 If `PI_CODING_AGENT_DIR` is set, Herdr writes to `$PI_CODING_AGENT_DIR/extensions/herdr-agent-state.ts` instead. Herdr creates the extensions directory when the Pi agent directory already exists. Uninstall removes only that extension file.
+
+## Omo
+
+Install the bundled Omo lifecycle reporter without registering a Herdr plugin:
+
+```bash
+herdr integration install omo
+herdr integration status
+herdr integration uninstall omo
+```
+
+The file is `~/.omo/agent/extensions/herdr-omo.js`. Herdr uses the first nonempty
+`OMO_CODING_AGENT_DIR`, `SENPI_CODING_AGENT_DIR`, or `PI_CODING_AGENT_DIR`
+override instead, resolving relative overrides against the current directory.
+Reload or restart Omo after installing or updating the extension.
+
+Install and uninstall verify the managed file's marker and body hash. Foreign
+files, symlinks, and modified managed copies are not overwritten or removed.
+Only the reporter file is managed; unrelated extensions remain untouched.
+
+The root interactive Omo session reports `omo` with `custom:omo` authority,
+including overlapping input blockers and background work. Its explicit resume
+argv includes the saved session file and current agent directory, model,
+thinking level, and permission preset. Unsaved sessions are not resumable, and
+the normal resume argument limits still apply.
+
+Native GPUI clients use the optional `integration.list.v2` and
+`integration.install.v2` methods to offer Omo in Settings. Clients without that
+capability continue using the existing integration API.
 
 ## OMP
 

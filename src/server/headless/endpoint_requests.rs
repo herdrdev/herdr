@@ -1,6 +1,63 @@
 use super::*;
 
 impl HeadlessServer {
+    pub(super) fn handle_client_shell_integration_v2_request(
+        &mut self,
+        client_id: u64,
+        boot_id: String,
+        request: api::integration_v2::Request,
+    ) -> bool {
+        let Some(client) = self.clients.get(&client_id) else {
+            return false;
+        };
+        if !matches!(client.mode, ClientConnectionMode::ClientShell) {
+            self.remove_client_and_resize_if_needed(client_id);
+            return true;
+        }
+        let rejection = if boot_id != self.client_shell_boot_id {
+            Some((
+                "stale_boot",
+                "endpoint command targeted an earlier server boot",
+            ))
+        } else if client.shell_endpoint_command_in_flight {
+            Some((
+                "endpoint_busy",
+                "this endpoint is still processing another command",
+            ))
+        } else if !client.shell_surface_active {
+            Some((
+                "surface_inactive",
+                "this method requires an active client shell surface",
+            ))
+        } else {
+            None
+        };
+        if let Some((code, message)) = rejection {
+            self.send_to_client(
+                client_id,
+                crate::server::client_commands::error_message(boot_id, request.id, code, message),
+            );
+            return false;
+        }
+        let request_id = request.id.clone();
+        let installing = matches!(&request.method, api::integration_v2::Method::Install(_));
+        let response = api::integration_v2::dispatch(request);
+        if installing {
+            self.app.state.integration_recommendations =
+                crate::integration::integration_recommendations();
+        }
+        self.send_to_client(
+            client_id,
+            protocol::ServerMessage::ClientShellEndpointResponseChunk {
+                boot_id,
+                request_id,
+                final_chunk: true,
+                data: response.into_bytes(),
+            },
+        );
+        false
+    }
+
     pub(super) fn handle_client_shell_endpoint_request(
         &mut self,
         client_id: u64,

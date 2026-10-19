@@ -50,6 +50,7 @@ pub enum Agent {
     Antigravity,
     Cline,
     Omp,
+    Omo,
     Mastracode,
     OpenCode,
     GithubCopilot,
@@ -68,7 +69,7 @@ pub enum Agent {
 }
 
 impl Agent {
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Pi,
         Self::Claude,
         Self::Codex,
@@ -78,6 +79,7 @@ impl Agent {
         Self::Antigravity,
         Self::Cline,
         Self::Omp,
+        Self::Omo,
         Self::Mastracode,
         Self::OpenCode,
         Self::GithubCopilot,
@@ -132,6 +134,7 @@ pub fn agent_label(agent: Agent) -> &'static str {
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
         Agent::Omp => "omp",
+        Agent::Omo => "omo",
         Agent::Mastracode => "mastracode",
         Agent::OpenCode => "opencode",
         Agent::GithubCopilot => "copilot",
@@ -167,6 +170,7 @@ pub fn interactive_agent_executable(agent: Agent) -> &'static str {
         Agent::Antigravity => "agy",
         Agent::Cline => "cline",
         Agent::Omp => "omp",
+        Agent::Omo => "omo",
         Agent::Mastracode => "mastracode",
         Agent::OpenCode => "opencode",
         Agent::GithubCopilot => "copilot",
@@ -207,6 +211,7 @@ fn lookup_agent(name: &str) -> Option<Agent> {
         "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
         "cline" | ".cline" => Some(Agent::Cline),
         "omp" => Some(Agent::Omp),
+        "omo" => Some(Agent::Omo),
         "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
         "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
         "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
@@ -402,7 +407,7 @@ fn normalized_process_name(process: &crate::platform::ForegroundProcess) -> Stri
             {
                 if matches!(
                     identify_agent(&wrapped_agent),
-                    Some(Agent::Qwen | Agent::Cline | Agent::Letta)
+                    Some(Agent::Qwen | Agent::Cline | Agent::Letta | Agent::Omo)
                 ) {
                     return wrapped_agent;
                 }
@@ -424,9 +429,11 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
     let runtime_name = normalized_agent_lookup_name(path_basename(runtime));
 
     match runtime_name.as_str() {
-        "node" => cursor_agent_name_from_bundled_node_argv(argv)
+        "node" => omo_agent_name_from_engine_argv(argv)
+            .or_else(|| cursor_agent_name_from_bundled_node_argv(argv))
             .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
-        "bun" => script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[]),
+        "bun" => omo_agent_name_from_engine_argv(argv)
+            .or_else(|| script_arg_agent_name(argv, &["-e", "--eval", "-p", "--print"], &[])),
         name if is_python_runtime(name) => hermes_installer_agent_name(argv)
             .or_else(|| script_arg_agent_name(argv, &["-c"], &["-m"])),
         "sh" | "bash" | "zsh" | "fish" => script_arg_agent_name(argv, &["-c"], &[]),
@@ -435,6 +442,38 @@ fn wrapped_agent_name_from_runtime_argv(runtime: &str, argv: Option<&[String]>) 
         "tmux" => None,
         _ => None,
     }
+}
+
+fn omo_agent_name_from_engine_argv(argv: &[String]) -> Option<String> {
+    let [_, engine, args @ ..] = argv else {
+        return None;
+    };
+    let ends_with = |path: &str, suffix: &[&str]| {
+        let mut components = path.rsplit(['/', '\\']).filter(|part| !part.is_empty());
+        suffix.iter().rev().all(|expected| {
+            components
+                .next()
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        })
+    };
+    if !ends_with(
+        engine,
+        &[
+            "node_modules",
+            "@code-yeongyu",
+            "senpi",
+            "dist",
+            "bundle",
+            "cli.js",
+        ],
+    ) {
+        return None;
+    }
+    args.windows(2)
+        .any(|pair| {
+            pair[0] == "--extension" && ends_with(&pair[1], &["node_modules", "omo-ai", "plugin"])
+        })
+        .then(|| agent_label(Agent::Omo).to_owned())
 }
 
 fn hermes_installer_agent_name(argv: &[String]) -> Option<String> {
@@ -696,6 +735,9 @@ fn agent_name_from_known_package_path(path: &str) -> Option<String> {
                 .zip(suffix)
                 .all(|(actual, expected)| actual.eq_ignore_ascii_case(expected))
     };
+    if ends_with(&["node_modules", "omo-ai", "bin", "omo.js"]) {
+        return Some(agent_label(Agent::Omo).to_string());
+    }
     if ends_with(&[
         "node_modules",
         "@earendil-works",
@@ -872,6 +914,10 @@ fn resolved_agent_name_from_path_token(token: &str) -> Option<String> {
 
 fn agent_name_from_basename(basename: &str) -> Option<String> {
     let agent = parse_agent_label(basename)?;
+    if agent == Agent::Omo && basename.eq_ignore_ascii_case("omo.js") {
+        // The Omo JS entry point needs its package path, not just a common basename.
+        return None;
+    }
     Some(agent_label(agent).to_string())
 }
 
@@ -983,6 +1029,7 @@ mod tests {
         assert_eq!(identify_agent("antigravity-cli"), Some(Agent::Antigravity));
         assert_eq!(identify_agent("cline"), Some(Agent::Cline));
         assert_eq!(identify_agent("omp"), Some(Agent::Omp));
+        assert_eq!(identify_agent("omo"), Some(Agent::Omo));
         assert_eq!(identify_agent("mastracode"), Some(Agent::Mastracode));
         assert_eq!(identify_agent("mastra-code"), Some(Agent::Mastracode));
         assert_eq!(identify_agent("opencode"), Some(Agent::OpenCode));
@@ -1030,6 +1077,7 @@ mod tests {
         assert_eq!(parse_agent_label("agy"), Some(Agent::Antigravity));
         assert_eq!(parse_agent_label("antigravity"), Some(Agent::Antigravity));
         assert_eq!(parse_agent_label("omp"), Some(Agent::Omp));
+        assert_eq!(parse_agent_label("omo"), Some(Agent::Omo));
         assert_eq!(parse_agent_label("mastracode"), Some(Agent::Mastracode));
         assert_eq!(parse_agent_label("mastra code"), Some(Agent::Mastracode));
         assert_eq!(parse_agent_label("opencode.exe"), Some(Agent::OpenCode));
@@ -1077,6 +1125,7 @@ mod tests {
             (Agent::Antigravity, "agy"),
             (Agent::Cline, "cline"),
             (Agent::Omp, "omp"),
+            (Agent::Omo, "omo"),
             (Agent::Mastracode, "mastracode"),
             (Agent::OpenCode, "opencode"),
             (Agent::GithubCopilot, "copilot"),
@@ -1117,6 +1166,15 @@ mod tests {
     }
 
     #[test]
+    fn omo_uses_custom_lifecycle_without_screen_manifest() {
+        // The reporter uses explicit resume argv, not the anchored native-session protocol.
+        assert!(!full_lifecycle_hook_authority("custom:omo", "omo"));
+        assert!(!full_lifecycle_hook_authority("herdr:omo", "omo"));
+        assert!(!full_lifecycle_hook_authority("custom:omo", "pi"));
+        assert!(!Agent::SCREEN_MANIFEST_AGENTS.contains(&Agent::Omo));
+    }
+
+    #[test]
     fn session_identity_integrations_leave_state_to_screen_detection() {
         for (source, label, agent) in [
             ("herdr:hermes", "hermes", Agent::Hermes),
@@ -1136,6 +1194,7 @@ mod tests {
         assert_eq!(identify_agent("zsh"), None);
         assert_eq!(identify_agent("vim"), None);
         assert_eq!(identify_agent("node"), None);
+        assert_eq!(identify_agent("omography"), None);
         assert_eq!(identify_agent("museum"), None);
         assert_eq!(identify_agent("muse-helper"), None);
         assert_eq!(identify_agent("muser"), None);
@@ -1187,6 +1246,73 @@ mod tests {
                 identify_agent_in_job(&job),
                 Some((Agent::Qwen, "qwen".to_string()))
             );
+        }
+    }
+
+    #[test]
+    fn identify_agent_in_job_detects_node_and_bun_wrapped_omo() {
+        for (runtime, executable) in [
+            ("node", "/home/user/.omo/bin/omo"),
+            ("bun.exe", r"C:\Users\user\.omo\bin\omo"),
+            ("bun", "/home/user/node_modules/omo-ai/bin/omo.js"),
+            ("node", "/home/user/node_modules/omo-ai/bin/omo.js"),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, runtime, &[runtime, executable])],
+            };
+
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Omo, "omo".to_string())),
+                "runtime: {runtime}"
+            );
+        }
+
+        for (runtime, script) in [
+            ("node", "/home/user/.omo/bin/omo-helper"),
+            ("bun", "/home/user/.omo/bin/other"),
+            ("node", "-e"),
+            ("bun", "/home/user/node_modules/other/bin/omo.js"),
+            ("node", "/home/user/node_modules/omo-ai/bin/helper.js"),
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, runtime, &[runtime, script])],
+            };
+
+            assert_eq!(identify_agent_in_job(&job), None, "script: {script}");
+        }
+    }
+
+    #[test]
+    fn identify_omo_engine_requires_its_real_plugin_argument() {
+        let engine = "/home/user/node_modules/@code-yeongyu/senpi/dist/bundle/cli.js";
+        let plugin = "/home/user/node_modules/omo-ai/plugin";
+        for runtime in ["node", "bun"] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(
+                    123,
+                    runtime,
+                    &[runtime, engine, "--extension", plugin],
+                )],
+            };
+            assert_eq!(
+                identify_agent_in_job(&job),
+                Some((Agent::Omo, "omo".into()))
+            );
+        }
+        for argv in [
+            vec!["bun", engine],
+            vec!["bun", engine, "--extension", "/home/user/other/plugin"],
+            vec!["bun", "/home/user/other/cli.js", "--extension", plugin],
+        ] {
+            let job = crate::platform::ForegroundJob {
+                process_group_id: 123,
+                processes: vec![foreground_process(123, "bun", &argv)],
+            };
+            assert_eq!(identify_agent_in_job(&job), None);
         }
     }
 

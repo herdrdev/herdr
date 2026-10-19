@@ -26,6 +26,7 @@ pub struct SoundConfig {
 #[serde(default)]
 pub struct AgentSoundOverrides {
     pub pi: AgentSoundSetting,
+    pub omo: AgentSoundSetting,
     pub claude: AgentSoundSetting,
     pub codex: AgentSoundSetting,
     pub gemini: AgentSoundSetting,
@@ -123,6 +124,7 @@ impl AgentSoundOverrides {
     pub fn for_agent(&self, agent: Option<Agent>) -> AgentSoundSetting {
         match agent {
             Some(Agent::Pi) => self.pi,
+            Some(Agent::Omo) => self.omo,
             Some(Agent::Claude) => self.claude,
             Some(Agent::Codex) => self.codex,
             Some(Agent::Gemini) => self.gemini,
@@ -167,6 +169,7 @@ impl Default for AgentSoundOverrides {
     fn default() -> Self {
         Self {
             pi: AgentSoundSetting::Default,
+            omo: AgentSoundSetting::Default,
             claude: AgentSoundSetting::Default,
             codex: AgentSoundSetting::Default,
             gemini: AgentSoundSetting::Default,
@@ -226,7 +229,23 @@ claude = "on"
         assert_eq!(config.ui.sound.agents.droid, AgentSoundSetting::Off);
         assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::On);
         assert_eq!(config.ui.sound.agents.pi, AgentSoundSetting::Default);
+        assert_eq!(config.ui.sound.agents.omo, AgentSoundSetting::Default);
         assert_eq!(config.ui.sound.agents.letta, AgentSoundSetting::Default);
+    }
+
+    #[test]
+    fn omo_sound_override_is_used() {
+        for (value, setting, allowed) in [
+            ("default", AgentSoundSetting::Default, true),
+            ("on", AgentSoundSetting::On, true),
+            ("off", AgentSoundSetting::Off, false),
+        ] {
+            let config: SoundConfig =
+                toml::from_str(&format!("[agents]\nomo = \"{value}\"")).unwrap();
+            assert_eq!(config.agents.omo, setting);
+            assert_eq!(config.agents.for_agent(Some(Agent::Omo)), setting);
+            assert_eq!(config.allows(Some(Agent::Omo)), allowed);
+        }
     }
 
     #[test]

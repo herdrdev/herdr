@@ -33,6 +33,13 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
 
     if outdated_only {
         crate::integration::print_outdated_update_notice();
+        let status = crate::integration::omo::status()?;
+        if status.state == crate::integration::omo::OmoState::Outdated {
+            println!(
+                "omo: outdated ({}); run `herdr integration install omo`",
+                status.path.display()
+            );
+        }
         return Ok(0);
     }
 
@@ -59,7 +66,25 @@ fn integration_status(args: &[String]) -> std::io::Result<i32> {
         );
     }
 
+    let status = crate::integration::omo::status()?;
+    println!(
+        "omo: {} ({})",
+        describe_omo_state(status.state),
+        status.path.display()
+    );
+
     Ok(0)
+}
+
+fn describe_omo_state(state: crate::integration::omo::OmoState) -> &'static str {
+    use crate::integration::omo::OmoState;
+    match state {
+        OmoState::NotInstalled => "not installed",
+        OmoState::Current => "current",
+        OmoState::Outdated => "outdated",
+        OmoState::Modified => "modified",
+        OmoState::Foreign => "foreign",
+    }
 }
 
 fn describe_integration_state(
@@ -93,6 +118,7 @@ fn integration_install(args: &[String]) -> std::io::Result<i32> {
     let installed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::install_target(target),
         IntegrationCommandTarget::Letta => crate::integration::install_experimental_letta(),
+        IntegrationCommandTarget::Omo => crate::integration::omo::install(),
     };
     match installed {
         Ok(messages) => {
@@ -114,6 +140,7 @@ fn integration_uninstall(args: &[String]) -> std::io::Result<i32> {
     let removed = match target {
         IntegrationCommandTarget::Builtin(target) => crate::integration::uninstall_target(target),
         IntegrationCommandTarget::Letta => crate::integration::uninstall_experimental_letta(),
+        IntegrationCommandTarget::Omo => crate::integration::omo::uninstall(),
     };
     match removed {
         Ok(messages) => {
@@ -133,12 +160,12 @@ fn print_integration_messages(messages: Vec<String>) {
     }
 }
 
-/// Integration target accepted by the CLI. Letta is deliberately kept out of
-/// the frozen client endpoint `IntegrationTarget` enum and is handled as an
-/// experimental CLI-only target until the agent registry replaces it.
+/// Sidecar targets stay outside the frozen client endpoint `IntegrationTarget`.
+#[derive(Debug, PartialEq, Eq)]
 enum IntegrationCommandTarget {
     Builtin(IntegrationTarget),
     Letta,
+    Omo,
 }
 
 fn parse_integration_target(
@@ -147,13 +174,13 @@ fn parse_integration_target(
 ) -> std::io::Result<Option<IntegrationCommandTarget>> {
     let Some(target) = args.first().map(|arg| arg.as_str()) else {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|omo|cursor|mastracode|grok>"
         );
         return Ok(None);
     };
     if args.len() != 1 {
         eprintln!(
-            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|cursor|mastracode|grok>"
+            "usage: herdr integration {action} <pi|omp|claude|codex|copilot|devin|droid|kimi|opencode|kilo|hermes|qodercli|qwen|letta|omo|cursor|mastracode|grok>"
         );
         return Ok(None);
     }
@@ -173,6 +200,7 @@ fn parse_integration_target(
         "qodercli" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qodercli),
         "qwen" => IntegrationCommandTarget::Builtin(IntegrationTarget::Qwen),
         "letta" => IntegrationCommandTarget::Letta,
+        "omo" => IntegrationCommandTarget::Omo,
         "cursor" => IntegrationCommandTarget::Builtin(IntegrationTarget::Cursor),
         "mastracode" => IntegrationCommandTarget::Builtin(IntegrationTarget::Mastracode),
         "antigravity-cli" | "antigravity_cli" => {
@@ -182,7 +210,7 @@ fn parse_integration_target(
         _ => {
             eprintln!("unknown integration target: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
+                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, omo, cursor, mastracode, antigravity-cli, grok"
             );
             return Ok(None);
         }
@@ -207,6 +235,7 @@ fn print_integration_help() {
     eprintln!("  herdr integration install qodercli");
     eprintln!("  herdr integration install qwen");
     eprintln!("  herdr integration install letta");
+    eprintln!("  herdr integration install omo");
     eprintln!("  herdr integration install cursor");
     eprintln!("  herdr integration install mastracode");
     eprintln!("  herdr integration install antigravity-cli");
@@ -225,9 +254,62 @@ fn print_integration_help() {
     eprintln!("  herdr integration uninstall qodercli");
     eprintln!("  herdr integration uninstall qwen");
     eprintln!("  herdr integration uninstall letta");
+    eprintln!("  herdr integration uninstall omo");
     eprintln!("  herdr integration uninstall cursor");
     eprintln!("  herdr integration uninstall mastracode");
     eprintln!("  herdr integration uninstall antigravity-cli");
     eprintln!("  herdr integration uninstall grok");
     eprintln!("  herdr integration status [--outdated-only]");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn omo_cli_target_is_separate_from_frozen_integration_targets() {
+        for action in ["install", "uninstall"] {
+            assert_eq!(
+                parse_integration_target(&["omo".into()], action).unwrap(),
+                Some(IntegrationCommandTarget::Omo)
+            );
+        }
+        assert_eq!(
+            parse_integration_target(&["codex".into()], "install").unwrap(),
+            Some(IntegrationCommandTarget::Builtin(IntegrationTarget::Codex))
+        );
+        assert_eq!(
+            parse_integration_target(&["letta".into()], "install").unwrap(),
+            Some(IntegrationCommandTarget::Letta)
+        );
+    }
+
+    #[test]
+    fn integration_cli_rejects_unknown_targets_and_extra_arguments() {
+        for args in [
+            Vec::new(),
+            vec!["unknown-agent".into()],
+            vec!["omo".into(), "extra".into()],
+        ] {
+            for action in ["install", "uninstall"] {
+                assert_eq!(parse_integration_target(&args, action).unwrap(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn omo_cli_status_distinguishes_all_ownership_states() {
+        use crate::integration::omo::OmoState;
+        let labels: std::collections::BTreeSet<_> = [
+            OmoState::NotInstalled,
+            OmoState::Current,
+            OmoState::Outdated,
+            OmoState::Modified,
+            OmoState::Foreign,
+        ]
+        .into_iter()
+        .map(describe_omo_state)
+        .collect();
+        assert_eq!(labels.len(), 5);
+    }
 }

@@ -1194,6 +1194,17 @@
           ]
         },
         {
+          "key": "ui.sound.agents.omo",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Omo agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
+        },
+        {
           "key": "ui.sound.agents.claude",
           "type": "enum",
           "default": "\"default\"",

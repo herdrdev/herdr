@@ -16,7 +16,9 @@ const CLIENT_SHELL_METHODS: &[&str] = &[
     "client_shell.surface.set",
     "command.invoke",
     "integration.install",
+    "integration.install.v2",
     "integration.list",
+    "integration.list.v2",
     "layout.set_split_ratio",
     "pane.clear",
     "pane.close",
@@ -245,7 +247,10 @@ mod tests {
             .expect("request method branches");
         let mut digests = BTreeMap::new();
 
-        for method in CLIENT_SHELL_METHODS {
+        for method in CLIENT_SHELL_METHODS
+            .iter()
+            .filter(|method| !crate::api::integration_v2::METHOD_NAMES.contains(method))
+        {
             let branch = branches
                 .iter()
                 .find(|branch| {
@@ -337,12 +342,32 @@ mod tests {
             .expect("request schema");
         let mut schema_methods = Vec::new();
         collect_method_constants(&schema, &mut schema_methods);
+        let extension_schema =
+            serde_json::to_value(schemars::schema_for!(crate::api::integration_v2::Request))
+                .expect("optional integration request schema");
+        collect_method_constants(&extension_schema, &mut schema_methods);
         for method in CLIENT_SHELL_METHODS {
             assert!(
                 schema_methods.iter().any(|candidate| candidate == method),
                 "advertised endpoint method {method:?} is absent from the request schema"
             );
         }
+    }
+
+    #[test]
+    fn integration_v2_methods_are_advertised_alongside_v1() {
+        for method in [
+            "integration.list",
+            "integration.install",
+            "integration.list.v2",
+            "integration.install.v2",
+        ] {
+            assert!(supported_client_shell_method_names().contains(&method));
+            assert!(supports_client_shell_method_name(method));
+        }
+        assert!(!supports_client_shell_method_name(
+            "integration.uninstall.v2"
+        ));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 mod history_read;
 mod id;
+#[cfg(test)]
+mod omo_tests;
 mod runtime;
 mod runtime_registry;
 pub mod state;
