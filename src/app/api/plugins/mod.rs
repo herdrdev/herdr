@@ -2741,23 +2741,15 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
         crate::persist::plugin_registry::update(|entries| *entries = vec![plugin.clone()]).unwrap();
         let mut app = test_app();
         crate::plugin_installations::load(&mut app.plugin_installation_leases).unwrap();
-        let command = if cfg!(windows) {
-            vec![
-                "powershell.exe",
-                "-NoProfile",
-                "-Command",
-                "Set-Content ready ready; $deadline = [DateTime]::UtcNow.AddSeconds(10); while (!(Test-Path release) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 10 }; Get-Content payload | Set-Content result",
-            ]
-        } else {
-            vec![
-                "sh",
-                "-c",
-                "printf ready > ready; i=0; while [ ! -f release ] && [ $i -lt 500 ]; do sleep 0.02; i=$((i+1)); done; cat payload > result",
-            ]
-        }
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+        let command = vec![
+            std::env::current_exe()
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+            "--exact".to_string(),
+            "app::api::plugins::tests::plugin_worker_lease_child".to_string(),
+            "--ignored".to_string(),
+        ];
         app.start_plugin_command(
             &plugin,
             None,
@@ -2799,6 +2791,33 @@ command = ["sh", "-c", "printf %s ${{HERDR_PANE_ID-unset}} > '{}'; sleep 1"]
             }
         }
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// Child half of `running_plugin_command_keeps_its_files_after_app_teardown`.
+    ///
+    /// The plugin worker has to outlive the app, so the lease test spawns this
+    /// test binary as the worker command. A native child starts reliably on
+    /// loaded runners, unlike a shell that has to initialize first.
+    #[test]
+    #[ignore = "spawned as a plugin worker by running_plugin_command_keeps_its_files_after_app_teardown"]
+    fn plugin_worker_lease_child() {
+        // The lease test writes the handshake request into the worker directory
+        // before starting the worker. A direct `cargo test -- --ignored` run has
+        // no request, so it returns instead of waiting for a release file.
+        if !std::path::Path::new("payload").exists() {
+            return;
+        }
+        std::fs::write("ready", "ready").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !std::path::Path::new("release").exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "plugin worker waited too long for release"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let payload = std::fs::read_to_string("payload").unwrap();
+        std::fs::write("result", payload).unwrap();
     }
 
     #[cfg(unix)]
