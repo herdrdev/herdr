@@ -1,1942 +1,763 @@
-use crate::api::schema::{
-    Method, OutputMatch, PaneCurrentParams, PaneDirection, PaneEdgesParams,
-    PaneFocusDirectionParams, PaneInputSetParams, PaneLayoutParams, PaneListParams,
-    PaneMoveDestination, PaneMoveParams, PaneNeighborParams, PaneProcessInfoParams, PaneReadParams,
-    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
-    PaneReportMetadataParams, PaneResizeParams, PaneRightClickTarget, PaneSendInputParams,
-    PaneSendKeysParams, PaneSendTextParams, PaneSplitParams, PaneSwapParams, PaneTarget,
-    PaneWaitForOutputParams, PaneZoomMode, PaneZoomParams, ReadFormat, ReadSource, Request,
-    SplitDirection,
-};
+pub(crate) mod bindings;
+
+use clap::ArgMatches;
+
+use super::projection::ParseError;
+use crate::api::schema::panes::{PaneMetadataProjection, PaneMoveProjection, PaneSwapProjection};
+use crate::api::schema::{Method, PaneDirection, PaneMoveDestination};
+
+pub(crate) fn command() -> clap::Command {
+    bindings::command()
+}
 
 pub(super) fn run_pane_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_pane_help();
+    let Some(name) = args.first() else {
+        command().print_help()?;
+        println!();
         return Ok(2);
     };
-
-    match subcommand {
-        "list" => pane_list(&args[1..]),
-        "current" => pane_current(&args[1..]),
-        "get" => pane_get(&args[1..]),
-        "layout" => pane_layout(&args[1..]),
-        "process-info" => pane_process_info(&args[1..]),
-        "neighbor" => pane_neighbor(&args[1..]),
-        "edges" => pane_edges(&args[1..]),
-        "focus" => pane_focus(&args[1..]),
-        "resize" => pane_resize(&args[1..]),
-        "zoom" => pane_zoom(&args[1..]),
-        "read" => pane_read(&args[1..]),
-        "rename" => pane_rename(&args[1..]),
-        "input" => pane_input(&args[1..]),
-        "split" => pane_split(&args[1..]),
-        "swap" => pane_swap(&args[1..]),
-        "move" => pane_move(&args[1..]),
-        "close" => pane_close(&args[1..]),
-        "send-text" => pane_send_text(&args[1..]),
-        "send-keys" => pane_send_keys(&args[1..]),
-        "wait-output" => pane_wait_output(&args[1..]),
-        "report-agent" => pane_report_agent(&args[1..]),
-        "report-agent-session" => pane_report_agent_session(&args[1..]),
-        "release-agent" => pane_release_agent(&args[1..]),
-        "report-metadata" => pane_report_metadata(&args[1..]),
-        "run" => pane_run(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_pane_help();
-            Ok(0)
-        }
-        _ => {
-            print_pane_help();
-            Ok(2)
-        }
+    if matches!(name.as_str(), "help" | "--help" | "-h") {
+        command().print_help()?;
+        println!();
+        return Ok(0);
     }
-}
-
-fn pane_list(args: &[String]) -> std::io::Result<i32> {
-    let mut workspace_id = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--workspace" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --workspace");
-                    return Ok(2);
-                };
-                workspace_id = Some(super::normalize_workspace_id(value));
-                index += 2;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
+    let Some(leaf) = bindings::LEAVES.iter().find(|leaf| leaf.name == name) else {
+        if let Err(error) = command().no_binary_name(true).try_get_matches_from(args) {
+            return super::print_clap_error(&error);
         }
-    }
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:list".into(),
-        method: Method::PaneList(PaneListParams { workspace_id }),
-    })?)
-}
-
-fn pane_get(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane get <pane_id>");
         return Ok(2);
     };
-    if args.len() != 1 {
-        eprintln!("usage: herdr pane get <pane_id>");
-        return Ok(2);
-    }
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:get".into(),
-        method: Method::PaneGet(PaneTarget {
-            pane_id: super::normalize_pane_id(raw_pane_id),
-        }),
-    })?)
-}
-
-fn pane_current(args: &[String]) -> std::io::Result<i32> {
-    let env_pane_id = super::target::caller_pane_id();
-    let caller_pane_id = match parse_pane_current_args(args, env_pane_id.as_deref()) {
-        Ok(caller_pane_id) => caller_pane_id,
-        Err(message) => {
+    let request = match leaf.request(&args[1..]) {
+        Ok(request) => request,
+        Err(ParseError::Io(error)) => return Err(error),
+        Err(ParseError::Usage(message)) => {
             eprintln!("{message}");
             return Ok(2);
         }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
     };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:current".into(),
-        method: Method::PaneCurrent(PaneCurrentParams { caller_pane_id }),
-    })?)
-}
-
-fn parse_pane_current_args(
-    args: &[String],
-    env_pane_id: Option<&str>,
-) -> Result<Option<String>, String> {
-    let mut caller_pane_id = env_pane_id.map(super::normalize_pane_id);
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                caller_pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
+    if matches!(leaf.output, bindings::Output::Quiet) {
+        return super::send_ok_request(request.method);
+    }
+    let response = super::send_request(&request)?;
+    match leaf.output {
+        bindings::Output::Json => super::print_response(&response),
+        bindings::Output::Read => super::print_read_response(&response),
+        bindings::Output::Quiet => {
+            if response.get("error").is_some() {
+                super::print_response(&response)
+            } else {
+                Ok(0)
             }
-            "--current" => {
-                caller_pane_id = env_pane_id.map(super::normalize_pane_id);
-                index += 1;
-            }
-            other => return Err(format!("unknown option: {other}")),
         }
     }
-    Ok(caller_pane_id)
 }
 
-fn pane_layout(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args_from_env(args) {
-        Ok(pane_id) => pane_id,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:layout".into(),
-        method: Method::PaneLayout(PaneLayoutParams { pane_id }),
-    })?)
-}
-
-fn pane_process_info(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args_from_env(args) {
-        Ok(pane_id) => pane_id,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:process_info".into(),
-        method: Method::PaneProcessInfo(PaneProcessInfoParams { pane_id }),
-    })?)
-}
-
-fn pane_edges(args: &[String]) -> std::io::Result<i32> {
-    let pane_id = match parse_optional_current_pane_args_from_env(args) {
-        Ok(pane_id) => pane_id,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:edges".into(),
-        method: Method::PaneEdges(PaneEdgesParams { pane_id }),
-    })?)
-}
-
-fn pane_neighbor(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_neighbor_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:neighbor".into(),
-        method: Method::PaneNeighbor(params),
-    })?)
-}
-
-fn pane_focus(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_focus_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_focus(params)
-}
-
-fn pane_resize(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_resize_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_resize(params)
-}
-
-fn parse_optional_current_pane_args_from_env(args: &[String]) -> Result<Option<String>, String> {
-    let env_pane_id = super::target::caller_pane_id();
-    parse_optional_current_pane_args(args, env_pane_id.as_deref())
-}
-
-fn parse_optional_current_pane_args(
-    args: &[String],
-    env_pane_id: Option<&str>,
-) -> Result<Option<String>, String> {
-    let mut pane_id = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
+fn last_index(matches: &ArgMatches, names: &[&str]) -> Option<usize> {
+    names
+        .iter()
+        .filter_map(|name| {
+            if matches.value_source(name) == Some(clap::parser::ValueSource::CommandLine) {
+                matches
+                    .indices_of(name)
+                    .and_then(|mut indices| indices.next_back())
+            } else {
+                None
             }
-            "--current" => {
-                pane_id = env_pane_id.map(super::normalize_pane_id);
-                index += 1;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
+        })
+        .max()
+}
+
+fn caller_target(
+    matches: &ArgMatches,
+    pane: Option<String>,
+    caller: Option<&str>,
+    default_caller: bool,
+    require_current_caller: bool,
+) -> Result<Option<String>, ParseError> {
+    let current = last_index(matches, &["current"]);
+    let mut explicit = last_index(matches, &["pane"]);
+    if matches.try_get_one::<String>("pane_id").is_ok() {
+        explicit = explicit.max(last_index(matches, &["pane_id"]));
     }
-    Ok(pane_id)
-}
-
-fn parse_pane_neighbor_args(args: &[String]) -> Result<PaneNeighborParams, String> {
-    let mut pane_id = None;
-    let mut direction = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                pane_id = None;
-                index += 1;
-            }
-            "--direction" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --direction".into());
-                };
-                direction = Some(parse_pane_direction(value)?);
-                index += 2;
-            }
-            other => return Err(format!("unknown option: {other}")),
+    if current.is_some() && current > explicit {
+        let caller = caller.map(super::normalize_pane_id);
+        if require_current_caller && caller.is_none() {
+            return Err(ParseError::Usage("--current requires HERDR_PANE_ID".into()));
         }
+        return Ok(caller);
     }
-
-    let Some(direction) = direction else {
-        return Err(
-            "usage: herdr pane neighbor --direction left|right|up|down [--pane ID|--current]"
-                .into(),
-        );
-    };
-
-    Ok(PaneNeighborParams { pane_id, direction })
-}
-
-fn parse_pane_focus_args(args: &[String]) -> Result<PaneFocusDirectionParams, String> {
-    let params = parse_pane_neighbor_args(args).map_err(|_| {
-        "usage: herdr pane focus --direction left|right|up|down [--pane ID|--current]".to_string()
-    })?;
-    Ok(PaneFocusDirectionParams {
-        pane_id: params.pane_id,
-        direction: params.direction,
-    })
-}
-
-fn parse_pane_resize_args(args: &[String]) -> Result<PaneResizeParams, String> {
-    let mut pane_id = None;
-    let mut direction = None;
-    let mut amount = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                pane_id = None;
-                index += 1;
-            }
-            "--direction" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --direction".into());
-                };
-                direction = Some(parse_pane_direction(value)?);
-                index += 2;
-            }
-            "--amount" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --amount".into());
-                };
-                let parsed = value
-                    .parse::<f32>()
-                    .map_err(|_| format!("invalid amount: {value}"))?;
-                if !parsed.is_finite() {
-                    return Err(format!("invalid amount: {value}"));
-                }
-                amount = Some(parsed);
-                index += 2;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
+    if current.is_none() && explicit.is_none() && default_caller {
+        return Ok(caller.map(super::normalize_pane_id));
     }
-
-    let Some(direction) = direction else {
-        return Err(
-            "usage: herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
-                .into(),
-        );
-    };
-
-    Ok(PaneResizeParams {
-        pane_id,
-        direction,
-        amount,
-    })
+    Ok(pane)
 }
 
-fn pane_zoom(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_zoom_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_zoom(params)
+fn direction(value: &str) -> Result<PaneDirection, ParseError> {
+    bindings::parse_choice(bindings::DIRECTIONS, "pane direction", value)
 }
 
-fn parse_pane_zoom_args(args: &[String]) -> Result<PaneZoomParams, String> {
-    let mut pane_id = None;
-    let mut mode = PaneZoomMode::Toggle;
-    let mut mode_seen = false;
+fn finite(name: &str, value: &str) -> Result<f32, ParseError> {
+    value
+        .parse::<f32>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| ParseError::Usage(format!("invalid {name}: {value}")))
+}
 
-    let mut index = 0;
-    if args
-        .first()
-        .is_some_and(|arg| !arg.as_str().starts_with("--"))
+fn source(value: String) -> Result<String, ParseError> {
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        return Err(ParseError::Usage("missing required --source".into()));
+    }
+    Ok(value)
+}
+
+fn swap(matches: &ArgMatches) -> Result<Method, ParseError> {
+    let mut params = PaneSwapProjection::from_matches(matches)?;
+    let directional = params.direction.is_some();
+    let explicit = params.source_pane_id.is_some() || params.target_pane_id.is_some();
+    if !((directional && !explicit)
+        || (!directional
+            && explicit
+            && params.pane_id.is_none()
+            && params.source_pane_id.is_some()
+            && params.target_pane_id.is_some()))
     {
-        pane_id = args.first().map(|arg| super::normalize_pane_id(arg));
-        index = 1;
+        return Err(ParseError::Usage(
+            "provide a direction or both source and target panes".into(),
+        ));
     }
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                pane_id = None;
-                index += 1;
-            }
-            "--toggle" => {
-                if mode_seen {
-                    return Err("provide only one of --toggle, --on, or --off".into());
-                }
-                mode = PaneZoomMode::Toggle;
-                mode_seen = true;
-                index += 1;
-            }
-            "--on" => {
-                if mode_seen {
-                    return Err("provide only one of --toggle, --on, or --off".into());
-                }
-                mode = PaneZoomMode::On;
-                mode_seen = true;
-                index += 1;
-            }
-            "--off" => {
-                if mode_seen {
-                    return Err("provide only one of --toggle, --on, or --off".into());
-                }
-                mode = PaneZoomMode::Off;
-                mode_seen = true;
-                index += 1;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
-    }
-
-    Ok(PaneZoomParams { pane_id, mode })
+    params.source_pane_id = params
+        .source_pane_id
+        .map(|value| super::normalize_pane_id(&value));
+    params.target_pane_id = params
+        .target_pane_id
+        .map(|value| super::normalize_pane_id(&value));
+    Ok(Method::PaneSwap(params))
 }
 
-fn pane_rename(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
-        return Ok(2);
+fn move_pane(matches: &ArgMatches) -> Result<Method, ParseError> {
+    let mut params = PaneMoveProjection::from_matches(matches)?;
+    let text = |name| {
+        matches
+            .get_many::<String>(name)
+            .and_then(|mut values| values.next_back())
+            .cloned()
     };
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane rename <pane_id> <label>|--clear");
-        return Ok(2);
-    }
-    let label = if args.len() == 2 && args[1] == "--clear" {
-        None
-    } else {
-        Some(args[1..].join(" "))
-    };
-
-    super::runtime::pane_rename(PaneRenameParams {
-        pane_id: super::normalize_pane_id(raw_pane_id),
-        label,
-    })
-}
-
-fn pane_read(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_read_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    let response = super::send_request(&Request {
-        id: "cli:pane:read".into(),
-        method: Method::PaneRead(params),
-    })?;
-
-    super::print_read_response(&response)
-}
-
-fn parse_pane_read_args(args: &[String]) -> Result<PaneReadParams, String> {
-    const USAGE: &str = "usage: herdr pane read <pane_id> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi] [--raw]";
-
-    let args = super::expand_equals_args(args, &["--source", "--lines", "--format"]);
-    let mut pane_id = None;
-    let mut source = ReadSource::Recent;
-    let mut lines = None;
-    let mut format = ReadFormat::Text;
-    let mut strip_ansi = true;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --source".into());
-                };
-                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
-                index += 2;
-            }
-            "--lines" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --lines".into());
-                };
-                lines =
-                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
-                index += 2;
-            }
-            "--format" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --format".into());
-                };
-                format = super::parse_read_format(value).map_err(|err| err.to_string())?;
-                index += 2;
-            }
-            "--ansi" => {
-                format = ReadFormat::Ansi;
-                index += 1;
-            }
-            "--raw" => {
-                format = ReadFormat::Ansi;
-                strip_ansi = false;
-                index += 1;
-            }
-            option if option.starts_with('-') => {
-                return Err(format!("unknown option: {option}"));
-            }
-            positional => {
-                if pane_id.is_some() {
-                    return Err(format!("unexpected argument: {positional}"));
-                }
-                pane_id = Some(super::normalize_pane_id(positional));
-                index += 1;
-            }
-        }
-    }
-
-    let Some(pane_id) = pane_id else {
-        return Err(USAGE.into());
-    };
-
-    Ok(PaneReadParams {
-        pane_id,
-        source,
-        lines,
-        format,
-        strip_ansi,
-        intent: crate::api::schema::ReadIntent::Interactive,
-    })
-}
-
-fn pane_input(args: &[String]) -> std::io::Result<i32> {
-    let env_pane_id = super::target::caller_pane_id();
-    let params = match parse_pane_input_args(args, env_pane_id.as_deref()) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-    super::runtime::pane_input_set(params)
-}
-
-fn parse_pane_input_args(
-    args: &[String],
-    env_pane_id: Option<&str>,
-) -> Result<PaneInputSetParams, String> {
-    const USAGE: &str =
-        "usage: herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane";
-
-    let args = super::expand_equals_args(args, &["--pane", "--right-click"]);
-    let mut pane_id = None;
-    let mut right_click = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                if pane_id.is_some() {
-                    return Err("provide only one pane selector".into());
-                }
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                if pane_id.is_some() {
-                    return Err("provide only one pane selector".into());
-                }
-                pane_id = Some(
-                    env_pane_id
-                        .map(super::normalize_pane_id)
-                        .ok_or("--current requires HERDR_PANE_ID")?,
-                );
-                index += 1;
-            }
-            "--right-click" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --right-click".into());
-                };
-                right_click = Some(parse_right_click_target(value)?);
-                index += 2;
-            }
-            option if option.starts_with('-') => return Err(format!("unknown option: {option}")),
-            positional => {
-                if pane_id.is_some() {
-                    return Err(format!("unexpected argument: {positional}"));
-                }
-                pane_id = Some(super::normalize_pane_id(positional));
-                index += 1;
-            }
-        }
-    }
-
-    Ok(PaneInputSetParams {
-        pane_id: pane_id.ok_or(USAGE)?,
-        right_click: right_click.ok_or(USAGE)?,
-    })
-}
-
-fn parse_right_click_target(value: &str) -> Result<PaneRightClickTarget, String> {
-    match value {
-        "herdr" => Ok(PaneRightClickTarget::Herdr),
-        "pane" => Ok(PaneRightClickTarget::Pane),
-        _ => Err(format!("invalid right-click target: {value}")),
-    }
-}
-
-fn pane_split(args: &[String]) -> std::io::Result<i32> {
-    let env_pane_id = super::target::caller_pane_id();
-    let params = match parse_pane_split_args(args, env_pane_id.as_deref()) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_split(params)
-}
-
-fn parse_pane_split_args(
-    args: &[String],
-    env_pane_id: Option<&str>,
-) -> Result<PaneSplitParams, String> {
-    let args = super::expand_equals_args(args, &["--right-click"]);
-    let mut env = std::collections::HashMap::new();
-    let mut pane_id = env_pane_id.map(super::normalize_pane_id);
-    let mut direction = None;
-    let mut ratio = None;
-    let mut cwd = None;
-    let mut focus = false;
-    let mut right_click = PaneRightClickTarget::Herdr;
-
-    let mut index = 0;
-    if args
-        .first()
-        .is_some_and(|arg| !arg.as_str().starts_with("--"))
-    {
-        pane_id = args.first().map(|arg| super::normalize_pane_id(arg));
-        index = 1;
-    }
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                pane_id = Some(
-                    env_pane_id
-                        .map(super::normalize_pane_id)
-                        .ok_or("--current requires HERDR_PANE_ID")?,
-                );
-                index += 1;
-            }
-            "--direction" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --direction".into());
-                };
-                direction =
-                    Some(super::parse_split_direction(value).map_err(|err| err.to_string())?);
-                index += 2;
-            }
-            "--ratio" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --ratio".into());
-                };
-                let parsed = value
-                    .parse::<f32>()
-                    .map_err(|_| format!("invalid ratio: {value}"))?;
-                if !parsed.is_finite() {
-                    return Err(format!("invalid ratio: {value}"));
-                }
-                ratio = Some(parsed);
-                index += 2;
-            }
-            "--cwd" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --cwd".into());
-                };
-                cwd = Some(value.clone());
-                index += 2;
-            }
-            "--right-click" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --right-click".into());
-                };
-                right_click = parse_right_click_target(value)?;
-                index += 2;
-            }
-            "--focus" => {
-                focus = true;
-                index += 1;
-            }
-            "--no-focus" => {
-                focus = false;
-                index += 1;
-            }
-            "--env" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --env".into());
-                };
-                let (key, value) = super::parse_env_assignment(value)?;
-                env.insert(key, value);
-                index += 2;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
-    }
-
-    let Some(direction) = direction else {
-        return Err(
-            "usage: herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
-                .into(),
-        );
-    };
-
-    Ok(PaneSplitParams {
-        workspace_id: None,
-        target_pane_id: pane_id,
-        direction,
-        ratio,
-        cwd,
-        focus,
-        right_click,
-        env,
-    })
-}
-
-fn pane_swap(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_swap_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_swap(params)
-}
-
-fn pane_move(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_move_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
-        }
-    };
-
-    super::runtime::pane_move(params)
-}
-
-fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
-    let Some(raw_pane_id) = args.first() else {
-        return Err(pane_move_usage());
-    };
-    if raw_pane_id.starts_with('-') {
-        return Err(pane_move_usage());
-    }
-
-    let pane_id = super::normalize_pane_id(raw_pane_id);
-    let mut tab_id = None;
-    let mut new_tab = false;
-    let mut new_workspace = false;
-    let mut workspace_id = None;
-    let mut target_pane_id = None;
-    let mut split = None;
-    let mut ratio = None;
-    let mut label = None;
-    let mut tab_label = None;
-    let mut focus = true;
-
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--tab" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --tab".into());
-                };
-                tab_id = Some(super::normalize_tab_id(value));
-                index += 2;
-            }
-            "--new-tab" => {
-                new_tab = true;
-                index += 1;
-            }
-            "--new-workspace" => {
-                new_workspace = true;
-                index += 1;
-            }
-            "--workspace" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --workspace".into());
-                };
-                workspace_id = Some(super::normalize_workspace_id(value));
-                index += 2;
-            }
-            "--target-pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --target-pane".into());
-                };
-                target_pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--split" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --split".into());
-                };
-                split = Some(parse_split_direction(value)?);
-                index += 2;
-            }
-            "--ratio" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --ratio".into());
-                };
-                let parsed = value
-                    .parse::<f32>()
-                    .map_err(|_| format!("invalid ratio: {value}"))?;
-                if !parsed.is_finite() {
-                    return Err(format!("invalid ratio: {value}"));
-                }
-                ratio = Some(parsed);
-                index += 2;
-            }
-            "--label" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --label".into());
-                };
-                label = Some(value.clone());
-                index += 2;
-            }
-            "--tab-label" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --tab-label".into());
-                };
-                tab_label = Some(value.clone());
-                index += 2;
-            }
-            "--focus" => {
-                focus = true;
-                index += 1;
-            }
-            "--no-focus" => {
-                focus = false;
-                index += 1;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
-    }
-
-    let destination_count =
-        usize::from(tab_id.is_some()) + usize::from(new_tab) + usize::from(new_workspace);
-    if destination_count != 1 {
-        return Err(pane_move_usage());
-    }
-
-    let destination = if let Some(tab_id) = tab_id {
-        let Some(split) = split else {
-            return Err(pane_move_usage());
-        };
-        if workspace_id.is_some()
-            || new_tab
-            || new_workspace
-            || label.is_some()
-            || tab_label.is_some()
-        {
-            return Err(pane_move_usage());
-        }
+    let ratio = text("ratio")
+        .map(|value| finite("ratio", &value))
+        .transpose()?;
+    params.destination = if let Some(tab) = text("tab") {
+        let split =
+            text("split").ok_or_else(|| ParseError::Usage("missing required --split".into()))?;
         PaneMoveDestination::Tab {
-            tab_id,
-            target_pane_id,
-            split,
+            tab_id: super::normalize_tab_id(&tab),
+            target_pane_id: text("target-pane").map(|value| super::normalize_pane_id(&value)),
+            split: bindings::parse_choice(bindings::SPLITS, "split direction", &split)?,
             ratio,
         }
-    } else if new_tab {
-        if split.is_some() || target_pane_id.is_some() || new_workspace || tab_label.is_some() {
-            return Err(pane_move_usage());
-        }
+    } else if matches.get_flag("new-tab") {
         PaneMoveDestination::NewTab {
-            workspace_id,
-            label,
+            workspace_id: text("workspace").map(|value| super::normalize_workspace_id(&value)),
+            label: text("label"),
         }
     } else {
-        if split.is_some() || target_pane_id.is_some() || workspace_id.is_some() || new_tab {
-            return Err(pane_move_usage());
-        }
-        PaneMoveDestination::NewWorkspace { label, tab_label }
-    };
-
-    Ok(PaneMoveParams {
-        pane_id,
-        destination,
-        focus,
-    })
-}
-
-fn pane_move_usage() -> String {
-    "usage: herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]\n       herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]"
-        .into()
-}
-
-fn parse_pane_swap_args(args: &[String]) -> Result<PaneSwapParams, String> {
-    let mut pane_id = None;
-    let mut direction = None;
-    let mut source_pane_id = None;
-    let mut target_pane_id = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --pane".into());
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--current" => {
-                pane_id = None;
-                index += 1;
-            }
-            "--direction" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --direction".into());
-                };
-                direction = Some(parse_pane_direction(value)?);
-                index += 2;
-            }
-            "--source-pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --source-pane".into());
-                };
-                source_pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--target-pane" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --target-pane".into());
-                };
-                target_pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            other => return Err(format!("unknown option: {other}")),
-        }
-    }
-
-    let directional = direction.is_some();
-    let explicit = source_pane_id.is_some() || target_pane_id.is_some();
-    match (directional, explicit) {
-        (true, false) => Ok(PaneSwapParams {
-            pane_id,
-            direction,
-            ..PaneSwapParams::default()
-        }),
-        (false, true) if pane_id.is_none() && source_pane_id.is_some() && target_pane_id.is_some() => {
-            Ok(PaneSwapParams {
-                source_pane_id,
-                target_pane_id,
-                ..PaneSwapParams::default()
-            })
-        }
-        _ => Err(
-            "usage: herdr pane swap --direction left|right|up|down [--pane ID|--current]\n       herdr pane swap --source-pane ID --target-pane ID"
-                .into(),
-        ),
-    }
-}
-
-fn parse_split_direction(value: &str) -> Result<SplitDirection, String> {
-    match value {
-        "right" => Ok(SplitDirection::Right),
-        "down" => Ok(SplitDirection::Down),
-        _ => Err(format!(
-            "invalid split direction: {value} (expected right or down)"
-        )),
-    }
-}
-
-fn parse_pane_direction(value: &str) -> Result<PaneDirection, String> {
-    match value {
-        "left" => Ok(PaneDirection::Left),
-        "right" => Ok(PaneDirection::Right),
-        "up" => Ok(PaneDirection::Up),
-        "down" => Ok(PaneDirection::Down),
-        _ => Err(format!(
-            "invalid pane direction: {value} (expected left, right, up, or down)"
-        )),
-    }
-}
-
-fn pane_close(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane close <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr pane close <pane_id>");
-        return Ok(2);
-    }
-
-    super::runtime::pane_close(super::normalize_pane_id(raw_pane_id))
-}
-
-fn pane_send_text(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane send-text <pane_id> <text>");
-        return Ok(2);
-    }
-
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let text = args[1..].join(" ");
-    super::send_ok_request(Method::PaneSendText(PaneSendTextParams { pane_id, text }))
-}
-
-fn pane_send_keys(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane send-keys <pane_id> <key> [key ...]");
-        return Ok(2);
-    }
-
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let keys = args[1..].to_vec();
-    super::send_ok_request(Method::PaneSendKeys(PaneSendKeysParams { pane_id, keys }))
-}
-
-fn pane_run(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr pane run <pane_id> <command>");
-        return Ok(2);
-    }
-
-    let pane_id = super::normalize_pane_id(&args[0]);
-    let text = args[1..].join(" ");
-    super::send_ok_request(Method::PaneSendInput(PaneSendInputParams {
-        pane_id,
-        text,
-        keys: vec!["Enter".into()],
-    }))
-}
-
-fn pane_wait_output(args: &[String]) -> std::io::Result<i32> {
-    let params = match parse_pane_wait_output_args(args) {
-        Ok(params) => params,
-        Err(message) => {
-            eprintln!("{message}");
-            return Ok(2);
+        PaneMoveDestination::NewWorkspace {
+            label: text("label"),
+            tab_label: text("tab-label"),
         }
     };
-
-    super::print_response(&super::send_request(&Request {
-        id: "cli:pane:wait-output".into(),
-        method: Method::PaneWaitForOutput(params),
-    })?)
+    Ok(Method::PaneMove(params))
 }
 
-fn parse_pane_wait_output_args(args: &[String]) -> Result<PaneWaitForOutputParams, String> {
-    const USAGE: &str = "usage: herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]";
-
-    let args = super::expand_equals_args(
-        args,
-        &["--match", "--regex", "--source", "--lines", "--timeout"],
-    );
-    let mut pane_id = None;
-    let mut source = ReadSource::Recent;
-    let mut lines = None;
-    let mut timeout_ms = None;
-    let mut strip_ansi = true;
-    let mut matcher = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            option @ ("--match" | "--regex") => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err(format!("missing value for {option}"));
-                };
-                if matcher.is_some() {
-                    return Err("--match and --regex are mutually exclusive".into());
-                }
-                matcher = Some(if option == "--regex" {
-                    OutputMatch::Regex {
-                        value: value.clone(),
-                    }
-                } else {
-                    OutputMatch::Substring {
-                        value: value.clone(),
-                    }
-                });
-                index += 2;
-            }
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --source".into());
-                };
-                source = super::parse_read_source(value).map_err(|err| err.to_string())?;
-                index += 2;
-            }
-            "--lines" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --lines".into());
-                };
-                lines =
-                    Some(super::parse_u32_flag("--lines", value).map_err(|err| err.to_string())?);
-                index += 2;
-            }
-            "--timeout" => {
-                let Some(value) = args.get(index + 1) else {
-                    return Err("missing value for --timeout".into());
-                };
-                timeout_ms =
-                    Some(super::parse_u64_flag("--timeout", value).map_err(|err| err.to_string())?);
-                index += 2;
-            }
-            "--raw" => {
-                strip_ansi = false;
-                index += 1;
-            }
-            option if option.starts_with('-') => {
-                return Err(format!("unknown option: {option}"));
-            }
-            positional => {
-                if pane_id.is_some() {
-                    return Err(format!("unexpected argument: {positional}"));
-                }
-                pane_id = Some(super::normalize_pane_id(positional));
-                index += 1;
-            }
-        }
-    }
-    let Some(pane_id) = pane_id else {
-        return Err(USAGE.into());
-    };
-    let Some(matcher) = matcher else {
-        return Err("missing required --match or --regex".into());
-    };
-    Ok(PaneWaitForOutputParams {
-        pane_id,
-        source,
-        lines,
-        r#match: matcher,
-        timeout_ms,
-        strip_ansi,
-    })
-}
-
-fn pane_report_agent(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [-- <resume-command...>]";
-
-    let (args, resume_argv) = split_resume_argv(args);
-    let args = super::expand_equals_args(
-        args,
-        &[
-            "--source",
-            "--agent",
-            "--state",
-            "--message",
-            "--seq",
-            "--agent-session-id",
-            "--agent-session-path",
-        ],
-    );
-    let mut pane_id = None;
-    let mut source = None;
-    let mut agent = None;
-    let mut state = None;
-    let mut message = None;
-    let mut seq = None;
-    let mut agent_session_id = None;
-    let mut agent_session_path = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
-                };
-                source = Some(value.clone());
-                index += 2;
-            }
-            "--agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent");
-                    return Ok(2);
-                };
-                agent = Some(value.clone());
-                index += 2;
-            }
-            "--state" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --state");
-                    return Ok(2);
-                };
-                state = Some(super::parse_pane_agent_state(value)?);
-                index += 2;
-            }
-            "--message" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --message");
-                    return Ok(2);
-                };
-                message = Some(value.clone());
-                index += 2;
-            }
-            "--seq" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --seq");
-                    return Ok(2);
-                };
-                seq = Some(super::parse_u64_flag("--seq", value)?);
-                index += 2;
-            }
-            "--agent-session-id" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-session-id");
-                    return Ok(2);
-                };
-                agent_session_id = Some(value.clone());
-                index += 2;
-            }
-            "--agent-session-path" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-session-path");
-                    return Ok(2);
-                };
-                agent_session_path = Some(value.clone());
-                index += 2;
-            }
-            option if option.starts_with('-') => {
-                eprintln!("unknown option: {option}");
-                return Ok(2);
-            }
-            positional => {
-                if pane_id.is_some() {
-                    eprintln!("unexpected argument: {positional}");
-                    return Ok(2);
-                }
-                pane_id = Some(super::normalize_pane_id(positional));
-                index += 1;
-            }
-        }
-    }
-
-    let Some(pane_id) = pane_id else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let Some(source) = source.and_then(|source| {
-        let source = source.trim().to_string();
-        (!source.is_empty()).then_some(source)
-    }) else {
-        eprintln!("missing required --source");
-        return Ok(2);
-    };
-    let Some(agent) = agent else {
-        eprintln!("missing required --agent");
-        return Ok(2);
-    };
-    let Some(state) = state else {
-        eprintln!("missing required --state");
-        return Ok(2);
-    };
-
-    super::send_ok_request(Method::PaneReportAgent(PaneReportAgentParams {
-        pane_id,
-        source,
-        agent,
-        state,
-        message,
-        seq,
-        agent_session_id,
-        agent_session_path,
-        agent_session_cursor: None,
-        agent_process_pid: None,
-        resume_argv,
-    }))
-}
-
-fn split_resume_argv(args: &[String]) -> (&[String], Option<Vec<String>>) {
-    match args.iter().position(|arg| arg == "--") {
-        Some(separator) => (&args[..separator], Some(args[separator + 1..].to_vec())),
-        None => (args, None),
-    }
-}
-
-fn pane_report_agent_session(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--agent-session-cursor ID] [--agent-process-pid PID] [--session-start-source SOURCE] [-- <resume-command...>]";
-
-    let (args, resume_argv) = split_resume_argv(args);
-    let args = super::expand_equals_args(
-        args,
-        &[
-            "--source",
-            "--agent",
-            "--seq",
-            "--agent-session-id",
-            "--agent-session-path",
-            "--agent-session-cursor",
-            "--agent-process-pid",
-            "--session-start-source",
-        ],
-    );
-    let mut pane_id = None;
-    let mut source = None;
-    let mut agent = None;
-    let mut seq = None;
-    let mut agent_session_id = None;
-    let mut agent_session_path = None;
-    let mut agent_session_cursor = None;
-    let mut agent_process_pid = None;
-    let mut session_start_source = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
-                };
-                source = Some(value.clone());
-                index += 2;
-            }
-            "--agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent");
-                    return Ok(2);
-                };
-                agent = Some(value.clone());
-                index += 2;
-            }
-            "--seq" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --seq");
-                    return Ok(2);
-                };
-                seq = Some(super::parse_u64_flag("--seq", value)?);
-                index += 2;
-            }
-            "--agent-session-id" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-session-id");
-                    return Ok(2);
-                };
-                agent_session_id = Some(value.clone());
-                index += 2;
-            }
-            "--agent-session-path" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-session-path");
-                    return Ok(2);
-                };
-                agent_session_path = Some(value.clone());
-                index += 2;
-            }
-            "--agent-session-cursor" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-session-cursor");
-                    return Ok(2);
-                };
-                agent_session_cursor = Some(value.clone());
-                index += 2;
-            }
-            "--agent-process-pid" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent-process-pid");
-                    return Ok(2);
-                };
-                agent_process_pid = Some(value.parse::<u32>().map_err(|_| {
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "invalid --agent-process-pid",
-                    )
-                })?);
-                index += 2;
-            }
-            "--session-start-source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --session-start-source");
-                    return Ok(2);
-                };
-                session_start_source = Some(value.clone());
-                index += 2;
-            }
-            option if option.starts_with('-') => {
-                eprintln!("unknown option: {option}");
-                return Ok(2);
-            }
-            positional => {
-                if pane_id.is_some() {
-                    eprintln!("unexpected argument: {positional}");
-                    return Ok(2);
-                }
-                pane_id = Some(super::normalize_pane_id(positional));
-                index += 1;
-            }
-        }
-    }
-
-    let Some(pane_id) = pane_id else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let Some(source) = source.and_then(|source| {
-        let source = source.trim().to_string();
-        (!source.is_empty()).then_some(source)
-    }) else {
-        eprintln!("missing required --source");
-        return Ok(2);
-    };
-    let Some(agent) = agent else {
-        eprintln!("missing required --agent");
-        return Ok(2);
-    };
-
-    super::send_ok_request(Method::PaneReportAgentSession(
-        PaneReportAgentSessionParams {
-            pane_id,
-            source,
-            agent,
-            seq,
-            agent_session_id,
-            agent_session_path,
-            agent_session_cursor,
-            agent_process_pid,
-            session_start_source,
-            resume_argv,
-        },
-    ))
-}
-
-fn pane_release_agent(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
-        return Ok(2);
-    };
-
-    let pane_id = super::normalize_pane_id(raw_pane_id);
-    let mut source = None;
-    let mut agent = None;
-    let mut seq = None;
-
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
-                };
-                source = Some(value.clone());
-                index += 2;
-            }
-            "--agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent");
-                    return Ok(2);
-                };
-                agent = Some(value.clone());
-                index += 2;
-            }
-            "--seq" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --seq");
-                    return Ok(2);
-                };
-                seq = Some(super::parse_u64_flag("--seq", value)?);
-                index += 2;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    let Some(source) = source.and_then(|source| {
-        let source = source.trim().to_string();
-        (!source.is_empty()).then_some(source)
-    }) else {
-        eprintln!("missing required --source");
-        return Ok(2);
-    };
-    let Some(agent) = agent else {
-        eprintln!("missing required --agent");
-        return Ok(2);
-    };
-
-    super::send_ok_request(Method::PaneReleaseAgent(PaneReleaseAgentParams {
-        pane_id,
-        source,
-        agent,
-        seq,
-    }))
-}
-
-fn pane_report_metadata(args: &[String]) -> std::io::Result<i32> {
-    let Some(raw_pane_id) = args.first() else {
-        eprintln!("usage: herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-        return Ok(2);
-    };
-
-    let pane_id = super::normalize_pane_id(raw_pane_id);
-    let mut source = None;
-    let mut agent = None;
-    let mut applies_to_source = None;
-    let mut title = None;
-    let mut display_agent = None;
-    let mut state_labels = std::collections::HashMap::new();
-    let mut tokens = std::collections::HashMap::new();
-    let mut clear_title = false;
-    let mut clear_display_agent = false;
-    let mut clear_state_labels = false;
-    let mut seq = None;
-    let mut ttl_ms = None;
-
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
-                };
-                source = Some(value.clone());
-                index += 2;
-            }
-            "--agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent");
-                    return Ok(2);
-                };
-                agent = Some(value.clone());
-                index += 2;
-            }
-            "--applies-to-source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --applies-to-source");
-                    return Ok(2);
-                };
-                applies_to_source = Some(value.clone());
-                index += 2;
-            }
-            "--title" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --title");
-                    return Ok(2);
-                };
-                title = Some(value.clone());
-                index += 2;
-            }
-            "--clear-title" => {
-                clear_title = true;
-                index += 1;
-            }
-            "--display-agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --display-agent");
-                    return Ok(2);
-                };
-                display_agent = Some(value.clone());
-                index += 2;
-            }
-            "--clear-display-agent" => {
-                clear_display_agent = true;
-                index += 1;
-            }
-            "--state-label" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --state-label");
-                    return Ok(2);
-                };
-                let Some((status, label)) = value.split_once('=') else {
-                    eprintln!("expected --state-label STATUS=TEXT");
-                    return Ok(2);
-                };
-                let status = status.trim().to_ascii_lowercase();
-                if !matches!(
-                    status.as_str(),
-                    "idle" | "working" | "blocked" | "done" | "unknown"
-                ) {
-                    eprintln!("unknown state label: {status}");
-                    return Ok(2);
-                }
-                state_labels.insert(status, label.to_string());
-                index += 2;
-            }
-            "--clear-state-labels" => {
-                clear_state_labels = true;
-                index += 1;
-            }
-            "--token" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --token");
-                    return Ok(2);
-                };
-                let (key, value) = match super::parse_token_assignment(value) {
-                    Ok(token) => token,
-                    Err(message) => {
-                        eprintln!("{message}");
-                        return Ok(2);
-                    }
-                };
-                tokens.insert(key, value);
-                index += 2;
-            }
-            "--clear-token" => {
-                let Some(key) = args.get(index + 1) else {
-                    eprintln!("missing value for --clear-token");
-                    return Ok(2);
-                };
-                tokens.insert(key.clone(), None);
-                index += 2;
-            }
-            "--seq" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --seq");
-                    return Ok(2);
-                };
-                seq = Some(super::parse_u64_flag("--seq", value)?);
-                index += 2;
-            }
-            "--ttl-ms" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --ttl-ms");
-                    return Ok(2);
-                };
-                ttl_ms = Some(super::parse_u64_flag("--ttl-ms", value)?);
-                index += 2;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    let Some(source) = source.and_then(|source| {
-        let source = source.trim().to_string();
-        (!source.is_empty()).then_some(source)
-    }) else {
-        eprintln!("missing required --source");
-        return Ok(2);
-    };
-    if applies_to_source
+fn metadata(matches: &ArgMatches) -> Result<Method, ParseError> {
+    let mut params = PaneMetadataProjection::from_matches(matches)?;
+    params.source = source(params.source)?;
+    if params
+        .applies_to_source
         .as_deref()
-        .is_some_and(|source| source.trim().is_empty())
+        .is_some_and(|value| value.trim().is_empty())
     {
-        eprintln!("missing value for --applies-to-source");
-        return Ok(2);
+        return Err(ParseError::Usage(
+            "missing value for --applies-to-source".into(),
+        ));
     }
-    if title.is_some() && clear_title
-        || display_agent.is_some() && clear_display_agent
-        || !state_labels.is_empty() && clear_state_labels
+    if params.title.is_none()
+        && params.display_agent.is_none()
+        && params.state_labels.is_empty()
+        && params.tokens.is_empty()
+        && !params.clear_title
+        && !params.clear_display_agent
+        && !params.clear_state_labels
     {
-        eprintln!("cannot set and clear the same metadata field");
-        return Ok(2);
+        return Err(ParseError::Usage(
+            "missing metadata field to set or clear".into(),
+        ));
     }
-    if title.is_none()
-        && display_agent.is_none()
-        && state_labels.is_empty()
-        && tokens.is_empty()
-        && !clear_title
-        && !clear_display_agent
-        && !clear_state_labels
-    {
-        eprintln!("missing metadata field to set or clear");
-        return Ok(2);
-    }
-
-    super::send_ok_request(Method::PaneReportMetadata(PaneReportMetadataParams {
-        pane_id,
-        source,
-        agent,
-        applies_to_source,
-        title,
-        display_agent,
-        state_labels,
-        tokens,
-        clear_title,
-        clear_display_agent,
-        clear_state_labels,
-        seq,
-        ttl_ms,
-    }))
-}
-
-fn print_pane_help() {
-    eprintln!("herdr pane commands:");
-    eprintln!("  herdr pane list [--workspace <workspace_id>]");
-    eprintln!("  herdr pane current [--pane ID|--current]");
-    eprintln!("  herdr pane get <pane_id>");
-    eprintln!("  herdr pane layout [--pane ID|--current]");
-    eprintln!("  herdr pane process-info [--pane ID|--current]");
-    eprintln!("  herdr pane neighbor --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  herdr pane edges [--pane ID|--current]");
-    eprintln!("  herdr pane focus --direction left|right|up|down [--pane ID|--current]");
-    eprintln!(
-        "  herdr pane resize --direction left|right|up|down [--amount FLOAT] [--pane ID|--current]"
-    );
-    eprintln!("  herdr pane zoom [<pane_id>|--pane ID|--current] [--toggle|--on|--off]");
-    eprintln!("  herdr pane rename <pane_id> <label>|--clear");
-    eprintln!("  herdr pane read <pane_id> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  herdr pane input [<pane_id>|--pane ID|--current] --right-click herdr|pane");
-    eprintln!(
-        "  herdr pane split [<pane_id>|--pane ID|--current] --direction right|down [--ratio FLOAT] [--cwd PATH] [--env KEY=VALUE] [--right-click herdr|pane] [--focus] [--no-focus]"
-    );
-    eprintln!("  herdr pane swap --direction left|right|up|down [--pane ID|--current]");
-    eprintln!("  herdr pane swap --source-pane ID --target-pane ID");
-    eprintln!("  herdr pane move <pane_id> --tab <tab_id> --split right|down [--target-pane ID] [--ratio FLOAT] [--focus|--no-focus]");
-    eprintln!("  herdr pane move <pane_id> --new-tab [--workspace ID] [--label TEXT] [--focus|--no-focus]");
-    eprintln!("  herdr pane move <pane_id> --new-workspace [--label TEXT] [--tab-label TEXT] [--focus|--no-focus]");
-    eprintln!("  herdr pane close <pane_id>");
-    eprintln!("  herdr pane send-text <pane_id> <text>");
-    eprintln!("  herdr pane send-keys <pane_id> <key> [key ...]");
-    eprintln!("  herdr pane wait-output <pane_id> (--match TEXT | --regex PATTERN) [--source visible|recent|recent-unwrapped] [--lines N] [--timeout MS] [--raw]");
-    eprintln!("  herdr pane report-agent <pane_id> --source ID --agent LABEL --state idle|working|blocked|unknown [--message TEXT] [--seq N] [--agent-session-id ID] [--agent-session-path PATH]");
-    eprintln!("  herdr pane report-agent-session <pane_id> --source ID --agent LABEL [--seq N] [--agent-session-id ID] [--agent-session-path PATH] [--agent-session-cursor ID] [--agent-process-pid PID]");
-    eprintln!("  herdr pane release-agent <pane_id> --source ID --agent LABEL [--seq N]");
-    eprintln!("  herdr pane report-metadata <pane_id> --source ID [--agent LABEL] [--applies-to-source ID] [--title TEXT|--clear-title] [--display-agent TEXT|--clear-display-agent] [--state-label STATUS=TEXT] [--clear-state-labels] [--token NAME=VALUE] [--clear-token NAME] [--seq N] [--ttl-ms N]");
-    eprintln!("  herdr pane run <pane_id> <command>");
+    Ok(Method::PaneReportMetadata(params))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::schema::{
+        OutputMatch, PaneRightClickTarget, PaneZoomMode, ReadFormat, ReadSource, SplitDirection,
+    };
 
     fn args(values: &[&str]) -> Vec<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn request(name: &str, values: &[&str]) -> Result<crate::api::schema::Request, ParseError> {
+        bindings::LEAVES
+            .iter()
+            .find(|leaf| leaf.name == name)
+            .unwrap()
+            .request(&args(values))
+    }
+
+    fn parse_pane_split_args(
+        values: &[&str],
+        caller: Option<&str>,
+    ) -> crate::api::schema::PaneSplitParams {
+        let leaf = bindings::LEAVES
+            .iter()
+            .find(|leaf| leaf.name == "split")
+            .unwrap();
+        let matches = leaf
+            .command()
+            .no_binary_name(true)
+            .try_get_matches_from(values)
+            .unwrap();
+        let mut params =
+            crate::api::schema::panes::PaneSplitProjection::from_matches(&matches).unwrap();
+        params.target_pane_id =
+            caller_target(&matches, params.target_pane_id, caller, true, true).unwrap();
+        params
+    }
+
+    #[test]
+    fn pane_projection_all_leaf_request_values() {
+        use serde_json::json;
+        let cases = [
+            ("list", vec![], "cli:pane:list", "pane.list", json!({})),
+            (
+                "current",
+                vec!["--pane", "pane"],
+                "cli:pane:current",
+                "pane.current",
+                json!({"caller_pane_id": "pane"}),
+            ),
+            (
+                "get",
+                vec!["pane"],
+                "cli:pane:get",
+                "pane.get",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "layout",
+                vec!["--pane", "pane"],
+                "cli:pane:layout",
+                "pane.layout",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "process-info",
+                vec!["--pane", "pane"],
+                "cli:pane:process_info",
+                "pane.process_info",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "neighbor",
+                vec!["--direction", "left"],
+                "cli:pane:neighbor",
+                "pane.neighbor",
+                json!({"direction": "left"}),
+            ),
+            (
+                "edges",
+                vec!["--pane", "pane"],
+                "cli:pane:edges",
+                "pane.edges",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "focus",
+                vec!["--direction", "right"],
+                "cli:pane:focus",
+                "pane.focus_direction",
+                json!({"direction": "right"}),
+            ),
+            (
+                "resize",
+                vec!["--direction", "up"],
+                "cli:pane:resize",
+                "pane.resize",
+                json!({"direction": "up"}),
+            ),
+            (
+                "zoom",
+                vec![],
+                "cli:pane:zoom",
+                "pane.zoom",
+                json!({"mode": "toggle"}),
+            ),
+            (
+                "read",
+                vec!["pane"],
+                "cli:pane:read",
+                "pane.read",
+                json!({"pane_id": "pane", "source": "recent", "format": "text", "strip_ansi": true}),
+            ),
+            (
+                "rename",
+                vec!["pane", "--clear"],
+                "cli:pane:rename",
+                "pane.rename",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "input",
+                vec!["pane", "--right-click", "herdr"],
+                "cli:pane:input:set",
+                "pane.input.set",
+                json!({"pane_id": "pane", "right_click": "herdr"}),
+            ),
+            (
+                "split",
+                vec!["pane", "--direction", "down"],
+                "cli:pane:split",
+                "pane.split",
+                json!({"target_pane_id": "pane", "direction": "down", "focus": false, "right_click": "herdr"}),
+            ),
+            (
+                "swap",
+                vec!["--direction", "down"],
+                "cli:pane:swap",
+                "pane.swap",
+                json!({"direction": "down"}),
+            ),
+            (
+                "move",
+                vec!["pane", "--new-tab"],
+                "cli:pane:move",
+                "pane.move",
+                json!({"pane_id": "pane", "destination": {"type": "new_tab"}, "focus": true}),
+            ),
+            (
+                "close",
+                vec!["pane"],
+                "cli:pane:close",
+                "pane.close",
+                json!({"pane_id": "pane"}),
+            ),
+            (
+                "send-text",
+                vec!["pane", ""],
+                "cli:request",
+                "pane.send_text",
+                json!({"pane_id": "pane", "text": ""}),
+            ),
+            (
+                "send-keys",
+                vec!["pane", "Enter", "esc"],
+                "cli:request",
+                "pane.send_keys",
+                json!({"pane_id": "pane", "keys": ["Enter", "esc"]}),
+            ),
+            (
+                "wait-output",
+                vec!["pane", "--match", ""],
+                "cli:pane:wait-output",
+                "pane.wait_for_output",
+                json!({"pane_id": "pane", "source": "recent", "match": {"type": "substring", "value": ""}, "strip_ansi": true}),
+            ),
+            (
+                "run",
+                vec!["pane", ""],
+                "cli:request",
+                "pane.send_input",
+                json!({"pane_id": "pane", "keys": ["Enter"]}),
+            ),
+            (
+                "report-agent",
+                vec![
+                    "pane", "--source", " hook ", "--agent", "", "--state", "unknown",
+                ],
+                "cli:request",
+                "pane.report_agent",
+                json!({"pane_id": "pane", "source": "hook", "agent": "", "state": "unknown"}),
+            ),
+            (
+                "report-agent-session",
+                vec!["pane", "--source", " hook ", "--agent", "a"],
+                "cli:request",
+                "pane.report_agent_session",
+                json!({"pane_id": "pane", "source": "hook", "agent": "a"}),
+            ),
+            (
+                "release-agent",
+                vec!["pane", "--source", " hook ", "--agent", "a"],
+                "cli:request",
+                "pane.release_agent",
+                json!({"pane_id": "pane", "source": "hook", "agent": "a"}),
+            ),
+            (
+                "report-metadata",
+                vec!["pane", "--source", " hook ", "--clear-title"],
+                "cli:request",
+                "pane.report_metadata",
+                json!({"pane_id": "pane", "source": "hook", "clear_title": true, "clear_display_agent": false, "clear_state_labels": false}),
+            ),
+        ];
+        assert_eq!(cases.len(), bindings::LEAVES.len());
+        for (name, values, id, method, params) in cases {
+            assert_eq!(
+                serde_json::to_value(request(name, &values).unwrap()).unwrap(),
+                json!({"id": id, "method": method, "params": params}),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn pane_report_agent_session_carries_cursor_and_process_pid() {
+        let json = serde_json::to_value(
+            request(
+                "report-agent-session",
+                &[
+                    "pane",
+                    "--source",
+                    "hook",
+                    "--agent",
+                    "omp",
+                    "--agent-session-cursor",
+                    "cursor-1",
+                    "--agent-process-pid",
+                    "4242",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["params"]["agent_session_cursor"], "cursor-1");
+        assert_eq!(json["params"]["agent_process_pid"], 4242);
+        assert!(request(
+            "report-agent-session",
+            &[
+                "pane",
+                "--source",
+                "hook",
+                "--agent",
+                "omp",
+                "--agent-process-pid",
+                "nope"
+            ],
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pane_projection_dash_leading_targets_and_empty_values() {
+        let params = parse_pane_split_args(&["-literal", "--direction", "right"], None);
+        assert_eq!(params.target_pane_id.as_deref(), Some("-literal"));
+        for name in ["get", "close", "zoom"] {
+            let json = serde_json::to_value(request(name, &["-literal"]).unwrap()).unwrap();
+            assert_eq!(json["params"]["pane_id"], "-literal");
+        }
+        let json = serde_json::to_value(
+            request(
+                "move",
+                &[
+                    "pane",
+                    "--new-workspace",
+                    "--label",
+                    "",
+                    "--tab-label",
+                    "-literal",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["params"]["destination"],
+            serde_json::json!({"type": "new_workspace", "label": "", "tab_label": "-literal"})
+        );
+        let json = serde_json::to_value(
+            request(
+                "move",
+                &[
+                    "pane",
+                    "--new-tab",
+                    "--workspace",
+                    "workspace",
+                    "--label",
+                    "label",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            json["params"]["destination"],
+            serde_json::json!({"type": "new_tab", "workspace_id": "workspace", "label": "label"})
+        );
+    }
+
+    #[test]
+    fn pane_projection_command_is_the_execution_grammar() {
+        command().debug_assert();
+        for leaf in bindings::LEAVES {
+            let command = command().find_subcommand(leaf.name).unwrap().clone();
+            assert_eq!(
+                command
+                    .get_arguments()
+                    .map(|arg| arg.get_id().to_string())
+                    .collect::<Vec<_>>(),
+                leaf.command()
+                    .get_arguments()
+                    .map(|arg| arg.get_id().to_string())
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
     fn parse_pane_split_args_accepts_ratio() {
         let params = parse_pane_split_args(
-            &args(&["issue-1", "--direction", "right", "--ratio", "0.333"]),
+            &["issue-1", "--direction", "right", "--ratio", "0.333"],
             None,
-        )
-        .unwrap();
-
+        );
         assert_eq!(params.target_pane_id, Some("issue-1".into()));
-        assert_eq!(params.direction, crate::api::schema::SplitDirection::Right);
+        assert_eq!(params.direction, SplitDirection::Right);
         assert_eq!(params.ratio, Some(0.333));
         assert_eq!(params.right_click, PaneRightClickTarget::Herdr);
     }
 
     #[test]
     fn parse_pane_split_args_accepts_pane_right_click_target() {
-        let params = parse_pane_split_args(
-            &args(&["--direction", "right", "--right-click", "pane"]),
-            None,
-        )
-        .unwrap();
-
+        let params =
+            parse_pane_split_args(&["--direction", "right", "--right-click", "pane"], None);
         assert_eq!(params.right_click, PaneRightClickTarget::Pane);
-    }
-
-    #[test]
-    fn parse_pane_input_args_requires_and_uses_calling_pane() {
-        let params = parse_pane_input_args(
-            &args(&["--current", "--right-click", "pane"]),
-            Some("issue-1:p1"),
-        )
-        .unwrap();
-
-        assert_eq!(params.pane_id, "issue-1:p1");
-        assert_eq!(params.right_click, PaneRightClickTarget::Pane);
-        assert!(
-            parse_pane_input_args(&args(&["--current", "--right-click", "pane"]), None).is_err()
-        );
-    }
-
-    #[test]
-    fn parse_pane_input_args_rejects_conflicting_selectors() {
-        assert!(parse_pane_input_args(
-            &args(&["pane-a", "--pane", "pane-b", "--right-click", "pane"]),
-            None,
-        )
-        .is_err());
-        assert!(parse_pane_input_args(
-            &args(&["--pane", "pane-a", "--current", "--right-click", "pane",]),
-            Some("pane-b"),
-        )
-        .is_err());
     }
 
     #[test]
     fn parse_pane_split_args_accepts_equals_right_click_target() {
-        let params =
-            parse_pane_split_args(&args(&["--direction", "right", "--right-click=pane"]), None)
-                .unwrap();
-
+        let params = parse_pane_split_args(&["--direction", "right", "--right-click=pane"], None);
         assert_eq!(params.right_click, PaneRightClickTarget::Pane);
     }
 
     #[test]
     fn parse_pane_split_args_accepts_current_target() {
-        let params = parse_pane_split_args(
-            &args(&["--direction", "down", "--current"]),
-            Some("issue-1"),
-        )
-        .unwrap();
-
+        let params = parse_pane_split_args(&["--direction", "down", "--current"], Some("issue-1"));
         assert_eq!(params.target_pane_id, Some("issue-1".into()));
-        assert_eq!(params.direction, crate::api::schema::SplitDirection::Down);
-    }
-
-    #[test]
-    fn parse_pane_split_args_current_without_env_is_rejected() {
-        assert!(parse_pane_split_args(&args(&["--direction", "down", "--current"]), None).is_err());
+        assert_eq!(params.direction, SplitDirection::Down);
     }
 
     #[test]
     fn parse_pane_split_args_omitted_target_uses_caller() {
         let params = parse_pane_split_args(
-            &args(&["--no-focus", "--direction", "right", "--cwd", "/var/tmp"]),
+            &["--no-focus", "--direction", "right", "--cwd", "/var/tmp"],
             Some("w1:p2"),
-        )
-        .unwrap();
-
+        );
         assert_eq!(params.target_pane_id, Some("w1:p2".into()));
         assert!(!params.focus);
     }
 
     #[test]
     fn parse_pane_split_args_without_caller_keeps_focused_fallback() {
-        let params = parse_pane_split_args(&args(&["--direction", "down"]), None).unwrap();
-
-        assert_eq!(params.target_pane_id, None);
+        assert_eq!(
+            parse_pane_split_args(&["--direction", "down"], None).target_pane_id,
+            None
+        );
     }
 
     #[test]
     fn parse_pane_split_args_explicit_target_overrides_caller() {
-        for target in [args(&["w2:p3"]), args(&["--pane", "w2:p3"])] {
-            let mut input = target;
-            input.extend(args(&["--direction", "right"]));
-            let params = parse_pane_split_args(&input, Some("w1:p2")).unwrap();
-
-            assert_eq!(params.target_pane_id, Some("w2:p3".into()));
+        for values in [
+            vec!["w2:p3", "--direction", "right"],
+            vec!["--pane", "w2:p3", "--direction", "right"],
+        ] {
+            assert_eq!(
+                parse_pane_split_args(&values, Some("w1:p2")).target_pane_id,
+                Some("w2:p3".into())
+            );
         }
     }
 
     #[test]
-    fn parse_pane_current_args_uses_env_pane_by_default() {
-        let pane_id = parse_pane_current_args(&args(&[]), Some("issue-1")).unwrap();
-
-        assert_eq!(pane_id, Some("issue-1".into()));
+    fn pane_projection_characterization_caller_and_focused_policies() {
+        for (name, default_caller) in [
+            ("current", true),
+            ("layout", false),
+            ("process-info", false),
+            ("edges", false),
+        ] {
+            let leaf = bindings::LEAVES
+                .iter()
+                .find(|leaf| leaf.name == name)
+                .unwrap();
+            for (values, expected) in [
+                (vec![], if default_caller { Some("caller") } else { None }),
+                (vec!["--pane", "explicit"], Some("explicit")),
+                (vec!["--pane", "explicit", "--current"], Some("caller")),
+                (vec!["--current", "--pane", "explicit"], Some("explicit")),
+            ] {
+                let matches = leaf
+                    .command()
+                    .no_binary_name(true)
+                    .try_get_matches_from(&values)
+                    .unwrap();
+                let mut field = bindings::target(false);
+                field.read_matches(&matches).unwrap();
+                assert_eq!(
+                    caller_target(
+                        &matches,
+                        field.finish().unwrap(),
+                        Some("caller"),
+                        default_caller,
+                        false
+                    )
+                    .unwrap()
+                    .as_deref(),
+                    expected
+                );
+                if values.is_empty() {
+                    assert_eq!(
+                        caller_target(&matches, None, None, default_caller, false).unwrap(),
+                        None
+                    );
+                }
+            }
+        }
+        for name in ["neighbor", "focus", "resize", "swap"] {
+            let parsed = request(
+                name,
+                &["--pane", "explicit", "--current", "--direction", "left"],
+            )
+            .unwrap();
+            assert!(serde_json::to_value(parsed).unwrap()["params"]
+                .get("pane_id")
+                .is_none());
+        }
     }
 
     #[test]
-    fn parse_pane_current_args_accepts_explicit_pane() {
-        let pane_id =
-            parse_pane_current_args(&args(&["--pane", "issue-2"]), Some("issue-1")).unwrap();
-
-        assert_eq!(pane_id, Some("issue-2".into()));
+    fn parse_pane_input_args_requires_and_uses_calling_pane() {
+        let leaf = bindings::LEAVES
+            .iter()
+            .find(|leaf| leaf.name == "input")
+            .unwrap();
+        let matches = leaf
+            .command()
+            .no_binary_name(true)
+            .try_get_matches_from(["--current", "--right-click", "pane"])
+            .unwrap();
+        let mut params =
+            crate::api::schema::panes::PaneInputProjection::from_matches(&matches).unwrap();
+        params.pane_id = caller_target(&matches, None, Some("issue-1:p1"), false, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(params.pane_id, "issue-1:p1");
+        assert_eq!(params.right_click, PaneRightClickTarget::Pane);
+        assert!(caller_target(&matches, None, None, false, true).is_err());
     }
 
     #[test]
-    fn parse_pane_current_args_current_keeps_env_pane() {
-        let pane_id = parse_pane_current_args(&args(&["--current"]), Some("issue-1")).unwrap();
-
-        assert_eq!(pane_id, Some("issue-1".into()));
+    fn parse_pane_input_args_rejects_conflicting_selectors() {
+        assert!(request(
+            "input",
+            &["pane-a", "--pane", "pane-b", "--right-click", "pane"]
+        )
+        .is_err());
+        assert!(request(
+            "input",
+            &["--pane", "pane-a", "--current", "--right-click", "pane"]
+        )
+        .is_err());
     }
 
     #[test]
-    fn parse_pane_current_args_without_env_falls_back_to_focused_pane() {
-        let pane_id = parse_pane_current_args(&args(&[]), None).unwrap();
-
-        assert_eq!(pane_id, None);
-    }
-
-    #[test]
-    fn parse_pane_swap_args_accepts_directional_current() {
-        let params = parse_pane_swap_args(&args(&["--direction", "right"])).unwrap();
-
-        assert_eq!(params.pane_id, None);
-        assert_eq!(params.direction, Some(PaneDirection::Right));
-        assert_eq!(params.source_pane_id, None);
-        assert_eq!(params.target_pane_id, None);
+    fn pane_projection_split_ordered_values() {
+        let params = parse_pane_split_args(
+            &[
+                "--pane",
+                "explicit",
+                "--current",
+                "--direction",
+                "right",
+                "--direction",
+                "down",
+                "--focus",
+                "--no-focus",
+                "--focus",
+                "--env",
+                "A=first",
+                "--env",
+                "A=last",
+            ],
+            Some("caller"),
+        );
+        assert_eq!(params.target_pane_id.as_deref(), Some("caller"));
+        assert_eq!(params.direction, SplitDirection::Down);
+        assert!(params.focus);
+        assert_eq!(params.env.get("A").map(String::as_str), Some("last"));
     }
 
     #[test]
     fn parse_pane_swap_args_accepts_explicit_source_and_target() {
-        let params = parse_pane_swap_args(&args(&[
-            "--source-pane",
-            "issue-1",
-            "--target-pane",
-            "issue-2",
-        ]))
-        .unwrap();
-
+        let Method::PaneSwap(params) = request(
+            "swap",
+            &["--source-pane", "issue-1", "--target-pane", "issue-2"],
+        )
+        .unwrap()
+        .method
+        else {
+            panic!()
+        };
         assert_eq!(params.direction, None);
         assert_eq!(params.source_pane_id, Some("issue-1".into()));
         assert_eq!(params.target_pane_id, Some("issue-2".into()));
-    }
-
-    #[test]
-    fn parse_pane_swap_args_rejects_mixed_forms() {
-        let err = parse_pane_swap_args(&args(&[
-            "--direction",
-            "left",
-            "--source-pane",
-            "issue-1",
-            "--target-pane",
-            "issue-2",
-        ]))
-        .unwrap_err();
-
-        assert!(err.contains("usage: herdr pane swap"));
+        assert!(request(
+            "swap",
+            &[
+                "--direction",
+                "left",
+                "--source-pane",
+                "a",
+                "--target-pane",
+                "b"
+            ]
+        )
+        .is_err());
     }
 
     #[test]
     fn parse_pane_move_args_accepts_existing_tab_destination() {
-        let params = parse_pane_move_args(&args(&[
-            "issue-1",
-            "--tab",
-            "issue:2",
-            "--split",
-            "right",
-            "--target-pane",
-            "issue-3",
-            "--ratio",
-            "0.25",
-            "--no-focus",
-        ]))
-        .unwrap();
-
+        let Method::PaneMove(params) = request(
+            "move",
+            &[
+                "issue-1",
+                "--tab",
+                "issue:2",
+                "--split",
+                "right",
+                "--target-pane",
+                "issue-3",
+                "--ratio",
+                "0.25",
+                "--no-focus",
+            ],
+        )
+        .unwrap()
+        .method
+        else {
+            panic!()
+        };
         assert_eq!(params.pane_id, "issue-1");
         assert!(!params.focus);
         assert_eq!(
@@ -1945,169 +766,139 @@ mod tests {
                 tab_id: "issue:2".into(),
                 target_pane_id: Some("issue-3".into()),
                 split: SplitDirection::Right,
-                ratio: Some(0.25),
+                ratio: Some(0.25)
             }
         );
     }
 
     #[test]
-    fn parse_pane_move_args_rejects_target_pane_without_tab() {
-        let err =
-            parse_pane_move_args(&args(&["issue-1", "--target-pane", "issue-2"])).unwrap_err();
-
-        assert!(err.contains("usage: herdr pane move"));
-    }
-
-    #[test]
-    fn parse_pane_move_args_rejects_non_finite_ratio() {
-        let err = parse_pane_move_args(&args(&[
-            "issue-1", "--tab", "issue:2", "--split", "right", "--ratio", "NaN",
-        ]))
-        .unwrap_err();
-
-        assert!(err.contains("invalid ratio"));
+    fn pane_projection_move_and_finite_values() {
+        for destination in ["--new-tab", "--new-workspace"] {
+            let parsed = request(
+                "move",
+                &[
+                    "pane",
+                    destination,
+                    "--ratio",
+                    "0.5",
+                    "--no-focus",
+                    "--focus",
+                ],
+            )
+            .unwrap();
+            let json = serde_json::to_value(parsed).unwrap();
+            assert_eq!(json["params"]["focus"], true);
+            assert!(json["params"]["destination"].get("ratio").is_none());
+        }
+        for value in ["NaN", "inf", "-inf"] {
+            for (name, values) in [
+                ("resize", vec!["--direction", "right", "--amount", value]),
+                ("split", vec!["--direction", "right", "--ratio", value]),
+                (
+                    "move",
+                    vec!["pane", "--tab", "tab", "--split", "right", "--ratio", value],
+                ),
+            ] {
+                assert!(request(name, &values).is_err());
+            }
+        }
     }
 
     #[test]
     fn parse_pane_zoom_args_defaults_to_current_toggle() {
-        let params = parse_pane_zoom_args(&args(&[])).unwrap();
-
+        let Method::PaneZoom(params) = request("zoom", &[]).unwrap().method else {
+            panic!()
+        };
         assert_eq!(params.pane_id, None);
         assert_eq!(params.mode, PaneZoomMode::Toggle);
+        for (values, pane, mode) in [
+            (vec!["issue-1", "--on"], "issue-1", PaneZoomMode::On),
+            (
+                vec!["--pane", "issue-2", "--off"],
+                "issue-2",
+                PaneZoomMode::Off,
+            ),
+        ] {
+            let Method::PaneZoom(params) = request("zoom", &values).unwrap().method else {
+                panic!()
+            };
+            assert_eq!(params.pane_id.as_deref(), Some(pane));
+            assert_eq!(params.mode, mode);
+        }
+        assert!(request("zoom", &["--on", "--off"]).is_err());
     }
 
     #[test]
-    fn parse_pane_zoom_args_accepts_positional_pane_and_on() {
-        let params = parse_pane_zoom_args(&args(&["issue-1", "--on"])).unwrap();
-
-        assert_eq!(params.pane_id, Some("issue-1".into()));
-        assert_eq!(params.mode, PaneZoomMode::On);
+    fn pane_projection_read_preserves_defaults_and_ansi_order() {
+        for (values, source, lines, format, strip) in [
+            (
+                vec!["issue-1"],
+                ReadSource::Recent,
+                None,
+                ReadFormat::Text,
+                true,
+            ),
+            (
+                vec!["issue-1", "--source", "visible", "--lines", "5", "--ansi"],
+                ReadSource::Visible,
+                Some(5),
+                ReadFormat::Ansi,
+                true,
+            ),
+            (
+                vec!["--source=visible", "--lines=5", "issue-1"],
+                ReadSource::Visible,
+                Some(5),
+                ReadFormat::Text,
+                true,
+            ),
+            (
+                vec![
+                    "--raw",
+                    "issue-1",
+                    "--format=text",
+                    "--ansi",
+                    "--format",
+                    "text",
+                    "--lines=0",
+                    "--source=recent_unwrapped",
+                ],
+                ReadSource::RecentUnwrapped,
+                Some(0),
+                ReadFormat::Text,
+                false,
+            ),
+            (
+                vec!["issue-1", "--format=text", "--raw"],
+                ReadSource::Recent,
+                None,
+                ReadFormat::Ansi,
+                false,
+            ),
+        ] {
+            let Method::PaneRead(params) = request("read", &values).unwrap().method else {
+                panic!()
+            };
+            assert_eq!(params.pane_id, "issue-1");
+            assert_eq!(params.source, source);
+            assert_eq!(params.lines, lines);
+            assert_eq!(params.format, format);
+            assert_eq!(params.strip_ansi, strip);
+            assert_eq!(params.intent, crate::api::schema::ReadIntent::Interactive);
+        }
     }
 
     #[test]
-    fn parse_pane_zoom_args_accepts_pane_option_and_off() {
-        let params = parse_pane_zoom_args(&args(&["--pane", "issue-2", "--off"])).unwrap();
-
-        assert_eq!(params.pane_id, Some("issue-2".into()));
-        assert_eq!(params.mode, PaneZoomMode::Off);
-    }
-
-    #[test]
-    fn parse_pane_zoom_args_rejects_multiple_modes() {
-        let err = parse_pane_zoom_args(&args(&["--on", "--off"])).unwrap_err();
-
-        assert!(err.contains("provide only one"));
-    }
-
-    #[test]
-    fn parse_pane_neighbor_args_accepts_directional_current() {
-        let params = parse_pane_neighbor_args(&args(&["--direction", "down"])).unwrap();
-
-        assert_eq!(params.pane_id, None);
-        assert_eq!(params.direction, PaneDirection::Down);
-    }
-
-    #[test]
-    fn parse_optional_current_pane_args_accepts_current_target() {
-        let pane_id =
-            parse_optional_current_pane_args(&args(&["--current"]), Some("issue-1")).unwrap();
-
-        assert_eq!(pane_id, Some("issue-1".into()));
-    }
-
-    #[test]
-    fn parse_optional_current_pane_args_current_without_env_keeps_focused_fallback() {
-        let pane_id = parse_optional_current_pane_args(&args(&["--current"]), None).unwrap();
-
-        assert_eq!(pane_id, None);
-    }
-
-    #[test]
-    fn parse_optional_current_pane_args_omitted_target_keeps_focused_fallback() {
-        let pane_id = parse_optional_current_pane_args(&args(&[]), Some("issue-1")).unwrap();
-
-        assert_eq!(pane_id, None);
-    }
-
-    #[test]
-    fn parse_optional_current_pane_args_accepts_explicit_pane() {
-        let pane_id =
-            parse_optional_current_pane_args(&args(&["--pane", "issue-2"]), Some("issue-1"))
-                .unwrap();
-
-        assert_eq!(pane_id, Some("issue-2".into()));
-    }
-
-    #[test]
-    fn parse_pane_focus_args_accepts_directional_current() {
-        let params = parse_pane_focus_args(&args(&["--direction", "up"])).unwrap();
-
-        assert_eq!(params.pane_id, None);
-        assert_eq!(params.direction, PaneDirection::Up);
-    }
-
-    #[test]
-    fn parse_pane_resize_args_accepts_amount_and_pane() {
-        let params = parse_pane_resize_args(&args(&[
-            "--pane",
-            "issue-2",
-            "--direction",
-            "left",
-            "--amount",
-            "0.125",
-        ]))
-        .unwrap();
-
-        assert_eq!(params.pane_id, Some("issue-2".into()));
-        assert_eq!(params.direction, PaneDirection::Left);
-        assert_eq!(params.amount, Some(0.125));
-    }
-
-    #[test]
-    fn parse_pane_read_args_defaults_with_bare_pane_id() {
-        let params = parse_pane_read_args(&args(&["issue-1"])).unwrap();
-
-        assert_eq!(params.pane_id, "issue-1");
-        assert_eq!(params.source, ReadSource::Recent);
-        assert_eq!(params.lines, None);
-        assert_eq!(params.format, ReadFormat::Text);
-        assert!(params.strip_ansi);
-    }
-
-    #[test]
-    fn parse_pane_read_args_accepts_space_separated_options() {
-        let params = parse_pane_read_args(&args(&[
-            "issue-1", "--source", "visible", "--lines", "5", "--ansi",
-        ]))
-        .unwrap();
-
-        assert_eq!(params.pane_id, "issue-1");
-        assert_eq!(params.source, ReadSource::Visible);
-        assert_eq!(params.lines, Some(5));
-        assert_eq!(params.format, ReadFormat::Ansi);
-    }
-
-    #[test]
-    fn parse_pane_read_args_accepts_reordered_equals_options() {
-        let params =
-            parse_pane_read_args(&args(&["--source=visible", "--lines=5", "issue-1"])).unwrap();
-
-        assert_eq!(params.pane_id, "issue-1");
-        assert_eq!(params.source, ReadSource::Visible);
-        assert_eq!(params.lines, Some(5));
-    }
-
-    #[test]
-    fn parse_pane_wait_output_args_accepts_space_separated_options() {
-        let params = parse_pane_wait_output_args(&args(&[
-            "issue-1",
-            "--match",
-            "ready",
-            "--timeout",
-            "5000",
-        ]))
-        .unwrap();
-
+    fn pane_projection_wait_preserves_matcher_and_defaults() {
+        let Method::PaneWaitForOutput(params) = request(
+            "wait-output",
+            &["issue-1", "--match", "ready", "--timeout", "5000"],
+        )
+        .unwrap()
+        .method
+        else {
+            panic!()
+        };
         assert_eq!(params.pane_id, "issue-1");
         assert_eq!(
             params.r#match,
@@ -2118,34 +909,158 @@ mod tests {
         assert_eq!(params.timeout_ms, Some(5000));
         assert_eq!(params.source, ReadSource::Recent);
         assert!(params.strip_ansi);
-    }
-
-    #[test]
-    fn parse_pane_wait_output_args_accepts_reordered_equals_options() {
-        let params =
-            parse_pane_wait_output_args(&args(&["--match=a=b", "--timeout=100", "issue-1"]))
-                .unwrap();
-
-        assert_eq!(params.pane_id, "issue-1");
+        let Method::PaneWaitForOutput(params) = request(
+            "wait-output",
+            &[
+                "--regex=a=b",
+                "--source=detection",
+                "issue-1",
+                "--timeout=0",
+                "--raw",
+            ],
+        )
+        .unwrap()
+        .method
+        else {
+            panic!()
+        };
         assert_eq!(
             params.r#match,
-            OutputMatch::Substring {
+            OutputMatch::Regex {
                 value: "a=b".into()
             }
         );
-        assert_eq!(params.timeout_ms, Some(100));
+        assert_eq!(params.source, ReadSource::Detection);
+        assert_eq!(params.timeout_ms, Some(0));
+        assert!(!params.strip_ansi);
+        assert!(request("wait-output", &["issue-1"]).is_err());
+        assert!(request("wait-output", &["issue-1", "--match", "a", "--regex", "b"]).is_err());
     }
 
     #[test]
-    fn parse_pane_wait_output_args_requires_matcher() {
-        let err = parse_pane_wait_output_args(&args(&["issue-1"])).unwrap_err();
-        assert!(err.contains("missing required --match or --regex"));
+    fn pane_projection_atomic_run_joined_text_and_raw_keys() {
+        for (name, field) in [("run", "text"), ("send-text", "text"), ("rename", "label")] {
+            let parsed = request(name, &["pane", "a", "--literal", "b"]).unwrap();
+            let json = serde_json::to_value(parsed).unwrap();
+            assert_eq!(json["params"][field], "a --literal b");
+            if name == "run" {
+                assert_eq!(json["params"]["keys"], serde_json::json!(["Enter"]));
+                assert_eq!(json["method"], "pane.send_input");
+                assert_eq!(json["id"], "cli:request");
+            }
+        }
+        let Method::PaneSendKeys(params) =
+            request("send-keys", &["pane", "Enter", "--literal", "esc"])
+                .unwrap()
+                .method
+        else {
+            panic!()
+        };
+        assert_eq!(params.keys, args(&["Enter", "--literal", "esc"]));
+        let Method::PaneRename(params) = request("rename", &["pane", "--clear"]).unwrap().method
+        else {
+            panic!()
+        };
+        assert_eq!(params.label, None);
     }
 
     #[test]
-    fn parse_pane_wait_output_args_rejects_conflicting_matchers() {
-        let err = parse_pane_wait_output_args(&args(&["issue-1", "--match", "a", "--regex", "b"]))
-            .unwrap_err();
-        assert!(err.contains("mutually exclusive"));
+    fn pane_projection_resume_presence_and_metadata_patches() {
+        for name in ["report-agent", "report-agent-session"] {
+            for (suffix, expected) in [
+                (vec![], None),
+                (vec!["--"], Some(vec![])),
+                (
+                    vec!["--", "agent", "--source=y", "--"],
+                    Some(args(&["agent", "--source=y", "--"])),
+                ),
+            ] {
+                let mut values = vec![
+                    "--source=  hook  ",
+                    "pane",
+                    "--agent=a",
+                    "--seq=0",
+                    "--agent-session-id=session",
+                    "--agent-session-path=/path",
+                ];
+                if name == "report-agent" {
+                    values.push("--state=idle");
+                }
+                values.extend(suffix);
+                let json = serde_json::to_value(request(name, &values).unwrap()).unwrap();
+                assert_eq!(json["params"]["source"], "hook");
+                assert_eq!(json["params"]["seq"], 0);
+                match expected {
+                    Some(argv) => assert_eq!(
+                        json["params"]["resume_argv"],
+                        serde_json::to_value(argv).unwrap()
+                    ),
+                    None => assert!(json["params"].get("resume_argv").is_none()),
+                }
+            }
+        }
+        let json = serde_json::to_value(
+            request(
+                "report-metadata",
+                &[
+                    "pane",
+                    "--source",
+                    "  hook  ",
+                    "--title",
+                    "",
+                    "--token",
+                    "K=a=b",
+                    "--clear-token",
+                    "K",
+                    "--token",
+                    "E=",
+                    "--state-label",
+                    " Idle =ready",
+                    "--seq",
+                    "0",
+                ],
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["params"]["source"], "hook");
+        assert_eq!(json["params"]["title"], "");
+        assert_eq!(
+            json["params"]["tokens"],
+            serde_json::json!({"K": null, "E": ""})
+        );
+        assert_eq!(
+            json["params"]["state_labels"],
+            serde_json::json!({"idle": "ready"})
+        );
+        assert!(request("report-metadata", &["pane", "--source", "hook"]).is_err());
+        assert!(request(
+            "report-metadata",
+            &["pane", "--source", "hook", "--title", "x", "--clear-title"]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn pane_projection_help_and_invalid_syntax_do_not_use_transport() {
+        for leaf in bindings::LEAVES {
+            assert_eq!(run_pane_command(&args(&[leaf.name, "--help"])).unwrap(), 0);
+        }
+        for name in [
+            "get",
+            "close",
+            "send-text",
+            "send-keys",
+            "run",
+            "rename",
+            "input",
+            "move",
+            "report-agent",
+            "report-agent-session",
+            "release-agent",
+            "report-metadata",
+        ] {
+            assert_eq!(run_pane_command(&args(&[name])).unwrap(), 2);
+        }
     }
 }

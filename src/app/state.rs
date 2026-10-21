@@ -1004,11 +1004,27 @@ impl AppState {
             })
     }
 
-    pub fn estimate_pane_size(&self) -> (u16, u16) {
-        if let Some(info) = self.view.pane_infos.first() {
-            (info.rect.height, info.rect.width)
+    /// Rows and columns a pane being created at `placement` will have once its
+    /// tab is laid out, including tabs that are not on screen.
+    pub(crate) fn new_pane_size(&self, placement: crate::ui::NewPanePlacement) -> (u16, u16) {
+        crate::ui::new_pane_terminal_size(self, self.new_pane_area(), placement)
+    }
+
+    /// Rows and columns for every pane of a tab about to be built as `layout`,
+    /// in pane order.
+    pub(crate) fn new_layout_pane_sizes(
+        &self,
+        layout: &crate::layout::TileLayout,
+    ) -> Vec<(u16, u16)> {
+        crate::ui::new_layout_terminal_sizes(self, self.new_pane_area(), layout)
+    }
+
+    fn new_pane_area(&self) -> Rect {
+        let area = self.view.terminal_area;
+        if area.width == 0 || area.height == 0 {
+            Rect::new(0, 0, self.headless_size.0, self.headless_size.1)
         } else {
-            (self.headless_size.1, self.headless_size.0)
+            area
         }
     }
 
@@ -1571,11 +1587,15 @@ mod tests {
     use crossterm::event::KeyEvent;
 
     #[test]
-    fn pane_size_estimate_uses_headless_size_before_first_view() {
+    fn new_pane_size_uses_headless_size_before_first_view() {
         let mut state = AppState::test_new();
         state.headless_size = (132, 41);
+        state.pane_scrollbars = false;
 
-        assert_eq!(state.estimate_pane_size(), (41, 132));
+        assert_eq!(
+            state.new_pane_size(crate::ui::NewPanePlacement::Alone),
+            (41, 132)
+        );
     }
 
     #[test]

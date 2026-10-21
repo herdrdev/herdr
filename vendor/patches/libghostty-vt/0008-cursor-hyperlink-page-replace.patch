@@ -1,0 +1,127 @@
+diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
+index d0d2b929..70b92124 100644
+--- a/vendor/libghostty-vt/src/terminal/Screen.zig
++++ b/vendor/libghostty-vt/src/terminal/Screen.zig
+@@ -1518,7 +1518,8 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+     }
+ 
+     // If we have a hyperlink then we need to release it from the old page.
+-    if (self.cursor.hyperlink != null) {
++    // A zero id means an outer pin change already released it.
++    if (self.cursor.hyperlink != null and self.cursor.hyperlink_id != 0) {
+         const old_page: *Page = self.cursor.page_pin.node.page();
+         old_page.hyperlink_set.release(old_page.memory, self.cursor.hyperlink_id);
+         // Zero the ID, it is invalid now and style changes below may
+@@ -1530,6 +1531,10 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+     // Update our pin to the new page
+     self.cursor.page_pin.* = new;
+ 
++    // Remember the heap link before style migration. Growing the
++    // destination page replaces it and frees this object.
++    const pre_style_link = self.cursor.hyperlink;
++
+     // On the new page, we need to migrate our style
+     if (old_style_) |old_style| {
+         self.cursor.style = old_style;
+@@ -1546,10 +1551,14 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+ 
+     // On the new page, we need to migrate our hyperlink
+     if (self.cursor.hyperlink) |link| {
+-        // startHyperlink will try to free old hyperlinks, so set this
+-        // to null. We free it ourselves later since we're doing some
+-        // ref-counting shenanigans in this function.
++        // Page replacement during style migration already inserted this
++        // link on the new page and freed the pre-move object.
++        if (link != pre_style_link) return;
++
++        // Clear both fields so startHyperlink doesn't try to end a link
++        // through a null pointer. We free the old link ourselves below.
+         self.cursor.hyperlink = null;
++        self.cursor.hyperlink_id = 0;
+ 
+         // Re-add
+         self.startHyperlink(link.uri, switch (link.id) {
+@@ -5021,6 +5030,83 @@ test "Screen: cursorAbsolute to page with insufficient capacity" {
+     new_page.assertIntegrity();
+ }
+ 
++test "Screen: cursorAbsolute across a full page keeps the hyperlink" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    const io = testing.io;
++
++    var s = try init(io, alloc, .{ .cols = 10, .rows = 3, .max_scrollback_bytes = 1 });
++    defer s.deinit();
++
++    const start_page = s.pages.pages.last.?.page();
++    const rem = start_page.capacity.rows;
++    start_page.pauseIntegrityChecks(true);
++    for (0..rem) |_| try s.cursorDownOrScroll();
++    start_page.pauseIntegrityChecks(false);
++    try testing.expect(start_page != s.cursor.page_pin.node.page());
++
++    {
++        start_page.pauseIntegrityChecks(true);
++        defer start_page.pauseIntegrityChecks(false);
++        var n: u24 = 1;
++        while (start_page.styles.add(
++            start_page.memory,
++            .{ .bg_color = .{ .rgb = @bitCast(n) } },
++        )) |_| n += 1 else |_| {}
++    }
++
++    try s.setAttribute(.{ .bold = {} });
++    try s.startHyperlink("https://example.com/5296", "keep");
++
++    // The destination style set is full, so this pin change grows the page
++    // while the cursor still holds the pre-move hyperlink.
++    s.cursorAbsolute(1, 1);
++
++    try testing.expect(s.cursor.hyperlink_id != 0);
++    try testing.expectEqualStrings("https://example.com/5296", s.cursor.hyperlink.?.uri);
++    try testing.expectEqualStrings("keep", s.cursor.hyperlink.?.id.explicit);
++    s.endHyperlink();
++    try testing.expect(s.cursor.hyperlink == null);
++    try testing.expect(s.cursor.hyperlink_id == 0);
++}
++
++test "Screen: cursorAbsolute keeps the hyperlink when style migration splits the page" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++    var s = try init(testing.io, alloc, .{ .cols = 10, .rows = 3, .max_scrollback_bytes = 1 });
++    defer s.deinit();
++
++    var destination_node = s.cursor.page_pin.node;
++    const rem = destination_node.page().capacity.rows;
++    for (0..rem) |_| try s.cursorDownOrScroll();
++    try testing.expect(destination_node != s.cursor.page_pin.node);
++
++    const max_styles = std.math.maxInt(size.CellCountInt);
++    while (destination_node.capacity().styles < max_styles) {
++        destination_node = try s.increaseCapacity(destination_node, .styles);
++    }
++    const destination_page = destination_node.page();
++    {
++        destination_page.pauseIntegrityChecks(true);
++        defer destination_page.pauseIntegrityChecks(false);
++        var n: u24 = 1;
++        while (destination_page.styles.add(
++            destination_page.memory,
++            .{ .bg_color = .{ .rgb = @bitCast(n) } },
++        )) |_| n += 1 else |_| {}
++    }
++
++    // The destination style set is already at its maximum capacity, so
++    // style migration splits the page and moves the cursor again.
++    try s.setAttribute(.bold);
++    try s.startHyperlink("https://example.com/5296-split", "keep");
++    s.cursorAbsolute(1, 1);
++
++    try testing.expect(s.cursor.hyperlink_id != 0);
++    try testing.expectEqualStrings("https://example.com/5296-split", s.cursor.hyperlink.?.uri);
++    s.endHyperlink();
++}
++
+ test "Screen: scrolling" {
+     const testing = std.testing;
+     const alloc = testing.allocator;

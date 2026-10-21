@@ -544,7 +544,6 @@ mod tests {
         let running_listener = crate::ipc::bind_local_listener(&running_path).unwrap();
         let error = crate::ipc::connect_local_stream(&denied_path).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
-        assert!(error.to_string().contains("admin shell"));
 
         let sessions = list_sessions().unwrap();
         let denied = sessions
@@ -552,7 +551,7 @@ mod tests {
             .find(|session| session.name == "denied")
             .unwrap();
         assert!(!denied.running);
-        assert!(denied.connection_error.is_some());
+        assert_eq!(denied.connection_error, Some(error.to_string()));
         let running = sessions
             .iter()
             .find(|session| session.name == "running")

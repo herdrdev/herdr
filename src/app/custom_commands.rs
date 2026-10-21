@@ -369,9 +369,9 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let previous_focus_target = self.state.current_pane_focus_target();
-        let (rows, cols) = self.state.estimate_pane_size();
-        let new_rows = rows.max(4);
-        let new_cols = cols.max(10);
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::ZoomedOverlay);
         let (env, _) = self.custom_command_env();
 
         let ws = self
@@ -393,8 +393,8 @@ impl App {
         });
         let new_pane = ws.split_focused_command(
             Direction::Horizontal,
-            new_rows,
-            new_cols,
+            rows,
+            cols,
             cwd,
             command,
             env,
@@ -448,9 +448,9 @@ impl App {
             return Err(std::io::Error::other("no active workspace"));
         };
         let previous_focus_target = self.state.current_pane_focus_target();
-        let (rows, cols) = self.state.estimate_pane_size();
-        let new_rows = rows.max(4);
-        let new_cols = cols.max(10);
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::ZoomedOverlay);
 
         let ws = self
             .state
@@ -480,8 +480,8 @@ impl App {
             let result = ws.split_pane_argv_command(
                 previous_focus,
                 Direction::Horizontal,
-                new_rows,
-                new_cols,
+                rows,
+                cols,
                 cwd,
                 argv,
                 extra_env,

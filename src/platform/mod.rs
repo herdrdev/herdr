@@ -6,6 +6,59 @@
 #[cfg(unix)]
 pub(crate) mod ssh_agent;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Native adapters construct only the event classifications their OS can report.
+#[allow(dead_code)]
+pub(crate) enum HostPowerEvent {
+    Suspend,
+    AutomaticResume,
+    InteractiveResume,
+    UnclassifiedResume,
+}
+
+pub(crate) struct HostPowerMonitor {
+    events: tokio::sync::mpsc::UnboundedReceiver<HostPowerEvent>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl HostPowerMonitor {
+    pub(crate) fn start(enabled: bool) -> Self {
+        let (sender, events) = tokio::sync::mpsc::unbounded_channel();
+        let task = if enabled {
+            monitor_host_power(sender)
+        } else {
+            None
+        };
+        Self { events, task }
+    }
+
+    pub(crate) fn try_recv(&mut self) -> Option<HostPowerEvent> {
+        self.events.try_recv().ok()
+    }
+
+    pub(crate) async fn recv(&mut self) -> HostPowerEvent {
+        match self.events.recv().await {
+            Some(event) => event,
+            None => std::future::pending().await,
+        }
+    }
+}
+
+impl Drop for HostPowerMonitor {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn monitor_host_power(
+    _sender: tokio::sync::mpsc::UnboundedSender<HostPowerEvent>,
+) -> Option<tokio::task::JoinHandle<()>> {
+    None
+}
+
 pub(crate) struct HostShutdownMonitor {
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -13,9 +66,10 @@ pub(crate) struct HostShutdownMonitor {
 impl HostShutdownMonitor {
     pub(crate) fn start(
         requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        intent: HostShutdownIntentCell,
         wake: impl Fn() + Send + Sync + 'static,
     ) -> Self {
-        let task = monitor_host_shutdown(requested, wake);
+        let task = monitor_host_shutdown(requested, intent, wake);
         Self { task }
     }
 }
@@ -28,12 +82,58 @@ impl Drop for HostShutdownMonitor {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// A restart or shutdown the host announced but has not committed to yet.
+///
+/// Live handoff carries it so a replacement server still recognizes the
+/// commit point. The value is captured when the old server builds its handoff
+/// manifest; announcements or cancellations that arrive after that and before
+/// the replacement starts its monitor reach only the old server. Each handoff
+/// phase may take up to 30 seconds, so that window can last tens of seconds.
+/// Only macOS reports an intent; the timestamp is in its boot-wide monotonic
+/// clock, which is shared by the old and new server processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HostShutdownIntent {
+    announced_at_ns: u64,
+}
+
+/// The pending host shutdown intent shared by the server and its monitor.
+// Windows has no live handoff and no announcement to record, so nothing reads it there.
+#[cfg_attr(windows, allow(dead_code))]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct HostShutdownIntentCell(
+    std::sync::Arc<std::sync::Mutex<Option<HostShutdownIntent>>>,
+);
+
+// Windows has no live handoff and no announcement to record, so nothing reads it there.
+#[cfg_attr(windows, allow(dead_code))]
+impl HostShutdownIntentCell {
+    pub(crate) fn get(&self) -> Option<HostShutdownIntent> {
+        *self.lock()
+    }
+
+    pub(crate) fn set(&self, intent: Option<HostShutdownIntent>) {
+        *self.lock() = intent;
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<HostShutdownIntent>> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn monitor_host_shutdown(
     _requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _intent: HostShutdownIntentCell,
     _wake: impl Fn() + Send + Sync + 'static,
 ) -> Option<tokio::task::JoinHandle<()>> {
     None
+}
+
+#[cfg(not(windows))]
+pub(crate) fn host_shutdown_in_progress() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +149,47 @@ pub struct ForegroundProcess {
 pub struct ForegroundJob {
     pub process_group_id: u32,
     pub processes: Vec<ForegroundProcess>,
+}
+
+/// A request from outside the process to stop the server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServerQuitSignal {
+    #[cfg(unix)]
+    Interrupt,
+    #[cfg(unix)]
+    Terminate,
+    #[cfg(not(unix))]
+    ConsoleControl,
+}
+
+impl std::fmt::Display for ServerQuitSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            #[cfg(unix)]
+            Self::Interrupt => "SIGINT",
+            #[cfg(unix)]
+            Self::Terminate => "SIGTERM",
+            #[cfg(not(unix))]
+            Self::ConsoleControl => "console control event",
+        })
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn spawn_server_signal_monitor(
+    on_quit: impl Fn(ServerQuitSignal) + Send + Sync + 'static,
+) {
+    if let Err(err) = ctrlc::set_handler(move || on_quit(ServerQuitSignal::ConsoleControl)) {
+        tracing::warn!(%err, "failed to install server stop handler");
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn ignore_server_hangup() {}
+
+#[cfg(not(unix))]
+pub(crate) fn local_stream_peer_description(_stream: &crate::ipc::LocalStream) -> Option<String> {
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,6 +307,42 @@ pub(crate) const fn capabilities() -> PlatformCapabilities {
     }
 }
 
+/// The byte the host terminal sends for Backspace according to the tty's erase
+/// setting (e.g. `^H` for MobaXterm and PuTTY-style terminals), when known.
+pub(crate) fn terminal_erase_byte() -> Option<u8> {
+    #[cfg(unix)]
+    return unix_common::terminal_erase_byte();
+    #[cfg(not(unix))]
+    None
+}
+
+/// Error kind marker for a terminal that momentarily has no usable grid.
+///
+/// A window drag can sample a zero-sized grid before the terminal settles, so
+/// this is distinct from a real terminal failure. Startup still rejects it; the
+/// resize watcher treats it as a transient sample instead of a dead terminal.
+#[derive(Debug)]
+pub(crate) struct ZeroSizedGridError;
+
+impl std::fmt::Display for ZeroSizedGridError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("terminal reported a zero-sized grid")
+    }
+}
+
+impl std::error::Error for ZeroSizedGridError {}
+
+pub(crate) fn zero_sized_terminal_grid_error() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, ZeroSizedGridError)
+}
+
+/// Whether an error only means the terminal has no usable size yet, so a
+/// resizing terminal should keep its last known geometry instead of detaching.
+pub(crate) fn is_transient_terminal_grid_error(err: &std::io::Error) -> bool {
+    err.get_ref()
+        .is_some_and(|inner| inner.is::<ZeroSizedGridError>())
+}
+
 pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
     #[cfg(unix)]
     let (cols, rows) = unix_common::read_terminal_grid_size()?;
@@ -175,17 +352,41 @@ pub(crate) fn terminal_grid_size() -> std::io::Result<(u16, u16)> {
     let (cols, rows) = fallback::read_terminal_grid_size()?;
 
     if cols == 0 || rows == 0 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "terminal reported a zero-sized grid",
-        ));
+        return Err(zero_sized_terminal_grid_error());
     }
     Ok((cols, rows))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
     command.spawn().map(|child| child.id())
+}
+
+/// Starts the daemon through launchd, so quitting the terminal app that
+/// started it does not take the server down (herdr#4920). Over SSH, or when
+/// launchd cannot carry the command exactly, it spawns a detached child.
+/// Returns the child's pid, or 0 when launchd started it.
+#[cfg(target_os = "macos")]
+pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
+    match macos::spawn_launchd_job(command) {
+        Ok(_label) => Ok(0),
+        Err(err) => {
+            tracing::info!(%err, "starting the server directly instead of through launchd");
+            command.spawn().map(|child| child.id())
+        }
+    }
+}
+
+/// First step of a server process; see `launch_server_daemon_command`.
+/// Returns a warning to log once logging is initialized.
+#[cfg(target_os = "macos")]
+pub(crate) fn leave_launcher_job() -> Option<String> {
+    macos::leave_launchd_job()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn leave_launcher_job() -> Option<String> {
+    None
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -369,11 +570,28 @@ mod remote_bridge;
 mod remote_bridge_tests;
 #[cfg(unix)]
 mod unix_common;
+/// Other Unix platforms keep their existing input admission policy.
+/// Their _PC_MAX_CANON values need not describe the actual queue capacity.
+#[cfg(all(unix, not(target_os = "macos")))]
+#[derive(Clone, Default)]
+pub(crate) struct PtyInputGuard;
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl PtyInputGuard {
+    pub(crate) fn new(_master: &std::sync::Arc<std::fs::File>) -> Self {
+        Self
+    }
+
+    pub(crate) fn validate(&self, _bytes: &[u8]) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 #[cfg(unix)]
 pub(crate) mod unix_image_files;
 #[cfg(unix)]
 pub(crate) use unix_common::{
-    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, RemoteBridgeWake,
+    begin_cli_output, end_cli_output, forward_remote_bridge_stdio, ignore_server_hangup,
+    local_stream_peer_description, spawn_server_signal_monitor, ChildPipe, RemoteBridgeWake,
 };
 
 mod client_state;
@@ -399,6 +617,9 @@ pub use macos::*;
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::*;
+
+#[cfg(not(windows))]
+pub(crate) use process_cwd as pane_process_cwd;
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 mod fallback;
@@ -709,6 +930,102 @@ fn child_exit_classification_only_checkpoints_interruptions() {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn live_pane_process_group_rejects_processes_outside_the_pane_session() {
+        use std::os::unix::process::CommandExt;
+
+        let mut detached = std::process::Command::new("sleep");
+        detached.arg("30");
+        // SAFETY: setsid is async-signal-safe and touches only the child.
+        unsafe {
+            detached.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut detached = detached.spawn().expect("spawn detached");
+        let token = process_start_token(detached.id()).expect("start token");
+        let mut gone = std::process::Command::new("true").spawn().expect("spawn");
+        let gone_pid = gone.id();
+        gone.wait().expect("reap");
+
+        assert_eq!(
+            live_pane_process_group(std::process::id(), detached.id(), token),
+            None,
+            "a live process in another terminal session"
+        );
+        assert_eq!(
+            live_pane_process_group(gone_pid, detached.id(), token),
+            None,
+            "a pane shell that is gone"
+        );
+        let _ = detached.kill();
+        let _ = detached.wait();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn live_pane_process_group_follows_the_agent_process_not_its_job() {
+        use std::os::unix::process::CommandExt;
+
+        let shell_pid = std::process::id();
+        let mut wrapper = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .expect("spawn wrapper");
+        let job = wrapper.id();
+        let mut agent = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(job as i32)
+            .spawn()
+            .expect("spawn agent");
+        let agent_pid = agent.id();
+        let token = process_start_token(agent_pid).expect("agent start token");
+        let wrapper_token = process_start_token(job).expect("wrapper start token");
+
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token + 1),
+            None,
+            "a reused pid has a different start token"
+        );
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGSTOP);
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            Some(job)
+        );
+
+        unsafe {
+            libc::kill(agent_pid as libc::pid_t, libc::SIGKILL);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while live_pane_process_group(shell_pid, agent_pid, token).is_some()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            live_pane_process_group(shell_pid, agent_pid, token),
+            None,
+            "an unreaped agent must not count as alive while its wrapper lives"
+        );
+        assert_eq!(
+            live_pane_process_group(shell_pid, job, wrapper_token),
+            Some(job)
+        );
+        agent.wait().expect("reap agent");
+        assert_eq!(live_pane_process_group(shell_pid, agent_pid, token), None);
+        let _ = wrapper.kill();
+        let _ = wrapper.wait();
+    }
 
     #[test]
     fn terminal_resize_signal_is_recorded_once_per_delivery() {

@@ -115,10 +115,12 @@ impl App {
             stderr: None,
             error: None,
         };
-        self.push_plugin_command_log(log.clone());
-        self.state.plugin_commands_in_flight += 1;
         let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
+        let installation_lease =
+            crate::plugin_installations::command_lease(&self.plugin_installation_leases, plugin);
+        let spawned = crate::thread_spawn::spawn_named("herdr-plugin-command", move || {
+            // The worker may outlive App during normal server teardown.
+            let _installation_lease = installation_lease;
             let child =
                 crate::plugin_command::command_for_argv_in_dir(&program, &args, &plugin_root)
                     .envs(env)
@@ -126,46 +128,7 @@ impl App {
                     .stderr(Stdio::piped())
                     .spawn();
             let finished = match child {
-                Ok(mut child) => {
-                    let stdout = child.stdout.take();
-                    let stderr = child.stderr.take();
-                    let stdout_reader = stdout.map(|stdout| {
-                        std::thread::spawn(move || {
-                            read_capped_plugin_output(stdout, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
-                        })
-                    });
-                    let stderr_reader = stderr.map(|stderr| {
-                        std::thread::spawn(move || {
-                            read_capped_plugin_output(stderr, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
-                        })
-                    });
-                    match child.wait() {
-                        Ok(status) => crate::events::AppEvent::PluginCommandFinished {
-                            log_id,
-                            finished_unix_ms: current_unix_ms(),
-                            exit_code: status.code(),
-                            stdout: stdout_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            stderr: stderr_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            error: None,
-                        },
-                        Err(err) => crate::events::AppEvent::PluginCommandFinished {
-                            log_id,
-                            finished_unix_ms: current_unix_ms(),
-                            exit_code: None,
-                            stdout: stdout_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            stderr: stderr_reader
-                                .and_then(|reader| reader.join().ok())
-                                .unwrap_or_default(),
-                            error: Some(err.to_string()),
-                        },
-                    }
-                }
+                Ok(child) => finish_plugin_child(log_id, child),
                 Err(err) => crate::events::AppEvent::PluginCommandFinished {
                     log_id,
                     finished_unix_ms: current_unix_ms(),
@@ -177,10 +140,32 @@ impl App {
             };
             let _ = event_tx.blocking_send(finished);
         });
+        if let Err(err) = spawned {
+            tracing::warn!(err = %err, "failed to spawn plugin command thread");
+            let log = PluginCommandLogInfo {
+                status: PluginCommandStatus::Failed,
+                finished_unix_ms: Some(current_unix_ms()),
+                stdout: Some(String::new()),
+                stderr: Some(String::new()),
+                error: Some(format!("could not start plugin command: {err}")),
+                ..log
+            };
+            self.push_plugin_command_log(log.clone());
+            return Ok(log);
+        }
+        self.push_plugin_command_log(log.clone());
+        self.state.plugin_commands_in_flight += 1;
         Ok(log)
     }
 
     pub(crate) fn run_plugin_startup_hooks(&mut self) {
+        if self.policy.persist_plugin_registry && !self.plugin_installation_cleanup_allowed {
+            tracing::warn!("plugin cleanup skipped: some installations could not be pinned");
+        } else if self.policy.persist_plugin_registry {
+            if let Err(err) = crate::plugin_installations::cleanup() {
+                tracing::warn!(%err, "plugin cleanup deferred");
+            }
+        }
         let mut context = self.current_plugin_context("plugin.startup");
         context.invocation_source = Some("startup".to_string());
         let mut plugins = self
@@ -274,6 +259,74 @@ impl App {
     }
 }
 
+type PluginOutputReader = std::thread::JoinHandle<String>;
+
+fn finish_plugin_child(log_id: String, mut child: std::process::Child) -> crate::events::AppEvent {
+    let (stdout_reader, stderr_reader) =
+        match spawn_plugin_output_readers(child.stdout.take(), child.stderr.take()) {
+            Ok(readers) => readers,
+            Err(err) => {
+                // A missing reader would leave the plugin writing into a closed
+                // pipe, so stop it rather than report a misleading result.
+                tracing::warn!(err = %err, "failed to spawn plugin output reader");
+                let _ = child.kill();
+                let _ = child.wait();
+                return crate::events::AppEvent::PluginCommandFinished {
+                    log_id,
+                    finished_unix_ms: current_unix_ms(),
+                    exit_code: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    error: Some(format!("could not start output reader: {err}")),
+                };
+            }
+        };
+    let wait = child.wait();
+    // Descendants can hold the pipes open after the command exits; the run
+    // ends when the command does, not when its output closes.
+    let finished_unix_ms = current_unix_ms();
+    let join = |reader: Option<PluginOutputReader>| {
+        reader
+            .and_then(|reader| reader.join().ok())
+            .unwrap_or_default()
+    };
+    let stdout = join(stdout_reader);
+    let stderr = join(stderr_reader);
+    let (exit_code, error) = match wait {
+        Ok(status) => (status.code(), None),
+        Err(err) => (None, Some(err.to_string())),
+    };
+    crate::events::AppEvent::PluginCommandFinished {
+        log_id,
+        finished_unix_ms,
+        exit_code,
+        stdout,
+        stderr,
+        error,
+    }
+}
+
+fn spawn_plugin_output_readers(
+    stdout: Option<std::process::ChildStdout>,
+    stderr: Option<std::process::ChildStderr>,
+) -> std::io::Result<(Option<PluginOutputReader>, Option<PluginOutputReader>)> {
+    let stdout = stdout
+        .map(|stdout| {
+            crate::thread_spawn::spawn_named("herdr-plugin-stdout", move || {
+                read_capped_plugin_output(stdout, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
+            })
+        })
+        .transpose()?;
+    let stderr = stderr
+        .map(|stderr| {
+            crate::thread_spawn::spawn_named("herdr-plugin-stderr", move || {
+                read_capped_plugin_output(stderr, PLUGIN_COMMAND_OUTPUT_MAX_BYTES)
+            })
+        })
+        .transpose()?;
+    Ok((stdout, stderr))
+}
+
 fn current_unix_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -308,4 +361,103 @@ pub(super) fn read_capped_plugin_output(mut reader: impl Read, cap: usize) -> St
         ));
     }
     output
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_output_reader_spawn_failure_stops_the_command() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+
+        crate::thread_spawn::test_hook::fail_next_spawns(1);
+        let finished = finish_plugin_child("log".into(), child);
+
+        let crate::events::AppEvent::PluginCommandFinished {
+            exit_code, error, ..
+        } = finished
+        else {
+            panic!("expected plugin command result");
+        };
+        assert_eq!(exit_code, None);
+        assert!(error.is_some_and(|error| error.starts_with("could not start output reader")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn plugin_second_output_reader_spawn_failure_stops_the_command() {
+        let child = std::process::Command::new("sh")
+            .args(["-c", "sleep 30"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let started = std::time::Instant::now();
+
+        crate::thread_spawn::test_hook::fail_spawns_after(1, 1);
+        let finished = finish_plugin_child("log".into(), child);
+
+        let crate::events::AppEvent::PluginCommandFinished {
+            exit_code, error, ..
+        } = finished
+        else {
+            panic!("expected plugin command result");
+        };
+        assert_eq!(exit_code, None);
+        assert!(error.is_some_and(|error| error.starts_with("could not start output reader")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[test]
+    fn plugin_finish_time_is_taken_when_the_command_exits() {
+        // The background `cat` keeps both output pipes open after `sh` exits,
+        // until the test closes its stdin.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "cat <&0 >/dev/null &"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let pid = child.id().to_string();
+        let releaser = std::thread::spawn(move || {
+            // Hold the pipes until `sh` has exited and been reaped.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while std::time::Instant::now() < deadline
+                && std::process::Command::new("ps")
+                    .args(["-p", &pid])
+                    .stdout(Stdio::null())
+                    .status()
+                    .is_ok_and(|status| status.success())
+            {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let released_unix_ms = current_unix_ms();
+            drop(stdin);
+            released_unix_ms
+        });
+
+        let finished = finish_plugin_child("log".into(), child);
+        let released_unix_ms = releaser.join().unwrap();
+
+        let crate::events::AppEvent::PluginCommandFinished {
+            finished_unix_ms,
+            exit_code,
+            ..
+        } = finished
+        else {
+            panic!("expected plugin command result");
+        };
+        assert_eq!(exit_code, Some(0));
+        assert!(finished_unix_ms <= released_unix_ms);
+    }
 }

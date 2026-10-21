@@ -194,6 +194,31 @@ impl ClientShellConfig {
         self.with_preferences_path(preferences::path_for_local_endpoint(socket_path))
     }
 
+    pub(crate) fn with_process_endpoint_preferences(self, socket_path: &std::path::Path) -> Self {
+        self.with_endpoint_preferences(
+            socket_path,
+            std::env::var(crate::remote::REMOTE_PREFERENCES_ENV_VAR)
+                .ok()
+                .as_deref(),
+        )
+    }
+
+    pub(crate) fn with_endpoint_preferences(
+        self,
+        socket_path: &std::path::Path,
+        remote_identity: Option<&str>,
+    ) -> Self {
+        let identity = remote_identity
+            .and_then(|value| serde_json::from_str::<(String, String)>(value).ok())
+            .filter(|(target, session)| !target.is_empty() && !session.is_empty());
+        match identity {
+            Some((target, session)) => {
+                self.with_preferences_path(preferences::path_for_remote_endpoint(&target, &session))
+            }
+            None => self.with_local_endpoint(socket_path),
+        }
+    }
+
     pub(super) fn with_preferences_path(mut self, path: std::path::PathBuf) -> Self {
         self.preferences = preferences::load(&path).unwrap_or_default();
         self.preferences_path = Some(path);

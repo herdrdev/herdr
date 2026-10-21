@@ -10,6 +10,19 @@ fn is_retained_selection_copy_key(key: &crate::input::TerminalKey) -> bool {
         && matches!(key.modifiers, KeyModifiers::CONTROL | KeyModifiers::SUPER)
 }
 
+/// True for Ctrl+[, the terminal-level equivalent of Esc.
+///
+/// A legacy terminal sends Ctrl+[ as 0x1b, the same byte as Esc, so it already
+/// arrives as `KeyCode::Esc`. Under the kitty keyboard protocol the modified key
+/// is reported on its own and reaches navigate mode as `Char('[')` with CONTROL.
+/// Ctrl+Shift+[ stays distinct because it carries SHIFT.
+///
+/// Navigate mode checks this only after keybinding dispatch, so a configured
+/// Ctrl+[ binding keeps working and this stays a fallback cancel.
+fn is_ctrl_bracket_key(key: &crate::input::TerminalKey) -> bool {
+    key.code == KeyCode::Char('[') && key.modifiers == KeyModifiers::CONTROL
+}
+
 pub(super) fn is_modal_paste_shortcut_for_platform(
     key: &crate::input::TerminalKey,
     macos: bool,
@@ -85,9 +98,62 @@ impl ClientShellState {
         )
     }
 
+    pub(crate) fn set_host_reports_key_releases(&mut self, reports: bool) {
+        self.host_reports_key_releases = reports;
+    }
+
+    pub(crate) fn set_host_reports_all_keys(&mut self, reports_all: bool) {
+        self.host_reports_all_keys = reports_all;
+    }
+
+    /// While the pane asks for every key as an escape code, committed text
+    /// (IME, compose) must reach it as text, not as invented key reports.
+    /// On a Kitty host switched to report-all, typed keys arrive as reports,
+    /// so any plain text is a commit (kitty sends those as text too). A legacy
+    /// host sends both as plain text; non-ASCII text has no key in the
+    /// keyboard model, so only that is treated as a commit there.
+    /// Only text bound for the focused pane is a commit. In prefix, navigate
+    /// and other Herdr-owned input, plain text is still a key that may run a
+    /// binding (#5255).
+    fn host_text_commit(&self, key: &crate::input::TerminalKey) -> Option<String> {
+        if !self.host_reports_all_keys
+            || key.kind != KeyEventKind::Press
+            || self.mode != ClientShellMode::Terminal
+            || self.overlay.is_some()
+        {
+            return None;
+        }
+        let plain_text = key
+            .vt_bytes()
+            .is_some_and(|bytes| bytes.first().is_some_and(|byte| *byte != 0x1b));
+        let text = key.generated_text.as_ref().filter(|_| plain_text)?;
+        (self.host_reports_key_releases || !text.is_ascii()).then(|| text.clone())
+    }
+
+    pub(crate) fn set_host_erase_byte(&mut self, erase: Option<u8>) {
+        self.host_erase_is_ctrl_h = erase == Some(0x08);
+    }
+
+    /// A raw 0x08 (or ESC 0x08) from a host whose erase character is `^H` is
+    /// its Backspace key (#3244).
+    fn host_erase_key(&self, key: crate::input::TerminalKey) -> crate::input::TerminalKey {
+        if !self.host_erase_is_ctrl_h {
+            return key;
+        }
+        let alt = match key.vt_bytes() {
+            Some([0x08]) => KeyModifiers::empty(),
+            Some([0x1b, 0x08]) => KeyModifiers::ALT,
+            _ => return key,
+        };
+        let bytes = key.vt_bytes().map(<[u8]>::to_vec).unwrap_or_default();
+        crate::input::TerminalKey::new(KeyCode::Backspace, alt)
+            .with_kind(key.kind)
+            .with_vt_bytes(bytes)
+    }
+
     #[cfg(test)]
     pub(crate) fn handle_input_bytes(&mut self, data: &[u8]) -> ClientShellInput {
-        self.handle_raw_events(crate::raw_input::parse_raw_input_bytes_sync(data))
+        self.handle_raw_events(crate::raw_input::parse_framed_input(data))
     }
 
     #[cfg(any(unix, test))]
@@ -96,21 +162,19 @@ impl ClientShellState {
         data: &[u8],
         geometry: crate::input::mouse::HostGeometry,
     ) -> ClientShellInput {
-        let Some((x, y)) = crate::input::mouse::parse_report(data) else {
+        let Some(report) = crate::raw_input::parse_sgr_mouse_report(data) else {
             return ClientShellInput::default();
         };
-        let Some((column, row)) = geometry.cell(x, y) else {
+        let Some((column, row)) = geometry.cell(report.x, report.y) else {
             return ClientShellInput::default();
         };
-        let Some(cell_report) = crate::input::mouse::report_at_cell(data, column, row) else {
-            return ClientShellInput::default();
-        };
-        let events = crate::raw_input::parse_raw_input_bytes_sync(&cell_report);
-        if events.len() != 1 || !matches!(events[0], RawInputEvent::Mouse(_)) {
-            return ClientShellInput::default();
-        }
-        self.host_mouse_pixels = Some(crate::input::mouse::HostPixels { x, y, geometry });
-        let outcome = self.handle_raw_events(events);
+        self.host_mouse_pixels = Some(crate::input::mouse::HostPixels {
+            x: report.x,
+            y: report.y,
+            geometry,
+        });
+        let outcome =
+            self.handle_raw_events(vec![RawInputEvent::Mouse(report.at_cell(column, row))]);
         self.host_mouse_pixels = None;
         outcome
     }
@@ -163,6 +227,13 @@ impl ClientShellState {
             outcome.repaint = true;
         }
         for event in events {
+            let event = match event {
+                RawInputEvent::Key(key) => match self.host_text_commit(&key) {
+                    Some(text) => RawInputEvent::Text(crate::input::TextCommit::new(text)),
+                    None => RawInputEvent::Key(key),
+                },
+                other => other,
+            };
             if self.handle_machine_badge_event(&event, &mut outcome) {
                 continue;
             }
@@ -170,7 +241,10 @@ impl ClientShellState {
                 push_host_theme_update(&mut outcome.requests, update);
             }
             match event {
-                RawInputEvent::Key(key) => self.handle_key(key, &mut outcome),
+                RawInputEvent::Key(key) => {
+                    let key = self.host_erase_key(key);
+                    self.handle_key(key, &mut outcome)
+                }
                 RawInputEvent::Text(text) => {
                     let text = text.into_string();
                     if matches!(
@@ -311,6 +385,11 @@ impl ClientShellState {
             self.copy_input_queue.push_back(key);
             return;
         }
+        let key = if self.host_reports_key_releases && key.generated_text.is_some() {
+            key.with_physical_identity_hint(true)
+        } else {
+            key
+        };
         let lease_key = crate::input::InputLeaseKey::new(LOCAL_INPUT_SOURCE, &key);
         let key = self.input_leases.normalize_press(&lease_key, key);
         match key.kind {
@@ -338,21 +417,49 @@ impl ClientShellState {
                 self.execute_repeat_plan(lease_key, key, plan, outcome);
             }
             KeyEventKind::Release => {
-                if let Some(lease) = self.input_leases.remove_forwarded(&lease_key) {
-                    let release = lease
+                let Some(lease) = self.take_release_lease(&lease_key, &key) else {
+                    return;
+                };
+                let crate::input::InputLease::Forwarded(lease) = lease else {
+                    // Herdr consumed the press; its release stays with Herdr.
+                    return;
+                };
+                // A native record is released as the recorded key. A VT release
+                // report already names its key and shifted character exactly,
+                // except around a non-Latin Ctrl chord: Ctrl alone resolves to
+                // the physical key, so a modifier let go before the key flips
+                // between the layout character and that key. It is released as
+                // the key the pane saw pressed.
+                let layout_chord =
+                    key.code != lease.key.code && key.identity() == lease.key.identity();
+                let release = if key.physical_key_id().is_some() || layout_chord {
+                    lease
                         .key
                         .with_modifiers(key.modifiers)
-                        .with_kind(KeyEventKind::Release);
-                    self.push_pane_key(lease.target, release, outcome);
+                        .with_kind(KeyEventKind::Release)
                 } else {
-                    let _ = self.input_leases.remove(&lease_key);
-                }
+                    key
+                };
+                self.push_pane_key(lease.target, release, outcome);
             }
         }
     }
 
     fn release_input_leases(&mut self, outcome: &mut ClientShellInput) {
         for lease in self.input_leases.remove_source(LOCAL_INPUT_SOURCE) {
+            // A press that arrived as plain text (IME commits, and printable keys
+            // the host sends as text) reached the pane as text, not as a key
+            // event. IME commits never get a host release, so inventing one per
+            // character is noise. Key reports, with or without text, still get
+            // their release.
+            let plain_text_press = lease.key.generated_text.is_some()
+                && lease
+                    .key
+                    .vt_bytes()
+                    .is_some_and(|bytes| bytes.first().is_some_and(|byte| *byte != 0x1b));
+            if plain_text_press {
+                continue;
+            }
             self.push_pane_key(
                 lease.target,
                 lease.key.with_kind(KeyEventKind::Release),
@@ -650,9 +757,7 @@ impl ClientShellState {
 
         self.pending_workspace_highlight = None;
         if key.code == KeyCode::Esc || self.config.keybinds.matches_prefix(key) {
-            self.mode = self.copy_or_terminal_mode();
-            self.navigate_workspace_id = None;
-            outcome.repaint = true;
+            self.cancel_navigate(outcome);
             return;
         }
 
@@ -687,6 +792,12 @@ impl ClientShellState {
             return;
         }
         if self.workspace_preview_action_blocked() {
+            // Bindings cannot run against a foreign preview, so Ctrl+[ has
+            // nothing to lose to and cancels here the same way Esc does.
+            if is_ctrl_bracket_key(key) {
+                self.cancel_navigate(outcome);
+                return;
+            }
             self.push_endpoint_notice(
                 ClientEndpointNoticeKind::Rejected,
                 "navigate_endpoint_inactive",
@@ -816,7 +927,15 @@ impl ClientShellState {
         });
         if let Some(binding) = binding {
             self.record_navigate_binding(binding, false, outcome);
+        } else if is_ctrl_bracket_key(key) {
+            self.cancel_navigate(outcome);
         }
+    }
+
+    fn cancel_navigate(&mut self, outcome: &mut ClientShellInput) {
+        self.mode = self.copy_or_terminal_mode();
+        self.navigate_workspace_id = None;
+        outcome.repaint = true;
     }
 
     fn record_navigate_binding(
@@ -1002,6 +1121,48 @@ impl ClientShellState {
         }
         self.focused_pane_id()
             .map(crate::protocol::ClientClipboardImageTarget::Pane)
+    }
+
+    /// The tracked press for a release. A press that arrived as text ("A") is
+    /// reported released as its key ("a", shifted alternate "A"), possibly after
+    /// Shift was let go, so the shifted alternate and the letter's other case
+    /// also match.
+    fn take_release_lease(
+        &mut self,
+        lease_key: &crate::input::InputLeaseKey<u8>,
+        key: &crate::input::TerminalKey,
+    ) -> Option<crate::input::InputLease<ClientInputContext, ClientInputTarget>> {
+        if let Some(lease) = self.input_leases.remove(lease_key) {
+            return Some(lease);
+        }
+        let KeyCode::Char(c) = key.layout_key().map_or(key.code, KeyCode::Char) else {
+            return None;
+        };
+        fn single(mut chars: impl Iterator<Item = char>) -> Option<char> {
+            match (chars.next(), chars.next()) {
+                (Some(only), None) => Some(only),
+                _ => None,
+            }
+        }
+        let other_case = if c.is_lowercase() {
+            single(c.to_uppercase())
+        } else {
+            single(c.to_lowercase())
+        }
+        .filter(|other| *other != c);
+        key.shifted_codepoint
+            .and_then(char::from_u32)
+            .into_iter()
+            .chain(other_case)
+            .find_map(|candidate| {
+                self.input_leases.remove(&crate::input::InputLeaseKey::new(
+                    LOCAL_INPUT_SOURCE,
+                    &crate::input::TerminalKey::new(KeyCode::Char(candidate), key.modifiers),
+                ))
+            })
+            // Shifted punctuation ("?") released after Shift: the report names
+            // only the unshifted key ("/"), which depends on the layout.
+            .or_else(|| self.input_leases.remove_sole_text_press(LOCAL_INPUT_SOURCE))
     }
 
     fn popup_input_target(&self) -> Option<ClientInputTarget> {

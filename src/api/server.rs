@@ -44,6 +44,7 @@ use crate::ipc::{
     bind_local_listener, is_connection_closed_error, remove_socket_file_if_owned,
     socket_file_identity, SocketFileIdentity,
 };
+use crate::server::shutdown::{ServerStop, ShutdownReason};
 
 mod gram_upload_stream;
 #[cfg(unix)]
@@ -171,7 +172,7 @@ impl ServerHandle {
 pub(crate) fn start_server_with_stop_control(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
-    server_stop: Arc<AtomicBool>,
+    server_stop: ServerStop,
     config: &crate::config::Config,
     federation_store: Arc<Mutex<FederationStore>>,
 ) -> std::io::Result<ServerHandle> {
@@ -215,7 +216,7 @@ fn start_server_inner(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
     mut capabilities: Option<ServerCapabilities>,
-    server_stop: Option<Arc<AtomicBool>>,
+    server_stop: Option<ServerStop>,
     federation: &FederationConfig,
     federation_store: Arc<Mutex<FederationStore>>,
 ) -> std::io::Result<ServerHandle> {
@@ -281,7 +282,7 @@ fn start_server_inner(
     let listener_capabilities = capabilities.clone();
     let listener_server_stop = server_stop.clone();
     let listener_federation_manager = Arc::clone(&federation_manager);
-    let thread = std::thread::spawn(move || {
+    let spawned = crate::thread_spawn::spawn_named("herdr-api-accept", move || {
         run_accept_loop(
             listener.incoming(),
             &listener_running,
@@ -295,7 +296,7 @@ fn start_server_inner(
                 let federation_manager = Arc::clone(&listener_federation_manager);
                 #[cfg(unix)]
                 let ssh_agents = ssh_agents.clone();
-                std::thread::spawn(move || {
+                spawn_connection_handler(move || {
                     // Snapshot the outbound proxy registry per connection so a
                     // concurrent reconcile (add/remove/change peer) is picked
                     // up without restarting the accept loop.
@@ -321,6 +322,14 @@ fn start_server_inner(
         );
         debug!("api server thread exiting");
     });
+    let thread = match spawned {
+        Ok(thread) => thread,
+        Err(err) => {
+            // No ServerHandle owns the socket yet, so its Drop cleanup won't run.
+            let _ = remove_socket_file_if_owned(&path, &identity);
+            return Err(err);
+        }
+    };
 
     // A bad federation address or an address already in use must not crash the
     // daemon: `maybe_start_federation_listener` logs and returns `None`, leaving
@@ -368,7 +377,7 @@ fn maybe_start_federation_listener(
     event_hub: &EventHub,
     capabilities: &Option<ServerCapabilities>,
     running: &Arc<AtomicBool>,
-    server_stop: &Option<Arc<AtomicBool>>,
+    server_stop: &Option<ServerStop>,
 ) -> Option<JoinHandle<()>> {
     let federation = federation.for_session(session);
     if !federation.listen {
@@ -470,7 +479,7 @@ fn spawn_federation_listener(
     event_hub: EventHub,
     capabilities: Option<ServerCapabilities>,
     running: Arc<AtomicBool>,
-    server_stop: Option<Arc<AtomicBool>>,
+    server_stop: Option<ServerStop>,
 ) -> std::io::Result<JoinHandle<()>> {
     listener.set_nonblocking(true)?;
     let peers = Arc::new(peers);
@@ -1154,7 +1163,7 @@ fn handle_federation_connection(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    server_stop: Option<&ServerStop>,
 ) -> std::io::Result<()> {
     if let Err(err) = stream.set_send_timeout(Some(STREAM_WRITE_TIMEOUT)) {
         debug!(err = %err, "federation connection write timeout unavailable");
@@ -1268,6 +1277,14 @@ fn federation_identity_unverified_error(id: String, alias: &str) -> ErrorRespons
     }
 }
 
+/// Starts one connection's worker. When the OS refuses a thread, only this
+/// connection is dropped; the accept loop keeps serving.
+fn spawn_connection_handler(work: impl FnOnce() + Send + 'static) {
+    if let Err(err) = crate::thread_spawn::spawn_named("herdr-api-conn", work) {
+        warn!(err = %err, "failed to spawn api connection thread; dropping connection");
+    }
+}
+
 fn run_accept_loop<S>(
     incoming: impl IntoIterator<Item = io::Result<S>>,
     running: &AtomicBool,
@@ -1324,6 +1341,21 @@ mod accept_loop_tests {
         );
 
         assert_eq!(handled, vec![1, 2]);
+    }
+
+    #[test]
+    fn keeps_serving_after_connection_thread_spawn_fails() {
+        let running = AtomicBool::new(true);
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        crate::thread_spawn::test_hook::fail_next_spawns(1);
+        run_accept_loop([Ok(1), Ok(2)], &running, Duration::ZERO, |stream| {
+            let tx = tx.clone();
+            spawn_connection_handler(move || tx.send(stream).unwrap());
+        });
+        drop(tx);
+
+        assert_eq!(rx.iter().collect::<Vec<_>>(), vec![2]);
     }
 
     #[test]
@@ -1425,7 +1457,7 @@ fn handle_connection_with_stop(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    server_stop: Option<&ServerStop>,
     federation: Option<PeerContext>,
     federation_peers: &HashMap<String, PeerRoute>,
     #[cfg(unix)] ssh_agents: Option<&crate::platform::ssh_agent::SshAgentRegistry>,
@@ -1455,7 +1487,7 @@ fn handle_principal_connection(
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
     capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    server_stop: Option<&ServerStop>,
     principal: ConnectionPrincipal,
     federation_peers: &HashMap<String, PeerRoute>,
     #[cfg(unix)] ssh_agents: Option<&crate::platform::ssh_agent::SshAgentRegistry>,
@@ -1785,6 +1817,14 @@ fn handle_principal_connection(
         }
         method_body => {
             let (response_write_tx, response_write_rx) = std::sync::mpsc::channel();
+            // Only the local socket names a process peer; federation and guest
+            // connections cannot reach `server.stop` past their gates anyway.
+            let stop_caller = match (&method_body, &stream) {
+                (Method::ServerStop(_), ApiStream::Local(local)) => {
+                    crate::platform::local_stream_peer_description(local)
+                }
+                _ => None,
+            };
             let response = handle_request(
                 Request {
                     id: request_id.clone(),
@@ -1793,6 +1833,7 @@ fn handle_principal_connection(
                 api_tx,
                 capabilities,
                 server_stop,
+                stop_caller,
                 Some(response_write_rx),
             );
             let result = write_text_line_allow_disconnect(&mut stream, &response);
@@ -2335,14 +2376,15 @@ pub(crate) fn handle_reverse_gram(request: Request, tx: &ApiRequestSender) -> St
     // Only api::reverse creates this envelope, after accepting its six-method
     // whitelist on the per-peer SSH gateway. The regular TCP policy still denies
     // gram.* and the local API remains local.
-    handle_request(request, tx, None, None, None)
+    handle_request(request, tx, None, None, None, None)
 }
 
 fn handle_request(
     request: Request,
     api_tx: &ApiRequestSender,
     capabilities: Option<ServerCapabilities>,
-    server_stop: Option<&Arc<AtomicBool>>,
+    server_stop: Option<&ServerStop>,
+    stop_caller: Option<String>,
     response_write_complete: Option<std::sync::mpsc::Receiver<()>>,
 ) -> String {
     if matches!(&request.method, Method::Ping(_)) {
@@ -2370,14 +2412,16 @@ fn handle_request(
 
     if matches!(&request.method, Method::ServerStop(_)) {
         if let Some(server_stop) = server_stop {
-            server_stop.store(true, Ordering::Release);
+            server_stop.request(ShutdownReason::ApiStop {
+                caller: stop_caller,
+            });
             return serde_json::to_string(&SuccessResponse {
                 id: request.id,
                 result: ResponseResult::Ok {},
             })
             .unwrap_or_else(|_| "{}".to_string());
         }
-    } else if server_stop.is_some_and(|stop| stop.load(Ordering::Acquire)) {
+    } else if server_stop.is_some_and(ServerStop::is_requested) {
         return error_response_json(
             request.id,
             "server_unavailable",
@@ -2389,157 +2433,7 @@ fn handle_request(
 }
 
 pub(crate) fn api_method_name(method: &Method) -> &'static str {
-    match method {
-        Method::Ping(_) => "ping",
-        Method::ServerStop(_) => "server.stop",
-        Method::ServerLiveHandoff(_) => "server.live_handoff",
-        Method::MachineStatus(_) => "machine.status",
-        Method::ServerReloadConfig(_) => "server.reload_config",
-        Method::ServerStagedUpdate(_) => "server.staged_update",
-        Method::ServerApplyStagedUpdate(_) => "server.apply_staged_update",
-        Method::ServerSshAgentRegister(_) => "server.ssh_agent.register",
-        Method::ServerAgentManifests(_) => "server.agent_manifests",
-        Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
-        Method::NotificationShow(_) => "notification.show",
-        Method::ProductAnnouncementDismiss(_) => "product_announcement.dismiss",
-        Method::ReleaseNotesDismiss(_) => "release_notes.dismiss",
-        Method::CommandInvoke(_) => "command.invoke",
-        Method::NotificationsRegisterDevice(_) => "notifications.register_device",
-        Method::NotificationsUnregisterDevice(_) => "notifications.unregister_device",
-        Method::NotificationsRegisterActivity(_) => "notifications.register_activity",
-        Method::NotificationsUnregisterActivity(_) => "notifications.unregister_activity",
-        Method::NotificationsStatus(_) => "notifications.status",
-        Method::GramSend(_) => "gram.send",
-        Method::GramPost(_) => "gram.post",
-        Method::GramList(_) => "gram.list",
-        Method::GramGrab(_) => "gram.grab",
-        Method::GramMarkRead(_) => "gram.mark_read",
-        Method::GramDelete(_) => "gram.delete",
-        Method::GramUploadChunk(_) => "gram.upload_chunk",
-        Method::GramGetFile(_) => "gram.get_file",
-        Method::GramGetFileChunk(_) => "gram.get_file_chunk",
-        Method::GramRelay(_) => "gram.relay",
-        Method::GramRelayStatus(_) => "gram.relay_status",
-        Method::GuestInviteCreate(_) => "guest.invite.create",
-        Method::GuestList(_) => "guest.list",
-        Method::GuestRevoke(_) => "guest.revoke",
-        Method::GuestUpdate(_) => "guest.update",
-        Method::GuestAudit(_) => "guest.audit",
-        #[cfg(unix)]
-        Method::GuestAgentProbe(_) => "guest.agent_probe",
-        Method::ClientWindowTitleSet(_) => "client.window_title.set",
-        Method::ClientWindowTitleClear(_) => "client.window_title.clear",
-        Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
-        Method::SessionSnapshot(_) => "session.snapshot",
-        Method::WorkspaceCreate(_) => "workspace.create",
-        Method::WorkspaceList(_) => "workspace.list",
-        Method::WorkspaceGet(_) => "workspace.get",
-        Method::WorkspaceFocus(_) => "workspace.focus",
-        Method::WorkspaceRename(_) => "workspace.rename",
-        Method::WorkspaceMove(_) => "workspace.move",
-        Method::WorkspaceMoveBlock(_) => "workspace.move_block",
-        Method::WorkspaceReportMetadata(_) => "workspace.report_metadata",
-        Method::WorkspaceClose(_) => "workspace.close",
-        Method::WorktreeList(_) => "worktree.list",
-        Method::WorktreeCreate(_) => "worktree.create",
-        Method::WorktreeOpen(_) => "worktree.open",
-        Method::WorktreeRemove(_) => "worktree.remove",
-        Method::TabCreate(_) => "tab.create",
-        Method::TabList(_) => "tab.list",
-        Method::TabGet(_) => "tab.get",
-        Method::TabFocus(_) => "tab.focus",
-        Method::TabRename(_) => "tab.rename",
-        Method::TabMove(_) => "tab.move",
-        Method::TabClose(_) => "tab.close",
-        Method::AgentList(_) => "agent.list",
-        Method::AgentGet(_) => "agent.get",
-        Method::AgentRead(_) => "agent.read",
-        Method::AgentExplain(_) => "agent.explain",
-        Method::AgentSendKeys(_) => "agent.send_keys",
-        Method::AgentRename(_) => "agent.rename",
-        Method::AgentArchive(_) => "agent.archive",
-        Method::AgentUnarchive(_) => "agent.unarchive",
-        Method::AgentForget(_) => "agent.forget",
-        Method::AgentViewSet(_) => "agent.view.set",
-        Method::AgentViewClear(_) => "agent.view.clear",
-        Method::AgentFocus(_) => "agent.focus",
-        Method::AgentStart(_) => "agent.start",
-        Method::AgentPrompt(_) => "agent.prompt",
-        Method::AgentWait(_) => "agent.wait",
-        Method::AgentRestart(_) => "agent.restart",
-        Method::AgentTransferSession(_) => "agent.transfer_session",
-        Method::AccountsList(_) => "accounts.list",
-        Method::AccountsCreate(_) => "accounts.create",
-        Method::AccountsRemove(_) => "accounts.remove",
-        Method::AgentKinds(_) => "agent.kinds",
-        Method::FsListDir(_) => "fs.list_dir",
-        Method::PaneSplit(_) => "pane.split",
-        Method::PaneSwap(_) => "pane.swap",
-        Method::PaneMove(_) => "pane.move",
-        Method::PaneZoom(_) => "pane.zoom",
-        Method::PaneLayout(_) => "pane.layout",
-        Method::PaneProcessInfo(_) => "pane.process_info",
-        Method::LayoutExport(_) => "layout.export",
-        Method::LayoutApply(_) => "layout.apply",
-        Method::LayoutSetSplitRatio(_) => "layout.set_split_ratio",
-        Method::PaneNeighbor(_) => "pane.neighbor",
-        Method::PaneEdges(_) => "pane.edges",
-        Method::PaneFocusDirection(_) => "pane.focus_direction",
-        Method::PaneResize(_) => "pane.resize",
-        Method::PaneScroll(_) => "pane.scroll",
-        Method::PaneClear(_) => "pane.clear",
-        Method::PaneEditScrollback(_) => "pane.edit_scrollback",
-        Method::PaneSelectionRead(_) => "pane.selection.read",
-        Method::PaneCopyMotion(_) => "pane.copy_motion",
-        Method::PaneCopySearch(_) => "pane.copy_search",
-        Method::PaneSetPtySize(_) => "pane.set_pty_size",
-        Method::PaneList(_) => "pane.list",
-        Method::PaneCurrent(_) => "pane.current",
-        Method::PaneGet(_) => "pane.get",
-        Method::PaneTurns(_) => "pane.turns",
-        Method::PaneFocus(_) => "pane.focus",
-        Method::PaneInputSet(_) => "pane.input.set",
-        Method::PaneLinkActivate(_) => "pane.link.activate",
-        Method::PaneLinkResolve(_) => "pane.link.resolve",
-        Method::PaneRename(_) => "pane.rename",
-        Method::PaneSendText(_) => "pane.send_text",
-        Method::PaneSendKeys(_) => "pane.send_keys",
-        Method::PaneSendInput(_) => "pane.send_input",
-        Method::PaneRead(_) => "pane.read",
-        Method::PaneStream(_) => "pane.stream",
-        Method::PaneStreamOpen(_) => "pane.stream.open",
-        Method::PaneStreamClose(_) => "pane.stream.close",
-        #[cfg(unix)]
-        Method::PanePtyLeaseRelease(_) => "pane.pty_lease.release",
-        Method::PaneInputStream(_) => "pane.input.stream",
-        Method::PaneInputStreamOpen(_) => "pane.input.stream.open",
-        Method::GramUploadStream(_) => "gram.upload.stream",
-        Method::GramUploadStreamOpen(_) => "gram.upload.stream.open",
-        Method::PaneReportAgent(_) => "pane.report_agent",
-        Method::PaneReportAgentSession(_) => "pane.report_agent_session",
-        Method::PaneReportMetadata(_) => "pane.report_metadata",
-        Method::PaneClearAgentAuthority(_) => "pane.clear_agent_authority",
-        Method::PaneReleaseAgent(_) => "pane.release_agent",
-        Method::PaneClose(_) => "pane.close",
-        Method::PopupClose(_) => "popup.close",
-        Method::EventsSubscribe(_) => "events.subscribe",
-        Method::EventsWait(_) => "events.wait",
-        Method::PaneWaitForOutput(_) => "pane.wait_for_output",
-        Method::IntegrationList(_) => "integration.list",
-        Method::IntegrationInstall(_) => "integration.install",
-        Method::IntegrationUninstall(_) => "integration.uninstall",
-        Method::PluginLink(_) => "plugin.link",
-        Method::PluginList(_) => "plugin.list",
-        Method::PluginUnlink(_) => "plugin.unlink",
-        Method::PluginEnable(_) => "plugin.enable",
-        Method::PluginDisable(_) => "plugin.disable",
-        Method::PluginActionList(_) => "plugin.action.list",
-        Method::PluginActionInvoke(_) => "plugin.action.invoke",
-        Method::PluginLogList(_) => "plugin.log.list",
-        Method::PluginPaneOpen(_) => "plugin.pane.open",
-        Method::PluginPaneFocus(_) => "plugin.pane.focus",
-        Method::PluginPaneClose(_) => "plugin.pane.close",
-    }
+    method.operation().name
 }
 
 fn api_response_outcome(response: &str) -> &'static str {
@@ -3221,6 +3115,31 @@ mod tests {
     }
 
     #[test]
+    fn api_accept_thread_spawn_failure_removes_bound_socket() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = unique_test_path("api-accept-spawn-failure");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("herdr.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
+        let (api_tx, _api_rx) = mpsc::unbounded_channel();
+
+        crate::thread_spawn::test_hook::fail_next_spawns(1);
+        let result = start_server_inner(
+            api_tx,
+            EventHub::default(),
+            None,
+            None,
+            &FederationConfig::default(),
+            Arc::new(Mutex::new(FederationStore::default())),
+        );
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+
+        assert!(result.is_err());
+        assert!(!path.exists(), "bound socket must be removed");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn socket_path_prefers_explicit_env_override() {
         let _guard = env_lock().lock().unwrap();
         let unique = format!("/tmp/herdr-test-{}.sock", std::process::id());
@@ -3459,6 +3378,7 @@ mod tests {
             }),
             None,
             None,
+            None,
         );
 
         let parsed: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -3469,7 +3389,7 @@ mod tests {
     #[test]
     fn server_stop_control_bypasses_app_channel() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let stop = Arc::new(AtomicBool::new(false));
+        let stop = ServerStop::default();
         let response = handle_request(
             Request {
                 id: "priority_stop".into(),
@@ -3478,13 +3398,20 @@ mod tests {
             &tx,
             None,
             Some(&stop),
+            Some("pid 42 (herdr)".into()),
             None,
         );
 
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(response["id"], "priority_stop");
         assert_eq!(response["result"]["type"], "ok");
-        assert!(stop.load(Ordering::Acquire));
+        assert!(stop.is_requested());
+        assert_eq!(
+            stop.take_reason(),
+            Some(ShutdownReason::ApiStop {
+                caller: Some("pid 42 (herdr)".into())
+            })
+        );
 
         let rejected = handle_request(
             Request {
@@ -3494,6 +3421,7 @@ mod tests {
             &tx,
             None,
             Some(&stop),
+            None,
             None,
         );
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
@@ -3510,8 +3438,9 @@ mod tests {
         };
 
         let request_for_thread = request.clone();
-        let thread =
-            std::thread::spawn(move || handle_request(request_for_thread, &tx, None, None, None));
+        let thread = std::thread::spawn(move || {
+            handle_request(request_for_thread, &tx, None, None, None, None)
+        });
 
         let msg = rx.blocking_recv().unwrap();
         assert_eq!(msg.request.id, "req_2");
@@ -4235,6 +4164,7 @@ mod tests {
             default_capabilities(),
             None,
             None,
+            None,
         );
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["result"]["capabilities"]["events_v2"], true);
@@ -4250,6 +4180,7 @@ mod tests {
             },
             &tx,
             default_capabilities(),
+            None,
             None,
             None,
         );
@@ -4923,18 +4854,15 @@ mod federation_tests {
             "the federation audit table lists a method name more than once"
         );
 
-        // Tripwire part 1 — completeness, bound to the source of truth. The audit
-        // table must classify every method `api_method_name` handles. That count
-        // is derived from `api_method_name`'s own match arms (not a hand-copied
-        // constant), so adding a `Method` variant — which the compiler forces to
-        // grow `api_method_name` by one exhaustive arm — makes this fail until a
-        // deliberate classification row is added here. A hardcoded length could
-        // not catch that: the new arm would leave the checked constant unchanged.
+        // Tripwire part 1 — completeness, bound to the source of truth. Method names
+        // come from the `define_operations!` table (`Method::OPERATIONS`), which also
+        // generates the `Method` enum and `api_method_name`, so adding a wire method
+        // makes this fail until a deliberate classification row is added here.
         assert_eq!(
-            expected.len(),
-            api_method_name_arm_count(),
-            "the federation audit table must classify every api_method_name arm; \
-             a wire method was added without a deliberate federation access row"
+            audit_names,
+            wire_method_names(),
+            "the federation audit table must classify every wire method exactly; \
+             a wire method was added or removed without a deliberate federation access row"
         );
 
         // Tripwire part 2 — spelling/coverage of the serde-visible wire methods.
@@ -4954,31 +4882,16 @@ mod federation_tests {
         );
     }
 
-    /// Number of match arms in [`api_method_name`], the source of truth for the
-    /// set of wire methods. Counted from this file's own text, embedded at
-    /// compile time (no runtime file I/O, no CWD dependency), so it tracks the
-    /// function that actually defines the methods. Each arm is one `Method::…`
-    /// pattern, so counting those in the function body yields the arm count.
-    fn api_method_name_arm_count() -> usize {
-        const SOURCE: &str = include_str!("server.rs");
-        let signature = "fn api_method_name(method: &Method) -> &'static str {";
-        let start = SOURCE
-            .find(signature)
-            .expect("api_method_name is defined in this file");
-        let after_signature = start + signature.len();
-        // The function body ends at the first unindented closing brace.
-        let body_len = SOURCE[after_signature..]
-            .find("\n}\n")
-            .expect("api_method_name has a closing brace");
-        let body = &SOURCE[after_signature..after_signature + body_len];
-        body.matches("Method::").count()
+    /// Every wire method name, from the operations table that defines `Method`.
+    fn wire_method_names() -> std::collections::BTreeSet<&'static str> {
+        Method::OPERATIONS.iter().map(|op| op.name).collect()
     }
 
     /// The serde-visible wire method names, from the `Method` enum's schema.
     /// `Method` is an adjacently-tagged serde enum, so each schema variant
     /// carries its wire name as the `method` tag constant. `#[schemars(skip)]`
     /// variants (the streaming internals) are absent, so this is a subset of the
-    /// full method set — see [`api_method_name_arm_count`] for the total.
+    /// full method set — see [`wire_method_names`] for the total.
     fn schema_wire_method_names() -> std::collections::BTreeSet<String> {
         let schema = schemars::schema_for!(Method);
         let value = serde_json::to_value(&schema).expect("method schema serializes to json");
@@ -6102,10 +6015,35 @@ mod federation_tests {
         while !args_log.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
+        // The remote script travels base64-encoded (`echo <b64> | base64 --decode | sh`)
+        // so login shells cannot reinterpret it; read the bridge command from the payload.
+        let decoded_scripts = || {
+            std::fs::read_to_string(&args_log)
+                .expect("fake SSH invocation captured")
+                .lines()
+                .filter_map(|line| {
+                    Some(
+                        line.split("echo ")
+                            .nth(1)?
+                            .split_whitespace()
+                            .next()?
+                            .to_owned(),
+                    )
+                })
+                .filter_map(|encoded| {
+                    use base64::Engine as _;
+                    base64::engine::general_purpose::STANDARD
+                        .decode(encoded)
+                        .ok()
+                })
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .collect::<String>()
+        };
         let args = std::fs::read_to_string(&args_log).expect("fake SSH invocation captured");
-        assert!(args.contains("/opt/Herdr Builds/herdr"));
-        assert!(args.contains("agent-work"));
-        assert!(args.contains("remote-api-bridge"));
+        let script = decoded_scripts();
+        assert!(script.contains("'/opt/Herdr Builds/herdr'"), "{script}");
+        assert!(script.contains("agent-work"), "{script}");
+        assert!(script.contains("remote-api-bridge"), "{script}");
         assert!(args.contains("ControlMaster=auto"));
         assert!(args.contains("ControlPersist=600"));
 
@@ -6169,8 +6107,8 @@ mod federation_tests {
         stream.read_line(&mut line).unwrap();
         assert_eq!(line, "next\n");
         drop(stream);
-        let args = std::fs::read_to_string(&args_log).expect("replacement SSH invocation captured");
-        assert!(args.contains("agent-next"));
+        let script = decoded_scripts();
+        assert!(script.contains("agent-next"), "{script}");
 
         catalog.set_enabled(&profile_id, false);
         catalog.store_profiles().unwrap();

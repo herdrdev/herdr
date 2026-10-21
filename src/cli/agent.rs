@@ -1,122 +1,94 @@
 use std::time::{Duration, Instant};
 
 use crate::api::schema::{
-    AgentArchiveParams, AgentForgetParams, AgentListParams, AgentPromptParams,
-    AgentPromptWaitOptions, AgentReadParams, AgentRenameParams, AgentRestartParams,
-    AgentSendKeysParams, AgentSessionTransferHarness, AgentStartParams, AgentTarget,
+    AgentArchiveParams, AgentForgetParams, AgentListParams, AgentPromptParams, AgentReadParams,
+    AgentRenameParams, AgentRestartParams, AgentSendKeysParams, AgentStartParams, AgentTarget,
     AgentTransferSessionParams, AgentUnarchiveParams, AgentWaitParams, ErrorBody, ErrorResponse,
-    Method, PaneProcessInfoParams, PaneTarget, ReadFormat, ReadSource, Request,
+    Method, PaneProcessInfoParams, PaneTarget, Request,
 };
 
 const AGENT_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PANE_SHELL_READINESS_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
 
-pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_agent_help();
-        return Ok(2);
-    };
+pub(crate) mod bindings;
+#[cfg(test)]
+mod bindings_tests;
 
-    match subcommand {
-        "list" => agent_list(&args[1..]),
-        "federated-list" => federated_agent_command(&args[1..], false),
-        "federated-prompt" => federated_agent_command(&args[1..], true),
-        "get" => agent_get(&args[1..]),
-        "read" => agent_read(&args[1..]),
-        "send-keys" => agent_send_keys(&args[1..]),
-        "prompt" => agent_prompt(&args[1..]),
-        "rename" => agent_rename(&args[1..]),
-        "archive" => agent_archive(&args[1..]),
-        "unarchive" => agent_unarchive(&args[1..]),
-        "forget" => agent_forget(&args[1..]),
-        "focus" => agent_focus(&args[1..]),
-        "wait" => agent_wait(&args[1..]),
-        "attach" => agent_attach(&args[1..]),
-        "start" => agent_start(&args[1..]),
-        "restart" => agent_restart(&args[1..]),
-        "transfer-session" => agent_transfer_session(&args[1..]),
-        "explain" => agent_explain(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_agent_help();
-            Ok(0)
+pub(crate) fn command() -> clap::Command {
+    bindings::command()
+}
+
+pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
+    use super::projection::ParseError;
+    use bindings::Operation;
+
+    // `explain` and `wait` historically treat a bare `help` operand after the target as help.
+    let help_args;
+    let args = match args.first().map(String::as_str) {
+        Some(leaf @ ("explain" | "wait")) => {
+            let operands = super::projection::operands(&command(), args);
+            let skip = usize::from(leaf == "wait");
+            if operands.iter().skip(skip).any(|operand| *operand == "help") {
+                help_args = [leaf.to_owned(), "--help".to_owned()];
+                &help_args[..]
+            } else {
+                args
+            }
         }
-        _ => {
-            print_agent_help();
-            Ok(2)
+        _ => args,
+    };
+    let operation = match super::projection::parse(
+        command().bin_name("herdr agent"),
+        args,
+        bindings::from_matches,
+    ) {
+        Ok(operation) => operation,
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
         }
+        Err(ParseError::Io(error)) => return Err(error),
+    };
+    match operation {
+        Operation::List => agent_list(),
+        Operation::FederatedList(params) => federated_agent_command(
+            params.caller_pane,
+            crate::api::reverse_agents::ReverseMethod::AgentList,
+        ),
+        Operation::FederatedPrompt(params) => federated_agent_command(
+            params.caller_pane,
+            crate::api::reverse_agents::ReverseMethod::AgentPrompt {
+                target: params.target,
+                text: params.text,
+            },
+        ),
+        Operation::Get(params) => agent_get(params),
+        Operation::Focus(params) => agent_focus(params),
+        Operation::Read(params) => agent_read(params),
+        Operation::SendKeys(params) => agent_send_keys(params),
+        Operation::Rename(params) => agent_rename(params),
+        Operation::Archive(params) => agent_archive(params),
+        Operation::Unarchive(params) => agent_unarchive(params),
+        Operation::Forget(params) => agent_forget(params),
+        Operation::Wait(params) => agent_wait(params),
+        Operation::Prompt(params) => agent_prompt(params),
+        Operation::Start(params) => agent_start(params),
+        Operation::Restart(params) => agent_restart(params),
+        Operation::TransferSession(params) => agent_transfer_session(params),
+        Operation::Attach(params) => agent_attach(params),
+        Operation::Explain(params) => agent_explain(params),
     }
 }
 
-fn agent_explain(args: &[String]) -> std::io::Result<i32> {
-    let mut file = None;
-    let mut agent = None;
-    let mut json = false;
-    let mut verbose = false;
-    let mut target = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--file" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --file");
-                    return Ok(2);
-                };
-                file = Some(value.clone());
-                index += 2;
-            }
-            "--agent" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --agent");
-                    return Ok(2);
-                };
-                agent = Some(value.clone());
-                index += 2;
-            }
-            "--json" => {
-                json = true;
-                index += 1;
-            }
-            "--format" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --format");
-                    return Ok(2);
-                };
-                match value.as_str() {
-                    "json" => json = true,
-                    "text" => json = false,
-                    other => {
-                        eprintln!("invalid --format: {other} (expected text or json)");
-                        return Ok(2);
-                    }
-                }
-                index += 2;
-            }
-            "--verbose" | "-v" => {
-                verbose = true;
-                index += 1;
-            }
-            "help" | "--help" | "-h" => {
-                eprintln!("usage: herdr agent explain <target> [--json|--verbose]");
-                eprintln!(
-                    "usage: herdr agent explain --file PATH --agent LABEL [--json|--verbose]"
-                );
-                return Ok(0);
-            }
-            value if value.starts_with('-') => {
-                eprintln!("unknown option: {value}");
-                return Ok(2);
-            }
-            value => {
-                if target.is_some() {
-                    eprintln!("usage: herdr agent explain <target> [--json]");
-                    return Ok(2);
-                }
-                target = Some(value.to_string());
-                index += 1;
-            }
-        }
-    }
+fn agent_explain(params: bindings::Explain) -> std::io::Result<i32> {
+    let bindings::Explain {
+        file,
+        agent,
+        json,
+        verbose,
+        target,
+    } = params;
 
     let explain = if let Some(path) = file {
         if target.is_some() {
@@ -295,81 +267,20 @@ fn matched_rule_region_preview<'a>(
         .filter(|preview| !preview.is_empty())
 }
 
-fn agent_start(args: &[String]) -> std::io::Result<i32> {
-    let Some(name) = args.first() else {
-        eprintln!("usage: herdr agent start <name> --kind KIND --pane ID [--timeout MS] [--account ID] [-- <agent-args...>]");
-        return Ok(2);
-    };
-    let separator = args
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(args.len());
-    let mut kind = None;
-    let mut pane_id = None;
-    let mut timeout_ms = None;
-    let mut account = None;
-    let mut index = 1;
-    while index < separator {
-        match args[index].as_str() {
-            "--kind" => {
-                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
-                    eprintln!("missing value for --kind");
-                    return Ok(2);
-                };
-                kind = Some(value.clone());
-                index += 2;
-            }
-            "--pane" => {
-                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
-                    eprintln!("missing value for --pane");
-                    return Ok(2);
-                };
-                pane_id = Some(super::normalize_pane_id(value));
-                index += 2;
-            }
-            "--timeout" => {
-                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
-                    eprintln!("missing value for --timeout");
-                    return Ok(2);
-                };
-                timeout_ms = match parse_timeout(value) {
-                    Ok(timeout_ms) => Some(timeout_ms),
-                    Err(exit_code) => return Ok(exit_code),
-                };
-                index += 2;
-            }
-            "--account" => {
-                let Some(value) = args.get(index + 1).filter(|_| index + 1 < separator) else {
-                    eprintln!("missing value for --account");
-                    return Ok(2);
-                };
-                account = Some(value.clone());
-                index += 2;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    let Some(kind) = kind else {
-        eprintln!("missing required --kind");
-        return Ok(2);
-    };
-    let Some(pane_id) = pane_id else {
-        eprintln!("missing required --pane");
-        return Ok(2);
-    };
+fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
+    let AgentStartParams {
+        name,
+        kind,
+        pane_id,
+        args: agent_args,
+        timeout_ms,
+        account,
+    } = params;
     let Some(expected_kind) = crate::detect::parse_agent_label(&kind) else {
         eprintln!("unsupported interactive agent kind: {kind}");
         return Ok(2);
     };
     let expected_kind = crate::detect::agent_label(expected_kind).to_string();
-    let agent_args = if separator < args.len() {
-        args[separator + 1..].to_vec()
-    } else {
-        Vec::new()
-    };
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(30_000));
     let retryable_timeout = timeout > crate::app::AGENT_START_SETTLE_DELAY
         && timeout <= crate::app::MAX_AGENT_START_TIMEOUT;
@@ -433,10 +344,10 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
         .as_deref()
         .is_some_and(|pinned| pinned != expected_terminal_id)
     {
-        return super::print_response(&agent_name_lost_error("cli:agent:start", name));
+        return super::print_response(&agent_name_lost_error("cli:agent:start", &name));
     }
     let waited = wait_for_named_agent(
-        name,
+        &name,
         &pane_id,
         timeout,
         &expected_kind,
@@ -454,28 +365,7 @@ fn agent_start(args: &[String]) -> std::io::Result<i32> {
     }
 }
 
-/// Validate `agent list` flags. `--json` is accepted as a no-op — bare
-/// `agent list` already emits JSON via `print_response`, so the flag only makes
-/// the documented contract copy-safe. Any other argument is rejected. Returns
-/// the exit code to surface on rejection.
-fn parse_agent_list_args(args: &[String]) -> Result<(), i32> {
-    for arg in args {
-        match arg.as_str() {
-            "--json" => {}
-            other => {
-                eprintln!("unknown option: {other}");
-                return Err(2);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn agent_list(args: &[String]) -> std::io::Result<i32> {
-    if let Err(code) = parse_agent_list_args(args) {
-        return Ok(code);
-    }
-
+fn agent_list() -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:list".into(),
         method: Method::AgentList(AgentListParams::default()),
@@ -484,7 +374,10 @@ fn agent_list(args: &[String]) -> std::io::Result<i32> {
 
 /// Explicit trusted-machine reverse request. The pane id is supplied by the
 /// caller, not OS-attested; a malicious same-user process can spoof it.
-fn federated_agent_command(args: &[String], prompt: bool) -> std::io::Result<i32> {
+fn federated_agent_command(
+    caller_pane: Option<String>,
+    method: crate::api::reverse_agents::ReverseMethod,
+) -> std::io::Result<i32> {
     let coordinator = crate::config::Config::load()
         .config
         .federation
@@ -493,36 +386,10 @@ fn federated_agent_command(args: &[String], prompt: bool) -> std::io::Result<i32
         eprintln!("reverse federation disabled: set federation.reverse_coordinator_machine_id to the trusted coordinator's pinned install id");
         return Ok(1);
     };
-    let mut caller = std::env::var("HERDR_PANE_ID").ok();
-    let mut positional = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        if args[index] == "--caller-pane" {
-            let Some(value) = args.get(index + 1) else {
-                eprintln!("--caller-pane requires a live local agent pane or terminal id");
-                return Ok(2);
-            };
-            caller = Some(value.clone());
-            index += 2;
-        } else {
-            positional.push(args[index].as_str());
-            index += 1;
-        }
-    }
+    let caller = caller_pane.or_else(|| std::env::var("HERDR_PANE_ID").ok());
     let Some(caller) = caller.filter(|caller| !caller.is_empty()) else {
         eprintln!("HERDR_PANE_ID (or --caller-pane) is required; same-user processes can spoof opted-in pane identities");
         return Ok(2);
-    };
-    let method = match (prompt, positional.as_slice()) {
-        (false, []) => crate::api::reverse_agents::ReverseMethod::AgentList,
-        (true, [target, text]) => crate::api::reverse_agents::ReverseMethod::AgentPrompt {
-            target: (*target).to_owned(),
-            text: (*text).to_owned(),
-        },
-        _ => {
-            eprintln!("usage: herdr agent federated-list [--caller-pane ID]\n       herdr agent federated-prompt <terminal-id-from-federated-list> <text> [--caller-pane ID]");
-            return Ok(2);
-        }
     };
     let roster = match crate::api::client::ApiClient::local().request(Request {
         id: "cli:agent:federated:caller".into(),
@@ -561,159 +428,28 @@ fn federated_agent_command(args: &[String], prompt: bool) -> std::io::Result<i32
     }
 }
 
-fn agent_get(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent get <target>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr agent get <target>");
-        return Ok(2);
-    }
-
+fn agent_get(params: AgentTarget) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:get".into(),
-        method: Method::AgentGet(AgentTarget {
-            target: target.clone(),
-        }),
+        method: Method::AgentGet(params),
     })?)
 }
 
-fn agent_focus(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent focus <target>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr agent focus <target>");
-        return Ok(2);
-    }
-
+fn agent_focus(params: AgentTarget) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:focus".into(),
-        method: Method::AgentFocus(AgentTarget {
-            target: target.clone(),
-        }),
+        method: Method::AgentFocus(params),
     })?)
 }
 
-fn agent_restart(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr agent restart <target> [--account <id>]";
-    let Some(target) = args.first() else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let mut account = None;
-    let mut rest = args[1..].iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "--account" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Ok(2);
-                };
-                account = Some(value.clone());
-            }
-            _ => {
-                eprintln!("{USAGE}");
-                return Ok(2);
-            }
-        }
-    }
-
+fn agent_restart(params: AgentRestartParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:restart".into(),
-        method: Method::AgentRestart(AgentRestartParams {
-            target: target.clone(),
-            account,
-        }),
+        method: Method::AgentRestart(params),
     })?)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-struct AgentTransferCliArgs {
-    target: String,
-    to: AgentSessionTransferHarness,
-    account: Option<String>,
-    confirm: Option<String>,
-    yes: bool,
-}
-
-fn parse_agent_transfer_args(args: &[String]) -> Result<AgentTransferCliArgs, i32> {
-    const USAGE: &str = "usage: herdr agent transfer-session <target> --to claude|codex|omp [--account <id>] [--yes | --confirm <transfer-id>]";
-    let Some(target) = args.first() else {
-        eprintln!("{USAGE}");
-        return Err(2);
-    };
-    let mut to = None;
-    let mut account = None;
-    let mut confirm = None;
-    let mut yes = false;
-    let mut rest = args[1..].iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "--to" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Err(2);
-                };
-                to = match value.as_str() {
-                    "claude" => Some(AgentSessionTransferHarness::Claude),
-                    "codex" => Some(AgentSessionTransferHarness::Codex),
-                    "omp" => Some(AgentSessionTransferHarness::Omp),
-                    _ => {
-                        eprintln!("{USAGE}");
-                        return Err(2);
-                    }
-                };
-            }
-            "--account" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Err(2);
-                };
-                account = Some(value.clone());
-            }
-            "--confirm" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Err(2);
-                };
-                confirm = Some(value.clone());
-            }
-            "--yes" => yes = true,
-            "help" | "--help" | "-h" => {
-                eprintln!("{USAGE}");
-                return Err(0);
-            }
-            _ => {
-                eprintln!("{USAGE}");
-                return Err(2);
-            }
-        }
-    }
-    let Some(to) = to else {
-        eprintln!("{USAGE}");
-        return Err(2);
-    };
-    if confirm.is_some() && yes {
-        eprintln!("{USAGE}");
-        return Err(2);
-    }
-    Ok(AgentTransferCliArgs {
-        target: target.clone(),
-        to,
-        account,
-        confirm,
-        yes,
-    })
-}
-
-fn agent_transfer_session(args: &[String]) -> std::io::Result<i32> {
-    let parsed = match parse_agent_transfer_args(args) {
-        Ok(parsed) => parsed,
-        Err(code) => return Ok(code),
-    };
+fn agent_transfer_session(parsed: bindings::TransferSession) -> std::io::Result<i32> {
     if let Some(transfer_id) = parsed.confirm {
         let response = super::send_request(&Request {
             id: "cli:agent:transfer-session:confirm".into(),
@@ -922,12 +658,8 @@ fn session_transfer_poll_may_retry(response: &serde_json::Value) -> bool {
         == Some("agent_not_found")
 }
 
-fn agent_attach(args: &[String]) -> std::io::Result<i32> {
-    let (target, takeover) =
-        match super::parse_attach_target(args, "usage: herdr agent attach <target> [--takeover]") {
-            Ok(parsed) => parsed,
-            Err(code) => return Ok(code),
-        };
+fn agent_attach(params: bindings::Attach) -> std::io::Result<i32> {
+    let bindings::Attach { target, takeover } = params;
 
     let response = resolve_agent_target(&target, "cli:agent:attach:resolve")?;
     if response.get("error").is_some() {
@@ -942,59 +674,10 @@ fn agent_attach(args: &[String]) -> std::io::Result<i32> {
     Ok(0)
 }
 
-fn agent_wait(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent wait <target> [--until STATUS]... [--timeout MS]");
-        return Ok(2);
-    };
-    let mut until = Vec::new();
-    let mut timeout_ms = None;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--until" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("--until requires at least one status");
-                    return Ok(2);
-                };
-                let status = match super::parse_agent_status(value) {
-                    Ok(status) => status,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return Ok(2);
-                    }
-                };
-                until.push(status);
-                index += 2;
-            }
-            "--timeout" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --timeout");
-                    return Ok(2);
-                };
-                timeout_ms = match parse_timeout(value) {
-                    Ok(timeout_ms) => Some(timeout_ms),
-                    Err(exit_code) => return Ok(exit_code),
-                };
-                index += 2;
-            }
-            "help" | "--help" | "-h" => {
-                eprintln!("usage: herdr agent wait <target> [--until STATUS]... [--timeout MS]");
-                return Ok(0);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
+fn agent_wait(params: AgentWaitParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:wait".into(),
-        method: Method::AgentWait(AgentWaitParams {
-            target: target.clone(),
-            until,
-            timeout_ms,
-        }),
+        method: Method::AgentWait(params),
     })?)
 }
 
@@ -1193,341 +876,55 @@ fn agent_get_request(target: &str, request_id: &str) -> Request {
     }
 }
 
-fn agent_rename(args: &[String]) -> std::io::Result<i32> {
-    let [target, value] = args else {
-        eprintln!("usage: herdr agent rename <target> <name>|--clear");
-        return Ok(2);
-    };
-    let name = if value == "--clear" {
-        None
-    } else {
-        Some(value.clone())
-    };
-
+fn agent_rename(params: AgentRenameParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:rename".into(),
-        method: Method::AgentRename(AgentRenameParams {
-            target: target.clone(),
-            name,
-        }),
+        method: Method::AgentRename(params),
     })?)
 }
 
-fn agent_archive(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr agent archive <target> [--reason TEXT] [--by WHO] [--parked-work FILE] [--force] [--json]";
-    let Some(target) = args.first().filter(|arg| !arg.starts_with('-')) else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let mut reason = None;
-    let mut by = None;
-    let mut parked_work = Vec::new();
-    let mut force = false;
-    let mut rest = args[1..].iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "--reason" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Ok(2);
-                };
-                reason = Some(value.clone());
-            }
-            "--by" => {
-                let Some(value) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Ok(2);
-                };
-                by = Some(value.clone());
-            }
-            "--parked-work" => {
-                let Some(path) = rest.next() else {
-                    eprintln!("{USAGE}");
-                    return Ok(2);
-                };
-                let content = std::fs::read_to_string(path)?;
-                match serde_json::from_str::<serde_json::Value>(&content) {
-                    Ok(serde_json::Value::Array(items)) => parked_work = items,
-                    Ok(_) => {
-                        eprintln!("--parked-work file must contain a JSON array");
-                        return Ok(2);
-                    }
-                    Err(err) => {
-                        eprintln!("--parked-work file is not valid JSON: {err}");
-                        return Ok(2);
-                    }
-                }
-            }
-            "--force" => force = true,
-            // Output is already JSON via print_response; accepted for symmetry.
-            "--json" => {}
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
+fn agent_archive(params: AgentArchiveParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:archive".into(),
-        method: Method::AgentArchive(AgentArchiveParams {
-            target: target.clone(),
-            reason,
-            by,
-            parked_work,
-            force,
-        }),
+        method: Method::AgentArchive(params),
     })?)
 }
 
-fn agent_unarchive(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr agent unarchive <target> [--fresh] [--json]";
-    let Some(target) = args.first().filter(|arg| !arg.starts_with('-')) else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    let mut fresh = false;
-    for arg in &args[1..] {
-        match arg.as_str() {
-            // Start a clean agent instead of resuming the archived session.
-            "--fresh" => fresh = true,
-            // Output is already JSON via print_response; accepted for symmetry.
-            "--json" => {}
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
+fn agent_unarchive(params: AgentUnarchiveParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:unarchive".into(),
-        method: Method::AgentUnarchive(AgentUnarchiveParams {
-            target: target.clone(),
-            fresh,
-        }),
+        method: Method::AgentUnarchive(params),
     })?)
 }
 
-fn agent_forget(args: &[String]) -> std::io::Result<i32> {
-    const USAGE: &str = "usage: herdr agent forget <target> [--json]";
-    let Some(target) = args.first().filter(|arg| !arg.starts_with('-')) else {
-        eprintln!("{USAGE}");
-        return Ok(2);
-    };
-    for arg in &args[1..] {
-        match arg.as_str() {
-            // Output is already JSON via print_response; accepted for symmetry.
-            "--json" => {}
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
+fn agent_forget(params: AgentForgetParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:forget".into(),
-        method: Method::AgentForget(AgentForgetParams {
-            target: target.clone(),
-        }),
+        method: Method::AgentForget(params),
     })?)
 }
 
-fn agent_prompt(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
-        eprintln!(
-            "usage: herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]"
-        );
-        return Ok(2);
-    };
-    let Some(text) = args.get(1) else {
-        eprintln!("agent prompt requires text");
-        return Ok(2);
-    };
-    let mut wait = false;
-    let mut until = Vec::new();
-    let mut timeout_ms = None;
-    let mut index = 2;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--wait" => {
-                wait = true;
-                index += 1;
-            }
-            "--until" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("--until requires at least one status");
-                    return Ok(2);
-                };
-                let status = match super::parse_agent_status(value) {
-                    Ok(status) => status,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return Ok(2);
-                    }
-                };
-                until.push(status);
-                index += 2;
-            }
-            "--timeout" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --timeout");
-                    return Ok(2);
-                };
-                timeout_ms = match parse_timeout(value) {
-                    Ok(timeout_ms) => Some(timeout_ms),
-                    Err(exit_code) => return Ok(exit_code),
-                };
-                index += 2;
-            }
-            option => {
-                eprintln!("unknown option: {option}");
-                return Ok(2);
-            }
-        }
-    }
-    if !until.is_empty() && !wait {
-        eprintln!("--until requires --wait");
-        return Ok(2);
-    }
-    if timeout_ms.is_some() && !wait {
-        eprintln!("--timeout requires --wait");
-        return Ok(2);
-    }
+fn agent_prompt(params: AgentPromptParams) -> std::io::Result<i32> {
     let response = super::send_request(&Request {
         id: "cli:agent:prompt".into(),
-        method: Method::AgentPrompt(AgentPromptParams {
-            target: target.clone(),
-            text: text.clone(),
-            wait: wait.then_some(AgentPromptWaitOptions {
-                until,
-                timeout_ms,
-                submission_deadline: None,
-            }),
-        }),
+        method: Method::AgentPrompt(params),
     })?;
     super::print_response(&response)
 }
 
-fn agent_send_keys(args: &[String]) -> std::io::Result<i32> {
-    if args.len() < 2 {
-        eprintln!("usage: herdr agent send-keys <target> <key> [key ...]");
-        return Ok(2);
-    }
-
+fn agent_send_keys(params: AgentSendKeysParams) -> std::io::Result<i32> {
     super::print_response(&super::send_request(&Request {
         id: "cli:agent:send-keys".into(),
-        method: Method::AgentSendKeys(AgentSendKeysParams {
-            target: args[0].clone(),
-            keys: args[1..].to_vec(),
-        }),
+        method: Method::AgentSendKeys(params),
     })?)
 }
 
-fn agent_read(args: &[String]) -> std::io::Result<i32> {
-    let Some(target) = args.first() else {
-        eprintln!("usage: herdr agent read <target> [--source visible|recent|recent-unwrapped] [--lines N] [--format text|ansi] [--ansi]");
-        return Ok(2);
-    };
-
-    let mut source = ReadSource::Recent;
-    let mut lines = None;
-    let mut format = ReadFormat::Text;
-    let mut strip_ansi = true;
-
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--source" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --source");
-                    return Ok(2);
-                };
-                source = super::parse_read_source(value)?;
-                index += 2;
-            }
-            "--lines" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --lines");
-                    return Ok(2);
-                };
-                lines = Some(super::parse_u32_flag("--lines", value)?);
-                index += 2;
-            }
-            "--format" => {
-                let Some(value) = args.get(index + 1) else {
-                    eprintln!("missing value for --format");
-                    return Ok(2);
-                };
-                format = super::parse_read_format(value)?;
-                strip_ansi = !matches!(format, ReadFormat::Ansi);
-                index += 2;
-            }
-            "--ansi" => {
-                format = ReadFormat::Ansi;
-                strip_ansi = false;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
+fn agent_read(params: AgentReadParams) -> std::io::Result<i32> {
     let response = super::send_request(&Request {
         id: "cli:agent:read".into(),
-        method: Method::AgentRead(AgentReadParams {
-            target: target.clone(),
-            source,
-            lines,
-            format,
-            strip_ansi,
-        }),
+        method: Method::AgentRead(params),
     })?;
     super::print_read_response(&response)
-}
-
-fn print_agent_help() {
-    eprintln!("herdr agent commands:");
-    eprintln!("  herdr agent list");
-    eprintln!("  herdr agent federated-list [--caller-pane ID] (trusted-machine grant; HERDR_PANE_ID by default)");
-    eprintln!(
-        "  herdr agent federated-prompt <terminal-id-from-federated-list> <text> [--caller-pane ID]"
-    );
-    eprintln!(
-        "  Reverse grants do not isolate same-user processes: they can spoof an opted-in pane ID."
-    );
-    eprintln!("  herdr agent get <target>");
-    eprintln!("  herdr agent read <target> [--source visible|recent|recent-unwrapped|detection] [--lines N] [--format text|ansi] [--ansi]");
-    eprintln!("  herdr agent send-keys <target> <key> [key ...]");
-    eprintln!("  herdr agent prompt <target> <text> [--wait] [--until STATUS]... [--timeout MS]");
-    eprintln!("  herdr agent rename <target> <name>|--clear");
-    eprintln!("  herdr agent archive <target> [--reason TEXT] [--by WHO] [--parked-work FILE] [--force] [--json]");
-    eprintln!("  herdr agent unarchive <target> [--fresh] [--json]");
-    eprintln!("  herdr agent forget <target> [--json]");
-    eprintln!("  herdr agent focus <target>");
-    eprintln!("  herdr agent wait <target> [--until STATUS]... [--timeout MS]");
-    eprintln!("  herdr agent attach <target> [--takeover]");
-    eprintln!(
-        "  herdr agent start <name> --kind KIND --pane ID [--timeout MS] [-- <agent-args...>]"
-    );
-    eprintln!("  herdr agent restart <target>");
-    eprintln!("  herdr agent transfer-session <target> --to claude|codex|omp [--account ID] [--yes | --confirm ID]");
-    eprintln!("  herdr agent explain <target> [--json|--format text|json] [--verbose]");
-    eprintln!(
-        "  herdr agent explain --file PATH --agent LABEL [--json|--format text|json] [--verbose]"
-    );
-    eprintln!("  targets accept unique agent names and pane ids that currently host agents");
-    eprintln!("  kinds: {}", super::spec::agent_kind_values().join("|"));
-}
-
-fn parse_timeout(value: &str) -> Result<u64, i32> {
-    super::parse_u64_flag("--timeout", value).map_err(|err| {
-        eprintln!("{err}");
-        2
-    })
 }
 
 #[cfg(test)]
@@ -1588,78 +985,6 @@ mod tests {
         let legacy: serde_json::Value = serde_json::from_str(r#"{"omissions":{}}"#).unwrap();
         assert_eq!(windowed_records_of(legacy.as_object()), 0);
         assert_eq!(windowed_records_of(None), 0);
-    }
-
-    #[test]
-    fn agent_list_accepts_json_flag_as_no_op() {
-        // Bare `agent list` already emits JSON; `--json` is copy-safe and does
-        // not trip the reject path.
-        assert_eq!(parse_agent_list_args(&[]), Ok(()));
-        assert_eq!(parse_agent_list_args(&["--json".to_string()]), Ok(()));
-    }
-
-    #[test]
-    fn agent_list_rejects_unknown_option() {
-        assert_eq!(parse_agent_list_args(&["--bogus".to_string()]), Err(2));
-        assert_eq!(
-            parse_agent_list_args(&["--json".to_string(), "--bogus".to_string()]),
-            Err(2)
-        );
-    }
-
-    #[test]
-    fn transfer_session_args_keep_prepare_and_confirm_explicit() {
-        assert_eq!(
-            parse_agent_transfer_args(&[
-                "jarvis".into(),
-                "--to".into(),
-                "codex".into(),
-                "--account".into(),
-                "codex-work".into(),
-            ]),
-            Ok(AgentTransferCliArgs {
-                target: "jarvis".into(),
-                to: AgentSessionTransferHarness::Codex,
-                account: Some("codex-work".into()),
-                confirm: None,
-                yes: false,
-            })
-        );
-        assert_eq!(
-            parse_agent_transfer_args(&[
-                "jarvis".into(),
-                "--to".into(),
-                "claude".into(),
-                "--confirm".into(),
-                "transfer-1".into(),
-            ]),
-            Ok(AgentTransferCliArgs {
-                target: "jarvis".into(),
-                to: AgentSessionTransferHarness::Claude,
-                account: None,
-                confirm: Some("transfer-1".into()),
-                yes: false,
-            })
-        );
-    }
-
-    #[test]
-    fn transfer_session_args_reject_implicit_or_double_confirmation() {
-        assert_eq!(
-            parse_agent_transfer_args(&["jarvis".into(), "--to".into(), "other".into()]),
-            Err(2)
-        );
-        assert_eq!(
-            parse_agent_transfer_args(&[
-                "jarvis".into(),
-                "--to".into(),
-                "codex".into(),
-                "--yes".into(),
-                "--confirm".into(),
-                "transfer-1".into(),
-            ]),
-            Err(2)
-        );
     }
 
     #[test]

@@ -228,3 +228,47 @@ just test-one kitty_file_image_survives
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='experimental PNG')
 just check
 ```
+
+## 0008 keep cursor hyperlink across page replacement
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0008-cursor-hyperlink-page-replace.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/5296
+
+upstream discussion: not opened
+
+upstream pr: not opened
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+
+reason: Moving the cursor onto another page while a hyperlink and a
+non-default style are active can grow that page. Growth replaces the page,
+re-adds the same heap hyperlink, and frees it. The outer move then clears
+the pointer without clearing the id that replacement just installed, so
+`endHyperlink` dereferences null and the server dies. The same sequence is
+still present on upstream main (`cursorChangePin` around line 1606 and
+`cursorPageReplaced` around line 706 at 22fa134a0). This is not the one-row
+scrollback prune fixed by 65ff54c67.
+
+The same function also crashes when style migration hits the maximum style
+capacity: the page split moves the cursor again, and the nested pin change
+releases hyperlink id 0 from a page that no longer holds it. The patch skips
+that release when an outer pin change already released the link.
+
+remove when: the vendored source keeps the cursor hyperlink alive across a
+page replacement or page split during a pin change, and both Screen tests
+below pass without this patch.
+
+verification:
+
+```sh
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute across a full page keeps the hyperlink')
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
+just maintenance-test
+```

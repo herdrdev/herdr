@@ -509,6 +509,10 @@ impl TerminalRuntime {
         self.0.try_send_bytes(bytes)
     }
 
+    pub(crate) fn validate_input_submission(&self, bytes: &[u8]) -> std::io::Result<()> {
+        self.0.validate_input_submission(bytes)
+    }
+
     pub fn queue_user_input_submission_guarded(
         &self,
         text: Bytes,
@@ -634,6 +638,20 @@ impl TerminalRuntime {
 #[cfg(test)]
 impl TerminalRuntime {
     #[cfg(unix)]
+    pub(crate) fn test_start_basic_detection(&mut self) -> mpsc::Receiver<crate::events::AppEvent> {
+        self.0.test_start_basic_detection()
+    }
+
+    #[cfg(unix)]
+    pub(crate) async fn test_wait_for_detection_reads(&self, expected: usize) {
+        self.0.test_wait_for_detection_reads(expected).await;
+    }
+
+    pub(crate) fn test_scroll_metrics_reads(&self) -> usize {
+        self.0.test_scroll_metrics_reads()
+    }
+
+    #[cfg(unix)]
     pub(crate) fn test_enable_kitty_source_forwarding(&self) {
         self.0.test_enable_kitty_source_forwarding();
     }
@@ -648,6 +666,11 @@ impl TerminalRuntime {
     pub(crate) fn test_with_channel(cols: u16, rows: u16) -> (Self, mpsc::Receiver<Bytes>) {
         let (runtime, rx) = crate::pane::PaneRuntime::test_with_channel(cols, rows);
         (Self(runtime), rx)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn test_with_actor(actor: crate::pty::actor::PtyIoActorHandle) -> Self {
+        Self(crate::pane::PaneRuntime::test_with_actor(actor))
     }
 
     pub(crate) fn test_with_channel_capacity(

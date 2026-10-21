@@ -399,9 +399,10 @@ fn main() {
     $kittyInitialHex = Get-LatestProbeHex -PaneText $report.kitty_initial
     $report.device_attributes_response = $kittyInitialHex -match "1b5b3f(?:3[0-9]|3b)+63"
     $report.kitty_query_response = $kittyInitialHex.Contains("1b5b3f3775")
-    $report.kitty_alt_v = Send-KeyAndObserve -PaneId $kittyPane -Key "alt+v" -ExpectedHex "1b5b3131383b333a3175"
-    $report.kitty_ctrl_u = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+u" -ExpectedHex "1b5b3131373b353a3175"
-    $report.kitty_ctrl_v = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+v" -ExpectedHex "1b5b3131383b353a3175"
+    # libghostty omits the default press event type (`;3u`, not `;3:1u`).
+    $report.kitty_alt_v = Send-KeyAndObserve -PaneId $kittyPane -Key "alt+v" -ExpectedHex "1b5b3131383b3375"
+    $report.kitty_ctrl_u = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+u" -ExpectedHex "1b5b3131373b3575"
+    $report.kitty_ctrl_v = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+v" -ExpectedHex "1b5b3131383b3575"
     $report.kitty_shift_enter = Send-KeyAndObserve -PaneId $kittyPane -Key "shift+enter" -ExpectedHex "1b5b31333b3275"
     $report.kitty_ctrl_backspace = Send-KeyAndObserve -PaneId $kittyPane -Key "ctrl+backspace" -ExpectedHex "1b5b3132373b3575"
     $report.kitty_up = Send-KeyAndObserve -PaneId $kittyPane -Key "up" -ExpectedHex "1b5b313b313a3141"
@@ -414,6 +415,11 @@ fn main() {
     $report.raw_kitty_ctrl_delete = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[57426;5u") -ExpectedHex "1b5b35373432363b3575"
     $report.raw_alt_v = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "v") -ExpectedHex "1b76"
     $report.raw_ctrl_u = Send-RawAndObserve -PaneId $kittyPane -Text ([string][char]0x15) -ExpectedHex "15"
+    # ConPTY must pass the richer Kitty and modifyOtherKeys forms through intact.
+    $report.raw_kitty_release = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[97;1:3u") -ExpectedHex "1b5b39373b313a3375"
+    $report.raw_kitty_alternate = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[97:65;2u") -ExpectedHex "1b5b39373a36353b3275"
+    $report.raw_kitty_associated_text = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[97;;97u") -ExpectedHex "1b5b39373b3b393775"
+    $report.raw_modify_other_keys = Send-RawAndObserve -PaneId $kittyPane -Text ([char]27 + "[27;5;97~") -ExpectedHex "1b5b32373b353b39377e"
 
     $nativePane = New-ProbePane -Mode "native"
     # Win32 input mode records use CSI Vk;Scan;Unicode;Down;Control;Repeat _.
@@ -465,6 +471,10 @@ fn main() {
         -or -not $report.raw_kitty_ctrl_delete.delivered `
         -or -not $report.raw_alt_v.delivered `
         -or -not $report.raw_ctrl_u.delivered `
+        -or -not $report.raw_kitty_release.delivered `
+        -or -not $report.raw_kitty_alternate.delivered `
+        -or -not $report.raw_kitty_associated_text.delivered `
+        -or -not $report.raw_modify_other_keys.delivered `
         -or -not $report.native_escape_down.delivered `
         -or -not $report.native_escape_release.delivered `
         -or ($appLocalHostRequired -and -not $report.app_local_console_host)

@@ -53,7 +53,18 @@ impl App {
             Ok(env) => env,
             Err((code, message)) => return encode_error(id, &code, message),
         };
-        let (rows, cols) = self.state.estimate_pane_size();
+        let direction = match params.direction {
+            crate::api::schema::SplitDirection::Right => ratatui::layout::Direction::Horizontal,
+            crate::api::schema::SplitDirection::Down => ratatui::layout::Direction::Vertical,
+        };
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::Split {
+                ws_idx,
+                target: target_pane_id,
+                direction,
+                ratio: params.ratio.unwrap_or(0.5),
+            });
         let split_cwd = params.cwd.map(std::path::PathBuf::from).or_else(|| {
             let follow_cwd = self.launch_cwd_for_pane_in_workspace(ws_idx, target_pane_id);
             Some(self.resolve_new_terminal_cwd(follow_cwd))
@@ -65,10 +76,6 @@ impl App {
         let previous_focus = self.state.current_pane_focus_target();
         let Some(ws) = self.state.workspaces.get_mut(ws_idx) else {
             return encode_error(id, "pane_not_found", "pane not found");
-        };
-        let direction = match params.direction {
-            crate::api::schema::SplitDirection::Right => ratatui::layout::Direction::Horizontal,
-            crate::api::schema::SplitDirection::Down => ratatui::layout::Direction::Vertical,
         };
         let shell_config = crate::pane::PaneShellConfig::new(&default_shell, self.state.shell_mode);
         let split_result = match params.ratio {
@@ -2310,6 +2317,9 @@ impl App {
             Ok(bytes) => bytes,
             Err(key) => return encode_error(id, "invalid_key", format!("unsupported key {key}")),
         };
+        if let Err(err) = runtime.validate_input_submission(&bytes) {
+            return encode_error(id, "pane_send_failed", err.to_string());
+        }
         if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
             return encode_error(id, "pane_send_failed", err.to_string());
         }
@@ -2356,14 +2366,18 @@ impl App {
         };
         let workspace_id = self.public_workspace_id(ws_idx);
         let layout_update_target = self.layout_update_target_after_pane_removal(ws_idx, pane_id);
-        if self.state.close_pane_would_close_workspace(ws_idx, pane_id)
-            && self.state.confirm_implicit_worktree_group_close(ws_idx)
-        {
-            return Err(encode_error(
-                id,
-                "confirmation_required",
-                "closing this pane would close a worktree group",
-            ));
+        if self.state.close_pane_would_close_workspace(ws_idx, pane_id) {
+            self.require_restored_group_close_ready(
+                &id,
+                &self.state.workspace_close_indices(ws_idx),
+            )?;
+            if self.state.confirm_implicit_worktree_group_close(ws_idx) {
+                return Err(encode_error(
+                    id,
+                    "confirmation_required",
+                    "closing this pane would close a worktree group",
+                ));
+            }
         }
         let workspace_snapshot = self.workspace_info(ws_idx);
         let terminal_id = self.state.terminal_id_for_pane(ws_idx, pane_id);
@@ -2427,7 +2441,7 @@ impl App {
             Ok(encoded_keys) => encoded_keys,
             Err(key) => return encode_error(id, "invalid_key", format!("unsupported key {key}")),
         };
-        for bytes in encoded_keys {
+        for bytes in encoded_keys.into_iter().filter(|bytes| !bytes.is_empty()) {
             if let Err(err) = runtime.try_send_bytes(Bytes::from(bytes)) {
                 return encode_error(id, "pane_send_failed", err.to_string());
             }
@@ -3905,7 +3919,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn api_pane_send_keys_preserves_super_chord_in_legacy_pane() {
+    async fn api_pane_send_keys_does_not_type_super_chord_into_legacy_pane() {
         let (mut app, pane_id, mut rx) = app_with_send_key_runtime(1);
         let internal_pane_id = app.state.workspaces[0].tabs[0].root_pane;
         assert_eq!(
@@ -3926,11 +3940,38 @@ mod tests {
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(success.id, "req");
         assert_eq!(success.result, ResponseResult::Ok {});
+        // Neither a bare "c" (#3710) nor a Kitty report the shell prints (#4356).
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn api_pane_send_keys_reports_super_chord_to_kitty_pane() {
+        let (mut app, pane_id) = app_with_test_workspace();
+        let internal_pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let (runtime, mut rx) =
+            crate::terminal::TerminalRuntime::test_with_channel_and_scrollback_bytes(
+                80,
+                24,
+                0,
+                b"\x1b[>1u",
+                1,
+            );
+        app.state.insert_test_runtime(internal_pane_id, runtime);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req".into(),
+            method: crate::api::schema::Method::PaneSendKeys(PaneSendKeysParams {
+                pane_id,
+                keys: vec!["cmd+c".into()],
+            }),
+        });
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
         assert_eq!(
             rx.try_recv().unwrap(),
             bytes::Bytes::from_static(b"\x1b[99;9u")
         );
-        assert!(rx.try_recv().is_err());
     }
 
     #[tokio::test]

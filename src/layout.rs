@@ -129,6 +129,29 @@ impl TileLayout {
         result
     }
 
+    /// Compute pane rects as they will be after splitting `target`, without
+    /// changing the layout. Returns the rects and the new pane's index; the
+    /// new pane's entry carries `target`'s id.
+    pub fn panes_after_split(
+        &self,
+        area: Rect,
+        target: PaneId,
+        direction: Direction,
+        ratio: f32,
+    ) -> Option<(Vec<PaneInfo>, usize)> {
+        let mut panes = self.panes(area);
+        let index = panes.iter().position(|info| info.id == target)?;
+        let (first, second) = split_rect(panes[index].rect, direction, valid_split_ratio(ratio));
+        panes[index].rect = first;
+        panes[index].inner_rect = first;
+        let mut new_pane = panes[index].clone();
+        new_pane.rect = second;
+        new_pane.inner_rect = second;
+        new_pane.is_focused = false;
+        panes.insert(index + 1, new_pane);
+        Some((panes, index + 1))
+    }
+
     /// Collect all split boundaries for mouse drag resize.
     pub fn splits(&self, area: Rect) -> Vec<SplitBorder> {
         let mut result = Vec::new();
@@ -602,7 +625,7 @@ fn split_node(target: PaneId, direction: Direction, new_id: PaneId, split_ratio:
     }
 }
 
-fn valid_split_ratio(ratio: f32) -> f32 {
+pub(crate) fn valid_split_ratio(ratio: f32) -> f32 {
     if ratio.is_finite() {
         ratio.clamp(0.1, 0.9)
     } else {
@@ -787,6 +810,37 @@ mod tests {
                 (Direction::Horizontal, 0.5)
             ]
         );
+    }
+
+    #[test]
+    fn panes_after_split_predicts_the_real_split_geometry() {
+        let area = Rect::new(3, 1, 121, 37);
+        let (mut layout, root) = TileLayout::new();
+        let right = layout.split_pane(root, Direction::Horizontal, 0.6).unwrap();
+        let bottom_left = layout.split_pane(root, Direction::Vertical, 0.4).unwrap();
+        for (target, direction, ratio) in [
+            (bottom_left, Direction::Horizontal, 0.5),
+            (right, Direction::Vertical, 0.3),
+            (root, Direction::Horizontal, f32::NAN),
+        ] {
+            let (predicted, new_index) = layout
+                .panes_after_split(area, target, direction, ratio)
+                .unwrap();
+            let new_id = layout.split_pane(target, direction, ratio).unwrap();
+            let actual: Vec<_> = layout
+                .panes(area)
+                .into_iter()
+                .map(|info| info.rect)
+                .collect();
+            assert_eq!(
+                predicted.iter().map(|info| info.rect).collect::<Vec<_>>(),
+                actual
+            );
+            assert_eq!(layout.pane_ids()[new_index], new_id);
+        }
+        assert!(layout
+            .panes_after_split(area, PaneId::alloc(), Direction::Vertical, 0.5)
+            .is_none());
     }
 
     #[test]

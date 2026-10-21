@@ -1,13 +1,60 @@
 id = "agy"
-version = "2026.06.24.1"
+version = "2026.10.05.1"
 min_engine_version = 1
-updated_at = "2026-06-24T00:00:00Z"
+updated_at = "2026-10-05T00:00:00Z"
 aliases = ["antigravity", "antigravity-cli"]
+
+# Evidence: Antigravity CLI 1.2.17 live pane reads, plus reporter captures
+# from 1.1.28 through 1.2.16.
+#
+# Dialogs replace the prompt box and end with a key-hint row directly above
+# the "esc to cancel" footer:
+#   permission: "↑/↓ Navigate · tab Amend · ctrl+g edit/expand command"
+#               "↑/↓ Navigate · tab Amend · f full diff"
+#   question:   "↑/↓ Navigate · enter Select · esc Skip"
+#   trust:      "↑/↓ Navigate · enter Confirm"
+#   slash menu: "↑/↓ Navigate · enter Select · tab Complete" (idle)
+# Some captures hold only the two footer rows, so dialog rules must not
+# require the question text.
+#
+# Working turns draw a braille spinner followed by either an -ing word or a
+# thought summary above the prompt box, and the footer reads "esc to cancel"
+# directly under the prompt box's bottom border. The idle footer reads
+# "? for shortcuts".
+#
+# Background tasks and subagents show "· N task(s)" in the footer and a task
+# panel under the prompt box. Once the agent is back at its prompt they do
+# not count as working.
 
 [[rules]]
 id = "permission_prompt"
 state = "blocked"
 priority = 300
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "tab amend"]
+
+[[rules]]
+id = "question_prompt"
+state = "blocked"
+priority = 290
+region = "bottom_non_empty_lines(2)"
+visible_blocker = true
+contains = ["navigate", "esc skip"]
+
+[[rules]]
+id = "trust_prompt"
+state = "blocked"
+priority = 280
+region = "bottom_non_empty_lines(8)"
+visible_blocker = true
+contains = ["do you trust the contents of this project?", "yes, i trust this folder", "enter confirm"]
+
+# Pre-1.1.28 permission dialog.
+[[rules]]
+id = "legacy_permission_prompt"
+state = "blocked"
+priority = 270
 region = "whole_recent"
 visible_blocker = true
 contains = ["requesting permission for:"]
@@ -17,17 +64,17 @@ any = [
 ]
 
 [[rules]]
+id = "esc_cancel_footer_working"
+state = "working"
+priority = 110
+region = "bottom_non_empty_lines(2)"
+visible_working = true
+regex = ['(?m)^\s*─{3,}\s*esc to cancel\b']
+
+[[rules]]
 id = "spinner_working"
 state = "working"
 priority = 100
-region = "whole_recent"
+region = "bottom_non_empty_lines(12)"
 visible_working = true
-line_regex = ['^\s*[\u2800-\u28FF]+\s+\p{Alphabetic}+\w*ing\b']
-
-[[rules]]
-id = "background_tasks_working"
-state = "working"
-priority = 90
-region = "bottom_non_empty_lines(5)"
-visible_working = true
-line_regex = ['(?i)·\s*[1-9][0-9]*\s+task']
+line_regex = ['^\s*[\u2801-\u28FF]+\s+\S']

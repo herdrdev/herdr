@@ -141,39 +141,73 @@ pub(super) fn resize_poll_loop(
     should_quit: &Arc<AtomicBool>,
 ) {
     crate::platform::watch_terminal_resize_signal();
-    let mut last_size = (
-        initial_cols,
-        initial_rows,
-        initial_cell_width,
-        initial_cell_height,
-        initial_pixel_geometry_exact,
+    resize_poll_loop_with(
+        resize_tx,
+        (
+            initial_cols,
+            initial_rows,
+            initial_cell_width,
+            initial_cell_height,
+            initial_pixel_geometry_exact,
+        ),
+        |last_cell_size| {
+            current_terminal_geometry(
+                pixel_geometry_enabled,
+                pixel_geometry_fallback,
+                reported_cell_size,
+                Some(last_cell_size),
+            )
+        },
+        crate::platform::take_terminal_resize_signal,
+        should_quit,
     );
+}
+
+/// The resize watcher loop, with its geometry and resize-signal sources
+/// injected so the transient/recovery behavior is testable without a terminal.
+pub(super) fn resize_poll_loop_with(
+    resize_tx: tokio::sync::mpsc::Sender<ClientLoopEvent>,
+    initial_size: (u16, u16, u32, u32, bool),
+    mut read_geometry: impl FnMut((u32, u32)) -> io::Result<TerminalGeometry>,
+    mut take_signal: impl FnMut() -> bool,
+    should_quit: &Arc<AtomicBool>,
+) {
+    let mut last_size = initial_size;
+    // Retained across a transient sample so a resize that lands back on the
+    // same size still re-reports (host modes may have been reset).
+    let mut signalled = false;
     while !should_quit.load(Ordering::Acquire) {
         std::thread::sleep(Duration::from_millis(100));
-        let signalled = crate::platform::take_terminal_resize_signal();
-        let new_size = match current_terminal_geometry(
-            pixel_geometry_enabled,
-            pixel_geometry_fallback,
-            reported_cell_size,
-            Some((last_size.2, last_size.3)),
-        ) {
-            Ok(size) => size,
-            Err(err) => {
-                let _ = resize_tx.blocking_send(ClientLoopEvent::TerminalUnavailable(err));
-                break;
-            }
-        };
+        signalled |= take_signal();
+        let (cols, rows, cell_width_px, cell_height_px, exact) =
+            match read_geometry((last_size.2, last_size.3)) {
+                Ok(size) => size,
+                // A window drag can momentarily report a zero-sized grid. Keep
+                // the last known geometry and the pending signal, then resample
+                // instead of treating the terminal as gone.
+                Err(err) if crate::platform::is_transient_terminal_grid_error(&err) => continue,
+                Err(err) => {
+                    let _ = resize_tx.blocking_send(ClientLoopEvent::TerminalUnavailable(err));
+                    break;
+                }
+            };
+        let new_size = (cols, rows, cell_width_px, cell_height_px, exact);
         if resize_report_required(signalled, new_size, last_size) {
             last_size = new_size;
             if resize_tx
                 .blocking_send(ClientLoopEvent::Resize(
-                    new_size.0, new_size.1, new_size.2, new_size.3, new_size.4,
+                    cols,
+                    rows,
+                    cell_width_px,
+                    cell_height_px,
+                    exact,
                 ))
                 .is_err()
             {
                 break;
             }
         }
+        signalled = false;
     }
 }
 

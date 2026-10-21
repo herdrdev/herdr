@@ -33,7 +33,7 @@ struct SpawnedHerdr {
 impl Drop for SpawnedHerdr {
     fn drop(&mut self) {
         let pid = self.child.process_id();
-        let _ = self.child.kill();
+        support::stop_spawned_herdr(&mut *self.child);
 
         if let Some(pid) = pid {
             let deadline = Instant::now() + Duration::from_secs(2);
@@ -142,6 +142,7 @@ fn spawn_herdr_with_options(
         .unwrap();
 
     let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    support::isolate_herdr_test_process(&mut cmd);
     cmd.arg("server");
     cmd.env("XDG_CONFIG_HOME", config_home);
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
@@ -308,6 +309,47 @@ fn ping_over_socket_returns_version() {
     // Intentionally hardcoded so wire protocol bumps require updating this test.
     // Changing this value means old clients/servers are no longer compatible.
     assert_eq!(value["result"]["protocol"], 22);
+
+    cleanup_spawned_herdr(child, base);
+}
+
+#[test]
+fn spawned_server_ignores_inherited_pane_env() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let socket_path = runtime_dir.join("herdr.sock");
+    let startup_cwd = base.join("startup");
+    fs::create_dir_all(&startup_cwd).unwrap();
+
+    // A shell inside a herdr pane passes these to every process it starts.
+    let saved: Vec<_> = ["HERDR_STARTUP_CWD", "HERDR_SESSION"]
+        .into_iter()
+        .map(|name| (name, std::env::var_os(name)))
+        .collect();
+    std::env::set_var("HERDR_STARTUP_CWD", &startup_cwd);
+    std::env::set_var("HERDR_SESSION", "inherited");
+    let child = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    for (name, value) in saved {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    wait_for_socket(&socket_path, Duration::from_secs(5));
+
+    let value = send_request(
+        &socket_path,
+        r#"{"id":"req_1","method":"workspace.list","params":{}}"#,
+    );
+    assert_eq!(value["result"]["workspaces"], serde_json::json!([]));
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    assert!(!config_home.join(app_dir).join("sessions").exists());
 
     cleanup_spawned_herdr(child, base);
 }

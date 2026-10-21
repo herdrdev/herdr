@@ -322,6 +322,8 @@ mod tests {
 
     #[test]
     fn deferred_refresh_replaces_visible_tail_after_repaint() {
+        let sequence = std::sync::atomic::AtomicU64::new(0);
+        let mut cache = crate::pane::agent_detection::DetectionTextCache::default();
         let (tx, _rx) = mpsc::channel(4);
         let terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
@@ -329,19 +331,28 @@ mod tests {
         pane.process_pty_bytes(pane_id, 0, b"older", &tx);
         pane.process_pty_bytes(pane_id, 0, b"\r\nold\r\nprompt", &tx);
         let mut core = pane.core.lock().unwrap();
-        let _ = super::super::finish_recent_snapshot(&mut core, String::new(), 3, false);
+        cache.refresh(None, &sequence, || {
+            super::super::finish_detection_text(&mut core, String::new(), 3)
+        });
+        assert!(cache.text.contains("prompt"));
         drop(core);
         pane.resize(2, 40, 8, 16);
         pane.process_pty_bytes(pane_id, 0, b"\rupdated", &tx);
         let mut core = pane.core.lock().unwrap();
-        let resized = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
-        assert_eq!(resized.text, "older\nold\nupdated\n");
+        assert!(core.recent_fallback.needs_refresh);
+        assert!(cache.refresh(None, &sequence, || {
+            super::super::finish_detection_text(&mut core, String::new(), 10)
+        }));
+        assert!(!core.recent_fallback.needs_refresh);
+        assert_eq!(cache.text, "older\nold\nupdated\n");
         drop(core);
         pane.process_pty_bytes(pane_id, 0, b"\x1b[2J\x1b[H", &tx);
         pane.process_pty_bytes(pane_id, 0, b"updated", &tx);
         let mut core = pane.core.lock().unwrap();
-        let refreshed = super::super::finish_recent_snapshot(&mut core, String::new(), 10, false);
-        assert_eq!(refreshed.text, "older\nupdated\n");
+        assert!(cache.refresh(None, &sequence, || {
+            super::super::finish_detection_text(&mut core, String::new(), 10)
+        }));
+        assert_eq!(cache.text, "older\nupdated\n");
     }
 
     #[test]

@@ -16,7 +16,6 @@ const ROWS: u16 = 40;
 const SAMPLE_COUNT: usize = 40;
 const WARMUP_COUNT: usize = 5;
 const CARDINALITIES: [usize; 3] = [1, 15, 50];
-const CLIENT_CARDINALITIES: [usize; 2] = [1, 4];
 
 #[derive(Clone, Copy)]
 struct StageStats {
@@ -233,7 +232,8 @@ fn profile_snapshot_encoding(
     build: fn(usize) -> Vec<Workspace>,
     count: usize,
     client_count: usize,
-) -> StageStats {
+    hidden_output: bool,
+) -> (StageStats, StageStats) {
     let mut pipeline = RenderPipeline::new(build(count));
     pipeline.app.state.ensure_test_terminals();
     for terminal in pipeline.app.state.terminals.values_mut() {
@@ -245,6 +245,23 @@ fn profile_snapshot_encoding(
         terminal.last_agent_completion_seq = Some(1);
     }
     let run = || {
+        if hidden_output {
+            for (workspace_index, workspace) in
+                pipeline.app.state.workspaces.iter().enumerate().skip(1)
+            {
+                let pane_id = workspace.tabs[0].root_pane;
+                pipeline
+                    .app
+                    .state
+                    .runtime_for_pane_in_workspace(
+                        &pipeline.app.terminal_runtimes,
+                        workspace_index,
+                        pane_id,
+                    )
+                    .unwrap()
+                    .test_process_pty_bytes(b"hidden output\r\n");
+            }
+        }
         let started = Instant::now();
         let (template, completions) = super::client_shell::snapshot_with_completions(
             &pipeline.app,
@@ -253,6 +270,7 @@ fn profile_snapshot_encoding(
             None,
             None,
         );
+        let construction_elapsed = started.elapsed();
         for client_index in 0..client_count {
             let mut snapshot = template.clone();
             snapshot.revision = client_index as u64 + 1;
@@ -271,24 +289,31 @@ fn profile_snapshot_encoding(
                     .expect("benchmark snapshot message should frame"),
             );
         }
-        started.elapsed()
+        (construction_elapsed, started.elapsed())
     };
     for _ in 0..WARMUP_COUNT {
         black_box(run());
     }
-    summarize((0..SAMPLE_COUNT).map(|_| run()).collect())
+    let (construction, total) = (0..SAMPLE_COUNT).map(|_| run()).unzip();
+    (summarize(construction), summarize(total))
 }
 
 fn print_snapshot_encoding_profiles(label: &str, build: fn(usize) -> Vec<Workspace>) {
     println!("{label} populated agent snapshots + completions + JSON framing");
-    println!("       panes  clients  median_us  p95_us  max_us");
-    for count in CARDINALITIES {
-        for client_count in CLIENT_CARDINALITIES {
-            let stats = profile_snapshot_encoding(build, count, client_count);
-            println!(
-                "  {count:>10}  {client_count:>7}  {:>9}  {:>6}  {:>6}",
-                stats.median_us, stats.p95_us, stats.max_us
-            );
+    println!("       panes  clients  hidden_output  construction_us  median_us  p95_us  max_us");
+    for count in [1, 15, 118] {
+        for client_count in [1, 2] {
+            for hidden_output in [false, true] {
+                if hidden_output && label != "background workspaces" {
+                    continue;
+                }
+                let (construction, stats) =
+                    profile_snapshot_encoding(build, count, client_count, hidden_output);
+                println!(
+                    "  {count:>10}  {client_count:>7}  {hidden_output:>13}  {:>15}  {:>9}  {:>6}  {:>6}",
+                    construction.median_us, stats.median_us, stats.p95_us, stats.max_us
+                );
+            }
         }
     }
 }

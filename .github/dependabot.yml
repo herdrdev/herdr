@@ -5,10 +5,18 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 1
+    ignore:
+      # 0.30.1+ diffs halfwidth kana + voiced mark as two columns, so the server's
+      # backend replay blanks the voiced mark. Lift once the render path handles it.
+      - dependency-name: ratatui
+        versions: [">0.30.0"]
     groups:
       cargo-dependencies:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
@@ -19,3 +27,6 @@ updates:
       github-actions:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch

@@ -79,7 +79,7 @@ pub(super) fn should_bridge_clipboard_image_paste(
         return false;
     };
 
-    let events = crate::raw_input::parse_raw_input_bytes_sync(data);
+    let events = crate::raw_input::parse_framed_input(data);
     matches!(
         events.as_slice(),
         [crate::raw_input::RawInputEvent::Key(key)]

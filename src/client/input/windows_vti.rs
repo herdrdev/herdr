@@ -106,19 +106,48 @@ fn push_platform_input_events(
 }
 
 #[cfg(windows)]
+/// The console input buffer: standard input when it is the console, otherwise
+/// the attached console's `CONIN$` (stdin redirected, e.g. mintty).
 pub(super) fn console_input_handle() -> std::io::Result<windows_sys::Win32::Foundation::HANDLE> {
-    use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    };
     use windows_sys::Win32::System::Console::{GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE};
 
-    let handle: HANDLE = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
-    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-        return Err(std::io::Error::last_os_error());
+    let is_console = |handle: HANDLE| {
+        let mut mode = 0;
+        !handle.is_null()
+            && handle != INVALID_HANDLE_VALUE
+            && unsafe { GetConsoleMode(handle, &mut mode) } != 0
+    };
+
+    // SAFETY: querying the process standard input handle has no preconditions.
+    let stdin: HANDLE = unsafe { GetStdHandle(STD_INPUT_HANDLE) };
+    if is_console(stdin) {
+        return Ok(stdin);
     }
-    let mut mode = 0;
-    if unsafe { GetConsoleMode(handle, &mut mode) } == 0 {
-        return Err(std::io::Error::last_os_error());
+    let name: Vec<u16> = "CONIN$".encode_utf16().chain(Some(0)).collect();
+    // SAFETY: `name` is NUL-terminated and outlives the call; the handle is owned
+    // by the reader for the rest of the process.
+    let conin = unsafe {
+        CreateFileW(
+            name.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            std::ptr::null(),
+            OPEN_EXISTING,
+            0,
+            std::ptr::null_mut(),
+        )
+    };
+    if is_console(conin) {
+        Ok(conin)
+    } else {
+        Err(std::io::Error::last_os_error())
     }
-    Ok(handle)
 }
 
 #[cfg(windows)]
@@ -754,6 +783,41 @@ struct WindowsInputTranslator {
     pump: WindowsInputPump,
 }
 
+/// Test handle that feeds native key records through the real Windows input
+/// translation (mapper + pump), for cross-module conformance tests.
+#[cfg(all(test, windows))]
+#[derive(Default)]
+pub(crate) struct TestWindowsInput(WindowsInputTranslator);
+
+#[cfg(all(test, windows))]
+impl TestWindowsInput {
+    pub(crate) fn key_in_layout(
+        &mut self,
+        record: crate::input::WindowsKeyRecord,
+        layout: windows_sys::Win32::UI::Input::KeyboardAndMouse::HKL,
+    ) -> Vec<crate::protocol::ClientInputEvent> {
+        let oem_char = (is_oem_virtual_key(record.virtual_key_code) && record.unicode == 0)
+            .then(|| {
+                crate::platform::resolve_base_printable_key_in_layout(
+                    record.virtual_key_code,
+                    record.virtual_scan_code,
+                    layout,
+                )
+            })
+            .flatten();
+        self.0
+            .mapper
+            .translate_key_with_oem_char(record, oem_char)
+            .into_iter()
+            .flat_map(|item| self.0.pump.process(item))
+            .collect()
+    }
+
+    pub(crate) fn idle(&mut self) -> Vec<crate::protocol::ClientInputEvent> {
+        self.0.idle()
+    }
+}
+
 #[cfg(test)]
 impl WindowsInputTranslator {
     fn translate(&mut self, record: WindowsInputRecord) -> Vec<crate::protocol::ClientInputEvent> {
@@ -820,6 +884,14 @@ impl WindowsInputMapper {
     }
 
     fn translate_key(&mut self, key: WindowsKeyRecord) -> Vec<PlatformInputItem> {
+        self.translate_key_with_oem_char(key, resolve_ctrl_oem_char(key))
+    }
+
+    fn translate_key_with_oem_char(
+        &mut self,
+        key: WindowsKeyRecord,
+        oem_char: Option<char>,
+    ) -> Vec<PlatformInputItem> {
         if !self.key_record_can_emit_event(key) {
             return Vec::new();
         }
@@ -856,7 +928,7 @@ impl WindowsInputMapper {
             };
         }
 
-        let events = self.translate_semantic_key_events(key, resolve_ctrl_oem_char(key));
+        let events = self.translate_semantic_key_events(key, oem_char);
         let items = if let Some(bytes) = self.paste_payload_bytes_for_key(key) {
             vec![PlatformInputItem::PasteAwareKey {
                 win32_paste_bytes: bytes.clone(),
@@ -1110,7 +1182,7 @@ impl WindowsInputMapper {
         kind: crate::protocol::ClientKeyKind,
         oem_char: Option<char>,
     ) -> Option<crate::protocol::ClientInputEvent> {
-        let modifiers = windows_key_modifiers(key.control_key_state);
+        let modifiers = windows_record_modifiers(key);
         if key.virtual_key_code == 0 {
             let codepoint = self.utf16_unit_to_char(key.unicode)?;
             if !codepoint.is_control() {
@@ -1166,6 +1238,7 @@ impl WindowsInputMapper {
                 .or_else(|| {
                     windows_virtual_key_to_char_code(key.virtual_key_code, key.unicode, modifiers)
                 })
+                .or_else(|| oem_char.map(crate::protocol::ClientKeyCode::Char))
         };
 
         code.map(|code| {
@@ -1483,12 +1556,10 @@ fn ctrl_key_code(vk: u16, u: u16, oem: Option<char>) -> Option<crate::protocol::
     })
 }
 
+/// Punctuation keys report no character under Ctrl or a non-producing AltGr.
+/// Ask the current layout which key it is so the record is still forwarded.
 fn resolve_ctrl_oem_char(key: WindowsKeyRecord) -> Option<char> {
-    if key.virtual_key_code == 0xbf
-        && key.unicode == 0
-        && windows_key_modifiers(key.control_key_state)
-            .contains(crossterm::event::KeyModifiers::CONTROL)
-    {
+    if is_oem_virtual_key(key.virtual_key_code) && key.unicode == 0 {
         #[cfg(windows)]
         return crate::platform::resolve_base_printable_key(
             key.virtual_key_code,
@@ -1496,6 +1567,28 @@ fn resolve_ctrl_oem_char(key: WindowsKeyRecord) -> Option<char> {
         );
     }
     None
+}
+
+fn is_oem_virtual_key(vk: u16) -> bool {
+    matches!(vk, 0xba..=0xc0 | 0xdb..=0xdf | 0xe2)
+}
+
+/// Modifiers for a key record. AltGr is a character shift on character keys
+/// (which may also be dead keys that report no character yet, #3948). On keys
+/// that never type a character it is the Ctrl+Alt chord Windows reports.
+fn windows_record_modifiers(key: WindowsKeyRecord) -> crossterm::event::KeyModifiers {
+    const RIGHT_ALT_PRESSED: u32 = 0x0001;
+    const LEFT_CTRL_PRESSED: u32 = 0x0008;
+    let modifiers = windows_key_modifiers(key.control_key_state);
+    let alt_gr = key.control_key_state & (RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED)
+        == (RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED);
+    let character_key = matches!(key.virtual_key_code, 0x30..=0x39 | 0x41..=0x5a)
+        || is_oem_virtual_key(key.virtual_key_code);
+    if alt_gr && key.unicode == 0 && !character_key {
+        modifiers | crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT
+    } else {
+        modifiers
+    }
 }
 
 #[cfg(windows)]
@@ -3064,6 +3157,28 @@ mod tests {
     }
 
     #[test]
+    fn altgr_is_ctrl_alt_only_on_keys_that_never_type_characters() {
+        let altgr = |virtual_key_code: u16, unicode: u16| WindowsKeyRecord {
+            key_down: true,
+            repeat_count: 1,
+            virtual_key_code,
+            virtual_scan_code: 0,
+            unicode,
+            control_key_state: 0x0009,
+        };
+        let ctrl_alt =
+            crossterm::event::KeyModifiers::CONTROL | crossterm::event::KeyModifiers::ALT;
+
+        // PageUp and Space type nothing: the chord must not look like a plain key.
+        assert_eq!(windows_record_modifiers(altgr(0x21, 0)), ctrl_alt);
+        assert_eq!(windows_record_modifiers(altgr(0x20, 0)), ctrl_alt);
+        // Character keys keep AltGr as a character shift, dead keys included.
+        assert!(windows_record_modifiers(altgr(0x34, 0)).is_empty());
+        assert!(windows_record_modifiers(altgr(0xba, 0)).is_empty());
+        assert!(windows_record_modifiers(altgr(0x51, u16::from(b'@'))).is_empty());
+    }
+
+    #[test]
     fn vti_altgr_dead_key_preserves_native_record_without_command_modifiers() {
         // AltGr+4 press captured in #3948, Spanish ISO layout.
         let record = WindowsKeyRecord {
@@ -3094,10 +3209,12 @@ mod tests {
             events
                 .into_iter()
                 .flat_map(|event| match event.to_raw_input_event() {
-                    crate::raw_input::RawInputEvent::Key(key) => crate::input::encode_terminal_key(
-                        key,
-                        crate::input::KeyboardProtocol::Kitty { flags },
-                    ),
+                    crate::raw_input::RawInputEvent::Key(key) => {
+                        crate::pane::test_encode_key_for_app(
+                            format!("\x1b[>{flags}u").as_bytes(),
+                            key,
+                        )
+                    }
                     crate::raw_input::RawInputEvent::Text(text) => {
                         text.as_str().as_bytes().to_vec()
                     }
@@ -3228,23 +3345,14 @@ mod tests {
         let crate::raw_input::RawInputEvent::Key(key) = events[0].to_raw_input_event() else {
             panic!("expected translated key");
         };
+        assert_eq!(crate::pane::test_encode_key_for_app(b"", key.clone()), b"/");
         assert_eq!(
-            crate::input::encode_terminal_key(key.clone(), crate::input::KeyboardProtocol::Legacy),
+            crate::pane::test_encode_key_for_app(b"\x1b[>7u", key.clone()),
             b"/"
         );
         assert_eq!(
-            crate::input::encode_terminal_key(
-                key.clone(),
-                crate::input::KeyboardProtocol::Kitty { flags: 7 },
-            ),
-            b"/"
-        );
-        assert_eq!(
-            crate::input::encode_terminal_key(
-                key,
-                crate::input::KeyboardProtocol::Kitty { flags: 15 },
-            ),
-            b"\x1b[47;2:1u"
+            crate::pane::test_encode_key_for_app(b"\x1b[>15u", key),
+            b"\x1b[47;2u"
         );
     }
 
@@ -3353,7 +3461,7 @@ mod tests {
             assert_eq!(key.modifiers.bits(), modifiers, "{name}: modifiers");
             assert_eq!(key.generated_text.as_deref(), text, "{name}: text");
             assert_eq!(
-                crate::input::encode_terminal_key(key, crate::input::KeyboardProtocol::Legacy),
+                crate::pane::test_encode_key_for_app(b"", key),
                 expected,
                 "{name}: encoding"
             );

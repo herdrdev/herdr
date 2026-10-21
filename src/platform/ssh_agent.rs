@@ -12,7 +12,11 @@ use interprocess::ConnectWaitMode;
 
 use crate::ipc::LocalStream;
 
-const PROBE_INTERVAL: Duration = Duration::from_secs(1);
+const CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const UNAVAILABLE_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Device, inode, mode, and ctime of a usable agent socket file.
+type Fingerprint = (u64, u64, u32, i64, i64);
 
 #[derive(Clone)]
 pub(crate) struct SshAgentRegistry(Arc<Mutex<State>>);
@@ -23,6 +27,9 @@ struct State {
     agents: Vec<(u64, PathBuf)>,
     next_id: u64,
     identity: Option<(u64, u64)>,
+    observed: Vec<Option<Fingerprint>>,
+    selected: bool,
+    last_check: Option<Instant>,
     last_probe: Option<Instant>,
 }
 
@@ -42,10 +49,27 @@ fn agent_path_for(api_path: &Path) -> PathBuf {
 }
 
 fn usable_socket(path: &Path) -> bool {
-    fs::metadata(path).is_ok_and(|metadata| {
-        // The API is user-private; do not redirect that user's panes to another user's agent.
-        metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() }
-    })
+    fingerprint(path).is_some()
+}
+
+// A listener that dies in place, or an in-place change that keeps all of these fields, is
+// noticed only at the next selection; periodic connect probes would cost a forwarded channel.
+fn fingerprint(path: &Path) -> Option<Fingerprint> {
+    fs::metadata(path)
+        .ok()
+        .filter(|metadata| {
+            // The API is user-private; do not redirect that user's panes to another user's agent.
+            metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() }
+        })
+        .map(|metadata| {
+            (
+                metadata.dev(),
+                metadata.ino(),
+                metadata.mode(),
+                metadata.ctime(),
+                metadata.ctime_nsec(),
+            )
+        })
 }
 
 fn live_socket(path: &Path) -> bool {
@@ -84,10 +108,13 @@ impl SshAgentRegistry {
             agents: Vec::new(),
             next_id: 0,
             identity: None,
+            observed: Vec::new(),
+            selected: false,
+            last_check: None,
             last_probe: None,
         };
         if managed {
-            state.publish()?;
+            state.publish(Instant::now())?;
         }
         Ok(Self(Arc::new(Mutex::new(state))))
     }
@@ -107,7 +134,7 @@ impl SshAgentRegistry {
         let id = state.next_id;
         state.next_id += 1;
         state.agents.push((id, path));
-        if let Err(error) = state.publish() {
+        if let Err(error) = state.publish(Instant::now()) {
             state.agents.retain(|(candidate, _)| *candidate != id);
             return Err(error);
         }
@@ -119,7 +146,7 @@ impl SshAgentRegistry {
 }
 
 impl State {
-    fn publish(&mut self) -> io::Result<()> {
+    fn ensure_owned(&self) -> io::Result<()> {
         if let Some(identity) = self.identity {
             let metadata = fs::symlink_metadata(&self.path)?;
             if identity != (metadata.dev(), metadata.ino()) {
@@ -128,9 +155,23 @@ impl State {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn observe(&self) -> Vec<Option<Fingerprint>> {
+        self.fallback
+            .iter()
+            .chain(self.agents.iter().map(|(_, path)| path))
+            .map(|path| fingerprint(path))
+            .collect()
+    }
+
+    fn publish(&mut self, now: Instant) -> io::Result<()> {
+        self.ensure_owned()?;
         // Keep a working agent rather than letting probes or a second client replace it.
         let unavailable = self.path.with_extension("unavailable");
-        self.last_probe = Some(Instant::now());
+        let observed = self.observe();
+        self.last_probe = Some(now);
         let target = self
             .fallback
             .as_deref()
@@ -141,20 +182,25 @@ impl State {
                     .map(|(_, path)| path.as_path())
                     .find(|path| live_socket(path))
             })
-            .unwrap_or(&unavailable);
-        if self.identity.is_some() && fs::read_link(&self.path).ok().as_deref() == Some(target) {
-            return Ok(());
+            .unwrap_or(&unavailable)
+            .to_path_buf();
+        if self.identity.is_none()
+            || fs::read_link(&self.path).ok().as_deref() != Some(target.as_path())
+        {
+            let temporary = self
+                .path
+                .with_extension(format!("{}.new", std::process::id()));
+            symlink(&target, &temporary)?;
+            if let Err(error) = fs::rename(&temporary, &self.path) {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+            let metadata = fs::symlink_metadata(&self.path)?;
+            self.identity = Some((metadata.dev(), metadata.ino()));
         }
-        let temporary = self
-            .path
-            .with_extension(format!("{}.new", std::process::id()));
-        symlink(target, &temporary)?;
-        if let Err(error) = fs::rename(&temporary, &self.path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(error);
-        }
-        let metadata = fs::symlink_metadata(&self.path)?;
-        self.identity = Some((metadata.dev(), metadata.ino()));
+        // Record the selection only once it is published, so a failed publish is retried.
+        self.observed = observed;
+        self.selected = target != unavailable;
         Ok(())
     }
 }
@@ -180,12 +226,24 @@ impl SshAgentLease {
             .0
             .lock()
             .map_err(|_| io::Error::other("SSH agent registry poisoned"))?;
-        // Share the probe budget across attachments, not one SSH channel per polling client.
         if state
-            .last_probe
-            .is_none_or(|last| now.saturating_duration_since(last) >= PROBE_INTERVAL)
+            .last_check
+            .is_some_and(|last| now.saturating_duration_since(last) < CHECK_INTERVAL)
         {
-            state.publish()?;
+            return Ok(());
+        }
+        state.last_check = Some(now);
+        state.ensure_owned()?;
+        // Each probe opens a forwarded SSH channel, so a selected agent is probed again only when a
+        // socket file changes. Without one, retry slowly in case a probe failed transiently.
+        let observed = state.observe();
+        let retry = !state.selected
+            && observed.iter().any(Option::is_some)
+            && state.last_probe.is_none_or(|last| {
+                now.saturating_duration_since(last) >= UNAVAILABLE_RETRY_INTERVAL
+            });
+        if retry || observed != state.observed {
+            state.publish(now)?;
         }
         Ok(())
     }
@@ -195,7 +253,7 @@ impl Drop for SshAgentLease {
     fn drop(&mut self) {
         if let Ok(mut state) = self.registry.0.lock() {
             state.agents.retain(|(id, _)| *id != self.id);
-            if let Err(error) = state.publish() {
+            if let Err(error) = state.publish(Instant::now()) {
                 tracing::warn!(%error, "could not refresh SSH agent after attachment ended");
             }
         }
@@ -252,7 +310,13 @@ mod tests {
         assert_eq!(fs::read_link(&stable).unwrap(), a);
         drop(listener_a);
         assert!(fs::metadata(&a).unwrap().file_type().is_socket());
-        lease_b.refresh_at(Instant::now() + PROBE_INTERVAL).unwrap();
+        // Periodic checks do not probe an unchanged socket file.
+        lease_b.refresh_at(Instant::now() + CHECK_INTERVAL).unwrap();
+        assert_eq!(fs::read_link(&stable).unwrap(), a);
+        // The next selection skips the stale socket.
+        let lease_c = registry.register(b.clone()).unwrap();
+        assert_eq!(fs::read_link(&stable).unwrap(), b);
+        drop(lease_c);
         assert_eq!(fs::read_link(&stable).unwrap(), b);
         drop(lease_b);
         drop(registry);
@@ -279,6 +343,134 @@ mod tests {
         let lease_b = registry.register(b.clone()).unwrap();
         assert_eq!(fs::read_link(&stable).unwrap(), b);
         drop(lease_b);
+        drop(registry);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn accepted_connections(listener: &UnixListener) -> usize {
+        listener.set_nonblocking(true).unwrap();
+        std::iter::from_fn(|| listener.accept().ok()).count()
+    }
+
+    #[test]
+    fn periodic_refresh_does_not_connect_to_agents() {
+        let directory =
+            std::env::temp_dir().join(format!("herdr-agent-quiet-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let stable = directory.join("agent");
+        let a = directory.join("a");
+        let b = directory.join("b");
+        let stale = UnixListener::bind(&a).unwrap();
+        drop(stale);
+        let listener_b = UnixListener::bind(&b).unwrap();
+        let registry = SshAgentRegistry::new(stable.clone(), Some(a.clone())).unwrap();
+        let lease = registry.register(b.clone()).unwrap();
+        assert_eq!(
+            fs::read_link(&stable).unwrap(),
+            b,
+            "selection must skip a socket file left by a crashed sshd"
+        );
+        assert!(accepted_connections(&listener_b) > 0);
+
+        let start = Instant::now();
+        for second in 1..=100 {
+            lease.refresh_at(start + CHECK_INTERVAL * second).unwrap();
+        }
+        assert_eq!(
+            accepted_connections(&listener_b),
+            0,
+            "periodic refresh must not open forwarded SSH channels"
+        );
+        assert_eq!(fs::read_link(&stable).unwrap(), b);
+
+        // A replaced socket file is probed again. The old listener keeps its inode alive.
+        let before = fingerprint(&b).unwrap();
+        fs::remove_file(&b).unwrap();
+        let replacement = UnixListener::bind(&b).unwrap();
+        assert_ne!(fingerprint(&b).unwrap(), before);
+        lease.refresh_at(start + CHECK_INTERVAL * 101).unwrap();
+        assert_eq!(accepted_connections(&replacement), 1);
+        assert_eq!(accepted_connections(&listener_b), 0);
+        assert_eq!(fs::read_link(&stable).unwrap(), b);
+
+        drop(lease);
+        drop(registry);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_publication_is_retried_by_remaining_leases() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+        let directory =
+            std::env::temp_dir().join(format!("herdr-agent-publish-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let stable = directory.join("agent");
+        let a = directory.join("a");
+        let b = directory.join("b");
+        let _listener_a = UnixListener::bind(&a).unwrap();
+        let _listener_b = UnixListener::bind(&b).unwrap();
+        let registry = SshAgentRegistry::new(stable.clone(), None).unwrap();
+        let lease_a = registry.register(a.clone()).unwrap();
+        let lease_b = registry.register(b.clone()).unwrap();
+        assert_eq!(fs::read_link(&stable).unwrap(), a);
+
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o500)).unwrap();
+        drop(lease_a);
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(fs::read_link(&stable).unwrap(), a);
+        lease_b.refresh_at(Instant::now() + CHECK_INTERVAL).unwrap();
+        assert_eq!(fs::read_link(&stable).unwrap(), b);
+        drop(lease_b);
+        drop(registry);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transient_probe_failure_recovers_without_a_socket_change() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::net::UnixStream;
+        let directory =
+            std::env::temp_dir().join(format!("herdr-agent-retry-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let stable = directory.join("agent");
+        let a = directory.join("a");
+        let listener = UnixListener::bind(&a).unwrap();
+        // Linux allows one queued connection with a zero backlog.
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 0) }, 0);
+        let queued = UnixStream::connect(&a).unwrap();
+        let registry = SshAgentRegistry::new(stable.clone(), None).unwrap();
+        let lease = registry.register(a.clone()).unwrap();
+        assert_eq!(
+            fs::read_link(&stable).unwrap(),
+            stable.with_extension("unavailable")
+        );
+
+        drop(queued);
+        assert_eq!(accepted_connections(&listener), 1);
+        let fingerprint_before = fingerprint(&a);
+        let start = Instant::now();
+        lease.refresh_at(start + CHECK_INTERVAL).unwrap();
+        assert_eq!(accepted_connections(&listener), 0, "retries back off");
+        lease
+            .refresh_at(start + UNAVAILABLE_RETRY_INTERVAL)
+            .unwrap();
+        assert_eq!(fingerprint(&a), fingerprint_before);
+        assert_eq!(fs::read_link(&stable).unwrap(), a);
+        assert_eq!(accepted_connections(&listener), 1);
+
+        lease
+            .refresh_at(start + UNAVAILABLE_RETRY_INTERVAL * 10)
+            .unwrap();
+        assert_eq!(
+            accepted_connections(&listener),
+            0,
+            "a selected agent is not probed"
+        );
+        drop(lease);
         drop(registry);
         fs::remove_dir_all(directory).unwrap();
     }
@@ -344,7 +536,7 @@ mod tests {
         let lease_b = registry.register(b.clone()).unwrap();
         assert_eq!(fs::read_link(&stable).unwrap(), a);
         fs::remove_file(&a).unwrap();
-        lease_b.refresh_at(Instant::now() + PROBE_INTERVAL).unwrap();
+        lease_b.refresh_at(Instant::now() + CHECK_INTERVAL).unwrap();
         assert_eq!(fs::read_link(&stable).unwrap(), b);
         drop(lease_a);
         assert_eq!(fs::read_link(&stable).unwrap(), b);
