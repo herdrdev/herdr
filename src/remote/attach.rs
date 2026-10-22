@@ -3200,6 +3200,19 @@ pub(crate) fn build_federation_ssh_options() -> io::Result<ManagedSshOptions> {
         .multiplexing
         .then(|| dir.join(CONTROL_SOCKET_TEMPLATE));
 
+    if let Err(error) = write_federation_ssh_config(&path) {
+        let _ = fs::remove_dir_all(&dir);
+        return Err(error);
+    }
+    Ok(ManagedSshOptions {
+        config_path: path,
+        control_path,
+        _directory: Arc::new(ManagedSshConfigDirectory(dir)),
+    })
+}
+
+fn write_federation_ssh_config(path: &Path) -> io::Result<()> {
+    let paths = crate::platform::remote_ssh_config_paths();
     let mut contents = String::new();
     if let Some(include) = ssh_user_config_include(paths.user_config.as_deref()) {
         contents.push_str(&format!("Include {include}\n"));
@@ -3214,19 +3227,37 @@ pub(crate) fn build_federation_ssh_options() -> io::Result<ManagedSshOptions> {
     contents.push_str("  ServerAliveInterval 15\n");
     contents.push_str("  ServerAliveCountMax 4\n");
 
-    let write_result = (|| {
-        let mut file = crate::platform::create_remote_ssh_config_file(&path)?;
-        file.write_all(contents.as_bytes())
-    })();
-    if let Err(error) = write_result {
-        let _ = fs::remove_dir_all(&dir);
-        return Err(error);
+    let mut file = crate::platform::create_remote_ssh_config_file(path)?;
+    file.write_all(contents.as_bytes())
+}
+
+/// The federation options are built once per server process, but their
+/// directory lives in the shared temp dir, where a cleaner can delete it while
+/// the server runs. Every later bridge would then fail with "Can't open user
+/// config file" until a restart. Recreate the config at the same path, so the
+/// stored control-path template stays valid. Returns whether it was missing.
+///
+/// The directory is checked on every call, even when the config is present:
+/// after a cleaner removes it, another local user could recreate the
+/// predictable path and plant a config (`ProxyCommand`, `Match exec`) that
+/// `ssh -F` would run. An error means the options must not be used.
+pub(crate) fn restore_federation_ssh_config(options: &ManagedSshOptions) -> io::Result<bool> {
+    let dir = options.config_path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "federation SSH config has no directory",
+        )
+    })?;
+    crate::platform::ensure_remote_ssh_config_dir(dir)?;
+    if options.config_path.is_file() {
+        return Ok(false);
     }
-    Ok(ManagedSshOptions {
-        config_path: path,
-        control_path,
-        _directory: Arc::new(ManagedSshConfigDirectory(dir)),
-    })
+    match write_federation_ssh_config(&options.config_path) {
+        Ok(()) => Ok(true),
+        // Another bridge restored it first.
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 struct BridgeUploadStop {
@@ -4463,6 +4494,83 @@ mod tests {
             ssh_config_quote("/home/a b/.ssh/config"),
             "\"/home/a b/.ssh/config\""
         );
+    }
+
+    #[test]
+    fn federation_ssh_config_is_recreated_after_a_temp_cleaner_removes_it() {
+        let _env_lock = crate::config::test_config_env_lock().lock().unwrap();
+        let options = build_federation_ssh_options().expect("build federation options");
+        let original = fs::read_to_string(&options.config_path).expect("read config");
+        let dir = options.config_path.parent().unwrap().to_path_buf();
+        fs::remove_dir_all(&dir).expect("simulate the cleaner");
+
+        assert!(restore_federation_ssh_config(&options).expect("restore"));
+        assert_eq!(fs::read_to_string(&options.config_path).unwrap(), original);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            let file_mode = fs::metadata(&options.config_path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(file_mode & 0o777, 0o600);
+        }
+        // A config that is present is left alone.
+        assert!(!restore_federation_ssh_config(&options).expect("second restore"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn federation_ssh_config_is_not_written_into_a_directory_others_can_open() {
+        use std::os::unix::fs::PermissionsExt;
+        let _env_lock = crate::config::test_config_env_lock().lock().unwrap();
+        let options = build_federation_ssh_options().expect("build federation options");
+        let dir = options.config_path.parent().unwrap().to_path_buf();
+        fs::remove_file(&options.config_path).expect("simulate the cleaner");
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let error = restore_federation_ssh_config(&options).expect_err("unsafe directory");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(!options.config_path.exists());
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// A config already present in a directory others can open may have been
+    /// planted after a cleaner removed ours; it must not be used.
+    #[cfg(unix)]
+    #[test]
+    fn federation_ssh_config_in_a_directory_others_can_open_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let _env_lock = crate::config::test_config_env_lock().lock().unwrap();
+        let options = build_federation_ssh_options().expect("build federation options");
+        let dir = options.config_path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap();
+
+        let error = restore_federation_ssh_config(&options).expect_err("unsafe directory");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!restore_federation_ssh_config(&options).expect("safe again"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn federation_ssh_config_dir_check_runs_before_reuse() {
+        let _env_lock = crate::config::test_config_env_lock().lock().unwrap();
+        let options = build_federation_ssh_options().expect("build federation options");
+        let dir = options.config_path.parent().unwrap().to_path_buf();
+        // The real directory replaced by a symlink to one that already holds a config.
+        let decoy = dir.with_extension("decoy");
+        fs::rename(&dir, &decoy).unwrap();
+        std::os::unix::fs::symlink(&decoy, &dir).unwrap();
+
+        let error = restore_federation_ssh_config(&options).expect_err("symlinked directory");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        fs::remove_file(&dir).unwrap();
+        fs::rename(&decoy, &dir).unwrap();
     }
 
     #[cfg(unix)]

@@ -95,6 +95,13 @@ pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Resu
     builder.create(path)
 }
 
+pub(crate) fn ensure_remote_ssh_config_dir(path: &std::path::Path) -> std::io::Result<()> {
+    match create_remote_private_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    }
+}
+
 pub(crate) fn remote_private_temp_base() -> PathBuf {
     std::env::temp_dir()
 }

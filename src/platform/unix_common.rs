@@ -471,6 +471,20 @@ pub(crate) fn create_remote_private_dir(path: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new().mode(0o700).create(path)
 }
 
+/// Recreate a managed SSH config directory at its original path after something
+/// (typically a /tmp cleaner) removed it. An existing directory is reused only
+/// if it is ours, mode 0700 and not a symlink: /tmp is shared, so another user
+/// could otherwise plant an SSH config where herdr will read it.
+pub(crate) fn ensure_remote_ssh_config_dir(path: &Path) -> std::io::Result<()> {
+    match create_remote_private_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            validate_shared_ssh_dir(path)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 pub(crate) fn remote_private_temp_base() -> PathBuf {
     std::env::temp_dir()
 }
