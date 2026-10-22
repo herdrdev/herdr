@@ -1230,6 +1230,16 @@
       "$defs": {
         "AgentPromptParams": {
           "properties": {
+            "preconditions": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/AgentPromptPreconditions"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "target": {
               "type": "string"
             },
@@ -1251,6 +1261,31 @@
             "target",
             "text"
           ],
+          "type": "object"
+        },
+        "AgentPromptPreconditions": {
+          "properties": {
+            "agent_session": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state_change_seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "terminal_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
           "type": "object"
         },
         "AgentPromptWaitOptions": {

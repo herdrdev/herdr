@@ -165,6 +165,42 @@ impl App {
         let Some(terminal) = self.state.terminals.get(&terminal_id) else {
             return Err(agent_not_found(id, &params.target));
         };
+        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
+            return Err(agent_not_found(id, &params.target));
+        };
+        if let Some(preconditions) = &params.preconditions {
+            if preconditions
+                .terminal_id
+                .as_ref()
+                .is_some_and(|expected| expected.as_str() != terminal_id.as_str())
+            {
+                return Err(agent_prompt_precondition_failed(
+                    id,
+                    "resolved terminal identity changed",
+                ));
+            }
+            if preconditions
+                .agent_session
+                .as_ref()
+                .is_some_and(|expected| {
+                    agent.agent_session.as_ref().map(|session| &session.value) != Some(expected)
+                })
+            {
+                return Err(agent_prompt_precondition_failed(
+                    id,
+                    "agent session identity changed",
+                ));
+            }
+            if preconditions
+                .state_change_seq
+                .is_some_and(|expected| expected != agent.state_change_seq)
+            {
+                return Err(agent_prompt_precondition_failed(
+                    id,
+                    "agent state change sequence changed",
+                ));
+            }
+        }
         if terminal.state == crate::detect::AgentState::Blocked {
             return Err(encode_error(
                 id,
@@ -194,9 +230,6 @@ impl App {
                 ),
             ));
         }
-        let Some(agent) = self.agent_info(resolved.ws_idx, resolved.pane_id) else {
-            return Err(agent_not_found(id, &params.target));
-        };
         Ok(ValidatedAgentPrompt {
             id,
             ws_idx: resolved.ws_idx,
@@ -442,6 +475,10 @@ fn agent_not_ready(id: String, target: &str) -> String {
     )
 }
 
+fn agent_prompt_precondition_failed(id: String, message: &str) -> String {
+    encode_error(id, "agent_prompt_precondition_failed", message)
+}
+
 fn agent_not_found(id: String, target: &str) -> String {
     encode_error(
         id,
@@ -454,7 +491,7 @@ fn agent_not_found(id: String, target: &str) -> String {
 mod tests {
     use super::*;
     use crate::{
-        api::schema::{AgentStatus, SuccessResponse},
+        api::schema::{AgentPromptPreconditions, AgentStatus, SuccessResponse},
         app::Mode,
         config::Config,
         detect::{Agent, AgentState},
@@ -521,6 +558,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -621,6 +659,7 @@ mod tests {
                 target: public_pane_id,
                 text: "A != B".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         assert!(response_rx.try_recv().is_err());
@@ -650,6 +689,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         let raw: SuccessResponse = serde_json::from_str(&raw).unwrap();
@@ -665,11 +705,93 @@ mod tests {
                 target: "opencode".into(),
                 text: "wrong target".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&rejected).unwrap();
         assert_eq!(error.error.code, "agent_not_found");
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_prompt_preconditions_reject_changed_occupant_or_state_before_writing() {
+        let mut app = app_with_agent();
+        let pane_id = app.state.workspaces[0].tabs[0].root_pane;
+        let terminal_id = app.state.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+        terminal.set_agent_name("reviewer".into());
+        terminal.set_detected_state(Some(Agent::OpenCode), AgentState::Idle);
+        terminal.set_persisted_agent_session(crate::agent_resume::PersistedAgentSession {
+            source: "herdr:opencode".into(),
+            agent: "opencode".into(),
+            session_ref: crate::agent_resume::AgentSessionRef::id("session-actual")
+                .expect("test session id should be valid"),
+        });
+        let (runtime, mut rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.state.insert_test_runtime(pane_id, runtime);
+        let state_change_seq = app
+            .agent_info(0, pane_id)
+            .expect("test agent should resolve")
+            .state_change_seq;
+
+        for preconditions in [
+            AgentPromptPreconditions {
+                terminal_id: Some("term_replaced".into()),
+                agent_session: Some("session-actual".into()),
+                state_change_seq: Some(state_change_seq),
+            },
+            AgentPromptPreconditions {
+                terminal_id: Some(terminal_id.to_string()),
+                agent_session: Some("session-replaced".into()),
+                state_change_seq: Some(state_change_seq),
+            },
+            AgentPromptPreconditions {
+                terminal_id: Some(terminal_id.to_string()),
+                agent_session: Some("session-actual".into()),
+                state_change_seq: Some(state_change_seq + 1),
+            },
+        ] {
+            let response = run_deferred_agent_prompt(
+                &mut app,
+                "req-rejected",
+                AgentPromptParams {
+                    target: "reviewer".into(),
+                    text: "must not be sent".into(),
+                    preconditions: Some(preconditions),
+                    wait: None,
+                },
+            );
+            let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(error.error.code, "agent_prompt_precondition_failed");
+            assert!(rx.try_recv().is_err());
+        }
+
+        let response = run_deferred_agent_prompt(
+            &mut app,
+            "req-accepted",
+            AgentPromptParams {
+                target: "reviewer".into(),
+                text: "expected occupant".into(),
+                preconditions: Some(AgentPromptPreconditions {
+                    terminal_id: Some(terminal_id.to_string()),
+                    agent_session: Some("session-actual".into()),
+                    state_change_seq: Some(state_change_seq),
+                }),
+                wait: None,
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert!(matches!(
+            success.result,
+            ResponseResult::AgentPrompted { .. }
+        ));
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            Bytes::from_static(b"expected occupant")
+        );
+        assert_eq!(rx.try_recv().unwrap(), Bytes::from_static(b"\r"));
     }
 
     #[tokio::test]
@@ -693,6 +815,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "hello".into(),
                 wait: None,
+                preconditions: None,
             },
         );
 
@@ -727,6 +850,7 @@ mod tests {
                     target: target.into(),
                     text: text.into(),
                     wait: None,
+                    preconditions: None,
                 },
             );
 
@@ -760,6 +884,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "unrelated prompt".into(),
                 wait: None,
+                preconditions: None,
             },
         );
 
@@ -800,6 +925,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -879,6 +1005,7 @@ mod tests {
                 target: "reviewer".into(),
                 text: "A != B".into(),
                 wait: None,
+                preconditions: None,
             },
         );
         let error: crate::api::schema::ErrorResponse = serde_json::from_str(&response).unwrap();

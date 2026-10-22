@@ -1021,6 +1021,7 @@ fn caller_timeout_dispatch_uses_timeout_error() {
             method: Method::AgentPrompt(crate::api::schema::AgentPromptParams {
                 target: "reviewer".into(),
                 text: "review this".into(),
+                preconditions: None,
                 wait: None,
             }),
         },

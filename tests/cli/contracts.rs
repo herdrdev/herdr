@@ -676,6 +676,29 @@ fn agent_prompt_missing_text_rejects_before_connecting() {
 }
 
 #[test]
+fn agent_prompt_invalid_state_sequence_rejects_before_connecting() {
+    let captured = capture(
+        &[
+            "agent",
+            "prompt",
+            "main",
+            "text",
+            "--expect-state-change-seq",
+            "not-a-sequence",
+        ],
+        json!({"id":"unexpected","result":{"type":"ok"}}),
+    );
+    assert_eq!(captured.output.status.code(), Some(2));
+    assert!(captured.output.stdout.is_empty());
+    let diagnostic = String::from_utf8_lossy(&captured.output.stderr);
+    assert!(
+        diagnostic.contains("invalid agent state change sequence: not-a-sequence"),
+        "{diagnostic}"
+    );
+    assert!(captured.requests.is_empty(), "{:?}", captured.requests);
+}
+
+#[test]
 fn agent_prompt_nested_wait_presence_contract() {
     let cases: Vec<(Vec<&str>, Value)> = vec![
         (
@@ -685,6 +708,21 @@ fn agent_prompt_nested_wait_presence_contract() {
         (
             vec!["agent", "prompt", "named-agent", "literal - text", "--wait"],
             json!({"id":"cli:agent:prompt","method":"agent.prompt","params":{"target":"named-agent","text":"literal - text","wait":{}}}),
+        ),
+        (
+            vec![
+                "agent",
+                "prompt",
+                "named-agent",
+                "literal - text",
+                "--expect-terminal",
+                "term_guarded",
+                "--expect-session",
+                "session-42",
+                "--expect-state-change-seq",
+                "17",
+            ],
+            json!({"id":"cli:agent:prompt","method":"agent.prompt","params":{"target":"named-agent","text":"literal - text","preconditions":{"terminal_id":"term_guarded","agent_session":"session-42","state_change_seq":17}}}),
         ),
         (
             vec![

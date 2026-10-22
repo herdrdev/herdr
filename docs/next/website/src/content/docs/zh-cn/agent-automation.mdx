@@ -69,7 +69,7 @@ herdr agent rename w1:p2 reviewer
 | 向智能体交互界面发送按键 | `agent send-keys` |
 | 等待智能体生命周期状态 | `agent wait` |
 
-`agent prompt` 会先发送文本,短暂延迟后再发送编码后的 Enter,并遵循终端当前的 bracketed paste 模式。即使智能体正在 working 也可以提交。如果智能体已经是 `blocked`,它不会发送任何终端输入,而是返回 `agent_blocked`;请先检查对话框,再用 `agent send-keys` 明确作出响应。使用 `agent send-keys` 进行 `esc`、`up`、`enter`、`ctrl+c` 等交互;`escape` 也是 `esc` 的别名。只有在明确需要原始终端控制时才使用窗格输入命令。
+`agent prompt` 会先发送文本,短暂延迟后再发送编码后的 Enter,并遵循终端当前的 bracketed paste 模式。即使智能体正在 working 也可以提交。对于恢复流程等竞态敏感的自动化，请将 `agent get` 返回的 `terminal_id` 传给 `--expect-terminal`，将 `agent_session.value` 传给 `--expect-session`，并将 `state_change_seq` 传给 `--expect-state-change-seq`；如果占用者已发生变化，Herdr 会在发送输入前返回 `agent_prompt_precondition_failed`。如果智能体已经是 `blocked`,它不会发送任何终端输入,而是返回 `agent_blocked`;请先检查对话框,再用 `agent send-keys` 明确作出响应。使用 `agent send-keys` 进行 `esc`、`up`、`enter`、`ctrl+c` 等交互;`escape` 也是 `esc` 的别名。只有在明确需要原始终端控制时才使用窗格输入命令。
 
 窗格输入直接指定终端,不关心当前进程。智能体输入会解析实时智能体;如果该智能体已不再控制此窗格,操作会被拒绝。
 

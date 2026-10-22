@@ -171,6 +171,46 @@ pub(crate) fn clear_name() -> Input<Option<String>> {
     })
 }
 
+pub(crate) fn expect_terminal() -> Input<Option<crate::api::schema::AgentPromptPreconditions>> {
+    Input::<Option<crate::api::schema::AgentPromptPreconditions>>::value(
+        "expect-terminal",
+        "TERMINAL_ID",
+        |slot, value| {
+            slot.get_or_insert_default().terminal_id = Some(value.to_owned());
+            Ok(())
+        },
+    )
+    .help("Submit only if TARGET resolves to this terminal identity")
+}
+
+pub(crate) fn expect_session() -> Input<Option<crate::api::schema::AgentPromptPreconditions>> {
+    Input::<Option<crate::api::schema::AgentPromptPreconditions>>::value(
+        "expect-session",
+        "SESSION",
+        |slot, value| {
+            slot.get_or_insert_default().agent_session = Some(value.to_owned());
+            Ok(())
+        },
+    )
+    .help("Submit only if the agent session has this exact value")
+}
+
+pub(crate) fn expect_state_change_seq(
+) -> Input<Option<crate::api::schema::AgentPromptPreconditions>> {
+    Input::<Option<crate::api::schema::AgentPromptPreconditions>>::value(
+        "expect-state-change-seq",
+        "SEQ",
+        |slot, value| {
+            slot.get_or_insert_default().state_change_seq =
+                Some(value.parse::<u64>().map_err(|_| {
+                    ParseError::Usage(format!("invalid agent state change sequence: {value}"))
+                })?);
+            Ok(())
+        },
+    )
+    .help("Submit only if the agent still has this state change sequence")
+}
+
 pub(crate) fn wait_presence() -> Input<Option<crate::api::schema::AgentPromptWaitOptions>> {
     Input::flag("wait", |slot, _| {
         *slot = Some(crate::api::schema::AgentPromptWaitOptions {
@@ -262,7 +302,7 @@ pub(crate) fn command() -> Command {
         .subcommand(leaf("prompt", AgentPromptProjection::arguments(), "Submit a prompt to an agent")
             .args(AgentPromptWaitProjection::arguments().into_iter().map(|arg| arg.requires("wait")))
             .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
-            .after_help("If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match."))
+            .after_help("Use --expect-terminal and --expect-session to bind submission to identity values from agent get; a mismatch returns agent_prompt_precondition_failed before any input is sent. If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match."))
         .subcommand(leaf("start", AgentStartProjection::arguments(), "Start a supported interactive agent in an existing pane")
             .override_usage("herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]")
             .after_help("The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\nnext: herdr agent prompt <TARGET> <TEXT> --wait"))

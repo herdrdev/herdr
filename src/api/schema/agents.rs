@@ -196,11 +196,26 @@ cli_params! {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentPromptPreconditions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_change_seq: Option<u64>,
+}
+
 cli_params! {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct AgentPromptParams => AgentPromptProjection {
         pub target: String => Field::new(String::new()).input(bindings::target()),
         pub text: String => Field::new(String::new()).input(bindings::text_position("text", "TEXT", 1).verbatim()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub preconditions: Option<AgentPromptPreconditions> => Field::new(None)
+            .input(bindings::expect_terminal())
+            .input(bindings::expect_session())
+            .input(bindings::expect_state_change_seq()),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub wait: Option<AgentPromptWaitOptions> => Field::new(None).input(bindings::wait_presence()),
     }

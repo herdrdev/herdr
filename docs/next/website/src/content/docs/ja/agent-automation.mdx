@@ -69,7 +69,7 @@ herdr agent rename w1:p2 reviewer
 | エージェントの対話 UI にキーを送る | `agent send-keys` |
 | エージェントのライフサイクル状態を待つ | `agent wait` |
 
-`agent prompt` はテキストを送信し、短い遅延の後にエンコード済み Enter を送信します。ターミナルの現在の bracketed paste モードを尊重します。working 中のエージェントにも送信できます。エージェントがすでに `blocked` の場合は、ターミナル入力を送信せずに `agent_blocked` を返します。ダイアログを確認し、意図した応答には `agent send-keys` を使ってください。`esc`、`up`、`enter`、`ctrl+c` のような操作には `agent send-keys` を使います。`escape` も `esc` のエイリアスとして使えます。意図的に生のターミナルを操作したい場合は、ペイン入力コマンドを使ってください。
+`agent prompt` はテキストを送信し、短い遅延の後にエンコード済み Enter を送信します。ターミナルの現在の bracketed paste モードを尊重します。working 中のエージェントにも送信できます。復旧処理など競合に敏感な自動化では、`agent get` の `terminal_id` を `--expect-terminal` に、`agent_session.value` を `--expect-session` に、`state_change_seq` を `--expect-state-change-seq` に指定してください。占有者が変わっていれば、Herdr は入力を送信する前に `agent_prompt_precondition_failed` を返します。エージェントがすでに `blocked` の場合は、ターミナル入力を送信せずに `agent_blocked` を返します。ダイアログを確認し、意図した応答には `agent send-keys` を使ってください。`esc`、`up`、`enter`、`ctrl+c` のような操作には `agent send-keys` を使います。`escape` も `esc` のエイリアスとして使えます。意図的に生のターミナルを操作したい場合は、ペイン入力コマンドを使ってください。
 
 ペイン入力は、現在のプロセスに関係なくターミナルを指定します。エージェント入力はライブエージェントを解決し、そのエージェントがペインを制御しなくなっていれば操作を拒否します。
 
