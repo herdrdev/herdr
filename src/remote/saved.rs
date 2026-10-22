@@ -338,7 +338,12 @@ fn saved_federation_ssh_options() -> Option<&'static ManagedSshOptions> {
             "recreated the saved federation SSH config after it was removed"
         ),
         Ok(false) => {}
-        Err(error) => tracing::warn!(%error, "could not recreate the saved federation SSH config"),
+        // An unsafe or unwritable directory: never hand ssh a config we cannot
+        // vouch for; this bridge uses plain SSH instead.
+        Err(error) => {
+            tracing::warn!(%error, "saved federation SSH config unusable; using plain SSH");
+            return None;
+        }
     }
     Some(options)
 }
