@@ -882,6 +882,15 @@ pub(crate) fn create_remote_ssh_config_file(
         .open(path)
 }
 
+/// Recreate a managed SSH config directory at its original path. It lives in
+/// the user's own temp directory, so an existing directory is reused.
+pub(crate) fn ensure_remote_ssh_config_dir(path: &std::path::Path) -> std::io::Result<()> {
+    match create_remote_private_dir(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
+        result => result,
+    }
+}
+
 pub(crate) fn create_remote_private_dir(path: &std::path::Path) -> std::io::Result<()> {
     use interprocess::os::windows::security_descriptor::{
         AsSecurityDescriptorExt as _, SecurityDescriptor,

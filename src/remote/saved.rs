@@ -323,7 +323,7 @@ pub(crate) fn reverse_forward_command(
 
 fn saved_federation_ssh_options() -> Option<&'static ManagedSshOptions> {
     static OPTIONS: OnceLock<Option<ManagedSshOptions>> = OnceLock::new();
-    OPTIONS
+    let options = OPTIONS
         .get_or_init(|| {
             super::attach::build_federation_ssh_options()
                 .inspect_err(|error| {
@@ -331,7 +331,16 @@ fn saved_federation_ssh_options() -> Option<&'static ManagedSshOptions> {
                 })
                 .ok()
         })
-        .as_ref()
+        .as_ref()?;
+    match super::attach::restore_federation_ssh_config(options) {
+        Ok(true) => tracing::info!(
+            path = %options.config_path.display(),
+            "recreated the saved federation SSH config after it was removed"
+        ),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "could not recreate the saved federation SSH config"),
+    }
+    Some(options)
 }
 
 /// Establish an authenticated SSH streamlocal reverse forward, never a forward
