@@ -257,20 +257,33 @@ fn serve_frames(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The socket-driven tests and their helpers are unix-only; the frame-default test
+    // runs everywhere.
+    #[cfg(unix)]
     use crate::api::schema::{ErrorResponse, Method, ResponseResult, SuccessResponse};
+    #[cfg(unix)]
     use crate::api::ApiRequestMessage;
     #[cfg(unix)]
     use crate::api::EventHub;
+    #[cfg(unix)]
     use crate::ipc::LocalStream;
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
+    #[cfg(unix)]
     use std::io::{BufRead, BufReader, Write};
+    #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    #[cfg(unix)]
     use std::sync::Arc;
+    #[cfg(unix)]
     use tokio::sync::mpsc;
 
+    #[cfg(unix)]
     static NEXT_LOCAL_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
+    #[cfg(unix)]
     fn local_stream_pair() -> (LocalStream, LocalStream, PathBuf) {
         let unique = format!(
             "hpi-{}-{}.sock",
@@ -284,6 +297,7 @@ mod tests {
         (client, server, path)
     }
 
+    #[cfg(unix)]
     fn read_response_line(stream: &mut LocalStream) -> String {
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
@@ -291,6 +305,7 @@ mod tests {
         line
     }
 
+    #[cfg(unix)]
     fn respond_ok(message: ApiRequestMessage) {
         let response = serde_json::to_string(&SuccessResponse {
             id: message.request.id,
@@ -300,6 +315,7 @@ mod tests {
         message.respond_to.send(response).unwrap();
     }
 
+    #[cfg(unix)]
     fn respond_error(message: ApiRequestMessage, code: &str, msg: &str) {
         let response = serde_json::to_string(&ErrorResponse {
             id: message.request.id,

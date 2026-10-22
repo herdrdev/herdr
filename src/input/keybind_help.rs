@@ -10,9 +10,20 @@ use crate::{
 pub(crate) type KeybindHelpEntry = (String, Cow<'static, str>);
 pub(crate) type KeybindHelpGroup = (&'static str, Vec<KeybindHelpEntry>);
 
+/// The character a key types, for overlay shortcuts and text fields.
 pub(crate) fn keybind_help_text_char(key: &TerminalKey) -> Option<char> {
     if !key.modifiers.difference(KeyModifiers::SHIFT).is_empty() {
         return None;
+    }
+    // Text the host says the key produced is authoritative: kitty hosts may
+    // report Shift+/ as `/` with text `?` and no shifted alternate.
+    if let Some(text) = key.generated_text.as_deref() {
+        let mut chars = text.chars();
+        if let (Some(character), None) = (chars.next(), chars.next()) {
+            if !character.is_control() {
+                return Some(character);
+            }
+        }
     }
     if let Some(character) = key.shifted_codepoint.and_then(char::from_u32) {
         return Some(character);
@@ -254,6 +265,28 @@ mod tests {
                 vec![entry("v", "split vertical"), entry("x", "close pane")],
             ),
         ]
+    }
+
+    #[test]
+    fn text_char_prefers_generated_text_then_alternate_then_code() {
+        let parse = |bytes: &str| {
+            crate::input::parse_terminal_key_sequence(bytes)
+                .unwrap_or_else(|| panic!("{bytes:?} parses"))
+        };
+        for (bytes, want) in [
+            // Shift+/ typing `?` with no shifted alternate.
+            ("\x1b[47;2;63u", Some('?')),
+            ("\x1b[47u", Some('/')),
+            ("/", Some('/')),
+            // Portuguese Shift+7: alternate and text agree.
+            ("\x1b[55:47;2;47u", Some('/')),
+            ("\x1b[55:47;2u", Some('/')),
+            ("\x1b[55;2u", Some('7')),
+            ("\x1b[47;5u", None),
+            ("\x1b[47;3u", None),
+        ] {
+            assert_eq!(keybind_help_text_char(&parse(bytes)), want, "{bytes:?}");
+        }
     }
 
     #[test]

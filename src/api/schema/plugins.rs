@@ -6,31 +6,43 @@ use super::common::AgentStatus;
 use super::common::SplitDirection;
 use super::panes::PaneInfo;
 use super::workspaces::WorkspaceWorktreeInfo;
+use crate::cli::plugin::bindings;
+use crate::cli::projection::{cli_params, Field};
 use crate::popup_size::PopupSize;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginLinkParams {
-    pub path: String,
-    #[serde(default = "super::common::default_true")]
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<PluginSourceInfo>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginLinkParams => PluginLinkProjection {
+        pub path: String => Field::new(String::new()).input(bindings::path()),
+        #[serde(default = "super::common::default_true")]
+        pub enabled: bool => Field::new(true)
+            .input(bindings::boolean("disabled", false))
+            .input(bindings::boolean("enabled", true)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub source: Option<PluginSourceInfo> => Field::new(None::<PluginSourceInfo>),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PluginListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct PluginListParams => PluginListProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub plugin_id: Option<String> => Field::new(None).input(bindings::optional_text("plugin", "ID")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginUnlinkParams {
-    pub plugin_id: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginUnlinkParams => PluginUnlinkProjection {
+        pub plugin_id: String => Field::new(String::new()).input(bindings::id("plugin_id", "PLUGIN_ID")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginSetEnabledParams {
-    pub plugin_id: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginSetEnabledParams => PluginSetEnabledProjection {
+        pub plugin_id: String => Field::new(String::new()).input(bindings::id("plugin_id", "PLUGIN_ID")),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -288,27 +300,33 @@ pub struct PluginManifestLinkHandler {
     pub platforms: Option<Vec<PluginPlatform>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PluginActionListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct PluginActionListParams => PluginActionListProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub plugin_id: Option<String> => Field::new(None).input(bindings::optional_text("plugin", "ID")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct PluginLogListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub limit: Option<usize>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct PluginLogListParams => PluginLogListProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub plugin_id: Option<String> => Field::new(None).input(bindings::optional_text("plugin", "ID")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub limit: Option<usize> => Field::new(None).input(bindings::limit()),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginActionInvokeParams {
-    pub action_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plugin_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context: Option<PluginInvocationContext>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginActionInvokeParams => PluginActionInvokeProjection {
+        pub action_id: String => Field::new(String::new()).input(bindings::id("action_id", "ACTION_ID")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub plugin_id: Option<String> => Field::new(None).input(bindings::optional_text("plugin", "ID")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub context: Option<PluginInvocationContext> => Field::new(Some(bindings::invocation_context())),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -414,28 +432,32 @@ impl PluginActionInfo {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginPaneOpenParams {
-    pub plugin_id: String,
-    pub entrypoint: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub placement: Option<PluginPanePlacement>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub width: Option<PopupSize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub height: Option<PopupSize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_pane_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub direction: Option<SplitDirection>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cwd: Option<String>,
-    #[serde(default)]
-    pub focus: bool,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginPaneOpenParams => PluginPaneOpenProjection {
+        pub plugin_id: String => Field::new(String::new()).input(bindings::required_text("plugin", "ID").order(0)),
+        pub entrypoint: String => Field::new(String::new()).input(bindings::required_text("entrypoint", "ID").order(1)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub placement: Option<PluginPanePlacement> => Field::new(None).input(bindings::placement().order(2)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub width: Option<PopupSize> => Field::new(None).input(bindings::width().hidden()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub height: Option<PopupSize> => Field::new(None).input(bindings::height().hidden()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub workspace_id: Option<String> => Field::new(None).input(bindings::optional_text("workspace", "ID").order(3)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub target_pane_id: Option<String> => Field::new(None).input(bindings::optional_text("target-pane", "PANE").order(4)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub direction: Option<SplitDirection> => Field::new(None).input(bindings::direction().order(5)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub cwd: Option<String> => Field::new(None).input(bindings::optional_text("cwd", "PATH").path().order(6)),
+        #[serde(default)]
+        pub focus: bool => Field::new(true)
+            .input(bindings::boolean("focus", true).order(8))
+            .input(bindings::boolean("no-focus", false).order(9)),
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub env: HashMap<String, String> => Field::new(HashMap::new()).input(bindings::environment().order(7)),
+    }
 }
 
 #[derive(
@@ -451,14 +473,18 @@ pub enum PluginPanePlacement {
     Zoomed,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginPaneFocusParams {
-    pub pane_id: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginPaneFocusParams => PluginPaneFocusProjection {
+        pub pane_id: String => Field::new(String::new()).input(bindings::pane_id()),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct PluginPaneCloseParams {
-    pub pane_id: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct PluginPaneCloseParams => PluginPaneCloseProjection {
+        pub pane_id: String => Field::new(String::new()).input(bindings::pane_id()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

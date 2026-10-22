@@ -86,6 +86,7 @@ pub(crate) struct EndpointRegistry {
     input_enabled: bool,
     connections: HashMap<ClientEndpointId, EndpointConnection>,
     failures: Vec<EndpointTransportFailure>,
+    last_health_tick: Instant,
 }
 
 impl EndpointRegistry {
@@ -95,6 +96,7 @@ impl EndpointRegistry {
             input_enabled: false,
             connections: HashMap::new(),
             failures: Vec::new(),
+            last_health_tick: Instant::now(),
         }
     }
 
@@ -201,7 +203,21 @@ impl EndpointRegistry {
         }
     }
 
+    pub(crate) fn resume_health(&mut self, now: Instant) {
+        self.last_health_tick = now;
+        for connection in self.connections.values_mut() {
+            if let Some(health) = &mut connection.health {
+                health.resume();
+            }
+        }
+    }
+
     pub(crate) fn tick_health(&mut self, now: Instant) {
+        // The client could not consume queued replies during a local scheduling pause.
+        if now.saturating_duration_since(self.last_health_tick) > super::health::HEARTBEAT_TIMEOUT {
+            self.resume_health(now);
+        }
+        self.last_health_tick = now;
         let actions = self
             .connections
             .iter()
@@ -553,6 +569,7 @@ mod tests {
             false,
         );
         let now = Instant::now();
+        registry.mark_ready(&ssh_id, 2);
         registry.tick_health(now + super::super::health::HEARTBEAT_INTERVAL);
         assert!(matches!(
             sent.lock().unwrap().as_slice(),
@@ -566,6 +583,37 @@ mod tests {
         );
         assert!(registry.connection(&ssh_id).is_none());
         assert_eq!(registry.take_failures()[0].kind, io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn paused_client_probes_before_expiring_a_live_connection() {
+        let mut registry = EndpointRegistry::empty();
+        let id = ClientEndpointId::Ssh(profile());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        registry.insert(
+            id.clone(),
+            FakeTransport {
+                sent: sent.clone(),
+                error: None,
+            },
+            2,
+            negotiation(),
+            true,
+        );
+        let now = Instant::now();
+        registry.mark_ready(&id, 2);
+        registry.tick_health(now + std::time::Duration::from_secs(5));
+        // The client could not run while the old probe's reply was waiting in its queue.
+        let resumed = now + std::time::Duration::from_secs(90);
+        registry.tick_health(resumed);
+        assert!(
+            registry.connection(&id).is_some(),
+            "local scheduling pause is not peer failure"
+        );
+        assert_eq!(sent.lock().unwrap().len(), 2, "send a fresh probe");
+        registry.received(&id, 2, resumed);
+        registry.tick_health(resumed + std::time::Duration::from_secs(1));
+        assert!(registry.take_failures().is_empty());
     }
 
     #[test]
@@ -591,9 +639,10 @@ mod tests {
         );
         let now = Instant::now();
         registry.mark_ready(&ssh_id, 2);
-        registry.received(&ssh_id, 2, now + super::super::health::HEARTBEAT_INTERVAL);
-        registry.tick_health(now + super::super::health::HEARTBEAT_TIMEOUT);
+        registry.received(&ssh_id, 2, now + std::time::Duration::from_secs(80));
+        registry.tick_health(now + std::time::Duration::from_secs(80));
         assert!(registry.connection(&ssh_id).is_some());
+        assert!(!registry.connection(&ssh_id).unwrap().surface_active);
     }
 
     #[test]

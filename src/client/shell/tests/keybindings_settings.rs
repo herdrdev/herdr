@@ -1,4 +1,66 @@
 use super::*;
+use crate::input::TerminalKey;
+
+#[test]
+fn plus_commands_survive_snapshots_and_reload_for_both_keybinding_sources() {
+    for source in [
+        ClientShellKeybindingSource::Local,
+        ClientShellKeybindingSource::Endpoint,
+    ] {
+        let mut state = ClientShellState::new(
+            ClientShellConfig::from_config(&Config::default()).with_keybinding_source(source),
+        );
+        for (revision, key, modifiers) in [
+            (1, "prefix+plus", KeyModifiers::empty()),
+            (2, "prefix+ctrl+plus", KeyModifiers::CONTROL),
+        ] {
+            let config: Config = toml::from_str(&format!(
+                "[[keys.command]]\nkey = {key:?}\ntype = \"shell\"\ncommand = \"echo plus\"\n"
+            ))
+            .unwrap();
+            assert!(config.collect_diagnostics().is_empty());
+            let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+            let app = crate::app::App::new(
+                &config,
+                crate::app::AppPolicy::TEST,
+                None,
+                api_rx,
+                crate::api::EventHub::default(),
+            );
+            let mut projection = snapshot();
+            projection.revision = revision;
+            projection.server_keybindings_toml = config.local_keybindings_profile_toml().ok();
+            projection.commands = app.client_shell_command_manifest();
+            assert_eq!(projection.commands.len(), 1);
+            let command_id = projection.commands[0].command_id.clone();
+            state.set_snapshot(Box::new(projection));
+            state.set_pane_surface(surface());
+            assert_eq!(state.config.keybinds.keybinds.custom_commands.len(), 1);
+
+            for plus in [
+                TerminalKey::new(KeyCode::Char('+'), modifiers),
+                TerminalKey::new(KeyCode::Char('+'), modifiers | KeyModifiers::SHIFT),
+                TerminalKey::new(KeyCode::Char('='), modifiers | KeyModifiers::SHIFT)
+                    .with_shifted_codepoint('+' as u32),
+            ] {
+                let outcome = state.handle_raw_events(vec![
+                    RawInputEvent::Key(TerminalKey::new(KeyCode::Char('b'), KeyModifiers::CONTROL)),
+                    RawInputEvent::Key(plus),
+                ]);
+                let [ClientShellAction::Endpoint { request, .. }] = &outcome.actions[..] else {
+                    panic!(
+                        "expected endpoint command invocation: {:?}",
+                        outcome.actions
+                    );
+                };
+                let crate::api::schema::Method::CommandInvoke(params) = &request.method else {
+                    panic!("expected command.invoke");
+                };
+                assert_eq!(params.command_id, command_id);
+            }
+        }
+    }
+}
 
 #[test]
 fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
@@ -42,6 +104,83 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
             ..
         }))
     ));
+}
+
+#[test]
+fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
+    let first = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
+        std::path::Path::new("/tmp/herdr-remote-100-dev-agents.sock"),
+        Some(r#"["dev", "agents"]"#),
+    );
+    let next = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
+        std::path::Path::new("/tmp/herdr-remote-200-dev-agents.sock"),
+        Some(r#"["dev", "agents"]"#),
+    );
+    assert_eq!(first.preferences_path, next.preferences_path);
+    let root =
+        std::env::temp_dir().join(format!("herdr-remote-preferences-{}", std::process::id()));
+    let first_path = root.join(
+        first
+            .preferences_path
+            .as_ref()
+            .unwrap()
+            .file_name()
+            .unwrap(),
+    );
+    let next_path = root.join(next.preferences_path.as_ref().unwrap().file_name().unwrap());
+    let mut state = ClientShellState::new(first.with_preferences_path(first_path));
+    state.sidebar_width = 31;
+    state.sidebar_width_manual = true;
+    state.sidebar_collapsed = true;
+    state.sidebar_collapsed_manual = true;
+    state.persist_chrome_preferences(&mut ClientShellInput::default());
+    let restored = ClientShellState::new(next.with_preferences_path(next_path));
+    assert_eq!(restored.sidebar_width, 31);
+    assert!(restored.sidebar_collapsed);
+    std::fs::remove_dir_all(root).unwrap();
+
+    let local_socket = std::path::Path::new("/tmp/local.sock");
+    for identity in [
+        None,
+        Some("invalid"),
+        Some(r#"["dev", ""]"#),
+        Some(r#"["", "agents"]"#),
+    ] {
+        let config = ClientShellConfig::from_config(&Config::default())
+            .with_endpoint_preferences(local_socket, identity);
+        assert_eq!(
+            config.preferences_path,
+            Some(super::super::preferences::path_for_local_endpoint(
+                local_socket
+            ))
+        );
+    }
+}
+
+#[test]
+fn remote_client_preferences_process_child() {
+    if std::env::var("HERDR_TEST_PREFERENCES_CHILD").as_deref() != Ok("1") {
+        return;
+    }
+    let expected_path = super::super::preferences::path_for_remote_endpoint("dev", "agents");
+    if !expected_path.exists() {
+        super::super::preferences::store(
+            expected_path.as_path(),
+            super::super::preferences::ClientChromePreferences {
+                sidebar_width: Some(31),
+                sidebar_collapsed: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let socket = crate::server::socket_paths::client_socket_path();
+    let config = ClientShellConfig::from_config(&Config::default())
+        .with_process_endpoint_preferences(&socket);
+    assert_eq!(config.preferences_path, Some(expected_path));
+    let restored = ClientShellState::new(config);
+    assert_eq!(restored.sidebar_width, 31);
+    assert!(restored.sidebar_collapsed);
 }
 
 #[test]

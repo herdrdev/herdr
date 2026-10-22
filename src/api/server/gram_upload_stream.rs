@@ -344,18 +344,29 @@ fn frame_error(stream: &mut ApiStream, seq: u64, code: &str, message: &str) -> s
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The socket-driven tests and their helpers are unix-only; the frame-parsing test
+    // below runs everywhere.
+    #[cfg(unix)]
     use crate::api::ApiRequestMessage;
     #[cfg(unix)]
     use crate::api::EventHub;
+    #[cfg(unix)]
     use crate::ipc::LocalStream;
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
+    #[cfg(unix)]
     use std::io::{BufRead, BufReader, Write};
+    #[cfg(unix)]
     use std::path::PathBuf;
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering};
+    #[cfg(unix)]
     use tokio::sync::mpsc;
 
+    #[cfg(unix)]
     static NEXT_LOCAL_STREAM_ID: AtomicU64 = AtomicU64::new(1);
 
+    #[cfg(unix)]
     fn local_stream_pair() -> (LocalStream, LocalStream, PathBuf) {
         let unique = format!(
             "hgu-{}-{}.sock",
@@ -369,6 +380,7 @@ mod tests {
         (client, server, path)
     }
 
+    #[cfg(unix)]
     /// Point `config_dir()` (and so gram staging) at a per-test directory, under
     /// the repo's config-env lock so a sibling test cannot observe the swap, and
     /// restore the previous value on drop.
@@ -378,6 +390,7 @@ mod tests {
         _lock: std::sync::MutexGuard<'static, ()>,
     }
 
+    #[cfg(unix)]
     impl Drop for ConfigDirGuard {
         fn drop(&mut self) {
             match self.previous.take() {
@@ -388,6 +401,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn isolate_config_dir(tag: &str) -> ConfigDirGuard {
         let lock = crate::config::test_config_env_lock()
             .lock()
@@ -407,6 +421,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn staging_path(upload_id: &str) -> PathBuf {
         crate::config::config_dir()
             .join("gram-files")
@@ -414,10 +429,12 @@ mod tests {
             .join(upload_id)
     }
 
+    #[cfg(unix)]
     fn staged_bytes(upload_id: &str) -> Vec<u8> {
         std::fs::read(staging_path(upload_id)).unwrap()
     }
 
+    #[cfg(unix)]
     fn read_response_line(stream: &mut LocalStream) -> String {
         let mut reader = BufReader::new(stream);
         let mut line = String::new();
@@ -425,12 +442,14 @@ mod tests {
         line
     }
 
+    #[cfg(unix)]
     fn write_line(stream: &mut LocalStream, line: &str) {
         stream.write_all(line.as_bytes()).unwrap();
         stream.write_all(b"\n").unwrap();
         stream.flush().unwrap();
     }
 
+    #[cfg(unix)]
     fn respond_ok(message: ApiRequestMessage) {
         let response = serde_json::to_string(&SuccessResponse {
             id: message.request.id,
@@ -440,6 +459,7 @@ mod tests {
         message.respond_to.send(response).unwrap();
     }
 
+    #[cfg(unix)]
     fn respond_error(message: ApiRequestMessage, code: &str, msg: &str) {
         let response = serde_json::to_string(&ErrorResponse {
             id: message.request.id,
@@ -452,6 +472,7 @@ mod tests {
         message.respond_to.send(response).unwrap();
     }
 
+    #[cfg(unix)]
     fn frame(seq: u64, offset: u64, bytes: &[u8]) -> String {
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
         format!(r#"{{"seq":{seq},"offset":{offset},"data_base64":"{data}"}}"#)

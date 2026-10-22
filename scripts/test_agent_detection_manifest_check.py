@@ -29,18 +29,27 @@ path = "{path}"
 '''
 
 
-def staged_grok_dirs(root: Path) -> tuple[Path, Path]:
+STAGED_BUNDLED_MANIFEST = manifest("codex", "2026.06.10.2").replace(
+    "min_engine_version = 1", "min_engine_version = 2"
+)
+STAGED_PUBLISHED_MANIFEST = manifest("codex", "2026.06.10.1")
+STAGED_TEST_EXCEPTION = {
+    "codex": (
+        "2026.06.10.2",
+        "2026.06.10.1",
+        hashlib.sha256(STAGED_PUBLISHED_MANIFEST.encode()).hexdigest(),
+    ),
+}
+
+
+def staged_manifest_dirs(root: Path) -> tuple[Path, Path]:
     bundled = root / "bundled"
     published = root / "published"
     bundled.mkdir()
     published.mkdir()
-    (bundled / "grok.toml").write_bytes(
-        (check.DEFAULT_BUNDLED_DIR / "grok.toml").read_bytes()
-    )
-    (published / "grok.toml").write_bytes(
-        (check.DEFAULT_PUBLISHED_DIR / "grok.toml").read_bytes()
-    )
-    (published / "index.toml").write_text(catalog("grok", "grok.toml"))
+    (bundled / "codex.toml").write_text(STAGED_BUNDLED_MANIFEST, encoding="utf-8", newline="\n")
+    (published / "codex.toml").write_text(STAGED_PUBLISHED_MANIFEST, encoding="utf-8", newline="\n")
+    (published / "index.toml").write_text(catalog())
     return bundled, published
 
 
@@ -94,47 +103,24 @@ class AgentDetectionManifestCheckTests(unittest.TestCase):
             with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
                 check.validate_catalog(website, bundled_manifests, engine_version=1)
 
+    @patch.dict(check.STAGED_PUBLISHED_MANIFESTS, STAGED_TEST_EXCEPTION, clear=True)
     def test_allows_explicitly_staged_published_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundled, website = staged_grok_dirs(Path(tmp))
+            bundled, website = staged_manifest_dirs(Path(tmp))
 
-            bundled_manifests = check.load_manifest_dir(bundled, engine_version=5)
-            check.validate_catalog(website, bundled_manifests, engine_version=5)
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=2)
+            check.validate_catalog(website, bundled_manifests, engine_version=2)
 
+    @patch.dict(check.STAGED_PUBLISHED_MANIFESTS, STAGED_TEST_EXCEPTION, clear=True)
     def test_rejects_mutated_staged_published_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bundled, website = staged_grok_dirs(Path(tmp))
-            with (website / "grok.toml").open("a") as manifest_file:
+            bundled, website = staged_manifest_dirs(Path(tmp))
+            with (website / "codex.toml").open("a") as manifest_file:
                 manifest_file.write("\n# unexpected mutation\n")
 
-            bundled_manifests = check.load_manifest_dir(bundled, engine_version=5)
+            bundled_manifests = check.load_manifest_dir(bundled, engine_version=2)
             with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
-                check.validate_catalog(website, bundled_manifests, engine_version=5)
-
-    def test_carried_forward_grok_stage_requires_pin_and_supported_engine(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            bundled, published = staged_grok_dirs(Path(tmp))
-            bundled_agents = check.load_manifest_dir(bundled, engine_version=5)
-            with patch.dict(check.STAGED_PUBLISHED_MANIFESTS, {}, clear=True):
-                with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
-                    check.validate_catalog(published, bundled_agents, engine_version=5)
-            with self.assertRaisesRegex(check.CheckError, "lower than bundled"):
-                check.validate_catalog(published, bundled_agents, engine_version=2)
-
-            bundled_path = bundled / "grok.toml"
-            bundled_bytes = bundled_path.read_bytes()
-            old_version = check.validate_manifest(published / "grok.toml", engine_version=5)["version"]
-            new_version = bundled_agents["grok"][1]["version"]
-            bundled_path.write_bytes(
-                bundled_bytes.replace(
-                    f'version = "{new_version}"'.encode(),
-                    f'version = "{old_version}"'.encode(),
-                    1,
-                )
-            )
-            same_version = check.load_manifest_dir(bundled, engine_version=5)
-            with self.assertRaisesRegex(check.CheckError, "same version"):
-                check.validate_catalog(published, same_version, engine_version=5)
+                check.validate_catalog(website, bundled_manifests, engine_version=2)
 
     def test_claude_staging_pins_published_bytes_and_preserves_version_order(self):
         with tempfile.TemporaryDirectory() as tmp:

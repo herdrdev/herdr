@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use super::common::{AgentStatus, ReadFormat, ReadSource};
+use crate::cli::agent::bindings;
+use crate::cli::projection::{cli_params, Field};
 
 /// Controls whether `agent.list` returns the coordinator's cached remote agents.
 ///
@@ -14,49 +16,65 @@ pub struct AgentListParams {
     pub local_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentReadParams {
-    pub target: String,
-    pub source: ReadSource,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lines: Option<u32>,
-    #[serde(default)]
-    pub format: ReadFormat,
-    #[serde(default = "super::common::default_true")]
-    pub strip_ansi: bool,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentReadParams => AgentReadProjection {
+        pub target: String => Field::new(String::new()).input(bindings::target()),
+        pub source: ReadSource => Field::new(ReadSource::Recent).input(bindings::source()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub lines: Option<u32> => Field::new(None).input(bindings::lines()),
+        #[serde(default)]
+        pub format: ReadFormat => Field::new(ReadFormat::Text)
+            .input(bindings::format()).input(bindings::ansi()),
+        #[serde(default = "super::common::default_true")]
+        pub strip_ansi: bool => Field::new(true),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentSendKeysParams {
-    pub target: String,
-    pub keys: Vec<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentSendKeysParams => AgentSendKeysProjection {
+        pub target: String => Field::new(String::new()).input(bindings::target()),
+        pub keys: Vec<String> => Field::new(Vec::new()).input(bindings::keys()),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentWaitParams {
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub until: Vec<AgentStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentWaitParams => AgentWaitProjection {
+        pub target: String => Field::new(String::new()).input(bindings::target()),
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub until: Vec<AgentStatus> => Field::new(Vec::new()).input(bindings::until()
+            .help("State to match; repeat for more than one state")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub timeout_ms: Option<u64> => Field::new(None).input(bindings::timeout()
+            .help("Fail after this many milliseconds")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentPromptWaitOptions {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub until: Vec<AgentStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub(crate) submission_deadline: Option<std::time::Instant>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentPromptWaitOptions => AgentPromptWaitProjection {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub until: Vec<AgentStatus> => Field::new(Vec::new()).input(bindings::until()
+            .help("State to match after --wait; repeat for more than one state")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub timeout_ms: Option<u64> => Field::new(None).input(bindings::timeout()
+            .help("Set a deadline for observable submission and requested state")),
+        #[serde(skip)]
+        #[schemars(skip)]
+        pub(crate) submission_deadline: Option<std::time::Instant> => Field::new(None::<std::time::Instant>),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentRenameParams {
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentRenameParams => AgentRenameProjection {
+        pub target: String => Field::new(String::new()).input(bindings::target()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub name: Option<String> => Field::new(None)
+            .input(bindings::rename_name()).input(bindings::clear_name()),
+    }
 }
 
 /// `agent.archive` — take an agent out of active rotation (issue #173). The pane
@@ -220,21 +238,25 @@ pub enum AgentViewSortOrder {
     Desc,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentStartParams {
-    pub name: String,
-    pub kind: String,
-    pub pane_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub args: Vec<String>,
-    /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// Optional credential/config-home account id (from the `[[accounts]]` config
-    /// registry) to launch this agent under. Points the harness at that account's
-    /// config-home directory. Must match the agent's kind.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentStartParams => AgentStartProjection {
+        pub name: String => Field::new(String::new()).input(bindings::text_position("name", "NAME", 0)),
+        pub kind: String => Field::new(String::new()).input(bindings::kind()),
+        pub pane_id: String => Field::new(String::new()).input(bindings::pane()),
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub args: Vec<String> => Field::new(Vec::new()).input(bindings::agent_args()),
+        /// Startup timeout in milliseconds. Values must be greater than 3000 and at most 300000.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub timeout_ms: Option<u64> => Field::new(None).input(bindings::timeout()
+            .help("Wait for interactive readiness (default: 30000; max: 300000)")),
+        /// Optional credential/config-home account id (from the `[[accounts]]` config
+        /// registry) to launch this agent under. Points the harness at that account's
+        /// config-home directory. Must match the agent's kind.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub account: Option<String> => Field::new(None).input(bindings::account()
+            .help("Launch under this configured account")),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -322,12 +344,14 @@ pub struct AgentSessionTransferInfo {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct AgentPromptParams {
-    pub target: String,
-    pub text: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wait: Option<AgentPromptWaitOptions>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+    pub struct AgentPromptParams => AgentPromptProjection {
+        pub target: String => Field::new(String::new()).input(bindings::target()),
+        pub text: String => Field::new(String::new()).input(bindings::text_position("text", "TEXT", 1).verbatim()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub wait: Option<AgentPromptWaitOptions> => Field::new(None).input(bindings::wait_presence()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

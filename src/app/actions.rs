@@ -1728,6 +1728,22 @@ impl AppState {
                 let _ = cache_updates;
                 Vec::new()
             }
+            AppEvent::RestoredWorktreeSpaceChecked {
+                workspace_id,
+                expected,
+                valid,
+            } => {
+                if !valid {
+                    if let Some(workspace) = self.workspaces.iter_mut().find(|workspace| {
+                        workspace.id == workspace_id
+                            && workspace.worktree_space.as_ref() == Some(&expected)
+                    }) {
+                        workspace.worktree_space = None;
+                        self.session_dirty = true;
+                    }
+                }
+                Vec::new()
+            }
             AppEvent::WorktreeAddFinished(_) => Vec::new(),
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::WorktreeReadFinished(_) => Vec::new(),
@@ -2779,6 +2795,46 @@ mod tests {
         assert_eq!(state.workspaces[0].git_ahead_behind(), Some((2, 1)));
         assert_eq!(state.workspaces[1].id, second_id);
         assert_eq!(state.workspaces[1].git_ahead_behind(), None);
+    }
+
+    #[test]
+    fn restored_worktree_rejection_preserves_changed_and_missing_workspaces() {
+        let mut state = AppState::test_with_adversarial_identity_state();
+        let workspace_id = state.workspaces[0].id.clone();
+        let expected = crate::workspace::WorktreeSpaceMembership {
+            key: "saved-repo".into(),
+            label: "saved".into(),
+            repo_root: "/repo".into(),
+            checkout_path: "/checkout".into(),
+            is_linked_worktree: true,
+        };
+        let current = crate::workspace::WorktreeSpaceMembership {
+            key: "new-repo".into(),
+            ..expected.clone()
+        };
+        state.workspaces[0].worktree_space = Some(current.clone());
+        state.session_dirty = false;
+        state.assert_invariants_for_test();
+
+        for id in [workspace_id.clone(), "closed-workspace".into()] {
+            state.handle_app_event(AppEvent::RestoredWorktreeSpaceChecked {
+                workspace_id: id,
+                expected: expected.clone(),
+                valid: false,
+            });
+        }
+        assert_eq!(state.workspaces[0].worktree_space, Some(current.clone()));
+        assert!(!state.session_dirty);
+        state.assert_invariants_for_test();
+
+        state.handle_app_event(AppEvent::RestoredWorktreeSpaceChecked {
+            workspace_id,
+            expected: current,
+            valid: false,
+        });
+        assert!(state.workspaces[0].worktree_space.is_none());
+        assert!(state.session_dirty);
+        state.assert_invariants_for_test();
     }
 
     #[test]
@@ -3900,88 +3956,6 @@ mod tests {
             .attached_terminal_id
             .clone();
         (pane_id, terminal_id)
-    }
-
-    #[test]
-    fn codex_hook_turn_lifecycle_preserves_session_and_beats_stale_working_screen() {
-        let mut state = app_with_workspaces(&["one"]);
-        let (pane_id, terminal_id) = first_pane_terminal(&state);
-        state.handle_app_event(AppEvent::StateChanged {
-            pane_id,
-            runtime_epoch: None,
-            agent: Some(Agent::Codex),
-            state: AgentState::Working,
-            visible_blocker: false,
-            visible_working: true,
-            process_exited: false,
-            observed_at: std::time::Instant::now(),
-        });
-
-        for (session, seq) in [("first", 1), ("second", 4)] {
-            state.handle_app_event(AppEvent::AgentSessionReported {
-                pane_id,
-                source: "herdr:codex".into(),
-                agent_label: "codex".into(),
-                seq: Some(seq),
-                session_ref: crate::agent_resume::AgentSessionRef::id(session),
-                session_path: None,
-                session_cursor: None,
-                process_pid: None,
-                session_start_source: Some("startup".into()),
-            });
-            state.handle_app_event(AppEvent::HookStateReported {
-                pane_id,
-                source: "herdr:codex".into(),
-                agent_label: "codex".into(),
-                state: AgentState::Working,
-                message: None,
-                seq: Some(seq + 1),
-                session_ref: crate::agent_resume::AgentSessionRef::id(session),
-                session_cursor: None,
-                process_pid: None,
-            });
-            state.handle_app_event(AppEvent::HookStateReported {
-                pane_id,
-                source: "herdr:codex".into(),
-                agent_label: "codex".into(),
-                state: AgentState::Idle,
-                message: None,
-                seq: Some(seq + 2),
-                session_ref: crate::agent_resume::AgentSessionRef::id(session),
-                session_cursor: None,
-                process_pid: None,
-            });
-            assert_eq!(state.terminals[&terminal_id].state, AgentState::Idle);
-            assert!(state.terminals[&terminal_id]
-                .last_agent_completion_seq
-                .is_some());
-            assert!(state.terminals[&terminal_id].session_ref_is_current(
-                &crate::agent_resume::AgentSessionRef::id(session).unwrap()
-            ));
-        }
-        state.handle_app_event(AppEvent::HookStateReported {
-            pane_id,
-            source: "herdr:codex".into(),
-            agent_label: "codex".into(),
-            state: AgentState::Working,
-            message: None,
-            seq: Some(7),
-            session_ref: crate::agent_resume::AgentSessionRef::id("second"),
-            session_cursor: None,
-            process_pid: None,
-        });
-        state.handle_app_event(AppEvent::HookStateReported {
-            pane_id,
-            source: "herdr:codex".into(),
-            agent_label: "codex".into(),
-            state: AgentState::Idle,
-            message: None,
-            seq: Some(8),
-            session_ref: crate::agent_resume::AgentSessionRef::id("first"),
-            session_cursor: None,
-            process_pid: None,
-        });
-        assert_eq!(state.terminals[&terminal_id].state, AgentState::Working);
     }
 
     #[test]

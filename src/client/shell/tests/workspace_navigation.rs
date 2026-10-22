@@ -968,3 +968,61 @@ fn navigation_highlight_ends_for_noop_focus_and_focused_creation() {
         }
     }
 }
+
+// Kitty keyboard protocol (CSI u) encodings of `[` (codepoint 91).
+const KITTY_CTRL_BRACKET: &[u8] = b"\x1b[91;5u";
+const KITTY_CTRL_SHIFT_BRACKET: &[u8] = b"\x1b[91;6u";
+
+#[test]
+fn kitty_ctrl_bracket_leaves_navigation_like_esc() {
+    let mut state = local_navigation_state(false);
+    enter_navigation(&mut state);
+    preview_key(&mut state, b"\x1b[B");
+
+    preview_key(&mut state, KITTY_CTRL_BRACKET);
+
+    assert_eq!(state.mode, ClientShellMode::Terminal);
+    assert!(state.navigate_workspace_id.is_none());
+}
+
+#[test]
+fn configured_ctrl_bracket_navigate_binding_wins_over_cancel() {
+    let config: Config = toml::from_str("[keys]\nnavigate_workspace_down = \"ctrl+[\"\n").unwrap();
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(workspaces(3)));
+    state.set_pane_surface(surface());
+    state.compose(100, 28).unwrap();
+    enter_navigation(&mut state);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+
+    preview_key(&mut state, KITTY_CTRL_BRACKET);
+
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_2");
+}
+
+#[test]
+fn kitty_ctrl_shift_bracket_keeps_navigation_open() {
+    let mut state = local_navigation_state(false);
+    enter_navigation(&mut state);
+
+    state.handle_input_bytes(KITTY_CTRL_SHIFT_BRACKET);
+
+    assert_eq!(state.mode, ClientShellMode::Navigate);
+    assert_selected(&state, &ClientEndpointId::Local, "ws_1");
+}
+
+#[test]
+fn kitty_ctrl_bracket_cancels_a_blocked_foreign_preview() {
+    let (mut state, remote) = state_with_remote();
+    state.compose(100, 28).unwrap();
+    enter_navigation(&mut state);
+    preview_key(&mut state, b"\x1b[B");
+    assert_selected(&state, &remote, "ws_1");
+    assert!(state.workspace_preview_action_blocked());
+
+    preview_key(&mut state, KITTY_CTRL_BRACKET);
+
+    assert_ne!(state.mode, ClientShellMode::Navigate);
+    assert!(state.navigate_workspace_id.is_none());
+}

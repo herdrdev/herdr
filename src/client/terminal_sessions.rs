@@ -1,4 +1,5 @@
 use std::io::{self, BufRead, Write as _};
+use std::sync::atomic::AtomicBool;
 
 use base64::Engine;
 use interprocess::local_socket::traits::Stream as _;
@@ -12,7 +13,7 @@ use crate::protocol::{
 };
 use crate::server::socket_paths::client_socket_path;
 
-use super::{do_handshake, init_logging, write_to_server, ClientError};
+use super::{do_handshake, init_logging, write_to_server, ClientError, HandshakePixelCapabilities};
 
 /// Runs a read-only terminal session observer and prints one JSON envelope per frame.
 pub fn run_terminal_session_observe(target: String, cols: u16, rows: u16) -> io::Result<()> {
@@ -95,12 +96,16 @@ fn connect_terminal_session_stream(
         rows,
         0,
         0,
-        false,
+        HandshakePixelCapabilities {
+            exact_geometry: false,
+            sgr_mouse: false,
+        },
         None,
         false,
         false,
         true,
         true,
+        &AtomicBool::new(false),
     ) {
         Ok(handshake) if handshake.encoding == RenderEncoding::TerminalAnsi => {}
         Ok(handshake) => {

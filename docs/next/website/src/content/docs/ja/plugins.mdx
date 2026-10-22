@@ -174,6 +174,7 @@ process.exit(result.status ?? 1);
 
 ```bash
 herdr plugin install ogulcancelik/herdr-plugin-examples/agent-telegram-notify
+herdr plugin update
 herdr plugin config-dir examples.agent-telegram-notify
 herdr plugin list
 herdr plugin action list --plugin examples.agent-telegram-notify
@@ -191,10 +192,15 @@ herdr plugin log list --plugin example.layout
 ```
 
 `plugin install` は `owner/repo/subdir` のような GitHub 省略記法のみを受け付けます。
-`git` でクローンし、対話的なターミナルではプレビューを表示し、サポートされる
-ビルドコマンドを実行し、チェックアウトを Herdr 管理のプラグインデータの下に保存して
-登録します。非対話的なインストールには `--yes` を使ってください。GitHub 管理の
-プラグインを再インストールすると、その管理チェックアウトが置き換えられます。
+`git` でクローンし、対話的なターミナルではプレビューを表示し、新しい Herdr 管理の
+インストールディレクトリでビルドして登録します。非対話的なインストールには
+`--yes` を使ってください。更新や再インストール後も、実行中のコマンドとペインは
+元のファイルを使い続け、新しい呼び出しは設定の再読み込みなしで新しい版を使います。
+既存のプロセスは再起動されず、起動フックは通常どおり次のサーバー起動時に実行されます。
+`plugin update` は対象を省略すると GitHub 管理の全プラグインを更新します。
+プラグイン id または GitHub ソースを指定すれば、その対象だけを更新します。
+インストール時の ref を再取得し、コミットが変わっていなければスキップします。
+一括更新ではローカルにリンクされたプラグインを無視します。非対話的な更新には `--yes` を使います。
 インストール済みおよびリンク済みのプラグインと、その有効・無効の状態は現在の
 ユーザー全体で共有され、すべての Herdr セッションから利用できます。Herdr サーバーが
 動作していないときでも `plugin install` と `plugin link` で登録できます。
@@ -206,12 +212,15 @@ Herdr 0.7.3 の名前付きセッションだけにインストールしたプ�
 `plugin config-dir <id>` はセットアップドキュメントやシェルスクリプト向けに
 設定ディレクトリを表示します。
 
-`plugin uninstall <id-or-source>` はプラグインの登録を解除します。GitHub 管理の
-インストールでは管理チェックアウトも削除し、プラグイン id と、install で使うのと
-同じ `owner/repo[/subdir...]` 省略記法の両方を受け付けます。`plugin unlink <id>` は
-登録解除のみを行いファイルには触れないため、ローカル開発に便利です。v1 に独立した
-`plugin update` はありません。管理プラグインを更新するには GitHub から
-再インストールしてください。
+`plugin uninstall <id-or-source>` は登録を解除し、プラグイン id または install と同じ
+`owner/repo[/subdir...]` 省略記法を受け付けます。更新、再インストール、アンインストール後も
+実行中のプラグインが完了できるようファイルを保持します。使用中のサーバーが終了した後、
+次に成功したインストール／更新、またはサーバー起動時に、不要な管理インストールを削除します。
+設定の再読み込みでは古いインストールを解放しません。サーバー停止前にプラグインの作業を
+止めてください。サーバー終了後も残るプロセスは削除から保護されません。プラグインは
+親コマンドやペインが終了する前に、切り離したバックグラウンドプロセスを停止する必要があります。
+削除追跡のない旧インストール、設定、状態は保持されます。
+`plugin unlink <id>` は登録解除のみを行いファイルには触れないため、ローカル開発に便利です。
 
 サンプル集のリポジトリは `ogulcancelik/herdr-plugin-examples` です。
 `agent-telegram-notify`、`github-link-preview`、`dev-layout-bootstrap` を含む
@@ -349,6 +358,8 @@ description = "apply layout"
 `invocation_source = "link_click"`、`clicked_url`、`link_handler_id` を受け取ります。
 シェルプラグインは `HERDR_PLUGIN_CLICKED_URL` と `HERDR_PLUGIN_LINK_HANDLER_ID` も
 読めます。ハンドラーは各プラグイン内でマニフェストの順にチェックされます。
+
+リンクのクリックでプラグインを呼び出すのは、`ui.mouse_capture` が有効な場合だけです。一致するハンドラーが先に実行され、起動に失敗するとエラーを表示して停止します。一致するハンドラーがない場合、外部で開くのは HTTP(S) リンクだけです。キャプチャが無効な場合、外側のターミナルが通常のショートカットと警告で明示的なハイパーリンクを処理します。Windows Terminal の URL 検出の注意点は[マウス操作](/ja/docs/quick-start/#マウスを使う)を参照してください。
 
 ## ストレージ
 

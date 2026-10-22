@@ -141,6 +141,8 @@ fn remote_machine_id(profile: &SavedSshEndpoint) -> Result<String, String> {
         &profile.target,
         &profile.session,
         false,
+        // Read-only identity probe: one retry after shared transport recovery is safe.
+        true,
     )
     .map_err(|error| format!("could not reach {}: {error}", profile.label))?;
     let client = ApiClient::for_target(ConnectionTarget::SocketPath(

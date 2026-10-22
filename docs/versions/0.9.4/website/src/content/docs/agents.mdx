@@ -1,0 +1,175 @@
+---
+title: Agents
+description: See which coding agents work with Herdr, either supported by Herdr or supporting Herdr themselves, and how agent state works.
+---
+
+Herdr is built for running more than one coding agent at a time. Each agent stays in a real terminal pane with its shell, logs, prompts, and running processes intact. Herdr tracks which panes contain agents, rolls their state up to tabs and workspaces, and lets you jump straight to the pane that needs attention instead of polling every terminal by hand.
+
+To coordinate agents from scripts or from another agent, see [Agent automation](/docs/agent-automation/).
+
+## Supported agents
+
+Agents get Herdr support in one of two ways: Herdr supports them, or they support Herdr themselves. Either way you see each agent's `idle`, `working`, and `blocked` state, get notified when it finishes or needs you, and can wait on it from scripts.
+
+Other agents still run normally in Herdr panes. They just show up as plain terminals.
+
+### Supported by Herdr
+
+Herdr recognizes these agents and reads their state from what they draw on screen. To get the same session back after a Herdr server restart, install the agent's integration with `herdr integration install <name>`. See [Integrations](/docs/integrations/) for what each one installs.
+
+| Agent | Integration | Notes |
+| --- | --- | --- |
+| Claude Code | `claude` | |
+| Codex | `codex` | |
+| GitHub Copilot CLI | `copilot` | |
+| Cursor Agent CLI | `cursor` | |
+| OpenCode | `opencode` | also reports state |
+| Pi | `pi` | also reports state |
+| OMP | `omp` | state requires the integration |
+| Droid | `droid` | |
+| Devin CLI | `devin` | |
+| Kimi Code CLI | `kimi` | also reports state |
+| Kilo Code CLI | `kilo` | also reports state |
+| Hermes Agent | `hermes` | |
+| Qoder CLI | `qodercli` | |
+| Qwen Code | `qwen` | |
+| Letta Code | `letta` | CLI install only |
+| MastraCode | `mastracode` | state requires the integration |
+| Grok CLI | `grok` | |
+| Antigravity CLI | `antigravity-cli` | |
+| Amp | none | state only |
+| Kiro CLI | none | state only |
+| Maki | none | state only |
+| Gemini CLI | none | state only, less tested |
+| Cline | none | state only, less tested |
+
+### Supported by the agent
+
+These agents report their own state to Herdr. There is nothing to install; run them in a Herdr pane.
+
+<ul class="agent-logos">
+  <li><a href="https://commandcode.ai"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/command-code.svg')" }} aria-hidden="true"></span>Command Code</a></li>
+  <li><a href="https://github.com/charmbracelet/crush"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/crush.svg')" }} aria-hidden="true"></span>Crush</a></li>
+  <li><a href="https://kiro.dev/cli/"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/kiro-mask.svg')" }} aria-hidden="true"></span>Kiro CLI</a></li>
+  <li><a href="https://dev.meta.ai/products/muse-code"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/muse-code.svg')" }} aria-hidden="true"></span>Muse Code</a></li>
+  <li><a href="https://github.com/PrimeIntellect-ai/prime-agent"><span class="agent-logo" style={{ '--logo': "url('/assets/agent-icons/prime-agent.svg')" }} aria-hidden="true"></span>Prime Agent</a></li>
+</ul>
+
+An agent that also reports its resume command comes back in the same session after a Herdr server restart.
+
+If you build a coding agent, [Add Herdr support to your agent](/docs/add-herdr-support/) shows how to join this list. It takes a few calls to Herdr's CLI or socket, and no change to Herdr.
+
+## How status works
+
+For agents Herdr supports, Herdr finds the agent's process in each pane and reads the live bottom of the pane, not the part you scrolled to. Rules in a detection manifest decide whether that screen means `idle`, `working`, or `blocked`. When an integration also reports state, Herdr uses those reports instead of reading the screen.
+
+For agents that support Herdr, the agent's own reports decide the state.
+
+## VMs and sandbox wrappers
+
+On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint applies only to that foreground process. Herdr cannot see it if you set it only inside a VM or container. Avoid exporting it globally unless every inherited foreground process should be treated as that agent.
+
+Some restricted Linux runtimes do not expose a terminal foreground process group. Start the Herdr server with `HERDR_PROCESS_DETECTION=child-groups` to opt into direct child-process-group inference when native detection is unavailable. Native detection remains preferred, and the default `native` mode never performs this inference. The opt-in mode is best effort: a newer background job can be mistaken for the foreground job. The variable is read by the server and requires a restart; set it in the remote server environment rather than on an attaching client.
+
+## Blocked state
+
+Blocked detection is deliberately strict for screen-manifest agents. Herdr only marks `blocked` when the live bottom-buffer snapshot matches known visible approval, question, or permission UI. If no manifest rule matches for a known agent, Herdr falls back to `idle` and labels that fallback as `default_known_agent_idle_fallback` in explain output.
+
+Unusual new agent prompts may initially show as `idle` instead of `blocked` until Herdr learns that screen shape. Detection itself does not send input, but automation that trusts a mistaken idle state can type into an approval dialog. Inspect unexpected prompts before sending more input; idle status is not authorization to approve an action.
+
+Antigravity and Grok count as idle once they return to their prompt, even if background tasks, monitors, or subagents are still running. `agent wait` and `agent prompt --wait` observe the agent's state, not completion of those jobs.
+
+Suspending an agent with Ctrl+Z preserves its name, session reference, and hook authority while the exact process remains alive behind the shell or another non-agent command. Returning with `fg` keeps that identity. This does not cover another recognized agent taking over the foreground. A retained identity does not mean the agent can receive input while suspended; inspect the pane before prompting it.
+
+## Detection manifests
+
+Bundled manifests live inside Herdr. Herdr also checks herdr.dev for remote manifest updates and applies valid per-agent rule updates automatically without requiring a Herdr restart. Remote manifests are stored in Herdr's state directory. Set `[update] manifest_check = false` to disable background remote manifest checks.
+
+Local overrides can replace a remote or bundled manifest from the platform config directory:
+
+```text
+~/.config/herdr/agent-detection/<agent>.toml
+```
+
+Local overrides always win. Without a local override, Herdr uses the newer compatible manifest between the cached remote manifest and the bundled manifest in the running binary. On debug builds, the same config helper may use a development directory such as `herdr-dev`. Invalid override files are ignored with a warning and Herdr falls back to the cached remote or bundled manifest for that agent.
+
+Remote manifests patch detection rules for agents Herdr already knows how to identify. Adding a completely new agent still requires a Herdr binary update for process detection, labels, and integration behavior.
+
+The running server loads active manifests into memory on startup. Automatic remote manifest updates reload that in-memory cache after new rules are written. Run `herdr server update-agent-manifests` to fetch remote manifest updates immediately and reload the running server. After editing a local override manually, restart Herdr or run `herdr server reload-agent-manifests` to apply the file to the running server.
+
+Use `herdr agent explain` when a pane shows the wrong state:
+
+```bash
+herdr agent explain <target>
+herdr agent explain --file screen.txt --agent codex --json
+```
+
+Live explain is evaluated by the running server, so it reflects the active manifest cache. The explain output shows the agent, final state, whether screen detection was skipped by a full lifecycle authority, manifest source and version, cached remote version, local override shadowing, remote update status, matched rule, visible evidence flags, matcher and region evidence for evaluated rules, skipped-update reason for transcript viewers, and the idle fallback reason when no rule matched.
+
+Herdr can run inside tmux as the outer terminal environment. Agent detection does not inspect tmux sessions launched inside a Herdr pane. If a shell framework auto-enters tmux inside Herdr, Herdr sees `tmux` as the pane process instead of the agent behind it.
+
+If your shell automatically attaches to tmux whenever `TMUX` is unset, update its startup rule to exclude Herdr panes. Reattaching the outer tmux session from inside a Herdr pane can recursively shrink the terminal and make it flicker. Add the `HERDR_ENV` check to your existing condition before it runs tmux:
+
+```zsh
+if [[ -z ${TMUX:-} && ${HERDR_ENV:-} != 1 ]]; then
+  tmux new-session -A -s my-session
+fi
+```
+
+## State rollups
+
+The sidebar rolls state upward.
+
+A blocked agent makes its pane, tab, and workspace look blocked. A working agent makes the workspace look active. A done agent stays visible until you view it.
+
+This is the main Herdr workflow: start several agents, let them work in parallel, and use the sidebar to see which project needs a decision, which one is still running, and which one is ready to review.
+
+## Custom agent labels
+
+You can rename an agent target for display:
+
+```bash
+herdr agent rename w1:p1 reviewer
+herdr agent rename reviewer --clear
+```
+
+Targets accept a unique live agent name or the pane ID that currently hosts the agent. Terminal IDs and bare agent-kind labels are not accepted.
+
+## Custom status labels
+
+Integrations report lifecycle state as semantic state only. Add display customization separately with pane metadata tokens.
+
+```bash
+herdr pane report-agent w1:p1 \
+  --source custom:indexer \
+  --agent docs-bot \
+  --state working
+
+herdr pane report-metadata w1:p1 \
+  --source custom:indexer-display \
+  --token summary=indexing
+```
+
+`state` controls waits, notifications, and rollups. The `summary` token is display-only and can be used as `$summary` in an Agent sidebar row.
+
+Agent sidebar rows can also opt into `terminal_title` or `terminal_title_stripped`; neither appears in the default rows. The first shows the latest safety-normalized OSC 0/2 terminal title. The second removes one recognized leading activity or spinner glyph and following whitespace. Herdr owns these values on the server; they are ephemeral across a cold restart and remain independent of metadata titles and semantic agent state. Spinner animation can therefore update the raw title without producing a pane update when the stripped text stays the same.
+
+## Attach directly to an agent
+
+Attach your current terminal to one agent terminal instead of the full Herdr UI:
+
+```bash
+herdr agent attach reviewer
+```
+
+Detach with `ctrl+b q`. Send a literal `ctrl+b` with `ctrl+b ctrl+b`.
+
+Scroll with the mouse wheel or plain page up/page down. Normal input jumps back to the bottom.
+
+Use `--takeover` if another direct attach client already owns input:
+
+```bash
+herdr agent attach reviewer --takeover
+```
+
+Use `herdr terminal attach <terminal_id>` when you want the same direct attach behavior for a non-agent terminal.

@@ -27,6 +27,7 @@ pub(crate) const API_BRIDGE_MULTI_MAX_IN_FLIGHT: usize = 16;
 /// It matches the server's own initial-request cap, which would refuse
 /// anything longer. Longer lines are drained and answered with
 /// `invalid_request`.
+#[cfg(unix)]
 pub(crate) const API_BRIDGE_MULTI_MAX_REQUEST_LINE_BYTES: usize = 1024 * 1024;
 
 /// Methods that keep their connection open after the first response line.

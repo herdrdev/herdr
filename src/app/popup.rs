@@ -142,8 +142,8 @@ impl App {
         {
             self.state.view.terminal_area
         } else {
-            let (estimated_rows, estimated_cols) = self.state.estimate_pane_size();
-            ratatui::layout::Rect::new(0, 0, estimated_cols, estimated_rows)
+            let (cols, rows) = self.state.headless_size;
+            ratatui::layout::Rect::new(0, 0, cols, rows)
         };
         let Some(resolved_geometry) =
             resolve_popup_geometry(geometry.width, geometry.height, terminal_area)

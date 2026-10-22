@@ -55,20 +55,15 @@ MAX_MATCHERS_PER_GATE = 32
 MAX_TOTAL_MATCHERS = 1024
 MAX_MATCHER_CHARS = 512
 
-# Keep engine-2 clients on the OSC-capable manifest until an engine-3 release
-# can consume top_non_empty_lines. Remove this entry when the distribution
-# publishes the bundled Grok manifest.
-STAGED_PUBLISHED_MANIFESTS = {
+# Keep older-engine clients on a published manifest until a release with the
+# bundled manifest's engine ships. Maps agent id to (bundled version, published
+# version, published sha256). Remove an entry once the bundled manifest ships.
+STAGED_PUBLISHED_MANIFESTS: dict[str, tuple[str, str, str]] = {
     # Keep engine-2 Claude clients on the published manifest until engine-5 input rules ship.
     "claude": (
-        "2026.09.25.1",
-        "2026.09.11.1",
-        "038d0aa23fee3f9b39cb3c9ca117d0f95b0b3a5873cf0f38284ccbac279c9664",
-    ),
-    "grok": (
-        "2026.09.18.2",
-        "2026.09.18.1",
-        "0f31b111144900b02f303577d27587f72d58d8c505185a682bd7887f822316ee",
+        "2026.10.21.1",
+        "2026.10.11.1",
+        "e8b816a70edc1b5f91479acc9977f1f132a55b0c93845682611e91bdf8aa1920",
     ),
 }
 

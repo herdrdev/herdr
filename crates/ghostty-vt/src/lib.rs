@@ -883,6 +883,8 @@ impl Terminal {
         };
         let userdata = (&mut *terminal.callback_state as *mut TerminalCallbackState).cast();
         let glyph_protocol = false;
+        // libghostty enables image storage by default; Herdr opts in explicitly.
+        let kitty_storage_limit: u64 = 0;
         let terminfo_name = ffi::GhosttyString {
             ptr: TERM.as_ptr().cast(),
             len: TERM.len(),
@@ -894,6 +896,12 @@ impl Terminal {
         let clipboard_callback: ffi::GhosttyTerminalClipboardWriteFn =
             Some(clipboard_write_trampoline);
         unsafe {
+            ffi::ghostty_terminal_set(
+                terminal.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT,
+                (&kitty_storage_limit as *const u64).cast(),
+            )
+            .into_result()?;
             ffi::ghostty_terminal_set(
                 terminal.raw,
                 ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_TERMINFO_NAME,
@@ -955,6 +963,10 @@ impl Terminal {
             )
             .into_result()?;
         }
+        // Disabling storage advances its generation even though it is empty.
+        terminal
+            .kitty_empty_generation
+            .set(Some(terminal.kitty_graphics_generation()?));
         Ok(terminal)
     }
 
@@ -1278,6 +1290,29 @@ impl Terminal {
 
     pub fn screen_text_rows(&self) -> Result<Vec<ScreenTextRow>, Error> {
         self.screen_text_rows_range(0, usize::MAX)
+    }
+
+    /// Visit a screen row without allocating an owned grapheme vector for each cell.
+    /// The borrowed graphemes are valid only for the duration of each callback.
+    /// Like `screen_text_rows_range`, rows outside the active screen/history are empty.
+    pub fn for_each_screen_row_cell(
+        &self,
+        row: u32,
+        mut visit: impl FnMut(CellWide, &[u32]),
+    ) -> Result<(), Error> {
+        if row as usize >= self.total_rows()? {
+            return Ok(());
+        }
+        let cols = self.cols()?;
+        let mut grid_ref = self.grid_ref(ghostty_screen_point(0, row))?;
+        let mut graphemes = Vec::new();
+        for x in 0..cols {
+            grid_ref.x = x;
+            let wide = grid_ref_wide(&grid_ref)?;
+            grid_ref_graphemes_into(&grid_ref, &mut graphemes)?;
+            visit(wide, &graphemes);
+        }
+        Ok(())
     }
 
     pub fn screen_text_rows_range(
@@ -2304,6 +2339,8 @@ fn grid_ref_graphemes(grid_ref: &ffi::GhosttyGridRef) -> Result<Vec<u32>, Error>
     if result != ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
         result.into_result()?;
     }
+    // Owned cells keep only this grapheme; unlike the row scratch buffer, they
+    // do not benefit from spare capacity for subsequent cells.
     let mut buffer = vec![0u32; required];
     if required == 0 {
         return Ok(buffer);
@@ -2314,6 +2351,28 @@ fn grid_ref_graphemes(grid_ref: &ffi::GhosttyGridRef) -> Result<Vec<u32>, Error>
     }
     buffer.truncate(required);
     Ok(buffer)
+}
+
+fn grid_ref_graphemes_into(
+    grid_ref: &ffi::GhosttyGridRef,
+    buffer: &mut Vec<u32>,
+) -> Result<(), Error> {
+    let mut required = 0usize;
+    let result =
+        unsafe { ffi::ghostty_grid_ref_graphemes(grid_ref, ptr::null_mut(), 0, &mut required) };
+    if result != ffi::GhosttyResult_GHOSTTY_OUT_OF_SPACE {
+        result.into_result()?;
+    }
+    buffer.resize(required, 0);
+    if required == 0 {
+        return Ok(());
+    }
+    unsafe {
+        ffi::ghostty_grid_ref_graphemes(grid_ref, buffer.as_mut_ptr(), buffer.len(), &mut required)
+            .into_result()?;
+    }
+    buffer.truncate(required);
+    Ok(())
 }
 
 fn grid_ref_wide(grid_ref: &ffi::GhosttyGridRef) -> Result<CellWide, Error> {
@@ -2974,13 +3033,19 @@ impl Drop for RenderState {
 
 pub struct KeyEvent {
     raw: ffi::GhosttyKeyEvent,
+    // libghostty borrows the UTF-8 pointer instead of copying it, so the event
+    // owns the text for as long as the handle can be encoded.
+    utf8: Box<str>,
 }
 
 impl KeyEvent {
     pub fn new() -> Result<Self, Error> {
         let mut raw = ptr::null_mut();
         unsafe { ffi::ghostty_key_event_new(ptr::null(), &mut raw).into_result()? };
-        Ok(Self { raw })
+        Ok(Self {
+            raw,
+            utf8: Box::from(""),
+        })
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyKeyAction) {
@@ -2996,13 +3061,26 @@ impl KeyEvent {
     }
 
     pub fn set_utf8(&mut self, text: &str) {
+        self.utf8 = Box::from(text);
         unsafe {
-            ffi::ghostty_key_event_set_utf8(self.raw, text.as_ptr().cast::<c_char>(), text.len())
+            ffi::ghostty_key_event_set_utf8(
+                self.raw,
+                self.utf8.as_ptr().cast::<c_char>(),
+                self.utf8.len(),
+            )
         }
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {
         unsafe { ffi::ghostty_key_event_set_unshifted_codepoint(self.raw, codepoint) }
+    }
+
+    pub fn set_consumed_mods(&mut self, mods: u16) {
+        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw, mods) }
+    }
+
+    pub fn set_composing(&mut self, composing: bool) {
+        unsafe { ffi::ghostty_key_event_set_composing(self.raw, composing) }
     }
 }
 
@@ -3025,6 +3103,23 @@ impl KeyEncoder {
 
     pub fn set_from_terminal(&mut self, terminal: &Terminal) {
         unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.raw, terminal.raw()) }
+    }
+
+    /// Whether macOS Option acts as Alt (ESC prefix) rather than a text
+    /// modifier. `set_from_terminal` resets this to false.
+    pub fn set_macos_option_as_alt(&mut self, enabled: bool) {
+        let value = if enabled {
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_TRUE
+        } else {
+            ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE
+        };
+        unsafe {
+            ffi::ghostty_key_encoder_setopt(
+                self.raw,
+                ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                (&value as *const ffi::GhosttyOptionAsAlt).cast(),
+            )
+        }
     }
 
     pub fn encode(&mut self, event: &KeyEvent) -> Result<Vec<u8>, Error> {
@@ -3674,6 +3769,9 @@ impl<'a> RowCellIter<'a> {
 }
 
 #[cfg(test)]
+mod test_allocations;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
@@ -3842,6 +3940,7 @@ mod tests {
     #[test]
     fn kitty_image_fingerprint_refreshes_on_retransmission() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        terminal.enable_kitty_graphics().unwrap();
         terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
         let first = terminal
             .kitty_image_placements_with_data_filter(|_| true)
@@ -3892,6 +3991,7 @@ mod tests {
     #[test]
     fn kitty_image_fingerprint_survives_hidden_placements_until_the_image_is_deleted() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        terminal.enable_kitty_graphics().unwrap();
         let cached =
             |terminal: &Terminal| terminal.kitty_fingerprints.lock().unwrap().contains_key(&7);
         terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=10,r=5,q=2;/wAA/w==\x1b\\");
@@ -3919,16 +4019,17 @@ mod tests {
     #[test]
     fn kitty_storage_generation_skips_only_proven_empty_storage() {
         let mut terminal = Terminal::new(10, 5, 1_000_000).unwrap();
+        assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
         terminal.enable_kitty_graphics().unwrap();
         terminal.resize(10, 5, 8, 16).unwrap();
 
-        assert_eq!(terminal.kitty_graphics_generation().unwrap(), 0);
+        let initial_generation = terminal.kitty_graphics_generation().unwrap();
         assert!(!terminal.kitty_graphics_may_have_placements().unwrap());
         assert!(terminal.kitty_image_placements().unwrap().is_empty());
 
         terminal.write(b"\x1b_Ga=t,t=d,f=24,i=1,s=1,v=2;////////\x1b\\");
         let transmitted = terminal.kitty_graphics_generation().unwrap();
-        assert_ne!(transmitted, 0);
+        assert_ne!(transmitted, initial_generation);
         assert!(terminal.kitty_graphics_may_have_placements().unwrap());
         assert!(terminal.kitty_image_placements().unwrap().is_empty());
         assert_eq!(terminal.kitty_empty_generation.get(), Some(transmitted));
@@ -4004,6 +4105,52 @@ mod tests {
         assert_eq!(placements[0].data, [255, 0, 0, 255]);
         assert_eq!(placements[0].render.grid_cols, 10);
         assert_eq!(placements[0].render.grid_rows, 5);
+    }
+
+    #[test]
+    fn kitty_graphics_queries_require_explicit_enablement() {
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        let responses = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let sink = responses.clone();
+        terminal
+            .set_write_pty_callback(move |bytes| sink.lock().unwrap().extend_from_slice(bytes))
+            .unwrap();
+        // The reporter's direct, compressed RGBA capability probe followed by DA1.
+        let query = b"\x1b_Gi=31,s=1,v=1,a=q,t=d,f=32,o=z;eAFjYGBgAAAABAAB\x1b\\\x1b[c";
+
+        for enabled in [false, true] {
+            if enabled {
+                terminal.enable_kitty_graphics().unwrap();
+            }
+            for reset in [false, true] {
+                if reset {
+                    terminal.write(b"\x1bc");
+                }
+                responses.lock().unwrap().clear();
+                terminal.write(query);
+                let expected: &[u8] = if enabled {
+                    b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22c"
+                } else {
+                    b"\x1b[?62;22c"
+                };
+                assert_eq!(
+                    responses.lock().unwrap().as_slice(),
+                    expected,
+                    "enabled={enabled}, reset={reset}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_kitty_graphics_discards_uploads_across_screen_changes() {
+        let mut terminal = Terminal::new(10, 5, 0).unwrap();
+        for sequence in [b"".as_slice(), b"\x1b[?1049h", b"\x1b[?1049l"] {
+            terminal.write(sequence);
+            terminal.resize(12, 6, 8, 16).unwrap();
+            terminal.write(b"\x1b_Ga=T,f=32,t=d,i=7,p=3,s=1,v=1,c=1,r=1;/wAA/w==\x1b\\");
+            assert!(terminal.kitty_image_placements().unwrap().is_empty());
+        }
     }
 
     #[test]
@@ -4645,6 +4792,76 @@ mod tests {
         assert_eq!(rows[2].cells[0].graphemes, vec!['界' as u32]);
         assert_eq!(rows[2].cells[1].wide, CellWide::SpacerTail);
         assert_eq!(rows[2].cells[2].graphemes, vec!['e' as u32, 0x301]);
+    }
+
+    #[test]
+    fn owned_cell_graphemes_keep_tight_capacity() {
+        let mut terminal = Terminal::new(8, 1, 100).unwrap();
+        terminal.write("xe\u{301}".as_bytes());
+
+        let rows = terminal.screen_text_rows().unwrap();
+        assert_eq!(rows[0].cells[0].graphemes, vec!['x' as u32]);
+        assert_eq!(rows[0].cells[1].graphemes, vec!['e' as u32, 0x301]);
+        for cell in &rows[0].cells {
+            assert_eq!(cell.graphemes.capacity(), cell.graphemes.len());
+        }
+    }
+
+    #[test]
+    fn borrowed_screen_row_cells_match_owned_cells() {
+        let mut terminal = Terminal::new(12, 4, 100).unwrap();
+        let content = format!(
+            "abcdefghi界Z\r\ne{} X\r\n{}\r\n",
+            "\u{301}".repeat(40),
+            char::from_u32(KITTY_UNICODE_PLACEHOLDER).unwrap()
+        );
+        for screen in ["", "\x1b[?1049h"] {
+            terminal.write(screen.as_bytes());
+            terminal.write(content.as_bytes());
+            let expected = terminal.screen_text_rows().unwrap();
+            assert!(expected
+                .iter()
+                .flat_map(|row| &row.cells)
+                .any(|cell| cell.graphemes.len() > 4));
+            for (y, row) in expected.iter().enumerate() {
+                let mut actual = Vec::new();
+                terminal
+                    .for_each_screen_row_cell(y as u32, |wide, graphemes| {
+                        actual.push((wide, graphemes.to_vec()));
+                    })
+                    .unwrap();
+                let expected: Vec<_> = row
+                    .cells
+                    .iter()
+                    .map(|cell| (cell.wide, cell.graphemes.clone()))
+                    .collect();
+                assert_eq!(actual, expected);
+            }
+            terminal
+                .for_each_screen_row_cell(u32::MAX, |_, _| panic!("out-of-range row"))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn borrowed_screen_row_allocations_do_not_scale_with_cell_count() {
+        for cols in [80, 330] {
+            let mut terminal = Terminal::new(cols, 1, 100).unwrap();
+            terminal.write("x".repeat(usize::from(cols)).as_bytes());
+            let mut cells = 0;
+            let (result, allocations) = crate::test_allocations::count(|| {
+                terminal.for_each_screen_row_cell(0, |_, graphemes| {
+                    std::hint::black_box(graphemes);
+                    cells += 1;
+                })
+            });
+            result.unwrap();
+            assert_eq!(cells, cols);
+            assert!(
+                allocations <= 1,
+                "one reusable grapheme buffer per ASCII row, got {allocations} allocations for {cols} cells"
+            );
+        }
     }
 
     #[test]

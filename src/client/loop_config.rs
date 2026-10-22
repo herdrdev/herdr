@@ -10,6 +10,7 @@ pub(super) struct ClientLoopConfig {
     pub(super) pixel_geometry_fallback: bool,
     pub(super) mouse_capture_active: bool,
     pub(super) host_escape_disambiguation_active: bool,
+    pub(super) host_sgr_pixel_mouse: Option<bool>,
     pub(super) initial_host_input: Vec<u8>,
     pub(super) endpoint_keybindings: bool,
     pub(super) remote_image_paste_key:

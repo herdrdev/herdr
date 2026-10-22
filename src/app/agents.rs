@@ -438,10 +438,15 @@ impl App {
         // client that opened it retried forever.
         //
         // Spawn eagerly on the same headless-safe terms `agent.restart` already uses:
-        // `estimate_pane_size` (falls back to a headless size) and
+        // `new_pane_size` (falls back to a headless size) and
         // `allow_empty_theme = true`, because an unarchive is an explicit operator
         // action that must not wait on a host theme a headless daemon may never report.
-        let (rows, cols) = self.state.estimate_pane_size();
+        let (rows, cols) = self
+            .state
+            .new_pane_size(crate::ui::NewPanePlacement::Existing {
+                ws_idx,
+                pane: pane_id,
+            });
         if !self.start_pending_agent_resume_for_terminal(&terminal_id, rows, cols, true) {
             // No plan to resume (`fresh`), or the resume launcher declined. The pane
             // still has to be usable, so give it a plain shell in the archived cwd
@@ -859,6 +864,10 @@ impl App {
             return Err(AgentStartError::InvalidTimeout);
         }
 
+        runtime
+            .validate_input_submission(&bytes)
+            .map_err(|err| AgentStartError::InputFailed(err.to_string()))?;
+
         let now = Instant::now();
         let terminal = self
             .state
@@ -1044,7 +1053,7 @@ impl App {
         if !terminal.is_agent_terminal() {
             return None;
         }
-        let pane = self.pane_info(ws_idx, pane_id)?;
+        let pane = self.pane_metadata(ws_idx, pane_id)?;
         // Account routing, read from the RECORDED account and resolved against the live
         // registry. `account_config_dir` is None either because no account is recorded or
         // because the recorded one is gone; `account_unresolved` separates those.

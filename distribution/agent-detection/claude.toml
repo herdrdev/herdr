@@ -1,7 +1,7 @@
 id = "claude"
-version = "2026.09.11.1"
+version = "2026.10.11.1"
 min_engine_version = 2
-updated_at = "2026-09-11T00:00:00Z"
+updated_at = "2026-10-11T00:00:00Z"
 aliases = ["claude-code"]
 
 [[rules]]
@@ -93,6 +93,18 @@ any = [
     { contains = ["↑↓ to navigate"] },
   ] },
 ]
+
+[[rules]]
+id = "live_blocked_form_named_session"
+state = "blocked"
+priority = 980
+region = "whole_recent"
+visible_blocker = true
+
+# Bind every control to the same footer, allowing wrapping between words.
+# After the name divider, accept only a counted task panel with marked rows
+# and optional pending overflow. Free-form activity can be newer output (#4573).
+regex = ['(?i)(?:^|\n)[ \t]*enter\s+to\s+(?:confirm|select\s+·\s+(?:(?:tab/arrow|arrow)\s+keys|arrows|↑/↓|↑↓)\s+to\s+navigate)\s+·\s+esc\s+to\s+cancel[ \t]*\n(?:[ \t]*\n)*[ \t]*─{3,}[^\n]*(?:\n(?:[ \t]*\n)*[ \t]+\d+ tasks? \(\d+ done, (?:\d+ in progress, )?\d+ open\)(?:\n[ \t]+[◻◼✔][ \t]+[^\n]+)+(?:\n[ \t]+…[ \t]+\+\d+[ \t]+pending)?)?(?:\n[ \t]*)*\z']
 
 [[rules]]
 id = "dynamic_workflow_prompt"

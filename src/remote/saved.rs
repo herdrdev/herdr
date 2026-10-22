@@ -4,6 +4,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, OnceLock,
 };
+use std::time::{Duration, Instant};
 
 use super::attach::{find_installed_remote_herdr, ManagedSshOptions, RemoteSsh, SshStdioBridge};
 
@@ -20,10 +21,16 @@ pub(crate) fn connect_saved_ssh(
     profile_id: &str,
     target: &str,
     session: &str,
+    cancelled: Arc<AtomicBool>,
 ) -> io::Result<SavedSshStream> {
-    let ssh = validated_saved_ssh(profile_id, target, session)?;
+    let mut ssh = validated_saved_ssh(profile_id, target, session)?;
+    ssh.cancelled = Arc::clone(&cancelled);
+    ssh.prepare_shared_transport()?;
     let remote_herdr = find_installed_remote_herdr(&ssh)?;
     let metadata = remote_herdr.machine_metadata();
+    if cancelled.load(Ordering::Acquire) {
+        return Err(super::process::cancelled());
+    }
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
@@ -32,8 +39,13 @@ pub(crate) fn connect_saved_ssh(
         session.to_owned(),
         ssh.options(),
         true,
+        Arc::clone(&cancelled),
     )?;
-    let stream = crate::ipc::connect_local_stream(&path)?;
+    let stream = crate::ipc::connect_local_stream_cancellable(
+        &path,
+        &cancelled,
+        Instant::now() + Duration::from_secs(5),
+    )?;
     if let Some(metadata) = metadata {
         crate::client::endpoint::SshMetadataCache::new(profile_id, target, session)?
             .store(&metadata);
@@ -48,6 +60,8 @@ pub(crate) struct SavedSshApiBridge {
     path: PathBuf,
     bridge: SshStdioBridge,
     metadata_cache: crate::client::endpoint::SshMetadataCache,
+    ssh: RemoteSsh,
+    pub(crate) can_retry: bool,
     pub(crate) used_cached_metadata: bool,
 }
 
@@ -57,10 +71,23 @@ impl SavedSshApiBridge {
         target: &str,
         session: &str,
         use_cached_metadata: bool,
+        allow_retry: bool,
     ) -> io::Result<Self> {
-        Self::start_inner(profile_id, target, session, use_cached_metadata, None)
+        Self::start_inner(
+            profile_id,
+            target,
+            session,
+            use_cached_metadata,
+            allow_retry,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
     }
 
+    /// Federation's supervised start: `cancellation` aborts discovery and the
+    /// metadata probe. The bridge, discovery, and transport recovery share the
+    /// process-wide federation SSH master that peer channels also use.
+    /// Discovery is read-only, so one retry after recovery stays allowed.
     pub(crate) fn start_cancellable(
         profile_id: &str,
         target: &str,
@@ -73,7 +100,9 @@ impl SavedSshApiBridge {
             target,
             session,
             use_cached_metadata,
-            Some(cancellation),
+            true,
+            cancellation,
+            saved_federation_ssh_options(),
         )
     }
 
@@ -82,14 +111,18 @@ impl SavedSshApiBridge {
         target: &str,
         session: &str,
         use_cached_metadata: bool,
-        cancellation: Option<Arc<AtomicBool>>,
+        allow_retry: bool,
+        cancellation: Arc<AtomicBool>,
+        transport: Option<&ManagedSshOptions>,
     ) -> io::Result<Self> {
-        let ssh = validated_saved_ssh_with_cancellation(
-            profile_id,
-            target,
-            session,
-            cancellation.clone(),
-        )?;
+        let mut ssh = validated_saved_ssh(profile_id, target, session)?;
+        ssh.cancelled = cancellation;
+        // One-shot commands keep the per-target managed master, whose stable
+        // control path lets a later command reuse or retire it.
+        if let Some(options) = transport {
+            ssh.use_managed_options(options.clone());
+        }
+        let mut can_retry = allow_retry;
         let metadata_cache =
             crate::client::endpoint::SshMetadataCache::new(profile_id, target, session)?;
         let cached = use_cached_metadata.then(|| metadata_cache.load()).flatten();
@@ -97,19 +130,20 @@ impl SavedSshApiBridge {
         let metadata = match cached {
             Some(metadata) => metadata,
             None => {
-                let metadata = super::attach::discover_remote_api_metadata(&ssh, session)?;
+                let discover = || super::attach::discover_remote_api_metadata(&ssh, session);
+                let metadata = match discover() {
+                    Err(_) if can_retry && ssh.prepare_shared_transport().unwrap_or(false) => {
+                        can_retry = false;
+                        discover()?
+                    }
+                    result => result?,
+                };
                 metadata_cache.store(&metadata);
                 metadata
             }
         };
-        if cancellation
-            .as_deref()
-            .is_some_and(|flag| flag.load(Ordering::Acquire))
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "saved SSH bridge startup cancelled",
-            ));
+        if ssh.cancelled.load(Ordering::Acquire) {
+            return Err(super::process::cancelled());
         }
         let command = super::attach::cached_remote_api_command(&metadata, session);
         let path = crate::platform::remote_bridge_endpoint_path(
@@ -124,13 +158,16 @@ impl SavedSshApiBridge {
             target.to_owned(),
             command,
             path.clone(),
-            saved_federation_ssh_options(),
+            ssh.options(),
             true,
+            Arc::new(AtomicBool::new(false)),
         )?;
         Ok(Self {
             path,
             bridge,
             metadata_cache,
+            ssh,
+            can_retry,
             used_cached_metadata,
         })
     }
@@ -149,6 +186,10 @@ impl SavedSshApiBridge {
 
     pub(crate) fn invalidate_metadata(&self) {
         self.metadata_cache.invalidate();
+    }
+
+    pub(crate) fn recover_transport(&self) -> bool {
+        self.can_retry && self.ssh.prepare_shared_transport().unwrap_or(false)
     }
 
     pub(crate) fn stale_metadata_failure(error: &io::Error) -> bool {
@@ -191,7 +232,7 @@ pub(crate) fn saved_peer_api_channel_command(
 
 /// A per-connection bridge running `remote_command` through `ssh` from `PATH`,
 /// as a saved peer's bridge does, for tests with a fake `ssh`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn start_test_ssh_bridge(
     target: &str,
     remote_command: &str,
@@ -204,6 +245,7 @@ pub(crate) fn start_test_ssh_bridge(
             local_socket,
             None,
             true,
+            Arc::new(AtomicBool::new(false)),
         )?,
     })
 }
@@ -305,7 +347,6 @@ pub(crate) fn spawn_saved_reverse_forward(
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
-    use std::time::Duration;
 
     validate_profile_path_id(profile_id)?;
     if target.is_empty() || target.starts_with('-') || target.chars().any(char::is_whitespace) {
@@ -467,24 +508,10 @@ fn saved_bridge_path(profile_id: &str) -> PathBuf {
 }
 
 fn validated_saved_ssh(profile_id: &str, target: &str, session: &str) -> io::Result<RemoteSsh> {
-    validated_saved_ssh_with_cancellation(profile_id, target, session, None)
-}
-
-fn validated_saved_ssh_with_cancellation(
-    profile_id: &str,
-    target: &str,
-    session: &str,
-    cancellation: Option<Arc<AtomicBool>>,
-) -> io::Result<RemoteSsh> {
     validate_profile_path_id(profile_id)?;
     crate::session::validate_name(session)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    Ok(match cancellation {
-        Some(cancellation) => {
-            RemoteSsh::new_noninteractive_cancellable(target.to_owned(), cancellation)
-        }
-        None => RemoteSsh::new_noninteractive(target.to_owned()),
-    })
+    Ok(RemoteSsh::new_noninteractive(target.to_owned()))
 }
 
 fn validate_profile_path_id(profile_id: &str) -> io::Result<()> {

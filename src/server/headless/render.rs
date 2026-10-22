@@ -1,6 +1,38 @@
 use super::*;
 
 impl HeadlessServer {
+    pub(super) fn note_interactive_input(&mut self, pane_id: crate::layout::PaneId, now: Instant) {
+        self.interactive_input_deadlines
+            .retain(|_, deadline| *deadline > now);
+        self.interactive_input_deadlines
+            .insert(pane_id, now + INTERACTIVE_RENDER_WINDOW);
+    }
+
+    pub(super) fn can_render_interactive(&self, now: Instant) -> bool {
+        if self.interactive_render_budget.is_some_and(|(epoch, used)| {
+            now.duration_since(epoch) < crate::app::MIN_RENDER_INTERVAL
+                && used >= INTERACTIVE_RENDER_BUDGET
+        }) {
+            return false;
+        }
+        self.app
+            .render_dirty
+            .has_pending_visible_pty_source(|pane_id| {
+                self.interactive_input_deadlines
+                    .get(&pane_id)
+                    .is_some_and(|deadline| *deadline > now)
+            })
+    }
+
+    pub(super) fn record_interactive_render(&mut self, now: Instant) {
+        let (epoch, used) = self.interactive_render_budget.get_or_insert((now, 0));
+        if now.duration_since(*epoch) >= crate::app::MIN_RENDER_INTERVAL {
+            *epoch = now;
+            *used = 0;
+        }
+        *used += 1;
+    }
+
     fn shell_focused_runtime(
         &self,
         client_id: u64,
@@ -33,6 +65,43 @@ impl HeadlessServer {
             .map(|runtime| (runtime, pane_id))
     }
 
+    /// Whether a pane the client shows asked for SGR pixel mouse reports. Host
+    /// reports go to whichever pane is under the pointer, so an unfocused pane
+    /// needs pixels from the host too (#4750); others get them as cells.
+    fn shell_visible_pane_wants_sgr_pixels(&self, client_id: u64) -> bool {
+        if self
+            .shell_focused_runtime(client_id)
+            .is_some_and(|(runtime, _)| runtime.sgr_pixel_mouse_enabled())
+        {
+            return true;
+        }
+        let Some(target) = self.shell_target_for_client(client_id) else {
+            return false;
+        };
+        let Some(tab) = self
+            .app
+            .state
+            .workspaces
+            .get(target.workspace_index)
+            .and_then(|workspace| workspace.tabs.get(target.tab_index))
+        else {
+            return false;
+        };
+        if tab.zoomed {
+            return false;
+        }
+        tab.layout.pane_ids().into_iter().any(|pane_id| {
+            self.app
+                .state
+                .runtime_for_pane_in_workspace(
+                    &self.app.terminal_runtimes,
+                    target.workspace_index,
+                    pane_id,
+                )
+                .is_some_and(crate::terminal::TerminalRuntime::sgr_pixel_mouse_enabled)
+        })
+    }
+
     pub(super) fn stream_host_mouse_capture_mode(&mut self) {
         let requested = self
             .clients
@@ -46,7 +115,8 @@ impl HeadlessServer {
                     let child_requests_mouse =
                         focused.is_some_and(|(runtime, _)| runtime.mouse_reporting_enabled());
                     let sgr_pixels = client.pixel_mouse
-                        && focused.is_some_and(|(runtime, _)| runtime.sgr_pixel_mouse_enabled());
+                        && client.shell_surface_active
+                        && self.shell_visible_pane_wants_sgr_pixels(client_id);
                     Some((
                         client_id,
                         client.shell_surface_active

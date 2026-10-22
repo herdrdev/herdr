@@ -1,81 +1,55 @@
-use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::projection::{self, ParseError};
 use crate::api::schema::{
-    InstalledPluginInfo, Method, PluginActionInvokeParams, PluginActionListParams,
-    PluginInvocationContext, PluginLinkParams, PluginListParams, PluginLogListParams,
-    PluginPaneCloseParams, PluginPaneFocusParams, PluginPaneOpenParams, PluginPanePlacement,
-    PluginPlatform, PluginSetEnabledParams, PluginSourceInfo, PluginSourceKind, PluginUnlinkParams,
-    Request, ResponseResult, SplitDirection, SuccessResponse,
+    InstalledPluginInfo, Method, PluginLinkParams, PluginListParams, PluginPlatform,
+    PluginSourceInfo, PluginSourceKind, PluginUnlinkParams, Request, ResponseResult,
+    SuccessResponse,
 };
-use crate::popup_size::PopupSize;
+
+pub(crate) mod bindings;
+
+pub(crate) fn command() -> clap::Command {
+    bindings::command()
+}
 
 const PLUGIN_BUILD_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 const PLUGIN_INSTALL_USAGE: &str =
     "usage: herdr plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
 
 pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_help();
-        return Ok(2);
+    match args.first().map(String::as_str) {
+        Some("install") => return plugin_install(&args[1..]),
+        Some("update") => return plugin_update(&args[1..]),
+        Some("uninstall") => return plugin_uninstall(&args[1..]),
+        Some("config-dir") => return plugin_config_dir_command(&args[1..]),
+        _ => {}
+    }
+    let (method, json) = match projection::parse(
+        command().bin_name("herdr plugin"),
+        args,
+        bindings::from_matches,
+    ) {
+        Ok(parsed) => parsed,
+        Err(ParseError::Io(error)) => return Err(error),
+        Err(ParseError::Usage(message)) => {
+            eprintln!("{message}");
+            return Ok(2);
+        }
+        Err(ParseError::Clap(error)) => return super::print_clap_error(&error),
     };
-
-    match subcommand {
-        "install" => plugin_install(&args[1..]),
-        "uninstall" => plugin_uninstall(&args[1..]),
-        "link" => plugin_link(&args[1..]),
-        "list" => plugin_list(&args[1..]),
-        "config-dir" => plugin_config_dir_command(&args[1..]),
-        "unlink" => plugin_unlink(&args[1..]),
-        "enable" => plugin_set_enabled(&args[1..], true),
-        "disable" => plugin_set_enabled(&args[1..], false),
-        "action" => run_plugin_action_command(&args[1..]),
-        "log" | "logs" => plugin_log_list(&args[1..]),
-        "pane" => run_plugin_pane_command(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_help();
-            Ok(2)
-        }
+    match method {
+        Method::PluginLink(params) => plugin_link(params),
+        Method::PluginList(params) => plugin_list(params, json),
+        method => print_plugin_response(method),
     }
 }
 
-fn plugin_link(args: &[String]) -> std::io::Result<i32> {
-    let Some(path) = args.first() else {
-        eprintln!("usage: herdr plugin link <path> [--disabled]");
-        return Ok(2);
-    };
-    let path = normalize_plugin_path_arg(path)?;
-    let mut enabled = true;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--disabled" => {
-                enabled = false;
-                index += 1;
-            }
-            "--enabled" => {
-                enabled = true;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    let params = PluginLinkParams {
-        path,
-        enabled,
-        source: None,
-    };
+fn plugin_link(params: PluginLinkParams) -> std::io::Result<i32> {
     let response = match super::send_request(&Request {
         id: "cli:plugin".into(),
         method: Method::PluginLink(params.clone()),
@@ -102,29 +76,7 @@ fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     Ok(0)
 }
 
-fn plugin_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut json = false;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--json" => {
-                json = true;
-                index += 1;
-            }
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    let params = PluginListParams { plugin_id };
+fn plugin_list(params: PluginListParams, json: bool) -> std::io::Result<i32> {
     let response = match super::send_request(&Request {
         id: "cli:plugin".into(),
         method: Method::PluginList(params.clone()),
@@ -137,20 +89,6 @@ fn plugin_list(args: &[String]) -> std::io::Result<i32> {
         return super::print_response(&response);
     }
     print_plugin_list_human(&response)
-}
-
-fn plugin_unlink(args: &[String]) -> std::io::Result<i32> {
-    let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin unlink <plugin_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginUnlink(PluginUnlinkParams {
-        plugin_id: plugin_id.clone(),
-    }))
 }
 
 #[derive(Debug)]
@@ -211,74 +149,241 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
         return Ok(2);
     }
 
-    let temp_root = create_plugin_temp_dir("install")?;
+    match install_github_plugin(source, requested_ref, yes, true, None) {
+        Ok(code) => Ok(code),
+        Err(err) => {
+            eprintln!("{err}");
+            Ok(1)
+        }
+    }
+}
+
+fn plugin_update(args: &[String]) -> std::io::Result<i32> {
+    let mut targets = Vec::new();
+    let mut yes = false;
+    for arg in args {
+        match arg.as_str() {
+            "--yes" | "-y" => yes = true,
+            other if other.starts_with('-') => {
+                eprintln!("unknown option: {other}");
+                return Ok(2);
+            }
+            _ => targets.push(arg.as_str()),
+        }
+    }
+
+    let installed = match live_installed_plugins() {
+        Ok(plugins) => plugins,
+        Err(err) if is_connection_error(&err) => crate::persist::plugin_registry::try_load()?,
+        Err(err) => return Err(err),
+    };
+    let plugins = if targets.is_empty() {
+        installed
+            .into_iter()
+            .filter(|plugin| plugin.source.kind == PluginSourceKind::Github)
+            .collect::<Vec<_>>()
+    } else {
+        let mut plugins: Vec<InstalledPluginInfo> = Vec::new();
+        for target in targets {
+            let plugin = if target.contains('/') {
+                let source = match GithubPluginSource::parse(target) {
+                    Ok(source) => source,
+                    Err(err) => {
+                        eprintln!("{err}");
+                        return Ok(2);
+                    }
+                };
+                installed
+                    .iter()
+                    .find(|plugin| plugin_matches_github_source(plugin, &source))
+            } else {
+                installed.iter().find(|plugin| plugin.plugin_id == target)
+            };
+            let Some(plugin) = plugin else {
+                eprintln!("plugin not installed: {target}");
+                return Ok(1);
+            };
+            if plugin.source.kind != PluginSourceKind::Github {
+                eprintln!("plugin is locally linked and cannot be updated: {target}");
+                return Ok(1);
+            }
+            if !plugins
+                .iter()
+                .any(|selected| selected.plugin_id == plugin.plugin_id)
+            {
+                plugins.push(plugin.clone());
+            }
+        }
+        plugins
+    };
+
+    if plugins.is_empty() {
+        println!("No GitHub-managed plugins installed.");
+        return Ok(0);
+    }
+    if !yes && !io::stdin().is_terminal() {
+        eprintln!("plugin update requires --yes when stdin is not interactive");
+        return Ok(2);
+    }
+
+    let mut exit_code = 0;
+    for plugin in plugins {
+        let plugin_id = plugin.plugin_id.clone();
+        let source = match GithubPluginSource::from_installed(&plugin) {
+            Ok(source) => source,
+            Err(err) => {
+                eprintln!("error updating {plugin_id}: {err}");
+                exit_code = 1;
+                continue;
+            }
+        };
+        match install_github_plugin(
+            source,
+            plugin.source.requested_ref.clone(),
+            yes,
+            plugin.enabled,
+            Some(&plugin),
+        ) {
+            Ok(code) => exit_code = exit_code.max(code),
+            Err(err) => {
+                eprintln!("error updating {plugin_id}: {err}");
+                exit_code = 1;
+            }
+        }
+    }
+    Ok(exit_code)
+}
+
+fn install_github_plugin(
+    source: GithubPluginSource,
+    requested_ref: Option<String>,
+    yes: bool,
+    enabled: bool,
+    updating_plugin: Option<&InstalledPluginInfo>,
+) -> std::io::Result<i32> {
+    let updating = updating_plugin.is_some();
+    let temp_root = create_plugin_temp_dir(if updating { "update" } else { "install" })?;
     let checkout = temp_root.join("checkout");
     let install_result = (|| {
         git_checkout(&source, requested_ref.as_deref(), &checkout)?;
         let resolved_commit = git_output(&checkout, ["rev-parse", "HEAD"])?;
         let manifest_root = source.manifest_root(&checkout);
-        let preview_plugin = load_cli_plugin_manifest(&manifest_root, true)?;
+        let preview_plugin = load_cli_plugin_manifest(&manifest_root, enabled)?;
+        if let Some(plugin) = updating_plugin {
+            if preview_plugin.plugin_id != plugin.plugin_id {
+                return Err(io::Error::other(format!(
+                    "update source now contains plugin {}, expected {}",
+                    preview_plugin.plugin_id, plugin.plugin_id
+                )));
+            }
+        }
+        let _checkout_lock = lock_managed_checkout(&preview_plugin.plugin_id)?;
         let existing = installed_plugin_info(&preview_plugin.plugin_id)?;
+        if let Some(expected) = updating_plugin {
+            ensure_update_target_unchanged(expected, existing.as_ref())?;
+        }
         ensure_replacement_allowed(&preview_plugin, existing.as_ref())?;
+        if updating
+            && existing
+                .as_ref()
+                .and_then(|plugin| plugin.source.resolved_commit.as_deref())
+                == Some(resolved_commit.as_str())
+        {
+            println!("{} is already up to date.", preview_plugin.plugin_id);
+            return Ok(true);
+        }
 
         let mut source_info =
             source.to_source_info(requested_ref, resolved_commit, None, current_unix_ms());
-        print_install_preview(&preview_plugin, &source_info, existing.as_ref());
-        if !yes && !confirm("Install this plugin?")? {
-            eprintln!("plugin install cancelled");
-            return Ok(0);
+        print_install_preview(&preview_plugin, &source_info, existing.as_ref(), updating);
+        let prompt = if updating {
+            "Update this plugin?"
+        } else {
+            "Install this plugin?"
+        };
+        if !yes && !confirm(prompt)? {
+            eprintln!(
+                "plugin {} cancelled",
+                if updating { "update" } else { "install" }
+            );
+            return Ok(false);
         }
-        if let Err(err) = run_plugin_build_commands(&preview_plugin, &manifest_root) {
-            eprintln!("{err}");
-            return Ok(1);
-        }
-        let post_build_plugin = load_cli_plugin_manifest(&manifest_root, true)?;
-        ensure_manifest_unchanged_after_build(&preview_plugin, &post_build_plugin)?;
-
-        let final_checkout = crate::plugin_paths::managed_checkout_path(&preview_plugin.plugin_id);
-        let backup_checkout = temp_root.join("previous-checkout");
-        let mut backup_moved = false;
-        if final_checkout.exists() {
-            std::fs::rename(&final_checkout, &backup_checkout)
-                .map_err(|err| plugin_checkout_lifecycle_error("replace", &final_checkout, err))?;
-            backup_moved = true;
-        }
+        let installation =
+            crate::plugin_paths::create_managed_installation(&preview_plugin.plugin_id)?;
+        let installation_lease = crate::plugin_installations::create_lease(&installation)?;
+        let final_checkout = installation.join("checkout");
+        let mut activation_attempted = false;
         let install_attempt = (|| {
-            if let Some(parent) = final_checkout.parent() {
-                std::fs::create_dir_all(parent).map_err(InstallFailure::Rollback)?;
-            }
-            std::fs::rename(&checkout, &final_checkout)
-                .map_err(|err| plugin_checkout_lifecycle_error("install", &final_checkout, err))
-                .map_err(InstallFailure::Rollback)?;
-
-            source_info.managed_path = Some(final_checkout.display().to_string());
+            std::fs::rename(&checkout, &final_checkout)?;
             let final_manifest_root = source.manifest_root(&final_checkout);
-            let mut plugin = load_cli_plugin_manifest(&final_manifest_root, true)
-                .map_err(InstallFailure::Rollback)?;
-            plugin.source = source_info.clone();
-            register_installed_plugin(plugin.clone(), source_info.clone())?;
-            Ok::<InstalledPluginInfo, InstallFailure>(plugin)
+            let mut preview_plugin = preview_plugin.clone();
+            let relocated_plugin = load_cli_plugin_manifest(&final_manifest_root, enabled)?;
+            preview_plugin.manifest_path = relocated_plugin.manifest_path;
+            preview_plugin.plugin_root = relocated_plugin.plugin_root;
+            run_plugin_build_commands(&preview_plugin, &final_manifest_root).map_err(|err| {
+                io::Error::other(format!(
+                    "{err}\n\nPlugin was not {}.",
+                    if updating { "updated" } else { "installed" }
+                ))
+            })?;
+            let mut plugin = load_cli_plugin_manifest(&final_manifest_root, enabled)?;
+            ensure_manifest_unchanged_after_build(&preview_plugin, &plugin)?;
+            source_info.managed_path = Some(final_checkout.display().to_string());
+            plugin.source = source_info;
+            activation_attempted = true;
+            if let Some(expected) = updating_plugin {
+                persist_updated_plugin(&plugin, expected)?;
+            } else {
+                persist_plugin_offline(&plugin, true)?;
+            }
+            Ok::<InstalledPluginInfo, io::Error>(plugin)
         })();
         let plugin = match install_attempt {
             Ok(plugin) => plugin,
-            Err(InstallFailure::Rollback(err)) => {
-                let _ = std::fs::remove_dir_all(&final_checkout);
-                if backup_moved && backup_checkout.exists() {
-                    let _ = std::fs::rename(&backup_checkout, &final_checkout);
+            Err(err) => {
+                drop(installation_lease);
+                // A failed activation may have published the path. Never delete files
+                // that a server or a plugin process could already be using.
+                if activation_attempted {
+                    return Err(io::Error::other(format!(
+                        "{err}; plugin files retained at {}",
+                        final_checkout.display()
+                    )));
+                }
+                if let Err(cleanup_err) =
+                    crate::persist::plugin_registry::with_registry_lock(|| {
+                        std::fs::remove_dir_all(&installation)
+                    })
+                {
+                    return Err(io::Error::other(format!(
+                        "{err}; could not remove failed installation at {}: {cleanup_err}",
+                        installation.display()
+                    )));
                 }
                 return Err(err);
             }
-            Err(InstallFailure::KeepCheckout(err)) => return Err(err),
         };
-        println!("Installed {} from {}.", plugin.plugin_id, source.display());
+        println!(
+            "{} {} from {}.",
+            if updating { "Updated" } else { "Installed" },
+            plugin.plugin_id,
+            source.display()
+        );
         println!(
             "Config: {}",
             crate::plugin_paths::plugin_config_dir(&plugin.plugin_id).display()
         );
-        Ok(0)
+        Ok(true)
     })();
     let _ = std::fs::remove_dir_all(&temp_root);
-    install_result
+    install_result.map(|cleanup| {
+        if cleanup {
+            if let Err(err) = crate::plugin_installations::cleanup() {
+                eprintln!("Plugin cleanup deferred: {err}");
+            }
+        }
+        0
+    })
 }
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
@@ -309,6 +414,11 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
             (target.clone(), existing)
         }
     };
+    let _checkout_lock = existing
+        .as_ref()
+        .filter(|plugin| plugin.source.kind == PluginSourceKind::Github)
+        .map(|_| lock_managed_checkout(&plugin_id))
+        .transpose()?;
 
     match super::send_request(&Request {
         id: "cli:plugin".into(),
@@ -339,386 +449,8 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
         Err(err) => return Err(err),
     }
 
-    if let Some(plugin) = existing.as_ref() {
-        remove_managed_plugin_files(plugin)?;
-    }
     println!("Uninstalled {plugin_id}.");
     Ok(0)
-}
-
-fn plugin_set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
-    let Some(plugin_id) = args.first() else {
-        eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
-            if enabled { "enable" } else { "disable" }
-        );
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!(
-            "usage: herdr plugin {} <plugin_id>",
-            if enabled { "enable" } else { "disable" }
-        );
-        return Ok(2);
-    }
-    let params = PluginSetEnabledParams {
-        plugin_id: plugin_id.clone(),
-    };
-    if enabled {
-        print_plugin_response(Method::PluginEnable(params))
-    } else {
-        print_plugin_response(Method::PluginDisable(params))
-    }
-}
-
-fn plugin_log_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut limit = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "list" if index == 0 => index += 1,
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            "--limit" => {
-                let Some(raw) = required_value(args, &mut index, "--limit") else {
-                    return Ok(2);
-                };
-                let Ok(parsed) = raw.parse::<usize>() else {
-                    eprintln!("invalid --limit value: {raw}");
-                    return Ok(2);
-                };
-                limit = Some(parsed);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-    print_plugin_response(Method::PluginLogList(PluginLogListParams {
-        plugin_id,
-        limit,
-    }))
-}
-
-fn run_plugin_action_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_action_help();
-        return Ok(2);
-    };
-
-    match subcommand {
-        "list" => plugin_action_list(&args[1..]),
-        "invoke" => plugin_action_invoke(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_action_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_action_help();
-            Ok(2)
-        }
-    }
-}
-
-fn plugin_action_list(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    print_plugin_response(Method::PluginActionList(PluginActionListParams {
-        plugin_id,
-    }))
-}
-
-fn plugin_action_invoke(args: &[String]) -> std::io::Result<i32> {
-    let Some(action_id) = args.first() else {
-        eprintln!("usage: herdr plugin action invoke <action_id> [--plugin ID]");
-        return Ok(2);
-    };
-    let mut plugin_id = None;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    print_plugin_response(Method::PluginActionInvoke(PluginActionInvokeParams {
-        action_id: action_id.clone(),
-        plugin_id,
-        context: Some(PluginInvocationContext {
-            workspace_id: None,
-            workspace_label: None,
-            workspace_cwd: None,
-            worktree: None,
-            tab_id: None,
-            tab_label: None,
-            focused_pane_id: None,
-            focused_pane_cwd: None,
-            focused_pane_agent: None,
-            focused_pane_status: None,
-            selected_text: None,
-            invocation_source: Some("cli".into()),
-            correlation_id: None,
-            clicked_url: None,
-            link_handler_id: None,
-        }),
-    }))
-}
-
-fn run_plugin_pane_command(args: &[String]) -> std::io::Result<i32> {
-    let Some(subcommand) = args.first().map(|arg| arg.as_str()) else {
-        print_plugin_pane_help();
-        return Ok(2);
-    };
-
-    match subcommand {
-        "open" => plugin_pane_open(&args[1..]),
-        "focus" => plugin_pane_focus(&args[1..]),
-        "close" => plugin_pane_close(&args[1..]),
-        "help" | "--help" | "-h" => {
-            print_plugin_pane_help();
-            Ok(0)
-        }
-        _ => {
-            print_plugin_pane_help();
-            Ok(2)
-        }
-    }
-}
-
-fn plugin_pane_open(args: &[String]) -> std::io::Result<i32> {
-    let mut plugin_id = None;
-    let mut entrypoint = None;
-    let mut placement = None;
-    let mut width = None;
-    let mut height = None;
-    let mut workspace_id = None;
-    let mut target_pane_id = None;
-    let mut direction = None;
-    let mut cwd = None;
-    let mut focus = true;
-    let mut env = HashMap::new();
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--plugin" => {
-                let Some(value) = required_value(args, &mut index, "--plugin") else {
-                    return Ok(2);
-                };
-                plugin_id = Some(value);
-            }
-            "--entrypoint" => {
-                let Some(value) = required_value(args, &mut index, "--entrypoint") else {
-                    return Ok(2);
-                };
-                entrypoint = Some(value);
-            }
-            "--placement" => {
-                let Some(value) = required_value(args, &mut index, "--placement") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_pane_placement(&value) else {
-                    return Ok(2);
-                };
-                placement = Some(parsed);
-            }
-            "--width" => {
-                let Some(value) = required_value(args, &mut index, "--width") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_popup_dimension(&value, "--width") else {
-                    return Ok(2);
-                };
-                width = Some(parsed);
-            }
-            "--height" => {
-                let Some(value) = required_value(args, &mut index, "--height") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_popup_dimension(&value, "--height") else {
-                    return Ok(2);
-                };
-                height = Some(parsed);
-            }
-            "--workspace" => {
-                let Some(value) = required_value(args, &mut index, "--workspace") else {
-                    return Ok(2);
-                };
-                workspace_id = Some(value);
-            }
-            "--target-pane" => {
-                let Some(value) = required_value(args, &mut index, "--target-pane") else {
-                    return Ok(2);
-                };
-                target_pane_id = Some(value);
-            }
-            "--direction" => {
-                let Some(value) = required_value(args, &mut index, "--direction") else {
-                    return Ok(2);
-                };
-                let Some(parsed) = parse_split_direction(&value) else {
-                    return Ok(2);
-                };
-                direction = Some(parsed);
-            }
-            "--cwd" => {
-                let Some(value) = required_value(args, &mut index, "--cwd") else {
-                    return Ok(2);
-                };
-                cwd = Some(value);
-            }
-            "--env" => {
-                let Some(value) = required_value(args, &mut index, "--env") else {
-                    return Ok(2);
-                };
-                let (key, value) = match super::parse_env_assignment(&value) {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        eprintln!("{err}");
-                        return Ok(2);
-                    }
-                };
-                env.insert(key, value);
-            }
-            "--focus" => {
-                focus = true;
-                index += 1;
-            }
-            "--no-focus" => {
-                focus = false;
-                index += 1;
-            }
-            other => {
-                eprintln!("unknown option: {other}");
-                return Ok(2);
-            }
-        }
-    }
-
-    let Some(plugin_id) = plugin_id else {
-        eprintln!("missing required --plugin");
-        return Ok(2);
-    };
-    let Some(entrypoint) = entrypoint else {
-        eprintln!("missing required --entrypoint");
-        return Ok(2);
-    };
-
-    print_plugin_response(Method::PluginPaneOpen(PluginPaneOpenParams {
-        plugin_id,
-        entrypoint,
-        placement,
-        width,
-        height,
-        workspace_id,
-        target_pane_id,
-        direction,
-        cwd,
-        focus,
-        env,
-    }))
-}
-
-fn parse_popup_dimension(value: &str, flag: &str) -> Option<PopupSize> {
-    match PopupSize::parse_cli(value) {
-        Ok(value) => Some(value),
-        Err(message) => {
-            eprintln!("{flag} {message}");
-            None
-        }
-    }
-}
-
-fn plugin_pane_focus(args: &[String]) -> std::io::Result<i32> {
-    let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane focus <pane_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginPaneFocus(PluginPaneFocusParams {
-        pane_id: super::normalize_pane_id(pane_id),
-    }))
-}
-
-fn plugin_pane_close(args: &[String]) -> std::io::Result<i32> {
-    let Some(pane_id) = args.first() else {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
-        return Ok(2);
-    };
-    if args.len() != 1 {
-        eprintln!("usage: herdr plugin pane close <pane_id>");
-        return Ok(2);
-    }
-    print_plugin_response(Method::PluginPaneClose(PluginPaneCloseParams {
-        pane_id: super::normalize_pane_id(pane_id),
-    }))
-}
-
-fn required_value(args: &[String], index: &mut usize, flag: &str) -> Option<String> {
-    let Some(value) = args.get(*index + 1) else {
-        eprintln!("missing value for {flag}");
-        return None;
-    };
-    *index += 2;
-    Some(value.clone())
-}
-
-fn parse_pane_placement(value: &str) -> Option<PluginPanePlacement> {
-    match value {
-        "overlay" => Some(PluginPanePlacement::Overlay),
-        "popup" => Some(PluginPanePlacement::Popup),
-        "split" => Some(PluginPanePlacement::Split),
-        "tab" => Some(PluginPanePlacement::Tab),
-        "zoomed" | "fullscreen" => Some(PluginPanePlacement::Zoomed),
-        _ => {
-            eprintln!("invalid pane placement: {value}");
-            None
-        }
-    }
-}
-
-fn parse_split_direction(value: &str) -> Option<SplitDirection> {
-    match value {
-        "right" => Some(SplitDirection::Right),
-        "down" => Some(SplitDirection::Down),
-        _ => {
-            eprintln!("invalid split direction: {value}");
-            None
-        }
-    }
 }
 
 fn normalize_plugin_path_arg(value: &str) -> std::io::Result<String> {
@@ -784,6 +516,23 @@ impl GithubPluginSource {
         format!("https://github.com/{}/{}.git", self.owner, self.repo)
     }
 
+    fn from_installed(plugin: &InstalledPluginInfo) -> std::io::Result<Self> {
+        let owner = plugin
+            .source
+            .owner
+            .clone()
+            .ok_or_else(|| io::Error::other("installed GitHub plugin has no source owner"))?;
+        let repo =
+            plugin.source.repo.clone().ok_or_else(|| {
+                io::Error::other("installed GitHub plugin has no source repository")
+            })?;
+        Ok(Self {
+            owner,
+            repo,
+            subdir: plugin.source.subdir.clone(),
+        })
+    }
+
     fn display(&self) -> String {
         match &self.subdir {
             Some(subdir) => format!("{}/{}/{}", self.owner, self.repo, subdir),
@@ -832,6 +581,23 @@ fn ensure_replacement_allowed(
         )));
     }
     Ok(())
+}
+
+fn ensure_update_target_unchanged(
+    expected: &InstalledPluginInfo,
+    current: Option<&InstalledPluginInfo>,
+) -> std::io::Result<()> {
+    if current.is_some_and(|current| same_update_target(expected, current)) {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "plugin {} changed while its update was in progress; retry the update",
+        expected.plugin_id
+    )))
+}
+
+fn same_update_target(expected: &InstalledPluginInfo, current: &InstalledPluginInfo) -> bool {
+    current.manifest_path == expected.manifest_path && current.source == expected.source
 }
 
 fn validate_github_segment(label: &str, value: &str) -> Result<(), String> {
@@ -932,106 +698,54 @@ fn load_cli_plugin_manifest(path: &Path, enabled: bool) -> std::io::Result<Insta
         .map_err(|(_, message)| std::io::Error::other(message))
 }
 
-fn persist_plugin_offline(plugin: &InstalledPluginInfo) -> std::io::Result<()> {
+fn persist_plugin_offline(
+    plugin: &InstalledPluginInfo,
+    preserve_enabled: bool,
+) -> std::io::Result<()> {
     crate::plugin_paths::ensure_plugin_user_dirs(&plugin.plugin_id)?;
     crate::persist::plugin_registry::update(|plugins| {
+        let mut plugin = plugin.clone();
+        if preserve_enabled {
+            if let Some(existing) = plugins
+                .iter()
+                .find(|entry| entry.plugin_id == plugin.plugin_id)
+            {
+                plugin.enabled = existing.enabled;
+            }
+        }
         plugins.retain(|entry| entry.plugin_id != plugin.plugin_id);
-        plugins.push(plugin.clone());
+        plugins.push(plugin);
     })?;
     Ok(())
 }
 
-fn register_installed_plugin(
-    plugin: InstalledPluginInfo,
-    source: PluginSourceInfo,
-) -> Result<(), InstallFailure> {
-    let request = Request {
-        id: "cli:plugin".into(),
-        method: Method::PluginLink(PluginLinkParams {
-            path: plugin.manifest_path.clone(),
-            enabled: plugin.enabled,
-            source: Some(source.clone()),
-        }),
-    };
-    match super::send_request(&request) {
-        Ok(response) => {
-            if response.get("error").is_some() {
-                return Err(InstallFailure::Rollback(std::io::Error::other(
-                    serde_json::to_string(&response).unwrap(),
-                )));
-            }
-            if let Err(err) =
-                verify_plugin_link_source_response(response, &plugin.plugin_id, &source)
-            {
-                let unlink = super::send_request(&Request {
-                    id: "cli:plugin".into(),
-                    method: Method::PluginUnlink(PluginUnlinkParams {
-                        plugin_id: plugin.plugin_id.clone(),
-                    }),
-                });
-                match unlink {
-                    Ok(response) if response.get("error").is_none() => {
-                        return Err(InstallFailure::Rollback(err));
-                    }
-                    Ok(response) => {
-                        return Err(InstallFailure::KeepCheckout(std::io::Error::other(
-                            format!(
-                                "{err}; failed to undo incompatible plugin registration: {}",
-                                serde_json::to_string(&response).unwrap()
-                            ),
-                        )));
-                    }
-                    Err(unlink_err) if super::protocol_mismatch_was_reported(&unlink_err) => {
-                        return Err(InstallFailure::KeepCheckout(unlink_err));
-                    }
-                    Err(unlink_err) => {
-                        return Err(InstallFailure::KeepCheckout(std::io::Error::other(
-                            format!(
-                                "{err}; failed to undo incompatible plugin registration: {unlink_err}"
-                            ),
-                        )));
-                    }
-                }
-            }
-            Ok(())
-        }
-        Err(err) if is_connection_error(&err) => {
-            persist_plugin_offline(&plugin).map_err(InstallFailure::Rollback)
-        }
-        Err(err) => Err(InstallFailure::Rollback(err)),
-    }
-}
-
-#[derive(Debug)]
-enum InstallFailure {
-    Rollback(std::io::Error),
-    KeepCheckout(std::io::Error),
-}
-
-fn verify_plugin_link_source_response(
-    response: serde_json::Value,
-    plugin_id: &str,
-    expected: &PluginSourceInfo,
+fn persist_updated_plugin(
+    plugin: &InstalledPluginInfo,
+    expected: &InstalledPluginInfo,
 ) -> std::io::Result<()> {
-    let parsed: SuccessResponse =
-        serde_json::from_value(response).map_err(std::io::Error::other)?;
-    let ResponseResult::PluginLinked { plugin } = parsed.result else {
-        return Err(std::io::Error::other("expected plugin_linked response"));
-    };
-    if plugin.plugin_id != plugin_id
-        || plugin.source.kind != PluginSourceKind::Github
-        || plugin.source.owner != expected.owner
-        || plugin.source.repo != expected.repo
-        || plugin.source.subdir != expected.subdir
-        || plugin.source.requested_ref != expected.requested_ref
-        || plugin.source.resolved_commit != expected.resolved_commit
-        || plugin.source.managed_path != expected.managed_path
-    {
-        return Err(std::io::Error::other(
-            "running Herdr server did not persist GitHub plugin source metadata",
-        ));
+    let (updated, _) = crate::persist::plugin_registry::update(|plugins| {
+        let Some(current) = plugins
+            .iter_mut()
+            .find(|entry| entry.plugin_id == expected.plugin_id)
+        else {
+            return false;
+        };
+        if !same_update_target(expected, current) {
+            return false;
+        }
+        let enabled = current.enabled;
+        *current = plugin.clone();
+        current.enabled = enabled;
+        true
+    })?;
+    if updated {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "plugin {} changed while its update was in progress; retry the update",
+            expected.plugin_id
+        )))
     }
-    Ok(())
 }
 
 fn installed_plugin_info(plugin_id: &str) -> std::io::Result<Option<InstalledPluginInfo>> {
@@ -1121,14 +835,22 @@ fn plugin_by_github_source(
 
 fn plugin_matches_github_source(plugin: &InstalledPluginInfo, source: &GithubPluginSource) -> bool {
     plugin.source.kind == PluginSourceKind::Github
-        && plugin.source.owner.as_deref() == Some(source.owner.as_str())
-        && plugin.source.repo.as_deref() == Some(source.repo.as_str())
+        && plugin
+            .source
+            .owner
+            .as_deref()
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(&source.owner))
+        && plugin
+            .source
+            .repo
+            .as_deref()
+            .is_some_and(|repo| repo.eq_ignore_ascii_case(&source.repo))
         && plugin.source.subdir.as_deref() == source.subdir.as_deref()
 }
 
 fn offline_plugin_link_response(params: &PluginLinkParams) -> std::io::Result<serde_json::Value> {
     let plugin = load_cli_plugin_manifest(Path::new(&params.path), params.enabled)?;
-    persist_plugin_offline(&plugin)?;
+    persist_plugin_offline(&plugin, false)?;
     serde_json::to_value(SuccessResponse {
         id: "cli:plugin".into(),
         result: ResponseResult::PluginLinked { plugin },
@@ -1233,8 +955,12 @@ fn print_install_preview(
     plugin: &InstalledPluginInfo,
     source: &PluginSourceInfo,
     existing: Option<&InstalledPluginInfo>,
+    updating: bool,
 ) {
-    eprintln!("Plugin install preview:");
+    eprintln!(
+        "Plugin {} preview:",
+        if updating { "update" } else { "install" }
+    );
     eprintln!("  id: {}", plugin.plugin_id);
     eprintln!("  name: {}", plugin.name);
     eprintln!("  version: {}", plugin.version);
@@ -1467,8 +1193,7 @@ impl fmt::Display for PluginBuildFailure {
                 write_output_section(f, "stdout", stdout)?;
             }
         }
-        writeln!(f)?;
-        write!(f, "Plugin was not installed.")
+        Ok(())
     }
 }
 
@@ -1595,49 +1320,19 @@ fn create_plugin_temp_dir(label: &str) -> std::io::Result<PathBuf> {
     Ok(path)
 }
 
-fn remove_managed_plugin_files(plugin: &InstalledPluginInfo) -> std::io::Result<()> {
-    if plugin.source.kind != PluginSourceKind::Github {
-        return Ok(());
+fn lock_managed_checkout(plugin_id: &str) -> std::io::Result<std::fs::File> {
+    let lock_path = crate::plugin_paths::managed_checkout_lock_path(plugin_id);
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)?;
     }
-    let Some(path) = plugin.source.managed_path.as_deref() else {
-        return Ok(());
-    };
-    let path = PathBuf::from(path);
-    if !path.exists() {
-        return Ok(());
-    }
-    if !is_expected_managed_path(plugin, &path) {
-        return Err(std::io::Error::other(format!(
-            "refusing to delete unmanaged plugin path: {}",
-            path.display()
-        )));
-    }
-    std::fs::remove_dir_all(&path)
-        .map_err(|err| plugin_checkout_lifecycle_error("remove", &path, err))
-}
-
-fn plugin_checkout_lifecycle_error(operation: &str, path: &Path, err: io::Error) -> io::Error {
-    if cfg!(windows) && err.kind() == io::ErrorKind::PermissionDenied {
-        return io::Error::new(
-            err.kind(),
-            format!(
-                "failed to {operation} managed plugin checkout at {}; close any Herdr plugin panes or plugin commands using that checkout, then retry: {err}",
-                path.display()
-            ),
-        );
-    }
-    err
-}
-
-fn is_expected_managed_path(plugin: &InstalledPluginInfo, path: &Path) -> bool {
-    let Ok(path) = path.canonicalize() else {
-        return false;
-    };
-    let expected = crate::plugin_paths::managed_checkout_path(&plugin.plugin_id);
-    let Ok(expected) = expected.canonicalize() else {
-        return false;
-    };
-    path == expected
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
+    lock.lock()?;
+    Ok(lock)
 }
 
 fn current_unix_ms() -> u64 {
@@ -1671,34 +1366,6 @@ fn print_plugin_response(method: Method) -> std::io::Result<i32> {
         id: "cli:plugin".into(),
         method,
     })?)
-}
-
-fn print_plugin_help() {
-    eprintln!("herdr plugin commands:");
-    eprintln!("  herdr plugin install <owner>/<repo>[/subdir...] [--ref REF] [--yes]");
-    eprintln!("  herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
-    eprintln!("  herdr plugin link <path> [--disabled]");
-    eprintln!("  herdr plugin list [--plugin ID] [--json]");
-    eprintln!("  herdr plugin config-dir <plugin_id>");
-    eprintln!("  herdr plugin unlink <plugin_id>");
-    eprintln!("  herdr plugin enable <plugin_id>");
-    eprintln!("  herdr plugin disable <plugin_id>");
-    eprintln!("  herdr plugin action <list|invoke>");
-    eprintln!("  herdr plugin log list [--plugin ID] [--limit N]");
-    eprintln!("  herdr plugin pane <open|focus|close>");
-}
-
-fn print_plugin_action_help() {
-    eprintln!("herdr plugin action commands:");
-    eprintln!("  herdr plugin action list [--plugin ID]");
-    eprintln!("  herdr plugin action invoke <action_id> [--plugin ID]");
-}
-
-fn print_plugin_pane_help() {
-    eprintln!("herdr plugin pane commands:");
-    eprintln!("  herdr plugin pane open --plugin ID --entrypoint ID [--placement overlay|popup|split|tab|zoomed] [--width SIZE] [--height SIZE] [--workspace ID] [--target-pane PANE] [--direction right|down] [--cwd PATH] [--env KEY=VALUE] [--focus|--no-focus]");
-    eprintln!("  herdr plugin pane focus <pane_id>");
-    eprintln!("  herdr plugin pane close <pane_id>");
 }
 
 #[cfg(test)]
@@ -1896,6 +1563,22 @@ mod tests {
     }
 
     #[test]
+    fn github_source_lookup_ignores_owner_and_repo_case() {
+        let source = GithubPluginSource::parse("OGULCANCELIK/HERDR-PLUGIN-EXAMPLES").unwrap();
+        let plugins = vec![github_plugin(
+            "examples.root",
+            "ogulcancelik",
+            "herdr-plugin-examples",
+            None,
+        )];
+
+        assert_eq!(
+            plugin_by_github_source(plugins, &source).unwrap().plugin_id,
+            "examples.root"
+        );
+    }
+
+    #[test]
     fn github_source_lookup_ignores_local_plugins() {
         let source = GithubPluginSource::parse("ogulcancelik/herdr-plugin-examples").unwrap();
         let mut plugin = github_plugin(
@@ -1907,6 +1590,24 @@ mod tests {
         plugin.source = PluginSourceInfo::default();
 
         assert!(plugin_by_github_source([plugin], &source).is_none());
+    }
+
+    #[test]
+    fn update_target_revalidation_allows_state_changes_but_rejects_install_changes() {
+        let expected = github_plugin("examples.root", "owner", "repo", None);
+        let mut current = expected.clone();
+        current.enabled = false;
+        assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_ok());
+
+        current.source.resolved_commit = Some("newer".to_string());
+        assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
+        current = expected.clone();
+        current.source = PluginSourceInfo::default();
+        assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
+        current = expected.clone();
+        current.manifest_path.push_str(".reinstalled");
+        assert!(ensure_update_target_unchanged(&expected, Some(&current)).is_err());
+        assert!(ensure_update_target_unchanged(&expected, None).is_err());
     }
 
     #[test]

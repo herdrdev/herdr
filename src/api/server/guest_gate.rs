@@ -488,6 +488,7 @@ pub(super) fn serve_request(
                 None,
                 None,
                 None,
+                None,
             );
             write_text_line_allow_disconnect(
                 &mut stream,
