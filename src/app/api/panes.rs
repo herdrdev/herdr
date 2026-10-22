@@ -4,12 +4,12 @@ use crate::api::schema::{
     EventData, EventEnvelope, EventKind, PaneClearAgentAuthorityParams, PaneCopyMotion,
     PaneCopyMotionParams, PaneCopySearchDirection, PaneCopySearchParams, PaneCurrentParams,
     PaneDirection, PaneEdgesParams, PaneEdgesResult, PaneFocusDirectionParams,
-    PaneFocusDirectionReason, PaneFocusDirectionResult, PaneInfo, PaneInputSetParams,
-    PaneInputStreamParams, PaneLayoutPane, PaneLayoutParams, PaneLayoutRect, PaneLayoutSnapshot,
-    PaneLayoutSplit, PaneListParams, PaneMoveDestination, PaneMoveParams, PaneMoveReason,
-    PaneMoveResult, PaneNeighborParams, PaneNeighborResult, PaneProcessInfo, PaneProcessInfoParams,
-    PaneProcessInfoProcess, PaneReadParams, PaneReadResult, PaneReleaseAgentParams,
-    PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
+    PaneFocusDirectionReason, PaneFocusDirectionResult, PaneHistoryParams, PaneInfo,
+    PaneInputSetParams, PaneInputStreamParams, PaneLayoutPane, PaneLayoutParams, PaneLayoutRect,
+    PaneLayoutSnapshot, PaneLayoutSplit, PaneListParams, PaneMoveDestination, PaneMoveParams,
+    PaneMoveReason, PaneMoveResult, PaneNeighborParams, PaneNeighborResult, PaneProcessInfo,
+    PaneProcessInfoParams, PaneProcessInfoProcess, PaneReadParams, PaneReadResult,
+    PaneReleaseAgentParams, PaneRenameParams, PaneReportAgentParams, PaneReportAgentSessionParams,
     PaneReportMetadataParams, PaneResizeParams, PaneResizeReason, PaneResizeResult,
     PaneScrollParams, PaneSelectionReadParams, PaneSendInputParams, PaneSendKeysParams,
     PaneSendTextParams, PaneSetPtySizeParams, PaneSplitParams, PaneStreamParams, PaneSwapParams,
@@ -1874,6 +1874,39 @@ impl App {
                     revision: 0,
                     truncated: snapshot.truncated,
                 },
+            },
+        )
+    }
+
+    pub(super) fn handle_pane_history(&mut self, id: String, params: PaneHistoryParams) -> String {
+        use base64::Engine;
+
+        let Some((ws_idx, pane_id)) = self.parse_pane_id(&params.pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Some((pane, _)) = self.lookup_runtime(ws_idx, pane_id) else {
+            return pane_not_found(id, &params.pane_id);
+        };
+        let Ok(page) = pane.history_page(&params.cursor, params.clamped_lines()) else {
+            return encode_error(
+                id,
+                "history_cursor_expired",
+                format!(
+                    "history cursor for pane {} is no longer valid; resync with a fresh pane.stream keyframe",
+                    params.pane_id
+                ),
+            );
+        };
+        encode_success(
+            id,
+            ResponseResult::PaneHistory {
+                pane_id: public_pane_id,
+                history_b64: base64::engine::general_purpose::STANDARD.encode(page.ansi),
+                rows: page.rows,
+                cursor: page.cursor,
             },
         )
     }

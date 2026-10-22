@@ -21,8 +21,8 @@ use crate::api::schema::{
     AgentInfo, ErrorResponse, GramGetFileChunkParams, GramGetFileParams, GramPostParams,
     GramRelayCall, GramRelayParams, GramRelayPostParams, GramUploadChunkParams,
     GuestAgentProbeParams, GuestAuditEvent, GuestAuditFile, GuestGrantInfo, Method,
-    PanePtyLeaseReleaseParams, PaneReadParams, PaneSetPtySizeParams, ReadIntent, ReadSource,
-    Request, ResponseResult, SuccessResponse,
+    PaneHistoryParams, PanePtyLeaseReleaseParams, PaneReadParams, PaneSetPtySizeParams, ReadIntent,
+    ReadSource, Request, ResponseResult, SuccessResponse,
 };
 use crate::api::transport::ApiStream;
 use crate::guest::GuestPrincipal;
@@ -413,6 +413,27 @@ fn project_read(result: ResponseResult) -> Option<serde_json::Value> {
     }))
 }
 
+/// A history page is the granted pane's own scrollback, like `pane.read`'s
+/// text; every field is the wire shape the app decodes.
+fn project_history(result: ResponseResult) -> Option<serde_json::Value> {
+    let ResponseResult::PaneHistory {
+        pane_id,
+        history_b64,
+        rows,
+        cursor,
+    } = result
+    else {
+        return None;
+    };
+    Some(serde_json::json!({
+        "type": "pane_history",
+        "pane_id": pane_id,
+        "history_b64": history_b64,
+        "rows": rows,
+        "cursor": cursor,
+    }))
+}
+
 /// The size in effect, the same fields the owner's `pane.set_pty_size` returns.
 fn project_pty_size(result: ResponseResult) -> Option<serde_json::Value> {
     let ResponseResult::PanePtySize {
@@ -539,6 +560,29 @@ pub(super) fn serve_request(
             write_text_line_allow_disconnect(
                 &mut stream,
                 &guest_reply(&id, &response, project_read),
+            )
+        }
+        Method::PaneHistory(params) => {
+            let state = grant_state(guest, api_tx);
+            if !names_grant(&params.pane_id, guest, state.pane_id()) {
+                return forbidden(&mut stream);
+            }
+            let GrantState::Live(agent) = state else {
+                return paused(&mut stream);
+            };
+            // Read-only scrollback of the grant, like `agent.read`: the cursor
+            // only resolves against the granted pane it was issued for.
+            let request = Request {
+                id: id.clone(),
+                method: Method::PaneHistory(PaneHistoryParams {
+                    pane_id: agent.pane_id,
+                    ..params
+                }),
+            };
+            let response = dispatch_to_app_with_timeout(request, api_tx, None);
+            write_text_line_allow_disconnect(
+                &mut stream,
+                &guest_reply(&id, &response, project_history),
             )
         }
         Method::PaneSetPtySize(params) => {
@@ -2154,6 +2198,58 @@ mod tests {
             code(&harness.call(&guest, read("llm-opt", 80))),
             "guest_revoked"
         );
+    }
+
+    #[test]
+    fn a_guest_pages_only_the_granted_scrollback() {
+        use base64::Engine as _;
+
+        let harness = start("history");
+        let guest = harness.admit();
+        harness.print_lines(0, "history", 60);
+        let (mut reader, _handle) = harness.open(
+            &guest,
+            json!({"id": "s", "method": "pane.stream", "params": {"pane_id": "llm-opt", "viewer_id": "v", "scrollback_lines": 10}}),
+        );
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let seed: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(seed["frame"], "reset", "{seed}");
+        let cursor = seed["history_cursor"]
+            .as_str()
+            .unwrap_or_else(|| panic!("older rows exist above the keyframe: {seed}"))
+            .to_string();
+        let page = |target: &str| {
+            harness.call(
+                &guest,
+                json!({"id": "h", "method": "pane.history", "params": {"pane_id": target, "cursor": cursor}}),
+            )
+        };
+
+        let lines = page("llm-opt");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let result = &lines[0]["result"];
+        assert_eq!(
+            keys(result),
+            set(&["type", "pane_id", "history_b64", "rows", "cursor"])
+        );
+        assert_eq!(result["type"], "pane_history");
+        assert_eq!(result["pane_id"], harness.pane_ids[0].as_str());
+        assert_eq!(result["cursor"], Value::Null, "the page reached line 0");
+        let history = base64::engine::general_purpose::STANDARD
+            .decode(result["history_b64"].as_str().unwrap())
+            .unwrap();
+        let history = String::from_utf8(history).unwrap();
+        assert!(history.contains("history-0\r\n"), "{history:?}");
+
+        for target in [
+            harness.pane_ids[1].clone(),
+            format!("studio/{}", harness.pane_ids[0]),
+        ] {
+            assert_eq!(code(&page(&target)), "guest_forbidden", "{target}");
+        }
     }
 
     /// Open the granted stream and read past the ack and the reset seed, so

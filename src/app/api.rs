@@ -1775,6 +1775,7 @@ impl App {
             }
             Method::PaneRename(params) => return self.handle_pane_rename(request.id, params),
             Method::PaneRead(params) => return self.handle_pane_read(request.id, params),
+            Method::PaneHistory(params) => return self.handle_pane_history(request.id, params),
             Method::PaneStream(_) => {
                 return responses::encode_error(
                     request.id,

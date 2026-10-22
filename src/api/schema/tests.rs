@@ -597,6 +597,69 @@ fn pane_read_defaults_to_text_format() {
 }
 
 #[test]
+fn pane_history_request_parses_and_clamps_lines() {
+    let request: Request = serde_json::from_value(serde_json::json!({
+        "id": "req_1",
+        "method": "pane.history",
+        "params": { "pane_id": "p_1", "cursor": "tok", "lines": 200 }
+    }))
+    .unwrap();
+    let Method::PaneHistory(params) = &request.method else {
+        panic!("wrong method parsed");
+    };
+    assert_eq!(params.pane_id, "p_1");
+    assert_eq!(params.cursor, "tok");
+    assert_eq!(params.clamped_lines(), 200);
+    assert_eq!(
+        serde_json::to_value(&request).unwrap()["params"],
+        serde_json::json!({ "pane_id": "p_1", "cursor": "tok", "lines": 200 })
+    );
+
+    let params = |lines: Option<u32>| PaneHistoryParams {
+        pane_id: "p_1".into(),
+        cursor: "tok".into(),
+        lines,
+    };
+    let omitted: PaneHistoryParams =
+        serde_json::from_value(serde_json::json!({ "pane_id": "p_1", "cursor": "tok" })).unwrap();
+    assert_eq!(omitted, params(None));
+    assert_eq!(omitted.clamped_lines(), 500);
+    assert_eq!(params(Some(0)).clamped_lines(), 1);
+    assert_eq!(params(Some(50_000)).clamped_lines(), 1000);
+}
+
+#[test]
+fn pane_history_result_serializes_the_contract_shape() {
+    let page = |cursor: Option<&str>| SuccessResponse {
+        id: "req_1".into(),
+        result: ResponseResult::PaneHistory {
+            pane_id: "p_1".into(),
+            history_b64: "b2xk".into(),
+            rows: 1,
+            cursor: cursor.map(str::to_string),
+        },
+    };
+    assert_eq!(
+        serde_json::to_value(page(Some("tok"))).unwrap(),
+        serde_json::json!({
+            "id": "req_1",
+            "result": {
+                "type": "pane_history",
+                "pane_id": "p_1",
+                "history_b64": "b2xk",
+                "rows": 1,
+                "cursor": "tok"
+            }
+        })
+    );
+    // The start of history is an explicit null, not an omitted field.
+    assert_eq!(
+        serde_json::to_value(page(None)).unwrap()["result"]["cursor"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
 fn pane_current_request_round_trips() {
     let request = Request {
         id: "req_current".into(),
@@ -1124,6 +1187,7 @@ fn success_response_round_trips() {
                 ssh_agent_registration: false,
                 agent_forget: false,
                 api_bridge_multi: false,
+                pane_history: false,
             }),
         },
     };

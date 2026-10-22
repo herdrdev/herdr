@@ -15,6 +15,8 @@ use unicode_width::UnicodeWidthStr;
 use crate::layout::PaneId;
 use crate::protocol::CellData;
 
+mod history;
+pub(crate) use history::{HistoryCursorExpired, HistoryPage};
 #[cfg(test)]
 mod migration_tests;
 #[cfg(windows)]
@@ -230,6 +232,9 @@ pub(crate) struct GhosttyPaneCore {
     /// the read hot path is the zero-cost no-subscriber fast path, and the tap's
     /// offset advance is serialized with the screen mutation.
     output_ring: Option<Arc<super::output_ring::OutputRing>>,
+    /// `pane.history` cursors issued by keyframes and pages. Their tracked rows
+    /// move with this terminal's content, so they live under the same lock.
+    history_cursors: history::HistoryCursors,
 }
 
 pub(crate) struct PaneTerminal {
@@ -284,6 +289,14 @@ impl PaneTerminal {
         history_lines: usize,
     ) -> Option<super::output_ring::OutputSnapshot> {
         self.ghostty.output_snapshot(ring, history_lines)
+    }
+
+    pub(super) fn history_page(
+        &self,
+        cursor: &str,
+        lines: usize,
+    ) -> Result<HistoryPage, HistoryCursorExpired> {
+        self.ghostty.history_page(cursor, lines)
     }
 
     pub fn scroll_up(&self, lines: usize) {
@@ -1252,6 +1265,7 @@ impl GhosttyPaneTerminal {
                 cursor_settle_state: CursorPositionSettleState::default(),
                 windows_powershell_prompt_cwd_reporting: false,
                 output_ring: None,
+                history_cursors: history::HistoryCursors::default(),
             }),
             key_encoder: Mutex::new(key_encoder),
             pending_pty_responses,
@@ -1901,25 +1915,42 @@ impl GhosttyPaneTerminal {
     /// reflects. Rendered under the core lock and reading the ring offset in the
     /// same critical section, so the pair is a consistent, gap/overlap-free cut.
     /// With `history_lines > 0` the scrollback above that screen is captured in
-    /// the same critical section, so seed and history can never disagree.
+    /// the same critical section, so seed and history can never disagree, and
+    /// when older rows remain above it a `pane.history` cursor is issued for
+    /// its first row before any further output can move it.
     pub(super) fn output_snapshot(
         &self,
         ring: &super::output_ring::OutputRing,
         history_lines: usize,
     ) -> Option<super::output_ring::OutputSnapshot> {
-        let core = self.core.lock().ok()?;
-        let ansi = ghostty_visible_ansi(&core).ok()?;
-        let history = (history_lines > 0)
-            .then(|| ghostty_scrollback_ansi(&core.terminal, history_lines).unwrap_or_default());
+        let mut core = self.core.lock().ok()?;
+        let core = &mut *core;
+        let ansi = ghostty_visible_ansi(core).ok()?;
+        let (history, history_cursor) = if history_lines > 0 {
+            ghostty_keyframe_history(core, history_lines)
+        } else {
+            (None, None)
+        };
         let (cursor, resize_id, cols, rows) = ring.capture_offsets();
         Some(super::output_ring::OutputSnapshot {
             ansi,
             history,
+            history_cursor,
             cursor,
             resize_id,
             cols,
             rows,
         })
+    }
+
+    pub(super) fn history_page(
+        &self,
+        cursor: &str,
+        lines: usize,
+    ) -> Result<HistoryPage, HistoryCursorExpired> {
+        let mut core = self.core.lock().map_err(|_| HistoryCursorExpired)?;
+        let core = &mut *core;
+        history::read_page(&mut core.terminal, &mut core.history_cursors, cursor, lines)
     }
 
     pub fn scroll_up(&self, lines: usize) {
@@ -3016,30 +3047,24 @@ fn ghostty_visible_ansi(core: &GhosttyPaneCore) -> Result<String, crate::ghostty
     )
 }
 
-/// Up to `lines` normal-screen scrollback rows directly above the viewport the
-/// seed renders, oldest first, as ANSI at the terminal's current width. Anchored
-/// to the viewport (not the bottom) so history and seed meet exactly even when a
-/// local client has scrolled the pane back. Empty on the alternate screen, which
-/// has no scrollback of its own.
-fn ghostty_scrollback_ansi(
-    terminal: &crate::ghostty::Terminal,
+/// A keyframe's `history` and `history_cursor`: up to `lines` scrollback rows
+/// above the seed's viewport (empty when there are none or they cannot be
+/// rendered), plus a cursor for the first of them when older rows remain.
+fn ghostty_keyframe_history(
+    core: &mut GhosttyPaneCore,
     lines: usize,
-) -> Result<String, crate::ghostty::Error> {
-    if lines == 0 || terminal.active_screen()? != crate::ghostty::ActiveScreen::Primary {
-        return Ok(String::new());
-    }
-    let cols = terminal.cols()?;
-    let viewport_start = terminal.scrollbar()?.offset;
-    if cols == 0 || viewport_start == 0 {
-        return Ok(String::new());
-    }
-    let start = viewport_start.saturating_sub(lines);
-    terminal.read_ansi_screen(
-        (0, start as u32),
-        (cols.saturating_sub(1), (viewport_start - 1) as u32),
-        false,
-        false,
-    )
+) -> (Option<String>, Option<String>) {
+    let rows = match history::keyframe_history_rows(&core.terminal, lines) {
+        Ok(Some(rows)) => rows,
+        Ok(None) | Err(_) => return (Some(String::new()), None),
+    };
+    let Ok(history) = history::read_rows_ansi(&core.terminal, rows.clone()) else {
+        return (Some(String::new()), None);
+    };
+    let cursor = (rows.start > 0)
+        .then(|| core.history_cursors.issue(&mut core.terminal, rows.start))
+        .flatten();
+    (Some(history), cursor)
 }
 
 fn ghostty_detection_text(core: &mut GhosttyPaneCore) -> Result<String, crate::ghostty::Error> {

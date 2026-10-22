@@ -39,6 +39,7 @@ pub(crate) use output_ring::{
     clamp_max_frame_bytes, OutputDrain, OutputRing, OutputSnapshot, OutputWait,
     OUTPUT_RING_CAPACITY_BYTES,
 };
+pub(crate) use terminal::{HistoryCursorExpired, HistoryPage};
 
 use self::agent_detection::{
     codex_prompt_ready, decide_detection_screen_read, decide_screen_detection_publish,
@@ -3836,6 +3837,18 @@ impl PaneRuntime {
 
     pub(crate) fn recent_ansi_snapshot(&self, lines: usize) -> TerminalReadSnapshot {
         let result = self.terminal.recent_ansi_snapshot(lines);
+        self.compression.wake();
+        result
+    }
+
+    /// Rows directly above a `pane.history` cursor's row; see `HistoryPage`.
+    pub(crate) fn history_page(
+        &self,
+        cursor: &str,
+        lines: usize,
+    ) -> Result<HistoryPage, HistoryCursorExpired> {
+        let result = self.terminal.history_page(cursor, lines);
+        // Rendering old rows restores their compressed pages.
         self.compression.wake();
         result
     }

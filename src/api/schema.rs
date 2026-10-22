@@ -175,6 +175,7 @@ operations::define_operations! {
     PaneSendKeys(PaneSendKeysParams) => "pane.send_keys", false, false;
     PaneSendInput(PaneSendInputParams) => "pane.send_input", false, false;
     PaneRead(PaneReadParams) => "pane.read", false, false;
+    PaneHistory(PaneHistoryParams) => "pane.history", false, false;
     #[schemars(skip)]
     PaneStream(PaneStreamParams) => "pane.stream", false, false;
     #[serde(skip)]

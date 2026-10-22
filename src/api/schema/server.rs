@@ -86,4 +86,8 @@ pub struct ServerCapabilities {
     /// long-lived bridge process instead of one process per request.
     #[serde(default)]
     pub api_bridge_multi: bool,
+    /// `pane.stream` reset keyframes carry `history_cursor` and `pane.history`
+    /// pages older scrollback above it.
+    #[serde(default)]
+    pub pane_history: bool,
 }

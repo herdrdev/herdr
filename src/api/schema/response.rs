@@ -198,6 +198,15 @@ pub enum ResponseResult {
         rows: u16,
         locked: bool,
     },
+    /// Rows directly above a `pane.history` cursor's row, oldest first, as
+    /// base64 ANSI rendered like a keyframe's `history_b64`. `cursor` pages
+    /// further back and is `null` once the start of retained history is reached.
+    PaneHistory {
+        pane_id: String,
+        history_b64: String,
+        rows: u32,
+        cursor: Option<String>,
+    },
     StreamStarted {
         pane_id: String,
         epoch: u64,

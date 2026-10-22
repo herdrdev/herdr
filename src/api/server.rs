@@ -209,6 +209,7 @@ pub(crate) fn default_capabilities() -> Option<ServerCapabilities> {
         ssh_agent_registration: false,
         agent_forget: true,
         api_bridge_multi: cfg!(unix),
+        pane_history: true,
     })
 }
 
@@ -1928,6 +1929,7 @@ fn routable_target_mut(method: &mut Method) -> Option<&mut String> {
         // must not silently gain federation filesystem authority.
         Method::AgentTransferSession(_) => None,
         Method::PaneRead(params) => Some(&mut params.pane_id),
+        Method::PaneHistory(params) => Some(&mut params.pane_id),
         Method::PaneTurns(params) => Some(&mut params.pane_id),
         Method::PaneSendText(params) => Some(&mut params.pane_id),
         Method::PaneSendInput(params) => Some(&mut params.pane_id),
@@ -3375,6 +3377,7 @@ mod tests {
                 ssh_agent_registration: false,
                 agent_forget: false,
                 api_bridge_multi: false,
+                pane_history: false,
             }),
             None,
             None,
@@ -4801,6 +4804,7 @@ mod federation_tests {
             ("pane.send_keys", AllowedAt(Interact)),
             ("pane.send_input", AllowedAt(Admin)),
             ("pane.read", AllowedAt(Observe)),
+            ("pane.history", AllowedAt(Observe)),
             ("pane.clear", Denied),
             ("pane.stream", AllowedAt(Observe)),
             ("pane.stream.open", Denied),
@@ -6712,6 +6716,10 @@ mod federation_tests {
             (
                 "pane.send_text",
                 serde_json::json!({ "pane_id": "remote/w1:p1", "text": "hi" }),
+            ),
+            (
+                "pane.history",
+                serde_json::json!({ "pane_id": "remote/w1:p1", "cursor": "tok" }),
             ),
             (
                 "workspace.get",

@@ -3832,6 +3832,32 @@
           ],
           "type": "object"
         },
+        "PaneHistoryParams": {
+          "description": "Params for `pane.history`: page further back from a `pane.stream` keyframe\n(its `history_cursor`) or a previous page (its `cursor`).",
+          "properties": {
+            "cursor": {
+              "description": "Opaque token naming the row the page ends directly above.",
+              "type": "string"
+            },
+            "lines": {
+              "description": "Rows to return, clamped to 1..=1000; 500 when omitted.",
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pane_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "pane_id",
+            "cursor"
+          ],
+          "type": "object"
+        },
         "PaneInputSetParams": {
           "properties": {
             "pane_id": {
@@ -7886,6 +7912,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PaneReadParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "pane.history",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/PaneHistoryParams"
             }
           },
           "required": [
@@ -16074,6 +16116,39 @@
               "type": "object"
             },
             {
+              "description": "Rows directly above a `pane.history` cursor's row, oldest first, as\nbase64 ANSI rendered like a keyframe's `history_b64`. `cursor` pages\nfurther back and is `null` once the start of retained history is reached.",
+              "properties": {
+                "cursor": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "history_b64": {
+                  "type": "string"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "rows": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": {
+                  "const": "pane_history",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pane_id",
+                "history_b64",
+                "rows"
+              ],
+              "type": "object"
+            },
+            {
               "properties": {
                 "base_seq": {
                   "format": "uint64",
@@ -17216,6 +17291,11 @@
               "type": "boolean"
             },
             "live_handoff": {
+              "type": "boolean"
+            },
+            "pane_history": {
+              "default": false,
+              "description": "`pane.stream` reset keyframes carry `history_cursor` and `pane.history`\npages older scrollback above it.",
               "type": "boolean"
             },
             "pane_input_stream": {
