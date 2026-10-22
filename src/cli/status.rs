@@ -434,6 +434,7 @@ mod tests {
                 ssh_agent_registration: false,
                 agent_forget: false,
                 api_bridge_multi: false,
+                pane_history: false,
             }),
         }
     }

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- A remote app can keep scrolling back through a pane's history past the 1000 rows a `pane.stream` keyframe carries. When older rows remain, the `reset` keyframe carries a `history_cursor`, and the new `pane.history` method returns the rows above it a page at a time, each with a cursor for the next page. Cursors follow their row as new output arrives, so pages never skip or repeat rows; a cursor whose row has been trimmed from scrollback answers `history_cursor_expired`. Servers advertise this as the `pane_history` capability.
+
 ### Changed
 - A coordinator sends one-shot requests to a saved SSH machine over one persistent `api-bridge --multi` channel per machine instead of starting a new SSH channel and remote bridge for each, once the machine advertises `api_bridge_multi`. Relayed requests to a distant machine no longer pay several round trips before they are sent. Streams keep their own channel, and machines without `api-bridge --multi` keep the per-request bridge.
 

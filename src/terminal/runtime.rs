@@ -423,6 +423,14 @@ impl TerminalRuntime {
         self.0.recent_ansi_snapshot(lines)
     }
 
+    pub(crate) fn history_page(
+        &self,
+        cursor: &str,
+        lines: usize,
+    ) -> Result<crate::pane::HistoryPage, crate::pane::HistoryCursorExpired> {
+        self.0.history_page(cursor, lines)
+    }
+
     #[cfg(test)]
     pub fn recent_unwrapped_text(&self, lines: usize) -> String {
         self.0.recent_unwrapped_text_snapshot(lines).text

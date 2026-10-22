@@ -484,6 +484,29 @@ pub struct PaneStreamParams {
     pub viewer_id: Option<String>,
 }
 
+/// Params for `pane.history`: page further back from a `pane.stream` keyframe
+/// (its `history_cursor`) or a previous page (its `cursor`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct PaneHistoryParams {
+    pub pane_id: String,
+    /// Opaque token naming the row the page ends directly above.
+    pub cursor: String,
+    /// Rows to return, clamped to 1..=1000; 500 when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u32>,
+}
+
+pub const DEFAULT_PANE_HISTORY_LINES: u32 = 500;
+pub const MAX_PANE_HISTORY_LINES: u32 = 1000;
+
+impl PaneHistoryParams {
+    pub fn clamped_lines(&self) -> usize {
+        self.lines
+            .unwrap_or(DEFAULT_PANE_HISTORY_LINES)
+            .clamp(1, MAX_PANE_HISTORY_LINES) as usize
+    }
+}
+
 crate::cli::projection::cli_params! {
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
     pub struct PaneReadParams => PaneReadProjection {

@@ -2707,6 +2707,7 @@ mod tests {
                 ssh_agent_registration: false,
                 agent_forget: false,
                 api_bridge_multi: false,
+                pane_history: false,
             }),
         };
         let missing_baseline = crate::api::RuntimeStatus {
@@ -2789,6 +2790,7 @@ mod tests {
                     ssh_agent_registration: false,
                     agent_forget: false,
                     api_bridge_multi: false,
+                    pane_history: false,
                 }),
             },
         };
@@ -3057,6 +3059,7 @@ mod tests {
                     ssh_agent_registration: false,
                     agent_forget: false,
                     api_bridge_multi: false,
+                    pane_history: false,
                 }),
             },
         };

@@ -91,6 +91,9 @@ pub(crate) struct OutputSnapshot {
     /// Normal-screen scrollback rows ABOVE the screen in `ansi`, oldest first, at
     /// the same width. `None` when the stream did not ask for history.
     pub history: Option<String>,
+    /// `pane.history` cursor for the first row of `history`, present only when
+    /// older rows remain above it.
+    pub history_cursor: Option<String>,
     pub cursor: u64,
     pub resize_id: u64,
     pub cols: u16,

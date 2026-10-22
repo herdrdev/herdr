@@ -849,7 +849,7 @@ pub struct Terminal {
     raw: ffi::GhosttyTerminal,
     max_scrollback: usize,
     #[cfg(windows)]
-    tracked_row: ffi::GhosttyTrackedGridRef,
+    tracked_row: Option<TrackedRow>,
     callback_state: Box<TerminalCallbackState>,
     kitty_fingerprints: Mutex<HashMap<u32, KittyImageFingerprintEntry>>,
     kitty_empty_generation: Cell<Option<u64>>,
@@ -868,7 +868,7 @@ impl Terminal {
             raw,
             max_scrollback,
             #[cfg(windows)]
-            tracked_row: ptr::null_mut(),
+            tracked_row: None,
             callback_state: Box::new(TerminalCallbackState {
                 size_report: ffi::GhosttySizeReportSize {
                     rows,
@@ -1265,20 +1265,29 @@ impl Terminal {
         })
     }
 
+    /// Follow the row at screen `y` (0 is the oldest retained scrollback row)
+    /// of the active screen as output scrolls, compresses or reflows it.
+    pub fn track_screen_row(&mut self, y: u32) -> Result<TrackedRow, Error> {
+        TrackedRow::track(self.raw, ghostty_screen_point(0, y))
+    }
+
     #[cfg(windows)]
     pub fn track_row(&mut self, y: u32) -> Option<usize> {
-        let mut point = ffi::GhosttyPointCoordinate::default();
-        let tag = ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN;
-        let result =
-            unsafe { ffi::ghostty_tracked_grid_ref_point(self.tracked_row, tag, &mut point) };
-        let terminal = self.raw;
+        let previous = self
+            .tracked_row
+            .as_ref()
+            .and_then(|row| row.screen_row(self));
         let target = ghostty_viewport_point(0, y);
-        unsafe {
-            ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
-            self.tracked_row = ptr::null_mut();
-            let _ = ffi::ghostty_terminal_grid_ref_track(terminal, target, &mut self.tracked_row);
+        let moved = self
+            .tracked_row
+            .as_mut()
+            .is_some_and(|row| row.set_point(self.raw, target).is_ok());
+        if !moved {
+            // A target that cannot be tracked leaves no row, so the next call
+            // reports no previous position rather than a stale one.
+            self.tracked_row = TrackedRow::track(self.raw, target).ok();
         }
-        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(point.y as usize)
+        previous
     }
 
     pub fn screen_cell(&self, x: u16, y: u32) -> Result<(CellWide, Vec<u32>), Error> {
@@ -2305,12 +2314,73 @@ unsafe impl Send for Terminal {}
 
 impl Drop for Terminal {
     fn drop(&mut self) {
+        #[cfg(windows)]
+        drop(self.tracked_row.take());
         // SAFETY: freeing a null or live handle is allowed by the C API.
         unsafe {
-            #[cfg(windows)]
-            ffi::ghostty_tracked_grid_ref_free(self.tracked_row);
             ffi::ghostty_terminal_free(self.raw);
         }
+    }
+}
+
+/// A screen row that ghostty keeps following as output scrolls, pages compress
+/// or the screen reflows. It stops reporting a position once its row is trimmed
+/// from scrollback or its screen is reset, and is freed on drop.
+///
+/// Like its [`Terminal`], it must only be used (and dropped) behind the same
+/// external synchronization as that terminal: the C API updates the terminal's
+/// own bookkeeping on track, move and free.
+pub struct TrackedRow {
+    raw: ffi::GhosttyTrackedGridRef,
+    terminal: ffi::GhosttyTerminal,
+}
+
+impl TrackedRow {
+    fn track(terminal: ffi::GhosttyTerminal, point: ffi::GhosttyPoint) -> Result<Self, Error> {
+        let mut raw = ptr::null_mut();
+        // SAFETY: `terminal` is a live handle and `raw` a valid out pointer.
+        unsafe {
+            ffi::ghostty_terminal_grid_ref_track(terminal, point, &mut raw).into_result()?;
+        }
+        Ok(Self { raw, terminal })
+    }
+
+    fn set_point(
+        &mut self,
+        terminal: ffi::GhosttyTerminal,
+        point: ffi::GhosttyPoint,
+    ) -> Result<(), Error> {
+        // SAFETY: both handles are live; a foreign terminal is rejected by the C API.
+        unsafe { ffi::ghostty_tracked_grid_ref_set(self.raw, terminal, point).into_result() }
+    }
+
+    /// The row's current screen `y` in `terminal`, or `None` once it was
+    /// trimmed, its screen was reset, or it belongs to another terminal.
+    pub fn screen_row(&self, terminal: &Terminal) -> Option<usize> {
+        if terminal.raw != self.terminal {
+            return None;
+        }
+        let mut point = ffi::GhosttyPointCoordinate::default();
+        let tag = ffi::GhosttyPointTag_GHOSTTY_POINT_TAG_SCREEN;
+        // SAFETY: `raw` is a live tracked ref owned by `self`.
+        let result = unsafe { ffi::ghostty_tracked_grid_ref_point(self.raw, tag, &mut point) };
+        (result == ffi::GhosttyResult_GHOSTTY_SUCCESS).then_some(point.y as usize)
+    }
+
+    /// Follow screen row `y` of `terminal`'s active screen instead. On error
+    /// the row keeps following what it followed before.
+    pub fn move_to_screen_row(&mut self, terminal: &mut Terminal, y: u32) -> Result<(), Error> {
+        self.set_point(terminal.raw, ghostty_screen_point(0, y))
+    }
+}
+
+// SAFETY: see the type docs; used only behind its terminal's synchronization.
+unsafe impl Send for TrackedRow {}
+
+impl Drop for TrackedRow {
+    fn drop(&mut self) {
+        // SAFETY: freeing is allowed even after the terminal itself was freed.
+        unsafe { ffi::ghostty_tracked_grid_ref_free(self.raw) }
     }
 }
 
@@ -4525,6 +4595,68 @@ mod tests {
         let mut terminal = Terminal::new(80, 3, 0).unwrap();
         write_numbered_lines(&mut terminal, 3000);
         assert_eq!(terminal.scrollback_rows().unwrap(), 0);
+    }
+
+    #[test]
+    fn tracked_row_follows_its_row_until_it_is_trimmed() {
+        let mut terminal = Terminal::new(80, 3, 4096).unwrap();
+        write_numbered_lines(&mut terminal, 20);
+        let mut row = terminal.track_screen_row(5).unwrap();
+        let text_at = |terminal: &Terminal, y: usize| {
+            terminal
+                .read_text_screen((0, y as u32), (79, y as u32), false)
+                .unwrap()
+        };
+        assert_eq!(text_at(&terminal, 5), "000005");
+
+        // New output below never moves the row on the screen; it stays `000005`.
+        write_numbered_lines(&mut terminal, 10);
+        assert_eq!(row.screen_row(&terminal), Some(5));
+        row.move_to_screen_row(&mut terminal, 2).unwrap();
+        assert_eq!(row.screen_row(&terminal), Some(2));
+
+        // A different terminal never resolves it.
+        let other = Terminal::new(80, 3, 4096).unwrap();
+        assert_eq!(row.screen_row(&other), None);
+
+        // Trimming the oldest scrollback pages takes the row with them.
+        for _ in 0..50 {
+            write_numbered_lines(&mut terminal, 1000);
+        }
+        assert_eq!(row.screen_row(&terminal), None);
+    }
+
+    #[test]
+    fn tracked_row_moves_up_as_older_rows_are_trimmed() {
+        let mut terminal = Terminal::new(80, 3, 4096).unwrap();
+        write_numbered_lines(&mut terminal, 5000);
+        let total = terminal.total_rows().unwrap();
+        let bottom = total - 4;
+        let row = terminal.track_screen_row(bottom as u32).unwrap();
+        let expected = terminal
+            .read_text_screen((0, bottom as u32), (79, bottom as u32), false)
+            .unwrap();
+        let rows_below = |terminal: &Terminal, y: usize| terminal.total_rows().unwrap() - y;
+        // Half the retained history: enough to trim, not enough to reach the row.
+        let appended = total / 2;
+        write_numbered_lines(&mut terminal, appended);
+        let y = row
+            .screen_row(&terminal)
+            .expect("a recent row survives trimming");
+        assert!(
+            terminal.total_rows().unwrap() < total + appended,
+            "the scrollback limit trimmed rows"
+        );
+        assert_eq!(rows_below(&terminal, y), total - bottom + appended);
+        assert_eq!(
+            terminal
+                .read_text_screen((0, y as u32), (79, y as u32), false)
+                .unwrap(),
+            expected
+        );
+        // Freeing a row after its terminal is allowed by the C API.
+        drop(terminal);
+        drop(row);
     }
 
     #[test]

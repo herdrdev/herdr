@@ -74,6 +74,10 @@ struct StreamFrameLine {
     /// for `scrollback_lines`; empty when the pane has no history to give.
     #[serde(skip_serializing_if = "Option::is_none")]
     history_b64: Option<String>,
+    /// `pane.history` cursor for the first row of `history_b64`; present only
+    /// when older rows remain above it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_cursor: Option<String>,
 }
 
 impl StreamFrameLine {
@@ -88,6 +92,7 @@ impl StreamFrameLine {
             data_b64: None,
             lagged: false,
             history_b64: None,
+            history_cursor: None,
         }
     }
 
@@ -100,6 +105,7 @@ impl StreamFrameLine {
                 .history
                 .as_deref()
                 .map(|history| encode_bytes(history.as_bytes())),
+            history_cursor: seed.history_cursor.clone(),
             lagged,
             ..Self::base("reset", seq, epoch)
         }
@@ -432,6 +438,7 @@ mod tests {
         OutputSnapshot {
             ansi: "seed".into(),
             history: history.map(str::to_string),
+            history_cursor: None,
             cursor: 918_273,
             resize_id: 0,
             cols: 80,
@@ -453,6 +460,7 @@ mod tests {
         assert!(value.get("lagged").is_none());
         // No history requested: the frame is byte-for-byte what old clients parse.
         assert!(value.get("history_b64").is_none());
+        assert!(value.get("history_cursor").is_none());
     }
 
     #[test]
@@ -466,6 +474,22 @@ mod tests {
             value["history_b64"], "",
             "asked-for-but-empty must stay distinguishable from not-sent"
         );
+    }
+
+    #[test]
+    fn reset_frame_carries_history_cursor_only_when_older_rows_exist() {
+        let value =
+            serde_json::to_value(StreamFrameLine::reset(1, 7, &seed(Some("old")), false)).unwrap();
+        assert!(
+            value.get("history_cursor").is_none(),
+            "history reaching the start of scrollback offers no paging"
+        );
+
+        let mut paged = seed(Some("old"));
+        paged.history_cursor = Some("tok".into());
+        let value = serde_json::to_value(StreamFrameLine::reset(1, 7, &paged, false)).unwrap();
+        assert_eq!(value["history_b64"], "b2xk");
+        assert_eq!(value["history_cursor"], "tok");
     }
 
     #[test]
