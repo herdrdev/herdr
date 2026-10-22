@@ -4985,12 +4985,14 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
         server.host_shutdown_probe = || true;
         let death = || AppEvent::PaneDied {
             pane_id,
+            runtime_epoch: None,
             exit_reason: crate::platform::classify_child_exit(
                 &portable_pty::ExitStatus::with_exit_code(0x40010004),
             ),
         };
         let agent_exit = || AppEvent::StateChanged {
             pane_id,
+            runtime_epoch: None,
             agent: Some(crate::detect::Agent::Codex),
             state: crate::detect::AgentState::Idle,
             visible_blocker: false,
@@ -5045,6 +5047,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
         assert!(
             !server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
                 pane_id: other_pane,
+                runtime_epoch: None,
                 exit_reason: crate::platform::classify_child_exit(
                     &portable_pty::ExitStatus::with_exit_code(0xC0000142),
                 ),
@@ -5093,6 +5096,7 @@ fn windows_shutdown_probe_preserves_panes_and_agent_sessions() {
         assert!(
             server.handle_internal_event_with_forwarding(AppEvent::PaneDied {
                 pane_id,
+                runtime_epoch: None,
                 exit_reason: crate::platform::classify_child_exit(
                     &portable_pty::ExitStatus::with_exit_code(code)
                 ),

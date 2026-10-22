@@ -4533,6 +4533,7 @@ mod tests {
     /// The duplicate-session tests need a SECOND agent holding the same session, and it
     /// has to exist BEFORE the archive: archiving the last agent in a workspace closes
     /// that workspace, so a stand-in armed afterwards has nowhere to live.
+    #[cfg(unix)]
     fn arm_resumable_claude_in(app: &mut App, ws_idx: usize, name: &str) -> String {
         let pane_id = app.state.workspaces[ws_idx].tabs[0].root_pane;
         let terminal_id = app.state.workspaces[ws_idx].tabs[0].panes[&pane_id]

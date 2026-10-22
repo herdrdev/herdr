@@ -805,6 +805,7 @@ impl RemoteSsh {
         ssh
     }
 
+    #[cfg(unix)]
     pub(super) fn new_noninteractive_cancellable(
         target: String,
         cancellation: Arc<AtomicBool>,

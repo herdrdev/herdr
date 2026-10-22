@@ -1210,7 +1210,7 @@ impl FederationPeerManager {
     }
 
     /// Current mutable presentation for one live route, for reload tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn presentation_for(&self, alias: &str) -> Option<PeerPresentation> {
         let handles = self
             .handles
@@ -1226,7 +1226,7 @@ impl FederationPeerManager {
     }
 
     /// Remote session attached to one live transport generation, for reload tests.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn remote_session_for(&self, alias: &str) -> Option<String> {
         self.handles
             .lock()

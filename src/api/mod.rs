@@ -21,7 +21,7 @@ mod transport;
 mod wait;
 
 pub use event_hub::EventHub;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) use server::prefix_remote_agent;
 #[cfg(unix)]
 pub(crate) use server::serve_guest_stream;

@@ -232,7 +232,7 @@ pub(crate) fn saved_peer_api_channel_command(
 
 /// A per-connection bridge running `remote_command` through `ssh` from `PATH`,
 /// as a saved peer's bridge does, for tests with a fake `ssh`.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn start_test_ssh_bridge(
     target: &str,
     remote_command: &str,
