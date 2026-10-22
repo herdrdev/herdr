@@ -2553,6 +2553,89 @@ async fn client_shell_tabs_render_accept_input_and_resize_independently() {
 }
 
 #[tokio::test]
+async fn public_focused_tab_create_uses_foreground_client_geometry() {
+    let mut server = test_headless_server();
+    let mut workspace = crate::workspace::Workspace::test_new("foreground-create");
+    let first_pane = workspace.tabs[0].root_pane;
+    workspace.insert_test_runtime(
+        first_pane,
+        crate::terminal::TerminalRuntime::test_with_screen_bytes(80, 24, b""),
+    );
+    server.app.state.workspaces = vec![workspace];
+    server.app.state.ensure_test_terminals();
+    server.app.state.active = Some(0);
+    server.app.state.selected = 0;
+    server.app.state.mode = crate::app::Mode::Terminal;
+    let workspace_id = server.app.public_workspace_id(0);
+    let first_tab_id = server.app.public_tab_id(0, 0).unwrap();
+
+    let (first_control, _) = connect_test_shell(&mut server, 71, 100, 35);
+    let (second_control, _) = connect_test_shell(&mut server, 72, 350, 71);
+    let _ = first_control.recv().expect("first snapshot");
+    let _ = second_control.recv().expect("second snapshot");
+    assert_eq!(server.foreground_client_id, Some(72));
+
+    assert!(server.reapply_controlled_shell_tab_geometry(false));
+    assert_eq!(
+        server.tab_geometry_controllers.get(&first_tab_id),
+        Some(&71)
+    );
+    assert!(server.claim_shell_tab_geometry(72, false));
+    let expected_size = server
+        .app
+        .state
+        .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, first_pane)
+        .expect("first pane runtime")
+        .current_size();
+
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    assert!(
+        server.handle_api_request_with_shutdown_check(crate::api::ApiRequestMessage {
+            request: crate::api::schema::Request {
+                id: "create-foreground-tab".into(),
+                method: crate::api::schema::Method::TabCreate(
+                    crate::api::schema::TabCreateParams {
+                        workspace_id: Some(workspace_id),
+                        cwd: None,
+                        focus: true,
+                        label: None,
+                        env: std::collections::HashMap::new(),
+                    }
+                ),
+            },
+            respond_to,
+            response_write_complete: None,
+        })
+    );
+    let response = response_rx.recv().expect("create response");
+    assert!(
+        serde_json::from_str::<api::schema::SuccessResponse>(&response).is_ok(),
+        "{response}"
+    );
+
+    let tab_id = server.app.public_tab_id(0, 1).expect("new tab");
+    let pane_id = server.app.state.workspaces[0].tabs[1].root_pane;
+    assert_eq!(server.tab_geometry_controllers.get(&tab_id), Some(&72));
+    for client_id in [71, 72] {
+        assert_eq!(
+            server.shell_tab_id_for_client(client_id).as_deref(),
+            Some(tab_id.as_str())
+        );
+    }
+    let runtime = server
+        .app
+        .state
+        .runtime_for_pane_in_workspace(&server.app.terminal_runtimes, 0, pane_id)
+        .expect("new pane runtime");
+    assert_eq!(runtime.current_size(), expected_size);
+    assert_eq!(
+        runtime.terminal_dimensions(),
+        Some((expected_size.1, expected_size.0))
+    );
+    shutdown_test_runtimes(&mut server);
+}
+
+#[tokio::test]
 async fn public_background_tab_create_preserves_client_locations() {
     let mut server = test_headless_server();
     let mut workspace = crate::workspace::Workspace::test_new("background-create");

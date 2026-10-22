@@ -894,6 +894,11 @@ impl HeadlessServer {
             || pane_move_focus_succeeded;
         if public_focus_succeeded {
             self.focus_all_shell_clients_on_default_target();
+            if create_focus_requested {
+                if let Some(client_id) = self.foreground_client_id {
+                    self.claim_shell_tab_geometry(client_id, false);
+                }
+            }
         }
         if reconcile
             || target_changed
