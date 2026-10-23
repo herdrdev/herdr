@@ -90,4 +90,7 @@ pub struct ServerCapabilities {
     /// pages older scrollback above it.
     #[serde(default)]
     pub pane_history: bool,
+    /// Serves `agent.transcript`: an omp agent's conversation as chat entries.
+    #[serde(default)]
+    pub agent_transcript: bool,
 }

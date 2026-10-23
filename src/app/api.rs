@@ -17,6 +17,7 @@ pub(super) mod responses;
 mod session;
 mod session_transfer;
 mod tabs;
+pub(crate) mod transcript;
 pub(crate) mod usage_fetch;
 mod workspaces;
 mod worktrees;
@@ -1711,6 +1712,13 @@ impl App {
                     request.id,
                     "invalid_request",
                     "agent.prompt is handled asynchronously by the app runtime",
+                );
+            }
+            Method::AgentTranscript(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "agent.transcript is handled asynchronously by the app runtime",
                 );
             }
             Method::AgentWait(_) => {

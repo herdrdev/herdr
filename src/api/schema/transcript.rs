@@ -164,19 +164,3 @@ pub enum TranscriptEntry {
         text: String,
     },
 }
-
-impl TranscriptEntry {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::User { id, .. }
-            | Self::Reply { id, .. }
-            | Self::Thinking { id, .. }
-            | Self::Step { id, .. }
-            | Self::Note { id, .. }
-            | Self::Plan { id, .. }
-            | Self::Ask { id, .. }
-            | Self::TurnEnd { id, .. }
-            | Self::Summary { id, .. } => id,
-        }
-    }
-}

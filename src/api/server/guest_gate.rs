@@ -18,11 +18,11 @@ use super::{
     ConnectionPrincipal, EventHub,
 };
 use crate::api::schema::{
-    AgentInfo, ErrorResponse, GramGetFileChunkParams, GramGetFileParams, GramPostParams,
-    GramRelayCall, GramRelayParams, GramRelayPostParams, GramUploadChunkParams,
+    AgentInfo, AgentTranscriptParams, ErrorResponse, GramGetFileChunkParams, GramGetFileParams,
+    GramPostParams, GramRelayCall, GramRelayParams, GramRelayPostParams, GramUploadChunkParams,
     GuestAgentProbeParams, GuestAuditEvent, GuestAuditFile, GuestGrantInfo, Method,
-    PaneHistoryParams, PanePtyLeaseReleaseParams, PaneReadParams, PaneSetPtySizeParams, ReadIntent,
-    ReadSource, Request, ResponseResult, SuccessResponse,
+    PaneHistoryParams, PanePtyLeaseReleaseParams, PaneReadParams, PaneSetPtySizeParams, PendingAsk,
+    ReadIntent, ReadSource, Request, ResponseResult, SuccessResponse, TranscriptEntry,
 };
 use crate::api::transport::ApiStream;
 use crate::guest::GuestPrincipal;
@@ -376,7 +376,13 @@ fn project_pong(result: ResponseResult) -> Option<serde_json::Value> {
     else {
         return None;
     };
-    Some(serde_json::json!({"type": "pong", "version": version, "protocol": protocol}))
+    // Only what this gate itself serves; the owner's capability set stays private.
+    Some(serde_json::json!({
+        "type": "pong",
+        "version": version,
+        "protocol": protocol,
+        "capabilities": {"agent_transcript": true},
+    }))
 }
 
 fn project_prompted(result: ResponseResult) -> Option<serde_json::Value> {
@@ -431,6 +437,62 @@ fn project_history(result: ResponseResult) -> Option<serde_json::Value> {
         "history_b64": history_b64,
         "rows": rows,
         "cursor": cursor,
+    }))
+}
+
+/// The granted agent's conversation without the owner's private parts: no
+/// notes (the owner's fleet traffic), no step details (commands and paths),
+/// and asks only the owner may answer.
+fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
+    let ResponseResult::AgentTranscript {
+        agent,
+        pane_id,
+        session_id,
+        entries,
+        before,
+        after,
+        pending_ask,
+        working,
+    } = result
+    else {
+        return None;
+    };
+    let entries: Vec<TranscriptEntry> = entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::Note { .. } => None,
+            TranscriptEntry::Step {
+                id,
+                ts_ms,
+                tool,
+                intent,
+                status,
+                detail: _,
+            } => Some(TranscriptEntry::Step {
+                id,
+                ts_ms,
+                tool,
+                intent,
+                status,
+                detail: None,
+            }),
+            other => Some(other),
+        })
+        .collect();
+    let pending_ask = pending_ask.map(|ask| PendingAsk {
+        answerable: false,
+        ..ask
+    });
+    Some(serde_json::json!({
+        "type": "agent_transcript",
+        "agent": agent,
+        "pane_id": pane_id,
+        "session_id": session_id,
+        "entries": serde_json::to_value(entries).ok()?,
+        "before": before,
+        "after": after,
+        "pending_ask": serde_json::to_value(pending_ask).ok()?,
+        "working": serde_json::to_value(working).ok()?,
     }))
 }
 
@@ -583,6 +645,29 @@ pub(super) fn serve_request(
             write_text_line_allow_disconnect(
                 &mut stream,
                 &guest_reply(&id, &response, project_history),
+            )
+        }
+        Method::AgentTranscript(params) => {
+            let state = grant_state(guest, api_tx);
+            if !names_grant(&params.target, guest, state.pane_id()) {
+                return forbidden(&mut stream);
+            }
+            let GrantState::Live(agent) = state else {
+                return paused(&mut stream);
+            };
+            // The granted agent's own session file; cursors only resolve
+            // against the file they were issued for.
+            let request = Request {
+                id: id.clone(),
+                method: Method::AgentTranscript(AgentTranscriptParams {
+                    target: agent.pane_id,
+                    ..params
+                }),
+            };
+            let response = dispatch_to_app_with_timeout(request, api_tx, None);
+            write_text_line_allow_disconnect(
+                &mut stream,
+                &guest_reply(&id, &response, project_transcript),
             )
         }
         Method::PaneSetPtySize(params) => {
@@ -1560,6 +1645,9 @@ mod tests {
                     Ok(message) if matches!(message.request.method, Method::AgentPrompt(_)) => {
                         app.handle_deferred_agent_api_request(message.request, message.respond_to);
                     }
+                    Ok(message) if matches!(message.request.method, Method::AgentTranscript(_)) => {
+                        app.handle_deferred_transcript_request(message.request, message.respond_to);
+                    }
                     Ok(message) => {
                         if matches!(message.request.method, Method::PaneSetPtySize(_)) {
                             let hook = app_before_resize
@@ -2200,6 +2288,158 @@ mod tests {
         );
     }
 
+    /// Makes both agents omp agents recording to their own synthetic session
+    /// file, before any invite is made for them.
+    fn omp_sessions(harness: &Harness) -> Vec<crate::agent_transcript::tests::Fixture> {
+        use crate::agent_transcript::tests::{ask_call, call, text, Fixture};
+
+        let mut fixtures = Vec::new();
+        for index in 0..2 {
+            let mut session = Fixture::new(&format!("guest-gate-{index}"));
+            session.user(&format!("owner prompt {index}"));
+            session.user("Ana (via HerdrUp): a guest prompt");
+            session.assistant(
+                vec![
+                    text("Working on it."),
+                    call(
+                        "c1",
+                        "bash",
+                        Some("Running the tests"),
+                        json!({"command": "cargo test --secret-flag"}),
+                    ),
+                ],
+                "toolUse",
+            );
+            session.result("c1", "bash", false, json!({}));
+            session.note(
+                "gitmoot-inbox",
+                "owner fleet traffic: deploy keys rotated",
+                true,
+                Value::Null,
+            );
+            session.assistant(
+                vec![ask_call("ask-1", json!([{"question": "Deploy?", "options": [{"label": "Yes"}, {"label": "No"}]}]))],
+                "toolUse",
+            );
+            let path = session.path.to_string_lossy().into_owned();
+            let (done_tx, done_rx) = std_mpsc::channel();
+            harness
+                .control
+                .send(Box::new(move |app: &mut App| {
+                    let pane = app.state.workspaces[index].tabs[0].root_pane;
+                    let terminal_id = app.state.workspaces[index].tabs[0].panes[&pane]
+                        .attached_terminal_id
+                        .clone();
+                    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+                    // Only the recorded session changes, so the grant still
+                    // names the agent; the session says omp wrote it.
+                    terminal.set_persisted_agent_session(
+                        crate::agent_resume::PersistedAgentSession {
+                            source: "herdr".into(),
+                            agent: "omp".into(),
+                            session_ref: crate::agent_resume::AgentSessionRef::path(path).unwrap(),
+                        },
+                    );
+                    let _ = done_tx.send(());
+                }))
+                .unwrap();
+            done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            fixtures.push(session);
+        }
+        fixtures
+    }
+
+    fn transcript(target: &str) -> Value {
+        json!({"id": "t", "method": "agent.transcript", "params": {"target": target}})
+    }
+
+    #[test]
+    fn a_guest_reads_the_granted_transcript_without_the_owners_private_parts() {
+        let harness = start("transcript");
+        let _sessions = omp_sessions(&harness);
+        let guest = harness.admit();
+
+        // The owner's own view of the same agent has every part.
+        let owner = dispatch_to_app_with_timeout(
+            Request {
+                id: "o".into(),
+                method: Method::AgentTranscript(AgentTranscriptParams {
+                    target: harness.pane_ids[0].clone(),
+                    before: None,
+                    after: None,
+                    limit: None,
+                }),
+            },
+            &harness.api_tx,
+            None,
+        );
+        let owner: Value = serde_json::from_str(&owner).unwrap();
+        let owner_kinds: Vec<&str> = owner["result"]["entries"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{owner}"))
+            .iter()
+            .map(|entry| entry["kind"].as_str().unwrap())
+            .collect();
+        assert!(owner_kinds.contains(&"note"), "{owner}");
+        assert_eq!(owner["result"]["pending_ask"]["answerable"], true);
+        assert!(owner.to_string().contains("--secret-flag"));
+
+        for target in ["llm-opt", harness.pane_ids[0].as_str()] {
+            let lines = harness.call(&guest, transcript(target));
+            let result = &lines[0]["result"];
+            assert_eq!(result["type"], "agent_transcript", "{lines:?}");
+            assert_eq!(result["agent"], owner["result"]["agent"]);
+            assert_eq!(result["pane_id"], harness.pane_ids[0]);
+            let entries = result["entries"].as_array().unwrap();
+            let kinds: Vec<&str> = entries
+                .iter()
+                .map(|entry| entry["kind"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                kinds,
+                vec!["user", "user", "reply", "step", "ask"],
+                "no notes"
+            );
+            assert_eq!(
+                entries[0]["text"], "owner prompt 0",
+                "the granted agent's file"
+            );
+            assert_eq!(entries[1]["author"], "guest");
+            assert_eq!(entries[1]["author_name"], "Ana");
+            assert_eq!(entries[3]["intent"], "Running the tests");
+            assert!(entries[3].get("detail").is_none(), "{}", entries[3]);
+            assert!(!lines[0].to_string().contains("--secret-flag"));
+            assert!(!lines[0].to_string().contains("deploy keys"));
+            assert_eq!(result["pending_ask"]["id"], "ask-1");
+            assert_eq!(result["pending_ask"]["answerable"], false);
+            // The cursor works for the guest's next poll.
+            let after = result["after"].as_str().unwrap();
+            let poll = harness.call(
+                &guest,
+                json!({"id": "t", "method": "agent.transcript", "params": {"target": target, "after": after}}),
+            );
+            assert_eq!(poll[0]["result"]["entries"], json!([]), "{poll:?}");
+        }
+    }
+
+    #[test]
+    fn agent_transcript_is_bound_to_the_grant() {
+        let harness = start("transcript-forged");
+        let _sessions = omp_sessions(&harness);
+        let guest = harness.admit();
+        let other = harness.pane_ids[1].clone();
+        for target in [
+            other,
+            "other-agent".to_string(),
+            format!("studio/{}", harness.pane_ids[0]),
+            "studio/llm-opt".to_string(),
+            "w99:p99".to_string(),
+        ] {
+            let lines = harness.call(&guest, transcript(&target));
+            assert_eq!(code(&lines), "guest_forbidden", "{target} -> {lines:?}");
+        }
+    }
+
     #[test]
     fn a_guest_pages_only_the_granted_scrollback() {
         use base64::Engine as _;
@@ -2642,7 +2882,12 @@ mod tests {
         assert_eq!(keys(&pong[0]), set(&["id", "result"]));
         assert_eq!(
             keys(&pong[0]["result"]),
-            set(&["type", "version", "protocol"])
+            set(&["type", "version", "protocol", "capabilities"])
+        );
+        assert_eq!(
+            pong[0]["result"]["capabilities"],
+            json!({"agent_transcript": true}),
+            "only what the gate serves"
         );
 
         let prompt = harness.call(

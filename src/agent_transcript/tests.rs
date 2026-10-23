@@ -1,1 +1,1208 @@
+//! Normaliser, branch, paging and cursor rules over synthetic omp sessions.
+//! Every fixture is made up here; none is copied from a real session.
 
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use serde_json::{json, Value};
+
+use super::*;
+use crate::api::schema::{
+    AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptStepStatus,
+    TranscriptTurnStatus,
+};
+
+const T0_MS: u64 = 1_792_749_600_000; // 2026-10-23T10:00:00Z
+
+/// A synthetic omp session file, appended to the way omp appends: one JSON
+/// entry per line, each parented to the previous one unless told otherwise.
+pub(crate) struct Fixture {
+    dir: PathBuf,
+    pub(crate) path: PathBuf,
+    next: u32,
+    last: Option<String>,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+pub(crate) fn text(text: &str) -> Value {
+    json!({"type": "text", "text": text})
+}
+
+pub(crate) fn thinking(text: &str) -> Value {
+    json!({"type": "thinking", "thinking": text, "thinkingSignature": "sig"})
+}
+
+pub(crate) fn call(id: &str, name: &str, intent: Option<&str>, arguments: Value) -> Value {
+    let mut part = json!({"type": "toolCall", "id": id, "name": name, "arguments": arguments});
+    if let Some(intent) = intent {
+        part["intent"] = json!(intent);
+    }
+    part
+}
+
+pub(crate) fn ask_call(id: &str, questions: Value) -> Value {
+    call(
+        id,
+        "ask",
+        Some("Asking which way to go"),
+        json!({"questions": questions}),
+    )
+}
+
+impl Fixture {
+    pub(crate) fn new(tag: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-transcript-test-{}-{tag}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("2026-10-23T10-00-00-000Z_sess-1.jsonl");
+        let mut fixture = Self {
+            dir,
+            path,
+            next: 0,
+            last: None,
+        };
+        fixture.raw(&format!(
+            "{}\n",
+            json!({"type": "title", "v": 1, "title": "Synthetic", "updatedAt": "2026-10-23T10:00:00.000Z", "pad": "    "})
+        ));
+        fixture.raw(&format!(
+            "{}\n",
+            json!({"type": "session", "version": 3, "id": "sess-1", "timestamp": "2026-10-23T10:00:00.000Z", "cwd": "/tmp/project"})
+        ));
+        fixture
+    }
+
+    pub(crate) fn raw(&mut self, bytes: &str) {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .unwrap();
+        file.write_all(bytes.as_bytes()).unwrap();
+    }
+
+    /// Append `entry` under `parent` (the previous entry when `None`).
+    pub(crate) fn push_under(&mut self, mut entry: Value, parent: Option<&str>) -> String {
+        self.next += 1;
+        let id = format!("{:08x}", self.next);
+        let parent = parent.map(str::to_owned).or_else(|| self.last.clone());
+        entry["id"] = json!(id);
+        entry["parentId"] = parent.map_or(Value::Null, Value::String);
+        entry["timestamp"] = json!(self.iso(self.next));
+        self.raw(&format!("{entry}\n"));
+        self.last = Some(id.clone());
+        id
+    }
+
+    pub(crate) fn push(&mut self, entry: Value) -> String {
+        self.push_under(entry, None)
+    }
+
+    pub(crate) fn ms(&self, n: u32) -> u64 {
+        T0_MS + u64::from(n) * 1000
+    }
+
+    fn iso(&self, n: u32) -> String {
+        let minutes = n / 60;
+        let seconds = n % 60;
+        format!("2026-10-23T10:{minutes:02}:{seconds:02}.000Z")
+    }
+
+    pub(crate) fn user(&mut self, text: &str) -> String {
+        let ms = self.ms(self.next + 1);
+        self.push(json!({"type": "message", "message": {
+            "role": "user", "content": [{"type": "text", "text": text}],
+            "attribution": "user", "timestamp": ms,
+        }}))
+    }
+
+    pub(crate) fn assistant(&mut self, content: Vec<Value>, stop: &str) -> String {
+        let ms = self.ms(self.next + 1);
+        self.push(json!({"type": "message", "message": {
+            "role": "assistant", "content": content, "stopReason": stop,
+            "timestamp": ms, "completedAt": ms + 500, "api": "x", "provider": "x", "model": "x",
+            "usage": {"input": 1, "output": 1},
+        }}))
+    }
+
+    pub(crate) fn failed(&mut self, stop: &str, error: &str) -> String {
+        let ms = self.ms(self.next + 1);
+        self.push(json!({"type": "message", "message": {
+            "role": "assistant", "content": [], "stopReason": stop, "errorMessage": error,
+            "timestamp": ms, "completedAt": ms + 500,
+        }}))
+    }
+
+    pub(crate) fn result(
+        &mut self,
+        call: &str,
+        tool: &str,
+        is_error: bool,
+        details: Value,
+    ) -> String {
+        let ms = self.ms(self.next + 1);
+        self.push(json!({"type": "message", "message": {
+            "role": "toolResult", "toolCallId": call, "toolName": tool, "isError": is_error,
+            "content": [{"type": "text", "text": "output"}], "details": details, "timestamp": ms,
+        }}))
+    }
+
+    pub(crate) fn note(
+        &mut self,
+        custom_type: &str,
+        content: &str,
+        display: bool,
+        details: Value,
+    ) -> String {
+        self.push(
+            json!({"type": "custom_message", "customType": custom_type, "content": content,
+            "display": display, "details": details, "attribution": "agent"}),
+        )
+    }
+
+    pub(crate) fn page(
+        &self,
+        before: Option<&str>,
+        after: Option<&str>,
+        limit: Option<u32>,
+    ) -> Page {
+        read_page(&self.path, &request(before, after, limit)).unwrap()
+    }
+
+    pub(crate) fn newest(&self) -> Page {
+        self.page(None, None, None)
+    }
+}
+
+fn request(before: Option<&str>, after: Option<&str>, limit: Option<u32>) -> PageRequest {
+    PageRequest {
+        before: before.map(str::to_owned),
+        after: after.map(str::to_owned),
+        limit,
+    }
+}
+
+fn read_err(path: &Path, before: Option<&str>, after: Option<&str>) -> &'static str {
+    read_page(path, &request(before, after, None))
+        .unwrap_err()
+        .code()
+}
+
+fn kinds(entries: &[TranscriptEntry]) -> Vec<&'static str> {
+    entries
+        .iter()
+        .map(|entry| match entry {
+            TranscriptEntry::User { .. } => "user",
+            TranscriptEntry::Reply { .. } => "reply",
+            TranscriptEntry::Thinking { .. } => "thinking",
+            TranscriptEntry::Step { .. } => "step",
+            TranscriptEntry::Note { .. } => "note",
+            TranscriptEntry::Plan { .. } => "plan",
+            TranscriptEntry::Ask { .. } => "ask",
+            TranscriptEntry::TurnEnd { .. } => "turn_end",
+            TranscriptEntry::Summary { .. } => "summary",
+        })
+        .collect()
+}
+
+fn ids(entries: &[TranscriptEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            serde_json::to_value(entry).unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+fn user_texts(entries: &[TranscriptEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::User { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn steps(
+    entries: &[TranscriptEntry],
+) -> Vec<(String, String, TranscriptStepStatus, Option<String>)> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::Step {
+                tool,
+                intent,
+                status,
+                detail,
+                ..
+            } => Some((tool.clone(), intent.clone(), *status, detail.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_turn_maps_to_user_thinking_reply_and_turn_end() {
+    let mut session = Fixture::new("basic");
+    let user = session.user("Fix the flaky test");
+    let answer = session.assistant(
+        vec![
+            thinking("The race is in the setup."),
+            text("Fixed it."),
+            text("Tests pass now."),
+        ],
+        "stop",
+    );
+    let page = session.newest();
+    assert_eq!(page.session_id, "sess-1");
+    assert_eq!(
+        page.entries,
+        vec![
+            TranscriptEntry::User {
+                id: user,
+                ts_ms: session.ms(1),
+                text: "Fix the flaky test".into(),
+                author: TranscriptAuthor::Owner,
+                author_name: None,
+            },
+            TranscriptEntry::Thinking {
+                id: format!("{answer}:thinking"),
+                ts_ms: session.ms(2),
+                text: "The race is in the setup.".into(),
+            },
+            TranscriptEntry::Reply {
+                id: format!("{answer}:reply"),
+                ts_ms: session.ms(2),
+                text: "Fixed it.\n\nTests pass now.".into(),
+                is_final: true,
+            },
+            TranscriptEntry::TurnEnd {
+                id: format!("{answer}:end"),
+                ts_ms: session.ms(2) + 500,
+                status: TranscriptTurnStatus::Done,
+                error: None,
+            },
+        ]
+    );
+    assert_eq!(page.before, None, "the whole session fits one page");
+    assert_eq!(page.pending_ask, None);
+    assert_eq!(page.working, None);
+    let wire = serde_json::to_value(&page.entries[2]).unwrap();
+    assert_eq!(wire["kind"], "reply");
+    assert_eq!(wire["final"], true);
+}
+
+#[test]
+fn a_guest_prompt_is_attributed_and_its_prefix_stripped() {
+    let mut session = Fixture::new("guest");
+    session.user("Ana (via HerdrUp): can you check the logs?");
+    session.user("Note: (via HerdrUp): is only a prefix at the start of a line\nlater");
+    session.user("plain owner prompt");
+    let page = session.newest();
+    let users: Vec<_> = page
+        .entries
+        .iter()
+        .map(|entry| match entry {
+            TranscriptEntry::User {
+                text,
+                author,
+                author_name,
+                ..
+            } => (text.as_str(), *author, author_name.as_deref()),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        users,
+        vec![
+            (
+                "can you check the logs?",
+                TranscriptAuthor::Guest,
+                Some("Ana")
+            ),
+            (
+                "is only a prefix at the start of a line\nlater",
+                TranscriptAuthor::Guest,
+                Some("Note:")
+            ),
+            ("plain owner prompt", TranscriptAuthor::Owner, None),
+        ]
+    );
+    let wire = serde_json::to_value(&page.entries[0]).unwrap();
+    assert_eq!(wire["author"], "guest");
+    assert_eq!(wire["author_name"], "Ana");
+}
+
+#[test]
+fn text_before_a_tool_call_is_a_reply_and_steps_follow_their_results() {
+    let mut session = Fixture::new("steps");
+    session.user("Ship it");
+    let long_command = "x".repeat(400);
+    let first = session.assistant(
+        vec![
+            text("Let me look first."),
+            call(
+                "c1",
+                "bash",
+                Some("Running the tests"),
+                json!({"command": "cargo test", "i": "ignored"}),
+            ),
+            call(
+                "c2",
+                "read",
+                None,
+                json!({"path": "src/main.rs", "i": "Reading main"}),
+            ),
+            call("c3", "grep", None, json!({"pattern": long_command})),
+        ],
+        "toolUse",
+    );
+    session.result("c1", "bash", false, json!({}));
+    session.result("c2", "read", true, json!({}));
+    let page = session.newest();
+    assert_eq!(
+        kinds(&page.entries),
+        vec!["user", "reply", "step", "step", "step"]
+    );
+    assert!(matches!(
+        &page.entries[1],
+        TranscriptEntry::Reply { is_final: false, text, .. } if text == "Let me look first."
+    ));
+    let steps = steps(&page.entries);
+    assert_eq!(
+        steps[0],
+        (
+            "bash".into(),
+            "Running the tests".into(),
+            TranscriptStepStatus::Ok,
+            Some("cargo test".into())
+        )
+    );
+    assert_eq!(
+        steps[1],
+        (
+            "read".into(),
+            "Reading main".into(),
+            TranscriptStepStatus::Error,
+            Some("src/main.rs".into())
+        )
+    );
+    let (tool, intent, status, detail) = &steps[2];
+    assert_eq!(
+        (tool.as_str(), intent.as_str()),
+        ("grep", "grep"),
+        "falls back to the tool name"
+    );
+    assert_eq!(*status, TranscriptStepStatus::Running);
+    let detail = detail.as_deref().unwrap();
+    assert_eq!(detail.chars().count(), 300);
+    assert!(detail.ends_with('…'));
+    assert_eq!(ids(&page.entries)[2], format!("{first}:c1"));
+    assert_eq!(
+        page.working,
+        Some(TranscriptWorking {
+            intent: "grep".into(),
+            tool: "grep".into(),
+            since_ms: session.ms(2) + 500,
+        })
+    );
+    assert_eq!(page.pending_ask, None);
+}
+
+#[test]
+fn a_call_left_without_a_result_by_later_output_or_an_exit_is_an_error() {
+    let mut session = Fixture::new("lost");
+    session.user("go");
+    session.assistant(
+        vec![call("c1", "bash", Some("Waiting"), json!({}))],
+        "toolUse",
+    );
+    session.assistant(vec![text("Moving on.")], "stop");
+    session.user("again");
+    session.assistant(
+        vec![call("c2", "bash", Some("Long job"), json!({}))],
+        "toolUse",
+    );
+    session.push(json!({"type": "custom", "customType": "session_exit", "data": {"kind": "exit"}}));
+    let page = session.newest();
+    let statuses: Vec<_> = steps(&page.entries)
+        .into_iter()
+        .map(|step| step.2)
+        .collect();
+    assert_eq!(
+        statuses,
+        vec![TranscriptStepStatus::Error, TranscriptStepStatus::Error]
+    );
+    assert_eq!(page.working, None, "an exited agent runs nothing");
+}
+
+#[test]
+fn bookkeeping_entries_and_hidden_reminders_are_dropped() {
+    let mut session = Fixture::new("hidden");
+    session.push(json!({"type": "model_change", "model": "x"}));
+    session.user("hello");
+    session.push(json!({"type": "message", "message": {"role": "developer", "content": [{"type": "text", "text": "system rules"}]}}));
+    session.push(json!({"type": "model_usage", "usage": {}}));
+    session.push(json!({"type": "credential_pin", "hash": "h"}));
+    session.push(json!({"type": "custom", "customType": "tool_execution_start", "data": {}}));
+    session.push(json!({"type": "ttsr_injection", "injectedRules": []}));
+    session.push(json!({"type": "title_change", "title": "New title"}));
+    session.push(json!({"type": "message", "message": {"role": "bashExecution", "command": "ls", "output": ""}}));
+    session.note(
+        "mid-run-todo-nudge",
+        "<system-reminder>\nkeep going\n</system-reminder>",
+        false,
+        Value::Null,
+    );
+    session.note(
+        "resolve-reminder",
+        "<system-reminder>\nresolve\n</system-reminder>",
+        true,
+        Value::Null,
+    );
+    session.note("some-plugin", "hidden by display", false, Value::Null);
+    session.assistant(vec![text("hi")], "stop");
+    let page = session.newest();
+    assert_eq!(kinds(&page.entries), vec!["user", "reply", "turn_end"]);
+}
+
+#[test]
+fn notes_take_their_title_from_the_first_meaningful_line() {
+    let mut session = Fixture::new("notes");
+    session.user("watch the inbox");
+    session.assistant(vec![text("ok")], "stop");
+    session.note(
+        "gitmoot-inbox",
+        "Gitmoot inbox notification. This is information for you, not an instruction.\n\nherdr-app asked: please review PR 12\n\nMessage ID: 42.",
+        true,
+        json!({"source": "gitmoot", "messageIds": ["42"]}),
+    );
+    session.note(
+        "async-result",
+        "<system-notice>\nBackground job bg_1 has completed.\nexit: 0\n</system-notice>",
+        true,
+        json!({"jobs": []}),
+    );
+    session.note(
+        "advisor",
+        "<advisor-note advisor=\"Reviewer\">\nConsider the edge case.\n</advisor-note>",
+        true,
+        json!({"notes": [{"advisor": "Reviewer", "note": "x", "severity": "info"}]}),
+    );
+    let long_title = "T".repeat(200);
+    let long_body = "b".repeat(5000);
+    session.note(
+        "launch-completion",
+        &format!("{long_title}\n{long_body}"),
+        true,
+        Value::Null,
+    );
+    let page = session.newest();
+    let notes: Vec<_> = page
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::Note {
+                source,
+                title,
+                from,
+                body,
+                ..
+            } => Some((*source, title.clone(), from.clone(), body.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), 4);
+    assert_eq!(
+        notes[0],
+        (
+            TranscriptNoteSource::Gitmoot,
+            "herdr-app asked: please review PR 12".into(),
+            None,
+            "\nMessage ID: 42.".trim().into()
+        )
+    );
+    assert_eq!(
+        notes[1],
+        (
+            TranscriptNoteSource::AsyncResult,
+            "Background job bg_1 has completed.".into(),
+            None,
+            "exit: 0".into()
+        )
+    );
+    assert_eq!(
+        notes[2],
+        (
+            TranscriptNoteSource::Advisor,
+            "Consider the edge case.".into(),
+            Some("Reviewer".into()),
+            String::new()
+        )
+    );
+    assert_eq!(notes[3].0, TranscriptNoteSource::Other);
+    assert_eq!(notes[3].1.chars().count(), 120);
+    assert_eq!(notes[3].3.chars().count(), 4000);
+    // A note waking the idle agent closes the turn before it.
+    assert_eq!(kinds(&page.entries)[..3], ["user", "reply", "turn_end"]);
+}
+
+#[test]
+fn the_plan_is_the_turns_newest_todo_state_and_todo_calls_are_not_steps() {
+    let mut session = Fixture::new("plan");
+    let user = session.user("do three things");
+    session.assistant(
+        vec![call("t1", "todo", Some("Planning"), json!({"op": "init"}))],
+        "toolUse",
+    );
+    session.result(
+        "t1",
+        "todo",
+        false,
+        json!({"phases": [{"name": "Work", "tasks": [
+            {"content": "one", "status": "in_progress"},
+            {"content": "two", "status": "pending"},
+            {"content": "dropped", "status": "abandoned"},
+        ]}]}),
+    );
+    session.assistant(
+        vec![call(
+            "b1",
+            "bash",
+            Some("Doing one"),
+            json!({"command": "true"}),
+        )],
+        "toolUse",
+    );
+    session.result("b1", "bash", false, json!({}));
+    session.assistant(
+        vec![call("t2", "todo", Some("Updating"), json!({"op": "done"}))],
+        "toolUse",
+    );
+    session.result(
+        "t2",
+        "todo",
+        false,
+        json!({"phases": [{"name": "Work", "tasks": [
+            {"content": "one", "status": "completed"},
+            {"content": "two", "status": "in_progress"},
+        ]}]}),
+    );
+    let page = session.newest();
+    assert_eq!(kinds(&page.entries), vec!["user", "plan", "step"]);
+    assert_eq!(
+        page.entries[1],
+        TranscriptEntry::Plan {
+            id: format!("{user}:plan"),
+            ts_ms: session.ms(7),
+            items: vec![
+                TranscriptPlanItem {
+                    text: "one".into(),
+                    done: true
+                },
+                TranscriptPlanItem {
+                    text: "two".into(),
+                    done: false
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn an_ask_is_pending_until_its_result_records_the_answer() {
+    let mut session = Fixture::new("ask");
+    session.user("deploy?");
+    session.assistant(
+        vec![
+            text("Two options."),
+            ask_call("ask-1", json!([{"id": "q", "question": "Deploy now?", "options": [{"label": "Yes"}, {"label": "Later"}], "recommended": 0}])),
+        ],
+        "toolUse",
+    );
+    let pending = PendingAsk {
+        id: "ask-1".into(),
+        questions: vec![AskQuestion {
+            question: "Deploy now?".into(),
+            options: vec!["Yes".into(), "Later".into()],
+            multi: false,
+            recommended: Some(0),
+        }],
+        answerable: true,
+    };
+    let page = session.newest();
+    assert_eq!(page.pending_ask, Some(pending.clone()));
+    assert_eq!(page.working, None, "waiting on the user is not working");
+    assert_eq!(kinds(&page.entries), vec!["user", "reply", "ask"]);
+    assert!(
+        matches!(&page.entries[2], TranscriptEntry::Ask { id, answer: None, .. } if id == "ask-1")
+    );
+    assert_eq!(pending_ask(&session.path).unwrap(), Some(pending));
+    assert_eq!(ask_result(&session.path, "ask-1").unwrap(), None);
+
+    session.result("ask-1", "ask", false, json!({"question": "Deploy now?", "options": ["Yes", "Later"], "multi": false, "selectedOptions": ["Later"]}));
+    let page = session.newest();
+    assert_eq!(page.pending_ask, None);
+    assert!(matches!(
+        &page.entries[2],
+        TranscriptEntry::Ask { answer: Some(answer), .. } if answer == &vec!["Later".to_string()]
+    ));
+    assert_eq!(pending_ask(&session.path).unwrap(), None);
+    assert_eq!(
+        ask_result(&session.path, "ask-1").unwrap(),
+        Some(vec!["Later".into()])
+    );
+}
+
+#[test]
+fn only_one_single_select_question_with_options_is_answerable() {
+    for (questions, answerable) in [
+        (
+            json!([{"question": "Pick", "options": [{"label": "A"}], "multi": true}]),
+            false,
+        ),
+        (json!([{"question": "Pick", "options": []}]), false),
+        (
+            json!([{"question": "One", "options": [{"label": "A"}]}, {"question": "Two", "options": [{"label": "B"}]}]),
+            false,
+        ),
+        (
+            json!([{"question": "Pick", "options": [{"label": "A"}]}]),
+            true,
+        ),
+    ] {
+        let mut session = Fixture::new("answerable");
+        session.user("q");
+        session.assistant(vec![ask_call("a", questions.clone())], "toolUse");
+        let ask = pending_ask(&session.path).unwrap().expect("pending");
+        assert_eq!(ask.answerable, answerable, "{questions}");
+    }
+}
+
+#[test]
+fn a_prompt_after_an_ask_abandons_it() {
+    let mut session = Fixture::new("abandon");
+    session.user("q");
+    session.assistant(
+        vec![ask_call(
+            "a",
+            json!([{"question": "Pick", "options": [{"label": "A"}]}]),
+        )],
+        "toolUse",
+    );
+    assert!(pending_ask(&session.path).unwrap().is_some());
+    session.user("never mind, do B");
+    assert_eq!(pending_ask(&session.path).unwrap(), None);
+}
+
+#[test]
+fn a_multi_question_ask_collects_each_answer() {
+    let mut session = Fixture::new("multi");
+    session.user("q");
+    session.assistant(vec![ask_call("a", json!([{"question": "One", "options": ["A"]}, {"question": "Two", "options": ["B", "C"], "multi": true}]))], "toolUse");
+    session.result("a", "ask", false, json!({"results": [
+        {"id": "1", "question": "One", "options": ["A"], "multi": false, "selectedOptions": ["A"]},
+        {"id": "2", "question": "Two", "options": ["B", "C"], "multi": true, "selectedOptions": ["B", "C"], "customInput": "and D"},
+    ]}));
+    assert_eq!(
+        ask_result(&session.path, "a").unwrap(),
+        Some(vec!["A".into(), "B".into(), "C".into(), "and D".into()])
+    );
+    let page = session.newest();
+    let TranscriptEntry::Ask { questions, .. } = &page.entries[1] else {
+        panic!("{:?}", page.entries);
+    };
+    assert_eq!(
+        questions[0].options,
+        vec!["A".to_string()],
+        "plain-string options"
+    );
+    assert!(questions[1].multi);
+}
+
+#[test]
+fn a_turn_ends_only_where_omp_did_not_continue() {
+    let mut session = Fixture::new("continuation");
+    session.user("first");
+    let retried = session.failed("error", "overloaded");
+    // An automatic retry (or a todo nudge) continues the same turn.
+    session.note(
+        "mid-run-todo-nudge",
+        "<system-reminder>\ncontinue\n</system-reminder>",
+        false,
+        Value::Null,
+    );
+    let stopped_early = session.assistant(vec![text("Partial answer.")], "stop");
+    session.assistant(
+        vec![call("c", "bash", Some("More work"), json!({}))],
+        "toolUse",
+    );
+    session.result("c", "bash", false, json!({}));
+    let done = session.assistant(vec![text("All done.")], "stop");
+    session.user("second");
+    let failed = session.failed("error", "rate limited");
+    session.user("third");
+    let aborted = session.failed("aborted", "Request was aborted");
+    let page = session.newest();
+    let ends: Vec<_> = page
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            TranscriptEntry::TurnEnd {
+                id, status, error, ..
+            } => Some((id.clone(), *status, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        ends,
+        vec![
+            (format!("{done}:end"), TranscriptTurnStatus::Done, None),
+            (
+                format!("{failed}:end"),
+                TranscriptTurnStatus::Error,
+                Some("rate limited".into())
+            ),
+            (
+                format!("{aborted}:end"),
+                TranscriptTurnStatus::Aborted,
+                None
+            ),
+        ]
+    );
+    let entry_ids = ids(&page.entries);
+    assert!(!entry_ids.contains(&format!("{retried}:end")));
+    assert!(!entry_ids.contains(&format!("{stopped_early}:end")));
+    assert!(
+        entry_ids.contains(&format!("{stopped_early}:reply")),
+        "the early answer still shows"
+    );
+}
+
+#[test]
+fn only_the_active_branch_is_shown_after_a_rewind() {
+    let mut session = Fixture::new("branch");
+    session.user("one");
+    let kept = session.assistant(vec![text("answer one")], "stop");
+    session.user("two (abandoned)");
+    session.assistant(vec![text("abandoned answer")], "stop");
+    let before_rewind = session.newest();
+    // The user rewinds to after the first answer and asks again.
+    session.push_under(
+        json!({"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "two, again"}], "timestamp": 0}}),
+        Some(&kept),
+    );
+    session.assistant(vec![text("new answer")], "stop");
+    let page = session.newest();
+    assert_eq!(user_texts(&page.entries), vec!["one", "two, again"]);
+    assert!(!ids(&page.entries)
+        .iter()
+        .any(|id| id.starts_with("00000004")));
+    // A client that saw the abandoned branch reloads.
+    assert_eq!(
+        read_err(&session.path, None, Some(&before_rewind.after)),
+        "cursor_expired"
+    );
+}
+
+#[test]
+fn a_compaction_is_a_summary_and_older_turns_stay_pageable() {
+    let mut session = Fixture::new("compaction");
+    session.user("old question");
+    session.assistant(vec![text("old answer")], "stop");
+    let compaction = session.push(json!({"type": "compaction", "summary": "private summary text", "shortSummary": "s", "firstKeptEntryId": "00000001", "tokensBefore": 1, "tokensAfter": 1}));
+    session.user("new question");
+    session.assistant(vec![text("new answer")], "stop");
+    let page = session.newest();
+    assert_eq!(
+        kinds(&page.entries),
+        vec!["user", "reply", "turn_end", "summary", "user", "reply", "turn_end"]
+    );
+    assert_eq!(
+        page.entries[3],
+        TranscriptEntry::Summary {
+            id: compaction,
+            ts_ms: session.ms(3),
+            text: "Earlier messages were summarised".into(),
+        }
+    );
+    let newest = session.page(None, None, Some(1));
+    assert_eq!(user_texts(&newest.entries), vec!["new question"]);
+    let older = session.page(newest.before.as_deref(), None, Some(1));
+    assert_eq!(
+        kinds(&older.entries),
+        vec!["user", "reply", "turn_end", "summary"]
+    );
+}
+
+#[test]
+fn a_clear_hides_what_came_before_it() {
+    let mut session = Fixture::new("clear");
+    session.user("before clear");
+    session.assistant(vec![text("x")], "stop");
+    session.push(json!({"type": "reset_boundary"}));
+    session.user("after clear");
+    let page = session.newest();
+    assert_eq!(user_texts(&page.entries), vec!["after clear"]);
+    assert_eq!(page.before, None);
+}
+
+#[test]
+fn malformed_and_unfinished_lines_are_skipped() {
+    let mut session = Fixture::new("malformed");
+    session.user("one");
+    session.raw("{not json\n");
+    session.raw("\n");
+    session.raw("{\"type\":\"message\",\"message\":{\"role\":\"user\"}}\n"); // no id
+    let leaf = session.assistant(vec![text("fine")], "stop");
+    // omp is mid-write: the last line has no newline yet.
+    session.raw(&format!(
+        "{{\"type\":\"message\",\"id\":\"partial\",\"parentId\":\"{leaf}\",\"message\":{{\"role\":\"user\",\"content\":\"ha"
+    ));
+    let page = session.newest();
+    assert_eq!(kinds(&page.entries), vec!["user", "reply", "turn_end"]);
+    let index = cached_index(&session.path);
+    assert_eq!(index.lock().unwrap().malformed, 2);
+    // The line completes: the next read picks it up.
+    session.raw(&format!("lf\",\"timestamp\":{T0_MS}}}}}\n"));
+    let page = session.page(None, Some(&page.after), None);
+    assert_eq!(user_texts(&page.entries), vec!["half"]);
+}
+
+fn numbered_session(tag: &str, turns: usize) -> Fixture {
+    let mut session = Fixture::new(tag);
+    for turn in 1..=turns {
+        session.user(&format!("question {turn}"));
+        session.assistant(
+            vec![call(
+                &format!("c{turn}"),
+                "bash",
+                Some("Working"),
+                json!({}),
+            )],
+            "toolUse",
+        );
+        session.result(&format!("c{turn}"), "bash", false, json!({}));
+        session.assistant(vec![text(&format!("answer {turn}"))], "stop");
+    }
+    session
+}
+
+#[test]
+fn pages_walk_back_by_turns_without_gaps_or_overlap() {
+    let session = numbered_session("paging", 5);
+    let newest = session.page(None, None, Some(2));
+    assert_eq!(
+        user_texts(&newest.entries),
+        vec!["question 4", "question 5"]
+    );
+    let middle = session.page(newest.before.as_deref(), None, Some(2));
+    assert_eq!(
+        user_texts(&middle.entries),
+        vec!["question 2", "question 3"]
+    );
+    let oldest = session.page(middle.before.as_deref(), None, Some(2));
+    assert_eq!(user_texts(&oldest.entries), vec!["question 1"]);
+    assert_eq!(oldest.before, None);
+    let mut all = oldest.entries.clone();
+    all.extend(middle.entries.clone());
+    all.extend(newest.entries.clone());
+    assert_eq!(all, session.page(None, None, Some(50)).entries);
+    assert_eq!(
+        kinds(&newest.entries),
+        vec!["user", "step", "reply", "turn_end", "user", "step", "reply", "turn_end"]
+    );
+}
+
+#[test]
+fn the_limit_defaults_to_twenty_turns_and_is_clamped() {
+    let session = numbered_session("limits", 60);
+    assert_eq!(
+        user_texts(&session.page(None, None, None).entries).len(),
+        20
+    );
+    assert_eq!(
+        user_texts(&session.page(None, None, Some(0)).entries).len(),
+        1
+    );
+    assert_eq!(
+        user_texts(&session.page(None, None, Some(500)).entries).len(),
+        50
+    );
+}
+
+#[test]
+fn a_turn_longer_than_the_page_budget_is_split_mid_turn() {
+    let mut session = Fixture::new("budget");
+    session.user("marathon");
+    for step in 0..2000 {
+        session.assistant(
+            vec![call(&format!("c{step}"), "bash", Some("Step"), json!({}))],
+            "toolUse",
+        );
+        session.result(&format!("c{step}"), "bash", false, json!({}));
+    }
+    session.assistant(vec![text("finished")], "stop");
+    let mut page = session.newest();
+    assert!(
+        page.before.is_some(),
+        "the rest of the turn is an older page"
+    );
+    let mut all = Vec::new();
+    let mut pages = 0;
+    loop {
+        assert!(page.entries.len() <= PAGE_RECORD_BUDGET + 1);
+        pages += 1;
+        let mut older = page.entries.clone();
+        older.extend(all);
+        all = older;
+        let Some(before) = page.before.clone() else {
+            break;
+        };
+        page = session.page(Some(&before), None, None);
+    }
+    assert_eq!(pages, 2, "1500 steps a page");
+    assert_eq!(kinds(&all)[0], "user");
+    assert_eq!(kinds(&all).last(), Some(&"turn_end"));
+    assert_eq!(steps(&all).len(), 2000);
+    let mut unique = ids(&all);
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "no entry appears on both pages");
+}
+
+#[test]
+fn after_returns_appended_entries_and_resends_changed_ones() {
+    let mut session = Fixture::new("after");
+    session.user("go");
+    let message = session.assistant(
+        vec![call(
+            "c1",
+            "bash",
+            Some("Building"),
+            json!({"command": "make"}),
+        )],
+        "toolUse",
+    );
+    let first = session.newest();
+    assert_eq!(steps(&first.entries)[0].2, TranscriptStepStatus::Running);
+    assert_eq!(first.working.as_ref().unwrap().intent, "Building");
+
+    // Nothing new: an empty page with the same position.
+    let idle = session.page(None, Some(&first.after), None);
+    assert!(idle.entries.is_empty());
+    assert_eq!(idle.after, first.after);
+    assert_eq!(idle.before, None, "after pages never page backwards");
+
+    session.result("c1", "bash", false, json!({}));
+    session.assistant(vec![call("t", "todo", None, json!({}))], "toolUse");
+    session.result(
+        "t",
+        "todo",
+        false,
+        json!({"phases": [{"name": "p", "tasks": [{"content": "a", "status": "pending"}]}]}),
+    );
+    let update = session.page(None, Some(&first.after), None);
+    assert_eq!(kinds(&update.entries), vec!["step", "plan"]);
+    assert_eq!(
+        ids(&update.entries)[0],
+        format!("{message}:c1"),
+        "same id, new status"
+    );
+    assert_eq!(steps(&update.entries)[0].2, TranscriptStepStatus::Ok);
+    assert_eq!(update.working, None);
+
+    session.assistant(vec![call("t2", "todo", None, json!({}))], "toolUse");
+    session.result(
+        "t2",
+        "todo",
+        false,
+        json!({"phases": [{"name": "p", "tasks": [{"content": "a", "status": "completed"}]}]}),
+    );
+    session.assistant(vec![text("done")], "stop");
+    let last = session.page(None, Some(&update.after), None);
+    assert_eq!(kinds(&last.entries), vec!["plan", "reply", "turn_end"]);
+    assert_eq!(
+        ids(&last.entries)[0],
+        ids(&update.entries)[1],
+        "the plan keeps its id"
+    );
+    assert!(session
+        .page(None, Some(&last.after), None)
+        .entries
+        .is_empty());
+}
+
+#[test]
+fn an_after_page_over_budget_continues_from_where_it_stopped() {
+    let mut session = Fixture::new("after-budget");
+    session.user("start");
+    let first = session.newest();
+    for step in 0..2000 {
+        session.assistant(
+            vec![call(&format!("c{step}"), "bash", Some("Step"), json!({}))],
+            "toolUse",
+        );
+        session.result(&format!("c{step}"), "bash", false, json!({}));
+    }
+    let one = session.page(None, Some(&first.after), None);
+    let two = session.page(None, Some(&one.after), None);
+    let three = session.page(None, Some(&two.after), None);
+    assert!(three.entries.is_empty());
+    assert_eq!(steps(&one.entries).len() + steps(&two.entries).len(), 2000);
+    assert!(!two.entries.is_empty());
+}
+
+#[test]
+fn foreign_garbled_or_rewritten_cursors_expire() {
+    let session = numbered_session("expire", 3);
+    let page = session.page(None, None, Some(1));
+    let before = page.before.clone().unwrap();
+    assert_eq!(
+        read_err(&session.path, Some("garbage!"), None),
+        "cursor_expired"
+    );
+    assert_eq!(
+        read_err(&session.path, Some(&page.after), None),
+        "cursor_expired"
+    );
+    assert_eq!(
+        read_err(&session.path, Some(&before), Some(&page.after)),
+        "invalid_request"
+    );
+
+    // Another session's cursor does not resolve here.
+    let other = numbered_session("expire-other", 3);
+    std::fs::write(
+        &other.path,
+        std::fs::read_to_string(&other.path)
+            .unwrap()
+            .replace("\"sess-1\"", "\"sess-2\""),
+    )
+    .unwrap();
+    let foreign = other.page(None, None, Some(1));
+    assert_eq!(
+        read_err(&session.path, foreign.before.as_deref(), None),
+        "cursor_expired"
+    );
+
+    // The file is rewritten in place (same path): old cursors expire.
+    let mut rewritten = Fixture::new("expire-rewrite");
+    rewritten.user("different");
+    rewritten.assistant(vec![text("history")], "stop");
+    std::fs::copy(&rewritten.path, &session.path).unwrap();
+    assert_eq!(
+        read_err(&session.path, Some(&before), None),
+        "cursor_expired"
+    );
+    assert_eq!(
+        read_err(&session.path, None, Some(&page.after)),
+        "cursor_expired"
+    );
+    assert_eq!(user_texts(&session.newest().entries), vec!["different"]);
+}
+
+#[test]
+fn a_missing_file_is_unavailable() {
+    let session = Fixture::new("missing");
+    std::fs::remove_file(&session.path).unwrap();
+    assert_eq!(
+        read_err(&session.path, None, None),
+        "transcript_unavailable"
+    );
+    assert!(pending_ask(&session.path).is_err());
+}
+
+#[test]
+fn appends_extend_the_index_instead_of_rescanning() {
+    let mut session = numbered_session("incremental", 2);
+    session.newest();
+    let index = cached_index(&session.path);
+    let first_offset = index.lock().unwrap().records[0].offset;
+    session.user("question 3");
+    let page = session.newest();
+    assert_eq!(user_texts(&page.entries).last(), Some(&"question 3"));
+    let index = index.lock().unwrap();
+    assert_eq!(index.records[0].offset, first_offset);
+    assert_eq!(index.records.len(), 9);
+}
+
+#[test]
+fn iso_timestamps_parse_to_epoch_milliseconds() {
+    assert_eq!(
+        normalize::parse_iso8601_ms("2026-10-23T10:00:00.000Z"),
+        Some(T0_MS)
+    );
+    assert_eq!(
+        normalize::parse_iso8601_ms("2026-10-23T10:00:01.5Z"),
+        Some(T0_MS + 1500)
+    );
+    assert_eq!(normalize::parse_iso8601_ms("1970-01-01T00:00:00Z"), Some(0));
+    assert_eq!(
+        normalize::parse_iso8601_ms("2024-02-29T00:00:00.000Z"),
+        Some(1_709_164_800_000)
+    );
+    assert_eq!(normalize::parse_iso8601_ms("yesterday"), None);
+}
+
+/// `cargo test --release --bin herdr agent_transcript::tests::large_session_pages -- --ignored --nocapture`
+/// Generates a ~150 MB synthetic session (long tool outputs, many turns) and
+/// times the cold first page (full index scan) and warm pages.
+#[test]
+#[ignore = "generates a 150 MB file; run explicitly for timings"]
+fn large_session_pages() {
+    let mut session = Fixture::new("large");
+    let output = "o".repeat(12_000);
+    let mut turn = 0;
+    while std::fs::metadata(&session.path).map_or(0, |meta| meta.len()) < 150_000_000 {
+        turn += 1;
+        session.user(&format!("question {turn}"));
+        for step in 0..8 {
+            let id = format!("c{turn}-{step}");
+            session.assistant(
+                vec![
+                    thinking("Considering the next step carefully."),
+                    call(&id, "bash", Some("Running"), json!({"command": "make"})),
+                ],
+                "toolUse",
+            );
+            session.push(json!({"type": "message", "message": {"role": "toolResult", "toolCallId": id, "toolName": "bash", "isError": false, "content": [{"type": "text", "text": output}], "details": {}}}));
+        }
+        session.assistant(vec![text("done")], "stop");
+    }
+    let size = std::fs::metadata(&session.path).unwrap().len();
+    let started = std::time::Instant::now();
+    let first = session.newest();
+    let cold = started.elapsed();
+    let started = std::time::Instant::now();
+    let again = session.newest();
+    let warm_newest = started.elapsed();
+    let started = std::time::Instant::now();
+    let older = session.page(first.before.as_deref(), None, None);
+    let warm_older = started.elapsed();
+    let started = std::time::Instant::now();
+    let poll = session.page(None, Some(&first.after), None);
+    let warm_after = started.elapsed();
+    assert_eq!(first, again);
+    assert_eq!(user_texts(&first.entries).len(), 20);
+    assert_eq!(user_texts(&older.entries).len(), 20);
+    assert!(poll.entries.is_empty());
+    println!(
+        "size={size} turns={turn} cold_first_page={cold:?} warm_newest={warm_newest:?} warm_before={warm_older:?} warm_after={warm_after:?}"
+    );
+}
