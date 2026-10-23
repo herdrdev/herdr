@@ -341,7 +341,7 @@ Set or clear the foreground client's outer terminal window title:
 `type: "client_window_title"` with `changed` and reason `set`, `cleared`, or
 `no_foreground_client`.
 
-Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch.
+Worktree methods manage Git checkouts as Herdr workspaces. `worktree.create` creates a checkout and returns the new `workspace`, `tab`, `root_pane`, and `worktree` records. If the requested branch already exists locally, it checks out that branch; otherwise it creates the branch from the requested base or `HEAD`. `worktree.open` opens an existing checkout or returns the already-open workspace. `worktree.remove` runs `git worktree remove` against a linked child workspace and never deletes the branch. It returns `dirty_worktree_requires_force` or `submodule_worktree_requires_force` when Git refuses a safe removal; check for work that would be lost before retrying with `force: true`.
 
 Create a worktree from a source workspace:
 

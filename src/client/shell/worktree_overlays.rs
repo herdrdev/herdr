@@ -344,24 +344,24 @@ pub(super) fn render_worktree_remove_overlay(
         inner.x,
         inner.y + 3,
         inner.width,
-        " The branch is not deleted. The Herdr workspace will close.",
-        Style::default().fg(p.text).bg(p.panel_bg),
+        if remove.force_confirmation {
+            " Uncommitted or unpushed work will be deleted."
+        } else {
+            " The branch is not deleted. The Herdr workspace will close."
+        },
+        Style::default()
+            .fg(if remove.force_confirmation {
+                p.red
+            } else {
+                p.text
+            })
+            .bg(p.panel_bg),
     );
-    if remove.force_confirmation {
-        put_text(
-            b,
-            inner.x,
-            inner.y + 4,
-            inner.width,
-            " Dirty or untracked files will be permanently deleted.",
-            Style::default().fg(p.red).bg(p.panel_bg),
-        );
-    }
     if remove.removing {
         put_text(
             b,
             inner.x,
-            inner.y + 5,
+            inner.y + 4,
             inner.width,
             " removing…",
             Style::default().fg(p.accent).bg(p.panel_bg),
@@ -370,7 +370,7 @@ pub(super) fn render_worktree_remove_overlay(
         put_text(
             b,
             inner.x,
-            inner.y + 5,
+            inner.y + 4,
             inner.width,
             &format!(" {error}"),
             Style::default().fg(p.red).bg(p.panel_bg),

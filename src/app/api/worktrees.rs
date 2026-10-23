@@ -2123,6 +2123,112 @@ mod tests {
         let _ = std::fs::remove_dir_all(repo);
     }
 
+    #[tokio::test]
+    async fn api_worktree_remove_reports_submodule_force_requirement_without_shutting_down_panes() {
+        let repo = create_committed_repo("api-worktree-remove-submodule-repo");
+        let submodule = create_committed_repo("api-worktree-remove-submodule-source");
+        let checkout = unique_temp_path("api-worktree-remove-submodule-checkout");
+        run_git(
+            &repo,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                "--quiet",
+                submodule.to_str().unwrap(),
+                "sub",
+            ],
+        );
+        run_git(&repo, &["commit", "--quiet", "-am", "add submodule"]);
+        run_git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "worktree/api-remove-submodule",
+                checkout.to_str().unwrap(),
+                "HEAD",
+            ],
+        );
+        run_git(
+            &checkout,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "update",
+                "--init",
+                "--quiet",
+            ],
+        );
+
+        let mut app = app_with_parent(&repo);
+        let mut child = Workspace::test_new("child");
+        child.identity_cwd = checkout.clone();
+        child.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
+            key: crate::workspace::git_space_metadata(&repo).unwrap().key,
+            label: "api-worktree-remove-submodule-repo".into(),
+            repo_root: repo.clone(),
+            checkout_path: checkout.clone(),
+            is_linked_worktree: true,
+        });
+        let child_id = child.id.clone();
+        let pane_id = child.tabs[0].root_pane;
+        let terminal_id = child.terminal_id(pane_id).cloned().unwrap();
+        app.state.workspaces.push(child);
+        app.state.ensure_test_terminals();
+        let (runtime, _input_rx) = crate::terminal::TerminalRuntime::test_with_channel(80, 24);
+        app.terminal_runtimes.insert(terminal_id.clone(), runtime);
+
+        for dirty in [false, true] {
+            if dirty {
+                std::fs::write(checkout.join("sub/README.md"), "uncommitted work\n").unwrap();
+            }
+            let response = run_deferred_api_request(
+                &mut app,
+                Request {
+                    id: "req".into(),
+                    method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
+                        workspace_id: child_id.clone(),
+                        force: false,
+                        trust_repository: false,
+                    }),
+                },
+            );
+            let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(error.error.code, "submodule_worktree_requires_force");
+            assert!(checkout.exists());
+            assert!(app.terminal_runtimes.get(&terminal_id).is_some());
+            assert!(app.pending_worktree_remove_runtime_exits.is_empty());
+        }
+
+        let response = run_deferred_api_request(
+            &mut app,
+            Request {
+                id: "req".into(),
+                method: crate::api::schema::Method::WorktreeRemove(WorktreeRemoveParams {
+                    workspace_id: child_id,
+                    force: true,
+                    trust_repository: false,
+                }),
+            },
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::WorktreeRemoved { forced, path, .. } = success.result else {
+            panic!("expected worktree_removed response");
+        };
+        assert!(forced);
+        assert_eq!(path, checkout.display().to_string());
+        assert!(!checkout.exists());
+        assert_eq!(app.state.workspaces.len(), 1);
+
+        let _ = std::fs::remove_dir_all(repo);
+        let _ = std::fs::remove_dir_all(submodule);
+    }
+
     #[test]
     fn api_worktree_remove_emits_close_event_and_drains_runtime_shutdowns() {
         let repo = create_committed_repo("api-worktree-remove-event-repo");
