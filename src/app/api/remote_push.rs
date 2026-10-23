@@ -197,6 +197,10 @@ impl RemoteTransition {
             kind: self.kind,
             #[cfg(unix)]
             guest_scope: None,
+            // v1: only the daemon that runs an agent sends its question
+            // (`herdr_ask`); a peer's ask arrives as a plain alert.
+            ask_source: None,
+            ask: None,
         })
     }
 }

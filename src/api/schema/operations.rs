@@ -202,6 +202,7 @@ mod tests {
             "agent.start",
             "agent.prompt",
             "agent.send_keys",
+            "agent.answer",
             "pane.split",
             "pane.swap",
             "pane.move",

@@ -17,12 +17,14 @@ pub(super) mod responses;
 mod session;
 mod session_transfer;
 mod tabs;
+pub(crate) mod transcript;
 pub(crate) mod usage_fetch;
 mod workspaces;
 mod worktrees;
 
 use super::{api_helpers::pane_agent_status, App, Mode, OverlayPaneState, ToastKind};
 use crate::events::AppEvent;
+use crate::push::sanitized_notification_text;
 
 const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
 #[cfg(windows)]
@@ -1156,6 +1158,8 @@ impl App {
                     name: terminal.agent_name.clone(),
                     kind: agent_label.to_string(),
                 }),
+                ask_source: push_ask_source(push_kind, agent_label, terminal, agent_display),
+                ask: None,
             });
         }
 
@@ -1713,11 +1717,25 @@ impl App {
                     "agent.prompt is handled asynchronously by the app runtime",
                 );
             }
+            Method::AgentTranscript(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "agent.transcript is handled asynchronously by the app runtime",
+                );
+            }
             Method::AgentWait(_) => {
                 return responses::encode_error(
                     request.id,
                     "invalid_request",
                     "agent.wait is handled by the api server",
+                );
+            }
+            Method::AgentAnswer(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "invalid_request",
+                    "agent.answer is handled by the api server",
                 );
             }
             Method::AgentRead(params) => return self.handle_agent_read(request.id, params),
@@ -2500,6 +2518,26 @@ fn push_title_agent<'a>(agent_name: Option<&'a str>, agent_label: &'a str) -> &'
         .unwrap_or(agent_label)
 }
 
+/// Where the push thread looks for a question this alert could carry
+/// (herdr#309): only a NeedsInput alert about an omp agent of this daemon whose
+/// session file herdr knows.
+fn push_ask_source(
+    kind: crate::push::PushKind,
+    agent_label: &str,
+    terminal: &crate::terminal::TerminalState,
+    agent_display: &str,
+) -> Option<crate::push::AskSource> {
+    if kind != crate::push::PushKind::NeedsInput || agent_label != "omp" {
+        return None;
+    }
+    let session = super::creation::terminal_agent_session_info(terminal)?;
+    (session.kind == crate::agent_resume::AgentSessionRefKind::Path && !session.value.is_empty())
+        .then(|| crate::push::AskSource {
+            session_path: session.value.into(),
+            agent: agent_display.to_owned(),
+        })
+}
+
 /// The verb phrase after the agent in a push title ("jarvis needs attention").
 fn push_event_text(kind: crate::push::PushKind) -> &'static str {
     match kind {
@@ -2529,38 +2567,6 @@ fn sanitize_muted_panes(panes: Vec<String>) -> Vec<String> {
     out.dedup();
     out.truncate(MAX_MUTED_PANES);
     out
-}
-
-fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
-    let mut sanitized = String::new();
-    let mut previous_space = false;
-    for ch in value.chars() {
-        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
-            Some(' ')
-        } else if ch.is_control() {
-            None
-        } else {
-            Some(ch)
-        };
-        let Some(ch) = replacement else {
-            continue;
-        };
-        if ch.is_whitespace() {
-            if previous_space {
-                continue;
-            }
-            previous_space = true;
-            sanitized.push(' ');
-        } else {
-            previous_space = false;
-            sanitized.push(ch);
-        }
-        if sanitized.chars().count() >= max_chars {
-            break;
-        }
-    }
-    let sanitized = sanitized.trim().to_string();
-    (!sanitized.is_empty()).then_some(sanitized)
 }
 
 fn agent_manifest_info(

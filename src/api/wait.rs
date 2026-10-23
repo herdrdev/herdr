@@ -799,7 +799,7 @@ fn agent_wait_matches(
         && after_state_change_seq.is_none_or(|baseline| agent.state_change_seq > baseline)
 }
 
-fn agent_get(
+pub(super) fn agent_get(
     request_id: &str,
     target: &str,
     api_tx: &ApiRequestSender,

@@ -57,6 +57,17 @@ pub(super) fn payload_body(notification: &PushNotification) -> String {
     if notification.kind == PushKind::Gram {
         payload["gram"] = serde_json::Value::Bool(true);
     }
+    // An answerable question (herdr#309): the phone shows the options as
+    // notification actions and answers with `agent.answer`.
+    if let Some(ask) = &notification.ask {
+        payload["aps"]["alert"] = serde_json::json!({
+            "title": format!("{} asks", ask.agent),
+            "body": ask.question,
+        });
+        payload["aps"]["category"] = serde_json::json!(super::ask::CATEGORY);
+        payload["aps"]["mutable-content"] = serde_json::json!(1);
+        payload["herdr_ask"] = serde_json::json!(ask);
+    }
     payload.to_string()
 }
 
@@ -334,6 +345,8 @@ mod tests {
             kind: PushKind::Finished,
             #[cfg(unix)]
             guest_scope: None,
+            ask_source: None,
+            ask: None,
         }
     }
 
@@ -348,6 +361,10 @@ mod tests {
         assert_eq!(payload["workspace_id"], "w_1");
         // Agent-transition alerts carry no gram marker.
         assert!(payload.get("gram").is_none());
+        // Nor, without a pending ask, any question.
+        assert!(payload.get("herdr_ask").is_none());
+        assert!(payload["aps"].get("category").is_none());
+        assert!(payload["aps"].get("mutable-content").is_none());
     }
 
     #[test]
@@ -359,6 +376,43 @@ mod tests {
         let payload: serde_json::Value =
             serde_json::from_str(&payload_body(&notification)).unwrap();
         assert_eq!(payload["gram"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn payload_body_turns_a_pending_ask_into_an_actionable_question() {
+        let mut notification = sample_notification();
+        notification.kind = PushKind::NeedsInput;
+        notification.ask = Some(super::super::PushAsk {
+            agent: "jarvis".into(),
+            pane_id: "w1-1".into(),
+            machine_id: "machine-1".into(),
+            ask_id: "call_7".into(),
+            question: "Ship it?".into(),
+            options: vec!["Yes".into(), "No".into()],
+        });
+        let payload: serde_json::Value =
+            serde_json::from_str(&payload_body(&notification)).unwrap();
+        assert_eq!(
+            payload["aps"],
+            serde_json::json!({
+                "alert": {"title": "jarvis asks", "body": "Ship it?"},
+                "sound": "default",
+                "category": "herdr.ask",
+                "mutable-content": 1,
+            })
+        );
+        assert_eq!(
+            payload["herdr_ask"],
+            serde_json::json!({
+                "agent": "jarvis",
+                "pane_id": "w1-1",
+                "machine_id": "machine-1",
+                "ask_id": "call_7",
+                "question": "Ship it?",
+                "options": ["Yes", "No"],
+            })
+        );
+        assert_eq!(payload["pane_id"], "w1-1");
     }
 
     #[test]

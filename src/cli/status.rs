@@ -435,6 +435,8 @@ mod tests {
                 agent_forget: false,
                 api_bridge_multi: false,
                 pane_history: false,
+                agent_answer: false,
+                agent_transcript: false,
             }),
         }
     }

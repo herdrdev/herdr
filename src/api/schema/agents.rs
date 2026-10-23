@@ -361,6 +361,28 @@ pub enum AgentPromptDelivery {
     Submitted,
 }
 
+/// `agent.answer` — pick one option of an omp agent's pending `ask` question
+/// by driving its on-screen selector.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentAnswerParams {
+    /// Agent name or pane id, resolved like `agent.read`.
+    pub target: String,
+    /// The pending ask's tool call id, from `agent.transcript`'s `pending_ask`.
+    pub ask_id: String,
+    /// One of the question's option labels, exactly as listed in the ask.
+    pub option: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentAnswerStatus {
+    /// The session recorded the chosen option as the ask's answer.
+    Answered,
+    /// Enter went to the highlighted option, but no matching answer reached
+    /// the session file in time.
+    SentUnconfirmed,
+}
+
 // `parked_work` holds arbitrary JSON (`serde_json::Value`), which is `PartialEq`
 // but not `Eq`, so `AgentInfo` can no longer derive `Eq`. Nothing keys a
 // map/set on it, so only the derive is dropped.

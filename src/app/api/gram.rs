@@ -1121,6 +1121,8 @@ pub(crate) fn gram_push_notification(
             sender: item.sender.clone(),
             gram_id: item.id.clone(),
         }),
+        ask_source: None,
+        ask: None,
     }
 }
 

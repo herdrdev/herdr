@@ -1672,6 +1672,29 @@
           ],
           "type": "object"
         },
+        "AgentAnswerParams": {
+          "description": "`agent.answer` — pick one option of an omp agent's pending `ask` question\nby driving its on-screen selector.",
+          "properties": {
+            "ask_id": {
+              "description": "The pending ask's tool call id, from `agent.transcript`'s `pending_ask`.",
+              "type": "string"
+            },
+            "option": {
+              "description": "One of the question's option labels, exactly as listed in the ask.",
+              "type": "string"
+            },
+            "target": {
+              "description": "Agent name or pane id, resolved like `agent.read`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "ask_id",
+            "option"
+          ],
+          "type": "object"
+        },
         "AgentArchiveParams": {
           "description": "`agent.archive` — take an agent out of active rotation (issue #173). The pane\nis released but the session ref is preserved, so `agent.unarchive` can resume\n(not recreate) it later. Rejected when the agent is mid-turn unless `force`.",
           "properties": {
@@ -1918,6 +1941,37 @@
         },
         "AgentTarget": {
           "properties": {
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "AgentTranscriptParams": {
+          "properties": {
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "target": {
               "type": "string"
             }
@@ -7091,6 +7145,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.transcript",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTranscriptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.explain",
               "type": "string"
             },
@@ -7272,6 +7342,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentWaitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.answer",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAnswerParams"
             }
           },
           "required": [
@@ -11100,6 +11186,20 @@
           },
           "type": "object"
         },
+        "AgentAnswerStatus": {
+          "oneOf": [
+            {
+              "const": "answered",
+              "description": "The session recorded the chosen option as the ask's answer.",
+              "type": "string"
+            },
+            {
+              "const": "sent_unconfirmed",
+              "description": "Enter went to the highlighted option, but no matching answer reached\nthe session file in time.",
+              "type": "string"
+            }
+          ]
+        },
         "AgentArchivedInfo": {
           "description": "The `archived { at, by, reason }` provenance surfaced on an archived\n[`AgentInfo`] in `agent.list`.",
           "properties": {
@@ -11678,6 +11778,37 @@
             "unknown"
           ],
           "type": "string"
+        },
+        "AskQuestion": {
+          "description": "One question of an omp `ask` tool call.",
+          "properties": {
+            "multi": {
+              "type": "boolean"
+            },
+            "options": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "question": {
+              "type": "string"
+            },
+            "recommended": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "question",
+            "options",
+            "multi"
+          ],
+          "type": "object"
         },
         "ClientWindowTitleReason": {
           "enum": [
@@ -14708,6 +14839,31 @@
           ],
           "type": "object"
         },
+        "PendingAsk": {
+          "description": "The newest `ask` still waiting for an answer.",
+          "properties": {
+            "answerable": {
+              "description": "One single-select question with at least one option, and a caller that\nmay answer it (guests never may).",
+              "type": "boolean"
+            },
+            "id": {
+              "description": "The ask's tool call id.",
+              "type": "string"
+            },
+            "questions": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/AskQuestion"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "questions",
+            "answerable"
+          ],
+          "type": "object"
+        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -15659,6 +15815,22 @@
             },
             {
               "properties": {
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/AgentAnswerStatus"
+                },
+                "type": {
+                  "const": "agent_answer",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "agents": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/AgentInfo"
@@ -16145,6 +16317,68 @@
                 "pane_id",
                 "history_b64",
                 "rows"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "One page of an omp agent's conversation (`agent.transcript`), entries\noldest first. `before` pages older turns and is `null` at the start;\n`after` returns what was appended or changed since this page.",
+              "properties": {
+                "after": {
+                  "type": "string"
+                },
+                "agent": {
+                  "type": "string"
+                },
+                "before": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "entries": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/TranscriptEntry"
+                  },
+                  "type": "array"
+                },
+                "pane_id": {
+                  "type": "string"
+                },
+                "pending_ask": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/PendingAsk"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "session_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "agent_transcript",
+                  "type": "string"
+                },
+                "working": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/TranscriptWorking"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "agent",
+                "pane_id",
+                "session_id",
+                "entries",
+                "after"
               ],
               "type": "object"
             },
@@ -17240,6 +17474,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "agent_answer": {
+              "default": false,
+              "description": "Supports `agent.answer` (pick an option of an omp agent's pending ask).",
+              "type": "boolean"
+            },
             "agent_forget": {
               "default": false,
               "description": "Supports `agent.forget` (remove an archived agent's record).",
@@ -17256,6 +17495,11 @@
                 "$ref": "#/schemas/success_response/$defs/AgentSessionTransferHarness"
               },
               "type": "array"
+            },
+            "agent_transcript": {
+              "default": false,
+              "description": "Serves `agent.transcript`: an omp agent's conversation as chat entries.",
+              "type": "boolean"
             },
             "api_bridge_multi": {
               "default": false,
@@ -17492,6 +17736,384 @@
             "focused",
             "pane_count",
             "agent_status"
+          ],
+          "type": "object"
+        },
+        "TranscriptAuthor": {
+          "description": "Who wrote a `user` entry: the owner at the terminal, or a guest whose prompt\narrived through HerdrUp with the `<name> (via HerdrUp): ` prefix.",
+          "enum": [
+            "owner",
+            "guest"
+          ],
+          "type": "string"
+        },
+        "TranscriptEntry": {
+          "description": "One chat entry. Every entry has a stable, unique `id` and a `ts_ms`\n(milliseconds since the Unix epoch); clients ignore kinds they do not know.",
+          "oneOf": [
+            {
+              "properties": {
+                "author": {
+                  "$ref": "#/schemas/success_response/$defs/TranscriptAuthor"
+                },
+                "author_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "user",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "text",
+                "author"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Assistant text parts joined with a blank line; `final` marks an answer\nthat ended the model's turn (stop reason `stop`/`length`).",
+              "properties": {
+                "final": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "reply",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "text",
+                "final"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "thinking",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "text"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "detail": {
+                  "description": "The command or path, at most 300 characters; owner only.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "intent": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "step",
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/TranscriptStepStatus"
+                },
+                "tool": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "tool",
+                "intent",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Fleet traffic delivered into the session (gitmoot inbox, async job\nresults, advisors); owner only.",
+              "properties": {
+                "body": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "note",
+                  "type": "string"
+                },
+                "source": {
+                  "$ref": "#/schemas/success_response/$defs/TranscriptNoteSource"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "source",
+                "title",
+                "body"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "The turn's todo list; one per turn, re-sent with the same id when it changes.",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "items": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/TranscriptPlanItem"
+                  },
+                  "type": "array"
+                },
+                "kind": {
+                  "const": "plan",
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "items"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "An `ask` tool call; `id` is the tool call id, `answer` the selection once made.",
+              "properties": {
+                "answer": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "ask",
+                  "type": "string"
+                },
+                "questions": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/AskQuestion"
+                  },
+                  "type": "array"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "questions"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "turn_end",
+                  "type": "string"
+                },
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/TranscriptTurnStatus"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "A compaction: the agent's earlier context was replaced by a summary.",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "const": "summary",
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "ts_ms": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "id",
+                "ts_ms",
+                "text"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "TranscriptNoteSource": {
+          "enum": [
+            "gitmoot",
+            "async_result",
+            "advisor",
+            "other"
+          ],
+          "type": "string"
+        },
+        "TranscriptPlanItem": {
+          "properties": {
+            "done": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text",
+            "done"
+          ],
+          "type": "object"
+        },
+        "TranscriptStepStatus": {
+          "enum": [
+            "running",
+            "ok",
+            "error"
+          ],
+          "type": "string"
+        },
+        "TranscriptTurnStatus": {
+          "enum": [
+            "done",
+            "error",
+            "aborted"
+          ],
+          "type": "string"
+        },
+        "TranscriptWorking": {
+          "description": "The tool step the agent is running now.",
+          "properties": {
+            "intent": {
+              "type": "string"
+            },
+            "since_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tool": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "intent",
+            "tool",
+            "since_ms"
           ],
           "type": "object"
         },
