@@ -1102,7 +1102,7 @@ fn url_at_byte(text: &str, clicked_byte: usize) -> Option<&str> {
     text.get(range)
 }
 
-pub(super) fn url_byte_range(text: &str, clicked_byte: usize) -> Option<std::ops::Range<usize>> {
+pub(crate) fn url_byte_range(text: &str, clicked_byte: usize) -> Option<std::ops::Range<usize>> {
     let clicked_idx = text.get(..clicked_byte)?.chars().count();
     let cells = text_cells(text);
     let span = url_span_at_column(&cells, clicked_idx)?;
@@ -1668,6 +1668,7 @@ impl AppState {
             AppEvent::WorktreeRemoveFinished(_) => Vec::new(),
             AppEvent::WorktreeReadFinished(_) => Vec::new(),
             AppEvent::TabBarCommandFinished { .. } => Vec::new(),
+            AppEvent::PluginLinkPatternsRefreshed { .. } => Vec::new(),
             AppEvent::PluginCommandFinished { .. } => Vec::new(),
         }
     }
@@ -2406,7 +2407,7 @@ mod tests {
         for text in [
             "file:///tmp/a",
             "javascript:alert(1)",
-            "\x1b]8;;https://example.com\x1b\\https://example.com\x1b]8;;\x1b\\",
+            "\x1b]8;;obsidian://note\x1b\\https://example.com\x1b]8;;\x1b\\",
         ] {
             let mut terminal = crate::ghostty::Terminal::new(80, 4, 1024).unwrap();
             terminal.write(text.as_bytes());
@@ -2415,6 +2416,49 @@ mod tests {
                 .unwrap()
                 .is_empty());
         }
+        let mut terminal = crate::ghostty::Terminal::new(5, 4, 1024).unwrap();
+        terminal.write("xxxx\x1b]8;;https://example.com\x1b\\界ab界cd\x1b]8;;\x1b\\".as_bytes());
+        for (col, row) in [(0, 1), (1, 1), (2, 2)] {
+            assert_eq!(
+                terminal
+                    .viewport_link_regions(col, row, url_byte_range)
+                    .unwrap()
+                    .iter()
+                    .map(|r| (r.row, r.start_col, r.end_col))
+                    .collect::<Vec<_>>(),
+                vec![(1, 0, 3), (2, 0, 3)],
+                "wrapped explicit labels include wide tails, excluding wrap padding"
+            );
+        }
+        assert!(terminal
+            .viewport_link_regions(4, 1, url_byte_range)
+            .unwrap()
+            .is_empty());
+        let mut terminal = crate::ghostty::Terminal::new(40, 3, 1024).unwrap();
+        terminal.write(b"\x1b]8;;https://example.com\x1b\\one\x1b]8;;\x1b\\ \x1b]8;;https://example.com\x1b\\two\x1b]8;;\x1b\\\x1b]8;;https://example.com\x1b\\!\x1b]8;;\x1b\\\x1b]8;;https://other.test\x1b\\z\x1b]8;;\x1b\\");
+        for (col, expected) in [(1, (0, 0, 2)), (5, (0, 4, 7)), (8, (0, 8, 8))] {
+            assert_eq!(
+                terminal
+                    .viewport_link_regions(col, 0, url_byte_range)
+                    .unwrap()
+                    .iter()
+                    .map(|r| (r.row, r.start_col, r.end_col))
+                    .collect::<Vec<_>>(),
+                vec![expected]
+            );
+        }
+        let mut terminal = crate::ghostty::Terminal::new(80, 120, 0).unwrap();
+        terminal.write(
+            format!(
+                "\x1b]8;;https://example.com\x1b\\{}\x1b]8;;\x1b\\",
+                "a".repeat(8193)
+            )
+            .as_bytes(),
+        );
+        assert!(terminal
+            .viewport_link_regions(0, 50, url_byte_range)
+            .unwrap()
+            .is_empty());
         let mut terminal = crate::ghostty::Terminal::new(80, 4, 1024 * 1024).unwrap();
         terminal.write(format!("https://example.com/{}", "a".repeat(9000)).as_bytes());
         assert!(terminal

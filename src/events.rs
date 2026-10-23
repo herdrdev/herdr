@@ -202,6 +202,11 @@ pub enum AppEvent {
         segment_index: usize,
         result: Result<Option<String>, String>,
     },
+    /// Background plugin link-pattern refresh completed.
+    PluginLinkPatternsRefreshed {
+        generation: u64,
+        result: Result<Vec<regex::Regex>, String>,
+    },
     /// A plugin action or event command finished.
     PluginCommandFinished {
         log_id: String,

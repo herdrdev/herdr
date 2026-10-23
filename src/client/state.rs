@@ -565,9 +565,13 @@ impl ClientState {
             frame: mut frame_data,
             graphics,
         } = frame_data.into();
-        // With capture enabled, host OSC 8 can intercept Ctrl-click before plugins.
-        // Keep semantic links internally and restore native links when capture is off.
-        if self.shell_mouse_capture_preference {
+        // Older compatible servers rely on the client to preserve plugin click priority.
+        if self.shell_mouse_capture_preference
+            && self
+                .shell
+                .as_ref()
+                .is_some_and(|shell| !shell.active_endpoint_selective_hyperlinks_supported())
+        {
             frame_data.hyperlinks.clear();
         }
         let frame_data = if self.draw_host_cursor {

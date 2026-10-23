@@ -738,7 +738,7 @@ impl HeadlessServer {
             let frame = match mode {
                 ClientConnectionMode::ClientShell => {
                     let crate::server::client_shell::RenderedPaneSurface {
-                        frame,
+                        mut frame,
                         panes,
                         splits,
                         popup,
@@ -746,6 +746,13 @@ impl HeadlessServer {
                         graphics_delivery: next_graphics_delivery,
                         graphics_sources,
                     } = shell_render.expect("active shell surface");
+                    if self
+                        .clients
+                        .get(&client_id)
+                        .is_some_and(|client| client.shell_mouse_capture)
+                    {
+                        crate::server::client_shell::reserve_plugin_links(&self.app, &mut frame);
+                    }
                     surface_parts = Some((
                         panes,
                         splits,

@@ -29,6 +29,9 @@ enum RuntimeExitAction {
 impl App {
     pub(crate) fn handle_internal_event_with_render_impact(&mut self, ev: AppEvent) -> bool {
         match ev {
+            AppEvent::PluginLinkPatternsRefreshed { generation, result } => {
+                self.finish_plugin_link_refresh(generation, result)
+            }
             AppEvent::GitStatusRefreshed {
                 results,
                 cache_updates,
@@ -111,6 +114,11 @@ impl App {
             &ev,
             AppEvent::TerminalBell { .. } | AppEvent::ClipboardWrite { .. }
         ) {
+            return Vec::new();
+        }
+
+        if let AppEvent::PluginLinkPatternsRefreshed { generation, result } = ev {
+            self.finish_plugin_link_refresh(generation, result);
             return Vec::new();
         }
 

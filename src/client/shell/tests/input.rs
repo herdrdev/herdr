@@ -859,6 +859,25 @@ fn rename_pane_empty_value_is_preserved_as_a_clear_request() {
 
 #[test]
 fn styled_client_composition_preserves_pane_hyperlinks() {
+    use crate::client::endpoint::{
+        ClientEndpointId, ClientEndpointStatus, ProfileId, SavedSshEndpoint,
+    };
+    use crate::protocol::endpoint::{EndpointServerWelcome, SELECTIVE_HYPERLINKS_CAPABILITY};
+
+    let current = EndpointServerWelcome::compatible(Vec::new());
+    let legacy: EndpointServerWelcome = serde_json::from_str(include_str!(
+        "../../../../tests/fixtures/endpoint-welcome-v1.json"
+    ))
+    .unwrap();
+    let local = ClientEndpointId::Local;
+    let profile = SavedSshEndpoint {
+        id: ProfileId::parse("0123456789abcdef0123456789abcdef").unwrap(),
+        label: "Legacy".into(),
+        target: "dev@legacy.example".into(),
+        session: "agents".into(),
+        enabled: true,
+    };
+    let remote = ClientEndpointId::Ssh(profile.id.clone());
     for uri in [
         "https://example.test",
         "obsidian://open?vault=meta&file=note.md",
@@ -866,7 +885,9 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
         for draw_host_cursor in [false, true] {
             let mut state =
                 ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+            state.set_endpoint_catalog(std::slice::from_ref(&profile));
             state.set_snapshot(Box::new(snapshot()));
+            state.set_endpoint_snapshot(&remote, Box::new(snapshot()));
             let mut pane_surface = surface();
             let linked = Buffer::with_lines(["LIVE", "PANE"]);
             pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(
@@ -874,7 +895,11 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
                 None,
                 &[((0, 0), "L".into(), uri.into())],
             );
-            state.set_pane_surface(pane_surface);
+            // A label can continue onto another pane row with the same URL.
+            for cell in &mut pane_surface.frame.cells {
+                cell.hyperlink = Some(0);
+            }
+            state.set_pane_surface(pane_surface.clone());
             let mut selection =
                 crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
             assert!(selection.finish());
@@ -889,46 +914,87 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
             let y = hit.inner_rect.y;
             let mut client = crate::client::state::ClientState::test_new();
             client.draw_host_cursor = draw_host_cursor;
+            client.shell = Some(state);
             let mut terminal = crate::ghostty::Terminal::new(106, 20, 0).unwrap();
-            for (phase, (capture, repaint)) in [
-                (false, false),
-                (true, false),
-                (false, false),
-                (true, true),
-                (true, false),
-                (false, true),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                client.shell_mouse_capture_preference = capture;
-                // Effective mouse reporting may still be requested by a pane app.
-                client.mouse_capture_active = true;
-                client.repaint_pending = repaint;
-                let mut frame = state.compose(106, 20).expect("linked semantic frame");
-                let link = frame.cells[index].hyperlink.expect("retained link") as usize;
-                assert_eq!(frame.hyperlinks[link], uri);
-                // Change the linked cell on the diff pass so it must be painted again.
-                if phase == 4 {
-                    frame.frame.cells[index].symbol = "D".into();
-                }
-                frame.frame.cursor = Some(crate::protocol::CursorState {
-                    x: x + 1,
-                    y,
-                    visible: true,
-                    shape: Default::default(),
-                });
-                let expected = frame.cells[index].symbol.clone();
-                let mut output = Vec::new();
-                assert!(client.try_present_frame_to(&mut output, frame));
-                terminal.write(&output);
-                assert_eq!(
-                    terminal.viewport_hyperlink_uri(x, u32::from(y)).unwrap(),
-                    (!capture).then_some(uri.to_owned()),
-                    "host link ownership must follow configured capture for {uri}"
+            for (endpoint, welcome, status, native_with_capture) in [
+                (&local, &current, ClientEndpointStatus::Online, true),
+                (&remote, &legacy, ClientEndpointStatus::Online, false),
+                (&local, &current, ClientEndpointStatus::Online, true),
+                // A new connection must not expose the older server's cached links.
+                (&remote, &current, ClientEndpointStatus::Reconnecting, false),
+                (&remote, &current, ClientEndpointStatus::Online, true),
+                (&remote, &legacy, ClientEndpointStatus::Online, false),
+                (&local, &current, ClientEndpointStatus::Online, true),
+            ] {
+                let state = client.shell.as_mut().unwrap();
+                state.set_endpoint_status(endpoint, ClientEndpointStatus::Online);
+                assert!(state.activate_endpoint_projection(endpoint));
+                state.set_endpoint_selective_hyperlinks_supported(
+                    endpoint,
+                    welcome
+                        .capabilities
+                        .iter()
+                        .any(|capability| capability == SELECTIVE_HYPERLINKS_CAPABILITY),
                 );
-                let (_, label) = terminal.screen_cell(x, u32::from(y)).unwrap();
-                assert_eq!(label, expected.chars().map(u32::from).collect::<Vec<_>>());
+                state.set_endpoint_status(endpoint, status);
+                state.set_pane_surface(pane_surface.clone());
+                for (phase, (capture, repaint)) in [
+                    (false, false),
+                    (true, false),
+                    (false, false),
+                    (true, true),
+                    (true, false),
+                    (false, true),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    client.shell_mouse_capture_preference = capture;
+                    // Effective mouse reporting may still be requested by a pane app.
+                    client.mouse_capture_active = true;
+                    client.repaint_pending = repaint;
+                    let mut frame = client
+                        .shell
+                        .as_mut()
+                        .unwrap()
+                        .compose(106, 20)
+                        .expect("linked semantic frame");
+                    let link = frame.cells[index].hyperlink.expect("retained link") as usize;
+                    assert_eq!(frame.hyperlinks[link], uri);
+                    // Change the linked cell on the diff pass so it must be painted again.
+                    if phase == 4 {
+                        frame.frame.cells[index].symbol = "D".into();
+                    }
+                    frame.frame.cursor = Some(crate::protocol::CursorState {
+                        x: x + 1,
+                        y,
+                        visible: true,
+                        shape: Default::default(),
+                    });
+                    let expected = frame.cells[index].symbol.clone();
+                    let mut output = Vec::new();
+                    assert!(client.try_present_frame_to(&mut output, frame));
+                    terminal.write(&output);
+                    let expected_uri = if capture && !native_with_capture {
+                        None
+                    } else {
+                        Some(uri.to_owned())
+                    };
+                    assert_eq!(
+                        terminal.viewport_hyperlink_uri(x, u32::from(y)).unwrap(),
+                        expected_uri,
+                        "native link routing for {endpoint:?}, {status:?}, capture {capture}, {uri}"
+                    );
+                    assert_eq!(
+                        terminal
+                            .viewport_hyperlink_uri(x + 3, u32::from(y + 1))
+                            .unwrap(),
+                        expected_uri,
+                        "wrapped labels must use the same native link routing"
+                    );
+                    let (_, label) = terminal.screen_cell(x, u32::from(y)).unwrap();
+                    assert_eq!(label, expected.chars().map(u32::from).collect::<Vec<_>>());
+                }
             }
         }
     }

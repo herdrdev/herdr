@@ -516,6 +516,17 @@ async fn run_client_loop(
                     })
                 }),
         );
+        shell.set_endpoint_selective_hyperlinks_supported(
+            &endpoint::ClientEndpointId::Local,
+            initial
+                .as_ref()
+                .and_then(|(_, handshake)| handshake.endpoint_capabilities.as_ref())
+                .is_some_and(|capabilities| {
+                    capabilities.iter().any(|capability| {
+                        capability == crate::protocol::endpoint::SELECTIVE_HYPERLINKS_CAPABILITY
+                    })
+                }),
+        );
         if local_unavailable {
             shell.set_endpoint_status(
                 &endpoint::ClientEndpointId::Local,
@@ -1393,6 +1404,12 @@ async fn run_client_loop(
                             &endpoint_id,
                             agent_view_projection_supported,
                         );
+                        shell.set_endpoint_selective_hyperlinks_supported(
+                            &endpoint_id,
+                            negotiation.supports_capability(
+                                crate::protocol::endpoint::SELECTIVE_HYPERLINKS_CAPABILITY,
+                            ),
+                        );
                         shell.compose(state.reported_size.0, state.reported_size.1)
                     });
                     let reader_quit = writer.stop_handle();
@@ -1404,6 +1421,13 @@ async fn run_client_loop(
                         generation,
                         negotiation,
                         false,
+                    );
+                    // The preference may have changed while the handshake was running.
+                    write_stream.send_to(
+                        &endpoint_id,
+                        &ClientMessage::ClientShellMouseCapture {
+                            enabled: state.shell_mouse_capture_preference,
+                        },
                     );
                     if let Some(frame) = frame {
                         state.present_frame(frame);

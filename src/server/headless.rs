@@ -165,6 +165,7 @@ const SHUTDOWN_API_TIMEOUT: Duration = Duration::from_secs(5);
 /// otherwise idle. Keep this much slower than the old resize-poll cadence to
 /// avoid reintroducing the idle CPU spin.
 const CLIENT_ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PLUGIN_LINK_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 
 // Split shell redraws need several early updates; sustained output still coalesces.
 const INTERACTIVE_RENDER_BUDGET: u8 = 16;
@@ -204,6 +205,7 @@ pub struct HeadlessServer {
     native_graphics: native_graphics::NativeGraphics,
     interactive_input_deadlines: HashMap<crate::layout::PaneId, Instant>,
     interactive_render_budget: Option<(Instant, u8)>,
+    next_plugin_link_refresh: Instant,
     #[cfg(unix)]
     next_client_id: u64,
     /// The client currently driving session-wide host presentation and side effects.
@@ -361,6 +363,7 @@ impl HeadlessServer {
             native_graphics: Default::default(),
             interactive_input_deadlines: HashMap::new(),
             interactive_render_budget: None,
+            next_plugin_link_refresh: Instant::now(),
             #[cfg(unix)]
             next_client_id: 1,
             foreground_client_id: None,
@@ -3277,6 +3280,16 @@ impl HeadlessServer {
             return false;
         }
         let mut changed = false;
+
+        if now >= self.next_plugin_link_refresh
+            && self
+                .clients
+                .values()
+                .any(|client| client.is_active_shell_client() && client.shell_mouse_capture)
+        {
+            self.next_plugin_link_refresh = now + PLUGIN_LINK_REFRESH_INTERVAL;
+            self.app.start_plugin_link_refresh();
+        }
 
         // No resize polling needed — server has no terminal.
         // Client resize messages drive size changes instead.

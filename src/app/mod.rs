@@ -170,6 +170,9 @@ pub struct App {
     // ponytail: server-lifetime pins defer reclamation until restart; use
     // per-pane leases only if reclamation during long-running sessions matters.
     pub(crate) plugin_installation_leases: crate::plugin_installations::Leases,
+    pub(crate) plugin_link_patterns: Vec<regex::Regex>,
+    pub(crate) plugin_link_refresh_in_flight: bool,
+    plugin_link_refresh_generation: u64,
     // False when startup could not pin every installation; cleanup could
     // otherwise reclaim files a restored consumer still uses.
     pub(crate) plugin_installation_cleanup_allowed: bool,
@@ -617,6 +620,9 @@ impl App {
 
         let mut app = Self {
             plugin_installation_leases,
+            plugin_link_patterns: Vec::new(),
+            plugin_link_refresh_in_flight: false,
+            plugin_link_refresh_generation: 0,
             plugin_installation_cleanup_allowed,
             config_diagnostic_deadline: None,
             toast_deadline: None,
@@ -680,6 +686,7 @@ impl App {
             client_shell_keybindings_profile,
             endpoint_commands,
         };
+        app.refresh_plugin_link_patterns();
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app.refresh_restored_workspace_git_metadata();
