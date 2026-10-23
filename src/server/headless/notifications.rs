@@ -331,10 +331,16 @@ impl HeadlessServer {
                 }
                 false
             }
-            AppEvent::ClipboardWrite { content } => {
-                // Clipboard writes are client-local side effects. Forward them only to
-                // the foreground client instead of broadcasting to every attached client.
+            AppEvent::ClipboardWrite { pane_id, content } => {
+                let attach_owner = self.app.find_pane(*pane_id).and_then(|(_, pane)| {
+                    self.terminal_attach_owners
+                        .get(&pane.attached_terminal_id.to_string())
+                        .copied()
+                });
                 let data = base64::engine::general_purpose::STANDARD.encode(content.as_slice());
+                if let Some(client_id) = attach_owner {
+                    self.send_to_client(client_id, ServerMessage::Clipboard { data: data.clone() });
+                }
                 self.send_to_foreground_client(ServerMessage::Clipboard { data });
                 false
             }
@@ -704,7 +710,7 @@ impl HeadlessServer {
     ///
     /// The server has no host terminal or audio subsystem, so we:
     /// - Forward `ClipboardWrite` as `ServerMessage::Clipboard` to the
-    ///   foreground client only.
+    ///   foreground client and the emitting pane's direct attach owner.
     /// - Detect when a sound would be played and forward as
     ///   `ServerMessage::Notify { kind: Sound }` to the foreground client.
     /// - Detect when a toast is set on AppState and forward as
