@@ -1,6 +1,7 @@
-name: Windows ARM64 installer
+name: Windows ARM64
 
 on:
+  workflow_dispatch:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
@@ -35,3 +36,70 @@ jobs:
       - name: Test x86_64 fallback installation
         shell: powershell
         run: .\scripts\windows_arm64_installer_test.ps1
+
+  native-build:
+    name: native build
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 45
+    env:
+      LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+      LIBGHOSTTY_VT_SIMD: 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: 1.96.1
+          targets: aarch64-pc-windows-msvc
+
+      # The native ARM64 Zig 0.16.0 compiler crashes with 0xc0000005 while
+      # building libghostty-vt. Its x64 compiler can target ARM64 under emulation.
+      - name: Install x64 Zig for the ARM64 target
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-0.16.0.zip"
+          curl.exe -fL --retry 3 --output $archive https://ziglang.org/download/0.16.0/zig-x86_64-windows-0.16.0.zip
+          if ($LASTEXITCODE -ne 0) { throw "Zig download failed" }
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($hash -ne "68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e") {
+            throw "Zig download checksum mismatch"
+          }
+          Expand-Archive -LiteralPath $archive -DestinationPath $env:RUNNER_TEMP
+          $zig = Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-0.16.0\zig.exe"
+          "ZIG=$zig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build native Herdr
+        run: cargo build --release --locked --target aarch64-pc-windows-msvc
+
+      - name: Smoke test native server and pane
+        shell: pwsh
+        run: |
+          .\scripts\windows_smoke_conpty_path.ps1 `
+            -ExePath target\aarch64-pc-windows-msvc\release\herdr.exe `
+            -Session "ci-native-arm64-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+
+      - name: Record build details
+        shell: pwsh
+        run: |
+          $exe = "target\aarch64-pc-windows-msvc\release\herdr.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLowerInvariant()
+          @(
+            "commit=$env:GITHUB_SHA"
+            "target=aarch64-pc-windows-msvc"
+            "zig=0.16.0-x86_64"
+            "libghostty_vt_optimize=$env:LIBGHOSTTY_VT_OPTIMIZE"
+            "libghostty_vt_simd=$env:LIBGHOSTTY_VT_SIMD"
+            "sha256=$hash  herdr.exe"
+          ) | Set-Content -Path BUILD_INFO.txt
+
+      - name: Upload experimental ARM64 binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: herdr-windows-aarch64-ci
+          path: |
+            target/aarch64-pc-windows-msvc/release/herdr.exe
+            BUILD_INFO.txt
