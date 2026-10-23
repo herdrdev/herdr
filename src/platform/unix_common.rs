@@ -319,19 +319,47 @@ fn set_sigpipe_disposition(handler: libc::sighandler_t) {
     }
 }
 
-extern "C" fn discard_signal(_signal: libc::c_int) {}
+static LAST_SERVER_HANGUP_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn monotonic_millis() -> u64 {
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) } != 0 {
+        return 0;
+    }
+    (now.tv_sec as u64)
+        .saturating_mul(1000)
+        .saturating_add(now.tv_nsec as u64 / 1_000_000)
+        .saturating_add(1)
+}
+
+fn record_server_hangup() {
+    LAST_SERVER_HANGUP_MS.store(monotonic_millis(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn within_server_hangup_window(hangup_ms: u64, now_ms: u64) -> bool {
+    hangup_ms != 0
+        && now_ms
+            .checked_sub(hangup_ms)
+            .is_some_and(|elapsed| elapsed <= 5_000)
+}
+
+pub(crate) fn server_hangup_is_recent() -> bool {
+    within_server_hangup_window(
+        LAST_SERVER_HANGUP_MS.load(std::sync::atomic::Ordering::Relaxed),
+        monotonic_millis(),
+    )
+}
 
 /// The server must outlive the terminal or shell that launched it, like tmux.
 /// Installed at process start so SIGHUP cannot stop the server before its event
 /// loop runs. A handler, unlike SIG_IGN, resets to the default on exec, so
 /// child processes keep normal hangup behavior.
 pub(crate) fn ignore_server_hangup() {
-    let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
-    action.sa_sigaction = discard_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
-    action.sa_flags = libc::SA_RESTART;
-    unsafe {
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGHUP, &action, std::ptr::null_mut());
+    // Record before async pane-exit handling, even if Tokio has not polled SIGHUP yet.
+    if let Err(err) =
+        unsafe { signal_hook::low_level::register(libc::SIGHUP, record_server_hangup) }
+    {
+        tracing::warn!(%err, "failed to install SIGHUP handler");
     }
 }
 
@@ -616,6 +644,22 @@ pub(crate) fn set_default_plugin_pane_pwd(env: &mut Vec<(String, String)>, cwd: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn server_hangup_evidence_expires() {
+        assert!(!within_server_hangup_window(0, 100));
+        assert!(within_server_hangup_window(100, 100));
+        assert!(within_server_hangup_window(100, 5_100));
+        assert!(!within_server_hangup_window(100, 5_101));
+        assert!(!within_server_hangup_window(100, 99));
+    }
+
+    #[test]
+    fn server_hangup_is_recorded_before_async_handling() {
+        ignore_server_hangup();
+        assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+        assert!(server_hangup_is_recent());
+    }
 
     #[test]
     fn server_signal_monitor_survives_hangup_and_reports_terminate() {

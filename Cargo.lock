@@ -801,6 +801,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2",
+ "signal-hook",
  "time",
  "tokio",
  "toml",

@@ -57,6 +57,9 @@ schemars = { version = "1.2.1", features = ["derive"] }
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 # logind's delay inhibitor lets the server save before host shutdown kills panes.
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
