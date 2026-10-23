@@ -170,8 +170,8 @@ pub(crate) fn federation_method_policy(method_wire_name: &str) -> FederationMeth
             (AllowedAt(Interact), true)
         }
         // Admin methods with an explicit remote-owned target.
-        "agent.focus" | "agent.rename" | "agent.restart" | "pane.send_input" | "pane.input.set"
-        | "pane.rename" | "pane.set_pty_size" => (AllowedAt(Admin), true),
+        "agent.focus" | "agent.rename" | "agent.restart" | "agent.answer" | "pane.send_input"
+        | "pane.input.set" | "pane.rename" | "pane.set_pty_size" => (AllowedAt(Admin), true),
         // Admin methods whose payload has no remote ownership target.
         "agent.view.set" | "agent.view.clear" => (AllowedAt(Admin), false),
         // Everything else (all server.*, plugin.*, integration.*, gram.*,

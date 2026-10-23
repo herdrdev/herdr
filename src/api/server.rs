@@ -32,6 +32,7 @@ use crate::api::schema::{
     ResponseResult, ServerCapabilities, SuccessResponse,
 };
 use crate::api::subscriptions::{history_error, ActiveSubscription};
+use crate::api::answer::answer_agent;
 use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_output};
 use crate::api::{
     request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, ApiStream, ApiStreamRead,
@@ -1812,6 +1813,10 @@ fn handle_principal_connection(
             )?;
             finish_wait_response(&mut stream, response, &request_id, method, changes_ui)
         }
+        Method::AgentAnswer(params) => {
+            let response = answer_agent(request_id.clone(), params, api_tx);
+            finish_wait_response(&mut stream, Some(response), &request_id, method, changes_ui)
+        }
         Method::PaneWaitForOutput(params) => {
             let response =
                 wait_for_output(request_id.clone(), params, &mut stream, api_tx, running)?;
@@ -1907,6 +1912,9 @@ fn routable_target_mut(method: &mut Method) -> Option<&mut String> {
         // `agent.restart` routes to the owning peer so a federated `<alias>/pane`
         // agent can be restarted from home; the resume runs where the process is.
         Method::AgentRestart(params) => Some(&mut params.target),
+        // `agent.answer` drives the selector on the pane's own daemon, which is
+        // the one that can read the agent's session file.
+        Method::AgentAnswer(params) => Some(&mut params.target),
         // Admin methods that name a pane/agent. `federation.rs` classifies all of these
         // as AllowedAt(Admin) - remote admin is INTENDED - but without an arm here they
         // fall through to `_ => None`, dispatch locally, and fail to resolve an
@@ -4774,6 +4782,7 @@ mod federation_tests {
             ("fs.list_dir", Denied),
             ("agent.prompt", AllowedAt(Interact)),
             ("agent.wait", AllowedAt(Observe)),
+            ("agent.answer", AllowedAt(Admin)),
             ("pane.copy_motion", Denied),
             ("pane.copy_search", Denied),
             ("pane.edit_scrollback", Denied),
@@ -6714,6 +6723,10 @@ mod federation_tests {
             (
                 "pane.send_keys",
                 serde_json::json!({ "pane_id": "remote/w1:p1", "keys": ["enter"] }),
+            ),
+            (
+                "agent.answer",
+                serde_json::json!({ "target": "remote/w1:p1", "ask_id": "call_1", "option": "A" }),
             ),
             (
                 "pane.send_text",

@@ -11,7 +11,7 @@ pub(crate) struct AskQuestion {
     pub question: String,
     pub options: Vec<String>,
     pub multi: bool,
-    pub recommended: Option<usize>,
+    pub recommended: Option<u32>,
 }
 
 /// The newest `ask` call without a tool result.
@@ -90,7 +90,7 @@ fn parse_ask(part: &Value) -> Option<PendingAsk> {
                 multi: question["multi"].as_bool().unwrap_or(false),
                 recommended: question["recommended"]
                     .as_u64()
-                    .and_then(|index| usize::try_from(index).ok()),
+                    .and_then(|index| u32::try_from(index).ok()),
             }
         })
         .collect();
@@ -179,10 +179,30 @@ mod tests {
         }])
     }
 
-    fn write(lines: &[String]) -> tempfile::NamedTempFile {
-        let file = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(file.path(), lines.join("\n") + "\n").unwrap();
-        file
+    /// A session file removed when the test ends.
+    struct TempSession(std::path::PathBuf);
+
+    impl TempSession {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempSession {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn write(lines: &[String]) -> TempSession {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "herdr-answer-session-{}-{}.jsonl",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        TempSession(path)
     }
 
     #[test]
