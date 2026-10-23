@@ -157,8 +157,8 @@ pub(crate) fn prepare_socket_path(
 fn stale_socket_connect_error(kind: io::ErrorKind) -> bool {
     matches!(
         kind,
-        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound | io::ErrorKind::TimedOut
-    ) || (cfg!(windows) && kind == io::ErrorKind::WouldBlock)
+        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+    ) || (cfg!(windows) && matches!(kind, io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock))
 }
 
 pub(crate) fn local_stream_peer_closed(stream: &mut LocalStream) -> io::Result<bool> {
@@ -382,7 +382,10 @@ mod tests {
     fn stale_socket_connect_errors_keep_unix_would_block_strict() {
         assert!(stale_socket_connect_error(io::ErrorKind::ConnectionRefused));
         assert!(stale_socket_connect_error(io::ErrorKind::NotFound));
-        assert!(stale_socket_connect_error(io::ErrorKind::TimedOut));
+        assert_eq!(
+            stale_socket_connect_error(io::ErrorKind::TimedOut),
+            cfg!(windows)
+        );
         assert_eq!(
             stale_socket_connect_error(io::ErrorKind::WouldBlock),
             cfg!(windows)
