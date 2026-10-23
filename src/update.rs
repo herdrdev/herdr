@@ -2152,6 +2152,21 @@ fn homebrew_cellar_keg_root(path: &Path) -> Option<PathBuf> {
 // Public API
 // ---------------------------------------------------------------------------
 
+#[cfg(any(windows, test))]
+fn preserve_preview_channel_for_install(
+    config_path: &Path,
+    configured_channel: UpdateChannel,
+    release_channel: UpdateChannel,
+) -> Result<(), String> {
+    if configured_channel == UpdateChannel::Preview && release_channel == UpdateChannel::Stable {
+        // Windows preview defaults would otherwise become stable with the new binary.
+        crate::config::update_file_at(config_path, "update channel", |content| {
+            crate::config::upsert_section_value(content, "update", "channel", "\"preview\"")
+        })?;
+    }
+    Ok(())
+}
+
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
     let channel = UpdateChannel::configured();
@@ -2226,6 +2241,11 @@ pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
         eprintln!("downloading {}...", release.label());
         let downloaded_update = download_windows_update(&release)?;
         eprintln!("downloaded {}", release.label());
+        preserve_preview_channel_for_install(
+            &crate::config::config_path(),
+            channel,
+            release.channel,
+        )?;
         install_windows_update_with_installer(&release, &downloaded_update)?;
         let updated_exe = windows_installed_herdr_exe_path()?;
         eprintln!("installed {}", release.label());
@@ -2697,6 +2717,47 @@ mod channel_tests {
         .expect("explicit stable selection permits a downgrade");
         assert_eq!(release.identity, "0.9.5");
         assert_eq!(release.channel, UpdateChannel::Stable);
+    }
+
+    #[test]
+    fn stable_fallback_persists_an_implicit_preview_preference() {
+        let dir = std::env::temp_dir().join(format!(
+            "herdr-preview-channel-install-{}",
+            std::process::id()
+        ));
+        let path = dir.join("config.toml");
+        for original in [
+            None,
+            Some("# keep settings\n[update]\nversion_check = false\n"),
+        ] {
+            if let Some(original) = original {
+                fs::write(&path, original).unwrap();
+            }
+            preserve_preview_channel_for_install(
+                &path,
+                UpdateChannel::Preview,
+                UpdateChannel::Stable,
+            )
+            .unwrap();
+            let written = fs::read_to_string(&path).unwrap();
+            let config: crate::config::Config = toml::from_str(&written).unwrap();
+            assert_eq!(
+                config.update.channel,
+                crate::config::UpdateChannelConfig::Preview
+            );
+            if original.is_some() {
+                assert!(!config.update.version_check);
+                assert!(written.starts_with("# keep settings\n"));
+            }
+        }
+        fs::remove_file(&path).unwrap();
+        preserve_preview_channel_for_install(&path, UpdateChannel::Stable, UpdateChannel::Stable)
+            .unwrap();
+        assert!(
+            !path.exists(),
+            "stable updates must not create a preview preference"
+        );
+        fs::remove_dir(&dir).unwrap();
     }
 }
 
