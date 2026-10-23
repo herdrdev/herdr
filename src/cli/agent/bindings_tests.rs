@@ -15,6 +15,7 @@ fn params(args: &[&str]) -> serde_json::Value {
         Operation::Get(params) => Method::AgentGet(params),
         Operation::Focus(params) => Method::AgentFocus(params),
         Operation::Read(params) => Method::AgentRead(params),
+        Operation::Transcript(params) => Method::AgentTranscript(params),
         Operation::SendKeys(params) => Method::AgentSendKeys(params),
         Operation::Rename(params) => Method::AgentRename(params),
         Operation::Wait(params) => Method::AgentWait(params),
@@ -68,6 +69,30 @@ fn agent_projection_defaults_and_ordered_read_policy() {
         params(&["wait", "opaque"]),
         serde_json::json!({"target":"opaque"})
     );
+}
+
+#[test]
+fn agent_transcript_projection_maps_cursors_and_limit() {
+    assert_eq!(
+        params(&["transcript", "opaque"]),
+        serde_json::json!({"target":"opaque"})
+    );
+    assert_eq!(
+        params(&[
+            "transcript",
+            "opaque",
+            "--before",
+            "c1",
+            "--limit=7",
+            "--json"
+        ]),
+        serde_json::json!({"target":"opaque", "before":"c1", "limit":7})
+    );
+    assert_eq!(
+        params(&["transcript", "opaque", "--after", "c2"]),
+        serde_json::json!({"target":"opaque", "after":"c2"})
+    );
+    assert!(parse(&["transcript", "opaque", "--before", "a", "--after", "b"]).is_err());
 }
 
 #[test]

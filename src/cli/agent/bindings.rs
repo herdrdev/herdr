@@ -4,11 +4,12 @@ use crate::api::schema::agents::{
     AgentPromptProjection, AgentPromptWaitProjection, AgentReadProjection, AgentRenameProjection,
     AgentSendKeysProjection, AgentStartProjection, AgentWaitProjection,
 };
+use crate::api::schema::transcript::AgentTranscriptProjection;
 use crate::api::schema::{
     AgentArchiveParams, AgentForgetParams, AgentPromptParams, AgentReadParams, AgentRenameParams,
     AgentRestartParams, AgentSendKeysParams, AgentSessionTransferHarness, AgentStartParams,
-    AgentStatus, AgentTarget, AgentUnarchiveParams, AgentWaitParams, ReadFormat, ReadSource,
-    READ_FORMATS, READ_SOURCES,
+    AgentStatus, AgentTarget, AgentTranscriptParams, AgentUnarchiveParams, AgentWaitParams,
+    ReadFormat, ReadSource, READ_FORMATS, READ_SOURCES,
 };
 pub(crate) use crate::cli::projection::optional_text;
 use crate::cli::projection::{
@@ -100,6 +101,25 @@ pub(crate) fn lines() -> Input<Option<u32>> {
         *slot = Some(super::super::parse_u32_flag("--lines", value)?);
         Ok(())
     })
+}
+
+pub(crate) fn transcript_before() -> Input<Option<String>> {
+    optional_text("before", "CURSOR")
+        .help("Page older turns ending just before this cursor (a previous page's `before`)")
+        .configure(|arg| arg.conflicts_with("after"))
+}
+
+pub(crate) fn transcript_after() -> Input<Option<String>> {
+    optional_text("after", "CURSOR")
+        .help("Entries appended or changed since this cursor (a previous page's `after`)")
+}
+
+pub(crate) fn transcript_limit() -> Input<Option<u32>> {
+    Input::value("limit", "TURNS", |slot, value| {
+        *slot = Some(super::super::parse_u32_flag("--limit", value)?);
+        Ok(())
+    })
+    .help("Turns per page (default 20, at most 50)")
 }
 
 pub(crate) fn keys() -> Input<Vec<String>> {
@@ -371,6 +391,7 @@ pub(crate) enum Operation {
     Get(AgentTarget),
     Focus(AgentTarget),
     Read(AgentReadParams),
+    Transcript(AgentTranscriptParams),
     SendKeys(AgentSendKeysParams),
     Rename(AgentRenameParams),
     Archive(AgentArchiveParams),
@@ -403,6 +424,10 @@ pub(crate) fn command() -> Command {
         .subcommand(leaf("focus", TargetProjection::arguments(), "Focus an agent"))
         .subcommand(leaf("read", AgentReadProjection::arguments(), "Read agent terminal output")
             .override_usage("herdr agent read <TARGET> [OPTIONS]"))
+        .subcommand(leaf("transcript", AgentTranscriptProjection::arguments(), "Read an omp agent's conversation as chat entries")
+            .arg(json_no_op())
+            .override_usage("herdr agent transcript <TARGET> [--before CURSOR | --after CURSOR] [--limit TURNS] [--json]")
+            .after_help("Without --before or --after, returns the newest page. Pass a page's `before` to page older turns, or its `after` to fetch what changed since."))
         .subcommand(leaf("send-keys", AgentSendKeysProjection::arguments(), "Send key presses to an agent")
             .after_help("Use esc as the canonical Escape key name; escape is also accepted."))
         .subcommand(leaf("rename", AgentRenameProjection::arguments(), "Rename an agent")
@@ -465,6 +490,7 @@ pub(crate) fn from_matches(matches: &ArgMatches) -> Result<Operation, ParseError
         }
         "get" => Operation::Get(TargetProjection::from_matches(matches)?),
         "focus" => Operation::Focus(TargetProjection::from_matches(matches)?),
+        "transcript" => Operation::Transcript(AgentTranscriptProjection::from_matches(matches)?),
         "read" => {
             let mut params = AgentReadProjection::from_matches(matches)?;
             params.strip_ansi = !matches!(params.format, ReadFormat::Ansi);
