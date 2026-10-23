@@ -7,9 +7,6 @@
 //! settles or the answer is confirmed.
 
 mod selector;
-mod session;
-
-pub(crate) use session::{pending_ask, AskQuestion, PendingAsk};
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,9 +15,9 @@ use std::time::{Duration, Instant};
 
 use crate::agent_resume::AgentSessionRefKind;
 use crate::api::schema::{
-    AgentAnswerParams, AgentAnswerStatus, AgentInfo, ErrorBody, ErrorResponse, Method,
-    PaneReadParams, PaneReadResult, PaneSendKeysParams, ReadFormat, ReadIntent, ReadSource,
-    Request, ResponseResult, SuccessResponse,
+    AgentAnswerParams, AgentAnswerStatus, AgentInfo, AskQuestion, ErrorBody, ErrorResponse,
+    Method, PaneReadParams, PaneReadResult, PaneSendKeysParams, PendingAsk, ReadFormat,
+    ReadIntent, ReadSource, Request, ResponseResult, SuccessResponse,
 };
 use crate::api::server::{dispatch_to_app_with_timeout, APP_RESPONSE_TIMEOUT};
 use crate::api::ApiRequestSender;
@@ -93,7 +90,7 @@ fn answer(
             "this ask is already being answered or was just answered",
         )
     })?;
-    let pending = session::pending_ask(&session_path)
+    let pending = crate::agent_transcript::pending_ask(&session_path)
         .map_err(|err| {
             error(
                 "ask_not_pending",
@@ -102,7 +99,7 @@ fn answer(
         })?
         .filter(|ask| ask.id == params.ask_id)
         .ok_or_else(|| error("ask_not_pending", "the agent is not waiting on this ask"))?;
-    let question = pending.single_select().ok_or_else(|| {
+    let question = drivable_question(&pending).ok_or_else(|| {
         error(
             "ask_unsupported",
             "only a single single-select question can be answered",
@@ -119,13 +116,6 @@ fn answer(
             .recommended
             .and_then(|index| usize::try_from(index).ok()),
     );
-    let offset = session::len(&session_path).map_err(|err| {
-        error(
-            "ask_not_pending",
-            format!("the agent's session file cannot be read: {err}"),
-        )
-    })?;
-
     let mut pane = AppPane {
         request_id,
         pane_id: &agent.pane_id,
@@ -137,11 +127,19 @@ fn answer(
     claim.keep();
     Ok(confirm(
         &session_path,
-        offset,
         &params.ask_id,
         &params.option,
         timing,
     ))
+}
+
+/// The question `agent.answer` (and an actionable push) can drive: the ask's
+/// only question, when it is single-select with options.
+pub(crate) fn drivable_question(ask: &PendingAsk) -> Option<&AskQuestion> {
+    match ask.questions.as_slice() {
+        [question] if ask.answerable => Some(question),
+        _ => None,
+    }
 }
 
 /// The session file of an omp agent whose session herdr tracks by path.
@@ -154,19 +152,14 @@ fn omp_session_path(agent: &AgentInfo) -> Option<PathBuf> {
         .then(|| PathBuf::from(&session.value))
 }
 
-/// Look for the ask's tool result written after `offset`: `answered` once it
-/// records exactly `option`, `sent_unconfirmed` if it records something else
-/// or does not show up in time.
-fn confirm(
-    path: &Path,
-    offset: u64,
-    ask_id: &str,
-    option: &str,
-    timing: Timing,
-) -> AgentAnswerStatus {
+/// Look for the ask's tool result: `answered` once it records exactly
+/// `option`, `sent_unconfirmed` if it records something else or does not
+/// show up in time. The ask was pending when the keys went out, so any result
+/// for it is the one they produced.
+fn confirm(path: &Path, ask_id: &str, option: &str, timing: Timing) -> AgentAnswerStatus {
     let deadline = Instant::now() + timing.confirm_timeout;
     loop {
-        if let Ok(Some(selected)) = session::answer_since(path, offset, ask_id) {
+        if let Ok(Some(selected)) = crate::agent_transcript::ask_result(path, ask_id) {
             return if selected == [option] {
                 AgentAnswerStatus::Answered
             } else {

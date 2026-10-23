@@ -14,6 +14,7 @@
 //! preferences and opaque relay capabilities live in `devices.json`.
 
 mod apns;
+mod ask;
 mod jwt;
 mod relay;
 
@@ -28,6 +29,7 @@ use self::apns::DeliveryOutcome;
 use self::relay::{RelayOutcome, RelayPushType};
 
 pub(crate) use self::relay::is_valid_capability as is_valid_relay_capability;
+pub(crate) use self::ask::{AskSource, PushAsk};
 
 /// Which agent transition triggered a push, used to match per-device prefs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +57,12 @@ pub(crate) struct PushNotification {
     /// that agent get it too. `None` for agents on other machines.
     #[cfg(unix)]
     pub guest_scope: Option<crate::guest::push::GuestScope>,
+    /// Set by the app for a NeedsInput alert about a local omp agent: where to
+    /// look for a pending `ask` on the push thread. Consumed by delivery.
+    pub ask_source: Option<AskSource>,
+    /// The question this alert lets the owner answer (`herdr_ask`), filled on
+    /// the push thread from `ask_source`.
+    pub ask: Option<PushAsk>,
 }
 
 /// True when the push config is complete enough to attempt delivery: the master
@@ -302,6 +310,41 @@ pub(crate) mod test_sink {
     }
 }
 
+/// Alert text on one line: newlines and tabs become spaces, other control
+/// characters drop, whitespace runs collapse, and the text stops at
+/// `max_chars`. `None` when nothing printable is left.
+pub(crate) fn sanitized_notification_text(value: &str, max_chars: usize) -> Option<String> {
+    let mut sanitized = String::new();
+    let mut previous_space = false;
+    for ch in value.chars() {
+        let replacement = if ch == '\n' || ch == '\r' || ch == '\t' {
+            Some(' ')
+        } else if ch.is_control() {
+            None
+        } else {
+            Some(ch)
+        };
+        let Some(ch) = replacement else {
+            continue;
+        };
+        if ch.is_whitespace() {
+            if previous_space {
+                continue;
+            }
+            previous_space = true;
+            sanitized.push(' ');
+        } else {
+            previous_space = false;
+            sanitized.push(ch);
+        }
+        if sanitized.chars().count() >= max_chars {
+            break;
+        }
+    }
+    let sanitized = sanitized.trim().to_string();
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
 /// Deliver a batch of agent transitions to every registered device that opted
 /// into the matching notification kind, each over the path [`route`] picks
 /// (direct APNs or the relay). Intended to be called on a detached thread: it
@@ -310,10 +353,11 @@ pub(crate) mod test_sink {
 ///
 /// Best-effort throughout: every failure is logged and swallowed so a slow or
 /// failing push never affects the app loop.
-pub(crate) fn deliver(cfg: PushConfig, notifications: Vec<PushNotification>) {
+pub(crate) fn deliver(cfg: PushConfig, mut notifications: Vec<PushNotification>) {
     if notifications.is_empty() || !may_deliver(&cfg) {
         return;
     }
+    ask::attach(&mut notifications);
     let devices = crate::persist::devices::load();
     let plan = plan_alerts(&cfg, &notifications, &devices);
     prune_device_tokens(send_plan(&cfg, &plan));

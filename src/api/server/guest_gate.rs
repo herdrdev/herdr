@@ -1893,6 +1893,7 @@ mod tests {
         for request in [
             json!({"id": "d", "method": "agent.forget", "params": {"target": terminal}}),
             json!({"id": "d", "method": "agent.send_keys", "params": {"target": terminal, "keys": ["enter"]}}),
+            json!({"id": "d", "method": "agent.answer", "params": {"target": terminal, "ask_id": "call_1", "option": "Yes"}}),
             json!({"id": "d", "method": "pane.send_text", "params": {"pane_id": pane, "text": "rm -rf /"}}),
             json!({"id": "d", "method": "pane.send_keys", "params": {"pane_id": pane, "keys": ["enter"]}}),
             json!({"id": "d", "method": "pane.send_input", "params": {"pane_id": pane, "text": "x"}}),

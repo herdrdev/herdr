@@ -49,6 +49,8 @@ impl FakeOmp {
             "enter" if self.records_answer => {
                 let line = json!({
                     "type": "message",
+                    "id": "e_result",
+                    "parentId": "e_ask",
                     "message": {
                         "role": "toolResult",
                         "toolCallId": self.ask_id,
@@ -56,9 +58,12 @@ impl FakeOmp {
                         "details": {"selectedOptions": [self.options[self.highlighted]]},
                     },
                 });
-                let mut text = std::fs::read_to_string(&self.session).unwrap();
-                text.push_str(&format!("{line}\n"));
-                std::fs::write(&self.session, text).unwrap();
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&self.session)
+                    .unwrap();
+                writeln!(file, "{line}").unwrap();
             }
             _ => {}
         }
@@ -81,6 +86,7 @@ impl Drop for Harness {
 fn ask_line(id: &str, questions: Value) -> String {
     json!({
         "type": "message",
+        "id": "e_ask",
         "message": {
             "role": "assistant",
             "content": [{
@@ -138,30 +144,55 @@ fn harness(questions: Value) -> Harness {
         records_answer: true,
         keys: Vec::new(),
     };
-    let mut agent: AgentInfo = serde_json::from_value(json!({
-        "terminal_id": "term_1",
-        "agent": "omp",
-        "agent_status": "blocked",
-        "input_pending": true,
-        "composer": {},
-        "screen_detection_skipped": false,
-        "state_labels": {},
-        "workspace_id": "w1",
-        "tab_id": "w1:t1",
-        "pane_id": pane_id,
-        "focused": true,
-        "launch_pending": false,
-        "interactive_ready": true,
-        "state_change_seq": 1,
-        "revision": 1,
-    }))
-    .expect("agent info");
-    agent.agent_session = Some(AgentSessionInfo {
-        source: "omp".into(),
-        agent: "omp".into(),
-        kind: AgentSessionRefKind::Path,
-        value: session.display().to_string(),
-    });
+    let agent = AgentInfo {
+        account: None,
+        account_config_dir: None,
+        account_unresolved: false,
+        terminal_id: "term_1".into(),
+        name: None,
+        agent: Some("omp".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        display_agent: None,
+        agent_status: crate::api::schema::AgentStatus::Blocked,
+        input_pending: true,
+        input_prompt_kind: None,
+        composer: Default::default(),
+        screen_detection_skipped: false,
+        state_labels: Default::default(),
+        tokens: Default::default(),
+        agent_session: Some(AgentSessionInfo {
+            source: "omp".into(),
+            agent: "omp".into(),
+            kind: AgentSessionRefKind::Path,
+            value: session.display().to_string(),
+        }),
+        last_completed_turn: None,
+        turn: None,
+        turn_epoch: None,
+        workspace_id: "w1".into(),
+        tab_id: "w1:t1".into(),
+        pane_id: pane_id.clone(),
+        focused: true,
+        launch_pending: false,
+        interactive_ready: true,
+        state_change_seq: 1,
+        status_since_unix_ms: None,
+        completion_seq: None,
+        cwd: None,
+        foreground_cwd: None,
+        revision: 1,
+        machine_id: None,
+        machine_profile_id: None,
+        machine_label: None,
+        origin_machine_id: None,
+        reachability: None,
+        last_known_status: None,
+        archived: None,
+        parked_work: Vec::new(),
+        session_transfer: None,
+    };
     Harness {
         omp: Arc::new(Mutex::new(omp)),
         agent,
@@ -243,7 +274,7 @@ fn answers_by_moving_from_the_recommended_row_and_confirms_from_the_session() {
     );
     assert_eq!(harness.keys(), ["up", "enter"]);
     assert_eq!(
-        session::answer_since(&harness.session, 0, &harness.ask_id()).unwrap(),
+        crate::agent_transcript::ask_result(&harness.session, &harness.ask_id()).unwrap(),
         Some(vec!["Ship it now".to_owned()])
     );
 }
