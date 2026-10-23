@@ -17,6 +17,7 @@ pub mod response;
 pub mod server;
 pub mod session;
 pub mod tabs;
+pub mod transcript;
 pub mod workspaces;
 pub mod worktrees;
 
@@ -36,6 +37,7 @@ pub use response::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
+pub use transcript::*;
 pub use workspaces::*;
 pub use worktrees::*;
 
@@ -123,6 +125,7 @@ operations::define_operations! {
     AgentList(AgentListParams) => "agent.list", false, false;
     AgentGet(AgentTarget) => "agent.get", false, false;
     AgentRead(AgentReadParams) => "agent.read", false, false;
+    AgentTranscript(AgentTranscriptParams) => "agent.transcript", false, false;
     AgentExplain(AgentTarget) => "agent.explain", false, false;
     AgentSendKeys(AgentSendKeysParams) => "agent.send_keys", true, false;
     AgentRename(AgentRenameParams) => "agent.rename", true, false;

@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use crate::api::schema::{
     AgentArchiveParams, AgentForgetParams, AgentListParams, AgentPromptParams, AgentReadParams,
     AgentRenameParams, AgentRestartParams, AgentSendKeysParams, AgentStartParams, AgentTarget,
-    AgentTransferSessionParams, AgentUnarchiveParams, AgentWaitParams, ErrorBody, ErrorResponse,
-    Method, PaneProcessInfoParams, PaneTarget, Request,
+    AgentTranscriptParams, AgentTransferSessionParams, AgentUnarchiveParams, AgentWaitParams,
+    ErrorBody, ErrorResponse, Method, PaneProcessInfoParams, PaneTarget, Request,
 };
 
 const AGENT_START_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -66,6 +66,7 @@ pub(super) fn run_agent_command(args: &[String]) -> std::io::Result<i32> {
         Operation::Get(params) => agent_get(params),
         Operation::Focus(params) => agent_focus(params),
         Operation::Read(params) => agent_read(params),
+        Operation::Transcript(params) => agent_transcript(params),
         Operation::SendKeys(params) => agent_send_keys(params),
         Operation::Rename(params) => agent_rename(params),
         Operation::Archive(params) => agent_archive(params),
@@ -925,6 +926,13 @@ fn agent_read(params: AgentReadParams) -> std::io::Result<i32> {
         method: Method::AgentRead(params),
     })?;
     super::print_read_response(&response)
+}
+
+fn agent_transcript(params: AgentTranscriptParams) -> std::io::Result<i32> {
+    super::print_response(&super::send_request(&Request {
+        id: "cli:agent:transcript".into(),
+        method: Method::AgentTranscript(params),
+    })?)
 }
 
 #[cfg(test)]
