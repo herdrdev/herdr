@@ -203,6 +203,19 @@ impl ClientShellState {
         }
     }
 
+    /// Logical screen column of the selected pane's glyph under the pointer.
+    /// The pointer is clamped into the pane first, so a drag outside it still
+    /// maps through the pane row it extends.
+    fn selection_endpoint_column(&self, hit: &PaneHit, column: u16, row: u16) -> u16 {
+        let inner = hit.inner_rect;
+        self.content_column(
+            column.clamp(inner.x, inner.x + inner.width.saturating_sub(1)),
+            row.clamp(inner.y, inner.y + inner.height.saturating_sub(1)),
+        )
+    }
+
+    /// Extends the selection to the pointer at visual (`column`, `row`), which
+    /// may lie outside the pane.
     fn update_selection_drag(
         &mut self,
         hit: &PaneHit,
@@ -215,11 +228,15 @@ impl ClientShellState {
             .selection
             .as_ref()
             .is_some_and(crate::selection::Selection::is_dragging);
+        // Movement compares the raw pointer with the anchor glyph's drawn
+        // position. The clamped, remapped endpoint can equal the anchor while
+        // the pointer has left it, for example past the pane's right edge.
         let moved_from_anchor = self.selection.as_ref().is_some_and(|selection| {
             let (anchor_row, anchor_col) = selection.anchor_screen_pos(hit.inner_rect, metrics);
-            anchor_row != row || anchor_col != column
+            anchor_row != row || self.visual_column(anchor_col, anchor_row) != column
         });
-        self.update_selection_cursor_with_metrics(hit, column, row, metrics, outcome);
+        let endpoint = self.selection_endpoint_column(hit, column, row);
+        self.update_selection_cursor_with_metrics(hit, endpoint, row, metrics, outcome);
         let is_dragging = self
             .word_selection_gesture
             .as_ref()
@@ -276,12 +293,14 @@ impl ClientShellState {
                 offset_from_bottom,
                 ..metrics
             };
-            self.update_selection_cursor_with_metrics(hit, column, row, Some(projected), outcome);
+            self.update_selection_cursor_with_metrics(hit, endpoint, row, Some(projected), outcome);
             self.push_pane_scroll_offset(hit.pane_id.clone(), offset_from_bottom, outcome);
         }
         self.selection_autoscroll = Some(ClientSelectionAutoscroll {
             pane_id: hit.pane_id.clone(),
             direction,
+            // The visual pointer: BiDi layout can move a different glyph
+            // under it once the pane scrolls.
             last_mouse_column: column,
             last_mouse_row: row,
             inner_rect: hit.inner_rect,
@@ -326,7 +345,7 @@ impl ClientShellState {
             };
             self.update_selection_cursor_with_metrics(
                 &hit,
-                mouse.column,
+                self.content_column(mouse.column, mouse.row),
                 mouse.row,
                 Some(projected),
                 outcome,
@@ -335,6 +354,37 @@ impl ClientShellState {
             outcome.repaint = true;
         }
         true
+    }
+
+    /// Re-resolves the autoscrolling selection endpoint under the stationary
+    /// pointer once the displayed frame shows the autoscroll offset. Until
+    /// then the endpoint column was mapped through the row drawn there before
+    /// the scroll, and rows with different BiDi layouts map columns
+    /// differently.
+    fn remap_selection_autoscroll_endpoint(&mut self, outcome: &mut ClientShellInput) {
+        let Some(autoscroll) = self.selection_autoscroll.as_ref() else {
+            return;
+        };
+        let Some(hit) = self
+            .hits
+            .panes
+            .iter()
+            .find(|hit| {
+                hit.pane_id == autoscroll.pane_id && hit.inner_rect == autoscroll.inner_rect
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let Some(displayed) = hit
+            .scroll
+            .filter(|metrics| metrics.offset_from_bottom == autoscroll.offset_from_bottom)
+        else {
+            return;
+        };
+        let (column, row) = (autoscroll.last_mouse_column, autoscroll.last_mouse_row);
+        let endpoint = self.selection_endpoint_column(&hit, column, row);
+        self.update_selection_cursor_with_metrics(&hit, endpoint, row, Some(displayed), outcome);
     }
 
     pub(super) fn request_selection_drag_repaint(&mut self, now: std::time::Instant) -> bool {
@@ -393,6 +443,7 @@ impl ClientShellState {
             self.stop_selection_autoscroll();
             return outcome;
         }
+        self.remap_selection_autoscroll_endpoint(&mut outcome);
         let next_offset = match autoscroll.direction {
             ClientSelectionAutoscrollDirection::Up => autoscroll
                 .offset_from_bottom
@@ -412,9 +463,14 @@ impl ClientShellState {
             max_offset_from_bottom: autoscroll.max_offset_from_bottom,
             viewport_rows: hit.scroll.map_or(0, |metrics| metrics.viewport_rows),
         };
-        self.update_selection_cursor_with_metrics(
+        let endpoint = self.selection_endpoint_column(
             &hit,
             autoscroll.last_mouse_column,
+            autoscroll.last_mouse_row,
+        );
+        self.update_selection_cursor_with_metrics(
+            &hit,
+            endpoint,
             autoscroll.last_mouse_row,
             Some(metrics),
             &mut outcome,
@@ -962,7 +1018,9 @@ impl ClientShellState {
                 .cloned()
             {
                 let viewport_row = mouse.row.saturating_sub(hit.inner_rect.y);
-                let col = mouse.column.saturating_sub(hit.inner_rect.x);
+                let col = self
+                    .content_column(mouse.column, mouse.row)
+                    .saturating_sub(hit.inner_rect.x);
                 let content_revision = self
                     .pane_surface
                     .as_ref()
@@ -1748,6 +1806,9 @@ impl ClientShellState {
                 return;
             }
         }
+        if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
+            self.remap_selection_autoscroll_endpoint(outcome);
+        }
         if mouse.kind == MouseEventKind::Up(MouseButton::Left)
             && self.word_selection_gesture.is_some()
         {
@@ -2244,7 +2305,9 @@ impl ClientShellState {
                         let click = ClientPaneClick {
                             pane_id: hit.pane_id.clone(),
                             viewport_row: mouse.row.saturating_sub(hit.inner_rect.y),
-                            col: mouse.column.saturating_sub(hit.inner_rect.x),
+                            col: self
+                                .content_column(mouse.column, mouse.row)
+                                .saturating_sub(hit.inner_rect.x),
                             at: std::time::Instant::now(),
                         };
                         if mouse.modifiers.is_empty()
@@ -2259,13 +2322,14 @@ impl ClientShellState {
                                 outcome,
                             );
                         } else {
+                            let col = click.col;
                             if mouse.modifiers.is_empty() {
                                 self.last_pane_click = Some(click);
                             }
                             self.selection = Some(crate::selection::Selection::anchor(
                                 hit.pane_id.clone(),
                                 mouse.row.saturating_sub(hit.inner_rect.y),
-                                mouse.column.saturating_sub(hit.inner_rect.x),
+                                col,
                                 hit.scroll,
                             ));
                         }
@@ -2336,8 +2400,9 @@ impl ClientShellState {
     }
 
     fn pane_mouse_position(&self, hit: &PaneHit, mouse: MouseEvent) -> ClientMousePosition {
+        let content_column = self.content_column(mouse.column, mouse.row);
         let cell = ClientMousePosition::Cell {
-            column: mouse.column.saturating_sub(hit.inner_rect.x),
+            column: content_column.saturating_sub(hit.inner_rect.x),
             row: mouse.row.saturating_sub(hit.inner_rect.y),
         };
         if hit.sgr_pixel_mouse && hit.pixel_width > 0 && hit.pixel_height > 0 {
@@ -2348,9 +2413,13 @@ impl ClientShellState {
                         .and_then(|position| match position {
                             crate::input::mouse::Position::Pixels { x, y } => {
                                 Some(ClientMousePosition::Pixels {
-                                    x,
+                                    x: super::display::shift_pixel_x(
+                                        x,
+                                        hit,
+                                        i32::from(content_column) - i32::from(mouse.column),
+                                    ),
                                     y,
-                                    column: mouse.column.saturating_sub(hit.inner_rect.x),
+                                    column: content_column.saturating_sub(hit.inner_rect.x),
                                     row: mouse.row.saturating_sub(hit.inner_rect.y),
                                 })
                             }

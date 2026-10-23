@@ -45,6 +45,11 @@ pub(crate) struct ClientShellConfig {
     pub(super) mouse_scroll_lines: usize,
     pub(super) right_click_passthrough_modifiers: Option<crossterm::event::KeyModifiers>,
     pub(super) redraw_on_focus_gained: bool,
+    /// Lay out pane rows in BiDi visual order while composing frames.
+    pub(super) bidi: bool,
+    /// The outer terminal reorders text itself and cannot be switched off,
+    /// so pane rows stay in logical order whatever `bidi` says.
+    pub(super) host_reorders_text: bool,
     pub(super) switch_ascii_input_source_in_prefix: bool,
     pub(super) local_config_path: std::path::PathBuf,
     pub(super) preferences_path: Option<std::path::PathBuf>,
@@ -895,6 +900,11 @@ pub(crate) struct ClientShellState {
     pub(super) last_composed_size: Option<(u16, u16)>,
     pub(super) last_composed_at: Option<std::time::Instant>,
     pub(super) selection_repaint_deadline: Option<std::time::Instant>,
+    /// Column maps for pane row segments the last compose reordered.
+    pub(super) display_maps: Vec<crate::pane_display::RowMap>,
+    /// Column maps for the popup pane, consulted before tiled panes.
+    pub(super) popup_display_maps: Vec<crate::pane_display::RowMap>,
+    pub(super) display_scratch: crate::pane_display::Scratch,
     pub(super) hits: ShellHitMap,
     pub(super) endpoints: Vec<ClientShellEndpoint>,
     pub(super) active_endpoint_id: ClientEndpointId,
@@ -1069,6 +1079,9 @@ impl ClientShellState {
             last_composed_size: None,
             last_composed_at: None,
             selection_repaint_deadline: None,
+            display_maps: Vec::new(),
+            popup_display_maps: Vec::new(),
+            display_scratch: crate::pane_display::Scratch::default(),
             hits: ShellHitMap::default(),
             endpoints: vec![local_endpoint()],
             active_endpoint_id: ClientEndpointId::Local,

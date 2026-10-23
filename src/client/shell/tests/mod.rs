@@ -60,6 +60,7 @@ pub(super) fn snapshot() -> ClientShellSnapshot {
             foreground_cwd: Some("/repo".into()),
             focused: true,
             right_click_passthrough: false,
+            bidi_explicit: false,
         }],
         agents: Vec::new(),
         commands: Vec::new(),
@@ -260,5 +261,6 @@ mod keybindings_settings;
 mod link_hover;
 mod mobile;
 mod mouse_selection;
+mod pane_display;
 mod popup_focus_projection;
 mod startup_overlays;

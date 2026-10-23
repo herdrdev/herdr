@@ -127,8 +127,8 @@ pub(super) fn snapshot_with_completions(
         .map(|pane| {
             let pane_id = pane.pane_id;
             let focused = focused_pane_id.as_deref() == Some(pane_id.as_str());
-            let right_click_passthrough = app
-                .parse_pane_id(&pane_id)
+            let parsed_pane_id = app.parse_pane_id(&pane_id);
+            let right_click_passthrough = parsed_pane_id
                 .and_then(|(workspace_index, pane_id)| {
                     app.state
                         .workspaces
@@ -136,6 +136,15 @@ pub(super) fn snapshot_with_completions(
                         .pane_state(pane_id)
                 })
                 .is_some_and(|pane| pane.right_click_passthrough);
+            let bidi_explicit = parsed_pane_id
+                .and_then(|(workspace_index, pane_id)| {
+                    app.state.runtime_for_pane_in_workspace(
+                        &app.terminal_runtimes,
+                        workspace_index,
+                        pane_id,
+                    )
+                })
+                .is_some_and(|runtime| runtime.bidi_explicit());
             protocol::ClientShellPane {
                 pane_id,
                 workspace_id: pane.workspace_id,
@@ -145,6 +154,7 @@ pub(super) fn snapshot_with_completions(
                 foreground_cwd: pane.foreground_cwd,
                 focused,
                 right_click_passthrough,
+                bidi_explicit,
             }
         })
         .collect();
@@ -715,6 +725,46 @@ mod tests {
             .terminal_runtimes
             .values()
             .all(|runtime| runtime.test_scroll_metrics_reads() == 1));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn snapshot_reports_panes_that_switched_bidi_to_explicit_mode() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let mut workspace = crate::workspace::Workspace::test_new("active");
+        workspace.test_add_tab(None);
+        app.state.workspaces = vec![workspace];
+        app.state.active = Some(0);
+        app.state.ensure_test_terminals();
+        let ids: Vec<_> = app.state.terminals.keys().cloned().collect();
+        for id in &ids {
+            let runtime =
+                crate::terminal::TerminalRuntime::test_with_scrollback_bytes(20, 5, 1000, b"");
+            app.terminal_runtimes.insert(id.clone(), runtime);
+        }
+        let explicit_panes = |app: &crate::app::App| {
+            snapshot(app, "boot", 1, None, None)
+                .panes
+                .into_iter()
+                .filter(|pane| pane.bidi_explicit)
+                .count()
+        };
+        assert_eq!(explicit_panes(&app), 0);
+
+        // A nested Herdr, or any application that lays out its own text,
+        // sends CSI 8 l; CSI 8 h hands reordering back.
+        let runtime = app.terminal_runtimes.get(&ids[0]).expect("runtime");
+        runtime.test_process_pty_bytes(b"\x1b[8l");
+        assert_eq!(explicit_panes(&app), 1);
+        let runtime = app.terminal_runtimes.get(&ids[0]).expect("runtime");
+        runtime.test_process_pty_bytes(b"\x1b[8h");
+        assert_eq!(explicit_panes(&app), 0);
     }
 
     #[test]

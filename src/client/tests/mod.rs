@@ -573,7 +573,7 @@ fn color_scheme_reports_are_enabled_only_for_full_clients() {
 #[test]
 fn terminal_restore_postlude_restores_visible_default_cursor() {
     let mut output = Vec::new();
-    write_terminal_restore_postlude(&mut output, false).unwrap();
+    write_terminal_restore_postlude(&mut output, false, false).unwrap();
     assert_eq!(output, b"\x1b[?25h\x1b[0 q");
 }
 
@@ -589,7 +589,7 @@ fn direct_attach_mouse_capture_combines_local_preference_with_child_demand() {
 #[test]
 fn terminal_restore_postlude_disables_color_scheme_reports_when_enabled() {
     let mut output = Vec::new();
-    write_terminal_restore_postlude(&mut output, true).unwrap();
+    write_terminal_restore_postlude(&mut output, true, false).unwrap();
 
     let mut expected = Vec::new();
     expected.extend_from_slice(

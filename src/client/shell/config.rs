@@ -68,6 +68,10 @@ impl ClientShellState {
         }
     }
 
+    pub(crate) fn bidi_enabled(&self) -> bool {
+        self.config.bidi_enabled()
+    }
+
     pub(crate) fn reload_client_config(&mut self) {
         match crate::config::load_live_config() {
             Ok(loaded) => {
@@ -151,6 +155,8 @@ impl ClientShellConfig {
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
             right_click_passthrough_modifiers: config.ui.right_click_passthrough_modifiers(),
             redraw_on_focus_gained: config.ui.redraw_on_focus_gained,
+            bidi: config.ui.bidi,
+            host_reorders_text: false,
             switch_ascii_input_source_in_prefix: config
                 .experimental
                 .switch_ascii_input_source_in_prefix,
@@ -176,6 +182,22 @@ impl ClientShellConfig {
         self.keybinding_source = source;
         self.keybinds.keybinds.custom_commands.clear();
         self
+    }
+
+    /// Whether `[ui] bidi` asks this client to lay out pane rows in BiDi
+    /// visual order.
+    pub(crate) fn bidi_enabled(&self) -> bool {
+        self.bidi
+    }
+
+    /// Records that the outer terminal always reorders text itself.
+    pub(crate) fn set_host_reorders_text(&mut self, host_reorders_text: bool) {
+        self.host_reorders_text = host_reorders_text;
+    }
+
+    /// Whether composed pane rows are laid out in BiDi visual order.
+    pub(super) fn lays_out_bidi(&self) -> bool {
+        self.bidi && !self.host_reorders_text
     }
 
     pub(crate) fn uses_endpoint_keybindings(&self) -> bool {
@@ -341,6 +363,7 @@ impl ClientShellConfig {
             } else {
                 let ui = &config.ui;
                 diagnostics.extend(ui.sound.diagnostics());
+                self.bidi = ui.bidi;
                 self.sidebar_width = ui.sidebar_width;
                 self.sidebar_min_width = ui.sidebar_min_width;
                 self.sidebar_max_width = ui.sidebar_max_width;

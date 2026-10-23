@@ -285,6 +285,7 @@ const entries: []const ModeEntry = &.{
     .{ .name = "insert", .value = 4, .ansi = true },
     .{ .name = "send_receive_mode", .value = 12, .ansi = true, .default = true }, // SRM
     .{ .name = "linefeed", .value = 20, .ansi = true },
+    .{ .name = "bidi_implicit", .value = 8, .ansi = true, .default = true }, // BDSM
 
     // DEC
     .{ .name = "cursor_keys", .value = 1 }, // DECCKM

@@ -1,0 +1,31 @@
+--- a/vendor/libghostty-vt/include/ghostty/vt/modes.h
++++ b/vendor/libghostty-vt/include/ghostty/vt/modes.h
+@@ -50,6 +50,7 @@ extern "C" {
+ #define GHOSTTY_MODE_INSERT           (ghostty_mode_new(4, true))    /**< Insert mode */
+ #define GHOSTTY_MODE_SRM              (ghostty_mode_new(12, true))   /**< Send/receive mode */
+ #define GHOSTTY_MODE_LINEFEED         (ghostty_mode_new(20, true))   /**< Linefeed/new line mode */
++#define GHOSTTY_MODE_BDSM             (ghostty_mode_new(8, true))    /**< BiDi implicit mode (ECMA-48 BDSM) */
+ /** @} */
+ 
+ /** @name DEC Private Modes
+--- a/vendor/libghostty-vt/src/terminal/modes.zig
++++ b/vendor/libghostty-vt/src/terminal/modes.zig
+@@ -285,6 +285,7 @@ const entries: []const ModeEntry = &.{
+     .{ .name = "insert", .value = 4, .ansi = true },
+     .{ .name = "send_receive_mode", .value = 12, .ansi = true, .default = true }, // SRM
+     .{ .name = "linefeed", .value = 20, .ansi = true },
++    .{ .name = "bidi_implicit", .value = 8, .ansi = true, .default = true }, // BDSM
+ 
+     // DEC
+     .{ .name = "cursor_keys", .value = 1 }, // DECCKM
+--- a/vendor/libghostty-vt/src/terminal/stream.zig
++++ b/vendor/libghostty-vt/src/terminal/stream.zig
+@@ -2167,7 +2167,7 @@ pub fn Stream(comptime H: type) type {
+ 
+                 // DECRQM - Request Mode
+                 'p' => switch (input.intermediates.len) {
+-                    2 => decrqm: {
++                    1, 2 => decrqm: {
+                         const ansi_mode = ansi: {
+                             switch (input.intermediates.len) {
+                                 1 => if (input.intermediates[0] == '$') break :ansi true,
