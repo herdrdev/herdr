@@ -210,6 +210,7 @@ pub(crate) fn default_capabilities() -> Option<ServerCapabilities> {
         agent_forget: true,
         api_bridge_multi: cfg!(unix),
         pane_history: true,
+        agent_answer: true,
     })
 }
 
@@ -3378,6 +3379,7 @@ mod tests {
                 agent_forget: false,
                 api_bridge_multi: false,
                 pane_history: false,
+                agent_answer: false,
             }),
             None,
             None,

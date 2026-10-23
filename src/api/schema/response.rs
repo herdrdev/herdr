@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::agents::{AgentInfo, AgentPromptDelivery};
+use super::agents::{AgentAnswerStatus, AgentInfo, AgentPromptDelivery};
 use super::common::{ClientWindowTitleReason, NotificationShowReason, NotificationsStatusState};
 use super::events::EventEnvelope;
 use super::gram::GramMessageInfo;
@@ -106,6 +106,9 @@ pub enum ResponseResult {
         agent: AgentInfo,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         delivery: Option<AgentPromptDelivery>,
+    },
+    AgentAnswer {
+        status: AgentAnswerStatus,
     },
     AgentList {
         agents: Vec<AgentInfo>,

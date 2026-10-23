@@ -90,4 +90,7 @@ pub struct ServerCapabilities {
     /// pages older scrollback above it.
     #[serde(default)]
     pub pane_history: bool,
+    /// Supports `agent.answer` (pick an option of an omp agent's pending ask).
+    #[serde(default)]
+    pub agent_answer: bool,
 }
