@@ -97,12 +97,7 @@ fn lookup(path: &Path, pause: Duration) -> Option<PendingAsk> {
     None
 }
 
-fn push_ask(
-    pending: &PendingAsk,
-    agent: &str,
-    pane_id: &str,
-    machine_id: &str,
-) -> Option<PushAsk> {
+fn push_ask(pending: &PendingAsk, agent: &str, pane_id: &str, machine_id: &str) -> Option<PushAsk> {
     let question = crate::api::answer::drivable_question(pending)?;
     let options_bytes: usize = question.options.iter().map(String::len).sum();
     if question.options.len() > MAX_OPTIONS || options_bytes > OPTIONS_MAX_BYTES {

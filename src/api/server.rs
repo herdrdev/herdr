@@ -13,6 +13,7 @@ use tracing::{debug, error, info, warn};
 #[cfg(all(test, unix))]
 use std::fs;
 
+use crate::api::answer::answer_agent;
 use crate::api::client::{
     parse_response_value, ApiClient, ApiClientError, ProxyError, FEDERATION_STREAM_IDLE_TIMEOUT,
 };
@@ -32,7 +33,6 @@ use crate::api::schema::{
     ResponseResult, ServerCapabilities, SuccessResponse,
 };
 use crate::api::subscriptions::{history_error, ActiveSubscription};
-use crate::api::answer::answer_agent;
 use crate::api::wait::{prompt_agent, wait_for_agent, wait_for_event, wait_for_output};
 use crate::api::{
     request_changes_ui, socket_path, ApiRequestMessage, ApiRequestSender, ApiStream, ApiStreamRead,

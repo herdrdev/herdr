@@ -32,7 +32,11 @@ impl FakeOmp {
         let mut screen = String::from("╭─ Ask ─────────────────────────────────────╮\n");
         screen.push_str("│ Which deploy path should I take?          │\n");
         for (index, row) in self.rows.iter().enumerate() {
-            let cursor = if index == self.highlighted { "❯" } else { " " };
+            let cursor = if index == self.highlighted {
+                "❯"
+            } else {
+                " "
+            };
             screen.push_str(&format!("│ {cursor} ○ {row:<38}│\n"));
         }
         screen.push_str("╰───────────────────────────────────────────╯\n");
@@ -120,10 +124,8 @@ fn harness(questions: Value) -> Harness {
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
     let pane_id = format!("w1:p{n}");
     let ask_id = format!("call_{n}");
-    let session = std::env::temp_dir().join(format!(
-        "herdr-answer-{}-{n}.jsonl",
-        std::process::id()
-    ));
+    let session =
+        std::env::temp_dir().join(format!("herdr-answer-{}-{n}.jsonl", std::process::id()));
     std::fs::write(&session, ask_line(&ask_id, questions.clone()) + "\n").unwrap();
     let question = &questions[0];
     let options: Vec<String> = question["options"]
@@ -310,7 +312,11 @@ fn second_answer_to_the_same_ask_presses_nothing() {
     assert_eq!(harness.keys(), ["up", "enter"]);
     let second = harness.answer(&harness.params("Abort the change"));
     assert_eq!(error_code(&second), "ask_not_pending");
-    assert_eq!(harness.keys(), ["up", "enter"], "no key after the first Enter");
+    assert_eq!(
+        harness.keys(),
+        ["up", "enter"],
+        "no key after the first Enter"
+    );
 }
 
 #[test]
@@ -336,7 +342,11 @@ fn stale_ask_id_is_not_pending() {
 #[test]
 fn option_that_is_not_a_label_is_invalid() {
     let harness = harness(deploy_question());
-    for option in ["Wait for review (Recommended)", "Other (type your own)", "ship it now"] {
+    for option in [
+        "Wait for review (Recommended)",
+        "Other (type your own)",
+        "ship it now",
+    ] {
         let response = harness.answer(&harness.params(option));
         assert_eq!(error_code(&response), "invalid_request", "{option}");
     }

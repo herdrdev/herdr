@@ -1672,6 +1672,29 @@
           ],
           "type": "object"
         },
+        "AgentAnswerParams": {
+          "description": "`agent.answer` — pick one option of an omp agent's pending `ask` question\nby driving its on-screen selector.",
+          "properties": {
+            "ask_id": {
+              "description": "The pending ask's tool call id, from `agent.transcript`'s `pending_ask`.",
+              "type": "string"
+            },
+            "option": {
+              "description": "One of the question's option labels, exactly as listed in the ask.",
+              "type": "string"
+            },
+            "target": {
+              "description": "Agent name or pane id, resolved like `agent.read`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "target",
+            "ask_id",
+            "option"
+          ],
+          "type": "object"
+        },
         "AgentArchiveParams": {
           "description": "`agent.archive` — take an agent out of active rotation (issue #173). The pane\nis released but the session ref is preserved, so `agent.unarchive` can resume\n(not recreate) it later. Rejected when the agent is mid-turn unless `force`.",
           "properties": {
@@ -1918,6 +1941,37 @@
         },
         "AgentTarget": {
           "properties": {
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "target"
+          ],
+          "type": "object"
+        },
+        "AgentTranscriptParams": {
+          "properties": {
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "limit": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "target": {
               "type": "string"
             }
@@ -7091,6 +7145,22 @@
         {
           "properties": {
             "method": {
+              "const": "agent.transcript",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentTranscriptParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "agent.explain",
               "type": "string"
             },
@@ -7272,6 +7342,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/AgentWaitParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "agent.answer",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/AgentAnswerParams"
             }
           },
           "required": [
@@ -11099,6 +11185,20 @@
             }
           },
           "type": "object"
+        },
+        "AgentAnswerStatus": {
+          "oneOf": [
+            {
+              "const": "answered",
+              "description": "The session recorded the chosen option as the ask's answer.",
+              "type": "string"
+            },
+            {
+              "const": "sent_unconfirmed",
+              "description": "Enter went to the highlighted option, but no matching answer reached\nthe session file in time.",
+              "type": "string"
+            }
+          ]
         },
         "AgentArchivedInfo": {
           "description": "The `archived { at, by, reason }` provenance surfaced on an archived\n[`AgentInfo`] in `agent.list`.",
@@ -15659,6 +15759,22 @@
             },
             {
               "properties": {
+                "status": {
+                  "$ref": "#/schemas/success_response/$defs/AgentAnswerStatus"
+                },
+                "type": {
+                  "const": "agent_answer",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "status"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "agents": {
                   "items": {
                     "$ref": "#/schemas/success_response/$defs/AgentInfo"
@@ -17240,6 +17356,11 @@
         },
         "ServerCapabilities": {
           "properties": {
+            "agent_answer": {
+              "default": false,
+              "description": "Supports `agent.answer` (pick an option of an omp agent's pending ask).",
+              "type": "boolean"
+            },
             "agent_forget": {
               "default": false,
               "description": "Supports `agent.forget` (remove an archived agent's record).",

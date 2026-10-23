@@ -22,8 +22,8 @@ mod workspaces;
 mod worktrees;
 
 use super::{api_helpers::pane_agent_status, App, Mode, OverlayPaneState, ToastKind};
-use crate::push::sanitized_notification_text;
 use crate::events::AppEvent;
+use crate::push::sanitized_notification_text;
 
 const API_NOTIFICATION_RATE_LIMIT: Duration = Duration::from_secs(1);
 #[cfg(windows)]

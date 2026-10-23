@@ -34,9 +34,7 @@ const RADIO_MARKERS: [&str; 6] = ["○", "◉", "\u{f10c}", "\u{f192}", "( )", "
 const LEFT_EDGE: [char; 5] = [' ', '│', '|', '┃', '║'];
 /// Characters that may close a row on the right: the panel border and the
 /// scrollbar track/thumb of a long list.
-const RIGHT_EDGE: [char; 12] = [
-    '│', '|', '┃', '║', '█', '▐', '▌', '░', '▒', '▓', '╎', '┆',
-];
+const RIGHT_EDGE: [char; 12] = ['│', '|', '┃', '║', '█', '▐', '▌', '░', '▒', '▓', '╎', '┆'];
 const NOTE_MARKER: &str = "✎ note";
 /// Status line text omp's older select lists show once the user typed a
 /// filter; a filtered list hides and reorders rows, so it is never driven.

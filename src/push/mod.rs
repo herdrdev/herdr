@@ -28,8 +28,8 @@ use crate::persist::devices::RegisteredDevice;
 use self::apns::DeliveryOutcome;
 use self::relay::{RelayOutcome, RelayPushType};
 
-pub(crate) use self::relay::is_valid_capability as is_valid_relay_capability;
 pub(crate) use self::ask::{AskSource, PushAsk};
+pub(crate) use self::relay::is_valid_capability as is_valid_relay_capability;
 
 /// Which agent transition triggered a push, used to match per-device prefs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -165,7 +165,11 @@ impl FakeSelector {
             out.push_str(&format!(" {cursor}{fit}\n"));
         }
         if let Some(filter) = &self.filter {
-            out.push_str(&format!("   ({}/{})  Search: {filter}\n", self.highlighted + 1, self.rows.len()));
+            out.push_str(&format!(
+                "   ({}/{})  Search: {filter}\n",
+                self.highlighted + 1,
+                self.rows.len()
+            ));
         } else if window.len() < self.rows.len() {
             out.push_str("   Type to search\n");
         }
@@ -203,7 +207,12 @@ fn keys(sent: &[String]) -> Vec<&str> {
 #[test]
 fn display_rows_badge_recommended_and_reserve_other() {
     let rows = display_rows(
-        &labels(&["Other (type your own)", "Keep", "Keep (Recommended)", "Next →"]),
+        &labels(&[
+            "Other (type your own)",
+            "Keep",
+            "Keep (Recommended)",
+            "Next →",
+        ]),
         Some(1),
     );
     assert_eq!(
@@ -238,13 +247,19 @@ fn recorded_omp_screen_needs_the_recommended_badge_where_omp_draws_it() {
         &labels(&["Ship it now", "Wait for review", "Abort the change"]),
         None,
     );
-    assert_eq!(locate(RECORDED_OMP_18_10_4, &rows), Err(ScreenError::NotFound));
+    assert_eq!(
+        locate(RECORDED_OMP_18_10_4, &rows),
+        Err(ScreenError::NotFound)
+    );
 }
 
 #[test]
 fn other_options_do_not_match_the_recorded_screen() {
     let rows = display_rows(&labels(&["Ship it now", "Abort the change"]), None);
-    assert_eq!(locate(RECORDED_OMP_18_10_4, &rows), Err(ScreenError::NotFound));
+    assert_eq!(
+        locate(RECORDED_OMP_18_10_4, &rows),
+        Err(ScreenError::NotFound)
+    );
 }
 
 #[test]
@@ -276,7 +291,10 @@ fn wrapping_list_is_driven_the_direct_way_in_both_directions() {
     let mut pane = FakeSelector::new(rows.clone(), 4);
     pane.wraps = true;
     pane.send_keys(&["down"]).unwrap();
-    assert_eq!(locate(&pane.render(), &rows), Ok(SelectorView { highlighted: 0 }));
+    assert_eq!(
+        locate(&pane.render(), &rows),
+        Ok(SelectorView { highlighted: 0 })
+    );
     pane.sent.clear();
     select_and_submit(&mut pane, &rows, 3).unwrap();
     assert_eq!(keys(&pane.sent), ["down", "down", "down", "enter"]);

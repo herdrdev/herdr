@@ -3426,6 +3426,24 @@ mod tests {
             .starts_with("llm-opt"));
         assert_eq!(status["aps"]["alert"]["body"], "Jerry's Mac Studio");
         assert_eq!(keys(status), set(&["aps", "herdr_guest"]));
+        // An owner alert that carries a question (herdr#309) reaches the guest
+        // as the same plain status alert: no question, options or category.
+        let with_ask: Vec<_> = alerts
+            .iter()
+            .cloned()
+            .map(|mut alert| {
+                alert.ask = Some(crate::push::PushAsk {
+                    agent: "llm-opt".into(),
+                    pane_id: alert.pane_id.clone(),
+                    machine_id: "machine-1".into(),
+                    ask_id: "call_1".into(),
+                    question: "Ship it?".into(),
+                    options: vec!["Yes".into(), "No".into()],
+                });
+                alert
+            })
+            .collect();
+        assert_eq!(guest_sends(&guest, &with_ask), sends);
         let (route, gram) = &sends[1];
         assert_eq!(*route, "relay");
         assert_eq!(gram["herdr_guest"]["kind"], "gram");
