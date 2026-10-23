@@ -6,14 +6,14 @@ fn queue_requests(server: &mut HeadlessServer, count: usize) -> std::sync::mpsc:
     let (respond_to, responses) = std::sync::mpsc::channel();
     for index in 0..count {
         sender
-            .send(api::ApiRequestMessage {
+            .send(api::ApiMessage::Request(Box::new(api::ApiRequestMessage {
                 request: api::schema::Request {
                     id: index.to_string(),
                     method: api::schema::Method::WorkspaceList(api::schema::EmptyParams::default()),
                 },
                 respond_to: respond_to.clone(),
                 response_write_complete: None,
-            })
+            })))
             .unwrap();
     }
     responses
@@ -112,14 +112,14 @@ async fn server_loop_drains_api_backlog_and_runs_scheduled_work() {
             api::schema::Method::WorkspaceList(api::schema::EmptyParams::default())
         };
         sender
-            .send(api::ApiRequestMessage {
+            .send(api::ApiMessage::Request(Box::new(api::ApiRequestMessage {
                 request: api::schema::Request {
                     id: index.to_string(),
                     method,
                 },
                 respond_to: respond_to.clone(),
                 response_write_complete: None,
-            })
+            })))
             .unwrap();
     }
     server.app.config_diagnostic_deadline = Some(Instant::now());

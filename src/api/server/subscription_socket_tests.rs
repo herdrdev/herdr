@@ -15,7 +15,7 @@ struct SocketTest {
     hub: EventHub,
     running: Arc<AtomicBool>,
     api_tx: ApiRequestSender,
-    api_rx: mpsc::UnboundedReceiver<ApiRequestMessage>,
+    api_rx: mpsc::UnboundedReceiver<ApiMessage>,
     workers: Vec<std::thread::JoinHandle<io::Result<()>>>,
     paths: Vec<PathBuf>,
 }
@@ -58,6 +58,29 @@ impl SocketTest {
     }
 
     fn app_request(&mut self) -> ApiRequestMessage {
+        let ApiMessage::Request(request) = self.app_message() else {
+            panic!("expected ordinary app request");
+        };
+        *request
+    }
+
+    fn status_request(
+        &mut self,
+    ) -> std::sync::mpsc::Sender<
+        Result<crate::api::schema::PaneAgentStatusChangedEvent, crate::api::schema::ErrorBody>,
+    > {
+        let ApiMessage::PaneAgentStatus {
+            pane_id,
+            respond_to,
+        } = self.app_message()
+        else {
+            panic!("status subscription requested full pane metadata");
+        };
+        assert_eq!(pane_id, "pane_1");
+        respond_to
+    }
+
+    fn app_message(&mut self) -> ApiMessage {
         let deadline = Instant::now() + RESPONSE_TIMEOUT;
         loop {
             match self.api_rx.try_recv() {
@@ -270,6 +293,54 @@ fn subscriptions_drain_retained_bursts_without_per_event_poll_delay() {
 }
 
 #[test]
+fn agent_status_subscriptions_sample_state_without_full_pane_requests() {
+    let mut test = SocketTest::new();
+    let mut client = test.connect();
+    client.subscribe(
+        "status",
+        json!([{"type": "pane.agent_status_changed", "pane_id": "pane_1"}]),
+    );
+    let snapshot = |status, title: Option<&str>| crate::api::schema::PaneAgentStatusChangedEvent {
+        pane_id: "pane_1".into(),
+        workspace_id: "workspace_1".into(),
+        agent_status: status,
+        agent: Some("pi".into()),
+        title: title.map(str::to_owned),
+        display_agent: Some("reviewer".into()),
+        state_labels: [("working".into(), "reviewing".into())].into(),
+    };
+
+    test.status_request()
+        .send(Ok(snapshot(AgentStatus::Working, None)))
+        .unwrap();
+    client.assert_started("status");
+    for _ in 0..3 {
+        test.status_request()
+            .send(Ok(snapshot(AgentStatus::Working, None)))
+            .unwrap();
+    }
+    test.status_request()
+        .send(Ok(snapshot(
+            AgentStatus::Working,
+            Some("Reviewing changes"),
+        )))
+        .unwrap();
+    let presentation = client.response();
+    assert_eq!(presentation["event"], "pane.agent_status_changed");
+    assert_eq!(presentation["data"]["agent_status"], "working");
+    assert_eq!(presentation["data"]["title"], "Reviewing changes");
+    assert_eq!(presentation["data"]["display_agent"], "reviewer");
+    assert_eq!(presentation["data"]["state_labels"]["working"], "reviewing");
+
+    for status in [AgentStatus::Done, AgentStatus::Idle] {
+        test.status_request()
+            .send(Ok(snapshot(status, Some("Reviewing changes"))))
+            .unwrap();
+        assert_eq!(client.response()["data"]["agent_status"], json!(status));
+    }
+}
+
+#[test]
 fn subscriptions_report_history_loss_before_sending_a_partial_stream() {
     assert_subscription_history_loss(false);
 }
@@ -293,12 +364,31 @@ fn assert_subscription_history_loss(agent_status: bool) {
     };
     client.subscribe("history-gap", subscriptions);
     // Hold the setup probe after the server pins its subscription cursor.
-    let probe = test.app_request();
-    assert!(probe.request.id.ends_with(":probe"));
+    let probe = test.app_message();
     for index in 0..600 {
         test.hub.push(renamed_event(index));
     }
-    reply_to_probe(probe);
+    match probe {
+        ApiMessage::Request(request) => {
+            assert!(request.request.id.ends_with(":probe"));
+            assert!(!agent_status);
+            reply_to_probe(*request);
+        }
+        ApiMessage::PaneAgentStatus { respond_to, .. } => {
+            assert!(agent_status);
+            respond_to
+                .send(Ok(crate::api::schema::PaneAgentStatusChangedEvent {
+                    pane_id: "pane_1".into(),
+                    workspace_id: "workspace_1".into(),
+                    agent_status: AgentStatus::Working,
+                    agent: Some("pi".into()),
+                    title: None,
+                    display_agent: None,
+                    state_labels: Default::default(),
+                }))
+                .unwrap();
+        }
+    }
     client.assert_started("history-gap");
     client.assert_history_lost("history-gap");
 }

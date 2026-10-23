@@ -359,14 +359,6 @@ pub fn foreground_job(child_pid: u32) -> Option<crate::platform::ForegroundJob> 
     crate::platform::foreground_job(child_pid)
 }
 
-/// Get the foreground process group leader as a one-process job.
-/// This is cheaper than collecting every process in the foreground job.
-pub fn foreground_group_leader_job(
-    process_group_id: u32,
-) -> Option<crate::platform::ForegroundJob> {
-    crate::platform::foreground_group_leader_job(process_group_id)
-}
-
 /// Get the foreground process group for a pane shell PID.
 /// This is cheaper than collecting every process in the foreground job.
 pub fn foreground_process_group_id(child_pid: u32) -> Option<u32> {
