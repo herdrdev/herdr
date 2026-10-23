@@ -669,12 +669,15 @@ mod tests {
             .unwrap();
         runtime.block_on(async {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            ignore_server_hangup();
             spawn_server_signal_monitor(move |signal| {
                 let _ = tx.send(signal);
             });
 
             // An unhandled SIGHUP would end the test process here.
-            assert_eq!(unsafe { libc::kill(libc::getpid(), libc::SIGHUP) }, 0);
+            // raise() runs the handler on this thread before returning, unlike kill().
+            assert_eq!(unsafe { libc::raise(libc::SIGHUP) }, 0);
+            assert!(server_hangup_is_recent());
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             assert!(rx.try_recv().is_err());
 
