@@ -601,15 +601,87 @@ fn wildcard_match(pattern: &str, value: &str, case_insensitive: bool) -> bool {
 }
 
 fn wildcard_match_bytes(pattern: &[u8], value: &[u8]) -> bool {
-    match pattern.split_first() {
-        None => value.is_empty(),
-        Some((&b'*', rest)) => {
-            wildcard_match_bytes(rest, value)
-                || (!value.is_empty() && wildcard_match_bytes(pattern, &value[1..]))
+    let mut pattern_idx = 0;
+    let mut value_idx = 0;
+    let mut last_star = None;
+    let mut retry_value_idx = 0;
+
+    // Only the most recent star needs another attempt: let it consume one more
+    // byte instead of recursively revisiting every earlier star. The retry
+    // position advances monotonically, bounding work by O(pattern.len() *
+    // value.len()) with constant space, even for adjacent or repeated stars.
+    while value_idx < value.len() {
+        if pattern.get(pattern_idx) == Some(&b'*') {
+            last_star = Some(pattern_idx);
+            pattern_idx += 1;
+            retry_value_idx = value_idx;
+        } else if pattern.get(pattern_idx) == Some(&value[value_idx]) {
+            pattern_idx += 1;
+            value_idx += 1;
+        } else if let Some(star_idx) = last_star {
+            retry_value_idx += 1;
+            value_idx = retry_value_idx;
+            pattern_idx = star_idx + 1;
+        } else {
+            return false;
         }
-        Some((&expected, rest)) => value.split_first().is_some_and(|(&actual, value_rest)| {
-            actual == expected && wildcard_match_bytes(rest, value_rest)
-        }),
+    }
+
+    pattern[pattern_idx..].iter().all(|&byte| byte == b'*')
+}
+
+#[cfg(test)]
+mod wildcard_tests {
+    use super::wildcard_match;
+
+    #[test]
+    fn wildcard_match_preserves_literal_and_star_semantics() {
+        for (pattern, value, expected) in [
+            ("", "", true),
+            ("", "a", false),
+            ("a", "", false),
+            ("*", "", true),
+            ("***", "a/b", true),
+            ("repo", "repo", true),
+            ("repo", "repos", false),
+            ("repo", "Repo", false),
+            ("*repo", "my/repo", true),
+            ("repo*", "repository", true),
+            ("a*b*c", "abxbc", true),
+            ("a*b*c", "abxb", false),
+            ("a**b", "ab", true),
+            ("a*b", "a/b", true),
+            ("a?b", "acb", false),
+            ("a?b", "a?b", true),
+            ("*项目*", "/work/项目/repo", true),
+            ("*repo", "repository", false),
+        ] {
+            assert_eq!(
+                wildcard_match(pattern, value, false),
+                expected,
+                "{pattern:?}, {value:?}"
+            );
+        }
+        assert!(wildcard_match("*/REPO/*", "/work/repo/.git", true));
+        assert!(!wildcard_match("*/REPO/*", "/work/repo/.git", false));
+        assert!(!wildcard_match("Ä", "ä", true));
+    }
+
+    #[test]
+    fn wildcard_match_handles_many_wildcards_without_recursive_explosion() {
+        let pattern = format!("{}nomatch/", "**/".repeat(32));
+        let value = format!("/{}repo/.git", "directory/".repeat(128));
+        assert!(!wildcard_match(&pattern, &value, false));
+
+        let pattern = format!("{}b", "*a".repeat(64));
+        let value = format!("{}c", "a".repeat(512));
+        assert!(!wildcard_match(&pattern, &value, false));
+    }
+
+    #[test]
+    fn wildcard_match_handles_long_literal_patterns_without_recursion() {
+        let literal = "a".repeat(50_000);
+        assert!(wildcard_match(&literal, &literal, false));
     }
 }
 
