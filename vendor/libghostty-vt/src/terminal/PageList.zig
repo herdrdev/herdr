@@ -1230,6 +1230,9 @@ pub const Resize = struct {
     /// be truncated if the new size is smaller than the old size.
     reflow: bool = true,
 
+    /// Reflow the finite ConPTY buffer independently from archived history.
+    conpty_resize: bool = false,
+
     /// Set this to the current cursor position in the active area. Some
     /// resize/reflow behavior depends on the cursor position.
     cursor: ?Cursor = null,
@@ -1276,6 +1279,13 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
         return;
     }
 
+    const active_top = if (opts.conpty_resize and
+        (opts.cols orelse self.cols) != self.cols)
+        try self.trackPin(self.pin(.{ .active = .{} }).?)
+    else
+        null;
+    defer if (active_top) |p| self.untrackPin(p);
+
     // Recalculate our minimum limits. This allows grow to work properly when
     // increasing beyond the explicit limits to fit the active area.
     const old_limits = self.limits;
@@ -1289,13 +1299,25 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
     // only rows change, reflow is impossible. So we change our behavior based
     // on the change of columns.
     const cols = opts.cols orelse self.cols;
-    switch (std.math.order(cols, self.cols)) {
+    if (opts.conpty_resize) {
+        // ConPTY grows its buffer before reflow and shrinks it afterward.
+        if (opts.rows) |rows| {
+            if (rows > self.rows) try self.resizeWithoutReflow(.{
+                .rows = rows,
+                .conpty_resize = true,
+            });
+        }
+        if (cols != self.cols) try self.resizeCols(cols, opts.cursor, active_top);
+        if (opts.rows) |rows| {
+            if (rows < self.rows) try self.resizeWithoutReflow(.{ .rows = rows });
+        }
+    } else switch (std.math.order(cols, self.cols)) {
         .eq => try self.resizeWithoutReflow(opts),
 
         .gt => {
             // We grow rows after cols so that we can do our unwrapping/reflow
             // before we do a no-reflow grow.
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, null);
             try self.resizeWithoutReflow(opts);
         },
 
@@ -1307,7 +1329,7 @@ pub fn resize(self: *PageList, opts: Resize) Allocator.Error!void {
                 copy.cols = self.cols;
                 break :opts copy;
             });
-            try self.resizeCols(cols, opts.cursor);
+            try self.resizeCols(cols, opts.cursor, null);
         },
     }
 
@@ -1332,8 +1354,11 @@ fn resizeCols(
     self: *PageList,
     cols: size.CellCountInt,
     cursor: ?Resize.Cursor,
+    active_top: ?*Pin,
 ) Allocator.Error!void {
     assert(cols != self.cols);
+    const old_active_top = if (active_top) |p| p.* else null;
+    const has_history = self.total_rows > self.rows;
 
     // If we have a cursor position (x,y), then we try under any col resizing
     // to keep the same number remaining active rows beneath it. This is a
@@ -1456,6 +1481,13 @@ fn resizeCols(
     {
         var reflow_cursor: ReflowCursor = .init(first_rewritten_node);
         while (it.next()) |row| {
+            if (old_active_top) |boundary| {
+                if (has_history and row.node == boundary.node and row.y == boundary.y) {
+                    // Archived text must not rejoin a live partial line.
+                    reflow_cursor.page_row.wrap = false;
+                    reflow_cursor.new_rows = @max(reflow_cursor.new_rows, 1);
+                }
+            }
             try reflow_cursor.reflowRow(
                 self,
                 row,
@@ -1483,6 +1515,22 @@ fn resizeCols(
         // At the end of the reflow, setup our total row cache
         // log.warn("total old={} new={}", .{ self.total_rows, reflow_cursor.total_rows });
         self.total_rows = reflow_cursor.total_rows;
+    }
+
+    if (active_top) |p| {
+        // Padding temporarily leaves a pinned viewport shorter than self.rows.
+        self.pauseIntegrityChecks(true);
+        defer self.pauseIntegrityChecks(false);
+        const start = self.pointFromPin(.screen, p.*).?.screen.y;
+        const missing = self.rows -| (self.total_rows - start);
+        for (0..missing) |_| _ = try self.grow();
+        switch (self.viewport) {
+            .pin => if (self.pinIsActive(self.viewport_pin.*)) {
+                self.viewport = .active;
+            },
+            .active, .top => {},
+        }
+        return;
     }
 
     // If our total rows is less than our active rows, we need to grow.
@@ -2851,6 +2899,20 @@ fn resizeWithoutReflow(self: *PageList, opts: Resize) Allocator.Error!void {
             // Making rows larger we adjust our row count, and then grow
             // to the row count.
             .gt => gt: {
+                if (opts.conpty_resize) {
+                    const delta = rows - self.rows;
+                    self.pauseIntegrityChecks(true);
+                    defer self.pauseIntegrityChecks(false);
+                    self.rows = rows;
+                    for (0..delta) |_| _ = try self.grow();
+                    switch (self.viewport) {
+                        .pin => if (self.pinIsActive(self.viewport_pin.*)) {
+                            self.viewport = .active;
+                        },
+                        .active, .top => {},
+                    }
+                    break :gt;
+                }
                 // If our rows increased and our cursor is NOT at the bottom,
                 // we want to try to preserve the y value of the old cursor.
                 // In other words, we don't want to "pull down" scrollback.

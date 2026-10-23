@@ -102,8 +102,9 @@ index 81f9ebd0..6404af53 100644
 +  GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_PRESERVE_PNG = 40,
 +  /** Optional synchronous GhosttyKittyImageSnapshotFileFn; NULL disables. */
 +  GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_SNAPSHOT_FILE = 41,
+   /** Reflow a finite ConPTY buffer separately from history. bool*; NULL disables. */
+   GHOSTTY_TERMINAL_OPT_CONPTY_RESIZE = 42,
    GHOSTTY_TERMINAL_OPT_MAX_VALUE = GHOSTTY_ENUM_MAX_VALUE,
- } GhosttyTerminalOption;
 
 diff --git a/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig b/vendor/libghostty-vt/src/terminal/c/kitty_graphics.zig
 index 2bd5e862..c66b13be 100644
@@ -197,13 +198,14 @@ index 91bbe310..e825183e 100644
      /// C function pointer type for the write_pty callback.
      pub const WritePtyFn = *const fn (Terminal, ?*anyopaque, [*]const u8, usize) callconv(lib.calling_conv) void;
 
-@@ -1174,12 +1184,15 @@ pub const Option = enum(c_int) {
+@@ -1174,4 +1184,6 @@ pub const Option = enum(c_int) {
      terminfo_name = 37,
      clipboard_read = 38,
      clipboard_write_max_bytes = 39,
 +    kitty_image_preserve_png = 40,
 +    kitty_image_snapshot_file = 41,
 
+@@ -1178,8 +1190,9 @@ pub const Option = enum(c_int) {
      /// Input type expected for setting the option.
      pub fn InType(comptime self: Option) type {
          return switch (self) {

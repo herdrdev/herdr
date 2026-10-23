@@ -1187,6 +1187,8 @@ pub const Option = enum(c_int) {
     kitty_image_preserve_png = 40,
     kitty_image_snapshot_file = 41,
 
+    conpty_resize = 42,
+
     /// Input type expected for setting the option.
     pub fn InType(comptime self: Option) type {
         return switch (self) {
@@ -1215,6 +1217,7 @@ pub const Option = enum(c_int) {
             .kitty_image_medium_shared_mem,
             .glyph_protocol,
             .title_report,
+            .conpty_resize,
             => ?*const bool,
             .kitty_image_medium_temp_file => ?*const lib.String,
             .apc_max_bytes,
@@ -1441,6 +1444,7 @@ fn setTyped(
         .scrollback_max_lines => wrapper.terminal.setScrollbackMaxLines(
             if (value) |ptr| ptr.* else null,
         ),
+        .conpty_resize => wrapper.terminal.conpty_resize = if (value) |ptr| ptr.* else false,
         .continuation_max_bytes => setContinuationMaxBytes(
             wrapper,
             if (value) |ptr| ptr.* else default_continuation_max_bytes,

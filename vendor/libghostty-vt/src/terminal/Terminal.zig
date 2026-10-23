@@ -79,6 +79,9 @@ colors: Colors,
 /// char CSI (ESC [ <n> b).
 previous_char: ?u21 = null,
 
+/// Host resize policy, retained across terminal resets.
+conpty_resize: bool = false,
+
 /// The modes that this terminal currently has active.
 modes: modespkg.ModeState = .{},
 
@@ -4088,6 +4091,7 @@ pub fn resize(
         .cols = opts.cols,
         .rows = opts.rows,
         .reflow = self.modes.get(.wraparound),
+        .conpty_resize = self.conpty_resize,
         .prompt_redraw = self.flags.shell_redraws_prompt,
     });
 
@@ -15873,6 +15877,153 @@ test "Terminal: resize with high unique style per cell with wrapping" {
     }
 
     try t.resize(alloc, .{ .cols = 60, .rows = 30 });
+}
+
+test "Terminal: ConPTY resize preserves the finite buffer across both axes" {
+    const alloc = testing.allocator;
+    // ReadConsoleOutputCharacterW captures, with three 127-character lines.
+    const cases = [_][6]u16{
+        .{ 25, 17, 33, 17, 11, 1 },
+        .{ 33, 17, 25, 17, 16, 1 },
+        .{ 25, 17, 25, 23, 16, 1 },
+        .{ 25, 23, 25, 17, 16, 1 },
+        .{ 25, 17, 33, 23, 11, 1 },
+        .{ 33, 23, 25, 17, 16, 1 },
+        .{ 25, 23, 33, 17, 12, 0 },
+        .{ 33, 17, 25, 23, 18, 0 },
+    };
+    for (cases) |case| {
+        var t = try init(testing.io, alloc, .{ .cols = case[0], .rows = case[1] });
+        defer t.deinit(alloc);
+        t.conpty_resize = true;
+        t.fullReset();
+        for (0..3) |line| {
+            var buf: [127]u8 = undefined;
+            try t.printString(try std.fmt.bufPrint(&buf, "L{d:0>4} {s}", .{ line, "x" ** 121 }));
+            t.carriageReturn();
+            try t.linefeed();
+        }
+        try t.printString("M001!");
+        try t.resize(alloc, .{ .cols = case[2], .rows = case[3] });
+        try testing.expectEqual(case[4], t.screens.active.cursor.y);
+        const body = if (case[2] == 33)
+            "x" ** 27 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 28 ++ "\n"
+        else
+            "x" ** 19 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\nxx\n";
+        const prefix = if (case[5] == 0)
+            try std.fmt.allocPrint(alloc, "L0000 {s}", .{body})
+        else if (case[2] == 33)
+            try alloc.dupe(u8, "x" ** 33 ++ "\n" ++ "x" ** 33 ++ "\n" ++ "x" ** 11 ++ "\n")
+        else
+            try alloc.dupe(u8, "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\n" ++ "x" ** 25 ++ "\nxx\n");
+        defer alloc.free(prefix);
+        const expected = try std.fmt.allocPrint(alloc, "{s}L0001 {s}L0002 {s}M001!", .{ prefix, body, body });
+        defer alloc.free(expected);
+        const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .active = .{} });
+        defer alloc.free(actual);
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "Terminal: ConPTY resize clears pending wrap only when geometry changes" {
+    const alloc = testing.allocator;
+    const cases = [_][4]u16{
+        .{ 33, 17, 29, 0 },
+        .{ 20, 17, 9, 1 },
+        .{ 25, 23, 4, 1 },
+        .{ 25, 12, 4, 1 },
+        .{ 33, 23, 29, 0 },
+        .{ 25, 17, 5, 1 },
+    };
+    for (cases) |case| {
+        var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
+        defer t.deinit(alloc);
+        t.conpty_resize = true;
+        try t.printString("x" ** 20 ++ "M001!");
+        try testing.expect(t.screens.active.cursor.pending_wrap);
+        try t.resize(alloc, .{ .cols = case[0], .rows = case[1] });
+        try t.printString("M002!");
+        try testing.expectEqual(case[2], t.screens.active.cursor.x);
+        try testing.expectEqual(case[3], t.screens.active.cursor.y);
+        const expected = if (case[0] == 33)
+            "x" ** 20 ++ "M001M002!"
+        else if (case[0] == 20)
+            "x" ** 20 ++ "\nM001M002!"
+        else if (case[1] == 17)
+            "x" ** 20 ++ "M001!\nM002!"
+        else
+            "x" ** 20 ++ "M001M\n002!";
+        const actual = try t.screens.active.dumpStringAlloc(alloc, .{ .active = .{} });
+        defer alloc.free(actual);
+        try testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "Terminal: ConPTY resize keeps saved cursor coordinates" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
+    defer t.deinit(alloc);
+    t.conpty_resize = true;
+    t.setCursorPos(4, 5);
+    t.saveCursor();
+    t.setCursorPos(1, 1);
+    for (0..3) |_| {
+        try t.printString("x" ** 127);
+        t.carriageReturn();
+        try t.linefeed();
+    }
+    try t.resize(alloc, .{ .cols = 33, .rows = 17 });
+    t.restoreCursor();
+    try testing.expectEqual(@as(u16, 3), t.screens.active.cursor.y);
+    try testing.expectEqual(@as(u16, 4), t.screens.active.cursor.x);
+
+    // Native ConPTY retains saved pending wrap even after the right edge moves.
+    for ([_][2]u16{ .{ 33, 17 }, .{ 20, 17 }, .{ 25, 23 }, .{ 25, 17 } }) |geometry| {
+        var pending = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
+        defer pending.deinit(alloc);
+        pending.conpty_resize = true;
+        try pending.printString("x" ** 25);
+        pending.saveCursor();
+        pending.setCursorPos(3, 1);
+        try pending.printString("M001!");
+        try pending.resize(alloc, .{ .cols = geometry[0], .rows = geometry[1] });
+        pending.restoreCursor();
+        try pending.printString("Z");
+        try testing.expectEqual(@as(u16, 1), pending.screens.active.cursor.y);
+        try testing.expectEqual(@as(u16, 1), pending.screens.active.cursor.x);
+    }
+}
+
+test "Terminal: ConPTY resize preserves a pinned history viewport" {
+    const alloc = testing.allocator;
+    for ([_][2]u16{ .{ 32, 4 }, .{ 4, 8 } }) |geometry| {
+        var t = try init(testing.io, alloc, .{ .cols = 4, .rows = 4 });
+        defer t.deinit(alloc);
+        t.conpty_resize = true;
+        try t.printString("x" ** 32);
+        t.screens.active.scroll(.{ .delta_row = -1 });
+        try testing.expect(t.screens.active.pages.viewport == .pin);
+        try t.resize(alloc, .{ .cols = geometry[0], .rows = geometry[1] });
+        try testing.expect(t.screens.active.pages.viewport == .pin);
+        t.screens.active.pages.assertIntegrity();
+    }
+}
+
+test "Terminal: ConPTY resize leaves alternate screen without reflow" {
+    const alloc = testing.allocator;
+    var t = try init(testing.io, alloc, .{ .cols = 25, .rows = 17 });
+    defer t.deinit(alloc);
+    t.conpty_resize = true;
+    _ = try t.switchScreen(.alternate);
+    for (0..3) |_| {
+        try t.printString("x" ** 127);
+        t.carriageReturn();
+        try t.linefeed();
+    }
+    try t.printString("M001!");
+    try t.resize(alloc, .{ .cols = 33, .rows = 17 });
+    try testing.expectEqual(@as(u16, 16), t.screens.active.cursor.y);
+    try testing.expectEqual(@as(u16, 5), t.screens.active.cursor.x);
 }
 
 test "Terminal: resize with reflow and saved cursor" {

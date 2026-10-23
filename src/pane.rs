@@ -2704,6 +2704,8 @@ impl PaneRuntime {
         let (response_tx, _response_rx) = mpsc::channel::<Bytes>(1);
         let mut terminal = crate::ghostty::Terminal::new(cols, rows, scrollback_limit_bytes)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        #[cfg(windows)]
+        crate::platform::configure_conpty_terminal(&mut terminal)?;
         if crate::kitty_graphics::is_enabled() {
             terminal
                 .enable_kitty_graphics()
