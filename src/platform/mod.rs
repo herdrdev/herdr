@@ -312,6 +312,11 @@ pub(crate) struct PlatformCapabilities {
     pub(crate) preserve_legacy_doubled_escape_input: bool,
 }
 
+#[cfg(all(unix, not(target_os = "linux")))]
+pub(crate) fn check_live_handoff() -> std::io::Result<()> {
+    Ok(())
+}
+
 pub(crate) const fn capabilities() -> PlatformCapabilities {
     PlatformCapabilities {
         live_handoff: cfg!(unix),
@@ -411,6 +416,8 @@ pub(crate) fn prepare_server_process(_handoff_import: bool) -> std::io::Result<b
 pub fn detach_server_daemon_command(command: &mut std::process::Command) {
     use std::os::unix::process::CommandExt;
 
+    #[cfg(target_os = "linux")]
+    linux::configure_server_daemon_context(command);
     #[cfg(target_os = "macos")]
     macos::configure_server_daemon_context(command);
 

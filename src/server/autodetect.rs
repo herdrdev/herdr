@@ -465,6 +465,15 @@ mod tests {
         crate::session::clear_explicit_session_for_test();
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn server_daemon_command_drops_inherited_systemd_invocation() {
+        let command = build_server_daemon_command(PathBuf::from("/tmp/herdr-test"));
+        assert!(command
+            .get_envs()
+            .any(|(key, value)| { key == OsStr::new("INVOCATION_ID") && value.is_none() }));
+    }
+
     #[test]
     fn server_daemon_command_passes_current_dir_as_startup_cwd() {
         let expected = std::env::current_dir().unwrap();
@@ -483,8 +492,10 @@ mod tests {
         command.arg("-c").arg(
             r#"sid=$(ps -o sid= -p $$ | tr -d ' ')
 test "$sid" = "$$"
+test "${INVOCATION_ID+x}" != x
 "#,
         );
+        command.env("INVOCATION_ID", "0123456789abcdef0123456789abcdef");
         crate::platform::detach_server_daemon_command(&mut command);
 
         let status = command.status().unwrap();
