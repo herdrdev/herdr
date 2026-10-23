@@ -2161,7 +2161,19 @@ fn preserve_preview_channel_for_install(
     if configured_channel == UpdateChannel::Preview && release_channel == UpdateChannel::Stable {
         // Windows preview defaults would otherwise become stable with the new binary.
         crate::config::update_file_at(config_path, "update channel", |content| {
-            crate::config::upsert_section_value(content, "update", "channel", "\"preview\"")
+            let mut document = content
+                .parse::<toml_edit::DocumentMut>()
+                .map_err(|error| format!("cannot preserve update channel: {error}"))?;
+            let update = document
+                .entry("update")
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()))
+                .as_table_like_mut()
+                .ok_or("cannot preserve update channel: update must be a table")?;
+            if update.contains_key("channel") {
+                return Ok(content.to_owned());
+            }
+            update.insert("channel", toml_edit::value("preview"));
+            Ok(document.to_string())
         })?;
     }
     Ok(())
@@ -2729,6 +2741,11 @@ mod channel_tests {
         for original in [
             None,
             Some("# keep settings\n[update]\nversion_check = false\n"),
+            Some("# keep settings\n[update] # updates\nversion_check = false\n"),
+            Some("# keep settings\n[\"update\"] # updates\nversion_check = false\n"),
+            Some("# keep settings\nupdate = { version_check = false }\n"),
+            Some("# keep settings\nupdate.version_check = false\n"),
+            Some("# keep settings\n[update] # updates\nversion_check = false\n'channel' = 'preview' # keep\n"),
         ] {
             if let Some(original) = original {
                 fs::write(&path, original).unwrap();
@@ -2749,6 +2766,19 @@ mod channel_tests {
                 assert!(!config.update.version_check);
                 assert!(written.starts_with("# keep settings\n"));
             }
+            if original.is_some_and(|original| original.contains("'channel'")) {
+                assert_eq!(written, original.unwrap());
+            }
+        }
+        for original in ["[update", "update = 1\n"] {
+            fs::write(&path, original).unwrap();
+            assert!(preserve_preview_channel_for_install(
+                &path,
+                UpdateChannel::Preview,
+                UpdateChannel::Stable,
+            )
+            .is_err());
+            assert_eq!(fs::read_to_string(&path).unwrap(), original);
         }
         fs::remove_file(&path).unwrap();
         preserve_preview_channel_for_install(&path, UpdateChannel::Stable, UpdateChannel::Stable)
