@@ -1037,7 +1037,6 @@ fn framed_events_with(
     if awaiting_replies {
         // Mirrors the Unix client right after it sent its host queries.
         framer.host_color_query_sent();
-        framer.enable_host_color_scheme_change_tracking();
         framer.enable_host_appearance_query_on_focus();
         framer.host_cell_size_query_sent();
     }
