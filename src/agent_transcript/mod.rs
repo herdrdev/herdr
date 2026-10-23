@@ -9,7 +9,7 @@
 mod index;
 mod normalize;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -23,9 +23,7 @@ use crate::api::schema::{
     TranscriptEntry, TranscriptStepStatus, TranscriptTurnStatus, TranscriptWorking,
 };
 use index::{read_line, Kind, SessionIndex};
-use normalize::{
-    AssistantLine, NoteLine, ResultLine, ResultStatusLine, StampLine, UserLine, SUMMARY_TEXT,
-};
+use normalize::{AssistantLine, NoteLine, ResultLine, StampLine, UserLine, SUMMARY_TEXT};
 
 pub(crate) const DEFAULT_TURNS: u32 = 20;
 pub(crate) const MAX_TURNS: u32 = 50;
@@ -149,6 +147,13 @@ pub(crate) fn read_page(path: &Path, request: &PageRequest) -> Result<Page, Tran
 }
 
 /// The newest `ask` on the active branch still waiting for its answer.
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "agent.answer and its push (herdr#308/#309) call it"
+    )
+)]
 pub(crate) fn pending_ask(session_path: &Path) -> std::io::Result<Option<PendingAsk>> {
     match with_index(session_path, |view| Ok(view.live_state()?.0)) {
         Ok(ask) => Ok(ask),
@@ -159,6 +164,13 @@ pub(crate) fn pending_ask(session_path: &Path) -> std::io::Result<Option<Pending
 
 /// The selection recorded for the `ask` call `ask_id`, once its result is
 /// written; `None` while it is unanswered (or not an ask in this file).
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "agent.answer and its push (herdr#308/#309) call it"
+    )
+)]
 pub(crate) fn ask_result(
     session_path: &Path,
     ask_id: &str,
@@ -592,10 +604,8 @@ impl View<'_> {
                 continue;
             }
             let status = match result {
-                Some(result) => match self.parse::<ResultStatusLine>(result)? {
-                    Some(line) if !line.message.is_error => TranscriptStepStatus::Ok,
-                    _ => TranscriptStepStatus::Error,
-                },
+                Some(result) if self.index.record(result).failed => TranscriptStepStatus::Error,
+                Some(_) => TranscriptStepStatus::Ok,
                 // A later model message or an exit means the call never finished.
                 None if lost => TranscriptStepStatus::Error,
                 None => TranscriptStepStatus::Running,
@@ -729,12 +739,4 @@ impl View<'_> {
         };
         Ok((ask, working))
     }
-}
-
-#[cfg(test)]
-pub(crate) fn clear_cache_for_tests() {
-    CACHE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
 }

@@ -19,6 +19,7 @@ use super::plugins::{
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
+use super::transcript::{PendingAsk, TranscriptEntry, TranscriptWorking};
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
@@ -209,6 +210,19 @@ pub enum ResponseResult {
         history_b64: String,
         rows: u32,
         cursor: Option<String>,
+    },
+    /// One page of an omp agent's conversation (`agent.transcript`), entries
+    /// oldest first. `before` pages older turns and is `null` at the start;
+    /// `after` returns what was appended or changed since this page.
+    AgentTranscript {
+        agent: String,
+        pane_id: String,
+        session_id: String,
+        entries: Vec<TranscriptEntry>,
+        before: Option<String>,
+        after: String,
+        pending_ask: Option<PendingAsk>,
+        working: Option<TranscriptWorking>,
     },
     StreamStarted {
         pane_id: String,

@@ -2709,6 +2709,7 @@ mod tests {
                 api_bridge_multi: false,
                 pane_history: false,
                 agent_answer: false,
+                agent_transcript: false,
             }),
         };
         let missing_baseline = crate::api::RuntimeStatus {
@@ -2793,6 +2794,7 @@ mod tests {
                     api_bridge_multi: false,
                     pane_history: false,
                     agent_answer: false,
+                    agent_transcript: false,
                 }),
             },
         };
@@ -3063,6 +3065,7 @@ mod tests {
                     api_bridge_multi: false,
                     pane_history: false,
                     agent_answer: false,
+                    agent_transcript: false,
                 }),
             },
         };

@@ -1189,6 +1189,7 @@ fn success_response_round_trips() {
                 api_bridge_multi: false,
                 pane_history: false,
                 agent_answer: false,
+                agent_transcript: false,
             }),
         },
     };

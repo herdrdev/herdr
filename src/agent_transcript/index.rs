@@ -45,9 +45,13 @@ pub(super) enum Kind {
 }
 
 impl Kind {
-    /// Entries a page reads and pays for; hidden bookkeeping costs nothing.
+    /// Entries a page reads and pays for. Tool results render nothing of
+    /// their own (their status is in the record) and bookkeeping is skipped.
     pub(super) fn is_rendered(self) -> bool {
-        !matches!(self, Kind::Hidden | Kind::ResetBoundary | Kind::SessionExit)
+        !matches!(
+            self,
+            Kind::ToolResult | Kind::Hidden | Kind::ResetBoundary | Kind::SessionExit
+        )
     }
 }
 
@@ -57,6 +61,8 @@ pub(super) struct Record {
     pub(super) len: u32,
     pub(super) parent: u32,
     pub(super) kind: Kind,
+    /// A tool result that reported an error.
+    pub(super) failed: bool,
     pub(super) id: Box<str>,
 }
 
@@ -131,6 +137,8 @@ struct MessageHead<'a> {
     tool_call_id: Option<Cow<'a, str>>,
     #[serde(rename = "toolName", borrow, default)]
     tool_name: Option<Cow<'a, str>>,
+    #[serde(rename = "isError", default)]
+    is_error: Option<bool>,
 }
 
 impl SessionIndex {
@@ -290,6 +298,12 @@ impl SessionIndex {
             "custom" if head.custom_type.as_deref() == Some("session_exit") => Kind::SessionExit,
             _ => Kind::Hidden,
         };
+        let failed = kind == Kind::ToolResult
+            && head
+                .message
+                .as_ref()
+                .and_then(|message| message.is_error)
+                .unwrap_or(false);
         let parent = head
             .parent_id
             .as_deref()
@@ -302,6 +316,7 @@ impl SessionIndex {
             len,
             parent,
             kind,
+            failed,
             id,
         });
     }

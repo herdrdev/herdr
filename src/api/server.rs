@@ -212,6 +212,7 @@ pub(crate) fn default_capabilities() -> Option<ServerCapabilities> {
         api_bridge_multi: cfg!(unix),
         pane_history: true,
         agent_answer: true,
+        agent_transcript: true,
     })
 }
 
@@ -1081,6 +1082,19 @@ pub(super) fn qualify_remote_tab(
 /// line (errors, other methods' results) passes through verbatim. A peer reply
 /// whose ids are already qualified is refused as `peer_invalid_response`
 /// instead of being prefixed twice.
+/// A peer older than `agent.transcript` cannot parse the request and answers
+/// `invalid_request`; the caller learns the peer has no transcripts instead.
+fn unknown_transcript_as_unsupported(alias: &str, line: String) -> String {
+    match serde_json::from_str::<ErrorResponse>(&line) {
+        Ok(error) if error.error.code == "invalid_request" => error_response_json(
+            error.id,
+            "transcript_unsupported",
+            format!("machine {alias} does not serve agent transcripts"),
+        ),
+        _ => line,
+    }
+}
+
 fn qualify_routed_response(alias: &str, presentation: &PeerPresentation, line: String) -> String {
     let Ok(response) = serde_json::from_str::<SuccessResponse>(&line) else {
         return line;
@@ -1908,6 +1922,7 @@ fn routable_target_mut(method: &mut Method) -> Option<&mut String> {
         Method::AgentSendKeys(params) => Some(&mut params.target),
         Method::AgentGet(params) => Some(&mut params.target),
         Method::AgentRead(params) => Some(&mut params.target),
+        Method::AgentTranscript(params) => Some(&mut params.target),
         Method::AgentExplain(params) => Some(&mut params.target),
         // `agent.restart` routes to the owning peer so a federated `<alias>/pane`
         // agent can be restarted from home; the resume runs where the process is.
@@ -2026,6 +2041,8 @@ fn maybe_route_to_peer(
     let response = proxy_federated_response(&peer_target, &stamp, request, running);
     let response = if matches!(method, "workspace.get" | "tab.get" | "tab.list") {
         qualify_routed_response(&alias, &peer_target.presentation(&alias), response)
+    } else if method == "agent.transcript" {
+        unknown_transcript_as_unsupported(&alias, response)
     } else {
         response
     };
@@ -3388,6 +3405,7 @@ mod tests {
                 api_bridge_multi: false,
                 pane_history: false,
                 agent_answer: false,
+                agent_transcript: false,
             }),
             None,
             None,
@@ -4763,6 +4781,7 @@ mod federation_tests {
             ("agent.list", AllowedAt(Observe)),
             ("agent.get", AllowedAt(Observe)),
             ("agent.read", AllowedAt(Observe)),
+            ("agent.transcript", AllowedAt(Observe)),
             ("agent.explain", AllowedAt(Observe)),
             ("agent.send_keys", AllowedAt(Interact)),
             ("agent.rename", AllowedAt(Admin)),
@@ -7307,6 +7326,156 @@ mod federation_tests {
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["result"]["read"]["marker"], "peer-snapshot");
         assert!(home.api_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn proxy_routes_agent_transcript_and_after_polls_to_the_owning_peer() {
+        // Both the first page and an `after` poll go to the peer with the alias
+        // stripped and every cursor param intact; the peer's page comes back
+        // verbatim.
+        let page = |id: &str| {
+            serde_json::json!({
+                "id": id,
+                "result": {
+                    "type": "agent_transcript", "agent": "builder", "pane_id": "w1:p9",
+                    "session_id": "s", "entries": [], "before": null, "after": "peer-cursor",
+                    "pending_ask": null, "working": null,
+                },
+            })
+            .to_string()
+        };
+        let peer = start_proxy_peer(move |request, mut sock| {
+            let parsed: serde_json::Value = serde_json::from_str(request).unwrap();
+            assert_eq!(parsed["method"], "agent.transcript");
+            assert_eq!(parsed["params"]["target"], "w1:p9");
+            writeln!(sock, "{}", page(parsed["id"].as_str().unwrap())).unwrap();
+            let _ = sock.flush();
+        });
+        let registry = HashMap::from([(
+            "remote".to_string(),
+            ConnectionTarget::Tcp {
+                addr: peer.addr,
+                token: Some("tok".into()),
+            },
+        )]);
+        let mut home = drive_home(registry);
+        let first = home_roundtrip(
+            &mut home,
+            serde_json::json!({"id": "t1", "method": "agent.transcript",
+                "params": {"target": "remote/w1:p9", "limit": 5}}),
+        );
+        let first: serde_json::Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["result"]["after"], "peer-cursor");
+        let mut home = drive_home(HashMap::from([(
+            "remote".to_string(),
+            ConnectionTarget::Tcp {
+                addr: peer.addr,
+                token: Some("tok".into()),
+            },
+        )]));
+        let poll = home_roundtrip(
+            &mut home,
+            serde_json::json!({"id": "t2", "method": "agent.transcript",
+                "params": {"target": "remote/w1:p9", "after": "peer-cursor"}}),
+        );
+        assert_eq!(poll, page("t2"));
+        let seen = peer.seen.lock().unwrap().clone();
+        let forwarded: Vec<serde_json::Value> = seen
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(forwarded[0]["params"]["limit"], 5);
+        assert_eq!(forwarded[1]["params"]["after"], "peer-cursor");
+        assert!(home.api_rx.try_recv().is_err(), "nothing ran on the home");
+    }
+
+    #[test]
+    fn a_peer_too_old_for_agent_transcript_answers_transcript_unsupported() {
+        // An older peer cannot parse the method and says `invalid_request`.
+        let peer = start_proxy_peer(move |request, mut sock| {
+            let parsed: serde_json::Value = serde_json::from_str(request).unwrap();
+            let reply = error_response_json(
+                parsed["id"].as_str().unwrap().into(),
+                "invalid_request",
+                "invalid request: unknown variant `agent.transcript`".into(),
+            );
+            writeln!(sock, "{reply}").unwrap();
+            let _ = sock.flush();
+        });
+        let registry = HashMap::from([(
+            "remote".to_string(),
+            ConnectionTarget::Tcp {
+                addr: peer.addr,
+                token: Some("tok".into()),
+            },
+        )]);
+        let mut home = drive_home(registry);
+        let response = home_roundtrip(
+            &mut home,
+            serde_json::json!({"id": "old", "method": "agent.transcript",
+                "params": {"target": "remote/builder"}}),
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["id"], "old");
+        assert_eq!(value["error"]["code"], "transcript_unsupported");
+
+        // Other routed methods keep the peer's verdict untouched.
+        let mut home = drive_home(HashMap::from([(
+            "remote".to_string(),
+            ConnectionTarget::Tcp {
+                addr: peer.addr,
+                token: Some("tok".into()),
+            },
+        )]));
+        let response = home_roundtrip(
+            &mut home,
+            serde_json::json!({"id": "r", "method": "agent.read",
+                "params": {"target": "remote/builder", "source": "visible"}}),
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["error"]["code"], "invalid_request");
+    }
+
+    #[test]
+    fn an_observe_peer_may_read_transcripts() {
+        // The inbound gate: an Observe-tier federation peer's agent.transcript
+        // reaches the local app instead of being refused.
+        let mut fed = start_federation(one_peer("obs-tok", CapabilityTier::Observe));
+        let registry = HashMap::from([(
+            "remote".to_string(),
+            ConnectionTarget::Tcp {
+                addr: fed.addr,
+                token: Some("obs-tok".into()),
+            },
+        )]);
+        let mut home = drive_home(registry);
+        let client = std::thread::spawn(move || {
+            home_roundtrip(
+                &mut home,
+                serde_json::json!({"id": "o1", "method": "agent.transcript",
+                    "params": {"target": "remote/agent"}}),
+            )
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let message = loop {
+            if let Ok(message) = fed.api_rx.try_recv() {
+                break message;
+            }
+            assert!(Instant::now() < deadline, "the peer's app never saw it");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert!(matches!(
+            &message.request.method,
+            Method::AgentTranscript(params) if params.target == "agent"
+        ));
+        let _ = message.respond_to.send(error_response_json(
+            message.request.id,
+            "transcript_unavailable",
+            "stub".into(),
+        ));
+        let response = client.join().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["error"]["code"], "transcript_unavailable");
     }
 
     #[test]

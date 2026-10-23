@@ -85,22 +85,8 @@ pub(super) struct ResultLine {
 pub(super) struct ResultMessage {
     #[serde(default)]
     pub(super) timestamp: Option<u64>,
-    #[serde(rename = "isError", default)]
-    pub(super) is_error: bool,
     #[serde(default)]
     pub(super) details: Option<Value>,
-}
-
-/// A tool result without its (possibly large) content.
-#[derive(Deserialize)]
-pub(super) struct ResultStatusLine {
-    pub(super) message: ResultStatus,
-}
-
-#[derive(Deserialize)]
-pub(super) struct ResultStatus {
-    #[serde(rename = "isError", default)]
-    pub(super) is_error: bool,
 }
 
 #[derive(Deserialize)]
