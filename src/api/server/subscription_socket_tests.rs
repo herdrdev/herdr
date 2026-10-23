@@ -1,7 +1,6 @@
 use super::*;
 use crate::api::schema::{
-    AgentStatus, EventData, EventEnvelope, EventKind, PaneInfo, PaneReadResult, ReadFormat,
-    ReadSource,
+    AgentStatus, EventData, EventEnvelope, EventKind, PaneReadResult, ReadFormat, ReadSource,
 };
 use crate::ipc::{poll_local_stream_read_count, LocalStreamReadCount};
 use interprocess::local_socket::traits::Listener as _;
@@ -15,7 +14,7 @@ struct SocketTest {
     hub: EventHub,
     running: Arc<AtomicBool>,
     api_tx: ApiRequestSender,
-    api_rx: mpsc::UnboundedReceiver<ApiRequestMessage>,
+    api_rx: mpsc::UnboundedReceiver<crate::api::ServerRequest>,
     workers: Vec<std::thread::JoinHandle<io::Result<()>>>,
     paths: Vec<PathBuf>,
 }
@@ -57,7 +56,7 @@ impl SocketTest {
         }
     }
 
-    fn app_request(&mut self) -> ApiRequestMessage {
+    fn app_request(&mut self) -> crate::api::ServerRequest {
         let deadline = Instant::now() + RESPONSE_TIMEOUT;
         loop {
             match self.api_rx.try_recv() {
@@ -213,32 +212,25 @@ fn reply(request: ApiRequestMessage, result: ResponseResult) {
         .unwrap();
 }
 
-fn reply_to_probe(request: ApiRequestMessage) {
+fn reply_to_probe(request: crate::api::ServerRequest) {
+    let request = match request {
+        crate::api::ServerRequest::AgentStatus { respond_to, .. } => {
+            respond_to
+                .send(Ok(crate::api::schema::PaneAgentStatusChangedEvent {
+                    pane_id: "pane_1".into(),
+                    workspace_id: "workspace_1".into(),
+                    agent_status: AgentStatus::Working,
+                    agent: Some("pi".into()),
+                    title: None,
+                    display_agent: None,
+                    state_labels: Default::default(),
+                }))
+                .unwrap();
+            return;
+        }
+        crate::api::ServerRequest::Api(request) => *request,
+    };
     let result = match request.request.method {
-        Method::PaneGet(_) => ResponseResult::PaneInfo {
-            pane: PaneInfo {
-                pane_id: "pane_1".into(),
-                terminal_id: "term_1".into(),
-                workspace_id: "workspace_1".into(),
-                tab_id: "tab_1".into(),
-                focused: true,
-                cwd: None,
-                foreground_cwd: None,
-                restore_error: None,
-                label: None,
-                agent: Some("pi".into()),
-                title: None,
-                terminal_title: None,
-                terminal_title_stripped: None,
-                display_agent: None,
-                agent_status: AgentStatus::Working,
-                state_labels: Default::default(),
-                tokens: Default::default(),
-                agent_session: None,
-                scroll: None,
-                revision: 0,
-            },
-        },
         Method::PaneRead(_) => ResponseResult::PaneRead {
             read: PaneReadResult {
                 pane_id: "pane_1".into(),
@@ -294,7 +286,10 @@ fn assert_subscription_history_loss(agent_status: bool) {
     client.subscribe("history-gap", subscriptions);
     // Hold the setup probe after the server pins its subscription cursor.
     let probe = test.app_request();
-    assert!(probe.request.id.ends_with(":probe"));
+    match &probe {
+        crate::api::ServerRequest::Api(request) => assert!(request.request.id.ends_with(":probe")),
+        crate::api::ServerRequest::AgentStatus { id, .. } => assert!(id.ends_with(":probe")),
+    }
     for index in 0..600 {
         test.hub.push(renamed_event(index));
     }
@@ -316,12 +311,15 @@ fn lagging_subscription_closes_without_interrupting_other_clients() {
         json!([{"type": "workspace.renamed"}, output_subscription()]),
     );
     let probe = test.app_request();
-    assert_eq!(probe.request.id, "slow:sub:1:probe");
+    let crate::api::ServerRequest::Api(ref public_probe) = probe else {
+        panic!("expected output probe");
+    };
+    assert_eq!(public_probe.request.id, "slow:sub:1:probe");
     reply_to_probe(probe);
     slow.assert_started("slow");
     // Pause only this connection in an existing app request, rather than depending
     // on OS socket buffer sizes or sleeping to make its event cursor fall behind.
-    let paused_read = test.app_request();
+    let paused_read = test.app_request().into_api();
     assert_eq!(paused_read.request.id, "slow:sub:1:read");
     assert!(matches!(paused_read.request.method, Method::PaneRead(_)));
     // All five batches must finish before the held app request can time out.
@@ -334,14 +332,14 @@ fn lagging_subscription_closes_without_interrupting_other_clients() {
         healthy.assert_renames(indices, deadline);
     }
 
-    reply_to_probe(paused_read);
+    reply_to_probe(crate::api::ServerRequest::Api(Box::new(paused_read)));
     slow.assert_history_lost("slow");
     test.hub.push(renamed_event(640));
     healthy.assert_renames(640..641, Instant::now() + RESPONSE_TIMEOUT);
 
     let mut ordinary = test.connect();
     ordinary.send(json!({"id": "ordinary", "method": "workspace.list", "params": {}}));
-    let request = test.app_request();
+    let request = test.app_request().into_api();
     assert_eq!(request.request.id, "ordinary");
     assert!(matches!(request.request.method, Method::WorkspaceList(_)));
     reply(
