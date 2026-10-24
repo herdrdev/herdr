@@ -550,7 +550,12 @@ pub(crate) fn admit_in(
     }
     let device = b64url(device_pub);
     let Some(invite_id) = hello.get("invite_id") else {
-        return admit_returning(dir, &device, now);
+        let guest_id = match hello.get("guest_id") {
+            None => None,
+            Some(serde_json::Value::String(id)) if !id.is_empty() => Some(id.as_str()),
+            Some(_) => return Ok(AdmitOutcome::Refused("unknown")),
+        };
+        return admit_returning(dir, &device, guest_id, now);
     };
     let (Some(invite_id), Some(secret)) = (
         invite_id.as_str(),
@@ -598,13 +603,14 @@ pub(crate) fn admit_in(
             Ok(bytes) => b64url(&bytes),
             Err(_) => return (AdmitOutcome::Refused("invite_invalid"), false),
         };
-        // One live record per device: a new invite replaces the old grant.
+        // Re-inviting the same terminal replaces that grant, not the device's
+        // independently authorized access to other agents on this host.
         let mut replaced = Vec::new();
-        for existing in store
-            .guests
-            .iter_mut()
-            .filter(|guest| guest.device_pub == device && !guest.revoked)
-        {
+        for existing in store.guests.iter_mut().filter(|guest| {
+            guest.device_pub == device
+                && !guest.revoked
+                && guest.grant.terminal_id == invite.grant.terminal_id
+        }) {
             existing.revoked = true;
             existing.revoked_ms = Some(now);
             replaced.push(existing.guest_id.clone());
@@ -631,16 +637,36 @@ pub(crate) fn admit_in(
     })
 }
 
-fn admit_returning(dir: &Path, device: &str, now: u64) -> io::Result<AdmitOutcome> {
+fn admit_returning(
+    dir: &Path,
+    device: &str,
+    guest_id: Option<&str>,
+    now: u64,
+) -> io::Result<AdmitOutcome> {
     update_store(dir, |store| {
-        let mut known = false;
-        let Some(guest) = store.guests.iter_mut().find(|guest| {
-            known |= guest.device_pub == device;
-            guest.device_pub == device && !guest.revoked
-        }) else {
-            let error = if known { "revoked" } else { "unknown" };
-            return (AdmitOutcome::Refused(error), false);
+        // The authenticated Noise device key is always part of the lookup.
+        // A guest id is a selector, never a credential or authority on its own.
+        let matches = |guest: &&GuestRecord| {
+            guest.device_pub == device && guest_id.is_none_or(|id| guest.guest_id == id)
         };
+        let mut live = store
+            .guests
+            .iter()
+            .enumerate()
+            .filter(|(_, guest)| matches(guest) && !guest.revoked);
+        let Some((selected, _)) = live.next() else {
+            let known = store.guests.iter().any(|guest| matches(&guest));
+            return (
+                AdmitOutcome::Refused(if known { "revoked" } else { "unknown" }),
+                false,
+            );
+        };
+        // Old clients that omit the selector can reconnect only when unambiguous.
+        // Never silently route one agent's request through another agent's grant.
+        if live.next().is_some() {
+            return (AdmitOutcome::Refused("guest_selection_required"), false);
+        }
+        let guest = &mut store.guests[selected];
         // The first returning request after acceptance is a connection, and
         // then one per window however often the client polls.
         let connected = guest
@@ -872,6 +898,87 @@ pub(crate) mod tests {
             AdmitOutcome::Refused("invite_used"),
             "even the accepting device cannot reuse it"
         );
+    }
+
+    #[test]
+    fn one_device_keeps_independent_agent_grants() {
+        let dir = TempDir::new("multiple-grants");
+        let first_invite = invite(&dir.0, at(1_000));
+        let AdmitOutcome::Accepted { guest: first, .. } =
+            accept(&first_invite, &[7; 32], at(2_000), &dir.0)
+        else {
+            panic!("first share accepts")
+        };
+
+        let mut second_grant = grant();
+        second_grant.terminal_id = "term_2".into();
+        second_grant.agent_name = Some("second-agent".into());
+        let second_invite = create_invite(
+            &dir.0,
+            "plotarmordev",
+            second_grant.clone(),
+            "Jerry",
+            "Mac",
+            3600,
+            true,
+            at(3_000),
+        )
+        .unwrap();
+        let AdmitOutcome::Accepted {
+            guest: second,
+            replaced,
+        } = accept(&second_invite, &[7; 32], at(4_000), &dir.0)
+        else {
+            panic!("second share accepts")
+        };
+        assert!(
+            replaced.is_empty(),
+            "another agent must not revoke the first share"
+        );
+
+        for expected in [&first, &second] {
+            let hello = json!({"v": 1, "guest_id": expected.guest_id});
+            let AdmitOutcome::Returning { guest, .. } =
+                admit_in(&dir.0, &[7; 32], &hello, at(5_000)).unwrap()
+            else {
+                panic!("both agent shares must remain usable")
+            };
+            assert_eq!(guest.guest_id, expected.guest_id);
+            assert_eq!(guest.grant, expected.grant);
+            assert_eq!(guest.share_gram, expected.share_gram);
+            assert_eq!(
+                admit_in(&dir.0, &[8; 32], &hello, at(5_000)).unwrap(),
+                AdmitOutcome::Refused("unknown"),
+                "a grant id does not authorize another device"
+            );
+        }
+        assert_eq!(
+            admit_in(&dir.0, &[7; 32], &json!({"v": 1}), at(5_000)).unwrap(),
+            AdmitOutcome::Refused("guest_selection_required")
+        );
+
+        revoke_in(&dir.0, RevokeTarget::Guest(&first.guest_id), at(6_000)).unwrap();
+        assert_eq!(
+            admit_in(
+                &dir.0,
+                &[7; 32],
+                &json!({"v": 1, "guest_id": first.guest_id}),
+                at(7_000)
+            )
+            .unwrap(),
+            AdmitOutcome::Refused("revoked")
+        );
+        let AdmitOutcome::Returning { guest, .. } = admit_in(
+            &dir.0,
+            &[7; 32],
+            &json!({"v": 1, "guest_id": second.guest_id}),
+            at(7_000),
+        )
+        .unwrap() else {
+            panic!("revoking one share must leave the other usable")
+        };
+        assert_eq!(guest.grant, second_grant);
+        assert!(guest.share_gram);
     }
 
     #[test]
