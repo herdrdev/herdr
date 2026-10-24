@@ -2800,11 +2800,11 @@ mod tests {
     }
 
     #[test]
-    fn a_new_invite_on_the_same_device_closes_the_old_grants_stream() {
+    fn a_new_invite_for_the_same_terminal_closes_the_old_grants_stream() {
         let harness = start("replace-stream");
         let first = harness.admit_to(0);
         let (mut reader, handle) = open_stream(&harness, &first);
-        let second = harness.admit_to(1);
+        let second = harness.admit_to(0);
         assert_ne!(first.guest_id, second.guest_id);
         assert_eq!(stream_end(&mut reader)["error"]["code"], "guest_revoked");
         handle.join().unwrap();
@@ -3645,6 +3645,69 @@ mod tests {
                     .map(|(index, _)| ("relay", payload(*index))),
             )
             .collect()
+    }
+
+    #[test]
+    fn one_phone_receives_pushes_for_each_independent_grant() {
+        let _config = ConfigHome::new("multi-guest-push");
+        let harness = start("multi-guest-push");
+        let first = harness.admit_with(0, true);
+        let second = harness.admit_with(1, false);
+        let token = "ef".repeat(32);
+        for guest in [&first, &second] {
+            assert_eq!(
+                code(&harness.call(
+                    guest,
+                    register(
+                        &token,
+                        json!({"notify_needs_input": true, "notify_gram": true})
+                    )
+                )),
+                "<success>"
+            );
+        }
+        let alerts = both_agents_alert(&harness);
+        let routes = |guest: &GuestPrincipal| {
+            let mut routes: Vec<_> = guest_sends(guest, &alerts)
+                .into_iter()
+                .map(|(_, payload)| {
+                    (
+                        payload["herdr_guest"]["guest_id"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                        payload["herdr_guest"]["kind"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            routes.sort();
+            routes
+        };
+        let mut expected = vec![
+            (first.guest_id.clone(), "status".to_owned()),
+            (first.guest_id.clone(), "gram".to_owned()),
+            (second.guest_id.clone(), "status".to_owned()),
+        ];
+        expected.sort();
+        assert_eq!(
+            routes(&first),
+            expected,
+            "registering the second grant must preserve the first"
+        );
+        assert_eq!(
+            code(&harness.call(
+                &first,
+                json!({
+                    "id": "u", "method": "notifications.unregister_device",
+                    "params": {"device_token": token}
+                })
+            )),
+            "<success>"
+        );
+        assert_eq!(
+            routes(&second),
+            vec![(second.guest_id.clone(), "status".to_owned())]
+        );
     }
 
     #[test]
