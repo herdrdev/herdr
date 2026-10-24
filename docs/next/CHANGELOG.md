@@ -11,6 +11,7 @@
 
 ### Fixed
 - Accepting an invitation for another agent on the same host no longer revokes that device's existing shares. Returning Noise hellos select a grant with `guest_id`, always bound to the authenticated device key; legacy clients without a selector are refused when multiple grants would be ambiguous. Re-inviting the same terminal still replaces its old grant, and revocation remains per grant. Previously revoked shares are not restored automatically.
+- Guest push registration is scoped to each grant as well as its device token. Registering or disabling notifications for one shared agent no longer removes that phone's notifications for another shared agent.
 - HerdrUp updates use only this fork's preview releases. The stable channel refuses with installer guidance because this fork has no stable release stream; remote setup and package-manager guidance no longer offer upstream binaries as fork updates. (#208)
 - Agent prompt CLI reports a written but unconfirmed submission as a non-failure result instead of a delivery error. `server agent-manifests` now shows which active manifests declare submission verification; unsupported agents are identified explicitly. (#210)
 - Grams from agents on federated machines name the machine instead of its id. Their message objects carry `machine_label` (the label the machine's agents carry), resolved when read so older Grams are covered too, and the owner's push reads "llm-opt on Jerry's Mac Studio". (#277)

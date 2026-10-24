@@ -47,11 +47,13 @@ pub(crate) struct GuestDevice {
     pub device: RegisteredDevice,
 }
 
-/// Register or replace a device for this guest. A token is one phone: it
-/// leaves any other guest it was registered under.
+/// Register or replace a device for this guest. The same phone may retain
+/// independent registrations and notification preferences for other grants.
 pub(crate) fn register(dir: &Path, guest_id: &str, device: RegisteredDevice) -> io::Result<()> {
     store::update_side(dir, DEVICES_FILE, |devices: &mut Vec<GuestDevice>| {
-        devices.retain(|existing| existing.device.device_token != device.device_token);
+        devices.retain(|existing| {
+            existing.guest_id != guest_id || existing.device.device_token != device.device_token
+        });
         let own = devices
             .iter()
             .filter(|existing| existing.guest_id == guest_id)

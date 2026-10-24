@@ -536,9 +536,11 @@ pub(crate) enum AdmitOutcome {
     Refused(&'static str),
 }
 
-/// Admit a device. A returning guest sends `{"v":1}`; a new one also sends
-/// `invite_id`, `secret` and `device`. The secret is checked in constant time
-/// before the invite's state is revealed.
+/// Admit a device. A returning guest sends `{"v":1,"guest_id":"..."}` to select
+/// a grant belonging to its authenticated device key. Omitting `guest_id` works
+/// only for a single active grant; ambiguous hellos get `guest_selection_required`.
+/// A new guest instead sends `invite_id`, `secret` and `device`. The secret is
+/// checked in constant time before the invite's state is revealed.
 pub(crate) fn admit_in(
     dir: &Path,
     device_pub: &[u8; 32],
