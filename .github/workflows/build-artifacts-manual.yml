@@ -90,7 +90,11 @@ jobs:
 
       - name: Set Linux aarch64 linker
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+        # The aarch64 linker is glibc's but the libc is musl, so bundled SQLite must not
+        # call the glibc-only *64 large-file aliases (musl's off_t is already 64-bit).
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "LIBSQLITE3_FLAGS=-DSQLITE_DISABLE_LFS" >> $GITHUB_ENV
 
       - name: Remove Zig caches
         run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
