@@ -3067,6 +3067,22 @@
             {
               "properties": {
                 "kind": {
+                  "const": "upload_discard",
+                  "type": "string"
+                },
+                "params": {
+                  "$ref": "#/schemas/request/$defs/GramUploadDiscardParams"
+                }
+              },
+              "required": [
+                "kind",
+                "params"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "kind": {
                   "const": "get_file_chunk",
                   "type": "string"
                 },
@@ -3216,6 +3232,18 @@
             "upload_id",
             "offset",
             "data_base64"
+          ],
+          "type": "object"
+        },
+        "GramUploadDiscardParams": {
+          "description": "`gram.upload.discard` — drop a staged upload that will never be attached, so\nits bytes stop counting against the shared staging budget before the 24 h\nsweep would reclaim them. Idempotent: `discarded` is `false` when no staged\nupload has that id (never uploaded, already discarded, or already consumed by\na `gram.send`/`gram.post`), which is not an error. A guest's `upload_id` is\nscoped to its own namespace, so a guest can discard only its own uploads.",
+          "properties": {
+            "upload_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "upload_id"
           ],
           "type": "object"
         },
@@ -6555,6 +6583,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/GramUploadChunkParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "gram.upload.discard",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/GramUploadDiscardParams"
             }
           },
           "required": [
@@ -17436,6 +17480,23 @@
                 "sha256",
                 "offset",
                 "data_base64"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "`gram.upload.discard` — whether a staged upload with that id existed and\nwas deleted. `false` (unknown, already discarded, or already attached to a\nmessage) is a normal answer, not an error.",
+              "properties": {
+                "discarded": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "gram_upload_discarded",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "discarded"
               ],
               "type": "object"
             },

@@ -347,6 +347,28 @@ pub fn remove_message_files_in(dir: &Path, message_id: &str) {
     }
 }
 
+/// Delete a staged upload that will never be attached (the client removed the
+/// file or abandoned the draft), so its bytes stop counting against
+/// [`MAX_TOTAL_STAGING_BYTES`] now instead of after [`STAGING_MAX_AGE`]. Returns
+/// whether a staging file with that id existed: `false` for an id never uploaded,
+/// already discarded, or already consumed by [`finalize`] (which renames the
+/// staging file away, so a posted attachment is never touched). An id that is
+/// not a safe path component names no staging file, so it is `false` as well.
+pub fn discard_staged(upload_id: &str) -> io::Result<bool> {
+    discard_staged_in(&config_base(), upload_id)
+}
+
+fn discard_staged_in(dir: &Path, upload_id: &str) -> io::Result<bool> {
+    let Some(path) = staging_path_in(dir, upload_id) else {
+        return Ok(false);
+    };
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
 fn sha256_of_file(path: &Path) -> io::Result<String> {
     // Attachments are capped at MAX_FILE_BYTES (100 MiB), so reading one to hash
     // is a bounded allocation.
@@ -657,6 +679,65 @@ mod tests {
 
         remove_message_files_in(&dir, "gram-msg-2");
         assert!(read_message_file_in(&dir, "gram-msg-2", "key.txt").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discard_deletes_the_staged_bytes_and_frees_the_staging_budget() {
+        let dir = unique_temp_dir("discard");
+        let staging = staging_dir_in(&dir);
+        // A staged upload that fills the whole budget (sparse, as above), so a
+        // second upload is refused until the first one's bytes are released.
+        append_chunk_in(&dir, "abandoned", 0, b"x").unwrap();
+        let hog = fs::OpenOptions::new()
+            .write(true)
+            .open(staging.join("abandoned"))
+            .unwrap();
+        hog.set_len(MAX_TOTAL_STAGING_BYTES).unwrap();
+        drop(hog);
+        let refused = append_chunk_in(&dir, "next", 0, b"hello").unwrap_err();
+        assert!(
+            refused.to_string().contains("staging is full"),
+            "got: {refused}"
+        );
+
+        assert!(discard_staged_in(&dir, "abandoned").unwrap());
+        assert!(!staging.join("abandoned").exists());
+        assert_eq!(staging_total_bytes(&staging), 0);
+        append_chunk_in(&dir, "next", 0, b"hello").unwrap();
+        assert_eq!(staging_total_bytes(&staging), 5);
+
+        // Idempotent, and the discarded id can no longer be attached.
+        assert!(!discard_staged_in(&dir, "abandoned").unwrap());
+        let Err(err) = finalize_in(&dir, "gram-msg-d", "abandoned", "a.bin") else {
+            panic!("a discarded upload must not finalize");
+        };
+        assert!(err.to_string().contains("no staged upload"), "got: {err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discard_of_an_unknown_or_unsafe_id_is_false() {
+        let dir = unique_temp_dir("discard-unknown");
+        assert!(!discard_staged_in(&dir, "never-uploaded").unwrap());
+        // A traversal id names no staging file, so it cannot reach outside it.
+        fs::write(dir.join("outside"), b"keep").unwrap();
+        assert!(!discard_staged_in(&dir, "../../outside").unwrap());
+        assert!(dir.join("outside").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn discard_after_finalize_is_false_and_leaves_the_attachment() {
+        let dir = unique_temp_dir("discard-posted");
+        append_chunk_in(&dir, "up-p", 0, b"posted bytes").unwrap();
+        finalize_in(&dir, "gram-msg-p", "up-p", "p.txt").unwrap();
+
+        assert!(!discard_staged_in(&dir, "up-p").unwrap());
+        assert_eq!(
+            read_message_file_in(&dir, "gram-msg-p", "p.txt").unwrap(),
+            b"posted bytes"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 }

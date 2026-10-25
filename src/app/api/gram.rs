@@ -40,7 +40,8 @@ use super::responses::{encode_error, encode_success};
 use crate::api::schema::{
     GramDeleteParams, GramDirection, GramFileInfo, GramFileUpload, GramGetFileChunkParams,
     GramGetFileParams, GramGrabParams, GramListParams, GramMarkReadParams, GramMessageInfo,
-    GramPostParams, GramSendParams, GramUploadChunkParams, GramUploadStreamParams, ResponseResult,
+    GramPostParams, GramSendParams, GramUploadChunkParams, GramUploadDiscardParams,
+    GramUploadStreamParams, ResponseResult,
 };
 #[cfg(unix)]
 use crate::api::schema::{GramRelayCall, GramRelayParams};
@@ -145,6 +146,10 @@ impl App {
             GramRelayCall::UploadChunk(mut chunk) => {
                 chunk.upload_id = relay_upload_id(&alias, &chunk.upload_id);
                 self.handle_gram_upload_chunk(id, chunk)
+            }
+            GramRelayCall::UploadDiscard(mut discard) => {
+                discard.upload_id = relay_upload_id(&alias, &discard.upload_id);
+                self.handle_gram_upload_discard(id, discard)
             }
             GramRelayCall::Send(mut send) => {
                 let Some(from) = self.relay_identity(&alias, send.caller_pane_id.as_deref()) else {
@@ -802,6 +807,37 @@ impl App {
             Err(err) if err.kind() == std::io::ErrorKind::InvalidInput => {
                 encode_error(id, "invalid_params", err.to_string())
             }
+            Err(err) => encode_error(id, "gram_file_error", err.to_string()),
+        }
+    }
+
+    /// `gram.upload.discard`: delete a staged upload the client will never attach,
+    /// freeing its share of the staging budget now rather than at the 24 h sweep.
+    /// Authority is the id itself: the owner may discard any staged upload, while a
+    /// guest's and a relayed peer's ids are rewritten into their own namespace
+    /// before they reach here, so neither can name another caller's upload.
+    pub(super) fn handle_gram_upload_discard(
+        &mut self,
+        id: String,
+        params: GramUploadDiscardParams,
+    ) -> String {
+        if self.no_session {
+            return gram_unavailable(id);
+        }
+        // Deleting is a fourth writer on the staging file: a live stream's next
+        // frame would fail its offset check against the vanished bytes, and a
+        // finalize between its hash and its rename would fail with the bytes gone.
+        // Refuse while any writer holds the id, exactly as `gram.upload_chunk` and
+        // attach do.
+        let Some(_claim) = crate::api::UploadClaim::acquire(&params.upload_id) else {
+            return encode_error(
+                id,
+                "upload_in_progress",
+                "another writer owns this upload_id; read the upload connection to EOF before discarding",
+            );
+        };
+        match crate::persist::gram_files::discard_staged(&params.upload_id) {
+            Ok(discarded) => encode_success(id, ResponseResult::GramUploadDiscarded { discarded }),
             Err(err) => encode_error(id, "gram_file_error", err.to_string()),
         }
     }
@@ -1748,6 +1784,128 @@ mod tests {
                 .as_str()
                 .unwrap_or(""),
             store_id
+        );
+
+        match prev_xdg {
+            Some(value) => std::env::set_var("XDG_CONFIG_HOME", value),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn owner_discards_a_staged_upload_but_never_a_posted_one() {
+        let _guard = crate::config::test_config_env_lock().lock().unwrap();
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        let tmp = std::env::temp_dir().join(format!(
+            "herdr-gram-discard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::env::set_var("XDG_CONFIG_HOME", &tmp);
+        let staging = crate::config::config_dir()
+            .join("gram-files")
+            .join(".staging");
+
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        let upload = |app: &mut App, upload_id: &str| {
+            let raw = app.handle_gram_upload_chunk(
+                "u".into(),
+                serde_json::from_value(serde_json::json!(
+                    {"upload_id": upload_id, "offset": 0, "data_base64": "aGVsbG8="}
+                ))
+                .unwrap(),
+            );
+            let reply: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(reply["result"]["type"], "ok", "{reply}");
+        };
+        let discard = |app: &mut App, upload_id: &str| -> serde_json::Value {
+            let raw = app.handle_gram_upload_discard(
+                "d".into(),
+                GramUploadDiscardParams {
+                    upload_id: upload_id.into(),
+                },
+            );
+            serde_json::from_str(&raw).unwrap()
+        };
+        let post = |app: &mut App, upload_id: &str| -> serde_json::Value {
+            let raw = app.handle_gram_post(
+                "p".into(),
+                serde_json::from_value(serde_json::json!(
+                    {"text": "notes", "file": {"upload_id": upload_id, "name": "a.txt", "mime": "text/plain"}}
+                ))
+                .unwrap(),
+            );
+            serde_json::from_str(&raw).unwrap()
+        };
+
+        // A staged upload is deleted, and can no longer be attached.
+        upload(&mut app, "up-removed");
+        assert!(staging.join("up-removed").exists());
+        let discarded = discard(&mut app, "up-removed");
+        assert_eq!(discarded["result"]["type"], "gram_upload_discarded");
+        assert_eq!(discarded["result"]["discarded"], true, "{discarded}");
+        assert!(!staging.join("up-removed").exists());
+        let refused = post(&mut app, "up-removed");
+        assert_eq!(refused["error"]["code"], "invalid_params", "{refused}");
+        assert!(
+            refused["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no staged upload"),
+            "{refused}"
+        );
+
+        // Unknown and already-discarded ids are a normal `false`, not an error.
+        assert_eq!(
+            discard(&mut app, "up-removed")["result"]["discarded"],
+            false
+        );
+        assert_eq!(
+            discard(&mut app, "never-uploaded")["result"]["discarded"],
+            false
+        );
+
+        // A posted upload was consumed: discarding it is `false` and the
+        // message keeps its file.
+        upload(&mut app, "up-posted");
+        let posted = post(&mut app, "up-posted");
+        let message_id = posted["result"]["message"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(discard(&mut app, "up-posted")["result"]["discarded"], false);
+        let file: serde_json::Value = serde_json::from_str(&app.handle_gram_get_file(
+            "g".into(),
+            GramGetFileParams {
+                id: message_id,
+                caller_pane_id: None,
+            },
+        ))
+        .unwrap();
+        assert_eq!(file["result"]["data_base64"], "aGVsbG8=", "{file}");
+
+        // A live writer on the id keeps its bytes.
+        upload(&mut app, "up-streaming");
+        let claim = crate::api::UploadClaim::acquire("up-streaming").unwrap();
+        let busy = discard(&mut app, "up-streaming");
+        assert_eq!(busy["error"]["code"], "upload_in_progress", "{busy}");
+        assert!(staging.join("up-streaming").exists());
+        drop(claim);
+        assert_eq!(
+            discard(&mut app, "up-streaming")["result"]["discarded"],
+            true
         );
 
         match prev_xdg {

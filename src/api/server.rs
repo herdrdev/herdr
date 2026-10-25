@@ -2401,7 +2401,7 @@ fn emit_line_to_client(stream: &mut ApiStream, line: &str) -> std::io::Result<bo
 
 #[cfg(unix)]
 pub(crate) fn handle_reverse_gram(request: Request, tx: &ApiRequestSender) -> String {
-    // Only api::reverse creates this envelope, after accepting its six-method
+    // Only api::reverse creates this envelope, after accepting its seven-method
     // whitelist on the per-peer SSH gateway. The regular TCP policy still denies
     // gram.* and the local API remains local.
     handle_request(request, tx, None, None, None, None)
@@ -4743,6 +4743,7 @@ mod federation_tests {
             ("gram.mark_read", Denied),
             ("gram.delete", Denied),
             ("gram.upload_chunk", Denied),
+            ("gram.upload.discard", Denied),
             ("gram.get_file", Denied),
             ("gram.get_file_chunk", Denied),
             ("gram.relay", Denied),

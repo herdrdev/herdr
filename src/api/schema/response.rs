@@ -470,6 +470,12 @@ pub enum ResponseResult {
         offset: u64,
         data_base64: String,
     },
+    /// `gram.upload.discard` — whether a staged upload with that id existed and
+    /// was deleted. `false` (unknown, already discarded, or already attached to a
+    /// message) is a normal answer, not an error.
+    GramUploadDiscarded {
+        discarded: bool,
+    },
     /// `server.staged_update` — the running daemon version/protocol/commit, plus the staged (built
     /// but not-yet-running) build if one is available. `staged` present with a `sha` different from
     /// `running_sha` means an update is ready to apply. `running_sha` is the running binary's short

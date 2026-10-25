@@ -81,6 +81,7 @@ operations::define_operations! {
     GramMarkRead(GramMarkReadParams) => "gram.mark_read", false, false;
     GramDelete(GramDeleteParams) => "gram.delete", false, false;
     GramUploadChunk(GramUploadChunkParams) => "gram.upload_chunk", false, false;
+    GramUploadDiscard(GramUploadDiscardParams) => "gram.upload.discard", false, false;
     GramGetFile(GramGetFileParams) => "gram.get_file", false, false;
     GramGetFileChunk(GramGetFileChunkParams) => "gram.get_file_chunk", false, false;
     /// Internal only: the restricted reverse SSH gateway inserts the machine alias.

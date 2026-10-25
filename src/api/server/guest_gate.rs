@@ -20,9 +20,10 @@ use super::{
 use crate::api::schema::{
     AgentInfo, AgentTranscriptParams, ErrorResponse, GramGetFileChunkParams, GramGetFileParams,
     GramPostParams, GramRelayCall, GramRelayParams, GramRelayPostParams, GramUploadChunkParams,
-    GuestAgentProbeParams, GuestAuditEvent, GuestAuditFile, GuestGrantInfo, Method,
-    PaneHistoryParams, PanePtyLeaseReleaseParams, PaneReadParams, PaneSetPtySizeParams, PendingAsk,
-    ReadIntent, ReadSource, Request, ResponseResult, SuccessResponse, TranscriptEntry,
+    GramUploadDiscardParams, GuestAgentProbeParams, GuestAuditEvent, GuestAuditFile,
+    GuestGrantInfo, Method, PaneHistoryParams, PanePtyLeaseReleaseParams, PaneReadParams,
+    PaneSetPtySizeParams, PendingAsk, ReadIntent, ReadSource, Request, ResponseResult,
+    SuccessResponse, TranscriptEntry,
 };
 use crate::api::transport::ApiStream;
 use crate::guest::GuestPrincipal;
@@ -539,6 +540,13 @@ fn project_pty_size(result: ResponseResult) -> Option<serde_json::Value> {
     }))
 }
 
+fn project_upload_discarded(result: ResponseResult) -> Option<serde_json::Value> {
+    let ResponseResult::GramUploadDiscarded { discarded } = result else {
+        return None;
+    };
+    Some(serde_json::json!({"type": "gram_upload_discarded", "discarded": discarded}))
+}
+
 fn project_gram_sent(result: ResponseResult) -> Option<serde_json::Value> {
     let ResponseResult::GramSent { message, .. } = result else {
         return None;
@@ -828,6 +836,25 @@ pub(super) fn serve_request(
             let response = crate::api::reverse::forward_relay(&request)
                 .unwrap_or_else(|| dispatch_to_app_with_timeout(request, api_tx, None));
             write_text_line_allow_disconnect(&mut stream, &guest_reply(&id, &response, project_ok))
+        }
+        Method::GramUploadDiscard(params) => {
+            // No live-agent check: dropping one's own staged bytes only frees
+            // space, and a guest whose agent stopped may still abandon a draft.
+            // The id is rewritten into this guest's namespace exactly as its
+            // upload was, so another guest's or the owner's upload is unnameable.
+            let request = Request {
+                id: id.clone(),
+                method: Method::GramUploadDiscard(GramUploadDiscardParams {
+                    upload_id: guest_upload_id(guest, &params.upload_id),
+                }),
+            };
+            // Staged on the coordinator when this daemon relays its Gram there.
+            let response = crate::api::reverse::forward_relay(&request)
+                .unwrap_or_else(|| dispatch_to_app_with_timeout(request, api_tx, None));
+            write_text_line_allow_disconnect(
+                &mut stream,
+                &guest_reply(&id, &response, project_upload_discarded),
+            )
         }
         Method::GramPost(params) => {
             let GrantState::Live(agent) = grant_state(guest, api_tx) else {
@@ -3590,6 +3617,55 @@ mod tests {
         assert_eq!(read_marks(&after), [(second, false), (first, true)]);
     }
 
+    #[test]
+    fn a_guest_discards_only_uploads_staged_in_its_own_namespace() {
+        let _config = ConfigHome::new("gram-discard");
+        let harness = start("gram-discard");
+        let guest = harness.admit_to(0);
+        // A grant to another agent, so admitting it does not replace the first.
+        let other = harness.admit_to(1);
+        assert_ne!(guest.guest_id, other.guest_id);
+        let staging = crate::config::config_dir()
+            .join("gram-files")
+            .join(".staging");
+        let chunk = json!({"id": "u", "method": "gram.upload_chunk", "params": {"upload_id": "up-1", "offset": 0, "data_base64": "aGk="}});
+        for principal in [&guest, &other] {
+            let staged = harness.call(principal, chunk.clone());
+            assert_eq!(staged[0]["result"]["type"], "ok", "{staged:?}");
+        }
+        let owners = local_call(&harness, chunk);
+        assert_eq!(owners["result"]["type"], "ok", "{owners}");
+        let mine = staging.join(guest_upload_id(&guest, "up-1"));
+        let theirs = staging.join(guest_upload_id(&other, "up-1"));
+        let owner = staging.join("up-1");
+        assert!(mine.exists() && theirs.exists() && owner.exists());
+        let discard = |upload_id: String| json!({"id": "d", "method": "gram.upload.discard", "params": {"upload_id": upload_id}});
+
+        // Naming the other guest's staged id lands in this guest's namespace.
+        let foreign = harness.call(&guest, discard(guest_upload_id(&other, "up-1")));
+        assert_eq!(
+            foreign[0],
+            json!({"id": "d", "result": {"type": "gram_upload_discarded", "discarded": false}})
+        );
+        assert!(theirs.exists() && owner.exists());
+
+        // Its own id deletes only its own bytes; the owner's same id survives.
+        let own = harness.call(&guest, discard("up-1".into()));
+        assert_eq!(
+            own[0],
+            json!({"id": "d", "result": {"type": "gram_upload_discarded", "discarded": true}})
+        );
+        assert!(!mine.exists());
+        assert!(theirs.exists() && owner.exists());
+        let again = harness.call(&guest, discard("up-1".into()));
+        assert_eq!(again[0]["result"]["discarded"], false, "{again:?}");
+
+        // The owner may discard any staged upload, a guest's included.
+        let by_owner = local_call(&harness, discard(guest_upload_id(&other, "up-1")));
+        assert_eq!(by_owner["result"]["discarded"], true, "{by_owner}");
+        assert!(!theirs.exists() && owner.exists());
+    }
+
     fn register(token: &str, prefs: Value) -> Value {
         let mut params =
             json!({"device_token": token, "platform": "ios", "relay_capability": "hpr1.guest_cap"});
@@ -3965,6 +4041,10 @@ mod tests {
                                 .extend(bytes);
                             json!({"type": "ok"})
                         }
+                        GramRelayCall::UploadDiscard(discard) => {
+                            let discarded = state.uploads.remove(&discard.upload_id).is_some();
+                            json!({"type": "gram_upload_discarded", "discarded": discarded})
+                        }
                         GramRelayCall::Send(send) => {
                             let Some(from) = caller(&send.caller_pane_id) else {
                                 let _ = message.respond_to.send(
@@ -4286,6 +4366,34 @@ mod tests {
             json!({"id": "f", "method": "gram.get_file", "params": {"id": id}}),
         );
         assert_eq!(whole[0]["result"]["data_base64"], "aGVsbG8=", "{whole:?}");
+    }
+
+    #[test]
+    fn on_a_gram_relay_remote_a_guest_discards_where_it_staged() {
+        let (_config, harness, coordinator) = relay_remote("relay-discard");
+        let guest = harness.admit_with(0, true);
+        let staged = harness.call(
+            &guest,
+            json!({"id": "u", "method": "gram.upload_chunk", "params": {"upload_id": "g-up", "offset": 0, "data_base64": "aGVsbG8="}}),
+        );
+        assert_eq!(staged[0]["result"]["type"], "ok", "{staged:?}");
+        let namespaced = guest_upload_id(&guest, "g-up");
+        assert!(coordinator
+            .state
+            .lock()
+            .unwrap()
+            .uploads
+            .contains_key(&namespaced));
+
+        let discarded = harness.call(
+            &guest,
+            json!({"id": "d", "method": "gram.upload.discard", "params": {"upload_id": "g-up"}}),
+        );
+        assert_eq!(
+            discarded[0],
+            json!({"id": "d", "result": {"type": "gram_upload_discarded", "discarded": true}})
+        );
+        assert!(coordinator.state.lock().unwrap().uploads.is_empty());
     }
 
     fn copy_ids(guest: &GuestPrincipal) -> Vec<String> {

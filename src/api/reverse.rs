@@ -1,7 +1,7 @@
 //! Explicit, machine-scoped Gram reverse gateway over a saved SSH connection.
 //!
 //! The coordinator never forwards its unrestricted API socket. A private socket
-//! accepts only the six Gram relay operations below, stamps the saved peer's
+//! accepts only the seven Gram relay operations below, stamps the saved peer's
 //! verified routing alias, and is reverse-forwarded to that peer by SSH. A local
 //! process on either trusted machine can impersonate a pane of that machine;
 //! this is not a per-process security boundary.
@@ -39,6 +39,7 @@ pub(crate) fn forward_local(request: &Request) -> Option<String> {
         Method::GramSend(_)
             | Method::GramList(_)
             | Method::GramUploadChunk(_)
+            | Method::GramUploadDiscard(_)
             | Method::GramGetFileChunk(_)
             | Method::GramDelete(_)
     ) {
@@ -120,6 +121,7 @@ fn serve_one(
             Method::GramSend(params) => Some(GramRelayCall::Send(params)),
             Method::GramList(params) => Some(GramRelayCall::List(params)),
             Method::GramUploadChunk(params) => Some(GramRelayCall::UploadChunk(params)),
+            Method::GramUploadDiscard(params) => Some(GramRelayCall::UploadDiscard(params)),
             Method::GramGetFileChunk(params) => Some(GramRelayCall::GetFileChunk(params)),
             Method::GramDelete(params) => Some(GramRelayCall::Delete(params)),
             // The relay envelope carries only a guest's post; the alias is

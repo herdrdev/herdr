@@ -189,6 +189,17 @@ pub struct GramUploadChunkParams {
     pub data_base64: String,
 }
 
+/// `gram.upload.discard` — drop a staged upload that will never be attached, so
+/// its bytes stop counting against the shared staging budget before the 24 h
+/// sweep would reclaim them. Idempotent: `discarded` is `false` when no staged
+/// upload has that id (never uploaded, already discarded, or already consumed by
+/// a `gram.send`/`gram.post`), which is not an error. A guest's `upload_id` is
+/// scoped to its own namespace, so a guest can discard only its own uploads.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct GramUploadDiscardParams {
+    pub upload_id: String,
+}
+
 /// `gram.upload.stream` — open a streaming upload channel for one file.
 ///
 /// The per-chunk `gram.upload_chunk` method costs one API connection per chunk, and
@@ -236,6 +247,7 @@ pub enum GramRelayCall {
     Send(GramSendParams),
     List(GramListParams),
     UploadChunk(GramUploadChunkParams),
+    UploadDiscard(GramUploadDiscardParams),
     GetFileChunk(GramGetFileChunkParams),
     Delete(GramDeleteParams),
     /// A HerdrUp guest's post to an agent on the relaying machine.

@@ -1595,6 +1595,9 @@ impl App {
             Method::GramUploadChunk(params) => {
                 return self.handle_gram_upload_chunk(request.id, params);
             }
+            Method::GramUploadDiscard(params) => {
+                return self.handle_gram_upload_discard(request.id, params);
+            }
             Method::GramGetFile(params) => return self.handle_gram_get_file(request.id, params),
             Method::GramGetFileChunk(params) => {
                 return self.handle_gram_get_file_chunk(request.id, params);
