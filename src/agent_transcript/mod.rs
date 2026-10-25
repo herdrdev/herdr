@@ -6,6 +6,7 @@
 //! chain of the newest entry, is shown. A per-file index (see `index`) keeps
 //! one small record per entry so a page reads only the lines it renders.
 
+mod history;
 mod index;
 mod normalize;
 #[cfg(test)]
@@ -415,7 +416,62 @@ impl View<'_> {
         }
     }
 
+    /// The completion recap for the newest turn. A session whose omp writes
+    /// turn-bound `completion-recap` records is read from those alone; older omp
+    /// only saves recaps to its `history.db`, matched to the turn by time.
     fn current_recap(&self) -> Result<Option<TranscriptRecap>, TranscriptError> {
+        if self
+            .branch
+            .iter()
+            .any(|&record| self.index.record(record).kind == Kind::Recap)
+        {
+            self.turn_bound_recap()
+        } else {
+            self.history_recap()
+        }
+    }
+
+    /// A `history.db` recap is current only when written after the newest
+    /// conversational entry and that entry is the assistant's reply. Rows keep
+    /// whole seconds, so an entry in the recap's own second counts as newer.
+    fn history_recap(&self) -> Result<Option<TranscriptRecap>, TranscriptError> {
+        let Some(&latest) = self.branch.iter().rev().find(|&&record| {
+            matches!(
+                self.index.record(record).kind,
+                Kind::User
+                    | Kind::Assistant
+                    | Kind::ToolResult
+                    | Kind::TodoResult
+                    | Kind::Compaction
+                    | Kind::ResetBoundary
+            )
+        }) else {
+            return Ok(None);
+        };
+        let entry = self.index.record(latest);
+        if entry.kind != Kind::Assistant {
+            return Ok(None);
+        }
+        let Some(latest_ms) = self
+            .parse::<StampLine>(latest)?
+            .and_then(|line| line.timestamp)
+            .and_then(|stamp| normalize::parse_iso8601_ms(&stamp))
+        else {
+            return Ok(None);
+        };
+        let Some(recap) = history::latest_recap(self.index.path(), self.session_id()) else {
+            return Ok(None);
+        };
+        let text = recap.text.trim();
+        Ok(
+            (latest_ms < recap.created_at_ms && !text.is_empty()).then(|| TranscriptRecap {
+                turn_id: entry.id.to_string(),
+                text: text.to_owned(),
+            }),
+        )
+    }
+
+    fn turn_bound_recap(&self) -> Result<Option<TranscriptRecap>, TranscriptError> {
         #[derive(serde::Deserialize)]
         struct RecapLine {
             data: RecapData,

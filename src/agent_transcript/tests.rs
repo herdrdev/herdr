@@ -57,6 +57,16 @@ pub(crate) fn ask_call(id: &str, questions: Value) -> Value {
 
 impl Fixture {
     pub(crate) fn new(tag: &str) -> Self {
+        Self::create(tag, "")
+    }
+
+    /// A session file laid out the way omp stores it, with room for the
+    /// `history.db` omp keeps beside `sessions/`.
+    fn in_agent_dir(tag: &str) -> Self {
+        Self::create(tag, "sessions/--tmp-project--")
+    }
+
+    fn create(tag: &str, subdir: &str) -> Self {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
             "herdr-transcript-test-{}-{tag}-{}",
@@ -64,8 +74,10 @@ impl Fixture {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("2026-10-23T10-00-00-000Z_sess-1.jsonl");
+        std::fs::create_dir_all(dir.join(subdir)).unwrap();
+        let path = dir
+            .join(subdir)
+            .join("2026-10-23T10-00-00-000Z_sess-1.jsonl");
         let mut fixture = Self {
             dir,
             path,
@@ -1360,4 +1372,112 @@ fn recap_rejects_wrong_identity_unknown_version_and_empty_text() {
         session.push(record);
         assert_eq!(session.newest().recap, None, "{field}");
     }
+}
+
+/// Seconds since the epoch of fixture entry `n` (entries are one second apart).
+fn entry_second(n: u64) -> i64 {
+    i64::try_from(T0_MS / 1000 + n).unwrap()
+}
+
+/// omp's `history.db` beside the fixture's `sessions/`, with omp's own schema.
+fn write_history(session: &Fixture, rows: &[(&str, &str, i64)]) {
+    let db = rusqlite::Connection::open(session.dir.join("history.db")).unwrap();
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS session_recaps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            cwd TEXT NOT NULL,
+            recap TEXT NOT NULL,
+            created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER))
+        );",
+    )
+    .unwrap();
+    for (session_id, recap, created_at) in rows {
+        db.execute(
+            "INSERT INTO session_recaps (session_id, cwd, recap, created_at) VALUES (?1, '/tmp/project', ?2, ?3)",
+            rusqlite::params![session_id, recap, created_at],
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn history_recap_is_shown_only_when_written_after_the_newest_reply() {
+    let mut session = Fixture::in_agent_dir("history-recap");
+    session.user("Fix the parser");
+    let turn = session.assistant(vec![text("Fixed")], "stop");
+    // Written in the reply's own second: whole-second rows cannot prove it came after.
+    write_history(&session, &[("sess-1", "Same second.", entry_second(2))]);
+    assert_eq!(session.newest().recap, None);
+    write_history(
+        &session,
+        &[("sess-1", " Parser fixed; review is next. ", entry_second(3))],
+    );
+    assert_eq!(
+        session.newest().recap,
+        Some(TranscriptRecap {
+            turn_id: turn,
+            text: "Parser fixed; review is next.".into(),
+        })
+    );
+}
+
+#[test]
+fn history_recap_is_hidden_by_newer_work() {
+    let mut session = Fixture::in_agent_dir("history-stale");
+    session.user("Fix the parser");
+    session.assistant(vec![text("Fixed")], "stop");
+    write_history(&session, &[("sess-1", "Parser fixed.", entry_second(3))]);
+    assert!(session.newest().recap.is_some());
+    session.user("Now add a test");
+    assert_eq!(session.newest().recap, None, "pending user request");
+    session.assistant(vec![text("Test added")], "stop");
+    assert_eq!(session.newest().recap, None, "reply newer than the recap");
+}
+
+#[test]
+fn history_recap_uses_this_session_newest_row() {
+    let mut session = Fixture::in_agent_dir("history-identity");
+    session.user("Work");
+    session.assistant(vec![text("Done")], "stop");
+    write_history(
+        &session,
+        &[
+            ("sess-1", "Older recap.", entry_second(3)),
+            ("sess-1", "Newest recap.", entry_second(5)),
+            ("another-session", "Not this session.", entry_second(9)),
+        ],
+    );
+    assert_eq!(session.newest().recap.unwrap().text, "Newest recap.");
+}
+
+#[test]
+fn turn_bound_records_take_precedence_over_history() {
+    let mut session = Fixture::in_agent_dir("history-precedence");
+    session.user("Work");
+    let turn = session.assistant(vec![text("Done")], "stop");
+    session.push(recap_record(&turn));
+    write_history(&session, &[("sess-1", "From history.", entry_second(9))]);
+    assert_eq!(
+        session.newest().recap.unwrap().text,
+        "Parser fixed; review is next."
+    );
+    let mut cleared = recap_record(&turn);
+    cleared["data"]["state"] = json!("cleared");
+    session.push(cleared);
+    assert_eq!(
+        session.newest().recap,
+        None,
+        "a cleared record is not replaced by history"
+    );
+}
+
+#[test]
+fn unreadable_history_means_no_recap() {
+    let mut session = Fixture::in_agent_dir("history-unreadable");
+    session.user("Work");
+    session.assistant(vec![text("Done")], "stop");
+    assert_eq!(session.newest().recap, None, "no history.db");
+    std::fs::write(session.dir.join("history.db"), b"not a database").unwrap();
+    assert_eq!(session.newest().recap, None, "corrupt history.db");
 }

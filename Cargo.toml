@@ -65,6 +65,7 @@ getrandom = "0.2"
 # alternatives because it adds NO transitive dependencies, which matters in a tree
 # that has deliberately avoided pulling in rand/uuid/hex.
 qrcodegen = "1.8.0"
+rusqlite = { version = "0.41.0", features = ["bundled"] }
 
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
