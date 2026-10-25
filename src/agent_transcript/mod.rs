@@ -20,7 +20,8 @@ use base64::Engine as _;
 
 use crate::api::schema::PendingAsk;
 use crate::api::schema::{
-    TranscriptEntry, TranscriptStepStatus, TranscriptTurnStatus, TranscriptWorking,
+    TranscriptEntry, TranscriptModel, TranscriptPlanItem, TranscriptRecap, TranscriptStepStatus,
+    TranscriptTurnStatus, TranscriptWorking,
 };
 use index::{read_line, Kind, SessionIndex};
 use normalize::{AssistantLine, NoteLine, ResultLine, StampLine, UserLine, SUMMARY_TEXT};
@@ -48,6 +49,9 @@ pub(crate) struct Page {
     pub(crate) after: String,
     pub(crate) pending_ask: Option<PendingAsk>,
     pub(crate) working: Option<TranscriptWorking>,
+    pub(crate) model: Option<TranscriptModel>,
+    pub(crate) plan: Option<Vec<TranscriptPlanItem>>,
+    pub(crate) recap: Option<TranscriptRecap>,
 }
 
 #[derive(Debug)]
@@ -359,7 +363,125 @@ impl View<'_> {
             after,
             pending_ask,
             working,
+            model: self.current_model()?,
+            plan: self.current_plan()?,
+            recap: self.current_recap()?,
         })
+    }
+
+    fn current_model(&self) -> Result<Option<TranscriptModel>, TranscriptError> {
+        let mut read_assistant = false;
+        for record in self.index.model_records() {
+            if self.index.record(record).kind == Kind::ModelChange {
+                #[derive(serde::Deserialize)]
+                struct ModelChange {
+                    model: String,
+                }
+                return Ok(self.parse::<ModelChange>(record)?.and_then(|change| {
+                    let (provider, id) = change.model.split_once('/')?;
+                    (!provider.is_empty() && !id.is_empty()).then(|| TranscriptModel {
+                        provider: provider.to_owned(),
+                        id: id.to_owned(),
+                    })
+                }));
+            }
+            if !read_assistant {
+                read_assistant = true;
+                if let Some(model) = self.parse::<AssistantLine>(record)?.and_then(|line| {
+                    let provider = line.message.provider?;
+                    let id = line.message.model?;
+                    (!provider.is_empty() && !id.is_empty())
+                        .then_some(TranscriptModel { provider, id })
+                }) {
+                    return Ok(Some(model));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    fn current_plan(&self) -> Result<Option<Vec<TranscriptPlanItem>>, TranscriptError> {
+        let record = self
+            .branch
+            .iter()
+            .rev()
+            .copied()
+            .find(|&record| self.index.record(record).kind == Kind::TodoResult);
+        match record {
+            Some(record) => Ok(self
+                .parse::<ResultLine>(record)?
+                .and_then(|line| normalize::plan_items(line.message.details.as_ref()))),
+            None => Ok(None),
+        }
+    }
+
+    fn current_recap(&self) -> Result<Option<TranscriptRecap>, TranscriptError> {
+        #[derive(serde::Deserialize)]
+        struct RecapLine {
+            data: RecapData,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RecapData {
+            version: u32,
+            session_id: String,
+            turn_id: String,
+            state: String,
+            #[serde(default)]
+            text: Option<String>,
+        }
+        for &record in self.branch.iter().rev() {
+            match self.index.record(record).kind {
+                Kind::Recap => {
+                    let Some(line) = self.parse::<RecapLine>(record)? else {
+                        return Ok(None);
+                    };
+                    let data = line.data;
+                    if data.version != 1
+                        || data.state != "available"
+                        || data.session_id != self.session_id()
+                    {
+                        return Ok(None);
+                    }
+                    let latest_assistant = self
+                        .branch
+                        .iter()
+                        .rev()
+                        .map(|&id| self.index.record(id))
+                        .find(|entry| {
+                            matches!(
+                                entry.kind,
+                                Kind::User
+                                    | Kind::Assistant
+                                    | Kind::ToolResult
+                                    | Kind::TodoResult
+                                    | Kind::Compaction
+                                    | Kind::ResetBoundary
+                            )
+                        })
+                        .filter(|entry| entry.kind == Kind::Assistant)
+                        .map(|entry| entry.id.as_ref());
+                    if latest_assistant != Some(data.turn_id.as_str()) {
+                        return Ok(None);
+                    }
+                    return Ok(data
+                        .text
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| TranscriptRecap {
+                            turn_id: data.turn_id,
+                            text,
+                        }));
+                }
+                Kind::User
+                | Kind::Assistant
+                | Kind::ToolResult
+                | Kind::TodoResult
+                | Kind::Compaction
+                | Kind::ResetBoundary => return Ok(None),
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     fn valid_record(&self, record: u32, id: &str) -> Option<u32> {
@@ -505,7 +627,12 @@ impl View<'_> {
                         text: SUMMARY_TEXT.to_owned(),
                     });
                 }
-                Kind::ToolResult | Kind::ResetBoundary | Kind::SessionExit | Kind::Hidden => {}
+                Kind::ToolResult
+                | Kind::ResetBoundary
+                | Kind::SessionExit
+                | Kind::Hidden
+                | Kind::ModelChange
+                | Kind::Recap => {}
             }
         }
         Ok(())

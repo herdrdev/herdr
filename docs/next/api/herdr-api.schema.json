@@ -16341,6 +16341,16 @@
                   },
                   "type": "array"
                 },
+                "model": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/TranscriptModel"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
                 "pane_id": {
                   "type": "string"
                 },
@@ -16348,6 +16358,25 @@
                   "anyOf": [
                     {
                       "$ref": "#/schemas/success_response/$defs/PendingAsk"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "plan": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/TranscriptPlanItem"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "recap": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/schemas/success_response/$defs/TranscriptRecap"
                     },
                     {
                       "type": "null"
@@ -18055,6 +18084,21 @@
             }
           ]
         },
+        "TranscriptModel": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "id"
+          ],
+          "type": "object"
+        },
         "TranscriptNoteSource": {
           "enum": [
             "gitmoot",
@@ -18066,8 +18110,24 @@
         },
         "TranscriptPlanItem": {
           "properties": {
+            "blocker": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "done": {
               "type": "boolean"
+            },
+            "phase": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/schemas/success_response/$defs/TranscriptTaskStatus",
+              "default": "unknown"
             },
             "text": {
               "type": "string"
@@ -18079,11 +18139,36 @@
           ],
           "type": "object"
         },
+        "TranscriptRecap": {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "turn_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "turn_id",
+            "text"
+          ],
+          "type": "object"
+        },
         "TranscriptStepStatus": {
           "enum": [
             "running",
             "ok",
             "error"
+          ],
+          "type": "string"
+        },
+        "TranscriptTaskStatus": {
+          "enum": [
+            "pending",
+            "in_progress",
+            "completed",
+            "blocked",
+            "unknown"
           ],
           "type": "string"
         },

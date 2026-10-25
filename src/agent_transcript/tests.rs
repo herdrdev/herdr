@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::api::schema::{
     AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptStepStatus,
-    TranscriptTurnStatus,
+    TranscriptTaskStatus, TranscriptTurnStatus,
 };
 
 const T0_MS: u64 = 1_792_749_600_000; // 2026-10-23T10:00:00Z
@@ -613,15 +613,100 @@ fn the_plan_is_the_turns_newest_todo_state_and_todo_calls_are_not_steps() {
             items: vec![
                 TranscriptPlanItem {
                     text: "one".into(),
-                    done: true
+                    done: true,
+                    status: TranscriptTaskStatus::Completed,
+                    phase: Some("Work".into()),
+                    blocker: None,
                 },
                 TranscriptPlanItem {
                     text: "two".into(),
-                    done: false
+                    done: false,
+                    status: TranscriptTaskStatus::InProgress,
+                    phase: Some("Work".into()),
+                    blocker: None,
                 },
             ],
         }
     );
+}
+
+#[test]
+fn current_model_tracks_selection_role_branch_and_clear() {
+    let mut session = Fixture::new("model-metadata");
+    let root = session.push(json!({"type": "model_change", "model": "provider/primary"}));
+    session.user("Work");
+    session.push(json!({"type": "model_change", "role": "smol", "model": "provider/helper"}));
+    assert_eq!(session.newest().model.unwrap().id, "primary");
+    session.push(json!({"type": "model_change", "role": "default", "model": "other/selected"}));
+    assert_eq!(
+        session.newest().model,
+        Some(TranscriptModel {
+            provider: "other".into(),
+            id: "selected".into(),
+        })
+    );
+    session.push_under(
+        json!({"type": "message", "message": {
+            "role": "user", "content": "Rewound branch"
+        }}),
+        Some(&root),
+    );
+    assert_eq!(session.newest().model.unwrap().id, "primary");
+    session.push(json!({"type": "reset_boundary"}));
+    assert_eq!(session.newest().model.unwrap().id, "primary");
+}
+
+#[test]
+fn latest_plan_preserves_phases_states_and_blockers_outside_the_page() {
+    let mut session = Fixture::new("plan-metadata");
+    session.user("Work");
+    session.assistant(vec![call("tasks", "todo", None, json!({}))], "toolUse");
+    session.result(
+        "tasks",
+        "todo",
+        false,
+        json!({"phases": [
+            {"name": "Build", "tasks": [
+                {"content": "Ready", "status": "completed"},
+                {"content": "Running", "status": "in_progress"}]},
+            {"name": "Ship", "tasks": [
+                {"content": "Review", "status": "blocked", "blocker": "Awaiting owner context"},
+                {"content": "Deploy", "status": "pending"},
+                {"content": "Discarded", "status": "abandoned"}]}
+        ]}),
+    );
+    session.user("Next turn");
+    let page = read_page(
+        &session.path,
+        &PageRequest {
+            limit: Some(1),
+            ..PageRequest::default()
+        },
+    )
+    .unwrap();
+    assert!(!page
+        .entries
+        .iter()
+        .any(|entry| matches!(entry, TranscriptEntry::Plan { .. })));
+    let plan = page.plan.unwrap();
+    assert_eq!(
+        plan.iter().map(|task| task.status).collect::<Vec<_>>(),
+        [
+            TranscriptTaskStatus::Completed,
+            TranscriptTaskStatus::InProgress,
+            TranscriptTaskStatus::Blocked,
+            TranscriptTaskStatus::Pending,
+        ]
+    );
+    assert_eq!(
+        plan.iter()
+            .map(|task| task.phase.as_deref())
+            .collect::<Vec<_>>(),
+        [Some("Build"), Some("Build"), Some("Ship"), Some("Ship")]
+    );
+    assert_eq!(plan[2].blocker.as_deref(), Some("Awaiting owner context"));
+    session.push(json!({"type": "reset_boundary"}));
+    assert!(session.newest().plan.is_none());
 }
 
 #[test]
@@ -1205,4 +1290,74 @@ fn large_session_pages() {
     println!(
         "size={size} turns={turn} cold_first_page={cold:?} warm_newest={warm_newest:?} warm_before={warm_older:?} warm_after={warm_after:?}"
     );
+}
+
+fn recap_record(turn_id: &str) -> Value {
+    json!({"type": "custom", "customType": "completion-recap", "data": {
+        "version": 1, "sessionId": "sess-1", "turnId": turn_id,
+        "state": "available", "text": "Parser fixed; review is next."
+    }})
+}
+
+#[test]
+fn recap_is_current_metadata_not_a_conversation_entry_and_can_be_cleared() {
+    let mut session = Fixture::new("recap-current");
+    session.user("Fix the parser");
+    let turn = session.assistant(vec![text("Fixed")], "stop");
+    let before = session.newest();
+    session.push(recap_record(&turn));
+    let page = session.newest();
+    assert_eq!(page.entries, before.entries);
+    assert_eq!(
+        page.recap,
+        Some(TranscriptRecap {
+            turn_id: turn.clone(),
+            text: "Parser fixed; review is next.".into(),
+        })
+    );
+    let delta = session.page(None, Some(&before.after), None);
+    assert_eq!(delta.recap, page.recap);
+    let mut cleared = recap_record(&turn);
+    cleared["data"]["state"] = json!("cleared");
+    session.push(cleared);
+    assert_eq!(session.newest().recap, None);
+}
+
+#[test]
+fn late_recap_cannot_cross_new_work_or_a_reset() {
+    for work in [
+        json!({"type": "message", "message": {"role": "user", "content": "New request"}}),
+        json!({"type": "message", "message": {"role": "assistant", "content": [], "stopReason": "stop"}}),
+        json!({"type": "message", "message": {"role": "toolResult", "toolName": "read", "toolCallId": "x", "content": []}}),
+        json!({"type": "compaction", "summary": "Not a completion recap"}),
+        json!({"type": "reset_boundary"}),
+    ] {
+        let mut session = Fixture::new("recap-stale");
+        session.user("Old request");
+        let turn = session.assistant(vec![text("Old answer")], "stop");
+        session.push(recap_record(&turn));
+        session.push(work.clone());
+        assert_eq!(session.newest().recap, None, "new work: {work}");
+        session.push(recap_record(&turn));
+        assert_eq!(session.newest().recap, None, "late result after: {work}");
+    }
+}
+
+#[test]
+fn recap_rejects_wrong_identity_unknown_version_and_empty_text() {
+    for (field, value) in [
+        ("version", json!(2)),
+        ("sessionId", json!("another-session")),
+        ("turnId", json!("older-turn")),
+        ("state", json!("pending")),
+        ("text", json!("  ")),
+    ] {
+        let mut session = Fixture::new("recap-invalid");
+        session.user("Work");
+        let turn = session.assistant(vec![text("Done")], "stop");
+        let mut record = recap_record(&turn);
+        record["data"][field] = value;
+        session.push(record);
+        assert_eq!(session.newest().recap, None, "{field}");
+    }
 }

@@ -453,6 +453,9 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
         after,
         pending_ask,
         working,
+        model,
+        plan,
+        recap: _,
     } = result
     else {
         return None;
@@ -476,12 +479,28 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
                 status,
                 detail: None,
             }),
+            TranscriptEntry::Plan {
+                id,
+                ts_ms,
+                mut items,
+            } => {
+                for item in &mut items {
+                    item.blocker = None;
+                }
+                Some(TranscriptEntry::Plan { id, ts_ms, items })
+            }
             other => Some(other),
         })
         .collect();
     let pending_ask = pending_ask.map(|ask| PendingAsk {
         answerable: false,
         ..ask
+    });
+    let plan = plan.map(|mut items| {
+        for item in &mut items {
+            item.blocker = None;
+        }
+        items
     });
     Some(serde_json::json!({
         "type": "agent_transcript",
@@ -493,6 +512,10 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
         "after": after,
         "pending_ask": serde_json::to_value(pending_ask).ok()?,
         "working": serde_json::to_value(working).ok()?,
+        "model": serde_json::to_value(model).ok()?,
+        "plan": serde_json::to_value(plan).ok()?,
+        // A recap can summarize owner-only notes or step details; do not expose it to guests.
+        "recap": serde_json::Value::Null,
     }))
 }
 
@@ -2421,6 +2444,53 @@ mod tests {
             );
             assert_eq!(poll[0]["result"]["entries"], json!([]), "{poll:?}");
         }
+    }
+
+    #[test]
+    fn guest_transcript_metadata_preserves_progress_without_private_blockers() {
+        use crate::agent_transcript::tests::call;
+        let harness = start("transcript-metadata");
+        let mut sessions = omp_sessions(&harness);
+        sessions[0].assistant(
+            vec![call("todo-metadata", "todo", None, json!({}))],
+            "toolUse",
+        );
+        sessions[0].result(
+            "todo-metadata",
+            "todo",
+            false,
+            json!({"phases": [
+                {"name": "Release", "tasks": [
+                    {"content": "Review", "status": "blocked", "blocker": "private-review-context"}
+                ]}
+            ]}),
+        );
+        let recap_turn = sessions[0].assistant(vec![], "stop");
+        sessions[0].push(json!({"type": "model_change", "model": "provider/selected"}));
+        sessions[0].push(
+            json!({"type": "custom", "customType": "completion-recap", "data": {
+                "version": 1, "sessionId": "sess-1", "turnId": recap_turn,
+                "state": "available", "text": "private-recap-context"
+            }}),
+        );
+        let owner = dispatch_to_app_with_timeout(
+            serde_json::from_value(transcript("llm-opt")).unwrap(),
+            &harness.api_tx,
+            None,
+        );
+        assert!(owner.contains("private-review-context"), "{owner}");
+        assert!(owner.contains("private-recap-context"), "{owner}");
+        let guest = harness.admit();
+        let lines = harness.call(&guest, transcript("llm-opt"));
+        let result = &lines[0]["result"];
+        assert_eq!(result["plan"][0]["status"], "blocked");
+        assert_eq!(result["model"]["id"], "selected");
+        assert_eq!(result["model"]["provider"], "provider");
+        assert_eq!(result["plan"][0]["phase"], "Release");
+        assert!(result["plan"][0].get("blocker").is_none());
+        assert!(!lines[0].to_string().contains("private-review-context"));
+        assert!(result["recap"].is_null());
+        assert!(!lines[0].to_string().contains("private-recap-context"));
     }
 
     #[test]

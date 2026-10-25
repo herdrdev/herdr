@@ -19,7 +19,10 @@ use super::plugins::{
 use super::server::ServerCapabilities;
 use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
-use super::transcript::{PendingAsk, TranscriptEntry, TranscriptWorking};
+use super::transcript::{
+    PendingAsk, TranscriptEntry, TranscriptModel, TranscriptPlanItem, TranscriptRecap,
+    TranscriptWorking,
+};
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
 
@@ -223,6 +226,12 @@ pub enum ResponseResult {
         after: String,
         pending_ask: Option<PendingAsk>,
         working: Option<TranscriptWorking>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<TranscriptModel>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plan: Option<Vec<TranscriptPlanItem>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recap: Option<TranscriptRecap>,
     },
     StreamStarted {
         pane_id: String,

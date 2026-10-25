@@ -75,6 +75,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Record runner capacity
+        shell: bash
+        run: |
+          printf 'Runner: %s; environment: %s; OS: %s\n' "${RUNNER_NAME:-unknown}" "${RUNNER_ENVIRONMENT:-unknown}" "${RUNNER_OS:-unknown}"
+          df -Pk .
+
       - name: Install Rust
         if: matrix.kind == 'unix'
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
@@ -180,6 +186,17 @@ jobs:
       - name: Run Linux tests
         if: runner.os == 'Linux'
         run: CARGO_INCREMENTAL=1 just ci-tests '${{ matrix.nextest_filter }}'
+
+      - name: Verify transcript metadata cases
+        if: runner.os == 'Linux'
+        run: >-
+          cargo nextest run --locked --color never --status-level pass --final-status-level pass
+          -E 'test(current_model_tracks_selection_role_branch_and_clear)
+          | test(latest_plan_preserves_phases_states_and_blockers_outside_the_page)
+          | test(recap_is_current_metadata_not_a_conversation_entry_and_can_be_cleared)
+          | test(late_recap_cannot_cross_new_work_or_a_reset)
+          | test(recap_rejects_wrong_identity_unknown_version_and_empty_text)
+          | test(guest_transcript_metadata_preserves_progress_without_private_blockers)'
 
       - name: Run macOS checks
         if: runner.os == 'macOS'

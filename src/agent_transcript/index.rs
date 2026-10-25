@@ -36,6 +36,8 @@ pub(super) enum Kind {
     TodoResult,
     /// A `custom_message` shown to the user.
     Note,
+    ModelChange,
+    Recap,
     Compaction,
     /// omp `/clear`: the conversation restarts after it.
     ResetBoundary,
@@ -50,7 +52,12 @@ impl Kind {
     pub(super) fn is_rendered(self) -> bool {
         !matches!(
             self,
-            Kind::ToolResult | Kind::Hidden | Kind::ResetBoundary | Kind::SessionExit
+            Kind::ToolResult
+                | Kind::Hidden
+                | Kind::ResetBoundary
+                | Kind::SessionExit
+                | Kind::ModelChange
+                | Kind::Recap
         )
     }
 }
@@ -126,6 +133,8 @@ struct Head<'a> {
     #[serde(default)]
     display: Option<bool>,
     #[serde(borrow, default)]
+    role: Option<Cow<'a, str>>,
+    #[serde(borrow, default)]
     message: Option<MessageHead<'a>>,
 }
 
@@ -164,6 +173,16 @@ impl SessionIndex {
 
     pub(super) fn branch(&self) -> &[u32] {
         &self.branch[self.branch_start..]
+    }
+
+    /// Model selection survives `/clear`, but not a switch to a different branch.
+    pub(super) fn model_records(&self) -> impl Iterator<Item = u32> + '_ {
+        self.branch.iter().rev().copied().filter(|&record| {
+            matches!(
+                self.record(record).kind,
+                Kind::ModelChange | Kind::Assistant
+            )
+        })
     }
 
     pub(super) fn record(&self, index: u32) -> &Record {
@@ -295,7 +314,11 @@ impl SessionIndex {
             }
             "compaction" => Kind::Compaction,
             "reset_boundary" => Kind::ResetBoundary,
+            "model_change" if matches!(head.role.as_deref(), None | Some("default")) => {
+                Kind::ModelChange
+            }
             "custom" if head.custom_type.as_deref() == Some("session_exit") => Kind::SessionExit,
+            "custom" if head.custom_type.as_deref() == Some("completion-recap") => Kind::Recap,
             _ => Kind::Hidden,
         };
         let failed = kind == Kind::ToolResult

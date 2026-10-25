@@ -5,7 +5,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api::schema::{
-    AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptTurnStatus,
+    AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptTaskStatus,
+    TranscriptTurnStatus,
 };
 
 pub(super) const DETAIL_MAX_CHARS: usize = 300;
@@ -54,6 +55,10 @@ pub(super) struct AssistantMessage {
     pub(super) stop_reason: Option<String>,
     #[serde(rename = "errorMessage", default)]
     pub(super) error_message: Option<String>,
+    #[serde(default)]
+    pub(super) provider: Option<String>,
+    #[serde(default)]
+    pub(super) model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -309,15 +314,34 @@ pub(super) fn plan_items(details: Option<&Value>) -> Option<Vec<TranscriptPlanIt
     Some(
         phases
             .iter()
-            .filter_map(|phase| phase.get("tasks").and_then(Value::as_array))
-            .flatten()
-            .filter_map(|task| {
-                let text = task.get("content").and_then(Value::as_str)?;
-                let status = task.get("status").and_then(Value::as_str).unwrap_or("");
-                (status != "abandoned").then(|| TranscriptPlanItem {
-                    text: text.to_owned(),
-                    done: status == "completed",
-                })
+            .flat_map(|phase| {
+                let name = phase.get("name").and_then(Value::as_str);
+                phase
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(move |task| {
+                        let text = task.get("content").and_then(Value::as_str)?;
+                        let status = match task.get("status").and_then(Value::as_str) {
+                            Some("pending") => TranscriptTaskStatus::Pending,
+                            Some("in_progress") => TranscriptTaskStatus::InProgress,
+                            Some("completed") => TranscriptTaskStatus::Completed,
+                            Some("blocked") => TranscriptTaskStatus::Blocked,
+                            Some("abandoned") => return None,
+                            _ => TranscriptTaskStatus::Unknown,
+                        };
+                        Some(TranscriptPlanItem {
+                            text: text.to_owned(),
+                            done: status == TranscriptTaskStatus::Completed,
+                            status,
+                            phase: name.map(str::to_owned),
+                            blocker: task
+                                .get("blocker")
+                                .and_then(Value::as_str)
+                                .map(str::to_owned),
+                        })
+                    })
             })
             .collect(),
     )
