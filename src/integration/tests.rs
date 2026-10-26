@@ -183,6 +183,10 @@ fn assert_kimi_hook(
 
 fn unique_base() -> PathBuf {
     clear_integration_path_env();
+    unique_base_without_clearing_env()
+}
+
+fn unique_base_without_clearing_env() -> PathBuf {
     std::env::temp_dir().join(format!(
         "herdr-integration-install-test-{}-{}",
         std::process::id(),
@@ -2457,10 +2461,42 @@ fn install_droid_errors_when_config_dir_missing() {
     let _ = fs::remove_dir_all(base);
 }
 
+struct ConfigPathEnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+impl ConfigPathEnvGuard {
+    fn new() -> Self {
+        Self(
+            [
+                "HOME",
+                "OPENCODE_CONFIG_DIR",
+                "XDG_CONFIG_HOME",
+                "XDG_STATE_HOME",
+            ]
+            .into_iter()
+            .map(|key| (key, std::env::var_os(key)))
+            .collect(),
+        )
+    }
+}
+
+impl Drop for ConfigPathEnvGuard {
+    fn drop(&mut self) {
+        for (key, value) in &self.0 {
+            match value {
+                Some(value) => std::env::set_var(key, value),
+                None => std::env::remove_var(key),
+            }
+        }
+    }
+}
+
 #[test]
 fn config_dirs_follow_xdg_and_opencode_override_precedence() {
     let _lock = integration_env_lock();
-    let base = unique_base();
+    let _env = ConfigPathEnvGuard::new();
+    let base = unique_base_without_clearing_env();
+    std::env::remove_var("OPENCODE_CONFIG_DIR");
+    std::env::remove_var("XDG_CONFIG_HOME");
     let home = base.join("home");
     let xdg = base.join("xdg");
     let custom = base.join("custom");
@@ -2485,14 +2521,24 @@ fn config_dirs_follow_xdg_and_opencode_override_precedence() {
     std::env::remove_var("XDG_CONFIG_HOME");
     assert_eq!(opencode_dir().unwrap(), custom);
 
-    clear_integration_path_env();
-    std::env::remove_var("HOME");
+    std::env::set_var("OPENCODE_CONFIG_DIR", "~/literal-opencode");
+    assert_eq!(opencode_dir().unwrap(), PathBuf::from("~/literal-opencode"));
+
+    std::env::remove_var("OPENCODE_CONFIG_DIR");
+    std::env::set_var("XDG_CONFIG_HOME", "~/literal-xdg");
+    assert_eq!(
+        opencode_dir().unwrap(),
+        PathBuf::from("~/literal-xdg/opencode")
+    );
+    assert_eq!(kilo_dir().unwrap(), PathBuf::from("~/literal-xdg/kilo"));
 }
 
 #[test]
 fn install_opencode_and_kilo_use_xdg_config_home() {
     let _lock = integration_env_lock();
-    let base = unique_base();
+    let _env = ConfigPathEnvGuard::new();
+    let base = unique_base_without_clearing_env();
+    std::env::remove_var("OPENCODE_CONFIG_DIR");
     let home = base.join("home");
     let xdg = base.join("xdg");
     fs::create_dir_all(xdg.join("opencode")).unwrap();
@@ -2543,8 +2589,6 @@ fn install_opencode_and_kilo_use_xdg_config_home() {
     assert!(removed_opencode.removed_plugin);
     assert!(removed_kilo.removed_plugin);
 
-    clear_integration_path_env();
-    std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
 

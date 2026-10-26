@@ -124,14 +124,21 @@ pub(crate) fn expand_tilde_path(path: PathBuf) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+fn xdg_config_dir() -> io::Result<PathBuf> {
+    match std::env::var_os("XDG_CONFIG_HOME").filter(|value| !value.is_empty()) {
+        Some(value) => Ok(PathBuf::from(value)),
+        None => Ok(home_dir()?.join(".config")),
+    }
+}
+
 pub(crate) fn opencode_dir() -> io::Result<PathBuf> {
     if let Some(value) =
         std::env::var_os(OPENCODE_CONFIG_DIR_ENV_VAR).filter(|value| !value.is_empty())
     {
-        return expand_tilde_path(PathBuf::from(value));
+        return Ok(PathBuf::from(value));
     }
 
-    Ok(config_dir_from_env_or_home("XDG_CONFIG_HOME", &[".config"])?.join("opencode"))
+    Ok(xdg_config_dir()?.join("opencode"))
 }
 
 pub(crate) fn opencode_state_dir() -> io::Result<PathBuf> {
@@ -143,7 +150,7 @@ pub(crate) fn opencode_state_dir() -> io::Result<PathBuf> {
 }
 
 pub(crate) fn kilo_dir() -> io::Result<PathBuf> {
-    Ok(config_dir_from_env_or_home("XDG_CONFIG_HOME", &[".config"])?.join("kilo"))
+    Ok(xdg_config_dir()?.join("kilo"))
 }
 
 pub(crate) fn hermes_dir() -> io::Result<PathBuf> {
