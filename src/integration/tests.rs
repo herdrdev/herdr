@@ -135,6 +135,7 @@ fn clear_integration_path_env() {
     std::env::remove_var(CODEX_HOME_ENV_VAR);
     std::env::remove_var(COPILOT_HOME_ENV_VAR);
     std::env::remove_var(KIMI_CODE_HOME_ENV_VAR);
+    std::env::remove_var("OPENCODE_CONFIG_DIR");
     std::env::remove_var("XDG_CONFIG_HOME");
     std::env::remove_var("XDG_STATE_HOME");
     #[cfg(windows)]
@@ -2452,6 +2453,97 @@ fn install_droid_errors_when_config_dir_missing() {
 
     assert!(err.contains("droid config directory not found"));
 
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
+fn config_dirs_follow_xdg_and_opencode_override_precedence() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let xdg = base.join("xdg");
+    let custom = base.join("custom");
+    std::env::set_var("HOME", &home);
+
+    assert_eq!(opencode_dir().unwrap(), home.join(".config/opencode"));
+    assert_eq!(kilo_dir().unwrap(), home.join(".config/kilo"));
+
+    std::env::set_var("XDG_CONFIG_HOME", "");
+    std::env::set_var("OPENCODE_CONFIG_DIR", "");
+    assert_eq!(opencode_dir().unwrap(), home.join(".config/opencode"));
+    assert_eq!(kilo_dir().unwrap(), home.join(".config/kilo"));
+
+    std::env::set_var("XDG_CONFIG_HOME", &xdg);
+    assert_eq!(opencode_dir().unwrap(), xdg.join("opencode"));
+    assert_eq!(kilo_dir().unwrap(), xdg.join("kilo"));
+
+    std::env::set_var("OPENCODE_CONFIG_DIR", &custom);
+    assert_eq!(opencode_dir().unwrap(), custom);
+    assert_eq!(kilo_dir().unwrap(), xdg.join("kilo"));
+
+    std::env::remove_var("XDG_CONFIG_HOME");
+    assert_eq!(opencode_dir().unwrap(), custom);
+
+    clear_integration_path_env();
+    std::env::remove_var("HOME");
+}
+
+#[test]
+fn install_opencode_and_kilo_use_xdg_config_home() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let xdg = base.join("xdg");
+    fs::create_dir_all(xdg.join("opencode")).unwrap();
+    fs::create_dir_all(xdg.join("kilo")).unwrap();
+    std::env::set_var("HOME", &home);
+    std::env::set_var("XDG_CONFIG_HOME", &xdg);
+    std::env::set_var("XDG_STATE_HOME", base.join("state"));
+
+    let opencode = install_opencode().unwrap();
+    let kilo = install_kilo().unwrap();
+    assert_eq!(
+        opencode.plugin_path,
+        xdg.join("opencode/plugins")
+            .join(OPENCODE_PLUGIN_INSTALL_NAME)
+    );
+    assert_eq!(
+        kilo.plugin_path,
+        xdg.join("kilo/plugin").join(KILO_PLUGIN_INSTALL_NAME)
+    );
+    assert!(opencode.plugin_path.is_file());
+    assert!(opencode.tui_plugin_path.is_file());
+    assert!(kilo.plugin_path.is_file());
+    assert!(!home.join(".config").exists());
+
+    let statuses = installed_integration_statuses();
+    for (target, path) in [
+        (
+            crate::api::schema::IntegrationTarget::Opencode,
+            &opencode.plugin_path,
+        ),
+        (
+            crate::api::schema::IntegrationTarget::Kilo,
+            &kilo.plugin_path,
+        ),
+    ] {
+        let status = statuses
+            .iter()
+            .find(|status| status.target == target)
+            .unwrap();
+        assert_eq!(&status.path, path);
+        assert_eq!(status.state, IntegrationStatusKind::Current);
+    }
+
+    let removed_opencode = uninstall_opencode().unwrap();
+    let removed_kilo = uninstall_kilo().unwrap();
+    assert_eq!(removed_opencode.plugin_path, opencode.plugin_path);
+    assert_eq!(removed_kilo.plugin_path, kilo.plugin_path);
+    assert!(removed_opencode.removed_plugin);
+    assert!(removed_kilo.removed_plugin);
+
+    clear_integration_path_env();
     std::env::remove_var("HOME");
     let _ = fs::remove_dir_all(base);
 }
