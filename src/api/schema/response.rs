@@ -21,7 +21,7 @@ use super::session::SessionSnapshot;
 use super::tabs::TabInfo;
 use super::transcript::{
     PendingAsk, TranscriptEntry, TranscriptModel, TranscriptPlanItem, TranscriptRecap,
-    TranscriptWorking,
+    TranscriptSubagent, TranscriptWorking,
 };
 use super::workspaces::WorkspaceInfo;
 use super::worktrees::{WorktreeInfo, WorktreeSourceInfo};
@@ -232,6 +232,10 @@ pub enum ResponseResult {
         plan: Option<Vec<TranscriptPlanItem>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recap: Option<TranscriptRecap>,
+        /// Running subagents, then those that finished in the newest turn;
+        /// newest first, at most 20.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subagents: Option<Vec<TranscriptSubagent>>,
     },
     StreamStarted {
         pane_id: String,

@@ -122,6 +122,11 @@ pub(crate) fn transcript_limit() -> Input<Option<u32>> {
     .help("Turns per page (default 20, at most 50)")
 }
 
+pub(crate) fn transcript_subagent() -> Input<Option<String>> {
+    optional_text("subagent", "ID")
+        .help("Page this subagent's own conversation (an id from a page's `subagents`)")
+}
+
 pub(crate) fn keys() -> Input<Vec<String>> {
     Input::<Vec<String>>::positional("key", 1, |slot, value| {
         slot.push(value.to_owned());

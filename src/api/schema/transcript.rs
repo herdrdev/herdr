@@ -16,6 +16,8 @@ cli_params! {
         pub after: Option<String> => Field::new(None).input(bindings::transcript_after()),
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub limit: Option<u32> => Field::new(None).input(bindings::transcript_limit()),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub subagent: Option<String> => Field::new(None).input(bindings::transcript_subagent()),
     }
 }
 
@@ -57,6 +59,45 @@ pub enum TranscriptTurnStatus {
 pub struct TranscriptModel {
     pub provider: String,
     pub id: String,
+    /// The effort omp runs the model at: minimal, low, medium, high, xhigh or
+    /// max. Absent when thinking is off or the level is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// omp picks the level per turn (`/thinking auto`).
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub thinking_auto: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptSubagentStatus {
+    Running,
+    Completed,
+    Failed,
+    Aborted,
+    Unknown,
+}
+
+/// A subagent the agent spawned with omp's `task` tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TranscriptSubagent {
+    /// The omp agent id, also its job id.
+    pub id: String,
+    /// The agent type, e.g. `reviewer`; may be empty.
+    pub agent: String,
+    /// The spawn's description, else its name.
+    pub label: Option<String>,
+    /// The assignment, at most 300 characters; owner only.
+    pub task: Option<String>,
+    pub status: TranscriptSubagentStatus,
+    pub started_ms: u64,
+    pub finished_ms: Option<u64>,
+    pub duration_ms: Option<u64>,
+    /// The newest tool intent in the subagent's own session file.
+    pub last_intent: Option<String>,
+    pub last_ms: Option<u64>,
+    /// `agent.transcript` with `subagent` set to `id` pages its conversation.
+    pub has_transcript: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

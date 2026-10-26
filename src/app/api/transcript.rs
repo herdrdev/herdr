@@ -114,6 +114,7 @@ fn transcript_response(
         before: params.before,
         after: params.after,
         limit: params.limit,
+        subagent: params.subagent,
     };
     match agent_transcript::read_page(&source.path, &request) {
         Ok(page) => encode_success(
@@ -130,6 +131,7 @@ fn transcript_response(
                 model: page.model,
                 plan: page.plan,
                 recap: page.recap,
+                subagents: page.subagents,
             },
         ),
         Err(error) => encode_error(id, error.code(), error.message()),

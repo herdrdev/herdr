@@ -92,6 +92,10 @@ fn agent_transcript_projection_maps_cursors_and_limit() {
         params(&["transcript", "opaque", "--after", "c2"]),
         serde_json::json!({"target":"opaque", "after":"c2"})
     );
+    assert_eq!(
+        params(&["transcript", "opaque", "--subagent", "Reviewer-2"]),
+        serde_json::json!({"target":"opaque", "subagent":"Reviewer-2"})
+    );
     assert!(parse(&["transcript", "opaque", "--before", "a", "--after", "b"]).is_err());
 }
 

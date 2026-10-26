@@ -9,6 +9,7 @@
 mod history;
 mod index;
 mod normalize;
+mod subagents;
 #[cfg(test)]
 pub(crate) mod tests;
 
@@ -22,7 +23,7 @@ use base64::Engine as _;
 use crate::api::schema::PendingAsk;
 use crate::api::schema::{
     TranscriptEntry, TranscriptModel, TranscriptPlanItem, TranscriptRecap, TranscriptStepStatus,
-    TranscriptTurnStatus, TranscriptWorking,
+    TranscriptSubagent, TranscriptTurnStatus, TranscriptWorking,
 };
 use index::{read_line, Kind, SessionIndex};
 use normalize::{AssistantLine, NoteLine, ResultLine, StampLine, UserLine, SUMMARY_TEXT};
@@ -40,6 +41,8 @@ pub(crate) struct PageRequest {
     pub(crate) before: Option<String>,
     pub(crate) after: Option<String>,
     pub(crate) limit: Option<u32>,
+    /// Page this subagent's own session file instead of the agent's.
+    pub(crate) subagent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +56,7 @@ pub(crate) struct Page {
     pub(crate) model: Option<TranscriptModel>,
     pub(crate) plan: Option<Vec<TranscriptPlanItem>>,
     pub(crate) recap: Option<TranscriptRecap>,
+    pub(crate) subagents: Option<Vec<TranscriptSubagent>>,
 }
 
 #[derive(Debug)]
@@ -62,6 +66,8 @@ pub(crate) enum TranscriptError {
     /// The cursor no longer names this file's active branch.
     CursorExpired,
     InvalidRequest(&'static str),
+    /// No subagent of this session has that id.
+    SubagentNotFound,
 }
 
 impl TranscriptError {
@@ -70,6 +76,7 @@ impl TranscriptError {
             Self::Unavailable(_) => "transcript_unavailable",
             Self::CursorExpired => "cursor_expired",
             Self::InvalidRequest(_) => "invalid_request",
+            Self::SubagentNotFound => "subagent_not_found",
         }
     }
 
@@ -80,6 +87,7 @@ impl TranscriptError {
                 "the transcript changed under this cursor; reload the newest page".into()
             }
             Self::InvalidRequest(message) => (*message).into(),
+            Self::SubagentNotFound => "no subagent of this agent has that id".into(),
         }
     }
 }
@@ -140,7 +148,8 @@ fn with_index<T>(
     read(&view)
 }
 
-/// One page of `path`'s conversation, as the owner sees it.
+/// One page of `path`'s conversation, as the owner sees it, or of its
+/// subagent `request.subagent`'s own conversation.
 pub(crate) fn read_page(path: &Path, request: &PageRequest) -> Result<Page, TranscriptError> {
     if request.before.is_some() && request.after.is_some() {
         return Err(TranscriptError::InvalidRequest(
@@ -148,7 +157,14 @@ pub(crate) fn read_page(path: &Path, request: &PageRequest) -> Result<Page, Tran
         ));
     }
     let limit = request.limit.unwrap_or(DEFAULT_TURNS).clamp(1, MAX_TURNS) as usize;
-    with_index(path, |view| view.page(request, limit))
+    match request.subagent.as_deref() {
+        Some(id) => {
+            let child =
+                subagents::child_session(path, id).ok_or(TranscriptError::SubagentNotFound)?;
+            with_index(&child, |view| view.page(request, limit))
+        }
+        None => with_index(path, |view| view.page(request, limit)),
+    }
 }
 
 /// The newest `ask` on the active branch still waiting for its answer.
@@ -367,10 +383,48 @@ impl View<'_> {
             model: self.current_model()?,
             plan: self.current_plan()?,
             recap: self.current_recap()?,
+            subagents: self.current_subagents()?,
         })
     }
 
+    /// The selected model with the effort omp runs it at.
     fn current_model(&self) -> Result<Option<TranscriptModel>, TranscriptError> {
+        let Some((provider, id)) = self.selected_model()? else {
+            return Ok(None);
+        };
+        let (thinking_level, thinking_auto) = self.thinking_level()?;
+        Ok(Some(TranscriptModel {
+            provider,
+            id,
+            thinking_level,
+            thinking_auto,
+        }))
+    }
+
+    /// The newest `thinking_level_change`: its level when it is a real effort
+    /// (not off, inherit or unknown), and whether omp picks it per turn.
+    /// Entries older than the `configured` field fall back to `thinkingLevel`.
+    fn thinking_level(&self) -> Result<(Option<String>, bool), TranscriptError> {
+        #[derive(serde::Deserialize)]
+        struct ThinkingLevelChange {
+            #[serde(rename = "thinkingLevel", default)]
+            thinking_level: Option<String>,
+            #[serde(default)]
+            configured: Option<String>,
+        }
+        let Some(record) = self.index.thinking_record() else {
+            return Ok((None, false));
+        };
+        let Some(change) = self.parse::<ThinkingLevelChange>(record)? else {
+            return Ok((None, false));
+        };
+        let level = change
+            .thinking_level
+            .filter(|level| normalize::THINKING_LEVELS.contains(&level.as_str()));
+        Ok((level, change.configured.as_deref() == Some("auto")))
+    }
+
+    fn selected_model(&self) -> Result<Option<(String, String)>, TranscriptError> {
         let mut read_assistant = false;
         for record in self.index.model_records() {
             if self.index.record(record).kind == Kind::ModelChange {
@@ -380,10 +434,8 @@ impl View<'_> {
                 }
                 return Ok(self.parse::<ModelChange>(record)?.and_then(|change| {
                     let (provider, id) = change.model.split_once('/')?;
-                    (!provider.is_empty() && !id.is_empty()).then(|| TranscriptModel {
-                        provider: provider.to_owned(),
-                        id: id.to_owned(),
-                    })
+                    (!provider.is_empty() && !id.is_empty())
+                        .then(|| (provider.to_owned(), id.to_owned()))
                 }));
             }
             if !read_assistant {
@@ -391,8 +443,7 @@ impl View<'_> {
                 if let Some(model) = self.parse::<AssistantLine>(record)?.and_then(|line| {
                     let provider = line.message.provider?;
                     let id = line.message.model?;
-                    (!provider.is_empty() && !id.is_empty())
-                        .then_some(TranscriptModel { provider, id })
+                    (!provider.is_empty() && !id.is_empty()).then_some((provider, id))
                 }) {
                     return Ok(Some(model));
                 }
@@ -441,6 +492,7 @@ impl View<'_> {
                 Kind::User
                     | Kind::Assistant
                     | Kind::ToolResult
+                    | Kind::TaskResult
                     | Kind::TodoResult
                     | Kind::Compaction
                     | Kind::ResetBoundary
@@ -510,6 +562,7 @@ impl View<'_> {
                                 Kind::User
                                     | Kind::Assistant
                                     | Kind::ToolResult
+                                    | Kind::TaskResult
                                     | Kind::TodoResult
                                     | Kind::Compaction
                                     | Kind::ResetBoundary
@@ -531,6 +584,7 @@ impl View<'_> {
                 Kind::User
                 | Kind::Assistant
                 | Kind::ToolResult
+                | Kind::TaskResult
                 | Kind::TodoResult
                 | Kind::Compaction
                 | Kind::ResetBoundary => return Ok(None),
@@ -610,7 +664,11 @@ impl View<'_> {
             .find(|kind| {
                 matches!(
                     kind,
-                    Kind::User | Kind::Assistant | Kind::Note | Kind::SessionExit
+                    Kind::User
+                        | Kind::Assistant
+                        | Kind::Note
+                        | Kind::AsyncResult
+                        | Kind::SessionExit
                 )
             })
             == Some(Kind::Assistant)
@@ -658,7 +716,7 @@ impl View<'_> {
                         entries.extend(self.plan(turn)?);
                     }
                 }
-                Kind::Note => {
+                Kind::Note | Kind::AsyncResult => {
                     if let Some(line) = self.parse::<NoteLine>(record)? {
                         if let Some(note) = normalize::note(&line) {
                             entries.push(TranscriptEntry::Note {
@@ -684,10 +742,12 @@ impl View<'_> {
                     });
                 }
                 Kind::ToolResult
+                | Kind::TaskResult
                 | Kind::ResetBoundary
                 | Kind::SessionExit
                 | Kind::Hidden
                 | Kind::ModelChange
+                | Kind::ThinkingLevelChange
                 | Kind::Recap => {}
             }
         }
@@ -799,7 +859,7 @@ impl View<'_> {
                 tool: tool.to_owned(),
                 intent: normalize::step_intent(part),
                 status,
-                detail: normalize::step_detail(part.arguments.as_ref()),
+                detail: normalize::step_detail(tool, part.arguments.as_ref()),
             });
         }
         if resend_only {

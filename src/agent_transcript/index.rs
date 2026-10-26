@@ -34,9 +34,16 @@ pub(super) enum Kind {
     ToolResult,
     /// A `todo` tool result: carries the full todo state.
     TodoResult,
+    /// A `task` tool result: the subagents a call spawned.
+    TaskResult,
     /// A `custom_message` shown to the user.
     Note,
+    /// An `async-result` note: shown like any note, and it settles the
+    /// background job (a subagent among them) it reports.
+    AsyncResult,
     ModelChange,
+    /// omp's effort (`/thinking`) selection.
+    ThinkingLevelChange,
     Recap,
     Compaction,
     /// omp `/clear`: the conversation restarts after it.
@@ -53,10 +60,12 @@ impl Kind {
         !matches!(
             self,
             Kind::ToolResult
+                | Kind::TaskResult
                 | Kind::Hidden
                 | Kind::ResetBoundary
                 | Kind::SessionExit
                 | Kind::ModelChange
+                | Kind::ThinkingLevelChange
                 | Kind::Recap
         )
     }
@@ -185,6 +194,15 @@ impl SessionIndex {
         })
     }
 
+    /// The newest effort selection, by the same rules as the model.
+    pub(super) fn thinking_record(&self) -> Option<u32> {
+        self.branch
+            .iter()
+            .rev()
+            .copied()
+            .find(|&record| self.record(record).kind == Kind::ThinkingLevelChange)
+    }
+
     pub(super) fn record(&self, index: u32) -> &Record {
         &self.records[index as usize]
     }
@@ -295,10 +313,10 @@ impl SessionIndex {
                         if let Some(call_id) = message.and_then(|m| m.tool_call_id.as_deref()) {
                             self.results.insert(call_id.into(), index);
                         }
-                        if message.and_then(|m| m.tool_name.as_deref()) == Some("todo") {
-                            Kind::TodoResult
-                        } else {
-                            Kind::ToolResult
+                        match message.and_then(|m| m.tool_name.as_deref()) {
+                            Some("todo") => Kind::TodoResult,
+                            Some("task") => Kind::TaskResult,
+                            _ => Kind::ToolResult,
                         }
                     }
                     _ => Kind::Hidden,
@@ -308,6 +326,8 @@ impl SessionIndex {
                 let custom = head.custom_type.as_deref().unwrap_or_default();
                 if head.display == Some(false) || HIDDEN_NOTE_TYPES.contains(&custom) {
                     Kind::Hidden
+                } else if custom == "async-result" {
+                    Kind::AsyncResult
                 } else {
                     Kind::Note
                 }
@@ -317,11 +337,12 @@ impl SessionIndex {
             "model_change" if matches!(head.role.as_deref(), None | Some("default")) => {
                 Kind::ModelChange
             }
+            "thinking_level_change" => Kind::ThinkingLevelChange,
             "custom" if head.custom_type.as_deref() == Some("session_exit") => Kind::SessionExit,
             "custom" if head.custom_type.as_deref() == Some("completion-recap") => Kind::Recap,
             _ => Kind::Hidden,
         };
-        let failed = kind == Kind::ToolResult
+        let failed = matches!(kind, Kind::ToolResult | Kind::TaskResult)
             && head
                 .message
                 .as_ref()

@@ -5,14 +5,16 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::api::schema::{
-    AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptTaskStatus,
-    TranscriptTurnStatus,
+    AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem,
+    TranscriptSubagentStatus, TranscriptTaskStatus, TranscriptTurnStatus,
 };
 
 pub(super) const DETAIL_MAX_CHARS: usize = 300;
 pub(super) const NOTE_TITLE_MAX_CHARS: usize = 120;
 pub(super) const NOTE_BODY_MAX_CHARS: usize = 4000;
 pub(super) const SUMMARY_TEXT: &str = "Earlier messages were summarised";
+/// omp's effort levels worth showing; `off`, `inherit` and unknown values are not.
+pub(super) const THINKING_LEVELS: &[&str] = &["minimal", "low", "medium", "high", "xhigh", "max"];
 /// What herdr prefixes to every prompt a guest sends through HerdrUp
 /// (`crate::guest::store`), so a transcript can tell guests from the owner.
 const GUEST_PROMPT_MARKER: &str = " (via HerdrUp): ";
@@ -221,20 +223,79 @@ pub(super) fn step_intent(part: &Part) -> String {
         .to_owned()
 }
 
-/// What the call acted on (command, path, …), else its arguments.
-pub(super) fn step_detail(arguments: Option<&Value>) -> Option<String> {
+/// What the call acted on (command, path, …), else its arguments. A `task`
+/// call names the subagents it spawns, never its (long) assignment or context.
+pub(super) fn step_detail(tool: &str, arguments: Option<&Value>) -> Option<String> {
     let arguments = arguments?;
-    let named = DETAIL_KEYS
-        .iter()
-        .find_map(|key| arguments.get(*key).and_then(Value::as_str))
-        .map(str::to_owned);
-    let detail = named.or_else(|| {
-        let mut rest = arguments.as_object()?.clone();
-        rest.remove("i");
-        (!rest.is_empty()).then(|| Value::Object(rest).to_string())
-    })?;
+    let detail = if tool == "task" {
+        task_names(arguments)?
+    } else {
+        DETAIL_KEYS
+            .iter()
+            .find_map(|key| arguments.get(*key).and_then(Value::as_str))
+            .map(str::to_owned)
+            .or_else(|| {
+                let mut rest = arguments.as_object()?.clone();
+                rest.remove("i");
+                (!rest.is_empty()).then(|| Value::Object(rest).to_string())
+            })?
+    };
     let detail = detail.trim();
     (!detail.is_empty()).then(|| truncate_chars(detail, DETAIL_MAX_CHARS))
+}
+
+/// The subagents a `task` call spawns: each one's `name`, else the first line
+/// of its assignment, for the batch (`tasks`) and the single form.
+fn task_names(arguments: &Value) -> Option<String> {
+    let one = |spawn: &Value| -> Option<String> {
+        spawn
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .or_else(|| {
+                spawn
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .and_then(|task| task.lines().map(str::trim).find(|line| !line.is_empty()))
+            })
+            .map(str::to_owned)
+    };
+    let names: Vec<String> = match arguments.get("tasks").and_then(Value::as_array) {
+        Some(tasks) => tasks.iter().filter_map(one).collect(),
+        None => one(arguments).into_iter().collect(),
+    };
+    (!names.is_empty()).then(|| names.join(", "))
+}
+
+/// How a subagent ended, from the `status` of its `<task-result id="…">`
+/// envelope in an `async-result` note: `completed`, `failed (exit N)`,
+/// `merge failed` or `cancelled`. `None` when the text has no envelope for `id`.
+pub(super) fn task_result_status(text: &str, id: &str) -> Option<TranscriptSubagentStatus> {
+    text.match_indices("<task-result ").find_map(|(start, _)| {
+        let tag = &text[start..];
+        let tag = &tag[..tag.find('>')?];
+        if tag_attribute(tag, "id")? != id {
+            return None;
+        }
+        let status = tag_attribute(tag, "status")?;
+        Some(match status {
+            "completed" => TranscriptSubagentStatus::Completed,
+            "cancelled" | "aborted" => TranscriptSubagentStatus::Aborted,
+            failed if failed.starts_with("failed") || failed.ends_with("failed") => {
+                TranscriptSubagentStatus::Failed
+            }
+            _ => TranscriptSubagentStatus::Unknown,
+        })
+    })
+}
+
+/// The value of ` name="…"` inside a tag.
+fn tag_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let marker = format!(" {name}=\"");
+    let start = tag.find(&marker)? + marker.len();
+    let end = tag[start..].find('"')?;
+    Some(&tag[start..start + end])
 }
 
 /// The questions of an `ask` call. omp's schema is `questions: [{question,

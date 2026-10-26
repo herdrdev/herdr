@@ -443,7 +443,7 @@ fn project_history(result: ResponseResult) -> Option<serde_json::Value> {
 
 /// The granted agent's conversation without the owner's private parts: no
 /// notes (the owner's fleet traffic), no step details (commands and paths),
-/// and asks only the owner may answer.
+/// no subagent assignments, and asks only the owner may answer.
 fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
     let ResponseResult::AgentTranscript {
         agent,
@@ -457,6 +457,7 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
         model,
         plan,
         recap: _,
+        subagents,
     } = result
     else {
         return None;
@@ -503,7 +504,15 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
         }
         items
     });
-    Some(serde_json::json!({
+    // A subagent's assignment and its conversation are the owner's.
+    let subagents = subagents.map(|mut subagents| {
+        for subagent in &mut subagents {
+            subagent.task = None;
+            subagent.has_transcript = false;
+        }
+        subagents
+    });
+    let mut projected = serde_json::json!({
         "type": "agent_transcript",
         "agent": agent,
         "pane_id": pane_id,
@@ -517,7 +526,11 @@ fn project_transcript(result: ResponseResult) -> Option<serde_json::Value> {
         "plan": serde_json::to_value(plan).ok()?,
         // A recap can summarize owner-only notes or step details; do not expose it to guests.
         "recap": serde_json::Value::Null,
-    }))
+    });
+    if let Some(subagents) = subagents {
+        projected["subagents"] = serde_json::to_value(subagents).ok()?;
+    }
+    Some(projected)
 }
 
 /// The size in effect, the same fields the owner's `pane.set_pty_size` returns.
@@ -680,7 +693,10 @@ pub(super) fn serve_request(
         }
         Method::AgentTranscript(params) => {
             let state = grant_state(guest, api_tx);
-            if !names_grant(&params.target, guest, state.pane_id()) {
+            // A subagent's conversation is the owner's (`project_transcript`
+            // would have to strip every part of it), so asking for one is
+            // refused like any target outside the grant.
+            if params.subagent.is_some() || !names_grant(&params.target, guest, state.pane_id()) {
                 return forbidden(&mut stream);
             }
             let GrantState::Live(agent) = state else {
@@ -2419,6 +2435,7 @@ mod tests {
                     before: None,
                     after: None,
                     limit: None,
+                    subagent: None,
                 }),
             },
             &harness.api_tx,

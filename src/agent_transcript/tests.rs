@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use super::*;
 use crate::api::schema::{
     AskQuestion, TranscriptAuthor, TranscriptNoteSource, TranscriptPlanItem, TranscriptStepStatus,
-    TranscriptTaskStatus, TranscriptTurnStatus,
+    TranscriptSubagentStatus, TranscriptTaskStatus, TranscriptTurnStatus,
 };
 
 const T0_MS: u64 = 1_792_749_600_000; // 2026-10-23T10:00:00Z
@@ -202,6 +202,7 @@ fn request(before: Option<&str>, after: Option<&str>, limit: Option<u32>) -> Pag
         before: before.map(str::to_owned),
         after: after.map(str::to_owned),
         limit,
+        subagent: None,
     }
 }
 
@@ -655,6 +656,8 @@ fn current_model_tracks_selection_role_branch_and_clear() {
         Some(TranscriptModel {
             provider: "other".into(),
             id: "selected".into(),
+            thinking_level: None,
+            thinking_auto: false,
         })
     );
     session.push_under(
@@ -1480,4 +1483,483 @@ fn unreadable_history_means_no_recap() {
     assert_eq!(session.newest().recap, None, "no history.db");
     std::fs::write(session.dir.join("history.db"), b"not a database").unwrap();
     assert_eq!(session.newest().recap, None, "corrupt history.db");
+}
+
+#[test]
+fn current_model_carries_the_newest_thinking_level() {
+    let mut session = Fixture::new("thinking-level");
+    session.push(
+        json!({"type": "thinking_level_change", "thinkingLevel": "high", "configured": "high"}),
+    );
+    let selected =
+        session.push(json!({"type": "model_change", "model": "anthropic/claude-opus-5-5"}));
+    session.user("Work");
+    let effort = |session: &Fixture| {
+        let model = session.newest().model.unwrap();
+        assert_eq!(model.id, "claude-opus-5-5");
+        (model.thinking_level, model.thinking_auto)
+    };
+    assert_eq!(effort(&session), (Some("high".into()), false));
+    session.push(
+        json!({"type": "thinking_level_change", "thinkingLevel": "xhigh", "configured": "auto"}),
+    );
+    assert_eq!(
+        effort(&session),
+        (Some("xhigh".into()), true),
+        "auto, resolved"
+    );
+    session.push(
+        json!({"type": "thinking_level_change", "thinkingLevel": null, "configured": "auto"}),
+    );
+    assert_eq!(effort(&session), (None, true), "auto, not classified yet");
+    session.push(
+        json!({"type": "thinking_level_change", "thinkingLevel": "off", "configured": "off"}),
+    );
+    assert_eq!(effort(&session), (None, false), "off is no effort");
+    session.push(json!({"type": "thinking_level_change", "thinkingLevel": "inherit"}));
+    assert_eq!(effort(&session), (None, false));
+    session.push(
+        json!({"type": "thinking_level_change", "thinkingLevel": "turbo", "configured": "turbo"}),
+    );
+    assert_eq!(
+        effort(&session),
+        (None, false),
+        "unknown levels are dropped"
+    );
+    session.push(json!({"type": "thinking_level_change", "thinkingLevel": "medium"}));
+    assert_eq!(
+        effort(&session),
+        (Some("medium".into()), false),
+        "an entry from before `configured` existed"
+    );
+    // A rewind to before the later changes restores the branch's own level.
+    session.push_under(
+        json!({"type": "message", "message": {"role": "user", "content": "Rewound"}}),
+        Some(&selected),
+    );
+    assert_eq!(effort(&session), (Some("high".into()), false));
+    session.push(json!({"type": "reset_boundary"}));
+    assert_eq!(
+        effort(&session),
+        (Some("high".into()), false),
+        "survives /clear"
+    );
+
+    let plain = serde_json::to_value(TranscriptModel {
+        provider: "p".into(),
+        id: "m".into(),
+        thinking_level: None,
+        thinking_auto: false,
+    })
+    .unwrap();
+    assert_eq!(
+        plain,
+        json!({"provider": "p", "id": "m"}),
+        "old apps see no new keys"
+    );
+}
+
+/// A `task` tool result as omp writes it when it spawns background
+/// subagents: `(id, assignment, description)` per spawn.
+pub(crate) fn spawn_details(spawns: &[(&str, &str, Option<&str>)]) -> Value {
+    let progress: Vec<Value> = spawns
+        .iter()
+        .enumerate()
+        .map(|(index, (id, task, description))| {
+            let mut item = json!({
+                "index": index, "id": id, "agent": "reviewer", "agentSource": "bundled",
+                "modelRole": "slow", "status": "pending",
+                "task": format!("Complete assignment thoroughly:\n\n{task}"),
+                "assignment": task, "recentTools": [], "recentOutput": [], "toolCount": 0,
+                "requests": 0, "tokens": 0, "cost": 0, "durationMs": 0,
+            });
+            if let Some(description) = description {
+                item["description"] = json!(description);
+            }
+            item
+        })
+        .collect();
+    json!({
+        "projectAgentsDir": null, "results": [], "totalDurationMs": 1, "progress": progress,
+        "async": {"state": "running", "jobId": spawns[0].0, "type": "task"},
+    })
+}
+
+/// The `async-result` note omp writes when background subagent `id` settles.
+fn task_settled(session: &mut Fixture, id: &str, status: &str, duration_ms: u64) -> String {
+    session.note(
+        "async-result",
+        &format!(
+            "<system-notice>\nBackground job {id} has completed.\n\n<task-result id=\"{id}\" agent=\"reviewer\" status=\"{status}\" duration=\"1m0s\">\n<output>\nLGTM\n</output>\n</task-result>\n\nRead the transcript at history://{id}\n</system-notice>"
+        ),
+        true,
+        json!({"jobs": [{"jobId": id, "type": "task", "label": id, "durationMs": duration_ms}]}),
+    )
+}
+
+/// Subagent `id`'s own session file beside `parent`, as omp lays it out,
+/// with a header naming `parent_session`.
+pub(crate) fn child_file(parent: &Path, id: &str, parent_session: &str) -> PathBuf {
+    let dir = parent.with_file_name(parent.file_stem().unwrap());
+    let path = dir.join(format!("{id}.jsonl"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let header = json!({
+        "type": "session", "version": 3, "id": format!("child-{id}"),
+        "timestamp": "2026-10-23T10:00:00.000Z", "cwd": "/tmp/project",
+        "parentSession": parent_session,
+    });
+    std::fs::write(&path, format!("{header}\n")).unwrap();
+    path
+}
+
+fn append(path: &Path, lines: &[Value]) {
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    for line in lines {
+        writeln!(file, "{line}").unwrap();
+    }
+}
+
+fn subagent_states(page: &Page) -> Vec<(String, TranscriptSubagentStatus)> {
+    page.subagents
+        .iter()
+        .flatten()
+        .map(|subagent| (subagent.id.clone(), subagent.status))
+        .collect()
+}
+
+#[test]
+fn a_background_task_is_a_running_subagent_until_its_async_result() {
+    let mut session = Fixture::new("subagents");
+    session.user("Review both heads");
+    session.assistant(
+        vec![call(
+            "t1",
+            "task",
+            Some("Dispatching final reviews"),
+            json!({"context": "# Goal\nA long shared context", "tasks": [
+                {"name": "AppReview", "agent": "reviewer", "task": "Review the app head"},
+                {"name": "DaemonReview", "agent": "reviewer", "task": "Review the daemon head"},
+            ]}),
+        )],
+        "toolUse",
+    );
+    session.result(
+        "t1",
+        "task",
+        false,
+        spawn_details(&[
+            ("AppReview", "Review the app head", Some("#12 app review")),
+            ("DaemonReview", "Review the daemon head", None),
+        ]),
+    );
+    session.assistant(vec![text("Both reviews are running.")], "stop");
+    let page = session.newest();
+    let spawned_ms = session.ms(3);
+    assert_eq!(
+        page.subagents,
+        Some(vec![
+            TranscriptSubagent {
+                id: "AppReview".into(),
+                agent: "reviewer".into(),
+                label: Some("#12 app review".into()),
+                task: Some("Review the app head".into()),
+                status: TranscriptSubagentStatus::Running,
+                started_ms: spawned_ms,
+                finished_ms: None,
+                duration_ms: None,
+                last_intent: None,
+                last_ms: None,
+                has_transcript: false,
+            },
+            TranscriptSubagent {
+                id: "DaemonReview".into(),
+                agent: "reviewer".into(),
+                label: Some("DaemonReview".into()),
+                task: Some("Review the daemon head".into()),
+                status: TranscriptSubagentStatus::Running,
+                started_ms: spawned_ms,
+                finished_ms: None,
+                duration_ms: None,
+                last_intent: None,
+                last_ms: None,
+                has_transcript: false,
+            },
+        ])
+    );
+    // The step names what it spawned, not the call's JSON.
+    assert_eq!(
+        steps(&page.entries)[0].3.as_deref(),
+        Some("AppReview, DaemonReview")
+    );
+
+    // A background bash job's result settles nothing, even under the same id.
+    session.note(
+        "async-result",
+        "<system-notice>\nBackground job AppReview has completed.\nexit: 0\n</system-notice>",
+        true,
+        json!({"jobs": [{"jobId": "AppReview", "type": "bash", "label": "cargo test", "durationMs": 5000}]}),
+    );
+    assert_eq!(
+        subagent_states(&session.newest()),
+        vec![
+            ("AppReview".into(), TranscriptSubagentStatus::Running),
+            ("DaemonReview".into(), TranscriptSubagentStatus::Running),
+        ]
+    );
+
+    let settled = task_settled(&mut session, "AppReview", "completed", 60_000);
+    let settled_ms = session.ms(session.next);
+    let page = session.newest();
+    assert_eq!(
+        subagent_states(&page),
+        vec![
+            ("DaemonReview".into(), TranscriptSubagentStatus::Running),
+            ("AppReview".into(), TranscriptSubagentStatus::Completed),
+        ],
+        "running first"
+    );
+    let app = &page.subagents.as_ref().unwrap()[1];
+    assert_eq!(app.finished_ms, Some(settled_ms));
+    assert_eq!(app.duration_ms, Some(60_000), "omp's own duration");
+    // The async result still renders as a note.
+    assert!(ids(&page.entries).contains(&settled));
+
+    task_settled(&mut session, "DaemonReview", "failed (exit 1)", 90_000);
+    assert_eq!(
+        subagent_states(&session.newest()),
+        vec![
+            ("AppReview".into(), TranscriptSubagentStatus::Completed),
+            ("DaemonReview".into(), TranscriptSubagentStatus::Failed),
+        ]
+    );
+
+    // Finished subagents belong to their turn.
+    session.user("Thanks, next thing");
+    assert_eq!(session.newest().subagents, None);
+}
+
+#[test]
+fn an_exit_or_a_clear_settles_running_subagents() {
+    let mut session = Fixture::new("subagents-exit");
+    session.user("Start the long one");
+    session.assistant(
+        vec![call(
+            "t1",
+            "task",
+            None,
+            json!({"name": "Old", "agent": "task", "task": "Run for hours"}),
+        )],
+        "toolUse",
+    );
+    session.result(
+        "t1",
+        "task",
+        false,
+        spawn_details(&[("Old", "Run for hours", None)]),
+    );
+    session.user("Meanwhile, another");
+    assert_eq!(
+        subagent_states(&session.newest()),
+        vec![("Old".into(), TranscriptSubagentStatus::Running)],
+        "a running subagent stays listed in later turns"
+    );
+    session.assistant(
+        vec![call(
+            "t2",
+            "task",
+            None,
+            json!({"name": "New", "agent": "task", "task": "Quick one"}),
+        )],
+        "toolUse",
+    );
+    session.result(
+        "t2",
+        "task",
+        false,
+        spawn_details(&[("New", "Quick one", None)]),
+    );
+    session.push(json!({"type": "custom", "customType": "session_exit", "data": {"reason": "dispose", "kind": "normal"}}));
+    let exit_ms = session.ms(session.next);
+    let page = session.newest();
+    assert_eq!(
+        subagent_states(&page),
+        vec![("New".into(), TranscriptSubagentStatus::Aborted)],
+        "the exit aborts both; the older turn's is no longer listed"
+    );
+    assert_eq!(
+        page.subagents.as_ref().unwrap()[0].finished_ms,
+        Some(exit_ms)
+    );
+
+    session.user("Resume");
+    session.assistant(
+        vec![call(
+            "t3",
+            "task",
+            None,
+            json!({"name": "Third", "agent": "task", "task": "Again"}),
+        )],
+        "toolUse",
+    );
+    session.result(
+        "t3",
+        "task",
+        false,
+        spawn_details(&[("Third", "Again", None)]),
+    );
+    assert_eq!(
+        subagent_states(&session.newest()),
+        vec![("Third".into(), TranscriptSubagentStatus::Running)]
+    );
+    session.push(json!({"type": "reset_boundary"}));
+    assert_eq!(session.newest().subagents, None, "/clear forgets them");
+}
+
+#[test]
+fn a_subagent_reports_its_own_files_newest_intent_and_end() {
+    let mut session = Fixture::new("subagents-child");
+    session.user("Review it");
+    session.assistant(
+        vec![call(
+            "t1",
+            "task",
+            None,
+            json!({"name": "Rev", "agent": "reviewer", "task": "Review"}),
+        )],
+        "toolUse",
+    );
+    session.result(
+        "t1",
+        "task",
+        false,
+        spawn_details(&[("Rev", "Review", None), ("NoFile", "Review", None)]),
+    );
+    let parent = session.path.to_string_lossy().into_owned();
+    let child = child_file(&session.path, "Rev", &parent);
+    append(
+        &child,
+        &[
+            json!({"type": "message", "id": "c1", "parentId": null, "timestamp": "2026-10-23T10:01:00.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "Review"}], "timestamp": 1}}),
+            json!({"type": "message", "id": "c2", "parentId": "c1", "timestamp": "2026-10-23T10:01:05.000Z", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "k1", "name": "read", "arguments": {"path": "src/main.rs"}}], "stopReason": "toolUse", "timestamp": 2}}),
+            json!({"type": "custom", "customType": "tool_execution_start", "id": "c3", "parentId": "c2", "timestamp": "2026-10-23T10:01:06.000Z", "data": {"toolCallId": "k1", "toolName": "read", "startedAt": "2026-10-23T10:01:06.000Z", "intent": "Reading the diff"}}),
+        ],
+    );
+    let page = session.newest();
+    let rev = &page.subagents.as_ref().unwrap()[0];
+    assert_eq!(rev.id, "Rev");
+    assert_eq!(rev.status, TranscriptSubagentStatus::Running);
+    assert_eq!(rev.last_intent.as_deref(), Some("Reading the diff"));
+    assert_eq!(rev.last_ms, Some(T0_MS + 66_000));
+    assert!(rev.has_transcript);
+    let no_file = &page.subagents.as_ref().unwrap()[1];
+    assert_eq!(
+        (no_file.id.as_str(), no_file.has_transcript),
+        ("NoFile", false)
+    );
+
+    // `hub wait` consumed the async result: the child's own exit after its
+    // yield completes it.
+    append(
+        &child,
+        &[
+            json!({"type": "message", "id": "c4", "parentId": "c3", "timestamp": "2026-10-23T10:01:07.000Z", "message": {"role": "toolResult", "toolCallId": "k1", "toolName": "read", "isError": false, "content": [], "timestamp": 3}}),
+            json!({"type": "message", "id": "c5", "parentId": "c4", "timestamp": "2026-10-23T10:01:08.000Z", "message": {"role": "assistant", "content": [{"type": "toolCall", "id": "k2", "name": "yield", "arguments": {"data": {}}}], "stopReason": "toolUse", "timestamp": 4}}),
+            json!({"type": "message", "id": "c6", "parentId": "c5", "timestamp": "2026-10-23T10:01:09.000Z", "message": {"role": "toolResult", "toolCallId": "k2", "toolName": "yield", "isError": false, "content": [{"type": "text", "text": "Result submitted."}], "details": {"status": "success"}, "timestamp": 5}}),
+            json!({"type": "custom", "customType": "session_exit", "id": "c7", "parentId": "c6", "timestamp": "2026-10-23T10:01:10.000Z", "data": {"reason": "dispose", "kind": "normal"}}),
+        ],
+    );
+    let page = session.newest();
+    let rev = page
+        .subagents
+        .iter()
+        .flatten()
+        .find(|subagent| subagent.id == "Rev")
+        .unwrap();
+    assert_eq!(rev.status, TranscriptSubagentStatus::Completed);
+    assert_eq!(rev.finished_ms, Some(T0_MS + 70_000));
+    assert_eq!(rev.last_intent.as_deref(), Some("Reading the diff"));
+    assert!(rev.has_transcript);
+}
+
+#[test]
+fn the_subagent_param_pages_only_a_real_child_of_the_session() {
+    let mut session = Fixture::new("subagents-page");
+    session.user("Review it");
+    let parent = session.path.to_string_lossy().into_owned();
+    let child = child_file(&session.path, "Rev", &parent);
+    append(
+        &child,
+        &[
+            json!({"type": "message", "id": "c1", "parentId": null, "timestamp": "2026-10-23T10:01:00.000Z", "message": {"role": "user", "content": [{"type": "text", "text": "Review the head"}], "timestamp": 1}}),
+            json!({"type": "message", "id": "c2", "parentId": "c1", "timestamp": "2026-10-23T10:01:05.000Z", "message": {"role": "assistant", "content": [{"type": "text", "text": "Looks good."}], "stopReason": "stop", "timestamp": 2}}),
+        ],
+    );
+    let subagent = |id: &str| PageRequest {
+        subagent: Some(id.into()),
+        ..PageRequest::default()
+    };
+    let page = read_page(&session.path, &subagent("Rev")).unwrap();
+    assert_eq!(page.session_id, "child-Rev");
+    assert_eq!(kinds(&page.entries), vec!["user", "reply", "turn_end"]);
+    // Its cursors page the child, not the parent.
+    let after = read_page(
+        &session.path,
+        &PageRequest {
+            after: Some(page.after.clone()),
+            ..subagent("Rev")
+        },
+    )
+    .unwrap();
+    assert!(after.entries.is_empty());
+
+    // Valid session files that name the parent, but outside its directory.
+    child_file(&session.path, "../Escape", &parent);
+    child_file(&session.path, "a/b", &parent);
+    // In the directory, but another session's.
+    child_file(&session.path, "Stray", "/elsewhere/session.jsonl");
+    for id in [
+        "../Escape",
+        "a/b",
+        "..",
+        "",
+        "Missing",
+        "Stray",
+        "Rev.jsonl",
+    ] {
+        let error = read_page(&session.path, &subagent(id)).unwrap_err();
+        assert_eq!(error.code(), "subagent_not_found", "{id:?}");
+    }
+}
+
+#[test]
+fn task_step_details_and_results_name_the_subagents() {
+    let names = |arguments: Value| normalize::step_detail("task", Some(&arguments));
+    assert_eq!(
+        names(json!({"agent": "explore", "name": "Scout", "task": "Find it"})).as_deref(),
+        Some("Scout")
+    );
+    assert_eq!(
+        names(json!({"agent": "explore", "task": "\n  Find the bug\nin detail"})).as_deref(),
+        Some("Find the bug"),
+        "an unnamed spawn shows its assignment's first line"
+    );
+    assert_eq!(
+        names(json!({"context": "{\"secret\": 1}", "tasks": []})),
+        None,
+        "never the raw arguments"
+    );
+    let status = |text: &str| normalize::task_result_status(text, "Rev");
+    for (envelope, expected) in [
+        ("completed", Some(TranscriptSubagentStatus::Completed)),
+        ("failed (exit 1)", Some(TranscriptSubagentStatus::Failed)),
+        ("merge failed", Some(TranscriptSubagentStatus::Failed)),
+        ("cancelled", Some(TranscriptSubagentStatus::Aborted)),
+        ("parked", Some(TranscriptSubagentStatus::Unknown)),
+    ] {
+        let text = format!(
+            "<task-result id=\"Other\" agent=\"a\" status=\"completed\">x</task-result>\n<task-result id=\"Rev\" agent=\"reviewer\" status=\"{envelope}\" duration=\"3s\">"
+        );
+        assert_eq!(status(&text), expected, "{envelope}");
+    }
+    assert_eq!(status("Background job Rev has completed."), None);
 }
