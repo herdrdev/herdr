@@ -9,10 +9,9 @@ use std::{
 
 pub(super) const REMOTE_BRIDGE_CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
 
-use super::{
-    read_limited_reader, ClipboardCommand, ClipboardImage, ForegroundJob, ForegroundProcess,
-    LimitedRead, Signal,
-};
+use super::{ClipboardCommand, ClipboardImage, ForegroundJob, ForegroundProcess, Signal};
+
+mod clipboard;
 
 pub(crate) use super::unix_common::{
     configure_status_command, create_remote_private_dir, create_remote_ssh_config_dir,
@@ -23,6 +22,8 @@ pub(crate) use super::unix_common::{
     ClientStreamReader, PinnedSshControlSocket, StatusCommandGuard,
 };
 
+#[cfg(test)]
+mod clipboard_tests;
 #[cfg(test)]
 mod config_file_tests;
 
@@ -852,8 +853,9 @@ pub fn process_exists(pid: u32) -> bool {
 }
 
 pub fn write_clipboard(bytes: &[u8]) -> bool {
+    let deadline = std::time::Instant::now() + clipboard::TIMEOUT;
     for command in clipboard_commands() {
-        if run_clipboard_command(&command, bytes) {
+        if run_clipboard_command_until(&command, bytes, deadline) {
             return true;
         }
     }
@@ -861,8 +863,9 @@ pub fn write_clipboard(bytes: &[u8]) -> bool {
 }
 
 pub fn read_clipboard_text() -> Option<String> {
+    let deadline = std::time::Instant::now() + clipboard::TIMEOUT;
     for command in read_clipboard_text_commands() {
-        if let Some(text) = read_clipboard_text_with_command(&command) {
+        if let Some(text) = read_clipboard_text_with_command_until(&command, deadline) {
             return Some(text);
         }
     }
@@ -884,8 +887,10 @@ pub fn open_url(url: &str) -> std::io::Result<Option<std::process::Child>> {
 }
 
 pub fn read_clipboard_image() -> Option<ClipboardImage> {
+    let deadline = std::time::Instant::now() + clipboard::TIMEOUT;
     if running_inside_wsl() {
-        if let Some(image) = read_wsl_clipboard_image_with_command(|program| Command::new(program))
+        if let Some(image) =
+            read_wsl_clipboard_image_with_command_until(|program| Command::new(program), deadline)
         {
             return Some(image);
         }
@@ -900,18 +905,22 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
         ("image/bmp", "bmp"),
     ] {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            if let Some(image) =
-                read_validated_clipboard_image("wl-paste", &["--type", mime], extension)
-            {
+            if let Some(image) = read_validated_clipboard_image_until(
+                "wl-paste",
+                &["--type", mime],
+                extension,
+                deadline,
+            ) {
                 return Some(image);
             }
         }
 
         if std::env::var_os("DISPLAY").is_some() {
-            if let Some(image) = read_validated_clipboard_image(
+            if let Some(image) = read_validated_clipboard_image_until(
                 "xclip",
                 &["-selection", "clipboard", "-t", mime, "-o"],
                 extension,
+                deadline,
             ) {
                 return Some(image);
             }
@@ -921,8 +930,9 @@ pub fn read_clipboard_image() -> Option<ClipboardImage> {
     None
 }
 
-fn read_wsl_clipboard_image_with_command(
+fn read_wsl_clipboard_image_with_command_until(
     mut command: impl FnMut(&str) -> Command,
+    deadline: std::time::Instant,
 ) -> Option<ClipboardImage> {
     let mut command = command("powershell.exe");
     command.args([
@@ -932,19 +942,30 @@ fn read_wsl_clipboard_image_with_command(
         "-Command",
         "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $image=[System.Windows.Forms.Clipboard]::GetImage(); if ($null -eq $image) { exit 1 }; $stream=[System.IO.MemoryStream]::new(); try { $image.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png); [Console]::OpenStandardOutput().Write($stream.GetBuffer(), 0, [int]$stream.Length) } finally { $stream.Dispose(); $image.Dispose() }",
     ]);
-    let bytes = read_clipboard_image_with_spawned_command(command)?;
+    let bytes = read_clipboard_image_until(
+        command,
+        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD,
+        deadline,
+    )?;
     bytes_match_image_signature("png", &bytes).then_some(ClipboardImage {
         bytes,
         extension: "png",
     })
 }
 
-fn read_validated_clipboard_image(
+fn read_validated_clipboard_image_until(
     program: &str,
     args: &[&str],
     extension: &'static str,
+    deadline: std::time::Instant,
 ) -> Option<ClipboardImage> {
-    let bytes = read_clipboard_image_with_command(program, args)?;
+    let mut command = Command::new(program);
+    command.args(args);
+    let bytes = read_clipboard_image_until(
+        command,
+        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD,
+        deadline,
+    )?;
     if !bytes_match_image_signature(extension, &bytes) {
         return None;
     }
@@ -1005,55 +1026,25 @@ fn run_notification_command(mut command: Command) -> std::io::Result<bool> {
     Ok(status.success())
 }
 
-fn read_clipboard_image_with_command(program: &str, args: &[&str]) -> Option<Vec<u8>> {
-    let mut command = Command::new(program);
-    command.args(args);
-    read_clipboard_image_with_spawned_command(command)
+fn read_clipboard_image_until(
+    command: Command,
+    max_bytes: usize,
+    deadline: std::time::Instant,
+) -> Option<Vec<u8>> {
+    let bytes = clipboard::run(command, None, max_bytes, deadline).ok()?;
+    (!bytes.is_empty()).then_some(bytes)
 }
 
-fn read_clipboard_image_with_spawned_command(command: Command) -> Option<Vec<u8>> {
-    read_clipboard_image_with_spawned_command_max(
-        command,
-        crate::protocol::MAX_CLIPBOARD_IMAGE_PAYLOAD,
-    )
-}
-
+#[cfg(test)]
 fn read_clipboard_image_with_spawned_command_max(
-    mut command: Command,
+    command: Command,
     max_bytes: usize,
 ) -> Option<Vec<u8>> {
-    let mut child = command
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let stdout = child.stdout.take()?;
-
-    let read = match read_limited_reader(stdout, max_bytes) {
-        Ok(read) => read,
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-    };
-
-    if read == LimitedRead::Oversized {
-        let _ = child.kill();
-        let _ = child.wait();
-        return None;
-    }
-
-    let status = child.wait().ok()?;
-    if !status.success() {
-        return None;
-    }
-
-    match read {
-        LimitedRead::Complete(bytes) => Some(bytes),
-        LimitedRead::Empty | LimitedRead::Oversized => None,
-    }
+    read_clipboard_image_until(
+        command,
+        max_bytes,
+        std::time::Instant::now() + clipboard::TIMEOUT,
+    )
 }
 
 fn clipboard_commands() -> Vec<ClipboardCommand> {
@@ -1108,125 +1099,66 @@ fn read_clipboard_text_commands() -> Vec<ClipboardCommand> {
     commands
 }
 
-fn read_clipboard_text_with_command(command: &ClipboardCommand) -> Option<String> {
+fn read_clipboard_text_with_command_until(
+    command: &ClipboardCommand,
+    deadline: std::time::Instant,
+) -> Option<String> {
     const MAX_CLIPBOARD_TEXT_BYTES: usize = 1024 * 1024;
-
-    let mut child = Command::new(command.program)
-        .args(command.args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-
-    let stdout = child.stdout.take()?;
-    let read = match read_limited_reader(stdout, MAX_CLIPBOARD_TEXT_BYTES) {
-        Ok(LimitedRead::Oversized) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-        Ok(read) => read,
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return None;
-        }
-    };
-
-    let status = child.wait().ok()?;
-    if !status.success() {
+    let mut process = Command::new(command.program);
+    process.args(command.args);
+    let bytes = clipboard::run(process, None, MAX_CLIPBOARD_TEXT_BYTES, deadline).ok()?;
+    if bytes.is_empty() {
         return None;
     }
-
-    match read {
-        LimitedRead::Complete(bytes) => String::from_utf8(bytes).ok(),
-        LimitedRead::Empty => None,
-        LimitedRead::Oversized => unreachable!("oversized clipboard text is handled before wait"),
-    }
+    String::from_utf8(bytes).ok()
 }
 
+fn run_clipboard_command_until(
+    command: &ClipboardCommand,
+    bytes: &[u8],
+    deadline: std::time::Instant,
+) -> bool {
+    let mut process = Command::new(command.program);
+    process.args(command.args);
+    clipboard::run(process, Some(bytes), 0, deadline).is_ok()
+}
+
+#[cfg(test)]
 fn run_clipboard_command(command: &ClipboardCommand, bytes: &[u8]) -> bool {
-    let mut child = match Command::new(command.program)
-        .args(command.args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-
-    let Some(mut stdin) = child.stdin.take() else {
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    };
-
-    if stdin.write_all(bytes).is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    }
-    drop(stdin);
-
-    if command.program == "wl-copy" {
-        return wait_for_wl_copy_startup(child);
-    }
-
-    child.wait().map(|status| status.success()).unwrap_or(false)
+    run_clipboard_command_until(
+        command,
+        bytes,
+        std::time::Instant::now() + clipboard::TIMEOUT,
+    )
 }
 
-fn wait_for_wl_copy_startup(mut child: std::process::Child) -> bool {
-    const STARTUP_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
-    const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
-
-    let deadline = std::time::Instant::now() + STARTUP_WAIT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(POLL_INTERVAL);
-            }
-            Ok(None) => return detach_clipboard_owner(child),
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return false;
-            }
-        }
-    }
+#[cfg(test)]
+fn read_clipboard_text_with_command(command: &ClipboardCommand) -> Option<String> {
+    read_clipboard_text_with_command_until(command, std::time::Instant::now() + clipboard::TIMEOUT)
 }
 
-fn detach_clipboard_owner(child: std::process::Child) -> bool {
-    let pid = child.id();
-    let child = std::sync::Arc::new(std::sync::Mutex::new(child));
-    let reaper_child = std::sync::Arc::clone(&child);
-    let reaper = std::thread::Builder::new()
-        .name("herdr-wl-copy-reaper".to_string())
-        .spawn(move || {
-            let wait_result = match reaper_child.lock() {
-                Ok(mut child) => child.wait(),
-                Err(poisoned) => poisoned.into_inner().wait(),
-            };
-            if let Err(err) = wait_result {
-                tracing::warn!(pid, %err, "failed to reap wl-copy clipboard owner");
-            }
-        });
+#[cfg(test)]
+fn read_validated_clipboard_image(
+    program: &str,
+    args: &[&str],
+    extension: &'static str,
+) -> Option<ClipboardImage> {
+    read_validated_clipboard_image_until(
+        program,
+        args,
+        extension,
+        std::time::Instant::now() + clipboard::TIMEOUT,
+    )
+}
 
-    if let Err(err) = reaper {
-        tracing::warn!(pid, %err, "failed to start wl-copy clipboard owner reaper");
-        let mut child = match child.lock() {
-            Ok(child) => child,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let _ = child.kill();
-        let _ = child.wait();
-        return false;
-    }
-
-    true
+#[cfg(test)]
+fn read_wsl_clipboard_image_with_command(
+    command: impl FnMut(&str) -> Command,
+) -> Option<ClipboardImage> {
+    read_wsl_clipboard_image_with_command_until(
+        command,
+        std::time::Instant::now() + clipboard::TIMEOUT,
+    )
 }
 
 fn process_session_id(pid: u32) -> Option<i32> {
@@ -1762,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn wl_copy_owner_does_not_block_clipboard_write() {
+    fn hung_wl_copy_reports_failure_and_is_reaped() {
         use std::ffi::OsString;
         use std::os::unix::fs::PermissionsExt;
         use std::path::PathBuf;
@@ -1841,6 +1773,28 @@ mod tests {
             std::env::set_var("HERDR_TEST_WL_COPY_ARGS", &args);
         }
 
+        for delay in ["", "sleep 0.3"] {
+            std::fs::write(
+                &fake_wl_copy,
+                format!("#!/bin/sh\ncat >/dev/null\n{delay}\nexit 0\n"),
+            )
+            .expect("successful helper should be written");
+            let command = ClipboardCommand {
+                program: "wl-copy",
+                args: &["--type", "text/plain;charset=utf-8"],
+            };
+            let started = Instant::now();
+            assert!(run_clipboard_command(&command, b"clipboard text"));
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "success must not wait for the deadline"
+            );
+        }
+        std::fs::write(
+            &fake_wl_copy,
+            "#!/bin/sh\ncat > \"$HERDR_TEST_WL_COPY_PAYLOAD\"\nprintf '%s\\n' \"$@\" > \"$HERDR_TEST_WL_COPY_ARGS\"\nprintf '%s' \"$$\" > \"$HERDR_TEST_WL_COPY_MARKER\"\nexec sleep 30\n",
+        ).expect("hung helper should be written");
+
         let (result_tx, result_rx) = mpsc::channel();
         let writer = std::thread::spawn(move || {
             let command = ClipboardCommand {
@@ -1859,12 +1813,13 @@ mod tests {
             .parse()
             .expect("owner pid should be numeric");
         cleanup.owner_pid = Some(owner_pid);
-        let returned_while_owner_running = result_rx
-            .recv_timeout(Duration::from_secs(2))
-            .is_ok_and(|result| result);
+        let reported_success = result_rx
+            .recv_timeout(Duration::from_secs(7))
+            .expect("clipboard write must finish within its deadline");
         let actual_payload = std::fs::read(&payload).expect("fake wl-copy should record stdin");
         let actual_args = std::fs::read_to_string(&args).expect("fake wl-copy should record args");
 
+        let owner_survived_return = process_exists(owner_pid as u32);
         unsafe {
             libc::kill(owner_pid, libc::SIGTERM);
         }
@@ -1878,8 +1833,12 @@ mod tests {
         drop(cleanup);
 
         assert!(
-            returned_while_owner_running,
-            "clipboard writes must return while wl-copy remains alive to own the selection"
+            !reported_success,
+            "a hung wl-copy must not be mistaken for a clipboard owner"
+        );
+        assert!(
+            !owner_survived_return,
+            "timed-out helper must be killed and reaped before return"
         );
         assert_eq!(actual_payload, b"clipboard text");
         assert_eq!(actual_args, "--type\ntext/plain;charset=utf-8\n");
