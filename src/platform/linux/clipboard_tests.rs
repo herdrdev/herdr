@@ -126,13 +126,13 @@ impl Drop for ForkingHelper {
     fn drop(&mut self) {
         if let Ok(pid) = std::fs::read_to_string(self.directory.join("owner")) {
             if let Ok(pid) = pid.trim().parse::<i32>() {
-                if process_exists(pid as u32) {
+                if helper_is_running(pid as u32) {
                     unsafe {
                         libc::kill(pid, libc::SIGKILL);
                     }
                 }
                 let deadline = Instant::now() + Duration::from_secs(2);
-                while process_exists(pid as u32) && Instant::now() < deadline {
+                while helper_is_running(pid as u32) && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             }
@@ -202,13 +202,50 @@ fn clipboard_failed_wrapper_kills_descendants() {
         started.elapsed() < Duration::from_secs(2),
         "failure must not wait for inherited stdout"
     );
-    // PID 1 reaps the killed descendant; it is not a child of the test process.
+    // A container's init may leave the killed descendant as a zombie.
     let deadline = Instant::now() + Duration::from_secs(2);
-    while process_exists(owner) && Instant::now() < deadline {
+    while helper_is_running(owner) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(
-        !process_exists(owner),
+        !helper_is_running(owner),
         "failed wrapper's descendant must not survive"
+    );
+}
+
+fn helper_is_running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(") ")
+            .is_some_and(|(_, state)| !state.starts_with('Z'))
+    })
+}
+
+#[test]
+fn clipboard_zombie_helper_is_not_running() {
+    let mut child = Command::new("sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .expect("child");
+    let pid = child.id();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut zombie = false;
+    while Instant::now() < deadline {
+        zombie = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit_once(") ")
+                .is_some_and(|(_, state)| state.starts_with('Z'))
+        });
+        if zombie {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let exists = process_exists(pid);
+    let running = helper_is_running(pid);
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(zombie && exists, "test must observe an unreaped zombie");
+    assert!(
+        !running,
+        "a zombie cannot keep a clipboard pipe or selection alive"
     );
 }
