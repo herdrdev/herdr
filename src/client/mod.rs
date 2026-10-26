@@ -117,7 +117,10 @@ use clipboard_images::{
     client_remote_image_paste_key, endpoint_accepts_local_images, write_remote_image_to_server,
 };
 #[cfg(windows)]
-use clipboard_images::{read_image_file_from_client_events, should_bridge_clipboard_image_events};
+use clipboard_images::{
+    read_image_file_from_client_events, should_bridge_clipboard_image_events,
+    should_bridge_local_clipboard_image_events,
+};
 #[cfg(unix)]
 use clipboard_images::{read_image_file_from_terminal_drop, should_bridge_clipboard_image_paste};
 pub use errors::ClientError;
@@ -1197,6 +1200,11 @@ async fn run_client_loop(
                             &events,
                             image_bridge_active,
                             state.remote_image_paste_key,
+                        ) || should_bridge_local_clipboard_image_events(
+                            &events,
+                            !is_remote_client
+                                && write_stream.active_id().is_local()
+                                && write_stream.active_surface_available(),
                         ) {
                             if let Some(image) = crate::platform::read_clipboard_image() {
                                 write_remote_image_to_server(

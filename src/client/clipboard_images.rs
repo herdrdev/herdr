@@ -89,6 +89,28 @@ pub(super) fn should_bridge_clipboard_image_paste(
 }
 
 #[cfg(windows)]
+pub(super) fn should_bridge_local_clipboard_image_events(
+    events: &[ClientInputEvent],
+    local_surface_available: bool,
+) -> bool {
+    // Reserve Alt+V only when an image can actually be read. Ctrl+V and empty
+    // bracketed pastes keep their native meaning in local terminal apps.
+    local_surface_available
+        && matches!(
+            events,
+            [event] if matches!(
+                event.to_raw_input_event(),
+                crate::raw_input::RawInputEvent::Key(key)
+                    if key.kind == crossterm::event::KeyEventKind::Press
+                        && crate::config::terminal_key_matches_combo(
+                            &key,
+                            (crossterm::event::KeyCode::Char('v'), crossterm::event::KeyModifiers::ALT),
+                        )
+            )
+        )
+}
+
+#[cfg(windows)]
 pub(super) fn should_bridge_clipboard_image_events(
     events: &[ClientInputEvent],
     is_remote_client: bool,
@@ -250,5 +272,94 @@ fn recognized_image_extension(extension: &str) -> Option<&'static str> {
         Some("bmp")
     } else {
         None
+    }
+}
+
+#[cfg(all(test, windows))]
+mod local_image_tests {
+    use super::*;
+    use crate::protocol::{ClientKeyCode, ClientKeyKind, ClientKeySource};
+    use crossterm::event::KeyModifiers;
+
+    fn key(modifiers: KeyModifiers, kind: ClientKeyKind) -> ClientInputEvent {
+        ClientInputEvent::Key {
+            code: ClientKeyCode::Char('v'),
+            modifiers: modifiers.bits(),
+            kind,
+            repeat_count: 1,
+            generated_text: None,
+            source: ClientKeySource::Synthesized,
+        }
+    }
+
+    #[test]
+    fn local_image_paste_accepts_alt_v_only_on_available_surface() {
+        let events = [key(KeyModifiers::ALT, ClientKeyKind::Press)];
+        assert!(should_bridge_local_clipboard_image_events(&events, true));
+        assert!(!should_bridge_local_clipboard_image_events(&events, false));
+    }
+
+    #[test]
+    fn local_image_paste_preserves_text_ctrl_v_and_key_release() {
+        for event in [
+            key(KeyModifiers::CONTROL, ClientKeyKind::Press),
+            key(KeyModifiers::empty(), ClientKeyKind::Press),
+            key(KeyModifiers::ALT, ClientKeyKind::Release),
+            ClientInputEvent::Paste {
+                text: String::new(),
+            },
+            ClientInputEvent::Paste {
+                text: "hello".into(),
+            },
+        ] {
+            assert!(!should_bridge_local_clipboard_image_events(&[event], true));
+        }
+    }
+
+    #[test]
+    fn local_image_paste_does_not_swallow_batched_input() {
+        let events = [
+            key(KeyModifiers::ALT, ClientKeyKind::Press),
+            key(KeyModifiers::empty(), ClientKeyKind::Press),
+        ];
+        assert!(!should_bridge_local_clipboard_image_events(&events, true));
+    }
+
+    #[test]
+    #[ignore = "requires an image in the interactive Windows clipboard"]
+    fn local_image_paste_reads_real_clipboard_and_stages_png() {
+        struct StagingSink(Option<std::path::PathBuf>);
+        impl super::super::ClientMessageSink for StagingSink {
+            fn send_client_message(&mut self, message: &ClientMessage) -> std::io::Result<()> {
+                let ClientMessage::ClipboardImage {
+                    target,
+                    extension,
+                    data,
+                } = message
+                else {
+                    panic!("expected clipboard image message");
+                };
+                assert!(matches!(target, ClientClipboardImageTarget::Pane(id) if id == "w1:p1"));
+                let staged = crate::server::clipboard_image::stage(0, extension, data)?;
+                assert_eq!(std::fs::read(&staged.path)?, *data);
+                assert_eq!(staged.paste_text, staged.path.to_string_lossy());
+                self.0 = Some(staged.path);
+                Ok(())
+            }
+        }
+        let events = [key(KeyModifiers::ALT, ClientKeyKind::Press)];
+        assert!(should_bridge_local_clipboard_image_events(&events, true));
+        let image = crate::platform::read_clipboard_image().expect("copy an image before running");
+        assert_eq!(image.extension, "png");
+        assert!(image.bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let mut sink = StagingSink(None);
+        write_remote_image_to_server(
+            &mut sink,
+            ClientClipboardImageTarget::Pane("w1:p1".into()),
+            image,
+            "local clipboard test",
+        )
+        .unwrap();
+        std::fs::remove_file(sink.0.expect("image was staged")).unwrap();
     }
 }
