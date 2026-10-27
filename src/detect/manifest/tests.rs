@@ -661,6 +661,43 @@ fn screen_regions_extract_structure_without_classifying_agent_state() {
             "after_last_horizontal_rule",
             "footer\n",
         ),
+        (
+            "before\r\n› input\r\nafter\r\n",
+            "before_current_prompt_marker",
+            "before\r\n",
+        ),
+        (
+            "before\r\n› input\r\nafter\r\n",
+            "after_last_prompt_marker",
+            "after\r\n",
+        ),
+        (
+            "above\r\n───\r\nbody\r\n───\r\nfooter\r\n",
+            "after_last_horizontal_rule",
+            "footer\r\n",
+        ),
+        (
+            "above\r\n───\r\nbody\r\n───\r\nfooter\r\n",
+            "prompt_box_body",
+            "body\r\n",
+        ),
+        (
+            "line 0\r\nline 1\r\n─\r\n",
+            "after_last_horizontal_rule",
+            "",
+        ),
+        (
+            "line 0\r\nline 1\r\n─\r\n",
+            "top_non_empty_lines(20)",
+            "line 0\r\nline 1\r\n─\r\n",
+        ),
+        ("before\n› input", "after_last_prompt_marker", ""),
+        ("a\rb\n› input\n", "before_current_prompt_marker", "a\rb\n"),
+        (
+            "a\rb\r\n› input\r\n",
+            "before_current_prompt_marker",
+            "a\rb\r\n",
+        ),
     ] {
         assert_eq!(
             region(
@@ -675,6 +712,82 @@ fn screen_regions_extract_structure_without_classifying_agent_state() {
             "region={spec}"
         );
     }
+}
+
+#[test]
+fn crlf_regions_match_lf_and_preserve_multibyte_boundaries() {
+    with_manifest_dirs("crlf-regions", || {
+        write_local_codex(&rules_manifest(
+            r#"
+[[rules]]
+id = "before_prompt"
+state = "working"
+region = "before_current_prompt_marker"
+contains = ["active-marker)"]
+
+[[rules]]
+id = "after_prompt"
+state = "idle"
+region = "after_last_prompt_marker"
+contains = ["unmatched-marker"]
+
+[[rules]]
+id = "after_rule"
+state = "idle"
+region = "after_last_horizontal_rule"
+contains = ["unmatched-marker"]
+
+[[rules]]
+id = "top_lines"
+state = "idle"
+region = "top_non_empty_lines(20)"
+contains = ["unmatched-marker"]
+"#,
+        ));
+        let lf = "prefix\nactive-marker)\n\n› input\nfooter\n";
+        let crlf = lf.replace('\n', "\r\n");
+        let lf_explain = explain(Agent::Codex, lf);
+        let crlf_explain = explain(Agent::Codex, &crlf);
+        for result in [&lf_explain, &crlf_explain] {
+            assert!(matches!(result.source, Some(ManifestSource::Override(_))));
+            assert_eq!(result.state, AgentState::Working);
+            assert_eq!(
+                result.matched_rule.as_ref().map(|rule| rule.id.as_str()),
+                Some("before_prompt")
+            );
+        }
+
+        for (id, expected) in [
+            ("before_prompt", "prefix\nactive-marker)\n\n"),
+            ("after_prompt", "footer\n"),
+        ] {
+            for (result, expected) in [
+                (&lf_explain, expected.to_string()),
+                (&crlf_explain, expected.replace('\n', "\r\n")),
+            ] {
+                let rule = result
+                    .evaluated_rules
+                    .iter()
+                    .find(|rule| rule.id == id)
+                    .unwrap();
+                assert_eq!(rule.evidence.region_preview, expected);
+            }
+        }
+
+        let working_only = explain(Agent::Codex, "active-marker)\r\n");
+        assert_eq!(working_only.state, AgentState::Working);
+
+        let multibyte = "line 0\r\nline 1\r\n─\r\n";
+        let result = explain(Agent::Codex, multibyte);
+        for (id, expected) in [("after_rule", ""), ("top_lines", multibyte)] {
+            let rule = result
+                .evaluated_rules
+                .iter()
+                .find(|rule| rule.id == id)
+                .unwrap();
+            assert_eq!(rule.evidence.region_preview, expected);
+        }
+    });
 }
 
 #[test]
