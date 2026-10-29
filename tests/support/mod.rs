@@ -27,6 +27,7 @@ const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 18;
 const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
 pub fn isolate_herdr_test_process(command: &mut CommandBuilder) {
+    command.env_remove("INVOCATION_ID");
     command.env_remove("HERDR_STARTUP_CWD");
     command.env_remove("HERDR_SESSION");
 }

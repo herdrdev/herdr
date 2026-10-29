@@ -7,6 +7,26 @@ use std::{
     sync::OnceLock,
 };
 
+pub(super) fn configure_server_daemon_context(command: &mut Command) {
+    command.env_remove("INVOCATION_ID");
+}
+
+pub(crate) fn check_live_handoff() -> std::io::Result<()> {
+    check_live_handoff_for_invocation(std::env::var_os("INVOCATION_ID").as_deref())
+}
+
+fn check_live_handoff_for_invocation(
+    invocation_id: Option<&std::ffi::OsStr>,
+) -> std::io::Result<()> {
+    if invocation_id.is_some_and(|id| !id.is_empty()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "live handoff is not supported under a systemd service; restart the service instead (this ends pane processes)",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) const REMOTE_BRIDGE_CLOCK: libc::clockid_t = libc::CLOCK_BOOTTIME;
 
 use super::{ClipboardCommand, ClipboardImage, ForegroundJob, ForegroundProcess, Signal};
@@ -1173,6 +1193,19 @@ mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
     use std::{cell::RefCell, collections::HashMap};
+
+    #[test]
+    fn systemd_service_handoff_detection() {
+        use std::ffi::OsStr;
+
+        assert!(check_live_handoff_for_invocation(None).is_ok());
+        assert!(check_live_handoff_for_invocation(Some(OsStr::new(""))).is_ok());
+        let error =
+            check_live_handoff_for_invocation(Some(OsStr::new("0123456789abcdef0123456789abcdef")))
+                .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("restart the service"));
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
