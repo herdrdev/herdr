@@ -249,6 +249,62 @@ fn git_status_fingerprint_matches_gitdir_include_if_directory_pattern() {
 }
 
 #[test]
+fn git_status_fingerprint_reads_config_after_nonmatching_gitdir_wildcards() {
+    let base = temp_test_dir("include-if-many-wildcards");
+    let mut root = base.clone();
+    for _ in 0..10 {
+        root.push("directory");
+    }
+    root.push("slow");
+    write_fake_tracked_repo(&root);
+    std::fs::create_dir_all(root.join(".git/refs/remotes/included")).unwrap();
+    std::fs::write(
+        root.join(".git/refs/remotes/included/main"),
+        "2222222222222222222222222222222222222222\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".git/config"),
+        format!(
+            "[includeIf \"gitdir:{}\"]\n\tpath = missing.cfg\n\
+             [includeIf \"gitdir:{}\"]\n\tpath = included.cfg\n",
+            base.join("**")
+                .join("**")
+                .join("**")
+                .join("**")
+                .join("nomatch")
+                .join("**")
+                .display(),
+            base.join("**")
+                .join("**")
+                .join("**")
+                .join("**")
+                .join("slow")
+                .join("**")
+                .display(),
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".git/included.cfg"),
+        "[remote \"included\"]\n\tfetch = +refs/heads/*:refs/remotes/included/*\n\
+         [branch \"main\"]\n\tremote = included\n\tmerge = refs/heads/main\n",
+    )
+    .unwrap();
+
+    let fingerprint = git_status_fingerprint(&root).unwrap();
+    let upstream = fingerprint.upstream.unwrap();
+    assert_eq!(upstream.remote, "included");
+    assert_eq!(upstream.full_ref, "refs/remotes/included/main");
+    assert_eq!(
+        upstream.oid.as_deref(),
+        Some("2222222222222222222222222222222222222222")
+    );
+
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn git_status_fingerprint_reads_case_insensitive_config_keys() {
     let root = temp_test_dir("case-insensitive-config");
     write_fake_tracked_repo(&root);
