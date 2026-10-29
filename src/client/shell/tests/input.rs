@@ -935,6 +935,37 @@ fn styled_client_composition_preserves_pane_hyperlinks() {
 }
 
 #[test]
+fn styled_client_composition_preserves_pane_underline_styles() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let curly = crate::protocol::modifier_with_underline_style(Modifier::UNDERLINED, 3);
+    let mut pane = Buffer::with_lines(["LIVE", "PANE"]);
+    pane.set_style(Rect::new(0, 1, 4, 1), Style::default().add_modifier(curly));
+    let mut pane_surface = surface();
+    pane_surface.frame = FrameData::from_ratatui_buffer_with_hyperlinks(&pane, None, &[]);
+    let plain_bg = pane_surface.frame.cells[0].bg;
+    state.set_pane_surface(pane_surface);
+    let mut selection =
+        crate::selection::Selection::absolute_range("pane_1".to_owned(), (0, 0), (0, 1));
+    assert!(selection.finish());
+    state.selection = Some(selection);
+
+    let frame = state.compose(106, 20).expect("composed frame");
+    let inner = state.hits.panes[0].inner_rect;
+    let index = |x: u16, y: u16| {
+        usize::from(inner.y + y) * usize::from(frame.width) + usize::from(inner.x + x)
+    };
+    assert_ne!(frame.cells[index(0, 0)].bg, plain_bg, "selection is drawn");
+    for x in 0..4 {
+        assert_eq!(
+            frame.cells[index(x, 1)].modifier,
+            curly.bits(),
+            "column {x}"
+        );
+    }
+}
+
+#[test]
 fn every_configured_prefix_enters_prefix_mode() {
     let mut config = Config::default();
     config.keys.prefix =
