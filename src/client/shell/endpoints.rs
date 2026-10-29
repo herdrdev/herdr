@@ -21,6 +21,7 @@ pub(crate) struct ClientShellEndpoint {
     pub(crate) agent_view_projection: Option<ClientEndpointAgentViewProjection>,
     pending_agent_view_projection: Option<ClientEndpointAgentViewProjection>,
     pub(crate) agent_view_projection_supported: bool,
+    selective_hyperlinks_supported: bool,
     pub(crate) methods: Option<HashSet<String>>,
 }
 
@@ -87,6 +88,8 @@ impl ClientShellState {
                     .and_then(|endpoint| endpoint.pending_agent_view_projection.clone()),
                 agent_view_projection_supported: previous
                     .is_some_and(|endpoint| endpoint.agent_view_projection_supported),
+                selective_hyperlinks_supported: previous
+                    .is_some_and(|endpoint| endpoint.selective_hyperlinks_supported),
                 methods: previous.and_then(|endpoint| endpoint.methods.clone()),
             });
         }
@@ -133,6 +136,7 @@ impl ClientShellState {
             endpoint.agent_view_projection = None;
             endpoint.pending_agent_view_projection = None;
             endpoint.agent_view_projection_supported = false;
+            endpoint.selective_hyperlinks_supported = false;
         }
     }
 
@@ -188,6 +192,29 @@ impl ClientShellState {
                 endpoint.pending_agent_view_projection = None;
             }
         }
+    }
+
+    pub(crate) fn set_endpoint_selective_hyperlinks_supported(
+        &mut self,
+        endpoint_id: &ClientEndpointId,
+        supported: bool,
+    ) {
+        if let Some(endpoint) = self
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
+        {
+            endpoint.selective_hyperlinks_supported = supported;
+        }
+    }
+
+    pub(crate) fn active_endpoint_selective_hyperlinks_supported(&self) -> bool {
+        self.endpoints.iter().any(|endpoint| {
+            endpoint.endpoint_id == self.active_endpoint_id
+                // Reconnect can still present a cached surface from the previous server.
+                && endpoint.status == ClientEndpointStatus::Online
+                && endpoint.selective_hyperlinks_supported
+        })
     }
 
     pub(crate) fn set_endpoint_methods_for(
@@ -741,6 +768,7 @@ pub(super) fn local_endpoint() -> ClientShellEndpoint {
         agent_view_projection: None,
         pending_agent_view_projection: None,
         agent_view_projection_supported: false,
+        selective_hyperlinks_supported: false,
         methods: None,
     }
 }

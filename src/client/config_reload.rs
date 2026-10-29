@@ -24,13 +24,9 @@ pub(super) fn apply_reload(
     state.shell_mouse_capture_preference = mouse_capture;
     state.direct_mouse_capture_preference = state.attach_escape.is_some() && mouse_capture;
     if state.shell.is_some() && previous_mouse_capture != mouse_capture {
-        write_to_server(
-            endpoints,
-            &ClientMessage::ClientShellMouseCapture {
-                enabled: mouse_capture,
-            },
-        )
-        .map_err(ClientError::ConnectionLost)?;
+        endpoints.send_to_all(&ClientMessage::ClientShellMouseCapture {
+            enabled: mouse_capture,
+        });
     }
     if state.attach_escape.is_some() {
         let enabled = effective_mouse_capture(

@@ -200,6 +200,7 @@ pub(crate) struct GhosttyPaneCore {
     pub dirty_collection_hook: Option<Box<dyn FnOnce() + Send>>,
     pub terminal: crate::ghostty::Terminal,
     synchronized_output_epoch: u64,
+    text_link_dependencies: bool,
     #[cfg(windows)]
     recent_fallback: windows_recent_fallback::Cache,
     pub render_state: crate::ghostty::RenderState,
@@ -1186,6 +1187,7 @@ impl GhosttyPaneTerminal {
                 dirty_collection_hook: None,
                 terminal,
                 synchronized_output_epoch: 0,
+                text_link_dependencies: false,
                 #[cfg(windows)]
                 recent_fallback: windows_recent_fallback::Cache::default(),
                 render_state,
@@ -2650,6 +2652,17 @@ fn ghostty_collect_dirty_patch(
         }};
     }
 
+    // A destination can change on a clean row or outside the viewport.
+    // shortcut: linked panes use full renders, cache token dependencies if costly.
+    if core.text_link_dependencies
+        || core
+            .terminal
+            .viewport_boundary_text_link(crate::app::actions::url_byte_range)
+            .unwrap_or(true)
+    {
+        fallback!("text_link_dependency");
+    }
+
     let host_theme = core.host_terminal_theme;
     let initial_default_foreground = core.initial_default_foreground;
     let initial_default_background = core.initial_default_background;
@@ -2692,6 +2705,7 @@ fn ghostty_collect_dirty_patch(
     let mut symbol_scratch = String::new();
     let mut patch_rows = Vec::new();
     let blank = blank_cell_data(default_fg, default_bg);
+    let mut check_text_links = false;
     while let Some(y) = rows.next_dirty() {
         if y >= area_height {
             break;
@@ -2701,6 +2715,10 @@ fn ghostty_collect_dirty_patch(
             Ok(Some(_)) => fallback!("row_selection_present"),
             Err(_) => fallback!("row_selection_error"),
         }
+        check_text_links |= rows
+            .wrap_state()
+            .map(|(_, continuation)| continuation)
+            .unwrap_or(true);
         let Ok(mut cells) = rows.populate_cells(&mut row_cells) else {
             fallback!("populate_cells_error");
         };
@@ -2741,11 +2759,20 @@ fn ghostty_collect_dirty_patch(
                 Ok(symbol) => symbol.to_owned(),
                 Err(_) => ghostty_blank_symbol_for_width(basic.wide).to_owned(),
             };
+            check_text_links |= symbol == "h";
             patch_cells.push(cell_data_from_style(symbol, style));
             x += 1;
         }
         patch_cells.resize(usize::from(area_width), blank.clone());
         patch_rows.push((y, patch_cells));
+    }
+
+    if check_text_links {
+        match terminal.viewport_text_links(crate::app::actions::url_byte_range) {
+            Ok(links) if links.is_empty() => {}
+            Ok(_) => fallback!("text_link_present"),
+            Err(_) => fallback!("text_link_error"),
+        }
     }
 
     // Nothing above mutates dirty state. Only clear it after every row has
@@ -2783,12 +2810,31 @@ fn ghostty_visible_hyperlinks(
     core: &mut GhosttyPaneCore,
     area: Rect,
 ) -> Result<VisibleHyperlinks, crate::ghostty::Error> {
+    if area.is_empty() {
+        return Ok(Vec::new());
+    }
+    // Always inspect the actual viewport: a clipped peer must not clear another
+    // peer's dependency on cells outside its smaller projection.
+    let text_links = core
+        .terminal
+        .viewport_text_links(crate::app::actions::url_byte_range)?;
+    core.text_link_dependencies = !text_links.is_empty();
     let GhosttyPaneCore {
         terminal,
         render_state,
         ..
     } = core;
     render_state.update(terminal)?;
+    let mut text_regions = text_links
+        .iter()
+        .flat_map(|link| {
+            link.regions
+                .iter()
+                .map(|region| (region, link.uri.as_str()))
+        })
+        .collect::<Vec<_>>();
+    text_regions.sort_unstable_by_key(|(region, _)| (region.row, region.start_col));
+    let mut text_region = 0;
     let mut row_iterator = crate::ghostty::RowIterator::new()?;
     let mut row_cells = crate::ghostty::RowCells::new()?;
     let mut rows = render_state.populate_row_iterator(&mut row_iterator)?;
@@ -2798,10 +2844,23 @@ fn ghostty_visible_hyperlinks(
         let mut cells = rows.populate_cells(&mut row_cells)?;
         let mut x = 0u16;
         while x < area.width && cells.next() {
-            if cells.has_hyperlink()? {
-                if let Some(uri) = terminal.viewport_hyperlink_uri(x, y.into())? {
-                    links.push(((area.x + x, area.y + y), ghostty_cell_symbol(&cells)?, uri));
-                }
+            while text_regions.get(text_region).is_some_and(|(region, _)| {
+                region.row < y || (region.row == y && region.end_col < x)
+            }) {
+                text_region += 1;
+            }
+            let uri = if cells.has_hyperlink()? {
+                terminal.viewport_hyperlink_uri(x, y.into())?
+            } else {
+                text_regions
+                    .get(text_region)
+                    .filter(|(region, _)| {
+                        region.row == y && x >= region.start_col && x <= region.end_col
+                    })
+                    .map(|(_, uri)| (*uri).to_owned())
+            };
+            if let Some(uri) = uri {
+                links.push(((area.x + x, area.y + y), ghostty_cell_symbol(&cells)?, uri));
             }
             x += 1;
         }

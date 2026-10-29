@@ -111,6 +111,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         native_graphics: Default::default(),
         interactive_input_deadlines: HashMap::new(),
         interactive_render_budget: None,
+        next_plugin_link_refresh: Instant::now(),
         #[cfg(unix)]
         next_client_id: 1,
         foreground_client_id: None,

@@ -82,7 +82,7 @@ impl RenderPipeline {
                 workspace_index,
                 tab_index: self.app.state.workspaces[workspace_index].active_tab_index(),
             });
-        let rendered = super::client_shell::render_pane_surface(
+        let mut rendered = super::client_shell::render_pane_surface(
             &mut self.app,
             target,
             Rect::new(0, 0, surface_size.cols, surface_size.rows),
@@ -96,6 +96,7 @@ impl RenderPipeline {
             1,
         )
         .expect("benchmark surface");
+        super::client_shell::reserve_plugin_links(&self.app, &mut rendered.frame);
         let server_elapsed = started.elapsed();
         self.graphics_delivery = rendered.graphics_delivery;
 
@@ -166,10 +167,11 @@ fn active_panes(pane_count: usize) -> Vec<Workspace> {
 
 fn summarize(mut samples: Vec<Duration>) -> StageStats {
     samples.sort_unstable();
+    let count = samples.len();
     StageStats {
-        median_us: samples[SAMPLE_COUNT / 2].as_micros(),
-        p95_us: samples[(SAMPLE_COUNT - 1) * 95 / 100].as_micros(),
-        max_us: samples[SAMPLE_COUNT - 1].as_micros(),
+        median_us: samples[count / 2].as_micros(),
+        p95_us: samples[(count - 1) * 95 / 100].as_micros(),
+        max_us: samples[count - 1].as_micros(),
     }
 }
 
@@ -613,6 +615,73 @@ async fn render_scale_profile() {
     print_token_rule_profiles();
     print_surface_reuse_profiles();
     print_surface_damage_profiles();
+    print_plugin_link_profiles();
+}
+
+fn print_plugin_link_profiles() {
+    let pattern = regex::Regex::new("^obsidian://").expect("benchmark pattern");
+    for (label, build) in [
+        (
+            "background workspaces",
+            workspaces as fn(usize) -> Vec<Workspace>,
+        ),
+        ("active panes", active_panes as fn(usize) -> Vec<Workspace>),
+    ] {
+        for count in [1, 15] {
+            let run = |intercept| {
+                let mut pipeline = RenderPipeline::new(build(count));
+                let linked = format!(
+                    "\x1b[2J\x1b[H{}",
+                    "\x1b]8;;https://example.test\x1b\\web\x1b]8;;\x1b\\ \
+                     \x1b]8;;obsidian://open?vault=notes\x1b\\note\x1b]8;;\x1b\\\r\n"
+                        .repeat(20)
+                );
+                for (workspace_index, workspace) in pipeline.app.state.workspaces.iter().enumerate()
+                {
+                    for tab in &workspace.tabs {
+                        for &pane_id in tab.panes.keys() {
+                            pipeline
+                                .app
+                                .state
+                                .runtime_for_pane_in_workspace(
+                                    &pipeline.app.terminal_runtimes,
+                                    workspace_index,
+                                    pane_id,
+                                )
+                                .expect("populated benchmark pane")
+                                .test_process_pty_bytes(linked.as_bytes());
+                        }
+                    }
+                }
+                if intercept {
+                    pipeline.app.plugin_link_patterns.push(pattern.clone());
+                }
+                pipeline
+            };
+            let mut native = run(false);
+            let mut intercepted = run(true);
+            let mut samples = [Vec::new(), Vec::new()];
+            // Alternate execution order so machine load affects both modes alike.
+            for sample in 0..1_050 {
+                for index in if sample % 2 == 0 { [0, 1] } else { [1, 0] } {
+                    let (server, client) = if index == 0 {
+                        native.render_once()
+                    } else {
+                        intercepted.render_once()
+                    };
+                    if sample >= 50 {
+                        samples[index].push(server + client);
+                    }
+                }
+            }
+            let [native, intercepted] = samples.map(summarize);
+            println!(
+                "plugin links {label} count={count} native_median_us={} intercepted_median_us={} delta_percent={:.2}",
+                native.median_us, intercepted.median_us,
+                (intercepted.median_us as f64 / native.median_us.max(1) as f64 - 1.0) * 100.0,
+            );
+        }
+    }
 }
 
 /// Dirty-row collection while output scrolls a large pane, the host's hot path
