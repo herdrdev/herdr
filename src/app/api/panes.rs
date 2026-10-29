@@ -4392,6 +4392,85 @@ mod tests {
     }
 
     #[test]
+    fn agent_status_snapshot_preserves_full_pane_event_bytes() {
+        use crate::api::schema::{
+            PaneAgentStatusChangedEvent, SubscriptionEventData, SubscriptionEventEnvelope,
+            SubscriptionEventKind,
+        };
+        use crate::detect::{Agent, AgentState};
+        let (mut app, public_pane_id) = app_with_test_workspace();
+        let (ws_idx, pane_id) = app.parse_pane_id(&public_pane_id).unwrap();
+        let terminal_id = app.state.workspaces[ws_idx]
+            .pane_state(pane_id)
+            .unwrap()
+            .attached_terminal_id
+            .clone();
+        for state in [
+            AgentState::Unknown,
+            AgentState::Working,
+            AgentState::Blocked,
+            AgentState::Idle,
+        ] {
+            for seen in [false, true] {
+                for metadata in [false, true] {
+                    let terminal = app.state.terminals.get_mut(&terminal_id).unwrap();
+                    terminal.agent_metadata.clear();
+                    terminal.set_detected_state(
+                        (state != AgentState::Unknown).then_some(Agent::Pi),
+                        state,
+                    );
+                    if metadata {
+                        terminal.set_agent_metadata(crate::terminal::AgentMetadataReport {
+                            source: "status-parity".into(),
+                            agent_label: None,
+                            applies_to_source: None,
+                            title: Some("quoted \"task\"\nλ".into()),
+                            display_agent: Some("custom agent".into()),
+                            state_labels: std::collections::HashMap::from([(
+                                "working".into(),
+                                "busy".into(),
+                            )]),
+                            clear_title: false,
+                            clear_display_agent: false,
+                            clear_state_labels: false,
+                            ttl: None,
+                            seq: None,
+                        });
+                    }
+                    app.state.workspaces[ws_idx]
+                        .pane_state_mut(pane_id)
+                        .unwrap()
+                        .seen = seen;
+                    let pane = app.pane_info(ws_idx, pane_id).unwrap();
+                    let legacy = PaneAgentStatusChangedEvent {
+                        pane_id: pane.pane_id,
+                        workspace_id: pane.workspace_id,
+                        agent_status: pane.agent_status,
+                        agent: pane.agent,
+                        title: pane.title,
+                        display_agent: pane.display_agent,
+                        state_labels: pane.state_labels,
+                    };
+                    let narrow = app.pane_agent_status_snapshot(&public_pane_id).unwrap();
+                    let encode = |data| {
+                        serde_json::to_vec(&SubscriptionEventEnvelope {
+                            event: SubscriptionEventKind::PaneAgentStatusChanged,
+                            data: SubscriptionEventData::PaneAgentStatusChanged(data),
+                        })
+                        .unwrap()
+                    };
+                    assert_eq!(
+                        encode(narrow),
+                        encode(legacy),
+                        "{state:?} seen={seen} metadata={metadata}"
+                    );
+                }
+            }
+        }
+        assert!(app.pane_agent_status_snapshot("missing").is_none());
+    }
+
+    #[test]
     fn pane_metadata_tokens_patch_and_clear_through_dispatcher() {
         let (mut app, pane_id) = app_with_test_workspace();
         for (tokens, expected) in [

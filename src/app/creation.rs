@@ -322,6 +322,26 @@ impl App {
         Some(pane)
     }
 
+    pub(crate) fn pane_agent_status_snapshot(
+        &self,
+        public_pane_id: &str,
+    ) -> Option<crate::api::schema::PaneAgentStatusChangedEvent> {
+        let (ws_idx, pane_id) = self.parse_pane_id(public_pane_id)?;
+        let ws = self.state.workspaces.get(ws_idx)?;
+        let pane = ws.pane_state(pane_id)?;
+        let terminal = self.state.terminals.get(&pane.attached_terminal_id)?;
+        let presentation = terminal.effective_presentation();
+        Some(crate::api::schema::PaneAgentStatusChangedEvent {
+            pane_id: self.public_pane_id(ws_idx, pane_id)?,
+            workspace_id: self.public_workspace_id(ws_idx),
+            agent_status: pane_agent_status(terminal.state, pane.seen),
+            agent: terminal.effective_agent_label().map(str::to_string),
+            title: presentation.title,
+            display_agent: presentation.display_agent,
+            state_labels: presentation.state_labels,
+        })
+    }
+
     pub(super) fn pane_metadata(
         &self,
         ws_idx: usize,

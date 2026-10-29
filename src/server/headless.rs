@@ -134,7 +134,7 @@ fn non_empty_body(value: &str) -> Option<String> {
 enum LoopEvent {
     Timer,
     Internal(AppEvent),
-    Api(Box<api::ApiRequestMessage>),
+    Api(api::ServerRequest),
     ServerEvent(ServerEvent),
     RenderRequested,
 }
@@ -626,7 +626,7 @@ impl HeadlessServer {
             let event = {
                 tokio::select! {
                     maybe_api = self.app.api_rx.recv() => match maybe_api {
-                        Some(msg) => LoopEvent::Api(Box::new(msg)),
+                        Some(msg) => LoopEvent::Api(msg),
                         None => LoopEvent::Timer,
                     },
                     maybe_ev = self.app.event_rx.recv() => match maybe_ev {
@@ -674,7 +674,7 @@ impl HeadlessServer {
                     }
                 }
                 LoopEvent::Api(msg) => {
-                    if self.handle_api_request_with_shutdown_check(*msg) {
+                    if self.handle_server_request(msg) {
                         needs_render = true;
                         needs_full_render = true;
                     }
@@ -2877,7 +2877,7 @@ impl HeadlessServer {
             let Ok(msg) = self.app.api_rx.try_recv() else {
                 break;
             };
-            changed |= self.handle_api_request_with_shutdown_check(msg);
+            changed |= self.handle_server_request(msg);
         }
         changed
     }
@@ -2887,8 +2887,54 @@ impl HeadlessServer {
             let Ok(msg) = self.app.api_rx.try_recv() else {
                 break;
             };
-            self.handle_api_request_with_shutdown_check(msg);
+            self.handle_server_request(msg);
         }
+    }
+
+    fn handle_server_request(&mut self, request: api::ServerRequest) -> bool {
+        let (id, pane_id, respond_to) = match request {
+            api::ServerRequest::Api(request) => {
+                return self.handle_api_request_with_shutdown_check(*request)
+            }
+            api::ServerRequest::AgentStatus {
+                id,
+                pane_id,
+                respond_to,
+            } => (id, pane_id, respond_to),
+        };
+        let error = |code: &str, message: String| api::schema::ErrorResponse {
+            id: id.clone(),
+            error: api::schema::ErrorBody {
+                code: code.into(),
+                message,
+            },
+        };
+        if self.shutting_down || self.host_shutdown_requested() {
+            let _ = respond_to.send(Err(error(
+                "server_unavailable",
+                "server is shutting down".into(),
+            )));
+            return false;
+        }
+        let mut changed = self.app.expire_due_metadata(Instant::now());
+        changed |= self.drain_all_internal_events_with_forwarding();
+        if self.host_shutdown_requested() {
+            let _ = respond_to.send(Err(error(
+                "server_unavailable",
+                "server is shutting down".into(),
+            )));
+            return changed;
+        }
+        if self.foreground_client_outer_focus() == Some(true) {
+            self.app.state.mark_active_tab_seen();
+        }
+        self.app.sync_pending_terminal_titles();
+        let result = self
+            .app
+            .pane_agent_status_snapshot(&pane_id)
+            .ok_or_else(|| error("pane_not_found", format!("pane {pane_id} not found")));
+        let _ = respond_to.send(result);
+        changed
     }
 
     fn reject_api_request_for_shutdown(msg: api::ApiRequestMessage) {

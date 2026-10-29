@@ -71,14 +71,6 @@ struct PanePresentationSnapshot {
 }
 
 impl PanePresentationSnapshot {
-    fn from(pane: &crate::api::schema::PaneInfo) -> Self {
-        Self {
-            title: pane.title.clone(),
-            display_agent: pane.display_agent.clone(),
-            state_labels: pane.state_labels.clone(),
-        }
-    }
-
     fn from_event(
         title: &Option<String>,
         display_agent: &Option<String>,
@@ -208,20 +200,20 @@ impl ActiveSubscription {
                 agent_status,
             } => {
                 let last_sequence = event_hub.current_sequence();
-                let probe = pane_get(format!("{request_id}:sub:{index}:probe"), &pane_id, api_tx)?;
+                let probe = agent_status_snapshot(
+                    format!("{request_id}:sub:{index}:probe"),
+                    &pane_id,
+                    api_tx,
+                )?;
                 let last_status = probe.agent_status;
-                let last_presentation = PanePresentationSnapshot::from(&probe);
+                let last_presentation = PanePresentationSnapshot::from_event(
+                    &probe.title,
+                    &probe.display_agent,
+                    &probe.state_labels,
+                );
                 let initial_event = agent_status
                     .is_some_and(|wanted| wanted == probe.agent_status)
-                    .then_some(PaneAgentStatusChangedEvent {
-                        pane_id: probe.pane_id.clone(),
-                        workspace_id: probe.workspace_id,
-                        agent_status: probe.agent_status,
-                        agent: probe.agent,
-                        title: probe.title,
-                        display_agent: probe.display_agent,
-                        state_labels: probe.state_labels,
-                    });
+                    .then(|| probe.clone());
 
                 Ok(Self::AgentStatusChanged(Box::new(
                     ActiveAgentStatusChangedSubscription {
@@ -483,7 +475,7 @@ impl ActiveAgentStatusChangedSubscription {
         }
 
         let before_snapshot_sequence = self.last_sequence;
-        let pane = pane_get(
+        let pane = agent_status_snapshot(
             format!("{}:pane", self.request_prefix),
             &self.pane_id,
             api_tx,
@@ -503,10 +495,14 @@ impl ActiveAgentStatusChangedSubscription {
 
     fn event_from_snapshot(
         &mut self,
-        pane: crate::api::schema::PaneInfo,
+        pane: PaneAgentStatusChangedEvent,
     ) -> Option<SubscriptionEventEnvelope> {
         let current_status = pane.agent_status;
-        let current_presentation = PanePresentationSnapshot::from(&pane);
+        let current_presentation = PanePresentationSnapshot::from_event(
+            &pane.title,
+            &pane.display_agent,
+            &pane.state_labels,
+        );
         let previous_status = self.last_status.replace(current_status);
         let previous_presentation = self.last_presentation.replace(current_presentation.clone());
         let presentation_changed = previous_presentation
@@ -525,15 +521,7 @@ impl ActiveAgentStatusChangedSubscription {
 
         Some(SubscriptionEventEnvelope {
             event: SubscriptionEventKind::PaneAgentStatusChanged,
-            data: SubscriptionEventData::PaneAgentStatusChanged(PaneAgentStatusChangedEvent {
-                pane_id: pane.pane_id,
-                workspace_id: pane.workspace_id,
-                agent_status: current_status,
-                agent: pane.agent,
-                title: pane.title,
-                display_agent: pane.display_agent,
-                state_labels: pane.state_labels,
-            }),
+            data: SubscriptionEventData::PaneAgentStatusChanged(pane),
         })
     }
 }
@@ -619,6 +607,31 @@ fn pane_read(
     })
 }
 
+fn agent_status_snapshot(
+    id: String,
+    pane_id: &str,
+    api_tx: &ApiRequestSender,
+) -> Result<PaneAgentStatusChangedEvent, ErrorResponse> {
+    let error = |message| ErrorResponse {
+        id: id.clone(),
+        error: ErrorBody {
+            code: "server_unavailable".into(),
+            message,
+        },
+    };
+    let (respond_to, response_rx) = std::sync::mpsc::channel();
+    api_tx
+        .send(crate::api::ServerRequest::AgentStatus {
+            id: id.clone(),
+            pane_id: pane_id.into(),
+            respond_to,
+        })
+        .map_err(|err| error(format!("failed to dispatch request: {err}")))?;
+    response_rx
+        .recv_timeout(APP_RESPONSE_TIMEOUT)
+        .map_err(|err| error(format!("request handling failed: {err}")))?
+}
+
 fn pane_get(
     request_id: String,
     pane_id: &str,
@@ -667,6 +680,89 @@ mod tests {
 
     use super::*;
     use crate::api::schema::{AgentStatus, EventData, EventEnvelope, EventKind, PaneInfo};
+
+    #[test]
+    fn agent_status_projector_does_not_load_full_pane_metadata() {
+        let creation = include_str!("../app/creation.rs");
+        let snapshot = creation
+            .split("fn pane_agent_status_snapshot(")
+            .nth(1)
+            .unwrap()
+            .split("fn pane_metadata(")
+            .next()
+            .unwrap();
+        for expensive in [
+            "pane_info(",
+            "pane_metadata(",
+            "foreground_cwd(",
+            "foreground_job(",
+            "runtime_for_pane",
+        ] {
+            assert!(
+                !snapshot.contains(expensive),
+                "status snapshot performs {expensive}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_status_setup_and_quiet_poll_use_narrow_requests_and_preserve_payloads() {
+        let (api_tx, mut api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let expected = PaneAgentStatusChangedEvent {
+            pane_id: "pane_1".into(),
+            workspace_id: "workspace_1".into(),
+            agent_status: AgentStatus::Working,
+            agent: Some("pi".into()),
+            title: Some("task".into()),
+            display_agent: Some("custom".into()),
+            state_labels: HashMap::from([("working".into(), "busy".into())]),
+        };
+        let initial = expected.clone();
+        let worker = std::thread::spawn(move || {
+            for title in ["task", "task", "updated"] {
+                let crate::api::ServerRequest::AgentStatus {
+                    pane_id,
+                    respond_to,
+                    ..
+                } = api_rx.blocking_recv().unwrap()
+                else {
+                    panic!("status sampling requested full public metadata");
+                };
+                assert_eq!(pane_id, "pane_1");
+                let mut snapshot = initial.clone();
+                snapshot.title = Some(title.into());
+                respond_to.send(Ok(snapshot)).unwrap();
+            }
+        });
+        let hub = EventHub::default();
+        let mut subscription = ActiveSubscription::new(
+            Subscription::PaneAgentStatusChanged {
+                pane_id: "pane_1".into(),
+                agent_status: Some(AgentStatus::Working),
+            },
+            "status",
+            0,
+            &api_tx,
+            &hub,
+            hub.current_sequence(),
+        )
+        .unwrap();
+        let encode = |data| {
+            serde_json::to_value(SubscriptionEventEnvelope {
+                event: SubscriptionEventKind::PaneAgentStatusChanged,
+                data: SubscriptionEventData::PaneAgentStatusChanged(data),
+            })
+            .unwrap()
+        };
+        let event = subscription.poll(&api_tx, &hub).unwrap();
+        assert_eq!(event, encode(expected.clone()));
+        assert!(subscription.poll(&api_tx, &hub).is_none());
+        let event = subscription.poll(&api_tx, &hub).unwrap();
+        let mut updated = expected;
+        updated.title = Some("updated".into());
+        assert_eq!(event, encode(updated));
+        worker.join().unwrap();
+    }
 
     fn presentation_event(title: Option<&str>) -> EventEnvelope {
         EventEnvelope {
