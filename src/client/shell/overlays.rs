@@ -227,13 +227,9 @@ fn panel(
     if a.width < 2 || a.height < 2 {
         return None;
     }
-    let background = Style::default().bg(bg).remove_modifier(Modifier::DIM);
-    let border = Style::default().fg(c).bg(bg).remove_modifier(Modifier::DIM);
-    for y in a.y..a.bottom() {
-        for x in a.x..a.right() {
-            b[(x, y)].set_symbol(" ").set_style(background);
-        }
-    }
+    let border = Style::default().fg(c).bg(bg);
+    ratatui::widgets::Widget::render(ratatui::widgets::Clear, a, b);
+    b.set_style(a, Style::default().bg(bg));
     for x in a.x..a.right() {
         b[(x, a.y)]
             .set_symbol(if x == a.x {
