@@ -7,10 +7,15 @@ fn checkout_path_preview(root: &str, repo: &str, branch: &str) -> String {
     } else {
         '/'
     };
-    format!(
-        "{}{separator}{repo}{separator}{}",
-        root.trim_end_matches(separator),
+    let branch = branch.trim();
+    let slug = if branch.is_empty() {
+        "<automatic>".to_owned()
+    } else {
         crate::worktree::branch_to_path_slug(branch)
+    };
+    format!(
+        "{}{separator}{repo}{separator}{slug}",
+        root.trim_end_matches(separator)
     )
 }
 
@@ -250,15 +255,10 @@ impl ClientShellState {
         if create.creating {
             return;
         }
-        let branch = create.branch.trim().to_owned();
-        if branch.is_empty() {
-            create.error = Some("branch is required".to_owned());
-            outcome.repaint = true;
-            return;
-        }
         create.branch.trim_and_accept();
+        let branch = (!create.branch.is_empty()).then(|| create.branch.as_str().to_owned());
         create.checkout_path =
-            checkout_path_preview(&worktree_directory, &create.repo_name, &branch);
+            checkout_path_preview(&worktree_directory, &create.repo_name, &create.branch);
         create.creating = true;
         create.error = None;
         let workspace_id = create.source_workspace_id.clone();
@@ -266,7 +266,7 @@ impl ClientShellState {
             crate::api::schema::Method::WorktreeCreate(crate::api::schema::WorktreeCreateParams {
                 workspace_id: Some(workspace_id),
                 cwd: None,
-                branch: Some(branch),
+                branch,
                 base: Some("HEAD".to_owned()),
                 path: None,
                 label: None,
@@ -378,21 +378,16 @@ impl ClientShellState {
                 PendingEndpointKind::PrepareWorktreeCreate { workspace_id },
                 Ok(ResponseResult::WorktreeList { source, .. }),
             ) => {
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|duration| duration.as_micros().min(u128::from(u64::MAX)) as u64)
-                    .unwrap_or(0);
-                let branch = crate::worktree::generated_branch_slug(seed);
                 let Some(worktree_directory) = self.endpoint_worktree_directory() else {
                     return false;
                 };
                 let checkout_path =
-                    checkout_path_preview(&worktree_directory, &source.repo_name, &branch);
+                    checkout_path_preview(&worktree_directory, &source.repo_name, "");
                 self.overlay = Some(ClientShellOverlay::WorktreeCreate(
                     ClientWorktreeCreateOverlay {
                         source_workspace_id: workspace_id,
                         repo_name: source.repo_name,
-                        branch: TextEditor::new(&branch, true),
+                        branch: TextEditor::default(),
                         checkout_path,
                         error: None,
                         creating: false,
@@ -563,6 +558,14 @@ mod path_tests {
         assert_eq!(
             checkout_path_preview(r"\\server\share", "repo", "feature/a"),
             r"\\server\share\repo\feature-a"
+        );
+        assert_eq!(
+            checkout_path_preview("/worktrees/", "repo", ""),
+            "/worktrees/repo/<automatic>"
+        );
+        assert_eq!(
+            checkout_path_preview(r"C:\worktrees\", "repo", "   "),
+            r"C:\worktrees\repo\<automatic>"
         );
     }
 }
