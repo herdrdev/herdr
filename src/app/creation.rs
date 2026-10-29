@@ -322,6 +322,37 @@ impl App {
         Some(pane)
     }
 
+    pub(crate) fn pane_agent_status_snapshot(
+        &self,
+        pane_id: &str,
+    ) -> Result<crate::api::schema::PaneAgentStatusChangedEvent, crate::api::schema::ErrorBody>
+    {
+        let not_found = || crate::api::schema::ErrorBody {
+            code: "pane_not_found".into(),
+            message: format!("pane {pane_id} not found"),
+        };
+        let (ws_idx, local_pane_id) = self.parse_pane_id(pane_id).ok_or_else(not_found)?;
+        let ws = self.state.workspaces.get(ws_idx).ok_or_else(not_found)?;
+        let pane = ws.pane_state(local_pane_id).ok_or_else(not_found)?;
+        let terminal = self
+            .state
+            .terminals
+            .get(&pane.attached_terminal_id)
+            .ok_or_else(not_found)?;
+        let presentation = terminal.effective_presentation();
+        Ok(crate::api::schema::PaneAgentStatusChangedEvent {
+            pane_id: self
+                .public_pane_id(ws_idx, local_pane_id)
+                .ok_or_else(not_found)?,
+            workspace_id: self.public_workspace_id(ws_idx),
+            agent_status: pane_agent_status(terminal.state, pane.seen),
+            agent: terminal.effective_agent_label().map(str::to_string),
+            title: presentation.title,
+            display_agent: presentation.display_agent,
+            state_labels: presentation.state_labels,
+        })
+    }
+
     pub(super) fn pane_metadata(
         &self,
         ws_idx: usize,

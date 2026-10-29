@@ -134,7 +134,7 @@ fn non_empty_body(value: &str) -> Option<String> {
 enum LoopEvent {
     Timer,
     Internal(AppEvent),
-    Api(Box<api::ApiRequestMessage>),
+    Api(Box<api::ApiMessage>),
     ServerEvent(ServerEvent),
     RenderRequested,
 }
@@ -674,7 +674,7 @@ impl HeadlessServer {
                     }
                 }
                 LoopEvent::Api(msg) => {
-                    if self.handle_api_request_with_shutdown_check(*msg) {
+                    if self.handle_api_message(*msg) {
                         needs_render = true;
                         needs_full_render = true;
                     }
@@ -2877,7 +2877,7 @@ impl HeadlessServer {
             let Ok(msg) = self.app.api_rx.try_recv() else {
                 break;
             };
-            changed |= self.handle_api_request_with_shutdown_check(msg);
+            changed |= self.handle_api_message(msg);
         }
         changed
     }
@@ -2887,8 +2887,38 @@ impl HeadlessServer {
             let Ok(msg) = self.app.api_rx.try_recv() else {
                 break;
             };
-            self.handle_api_request_with_shutdown_check(msg);
+            self.handle_api_message(msg);
         }
+    }
+
+    fn handle_api_message(&mut self, message: api::ApiMessage) -> bool {
+        let (pane_id, respond_to) = match message {
+            api::ApiMessage::Request(request) => {
+                return self.handle_api_request_with_shutdown_check(*request);
+            }
+            api::ApiMessage::PaneAgentStatus {
+                pane_id,
+                respond_to,
+            } => (pane_id, respond_to),
+        };
+        let unavailable = || api::schema::ErrorBody {
+            code: "server_unavailable".into(),
+            message: "server is shutting down".into(),
+        };
+        if self.shutting_down || self.host_shutdown_requested() {
+            let _ = respond_to.send(Err(unavailable()));
+            return false;
+        }
+        let mut changed = self.app.expire_due_metadata(Instant::now());
+        changed |= self.drain_all_internal_events_with_forwarding();
+        if self.host_shutdown_requested() {
+            let _ = respond_to.send(Err(unavailable()));
+            return changed;
+        }
+        let title_changes = self.app.sync_pending_terminal_titles();
+        changed |= self.app.terminal_title_sidebar_changed(&title_changes);
+        let _ = respond_to.send(self.app.pane_agent_status_snapshot(&pane_id));
+        changed
     }
 
     fn reject_api_request_for_shutdown(msg: api::ApiRequestMessage) {

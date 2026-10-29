@@ -151,6 +151,24 @@ pub struct ForegroundJob {
     pub processes: Vec<ForegroundProcess>,
 }
 
+pub(crate) fn foreground_agent_leader_candidate(
+    shell_pid: u32,
+    observed_native_pgid: Option<u32>,
+) -> Option<ForegroundJob> {
+    if let Some(group) = observed_native_pgid {
+        return foreground_group_leader_job(group);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::inferred_agent_leader_candidate(shell_pid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shell_pid;
+        None
+    }
+}
+
 /// A request from outside the process to stop the server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServerQuitSignal {

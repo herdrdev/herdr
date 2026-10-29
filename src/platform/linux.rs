@@ -354,6 +354,7 @@ pub fn foreground_job(child_pid: u32) -> Option<ForegroundJob> {
         (process_detection_mode() == ProcessDetectionMode::ChildGroups)
             .then(|| child_groups_foreground_process_group(child_pid))
             .flatten()
+            .map(|group| group.process_group_id)
     })?;
     foreground_job_for_group(child_pid, process_group_id)
 }
@@ -405,21 +406,58 @@ fn foreground_job_from_members(
     })
 }
 
+struct InferredForegroundGroup {
+    process_group_id: u32,
+    shell_group_id: u32,
+}
+
 /// Best-effort foreground group for environments that do not expose terminal
 /// foreground groups. This mode is explicit because background jobs cannot be
 /// distinguished from foreground jobs without the native terminal signal.
-fn child_groups_foreground_process_group(child_pid: u32) -> Option<u32> {
+fn child_groups_foreground_process_group(child_pid: u32) -> Option<InferredForegroundGroup> {
     let shell_group_id = process_pgrp_comm_and_state(child_pid)
         .map(|(pgrp, _, _)| pgrp)
         .filter(|pgrp| *pgrp > 0)? as u32;
 
-    child_groups_foreground_process_group_with(
+    let process_group_id = child_groups_foreground_process_group_with(
         child_pid,
         shell_group_id,
         process_task_ids,
         process_task_children,
         |pid| process_pgrp_comm_and_state(pid).map(|(pgrp, _, _)| pgrp),
+    )?;
+    Some(InferredForegroundGroup {
+        process_group_id,
+        shell_group_id,
+    })
+}
+
+pub(super) fn inferred_agent_leader_candidate(shell_pid: u32) -> Option<ForegroundJob> {
+    inferred_agent_leader_candidate_with(
+        process_detection_mode(),
+        || foreground_process_group_id(shell_pid),
+        || child_groups_foreground_process_group(shell_pid),
+        foreground_group_leader_job,
     )
+}
+
+fn inferred_agent_leader_candidate_with(
+    mode: ProcessDetectionMode,
+    native_group: impl FnOnce() -> Option<u32>,
+    infer_group: impl FnOnce() -> Option<InferredForegroundGroup>,
+    leader_job: impl FnOnce(u32) -> Option<ForegroundJob>,
+) -> Option<ForegroundJob> {
+    if mode != ProcessDetectionMode::ChildGroups {
+        return None;
+    }
+    if native_group().is_some() {
+        return None;
+    }
+    let inferred = infer_group()?;
+    if inferred.process_group_id == inferred.shell_group_id {
+        return None;
+    }
+    leader_job(inferred.process_group_id)
 }
 
 fn child_groups_foreground_process_group_with(
@@ -631,13 +669,26 @@ fn live_process_group_member(process_group_id: u32, pid: u32) -> Option<ProcGrou
 }
 
 pub fn foreground_group_leader_job(process_group_id: u32) -> Option<ForegroundJob> {
-    let (pgrp, name, state) = process_pgrp_comm_and_state(process_group_id)?;
+    foreground_group_leader_job_with(
+        process_group_id,
+        process_pgrp_comm_and_state,
+        running_inside_wsl(),
+        process_argv,
+    )
+}
+
+fn foreground_group_leader_job_with(
+    process_group_id: u32,
+    read_stat: impl FnOnce(u32) -> Option<(i32, String, char)>,
+    running_inside_wsl: bool,
+    read_argv: impl FnOnce(u32) -> Option<Vec<String>>,
+) -> Option<ForegroundJob> {
+    let (pgrp, name, state) = read_stat(process_group_id)?;
     if pgrp as u32 != process_group_id {
         return None;
     }
-
-    let argv = process_allows_remote_memory_read(state, &name, running_inside_wsl())
-        .then(|| process_argv(process_group_id))
+    let argv = process_allows_remote_memory_read(state, &name, running_inside_wsl)
+        .then(|| read_argv(process_group_id))
         .flatten();
     Some(ForegroundJob {
         process_group_id,
@@ -1291,6 +1342,158 @@ mod tests {
     }
 
     #[test]
+    fn inferred_leader_candidate_prefers_fresh_native_group() {
+        assert!(inferred_agent_leader_candidate_with(
+            ProcessDetectionMode::ChildGroups,
+            || Some(300),
+            || panic!("native tpgid must prevent inference"),
+            |_| panic!("newly observed native group must use the full fallback"),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn inferred_leader_candidate_requires_opt_in_and_a_non_shell_group() {
+        assert!(inferred_agent_leader_candidate_with(
+            ProcessDetectionMode::Native,
+            || panic!("native mode retains its existing full fallback"),
+            || panic!("native mode must not infer"),
+            |_| panic!("native mode must not infer a leader"),
+        )
+        .is_none());
+
+        for inferred in [
+            None,
+            Some(InferredForegroundGroup {
+                process_group_id: 40,
+                shell_group_id: 40,
+            }),
+        ] {
+            assert!(inferred_agent_leader_candidate_with(
+                ProcessDetectionMode::ChildGroups,
+                || None,
+                || inferred,
+                |_| panic!("missing selection or shell group must use full fallback"),
+            )
+            .is_none());
+        }
+    }
+
+    #[test]
+    fn inferred_leader_candidate_refreshes_worker_children_and_group_selection() {
+        let children = RefCell::new(vec![99]);
+        let selected = RefCell::new(Vec::new());
+        let discover = || {
+            inferred_agent_leader_candidate_with(
+                ProcessDetectionMode::ChildGroups,
+                || None,
+                || {
+                    let process_group_id = child_groups_foreground_process_group_with(
+                        42,
+                        40,
+                        |_, _| vec![42, 43],
+                        |_, tid, _| {
+                            if tid == 43 {
+                                children.borrow().clone()
+                            } else {
+                                Vec::new()
+                            }
+                        },
+                        |pid| Some(pid as i32),
+                    )?;
+                    Some(InferredForegroundGroup {
+                        process_group_id,
+                        shell_group_id: 40,
+                    })
+                },
+                |group| {
+                    selected.borrow_mut().push(group);
+                    foreground_group_leader_job_with(
+                        group,
+                        |_| Some((group as i32, "codex".to_string(), 'S')),
+                        false,
+                        |_| None,
+                    )
+                },
+            )
+        };
+
+        assert_eq!(discover().unwrap().process_group_id, 99);
+        children.borrow_mut().push(200);
+        assert_eq!(discover().unwrap().process_group_id, 200);
+        children.borrow_mut().pop();
+        assert_eq!(discover().unwrap().process_group_id, 99);
+        children.borrow_mut().clear();
+        assert!(discover().is_none());
+        *children.borrow_mut() = (100..=100 + CHILD_GROUPS_SCAN_LIMIT as u32).collect();
+        assert!(discover().is_none());
+        assert_eq!(*selected.borrow(), vec![99, 200, 99]);
+    }
+
+    #[test]
+    fn inferred_leader_candidate_rejects_missing_or_changed_leader_group() {
+        for stat in [
+            None,
+            Some((100, "codex".to_string(), 'S')),
+            Some((0, "codex".to_string(), 'S')),
+            Some((-1, "codex".to_string(), 'S')),
+        ] {
+            let candidate = inferred_agent_leader_candidate_with(
+                ProcessDetectionMode::ChildGroups,
+                || None,
+                || {
+                    Some(InferredForegroundGroup {
+                        process_group_id: 99,
+                        shell_group_id: 40,
+                    })
+                },
+                |group| {
+                    foreground_group_leader_job_with(
+                        group,
+                        |_| stat,
+                        false,
+                        |_| panic!("invalid leader must not read argv"),
+                    )
+                },
+            );
+            assert!(candidate.is_none());
+        }
+    }
+
+    #[test]
+    fn leader_candidate_keeps_fresh_remote_memory_guards() {
+        for (comm, state, wsl, reads) in [
+            ("codex", 'S', true, 0),
+            ("codex", 'S', false, 1),
+            ("node", 'S', true, 1),
+            ("node", 'T', true, 1),
+            ("node", 't', true, 1),
+            ("node", 'D', true, 0),
+            ("node", 'Z', false, 0),
+            ("node", 'X', false, 0),
+            ("node", 'x', false, 0),
+        ] {
+            let mut argv_reads = 0;
+            let job = foreground_group_leader_job_with(
+                99,
+                |_| Some((99, comm.to_string(), state)),
+                wsl,
+                |_| {
+                    argv_reads += 1;
+                    Some(vec!["codex".to_string()])
+                },
+            )
+            .unwrap();
+            assert_eq!(argv_reads, reads, "{comm} {state} wsl={wsl}");
+            assert_eq!(job.processes[0].argv.is_some(), reads != 0);
+            assert_eq!(
+                process_allows_remote_memory_read(state, comm, wsl),
+                reads != 0
+            );
+        }
+    }
+
+    #[test]
     fn foreground_members_follow_the_pane_tree_and_filter_by_process_group() {
         let tasks = HashMap::from([
             (100, vec![100, 101]),
@@ -1581,6 +1784,20 @@ mod tests {
         };
 
         assert_eq!(discover(), vec![200]);
+        let inferred = child_groups_foreground_process_group_with(
+            100,
+            100,
+            |pid, _| vec![pid],
+            |pid, tid, _| {
+                children
+                    .borrow()
+                    .get(&(pid, tid))
+                    .cloned()
+                    .unwrap_or_default()
+            },
+            |_| Some(200),
+        );
+        assert_eq!(inferred, Some(200));
         children.borrow_mut().insert((100, 100), vec![200, 201]);
         assert_eq!(discover(), vec![200, 201]);
     }
