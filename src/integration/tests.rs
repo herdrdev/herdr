@@ -1137,7 +1137,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(9));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     install_claude().unwrap();
@@ -1146,7 +1146,7 @@ fn claude_v9_integration_status_is_outdated_until_reinstalled() {
         hook_path,
         CLAUDE_INTEGRATION_VERSION,
     );
-    assert_eq!(status.installed_version, Some(11));
+    assert_eq!(status.installed_version, Some(CLAUDE_INTEGRATION_VERSION));
     assert_eq!(status.state, IntegrationStatusKind::Current);
 
     std::env::remove_var("HOME");
@@ -1176,7 +1176,7 @@ fn claude_v2_integration_status_is_outdated() {
 
     assert_eq!(claude.path, hook_path);
     assert_eq!(claude.installed_version, Some(2));
-    assert_eq!(claude.expected_version, 11);
+    assert_eq!(claude.expected_version, CLAUDE_INTEGRATION_VERSION);
     assert_eq!(claude.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -1435,7 +1435,7 @@ fn codex_v2_integration_status_is_outdated() {
 
     assert_eq!(codex.path, hook_path);
     assert_eq!(codex.installed_version, Some(2));
-    assert_eq!(codex.expected_version, 10);
+    assert_eq!(codex.expected_version, CODEX_INTEGRATION_VERSION);
     assert_eq!(codex.state, IntegrationStatusKind::Outdated);
 
     std::env::remove_var("HOME");
@@ -4135,7 +4135,9 @@ fn install_qwen_writes_session_hook_and_preserves_settings() {
     assert!(settings.get("permissions").is_some());
     let hook_asset = fs::read_to_string(&installed.hook_path).unwrap();
     assert!(hook_asset.contains("HERDR_INTEGRATION_ID=qwen"));
-    assert!(hook_asset.contains("HERDR_INTEGRATION_VERSION=2"));
+    assert!(hook_asset.contains(&format!(
+        "HERDR_INTEGRATION_VERSION={QWEN_INTEGRATION_VERSION}"
+    )));
     assert!(hook_asset.contains("herdr:qwen"));
 
     install_qwen().unwrap();
@@ -5033,8 +5035,10 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     fs::create_dir_all(&hook_dir).unwrap();
     fs::write(
         hook_dir.join(ANTIGRAVITY_CLI_HOOK_INSTALL_NAME),
-        ANTIGRAVITY_CLI_HOOK_ASSET
-            .replace("HERDR_INTEGRATION_VERSION=4", "HERDR_INTEGRATION_VERSION=3"),
+        ANTIGRAVITY_CLI_HOOK_ASSET.replace(
+            &format!("HERDR_INTEGRATION_VERSION={ANTIGRAVITY_CLI_INTEGRATION_VERSION}"),
+            "HERDR_INTEGRATION_VERSION=3",
+        ),
     )
     .unwrap();
     std::env::set_var(ANTIGRAVITY_CLI_CONFIG_DIR_ENV_VAR, &agy_dir);
@@ -5048,7 +5052,10 @@ fn antigravity_cli_v3_install_is_outdated_until_reinstalled() {
     let outdated = status();
     assert_eq!(outdated.state, IntegrationStatusKind::Outdated);
     assert_eq!(outdated.installed_version, Some(3));
-    assert_eq!(outdated.expected_version, 4);
+    assert_eq!(
+        outdated.expected_version,
+        ANTIGRAVITY_CLI_INTEGRATION_VERSION
+    );
 
     install_antigravity_cli().unwrap();
     assert_eq!(status().state, IntegrationStatusKind::Current);

@@ -1,7 +1,7 @@
 #!/bin/sh
 # managed by herdr; reinstalling the integration replaces this file.
 # HERDR_INTEGRATION_ID=qwen
-# HERDR_INTEGRATION_VERSION=2
+# HERDR_INTEGRATION_VERSION=3
 
 [ "${1:-}" = "session" ] || exit 0
 [ "${HERDR_ENV:-}" = "1" ] || exit 0
@@ -14,7 +14,7 @@ else
 fi
 command -v python3 >/dev/null 2>&1 || exit 0
 
-python3 -c '
+python3 -I -c '
 import json
 import os
 import subprocess

@@ -3,7 +3,7 @@
 # managed by herdr; reinstalling or updating the integration overwrites this file.
 # add custom hooks beside this file instead of editing it.
 # HERDR_INTEGRATION_ID=copilot
-# HERDR_INTEGRATION_VERSION=4
+# HERDR_INTEGRATION_VERSION=5
 
 set -eu
 
@@ -16,7 +16,7 @@ cat >"$hook_input_file" 2>/dev/null || true
 [ -n "${HERDR_PANE_ID:-}" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
-HERDR_HOOK_INPUT_FILE="$hook_input_file" python3 - <<'PY'
+HERDR_HOOK_INPUT_FILE="$hook_input_file" python3 -I - <<'PY'
 import json
 import os
 import random
