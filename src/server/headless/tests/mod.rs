@@ -7179,6 +7179,68 @@ fn terminal_bell_targets_foreground_client_only() {
 }
 
 #[test]
+fn clipboard_write_reaches_only_source_attach_owner_and_preserves_tui_delivery() {
+    with_terminal_session_test_server(|server, _terminal_id, target, _| {
+        for foreground in [false, true] {
+            server.clients.clear();
+            server.terminal_attach_owners.clear();
+            let mut controls = Vec::new();
+            for client_id in 1..=3 {
+                let (writer, control, _render) = test_client_writer();
+                let mut client = ClientConnection::new(
+                    (80, 24),
+                    crate::kitty_graphics::HostCellSize::default(),
+                    client_id,
+                    RenderEncoding::SemanticFrame,
+                    Some(writer),
+                );
+                if client_id != 3 {
+                    client.mode = ClientConnectionMode::TerminalAttach {
+                        terminal_id: if client_id == 1 {
+                            target.clone()
+                        } else {
+                            "unrelated".to_owned()
+                        },
+                    };
+                }
+                server.clients.insert(client_id, client);
+                controls.push(control);
+            }
+            server.terminal_attach_owners.insert(target.clone(), 1);
+            server
+                .terminal_attach_owners
+                .insert("unrelated".to_owned(), 2);
+            server.foreground_client_id = foreground.then_some(3);
+
+            assert!(
+                !server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+                    pane_id: server.app.state.workspaces[0].tabs[0].root_pane,
+                    content: b"test".to_vec(),
+                })
+            );
+            assert!(matches!(
+                read_server_message(controls[0].recv_timeout(Duration::from_millis(100))
+                    .expect("source attach owner receives clipboard")),
+                ServerMessage::Clipboard { data } if data == "dGVzdA=="
+            ));
+            assert!(
+                controls[1].try_recv().is_err(),
+                "unrelated attach gets nothing"
+            );
+            if foreground {
+                assert!(matches!(
+                    read_server_message(controls[2].recv_timeout(Duration::from_millis(100))
+                        .expect("foreground TUI still receives clipboard")),
+                    ServerMessage::Clipboard { data } if data == "dGVzdA=="
+                ));
+            } else {
+                assert!(controls[2].try_recv().is_err());
+            }
+        }
+    });
+}
+
+#[test]
 fn clipboard_write_targets_foreground_client_only() {
     let mut server = test_headless_server();
     let (background_tx, background_control_rx, _background_rx) = test_client_writer();
@@ -7208,6 +7270,7 @@ fn clipboard_write_targets_foreground_client_only() {
     server.sync_foreground_client_state();
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 
@@ -7234,6 +7297,7 @@ fn clipboard_write_without_foreground_client_does_not_change_visual_state() {
     server.foreground_client_id = None;
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 
@@ -7260,6 +7324,7 @@ fn clipboard_write_failed_foreground_send_removes_client_without_visual_change()
     server.foreground_client_id = Some(1);
 
     let changed = server.handle_internal_event_with_forwarding(AppEvent::ClipboardWrite {
+        pane_id: crate::layout::PaneId::from_raw(1),
         content: b"test".to_vec(),
     });
 

@@ -2007,7 +2007,11 @@ async fn run_client_loop(
                         }
                     }
                     ServerMessage::Clipboard { data } => {
-                        if forward_clipboard(&data) {
+                        if forward_clipboard(
+                            &data,
+                            state.attach_escape.is_some(),
+                            &mut io::stdout(),
+                        ) {
                             let (width, height) = state.reported_size;
                             let frame = state.shell.as_mut().and_then(|shell| {
                                 shell

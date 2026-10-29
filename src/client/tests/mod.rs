@@ -904,6 +904,25 @@ fn system_toast_notify_preserves_colon_in_title() {
 }
 
 #[test]
+fn direct_attach_clipboard_writes_osc52_to_output() {
+    let mut output = Vec::new();
+    assert!(forward_clipboard("dGVzdA==", true, &mut output));
+    assert_eq!(output, b"\x1b]52;c;dGVzdA==\x07");
+}
+
+#[test]
+fn direct_attach_clipboard_rejects_invalid_payload_without_output() {
+    let mut output = Vec::new();
+    assert!(!forward_clipboard("invalid!\x07", true, &mut output));
+    assert!(output.is_empty());
+}
+
+#[test]
+fn direct_attach_clipboard_reports_output_failure() {
+    assert!(!forward_clipboard("dGVzdA==", true, &mut &mut [0u8; 0][..]));
+}
+
+#[test]
 fn decode_clipboard_payload_decodes_base64() {
     assert_eq!(decode_clipboard_payload("dGVzdA=="), Some(b"test".to_vec()));
 }
