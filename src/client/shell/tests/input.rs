@@ -43,7 +43,7 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
         crate::terminal_theme::HostAppearance::Dark,
     )]);
     assert!(explicit.repaint);
-    assert!(explicit.query_host_theme);
+    assert!(!explicit.query_host_theme);
     assert!(matches!(
         explicit.requests.as_slice(),
         [ClientMessage::ClientShellHostTheme {
@@ -74,6 +74,23 @@ fn host_appearance_prefers_explicit_reports_over_background_inference() {
         Some(crate::terminal_theme::HostAppearance::Dark)
     );
     assert_eq!(state.config.palette, dark);
+}
+
+#[test]
+fn explicit_color_scheme_reports_query_the_palette_only_when_they_change() {
+    use crate::terminal_theme::HostAppearance::{Dark, Light};
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    let outcomes: Vec<(bool, usize)> = [Dark, Dark, Light, Light]
+        .into_iter()
+        .map(|appearance| {
+            let outcome =
+                state.handle_raw_events(vec![RawInputEvent::HostColorSchemeChanged(appearance)]);
+            (outcome.query_host_theme, outcome.requests.len())
+        })
+        .collect();
+
+    assert_eq!(outcomes, [(false, 1), (false, 1), (true, 1), (false, 1)]);
 }
 
 #[test]

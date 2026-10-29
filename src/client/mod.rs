@@ -62,6 +62,8 @@ pub use terminal_sessions::{run_terminal_session_control, run_terminal_session_o
 
 #[cfg(not(windows))]
 use terminal_geometry::query_host_terminal_appearance;
+#[cfg(windows)]
+use terminal_geometry::query_host_terminal_theme;
 #[cfg(test)]
 use terminal_geometry::{
     cell_size_fallback, current_terminal_geometry_with, ioctl_cell_size, pack_cell_size,
@@ -70,7 +72,7 @@ use terminal_geometry::{
 };
 use terminal_geometry::{
     host_cell_size_query_required, initial_terminal_geometry, query_host_cell_size,
-    query_host_terminal_theme, resize_poll_loop,
+    resize_poll_loop,
 };
 #[cfg(unix)]
 use terminal_geometry::{reported_cell_size_from_events, store_reported_cell_size};
@@ -472,6 +474,7 @@ async fn run_client_loop(
         pixel_geometry_enabled: config.pixel_geometry_enabled,
         pixel_geometry_exact: initial_pixel_geometry_exact,
         host_sgr_pixel_mouse: config.host_sgr_pixel_mouse,
+        host_theme_query_pending: Arc::new(AtomicU32::new(0)),
         #[cfg(unix)]
         direct_graphics_response: Arc::new(Mutex::new(direct_graphics::ResponseMatcher::default())),
         #[cfg(unix)]
@@ -543,8 +546,7 @@ async fn run_client_loop(
 
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme = state.attach_escape.is_none();
-    let host_theme_query_pending = Arc::new(AtomicU32::new(0));
-    let stdin_host_theme_query_pending = host_theme_query_pending.clone();
+    let stdin_host_theme_query_pending = state.host_theme_query_pending.clone();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
     let will_query_host_cell_size = state.attach_escape.is_none()
@@ -581,7 +583,7 @@ async fn run_client_loop(
 
     #[cfg(unix)]
     if will_query_host_terminal_theme {
-        query_host_terminal_theme();
+        state.query_host_terminal_theme();
         if state.shell.is_some() {
             query_host_terminal_appearance();
         }
@@ -1000,7 +1002,7 @@ async fn run_client_loop(
                         query_host_terminal_appearance();
                     }
                     if crate::raw_input::events_require_host_terminal_theme_query(&events) {
-                        query_host_terminal_theme();
+                        state.query_host_terminal_theme();
                     }
                     if let Some((width_px, height_px)) = reported_cell_size_from_events(&events) {
                         store_reported_cell_size(&reported_cell_size, width_px, height_px);
@@ -1289,8 +1291,7 @@ async fn run_client_loop(
                 // Re-query on redraw, including SIGWINCH without a resize.
                 #[cfg(unix)]
                 if will_query_host_terminal_theme {
-                    host_theme_query_pending.fetch_add(1, Ordering::AcqRel);
-                    query_host_terminal_theme();
+                    state.query_host_terminal_theme();
                 }
                 let pixel_mouse_available =
                     pixel_geometry_exact && state.host_sgr_pixel_mouse == Some(true);
