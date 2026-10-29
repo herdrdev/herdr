@@ -497,9 +497,11 @@ impl ClientShellState {
                 true
             }
             (PendingEndpointKind::WorktreeRemove { forced: false }, Err(error))
-                if error.code.as_deref() == Some("dirty_worktree_requires_force")
-                    || (error.code.as_deref() == Some("worktree_remove_failed")
-                        && crate::worktree::is_not_working_tree_remove_error(&error.message)) =>
+                if matches!(
+                    error.code.as_deref(),
+                    Some("dirty_worktree_requires_force" | "submodule_worktree_requires_force")
+                ) || (error.code.as_deref() == Some("worktree_remove_failed")
+                    && crate::worktree::is_not_working_tree_remove_error(&error.message)) =>
             {
                 if let Some(ClientShellOverlay::WorktreeRemove(remove)) = self.overlay.as_mut() {
                     remove.removing = false;

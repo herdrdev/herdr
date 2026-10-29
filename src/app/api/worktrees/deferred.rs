@@ -293,22 +293,34 @@ impl App {
 
         #[cfg(windows)]
         {
-            if !params.force
-                && crate::worktree::checkout_has_dirty_files(
+            if !params.force {
+                if crate::worktree::checkout_has_initialized_submodules(&space.checkout_path) {
+                    Self::send_api_response(
+                        respond_to,
+                        encode_error(
+                            id,
+                            "submodule_worktree_requires_force",
+                            crate::worktree::SUBMODULE_WORKTREE_REMOVE_ERROR,
+                        ),
+                    );
+                    return;
+                }
+                if crate::worktree::checkout_has_dirty_files(
                     &space.checkout_path,
                     params.trust_repository,
                 )
                 .unwrap_or(false)
-            {
-                Self::send_api_response(
-                    respond_to,
-                    encode_error(
-                        id,
-                        "dirty_worktree_requires_force",
-                        crate::worktree::worktree_dirty_remove_message(&space.checkout_path),
-                    ),
-                );
-                return;
+                {
+                    Self::send_api_response(
+                        respond_to,
+                        encode_error(
+                            id,
+                            "dirty_worktree_requires_force",
+                            crate::worktree::worktree_dirty_remove_message(&space.checkout_path),
+                        ),
+                    );
+                    return;
+                }
             }
         }
 
@@ -554,12 +566,15 @@ impl App {
                 api.operation_id,
                 &result.path,
             );
-            let code =
-                if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
-                    "dirty_worktree_requires_force"
-                } else {
-                    "worktree_remove_failed"
-                };
+            let code = if !result.forced
+                && crate::worktree::is_submodule_worktree_remove_error(&message)
+            {
+                "submodule_worktree_requires_force"
+            } else if !result.forced && crate::worktree::is_dirty_worktree_remove_error(&message) {
+                "dirty_worktree_requires_force"
+            } else {
+                "worktree_remove_failed"
+            };
             Self::send_api_response(api.respond_to, encode_error(api.id, code, message));
             return pane_updates;
         }

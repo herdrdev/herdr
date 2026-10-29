@@ -179,7 +179,7 @@ herdr worktree remove --workspace ID [--force] [--trust-repository]
 
 worktree は、Git チェックアウトの出自情報を持つ通常の Herdr ワークスペースです。`worktree create` は Git worktree のチェックアウトを作成し、ワークスペースとして開き、親リポジトリのワークスペースとグループ化します。`--branch` が既存のローカルブランチを指す場合はそれをチェックアウトし、そうでなければ `--base` または `HEAD` からブランチを作成します。`--path` がない場合、チェックアウトは `<worktrees.directory>/<repo>/<branch-slug>` の下に作成されます。
 
-`workspace close` は Herdr の状態だけを閉じます。リンクされた worktree ワークスペースが開いている間に親ワークスペースを閉じるには `--group` が必要です。指定しない場合、グループは開いたままになり `workspace_group_close_required` が返されます。`worktree remove` が明示的なチェックアウト削除の経路です。`git worktree remove` を実行し、ブランチは決して削除せず、Git がダーティなチェックアウトを拒否する場合は `--force` が必要です。
+`workspace close` は Herdr の状態だけを閉じます。リンクされた worktree ワークスペースが開いている間に親ワークスペースを閉じるには `--group` が必要です。指定しない場合、グループは開いたままになり `workspace_group_close_required` が返されます。`worktree remove` が明示的なチェックアウト削除の経路です。`git worktree remove` を実行し、ブランチは決して削除せず、Git がダーティなチェックアウト、または初期化済みサブモジュールを含むチェックアウトを拒否する場合は `--force` が必要です。
 
 Git はデフォルトで、別のユーザーが所有するリポジトリを拒否します。リポジトリを別途確認済みの場合は `--trust-repository` を渡すと、解決されたパスをそのコマンドでのみ信頼します。Herdr は Git 設定を変更しません。
 
