@@ -13,6 +13,7 @@ pub(crate) mod clipboard_image;
 pub(crate) mod handoff;
 pub mod headless;
 pub(crate) mod keybindings;
+pub(crate) mod lifecycle;
 pub(crate) mod notifications;
 pub(crate) mod pane_input;
 #[cfg(test)]

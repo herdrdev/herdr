@@ -86,6 +86,7 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         remote.live_handoff,
         require_surface_interest,
     )?;
+    start_prepared_remote(&remote_ssh, &prepared_remote.remote_herdr)?;
 
     let _bridge = SshStdioBridge::start(
         remote.target.clone(),
@@ -115,6 +116,19 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
     ssh.session_name = session.to_owned();
     let check = || {
         let remote = find_installed_remote_herdr(&ssh)?;
+        if let Some(status) = remote_host_status(&ssh, &remote)? {
+            if status.inactive() {
+                return Err(io::Error::other(format!(
+                    "Server {}. Use Start in Herdr or run `{}`.",
+                    if status.state == super::HostState::Stopped {
+                        "stopped"
+                    } else {
+                        "is not running"
+                    },
+                    super::saved_ssh_bootstrap_command(target, session)
+                )));
+            }
+        }
         match remote_server_status(&ssh, &remote, false)? {
             RemoteServerStatus::Running {
                 endpoint_protocol_generation,
@@ -232,9 +246,9 @@ impl SavedSshSetup {
             false,
             true,
         )?;
+        start_prepared_remote(&ssh, &prepared.remote_herdr)?;
 
-        // The bridge already owns daemon startup. EOF closes only this temporary attachment,
-        // leaving the named server running even when no local TUI is open yet.
+        // EOF closes only this temporary attachment, leaving the server running.
         let command = prepared
             .remote_herdr
             .executable
@@ -272,6 +286,76 @@ impl SavedSshSetup {
             )),
         }
     }
+}
+
+pub(super) fn remote_host_status(
+    ssh: &RemoteSsh,
+    remote: &RemoteHerdr,
+) -> io::Result<Option<super::HostStatus>> {
+    let supported = match remote.host_control {
+        Some(supported) => supported,
+        None => {
+            remote_client_status(ssh, remote)?.is_some_and(|status| status.remote_host_control_v1)
+        }
+    };
+    if !supported {
+        return Ok(None);
+    }
+    let command = remote.executable.session_command(
+        &ssh.session_name,
+        &["remote-client-bridge", "--host-control-v1", "status"],
+    );
+    let output = ssh.shell_output(&remote.platform, &command)?;
+    if output.status.code() == Some(255) {
+        return Err(command_failed("remote SSH connection failed", &output));
+    }
+    if !output.status.success() {
+        return Err(command_failed("remote server status failed", &output));
+    }
+    let status: super::HostStatus = serde_json::from_slice(&output.stdout)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    Ok(Some(status))
+}
+
+pub(super) fn start_remote_host(
+    ssh: &RemoteSsh,
+    remote: &RemoteHerdr,
+    epoch: u64,
+) -> io::Result<()> {
+    let epoch = epoch.to_string();
+    let command = remote.executable.session_command(
+        &ssh.session_name,
+        &["remote-client-bridge", "--host-control-v1", "start", &epoch],
+    );
+    let output = ssh.shell_output(&remote.platform, &command)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(command_failed("remote server start failed", &output))
+    }
+}
+
+pub(super) fn require_legacy_host_running(ssh: &RemoteSsh, remote: &RemoteHerdr) -> io::Result<()> {
+    if matches!(
+        remote_server_status(ssh, remote, false)?,
+        RemoteServerStatus::Running { .. }
+    ) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::ConnectionRefused,
+            "remote server is unavailable; run herdr --remote in a terminal to start it",
+        ))
+    }
+}
+
+fn start_prepared_remote(ssh: &RemoteSsh, remote: &RemoteHerdr) -> io::Result<()> {
+    if let Some(status) = remote_host_status(ssh, remote)? {
+        if status.state != super::HostState::Online {
+            start_remote_host(ssh, remote, status.epoch)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -478,6 +562,7 @@ pub(super) struct RemoteHerdr {
     resolved_executable: Option<String>,
     platform: RemotePlatform,
     bridge_idle_timeout: bool,
+    host_control: Option<bool>,
 }
 
 impl RemoteHerdr {
@@ -507,6 +592,7 @@ impl RemoteHerdr {
             resolved_executable: None,
             platform,
             bridge_idle_timeout: false,
+            host_control: None,
         }
     }
 
@@ -816,7 +902,7 @@ fn authentication_command_with_config(
 
 pub(super) struct RemoteSsh {
     target: String,
-    session_name: String,
+    pub(super) session_name: String,
     managed_config: Option<ManagedSshConfig>,
     noninteractive: bool,
     pub(super) cancelled: Arc<AtomicBool>,
@@ -1588,6 +1674,7 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
         if let Some(status) = remote_client_status(ssh, &candidate)? {
             if status.supports_endpoint_requirement(&candidate.platform, true) {
                 candidate.bridge_idle_timeout = status.remote_bridge_idle_timeout;
+                candidate.host_control = Some(status.remote_host_control_v1);
                 return Ok(candidate);
             }
         }
@@ -2410,6 +2497,8 @@ fn probe_remote_endpoint(
 
 #[derive(Debug, Deserialize)]
 struct RemoteClientStatusJson {
+    #[serde(default)]
+    remote_host_control_v1: bool,
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
@@ -4547,6 +4636,7 @@ mod tests {
             arch: "x86_64",
         };
         let mut status = RemoteClientStatusJson {
+            remote_host_control_v1: false,
             version: Some("0.1.0".into()),
             protocol: Some(1),
             endpoint_protocol_generation: Some(

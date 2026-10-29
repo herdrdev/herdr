@@ -493,6 +493,40 @@ pub(crate) fn create_remote_ssh_config_file(path: &Path) -> std::io::Result<std:
         .open(path)
 }
 
+pub(crate) fn server_lifecycle_identity(path: &Path) -> std::io::Result<(Vec<u8>, PathBuf)> {
+    let path = std::path::absolute(path)?;
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid server endpoint path",
+        )
+    })?;
+    let mut resolved = PathBuf::new();
+    for component in path.parent().into_iter().flat_map(Path::components) {
+        if component == std::path::Component::ParentDir {
+            resolved.pop();
+            continue;
+        }
+        resolved.push(component.as_os_str());
+        match resolved.canonicalize() {
+            Ok(path) => resolved = path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::symlink_metadata(&resolved) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => return Err(error),
+                    Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                        return Err(error)
+                    }
+                    _ => {}
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // Keep the literal socket name stable after shutdown unlinks it.
+    resolved.push(name);
+    Ok((resolved.as_os_str().as_encoded_bytes().to_vec(), resolved))
+}
+
 pub(crate) fn create_remote_private_dir(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::DirBuilderExt;
 

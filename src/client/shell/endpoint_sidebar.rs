@@ -609,6 +609,11 @@ fn render_endpoint_row(
         "! auth".to_owned()
     } else if endpoint.status == ClientEndpointStatus::Attention {
         "! error".to_owned()
+    } else if matches!(
+        endpoint.status,
+        ClientEndpointStatus::Stopped(_) | ClientEndpointStatus::Offline(_)
+    ) {
+        format!("{state} · Start")
     } else if endpoint.endpoint_id.is_local() {
         String::new()
     } else if state.is_empty() {

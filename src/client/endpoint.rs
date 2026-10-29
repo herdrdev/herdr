@@ -94,6 +94,8 @@ pub(crate) enum ClientEndpointStatus {
     Connecting,
     Online,
     Reconnecting,
+    Stopped(u64),
+    Offline(u64),
     Attention,
     Disabled,
 }

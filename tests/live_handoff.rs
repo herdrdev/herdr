@@ -2118,3 +2118,65 @@ fn live_handoff_import_failure_rolls_back_old_server_at(failure_point: &str) {
 fn live_handoff_after_restored_failure_rolls_back_old_server() {
     live_handoff_import_failure_rolls_back_old_server_at("after_restored");
 }
+
+#[test]
+fn api_stop_on_existing_connection_rejects_busy_handoff_then_succeeds_after_rollback() {
+    let _lock = test_lock();
+    let base = unique_test_dir();
+    fs::create_dir_all(&base).unwrap();
+    let config_home = base.join("config");
+    let runtime_dir = base.join("runtime");
+    let api_socket = runtime_dir.join("herdr.sock");
+    let paused = base.join("import-paused");
+    let spawned = spawn_server_with_env(
+        &config_home,
+        &runtime_dir,
+        &api_socket,
+        &[
+            ("HERDR_TEST_HANDOFF_IMPORT_FAIL", "after_restored"),
+            ("HERDR_TEST_HANDOFF_IMPORT_PAUSE", paused.to_str().unwrap()),
+        ],
+    );
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    let mut existing = UnixStream::connect(&api_socket).unwrap();
+    existing
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    // This connection belongs to the original listener, before ownership transfer.
+    let mut reader = BufReader::new(existing.try_clone().unwrap());
+    let mut line = String::new();
+    let handoff_socket = api_socket.clone();
+    let handoff = thread::spawn(move || {
+        request(
+            &handoff_socket,
+            serde_json::json!({"id":"transfer","method":"server.live_handoff","params":{}}),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !paused.exists() {
+        assert!(Instant::now() < deadline, "handoff importer never paused");
+        thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    existing
+        .write_all(b"{\"id\":\"stop\",\"method\":\"server.stop\",\"params\":{}}\n")
+        .unwrap();
+    line.clear();
+    reader.read_line(&mut line).unwrap();
+    assert!(started.elapsed() < Duration::from_secs(1));
+    let response: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(response["error"]["code"], "server_unavailable");
+    assert!(response["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("busy"));
+    fs::remove_file(paused).unwrap();
+    assert!(handoff.join().unwrap().get("error").is_some());
+    wait_for_api(&api_socket, Duration::from_secs(10));
+    assert_ok(request(
+        &api_socket,
+        serde_json::json!({"id":"stop-after-rollback","method":"server.stop","params":{}}),
+    ));
+    drop(spawned);
+    cleanup_test_base(&base);
+}

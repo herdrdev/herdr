@@ -26,6 +26,7 @@ impl HeadlessServer {
         &mut self,
         params: crate::api::schema::ServerLiveHandoffParams,
     ) -> io::Result<()> {
+        let _lifecycle_transfer = self.server_stop.lock_for_handoff()?;
         info!("starting live handoff");
         let import_exe = params.import_exe.as_deref().map(std::path::PathBuf::from);
         let socket_path = crate::server::handoff::handoff_socket_path();
@@ -220,6 +221,8 @@ impl HeadlessServer {
             runtime.preserve_for_handoff();
         }
         crate::server::handoff::wait_owned_ack(&mut stream);
+
+        self.server_stop.retire();
 
         Ok(())
     }

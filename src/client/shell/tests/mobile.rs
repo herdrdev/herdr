@@ -160,6 +160,25 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         .collect::<String>();
     assert!(text.contains("reconnecting"), "frame: {text}");
     assert!(text.contains("network lost"), "frame: {text}");
+
+    state.set_endpoint_status(&endpoint_id, ClientEndpointStatus::Stopped(7));
+    state.compose(44, 30).unwrap();
+    let start = state
+        .hits
+        .mobile_targets
+        .iter()
+        .find_map(|(rect, target)| {
+            matches!(target, ClientMobileTarget::StartMachine(id) if id == &endpoint_id)
+                .then_some(*rect)
+        })
+        .expect("stopped machine has a separate Start action");
+    state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: start.x,
+        row: start.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+    assert_eq!(state.take_machine_starts(), vec![(endpoint_id, 7)]);
 }
 
 #[test]

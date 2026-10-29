@@ -21,7 +21,9 @@ use crate::ipc::{
     poll_local_stream_read, remove_socket_file_if_owned, set_local_stream_polling,
     socket_file_identity, LocalStream, LocalStreamRead, SocketFileIdentity,
 };
-use crate::server::shutdown::{ServerStop, ShutdownReason};
+use crate::server::shutdown::ServerStop;
+#[cfg(all(test, unix))]
+use crate::server::shutdown::ShutdownReason;
 
 #[cfg(test)]
 mod subscription_socket_tests;
@@ -581,9 +583,9 @@ fn handle_request(
 
     if matches!(&request.method, Method::ServerStop(_)) {
         if let Some(server_stop) = server_stop {
-            server_stop.request(ShutdownReason::ApiStop {
-                caller: stop_caller,
-            });
+            if let Err(error) = server_stop.request_api_stop(stop_caller) {
+                return error_response_json(request.id, "server_unavailable", error.to_string());
+            }
             return serde_json::to_string(&SuccessResponse {
                 id: request.id,
                 result: ResponseResult::Ok {},
@@ -1411,7 +1413,30 @@ mod tests {
     #[test]
     fn server_stop_control_bypasses_app_channel() {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let stop = ServerStop::default();
+        let path = unique_test_path("startup-stop");
+        let mut startup = crate::server::lifecycle::lock(&path).unwrap();
+        let stop = ServerStop::for_test_path(path.clone(), startup.next_epoch().unwrap());
+        let started = std::time::Instant::now();
+        let busy = handle_request(
+            Request {
+                id: "startup_stop".into(),
+                method: Method::ServerStop(crate::api::schema::EmptyParams::default()),
+            },
+            &tx,
+            None,
+            Some(&stop),
+            None,
+            None,
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let busy: serde_json::Value = serde_json::from_str(&busy).unwrap();
+        assert_eq!(busy["error"]["code"], "server_unavailable");
+        assert!(busy["error"]["message"].as_str().unwrap().contains("busy"));
+        assert!(!stop.is_requested());
+        assert!(!crate::server::lifecycle::read(&path).unwrap().stopped);
+        assert!(rx.try_recv().is_err());
+        startup.commit(false).unwrap();
+        drop(startup);
         let response = handle_request(
             Request {
                 id: "priority_stop".into(),
@@ -1449,6 +1474,8 @@ mod tests {
         let rejected: serde_json::Value = serde_json::from_str(&rejected).unwrap();
         assert_eq!(rejected["error"]["code"], "server_unavailable");
         assert!(rx.try_recv().is_err());
+        drop(stop);
+        crate::server::lifecycle::remove_test_receipt(&path);
     }
 
     #[test]

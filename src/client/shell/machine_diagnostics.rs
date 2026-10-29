@@ -8,6 +8,7 @@ pub(super) struct MachineDiagnostics {
     hover: Option<ClientEndpointId>,
     /// Retries the client loop has not yet handed to the endpoint supervisors.
     retry_requests: Vec<ClientEndpointId>,
+    start_requests: Vec<(ClientEndpointId, u64)>,
     /// Requested retries whose failure should reopen the fresh diagnostic.
     retry_reports: HashSet<ClientEndpointId>,
 }
@@ -25,7 +26,13 @@ impl MachineDiagnostics {
         palette: &Palette,
         style: Style,
     ) -> Style {
-        if self.hover.as_ref() == Some(&endpoint.endpoint_id) && machine_retryable(endpoint) {
+        if self.hover.as_ref() == Some(&endpoint.endpoint_id)
+            && (machine_retryable(endpoint)
+                || matches!(
+                    endpoint.status,
+                    ClientEndpointStatus::Stopped(_) | ClientEndpointStatus::Offline(_)
+                ))
+        {
             style
                 .bg(palette.active_row_bg)
                 .add_modifier(Modifier::REVERSED)
@@ -115,6 +122,24 @@ impl ClientShellState {
         std::mem::take(&mut self.machine_diagnostics.retry_requests)
     }
 
+    pub(crate) fn take_machine_starts(&mut self) -> Vec<(ClientEndpointId, u64)> {
+        std::mem::take(&mut self.machine_diagnostics.start_requests)
+    }
+
+    pub(super) fn start_machine(&mut self, id: &ClientEndpointId) -> bool {
+        let Some(ClientEndpointStatus::Stopped(epoch) | ClientEndpointStatus::Offline(epoch)) =
+            self.endpoint_status(id)
+        else {
+            return false;
+        };
+        self.machine_diagnostics
+            .start_requests
+            .push((id.clone(), epoch));
+        self.machine_diagnostics.retry_reports.insert(id.clone());
+        self.set_endpoint_status(id, ClientEndpointStatus::Connecting);
+        true
+    }
+
     /// Reports a failed connection attempt when the user asked for it.
     pub(crate) fn report_machine_retry(&mut self, id: &ClientEndpointId) -> bool {
         let requested = self.machine_diagnostics.retry_reports.remove(id);
@@ -146,7 +171,12 @@ impl ClientShellState {
             .find(|hit| contains(hit.status_badge, (mouse.column, mouse.row)))
             .filter(|hit| {
                 self.endpoints.iter().any(|endpoint| {
-                    endpoint.endpoint_id == hit.endpoint_id && machine_retryable(endpoint)
+                    endpoint.endpoint_id == hit.endpoint_id
+                        && (machine_retryable(endpoint)
+                            || matches!(
+                                endpoint.status,
+                                ClientEndpointStatus::Stopped(_) | ClientEndpointStatus::Offline(_)
+                            ))
                 })
             })
             .map(|hit| hit.endpoint_id.clone());
@@ -166,7 +196,7 @@ impl ClientShellState {
         if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
             return false;
         }
-        outcome.repaint |= self.retry_machine(&id);
+        outcome.repaint |= self.start_machine(&id) || self.retry_machine(&id);
         true
     }
 

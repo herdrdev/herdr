@@ -298,6 +298,23 @@ fn click_machine(state: &mut ClientShellState, id: &ClientEndpointId, badge: boo
 }
 
 #[test]
+fn stopped_machine_selection_never_starts_but_start_badge_does() {
+    let (mut state, id) = state_with_remote();
+    for status in [
+        ClientEndpointStatus::Stopped(42),
+        ClientEndpointStatus::Offline(42),
+    ] {
+        state.set_endpoint_status(&id, status);
+        click_machine(&mut state, &id, false);
+        assert!(state.take_machine_starts().is_empty());
+        assert!(state.take_machine_retries().is_empty());
+        state.set_endpoint_status(&id, status);
+        assert!(click_machine(&mut state, &id, true));
+        assert_eq!(state.take_machine_starts(), vec![(id.clone(), 42)]);
+    }
+}
+
+#[test]
 fn machine_badge_retries_and_reports_the_fresh_diagnostic() {
     let (mut state, id) = state_with_remote();
     state.set_endpoint_status(&id, ClientEndpointStatus::Attention);

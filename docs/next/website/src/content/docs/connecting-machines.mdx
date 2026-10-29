@@ -69,6 +69,10 @@ Local opens immediately on startup without waiting for SSH connections. Selectin
 
 When a connection is lost, the last workspace and agent state remains visible but dimmed. That is cached information, not live state. Input and navigation into those cached panes stay disabled until a fresh connection and matching screen arrive. Reconnecting never takes selection away from the machine you are using.
 
+Stopping an updated server with `herdr server stop` or `herdr session stop <name>` leaves it stopped. Saved reconnects, Retry, wake, and selecting the machine do not start it. Clients show **stopped**, including clients that were offline when the stop was accepted. Click **Start** beside that saved machine or in the mobile machine list. Other clients reconnect after it starts. A stop requested during startup or live handoff is rejected; retry after that operation finishes. A network failure, crash, or operating-system shutdown does not establish an accepted API stop. When the host is reachable and both server listeners are absent, clients show **offline** and offer the same explicit **Start** action. An unreachable host or a server still starting does not offer Start.
+
+This guarantee requires updating both the running server and the remote Herdr executable used for SSH bridges. Compatible older servers remain connectable, but older host executables cannot enforce the same stop guarantee or provide the new Start action. Explicit `herdr`, `herdr --remote`, machine setup, and configured service startup still authorize a start. Herdr does not override an external service manager's restart policy. A Windows SSH start can still run outside the signed-in desktop, so tools requiring that desktop may remain unavailable.
+
 ## Rename, disable, or remove
 
 Read profile IDs from the list rather than deriving them from labels or hostnames:

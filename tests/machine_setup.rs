@@ -67,6 +67,12 @@ case "$script" in
         echo sessions >>"$FAKE_ROOT/probes"
         if [ "$FAKE_SESSIONS" = failed ]; then echo 'session query denied' >&2; exit 1; fi
         printf '%s\n' "$FAKE_SESSIONS" ;;
+    *'remote-client-bridge --host-control-v1 status'*)
+        if [ -f "$FAKE_ROOT/stopped" ]; then
+            echo '{"kind":"herdr-host-control-v1","state":"stopped","epoch":1}'
+        else
+            echo '{"kind":"herdr-host-control-v1","state":"online","epoch":0}'
+        fi ;;
     *'remote-client-bridge'*)
         printf '%s\n' "$script" >"$FAKE_ROOT/start-command"
         echo start >>"$FAKE_ROOT/actions"; echo 'test startup failure' >&2; exit 1 ;;
