@@ -1039,6 +1039,9 @@ impl ImeCursorShape {
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Windows: allow remote startup without a signed-in same-account session. Default: false.
+    #[cfg(windows)]
+    pub allow_headless_remote_start: bool,
     /// Windows: allow ordinary same-account clients to control an elevated server. Default: false.
     #[cfg(windows)]
     pub allow_unelevated_clients: bool,
@@ -1314,6 +1317,8 @@ impl<'de> Deserialize<'de> for ToastConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
+            #[cfg(windows)]
+            allow_headless_remote_start: false,
             #[cfg(windows)]
             allow_unelevated_clients: false,
             headless_cols: crate::config::DEFAULT_HEADLESS_COLS,

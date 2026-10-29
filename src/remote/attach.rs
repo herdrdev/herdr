@@ -4,6 +4,7 @@
 use super::process::wait_with_output_limit;
 use super::{
     args::*,
+    host::{RemoteStartResponse, RemoteStartStatus},
     process::{wait_with_output_timeout, CancellablePipe, OwnedSshChild, PipeControl},
     restart_policy::*,
     shell_quote,
@@ -86,6 +87,9 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         remote.live_handoff,
         require_surface_interest,
     )?;
+    if prepared_remote.remote_herdr.platform.is_windows() {
+        ensure_windows_remote_server_started(&remote_ssh, &prepared_remote.remote_herdr)?;
+    }
 
     let _bridge = SshStdioBridge::start(
         remote.target.clone(),
@@ -442,6 +446,25 @@ impl RemoteExecutable {
             Self::WindowsPath(path) => {
                 windows_powershell_streaming_application_command(path, &args)
             }
+        }
+    }
+
+    fn start_only_command(&self, session_name: &str, allow_headless: bool) -> String {
+        let args = if allow_headless {
+            &[
+                "remote-client-bridge",
+                "--start-only-v1",
+                "--allow-headless-start-v1",
+            ][..]
+        } else {
+            &["remote-client-bridge", "--start-only-v1"][..]
+        };
+        let args = Self::session_args(session_name, args);
+        match self {
+            Self::WindowsPath(path) => {
+                windows_powershell_streaming_application_command(path, &args)
+            }
+            Self::PosixShellPath(_) => self.command(&args),
         }
     }
 
@@ -2183,6 +2206,121 @@ impl RemoteServerStatus {
     }
 }
 
+fn ensure_windows_remote_server_started(ssh: &RemoteSsh, remote: &RemoteHerdr) -> io::Result<()> {
+    let running = matches!(
+        remote_server_status(ssh, remote, false)?,
+        RemoteServerStatus::Running { .. }
+    );
+    let mut announced = false;
+    prepare_windows_remote_start(
+        running,
+        || Ok(remote_client_status(ssh, remote)?.is_some_and(|status| status.remote_windows_start)),
+        |allow_headless| {
+            let command = remote
+                .executable
+                .start_only_command(&ssh.session_name, allow_headless);
+            let output = ssh.shell_output(&remote.platform, &command)?;
+            if !output.status.success() {
+                return Err(command_failed("remote server startup failed", &output));
+            }
+            let response: RemoteStartResponse =
+                serde_json::from_slice(&output.stdout).map_err(|error| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("invalid remote startup response: {error}"),
+                    )
+                })?;
+            Ok(response.status)
+        },
+        || {
+            if !io::stdin().is_terminal() {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "Waiting for Windows sign-in. Sign in on the Windows host with the same account."));
+            }
+            if !announced {
+                eprintln!(
+                    "This Windows account is not signed in on {}. Waiting for sign-in...",
+                    ssh.target()
+                );
+                eprintln!(
+                    "Forcing Session 0 may break Codex sandbox, computer use and desktop tools."
+                );
+                eprintln!("F: force Session 0 once · Esc/Ctrl+C: cancel");
+                announced = true;
+            }
+            poll_windows_sign_in_choice()
+        },
+    )
+}
+
+fn prepare_windows_remote_start(
+    running: bool,
+    supports_start: impl FnOnce() -> io::Result<bool>,
+    mut start: impl FnMut(bool) -> io::Result<RemoteStartStatus>,
+    mut choose_force: impl FnMut() -> io::Result<bool>,
+) -> io::Result<()> {
+    if running {
+        return Ok(());
+    }
+    if !supports_start()? {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Update Herdr on the Windows host, or start it from the Windows desktop and reconnect.",
+        ));
+    }
+    let mut allow_headless = false;
+    loop {
+        match start(allow_headless)? {
+            RemoteStartStatus::Ready => return Ok(()),
+            RemoteStartStatus::WindowsSignInRequired if allow_headless => {
+                return Err(io::Error::other(
+                    "The Windows host did not accept the Session 0 start.",
+                ));
+            }
+            RemoteStartStatus::WindowsSignInRequired => allow_headless = choose_force()?,
+        }
+    }
+}
+
+fn poll_windows_sign_in_choice() -> io::Result<bool> {
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+    struct RawModeGuard;
+    impl Drop for RawModeGuard {
+        fn drop(&mut self) {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+    }
+    crossterm::terminal::enable_raw_mode()?;
+    let _raw_mode = RawModeGuard;
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if !crossterm::event::poll(deadline.saturating_duration_since(Instant::now()))? {
+            return Ok(false);
+        }
+        let Event::Key(key) = crossterm::event::read()? else {
+            continue;
+        };
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            continue;
+        }
+        match key.code {
+            KeyCode::Char('f' | 'F')
+                if !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                return Ok(true);
+            }
+            KeyCode::Esc => break,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => break,
+            _ => {}
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Interrupted,
+        "Windows sign-in wait cancelled",
+    ))
+}
+
 fn ensure_remote_server_ready(
     ssh: &RemoteSsh,
     remote_herdr: &RemoteHerdr,
@@ -2422,6 +2560,8 @@ struct RemoteClientStatusJson {
     remote_host_bridge: bool,
     #[serde(default)]
     remote_bridge_idle_timeout: bool,
+    #[serde(default)]
+    remote_windows_start: bool,
 }
 
 impl RemoteClientStatusJson {
@@ -3677,6 +3817,79 @@ fn sanitize_path_component(input: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn windows_remote_start_reuses_waits_and_only_forces_by_choice() {
+        if let Ok(choice) = std::env::var("HERDR_TEST_SIGN_IN_CHOICE") {
+            assert!(io::stdin().is_terminal());
+            assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
+            let result = poll_windows_sign_in_choice();
+            assert!(!crossterm::terminal::is_raw_mode_enabled().unwrap());
+            match choice.as_str() {
+                "force" => assert!(result.unwrap()),
+                "cancel" => assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted),
+                "timeout" => assert!(!result.unwrap()),
+                _ => panic!("unknown manual sign-in input case"),
+            }
+            return;
+        }
+        prepare_windows_remote_start(
+            true,
+            || panic!("running server needs no new capability"),
+            |_| panic!("must reuse running server"),
+            || panic!("must not prompt"),
+        )
+        .unwrap();
+        let error = prepare_windows_remote_start(
+            false,
+            || Ok(false),
+            |_| panic!("old stopped host must not cold start"),
+            || panic!("must not prompt"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
+        for force in [false, true] {
+            let mut requests = Vec::new();
+            prepare_windows_remote_start(
+                false,
+                || Ok(true),
+                |allow| {
+                    requests.push(allow);
+                    Ok(if requests.len() == 1 {
+                        RemoteStartStatus::WindowsSignInRequired
+                    } else {
+                        RemoteStartStatus::Ready
+                    })
+                },
+                || Ok(force),
+            )
+            .unwrap();
+            assert_eq!(requests, [false, force]);
+        }
+
+        let error = prepare_windows_remote_start(
+            false,
+            || Ok(true),
+            |_| Err(io::Error::new(io::ErrorKind::TimedOut, "uncertain launch")),
+            || panic!("must not offer force after launch error"),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        let mut requests = 0;
+        let error = prepare_windows_remote_start(
+            false,
+            || Ok(true),
+            |_| {
+                requests += 1;
+                Ok(RemoteStartStatus::WindowsSignInRequired)
+            },
+            || Err(io::Error::new(io::ErrorKind::Interrupted, "cancel")),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(requests, 1);
+    }
+
     #[cfg(unix)]
     #[test]
     #[ignore = "requires a private loopback OpenSSH fixture"]
@@ -4559,6 +4772,7 @@ mod tests {
             ],
             remote_host_bridge: false,
             remote_bridge_idle_timeout: false,
+            remote_windows_start: false,
         };
         assert!(status.supports_endpoint_requirement(&linux, true));
         for index in 0..status.endpoint_capabilities.len() {
