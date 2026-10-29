@@ -281,6 +281,14 @@ pub(crate) fn local_server_connection_error(error: std::io::Error) -> std::io::E
     )
 }
 
+pub(crate) fn configure_conpty_terminal(
+    terminal: &mut crate::ghostty::Terminal,
+) -> std::io::Result<()> {
+    terminal
+        .set_conpty_resize(true)
+        .map_err(|error| std::io::Error::other(error.to_string()))
+}
+
 pub(crate) fn windows_virtual_terminal_input_active() -> bool {
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Console::{

@@ -272,3 +272,54 @@ verification:
 (cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='cursorAbsolute keeps the hyperlink when style migration splits the page')
 just maintenance-test
 ```
+
+## 0009 ConPTY finite-buffer resize
+
+status: active
+
+patch: `vendor/patches/libghostty-vt/0009-conpty-finite-buffer-resize.patch`
+
+herdr issue: https://github.com/herdrdev/herdr/issues/5108
+
+upstream discussion: none
+
+upstream pr: none
+
+vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+
+local files:
+
+- `vendor/libghostty-vt/include/ghostty/vt/terminal.h`
+- `vendor/libghostty-vt/src/terminal/c/terminal.zig`
+- `vendor/libghostty-vt/src/terminal/Terminal.zig`
+- `vendor/libghostty-vt/src/terminal/Screen.zig`
+- `vendor/libghostty-vt/src/terminal/PageList.zig`
+
+reason: Windows ConPTY reflows only its finite live buffer, while ordinary
+Ghostty reflow joins archived scrollback back into the active grid. Widening a
+25x17 pane containing wrapped output to 33x17 reproducibly puts the child cursor
+on row 11 and the pane cursor on row 12. Subsequent PSReadLine positioning then
+overwrites output and leaves a stale prompt. The opt-in policy keeps archived
+characters outside live-buffer reflow, appends blank rows on height growth, and
+matches ConPTY's grow-height/reflow-width/shrink-height order and saved cursor
+coordinates. The default policy and alternate-screen non-reflow are unchanged.
+A split wrapped line remains archived as a separate fragment rather than being
+rejoined to the live suffix during later resizes.
+
+remove when: upstream offers a finite-buffer resize policy matching the native
+ConPTY cursor and live rows without discarding archived text, or Herdr no longer
+uses a ConPTY-backed terminal grid.
+
+verification:
+
+```sh
+just test-one windows_conpty_resize_preserves_live_buffer_and_scrollback
+(cd vendor/libghostty-vt && zig build test-lib-vt -Dtest-filter='ConPTY resize')
+just check
+just bench-render-scale
+```
+
+Native Windows verification must compare `ReadConsoleOutputCharacterW` and
+cursor coordinates with the candidate pane for width growth/shrink, height
+growth/shrink, and simultaneous changes. Repeat the wrapped-output PSReadLine
+typing reproduction in an isolated named session using the packaged ConPTY runtime.

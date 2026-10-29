@@ -1043,6 +1043,19 @@ impl Terminal {
         Ok(out.map(Into::into))
     }
 
+    #[cfg(windows)]
+    pub fn set_conpty_resize(&mut self, enabled: bool) -> Result<(), Error> {
+        // SAFETY: self.raw is valid and the option takes a pointer to bool.
+        unsafe {
+            ffi::ghostty_terminal_set(
+                self.raw,
+                ffi::GhosttyTerminalOption_GHOSTTY_TERMINAL_OPT_CONPTY_RESIZE,
+                (&enabled as *const bool).cast(),
+            )
+            .into_result()
+        }
+    }
+
     pub fn resize(
         &mut self,
         cols: u16,
