@@ -171,6 +171,8 @@ impl ClientShellState {
                     && self.navigation_target_valid(&pending.target)
             });
         if self.snapshot.is_none() || self.pane_surface.is_none() {
+            self.display_maps.clear();
+            self.popup_display_maps.clear();
             return Some(self.compose_unavailable(cols, rows).into());
         }
         let snapshot = self.snapshot.as_deref()?;
@@ -185,6 +187,10 @@ impl ClientShellState {
         if snapshot.revision != surface.projection_revision {
             return None;
         }
+        // A `None` above keeps the previous frame on screen, so its column
+        // maps stay valid until a new frame is built here.
+        self.display_maps.clear();
+        self.popup_display_maps.clear();
         let layout = self.layout(cols, rows);
         if self.last_tab_bar_width != Some(layout.tab_bar.width) {
             self.last_tab_bar_width = Some(layout.tab_bar.width);
@@ -450,6 +456,30 @@ impl ClientShellState {
                 }
             }
         }
+        // BiDi layout runs after every logical highlight is stamped, so
+        // highlights move with their glyphs.
+        if self.config.lays_out_bidi() {
+            for hit in &self.hits.panes {
+                if self.pane_bidi_explicit(&hit.pane_id) {
+                    continue;
+                }
+                if super::display::graphics_overlap(
+                    self.graphics.scene(),
+                    false,
+                    layout.pane_surface,
+                    hit.inner_rect,
+                ) {
+                    continue;
+                }
+                super::display::apply_pane_display(
+                    &mut self.display_scratch,
+                    &mut self.display_maps,
+                    &mut frame,
+                    hit.inner_rect,
+                    mode_bar.map(|bar| bar.y),
+                );
+            }
+        }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         self.hits.notification_toast = Rect::default();
         let has_config_diagnostic = self.config_diagnostic.is_some();
@@ -580,6 +610,22 @@ impl ClientShellState {
                 ratatui::widgets::Widget::render(block, geometry.outer, &mut composed);
                 frame.replace_from_ratatui_buffer_preserving_effects(&composed, None);
                 blit_pane_surface(&mut frame, &popup.frame, geometry.inner);
+                if self.config.lays_out_bidi()
+                    && !super::display::graphics_overlap(
+                        self.graphics.scene(),
+                        true,
+                        geometry.inner,
+                        geometry.inner,
+                    )
+                {
+                    super::display::apply_pane_display(
+                        &mut self.display_scratch,
+                        &mut self.popup_display_maps,
+                        &mut frame,
+                        geometry.inner,
+                        None,
+                    );
+                }
                 self.hits.popup = Some(PaneHit {
                     rect: geometry.outer,
                     inner_rect: geometry.inner,

@@ -345,6 +345,11 @@ impl ClientState {
         bytes
     }
 
+    /// The desired scene last set from a pane surface.
+    pub(crate) fn scene(&self) -> &SurfaceGraphicsScene {
+        &self.scene
+    }
+
     pub(crate) fn set_scene(&mut self, mut scene: SurfaceGraphicsScene) {
         let desired = scene
             .placements

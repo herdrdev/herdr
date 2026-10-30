@@ -980,6 +980,10 @@ pub struct UiConfig {
     pub pane_gaps: bool,
     /// Show agent labels in split pane borders when no manual pane label is set. Default: false.
     pub show_agent_labels_on_pane_borders: bool,
+    /// Lay out right-to-left text in pane rows with the Unicode Bidirectional
+    /// Algorithm and a left-to-right base direction. Copied text keeps logical
+    /// order. Default: true; set false to draw logical order.
+    pub bidi: bool,
     /// Hide the tab row when the workspace has one tab. Default: false.
     pub hide_tab_bar_when_single_tab: bool,
     /// Desktop tab row placement. Default: top.
@@ -1220,6 +1224,7 @@ impl Default for UiConfig {
             show_agent_labels_on_pane_borders: false,
             hide_tab_bar_when_single_tab: false,
             tab_bar_position: TabBarPositionConfig::Top,
+            bidi: true,
             tab_bar_right: Vec::new(),
             tab_bar_right_separator: " ".into(),
             window_title: super::window_title::default_window_title(),
@@ -2038,6 +2043,23 @@ pane_history = true
         let config: Config = toml::from_str(toml).unwrap();
 
         assert!(config.experimental.pane_history);
+    }
+
+    #[test]
+    fn bidi_defaults_on_with_an_opt_out() {
+        let default = Config::default();
+        assert!(default.ui.bidi);
+        assert!(default.collect_diagnostics().is_empty());
+
+        let disabled: Config = toml::from_str(
+            r#"
+[ui]
+bidi = false
+"#,
+        )
+        .unwrap();
+        assert!(!disabled.ui.bidi);
+        assert!(disabled.collect_diagnostics().is_empty());
     }
 
     #[test]

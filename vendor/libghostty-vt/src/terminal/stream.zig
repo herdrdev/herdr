@@ -2167,7 +2167,7 @@ pub fn Stream(comptime H: type) type {
 
                 // DECRQM - Request Mode
                 'p' => switch (input.intermediates.len) {
-                    2 => decrqm: {
+                    1, 2 => decrqm: {
                         const ansi_mode = ansi: {
                             switch (input.intermediates.len) {
                                 1 => if (input.intermediates[0] == '$') break :ansi true,

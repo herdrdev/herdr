@@ -80,6 +80,8 @@ fn fast_path_blocker(
         Some("client_surface_patch.fallback.copy_mode")
     } else if state.selection_highlight_clear_deadline.is_some() {
         Some("client_surface_patch.fallback.selection_deadline")
+    } else if state.patch_touches_display_rows(patch) {
+        Some("client_surface_patch.fallback.pane_display")
     } else if patch.panes.iter().any(|pane| {
         !state
             .hits
@@ -106,6 +108,19 @@ fn pane_geometry_matches(
 }
 
 impl ClientShellState {
+    /// Applies `patch` for profiles outside the client module. Returns
+    /// whether it needs a full composition, or `None` when it was rejected.
+    #[cfg(test)]
+    pub(crate) fn apply_pane_surface_patch_needs_compose(
+        &mut self,
+        patch: crate::protocol::PaneSurfacePatch,
+    ) -> Option<bool> {
+        match self.apply_pane_surface_patch(patch) {
+            ClientPaneSurfacePatchOutcome::Applied(composed) => Some(composed.is_none()),
+            ClientPaneSurfacePatchOutcome::Rejected => None,
+        }
+    }
+
     pub(crate) fn apply_pane_surface_patch(
         &mut self,
         patch: crate::protocol::PaneSurfacePatch,

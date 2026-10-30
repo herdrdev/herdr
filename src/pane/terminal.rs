@@ -170,6 +170,8 @@ pub(crate) struct ProcessBytesResult {
     pub clipboard_writes: Vec<Vec<u8>>,
     pub reported_cwd: Option<std::path::PathBuf>,
     pub terminal_responses: Vec<Bytes>,
+    /// The pane switched ECMA-48 BiDi mode (`CSI 8 h` / `CSI 8 l`).
+    pub bidi_mode_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -193,6 +195,9 @@ pub(crate) struct GhosttyPaneTerminal {
     pub(super) detection_text_reads: std::sync::atomic::AtomicUsize,
     key_encoder: Mutex<crate::ghostty::KeyEncoder>,
     pending_pty_responses: Arc<Mutex<Vec<Bytes>>>,
+    /// Mirrors BiDi explicit mode (BDSM reset) after each PTY write, so
+    /// projections read it without taking the core lock.
+    bidi_explicit: std::sync::atomic::AtomicBool,
 }
 
 pub(crate) struct GhosttyPaneCore {
@@ -455,6 +460,10 @@ impl PaneTerminal {
 
     pub fn sgr_pixel_mouse_enabled(&self) -> bool {
         self.ghostty.sgr_pixel_mouse_enabled()
+    }
+
+    pub fn bidi_explicit(&self) -> bool {
+        self.ghostty.bidi_explicit()
     }
 
     pub fn plain_page_keys_use_host_scrollback(&self) -> Option<bool> {
@@ -1207,6 +1216,7 @@ impl GhosttyPaneTerminal {
             }),
             key_encoder: Mutex::new(key_encoder),
             pending_pty_responses,
+            bidi_explicit: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -1368,6 +1378,7 @@ impl GhosttyPaneTerminal {
                 clipboard_writes: Vec::new(),
                 reported_cwd: None,
                 terminal_responses: Vec::new(),
+                bidi_mode_changed: false,
             };
         };
 
@@ -1446,6 +1457,14 @@ impl GhosttyPaneTerminal {
         if synchronized_output != synchronized_output_before {
             core.synchronized_output_epoch = core.synchronized_output_epoch.wrapping_add(1);
         }
+        let bidi_explicit = !core
+            .terminal
+            .mode_get(crate::ghostty::MODE_BIDI_IMPLICIT)
+            .unwrap_or(true);
+        let bidi_mode_changed = self
+            .bidi_explicit
+            .swap(bidi_explicit, std::sync::atomic::Ordering::AcqRel)
+            != bidi_explicit;
         // Intermediate synchronized-frame positions must not become settled cursors.
         if CURSOR_POSITION_SETTLE_ENABLED && !synchronized_output {
             let cursor_started = crate::render_prof::timer();
@@ -1485,6 +1504,7 @@ impl GhosttyPaneTerminal {
             clipboard_writes,
             reported_cwd,
             terminal_responses,
+            bidi_mode_changed,
         }
     }
 
@@ -1873,6 +1893,14 @@ impl GhosttyPaneTerminal {
 
     pub fn sgr_pixel_mouse_enabled(&self) -> bool {
         self.mode_enabled(crate::ghostty::MODE_MOUSE_SGR_PIXELS)
+    }
+
+    /// Whether the pane application switched BiDi to explicit mode
+    /// (`CSI 8 l`): it lays out its own text, so it must not be reordered
+    /// again. Reads the value mirrored after the last PTY write.
+    pub fn bidi_explicit(&self) -> bool {
+        self.bidi_explicit
+            .load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn mode_enabled(&self, mode: u16) -> bool {
@@ -6511,6 +6539,51 @@ mod tests {
         assert_eq!(result.terminal_responses.len(), 1);
         assert!(String::from_utf8_lossy(&result.terminal_responses[0]).contains('R'));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn bidi_mode_switches_are_mirrored_and_reported_by_decrqm() {
+        let (tx, _rx) = mpsc::channel(4);
+        let terminal = crate::ghostty::Terminal::new(20, 5, 0).unwrap();
+        let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
+        let pane_id = PaneId::from_raw(1);
+        let query = |pane: &GhosttyPaneTerminal| {
+            pane.process_pty_bytes(pane_id, 0, b"\x1b[8$p", &tx)
+                .terminal_responses
+        };
+
+        // ECMA-48 BDSM defaults to implicit: the terminal reorders text.
+        assert!(!pane.bidi_explicit());
+        assert_eq!(query(&pane), vec![Bytes::from_static(b"\x1b[8;1$y")]);
+
+        let explicit = pane.process_pty_bytes(pane_id, 0, b"\x1b[8l", &tx);
+        assert!(explicit.bidi_mode_changed);
+        assert!(pane.bidi_explicit());
+        assert_eq!(query(&pane), vec![Bytes::from_static(b"\x1b[8;2$y")]);
+        assert!(
+            !pane
+                .process_pty_bytes(pane_id, 0, b"text", &tx)
+                .bidi_mode_changed
+        );
+        // DEC private mode 8 (autorepeat) is a different mode.
+        assert!(
+            !pane
+                .process_pty_bytes(pane_id, 0, b"\x1b[?8h", &tx)
+                .bidi_mode_changed
+        );
+        assert!(pane.bidi_explicit());
+
+        let implicit = pane.process_pty_bytes(pane_id, 0, b"\x1b[8h", &tx);
+        assert!(implicit.bidi_mode_changed);
+        assert!(!pane.bidi_explicit());
+
+        // RIS restores the implicit default.
+        pane.process_pty_bytes(pane_id, 0, b"\x1b[8l", &tx);
+        assert!(
+            pane.process_pty_bytes(pane_id, 0, b"\x1bc", &tx)
+                .bidi_mode_changed
+        );
+        assert!(!pane.bidi_explicit());
     }
 
     #[test]
