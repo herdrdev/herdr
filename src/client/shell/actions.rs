@@ -1095,6 +1095,16 @@ impl ClientShellState {
                     pane_id: pane_id.clone(),
                 }))
             }
+            KeybindAction::HistoryBack | KeybindAction::HistoryForward => {
+                let current = focused_pane.as_deref()?;
+                let is_live = |pane_id: &str| snapshot.panes.iter().any(|p| p.pane_id == pane_id);
+                let pane_id = if action == KeybindAction::HistoryBack {
+                    self.navigation_history.back(current, is_live)
+                } else {
+                    self.navigation_history.forward(current, is_live)
+                }?;
+                Some(Method::PaneFocus(PaneTarget { pane_id }))
+            }
             KeybindAction::Zoom => Some(Method::PaneZoom(PaneZoomParams {
                 pane_id: focused_pane,
                 mode: PaneZoomMode::Toggle,

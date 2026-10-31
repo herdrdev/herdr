@@ -64,6 +64,8 @@ pub(crate) enum KeybindAction {
     CyclePaneNext,
     CyclePanePrevious,
     LastPane,
+    HistoryBack,
+    HistoryForward,
     Help,
     Settings,
     ReloadConfig,
@@ -132,6 +134,8 @@ pub(crate) fn resolve_non_indexed_action(
         (&keybinds.swap_pane_up, KeybindAction::SwapPaneUp),
         (&keybinds.swap_pane_right, KeybindAction::SwapPaneRight),
         (&keybinds.last_pane, KeybindAction::LastPane),
+        (&keybinds.history_back, KeybindAction::HistoryBack),
+        (&keybinds.history_forward, KeybindAction::HistoryForward),
         (&keybinds.cycle_pane_next, KeybindAction::CyclePaneNext),
         (
             &keybinds.cycle_pane_previous,

@@ -782,6 +782,18 @@
           "description": "Focus the last focused pane across workspaces and tabs. Unset by default."
         },
         {
+          "key": "keys.history_back",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Step back through the history of focus jumps across tabs and workspaces. Unset by default."
+        },
+        {
+          "key": "keys.history_forward",
+          "type": "keybinding",
+          "default": "unset",
+          "description": "Step forward through the history of focus jumps across tabs and workspaces. Unset by default."
+        },
+        {
           "key": "keys.split_vertical",
           "type": "keybinding",
           "default": "\"prefix+v\"",
