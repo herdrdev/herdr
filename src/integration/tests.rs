@@ -513,6 +513,53 @@ fn integration_recommendations_mark_standalone_codex_available() {
 }
 
 #[test]
+#[cfg(unix)]
+fn integration_recommendations_skip_agents_without_a_config_dir() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let bin = base.join("bin");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&bin).unwrap();
+    let droid = bin.join("droid");
+    fs::write(&droid, "#!/bin/sh\n").unwrap();
+    make_executable(&droid).unwrap();
+    let original_home = std::env::var_os("HOME");
+    let original_path = std::env::var_os("PATH");
+    std::env::set_var("HOME", &home);
+    std::env::set_var("PATH", &bin);
+
+    let droid_recommendation = || {
+        integration_recommendations()
+            .into_iter()
+            .find(|recommendation| {
+                recommendation.target == crate::api::schema::IntegrationTarget::Droid
+            })
+            .expect("droid recommendation should be present")
+    };
+
+    // On PATH but never run: installing would fail on the missing directory.
+    assert!(!droid_recommendation().available);
+    assert!(!droid_recommendation().needs_install());
+
+    fs::create_dir_all(home.join(".factory")).unwrap();
+    assert!(droid_recommendation().available);
+    assert!(droid_recommendation().needs_install());
+
+    if let Some(home) = original_home {
+        std::env::set_var("HOME", home);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    if let Some(path) = original_path {
+        std::env::set_var("PATH", path);
+    } else {
+        std::env::remove_var("PATH");
+    }
+    let _ = fs::remove_dir_all(base);
+}
+
+#[test]
 fn integration_recommendation_installs_available_or_outdated_targets() {
     let mut recommendation = IntegrationRecommendation {
         target: crate::api::schema::IntegrationTarget::Claude,
@@ -4374,6 +4421,7 @@ fn install_letta_does_not_publish_hook_when_settings_are_invalid() {
 
 #[test]
 fn letta_staged_install_can_restore_the_prior_file() {
+    let _lock = integration_env_lock();
     let base = unique_base();
     fs::create_dir_all(&base).unwrap();
     let target = base.join("settings.json");
