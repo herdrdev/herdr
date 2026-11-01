@@ -7,7 +7,7 @@ use super::output::GraphicsOutput;
 use ratatui::layout::Rect;
 
 use super::{
-    clipped_placement, collect_visible_placements, encode_graphics_output, HostCellSize,
+    cells, clipped_placement, collect_visible_placements, encode_graphics_output, HostCellSize,
     HostGraphicsCache, HostPlacement, HostSourceKey, ImageSignature,
 };
 use crate::ghostty::{
@@ -25,6 +25,9 @@ const MAX_SURFACE_GRAPHICS_PLACEMENTS: usize = 4_096;
 // match pi's own off-screen cache in decoded bytes, which is what hosts store.
 const MAX_OFFSCREEN_IMAGES: usize = 16;
 const MAX_OFFSCREEN_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+/// Scrolling an image produces a new clipped geometry per step; the raster
+/// cache is cleared wholesale once it holds this many entries.
+const MAX_CELL_IMAGES: usize = 256;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct DeliveryCache {
@@ -219,6 +222,9 @@ pub(crate) struct ClientState {
     reset_pending: bool,
     stale_images: Vec<u32>,
     forced_delete_images: Vec<u32>,
+    /// Half-block rasters for hosts without Kitty graphics, per image and geometry.
+    cell_images: HashMap<(SurfaceGraphicsAssetKey, cells::CellGeometry), cells::CellImage>,
+    decoded_png: HashMap<SurfaceGraphicsAssetKey, Arc<[u8]>>,
 }
 
 impl ClientState {
@@ -253,6 +259,8 @@ impl ClientState {
         self.trusted_direct.clear();
         self.stale_images.clear();
         self.forced_delete_images.clear();
+        self.cell_images.clear();
+        self.decoded_png.clear();
         self.reset_pending = true;
     }
 
@@ -461,6 +469,8 @@ impl ClientState {
             .collect::<HashSet<_>>();
         self.assets.retain(|key, _| owned.contains(key));
         self.native_image_ids.retain(|key, _| owned.contains(key));
+        self.cell_images.retain(|(key, _), _| owned.contains(key));
+        self.decoded_png.retain(|key, _| owned.contains(key));
         self.display_scene = next;
     }
 
@@ -503,6 +513,94 @@ impl ClientState {
             return GraphicsOutput::from_bytes(bytes);
         }
 
+        let placements = self
+            .host_pieces(visibility, main_origin, popup_origin, cell_size, occlusion)
+            .into_iter()
+            .map(|(host, _)| host)
+            .collect::<Vec<_>>();
+        let mut output = GraphicsOutput::from_bytes(bytes);
+        self.host.request_placement_replay();
+        output.extend(encode_graphics_output(&mut self.host, &placements));
+        output
+    }
+
+    /// Paints every visible placement into `frame` as half-block cells for a
+    /// host terminal without Kitty graphics. Rasters are cached per image and
+    /// geometry; Kitty bookkeeping is discarded because the host never saw any
+    /// image.
+    pub(crate) fn paint_cells(
+        &mut self,
+        frame: &mut crate::protocol::FrameData,
+        visibility: Visibility,
+        main_origin: (u16, u16),
+        popup_origin: Option<(u16, u16)>,
+        cell_size: HostCellSize,
+        occlusion: &Occlusion,
+    ) {
+        let _ = self.take_pending_cleanup();
+        self.stale_images.clear();
+        self.host.clear_bytes();
+        if !cell_size.is_known() || self.scope.is_empty() {
+            return;
+        }
+        let pieces = self
+            .host_pieces(visibility, main_origin, popup_origin, cell_size, occlusion)
+            .into_iter()
+            .map(|(host, key)| (host, key.clone()))
+            .collect::<Vec<_>>();
+        for (host, key) in pieces {
+            let (Some((clipped, _)), Some(data)) =
+                (clipped_placement(&host), host.raw_data.as_ref())
+            else {
+                continue;
+            };
+            let cache_key = (key, cells::CellGeometry::from_clipped(clipped, cell_size));
+            if !self.cell_images.contains_key(&cache_key) {
+                let Some(image) = self.rasterize(&cache_key.0, data, cache_key.1) else {
+                    continue;
+                };
+                if self.cell_images.len() >= MAX_CELL_IMAGES {
+                    self.cell_images.clear();
+                }
+                self.cell_images.insert(cache_key.clone(), image);
+            }
+            if let Some(image) = self.cell_images.get(&cache_key) {
+                image.paint(frame, clipped.x, clipped.y);
+            }
+        }
+    }
+
+    fn rasterize(
+        &mut self,
+        key: &SurfaceGraphicsAssetKey,
+        data: &Arc<[u8]>,
+        geometry: cells::CellGeometry,
+    ) -> Option<cells::CellImage> {
+        let (format, data) = if key.format == SurfaceGraphicsFormat::Png {
+            let decoded = match self.decoded_png.get(key) {
+                Some(decoded) => Arc::clone(decoded),
+                None => {
+                    let decoded = cells::decode_png(data, key.image_width, key.image_height)?;
+                    self.decoded_png.insert(key.clone(), Arc::clone(&decoded));
+                    decoded
+                }
+            };
+            (SurfaceGraphicsFormat::Rgba, decoded)
+        } else {
+            (key.format, Arc::clone(data))
+        };
+        let pixels = cells::Pixels::new(format, key.image_width, key.image_height, &data)?;
+        Some(cells::rasterize(&pixels, geometry))
+    }
+
+    fn host_pieces(
+        &self,
+        visibility: Visibility,
+        main_origin: (u16, u16),
+        popup_origin: Option<(u16, u16)>,
+        cell_size: HostCellSize,
+        occlusion: &Occlusion,
+    ) -> Vec<(HostPlacement, &SurfaceGraphicsAssetKey)> {
         let visible = self
             .display_scene
             .placements
@@ -513,30 +611,25 @@ impl ClientState {
             })
             .collect::<Vec<_>>();
         let pieces = occlusion.frame_pieces(&visible);
-        let this = &*self;
-        let placements = visible
+        visible
             .iter()
             .zip(pieces)
             .flat_map(|(&(placement, origin), pieces)| {
                 pieces.into_iter().enumerate().map(move |(index, piece)| {
                     let mut host = client_host_piece(
-                        &this.scope,
+                        &self.scope,
                         placement,
                         origin,
                         cell_size,
                         piece,
                         index as u32,
                     );
-                    host.host_image_id = Some(this.image_id(&placement.asset));
-                    host.raw_data = this.assets.get(&placement.asset).map(Arc::clone);
-                    host
+                    host.host_image_id = Some(self.image_id(&placement.asset));
+                    host.raw_data = self.assets.get(&placement.asset).map(Arc::clone);
+                    (host, &placement.asset)
                 })
             })
-            .collect::<Vec<_>>();
-        let mut output = GraphicsOutput::from_bytes(bytes);
-        self.host.request_placement_replay();
-        output.extend(encode_graphics_output(&mut self.host, &placements));
-        output
+            .collect()
     }
 }
 

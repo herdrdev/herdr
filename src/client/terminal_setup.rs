@@ -28,8 +28,11 @@ use super::frame_output::clear_received_kitty_graphics;
 /// Sets up the terminal for client mode (raw mode, optional mouse, keyboard enhancements).
 ///
 /// Returns a guard that restores the terminal when dropped.
-pub(super) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(true, mouse_capture)
+pub(super) fn setup_terminal(
+    mouse_capture: bool,
+    probe_kitty_graphics: bool,
+) -> io::Result<TerminalGuard> {
+    setup_terminal_with_capabilities(true, mouse_capture, probe_kitty_graphics)
 }
 
 /// Sets up a direct attach terminal.
@@ -38,17 +41,19 @@ pub(super) fn setup_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
 /// capture lets wheel events drive the attached viewport or reach child
 /// programs that requested mouse input.
 pub(super) fn setup_direct_attach_terminal(mouse_capture: bool) -> io::Result<TerminalGuard> {
-    setup_terminal_with_capabilities(false, mouse_capture)
+    setup_terminal_with_capabilities(false, mouse_capture, false)
 }
 
 pub(super) fn setup_terminal_with_capabilities(
     enable_client_protocols: bool,
     mouse_capture: bool,
+    probe_kitty_graphics: bool,
 ) -> io::Result<TerminalGuard> {
     ratatui::init();
     let mut terminal_guard = TerminalGuard {
         host_escape_disambiguation_active: false,
         host_sgr_pixel_mouse: None,
+        host_kitty_graphics: None,
         buffered_host_input: Vec::new(),
         reset_keyboard_enhancements: false,
         reset_modify_other_keys: false,
@@ -77,7 +82,7 @@ pub(super) fn setup_terminal_with_capabilities(
     let (host_probe, buffered_host_input) = if enable_client_protocols {
         terminal_guard.reset_keyboard_enhancements = true;
         push_keyboard_enhancement_flags()?;
-        let (probe, buffered_input) = query_host_capabilities(true);
+        let (probe, buffered_input) = query_host_capabilities(true, probe_kitty_graphics);
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste, EnableFocusChange)?;
         if host_color_scheme_reports {
@@ -89,7 +94,7 @@ pub(super) fn setup_terminal_with_capabilities(
         if should_enable_host_color_scheme_reports(true) {
             write_host_color_scheme_report_mode(&mut io::stdout(), false)?;
         }
-        let (probe, buffered_input) = query_host_capabilities(false);
+        let (probe, buffered_input) = query_host_capabilities(false, false);
         set_mouse_capture(mouse_capture, false)?;
         execute!(io::stdout(), EnableBracketedPaste)?;
         (probe, buffered_input)
@@ -125,6 +130,7 @@ pub(super) fn setup_terminal_with_capabilities(
 
     terminal_guard.host_escape_disambiguation_active = host_probe.escape_disambiguation;
     terminal_guard.host_sgr_pixel_mouse = host_probe.sgr_pixel_mouse;
+    terminal_guard.host_kitty_graphics = host_probe.kitty_graphics;
     terminal_guard.buffered_host_input = buffered_host_input;
     Ok(terminal_guard)
 }
@@ -137,6 +143,7 @@ pub(super) fn should_enable_host_color_scheme_reports(enable_client_protocols: b
 pub(super) struct TerminalGuard {
     host_escape_disambiguation_active: bool,
     host_sgr_pixel_mouse: Option<bool>,
+    host_kitty_graphics: Option<bool>,
     buffered_host_input: Vec<u8>,
     reset_keyboard_enhancements: bool,
     reset_modify_other_keys: bool,
@@ -159,6 +166,7 @@ const MAX_BUFFERED_HOST_INPUT: usize = 64 * 1024;
 struct HostKeyboardProbeResponses {
     flags: Option<u16>,
     sgr_pixel_mouse_status: Option<u8>,
+    kitty_graphics: Option<bool>,
     primary_device_attributes: bool,
 }
 
@@ -168,21 +176,41 @@ pub(super) struct HostTerminalProbe {
     pub(super) escape_disambiguation: bool,
     /// None when the host did not answer; exact pixel input stays disabled.
     pub(super) sgr_pixel_mouse: Option<bool>,
+    /// Whether the host speaks Kitty graphics. None when the query was not sent
+    /// or the host never answered DA1, so nothing is known.
+    pub(super) kitty_graphics: Option<bool>,
+}
+
+/// Image id of the 1x1 Kitty graphics query; `a=q` stores nothing, so the id
+/// only has to be echoed back.
+#[cfg(not(windows))]
+const KITTY_GRAPHICS_PROBE_IMAGE_ID: u32 = 31;
+
+#[cfg(not(windows))]
+fn host_capability_query(query_keyboard: bool, query_graphics: bool) -> Vec<u8> {
+    let mut query = b"\x1b[?1016$p".to_vec();
+    if query_keyboard {
+        query.extend_from_slice(b"\x1b[?u");
+    }
+    if query_graphics {
+        query.extend_from_slice(
+            format!("\x1b_Ga=q,i={KITTY_GRAPHICS_PROBE_IMAGE_ID},s=1,v=1,f=24;AAAA\x1b\\")
+                .as_bytes(),
+        );
+    }
+    query.extend_from_slice(b"\x1b[c");
+    query
 }
 
 #[cfg(not(windows))]
-fn query_host_capabilities(query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
-    const FULL_QUERY: &[u8] = b"\x1b[?1016$p\x1b[?u\x1b[c";
-    const PIXEL_MOUSE_QUERY: &[u8] = b"\x1b[?1016$p\x1b[c";
-
+fn query_host_capabilities(
+    query_keyboard: bool,
+    query_graphics: bool,
+) -> (HostTerminalProbe, Vec<u8>) {
     let mut buffered_input = Vec::new();
-    let query = if query_keyboard {
-        FULL_QUERY
-    } else {
-        PIXEL_MOUSE_QUERY
-    };
+    let query = host_capability_query(query_keyboard, query_graphics);
     if let Err(err) = io::stdout()
-        .write_all(query)
+        .write_all(&query)
         .and_then(|()| io::stdout().flush())
     {
         tracing::debug!(%err, "host capability query unavailable");
@@ -226,11 +254,17 @@ fn query_host_capabilities(query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>)
         }
     }
 
-    (host_terminal_probe(&responses), buffered_input)
+    (
+        host_terminal_probe(&responses, query_graphics),
+        buffered_input,
+    )
 }
 
 #[cfg(not(windows))]
-fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalProbe {
+fn host_terminal_probe(
+    responses: &HostKeyboardProbeResponses,
+    graphics_queried: bool,
+) -> HostTerminalProbe {
     let sgr_pixel_mouse = match responses.sgr_pixel_mouse_status {
         // The query follows an explicit reset, so a host still reporting SET may
         // send pixels where Herdr expects cells. Wrong mouse units beat refusing
@@ -246,6 +280,11 @@ fn host_terminal_probe(responses: &HostKeyboardProbeResponses) -> HostTerminalPr
     HostTerminalProbe {
         escape_disambiguation: host_escape_disambiguation_confirmed(responses),
         sgr_pixel_mouse,
+        // Hosts answer in order, so reaching DA1 without a graphics reply means
+        // the host dropped the query: it cannot show Kitty images.
+        kitty_graphics: responses
+            .kitty_graphics
+            .or((graphics_queried && responses.primary_device_attributes).then_some(false)),
     }
 }
 
@@ -282,6 +321,13 @@ fn consume_host_keyboard_probe_responses(
             let Some(control_string_end) = control_string_end else {
                 break;
             };
+            if let Some(accepted) =
+                kitty_graphics_probe_reply(&buffered_input[offset..offset + control_string_end])
+            {
+                responses.kitty_graphics = Some(accepted);
+                buffered_input.drain(offset..offset + control_string_end);
+                continue;
+            }
             offset += control_string_end;
             continue;
         }
@@ -346,6 +392,22 @@ fn consume_host_keyboard_probe_responses(
     }
 }
 
+/// `Some(accepted)` for the host's reply to the Kitty graphics probe, which
+/// echoes the probe image id and `OK` or an error code.
+#[cfg(not(windows))]
+fn kitty_graphics_probe_reply(control_string: &[u8]) -> Option<bool> {
+    let payload = control_string
+        .strip_prefix(b"\x1b_G")?
+        .strip_suffix(b"\x1b\\")?;
+    let separator = payload.iter().position(|byte| *byte == b';')?;
+    let (controls, status) = (&payload[..separator], &payload[separator + 1..]);
+    let probe_id = format!("i={KITTY_GRAPHICS_PROBE_IMAGE_ID}");
+    controls
+        .split(|byte| *byte == b',')
+        .any(|field| field == probe_id.as_bytes())
+        .then_some(status == b"OK")
+}
+
 #[cfg(not(windows))]
 fn parse_sgr_pixel_mouse_status(body: &[u8]) -> Option<u8> {
     let mut fields = body.split(|byte| *byte == b';');
@@ -383,7 +445,10 @@ fn host_control_string_end(bytes: &[u8]) -> Option<Option<usize>> {
 }
 
 #[cfg(windows)]
-fn query_host_capabilities(_query_keyboard: bool) -> (HostTerminalProbe, Vec<u8>) {
+fn query_host_capabilities(
+    _query_keyboard: bool,
+    _query_graphics: bool,
+) -> (HostTerminalProbe, Vec<u8>) {
     (HostTerminalProbe::default(), Vec::new())
 }
 
@@ -811,6 +876,10 @@ impl TerminalGuard {
         self.host_sgr_pixel_mouse
     }
 
+    pub(super) fn host_kitty_graphics(&self) -> Option<bool> {
+        self.host_kitty_graphics
+    }
+
     pub(super) fn take_buffered_host_input(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.buffered_host_input)
     }
@@ -973,6 +1042,7 @@ mod tests {
         TerminalGuard {
             host_escape_disambiguation_active: kitty_confirmed,
             host_sgr_pixel_mouse: None,
+            host_kitty_graphics: None,
             buffered_host_input: Vec::new(),
             reset_keyboard_enhancements: client_protocols,
             reset_modify_other_keys: modify_other_keys_sequence.is_some(),
@@ -1135,7 +1205,7 @@ mod tests {
             consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
             assert_eq!(
-                host_terminal_probe(&responses).sgr_pixel_mouse,
+                host_terminal_probe(&responses, false).sgr_pixel_mouse,
                 Some(status == 2),
                 "status {status}"
             );
@@ -1151,7 +1221,10 @@ mod tests {
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(!responses.primary_device_attributes);
-        assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(false));
+        assert_eq!(
+            host_terminal_probe(&responses, false).sgr_pixel_mouse,
+            Some(false)
+        );
     }
 
     #[cfg(not(windows))]
@@ -1163,7 +1236,10 @@ mod tests {
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(host_escape_disambiguation_confirmed(&responses));
-        assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(true));
+        assert_eq!(
+            host_terminal_probe(&responses, false).sgr_pixel_mouse,
+            Some(true)
+        );
         assert_eq!(buffered, b"aPtyped");
     }
 
@@ -1205,7 +1281,10 @@ mod tests {
         consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
 
         assert!(host_escape_disambiguation_confirmed(&responses));
-        assert_eq!(host_terminal_probe(&responses).sgr_pixel_mouse, Some(true));
+        assert_eq!(
+            host_terminal_probe(&responses, false).sgr_pixel_mouse,
+            Some(true)
+        );
         assert_eq!(buffered, opaque);
     }
 
@@ -1224,6 +1303,74 @@ mod tests {
             buffered,
             b"a\x1b[?7;1ub\x1b[?65536uc\x1b[?1016;5$y\x1b[?1006;2$y"
         );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_capability_query_asks_for_kitty_graphics_before_device_attributes() {
+        let query = host_capability_query(true, true);
+        let text = String::from_utf8(query).unwrap();
+        assert_eq!(
+            text,
+            "\x1b[?1016$p\x1b[?u\x1b_Ga=q,i=31,s=1,v=1,f=24;AAAA\x1b\\\x1b[c"
+        );
+        assert!(!String::from_utf8(host_capability_query(true, false))
+            .unwrap()
+            .contains("\x1b_G"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_probe_reads_the_kitty_graphics_answer_fenced_by_device_attributes() {
+        // Ghostty, kitty, and WezTerm answer the query before DA1.
+        let mut buffered = b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+        assert_eq!(
+            host_terminal_probe(&responses, true).kitty_graphics,
+            Some(true)
+        );
+        assert!(buffered.is_empty());
+
+        // A host that rejects the query cannot show images either.
+        let mut buffered = b"\x1b_Gi=31;EINVAL:unsupported\x1b\\\x1b[?62c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+        assert_eq!(
+            host_terminal_probe(&responses, true).kitty_graphics,
+            Some(false)
+        );
+        assert!(buffered.is_empty());
+
+        // Mosh, Terminal.app, and tmux without passthrough answer only DA1.
+        let mut buffered = b"\x1b[?1016;0$y\x1b[?1;2c".to_vec();
+        let mut responses = HostKeyboardProbeResponses::default();
+        consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+        assert!(responses.primary_device_attributes);
+        assert_eq!(
+            host_terminal_probe(&responses, true).kitty_graphics,
+            Some(false)
+        );
+        // Without the query, or without DA1, nothing is known.
+        assert_eq!(host_terminal_probe(&responses, false).kitty_graphics, None);
+        let unanswered = HostKeyboardProbeResponses::default();
+        assert_eq!(host_terminal_probe(&unanswered, true).kitty_graphics, None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn host_probe_reassembles_a_split_kitty_graphics_answer_and_keeps_foreign_apcs() {
+        let stream = b"\x1b_Gi=30;OK\x1b\\\x1b_Gi=31,I=0;OK\x1b\\\x1b[?62c";
+        for split in 1..stream.len() {
+            let mut buffered = Vec::new();
+            let mut responses = HostKeyboardProbeResponses::default();
+            buffered.extend_from_slice(&stream[..split]);
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+            buffered.extend_from_slice(&stream[split..]);
+            consume_host_keyboard_probe_responses(&mut buffered, &mut responses);
+            assert_eq!(responses.kitty_graphics, Some(true), "split {split}");
+            assert_eq!(buffered, b"\x1b_Gi=30;OK\x1b\\", "split {split}");
+        }
     }
 
     #[test]

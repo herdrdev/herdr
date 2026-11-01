@@ -550,3 +550,34 @@ fn popup_terminal_keeps_own_graphics_and_hides_only_background_overlap() {
     ));
     assert!(!String::from_utf8_lossy(&frame.graphics.clone().into_inline_bytes()).contains("a=t"));
 }
+
+#[test]
+fn hosts_without_kitty_graphics_get_half_block_cells_and_no_escapes() {
+    use crate::client::loop_config::GraphicsMode;
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    let layout = state.layout(106, 20);
+    let point = (layout.pane_surface.x, layout.pane_surface.y);
+    let mut pane = surface();
+    add_main_image(&mut pane, layout, point, 1);
+    pane.graphics.assets[0].data = vec![0x10, 0x20, 0x30, 0xff];
+    let cell_index = usize::from(point.1) * 106 + usize::from(point.0);
+
+    state.set_graphics_mode(GraphicsMode::Cells);
+    state.set_pane_surface(pane.clone());
+    let frame = state.compose(106, 20).unwrap();
+    assert!(frame.graphics.is_empty());
+    let cell = &frame.cells[cell_index];
+    assert_eq!(cell.symbol, "\u{2580}");
+    assert_eq!(cell.fg, 0x02_10_20_30, "{:#x}", cell.fg);
+    assert_eq!(cell.bg, 0x02_10_20_30, "{:#x}", cell.bg);
+
+    // The same scene on a Kitty host is uploaded, not painted into the cells.
+    state.set_graphics_mode(GraphicsMode::Kitty);
+    state.set_pane_surface(pane);
+    let frame = state.compose(106, 20).unwrap();
+    assert_ne!(frame.cells[cell_index].symbol, "\u{2580}");
+    let bytes = frame.graphics.into_inline_bytes();
+    assert!(String::from_utf8_lossy(&bytes).contains("a=t"));
+}

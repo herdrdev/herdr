@@ -68,15 +68,16 @@ pub(super) fn direct_graphics_profile_values(
     supported && !blocked_transport && terminals
 }
 
-/// Server-owned files require a shared filesystem; the host terminal profile alone
-/// cannot establish that for a saved SSH endpoint.
+/// Server-owned files require a shared filesystem and a host terminal that
+/// accepted the Kitty graphics query; the terminal profile alone establishes
+/// neither for a saved SSH endpoint or a client behind Mosh.
 fn direct_graphics_capability(
-    local_transport: bool,
+    direct_transport: bool,
     exact_cell_size: bool,
     cell_size: (u32, u32),
     profile_allowed: bool,
 ) -> bool {
-    local_transport && exact_cell_size && cell_size.0 > 0 && cell_size.1 > 0 && profile_allowed
+    direct_transport && exact_cell_size && cell_size.0 > 0 && cell_size.1 > 0 && profile_allowed
 }
 
 #[cfg(unix)]
@@ -164,8 +165,9 @@ pub(super) struct HandshakePixelCapabilities {
 ///
 /// Direct terminal clients retain the same-install private protocol. Client-owned
 /// shells use the stable endpoint generation and negotiate whole codecs without
-/// comparing Herdr build versions. `local_transport` means the endpoint shares the
-/// client's filesystem, not merely that its bridge exposes a local socket.
+/// comparing Herdr build versions. `direct_transport` means the endpoint shares the
+/// client's filesystem and the host terminal accepts Kitty graphics, not merely
+/// that its bridge exposes a local socket.
 // Cancellation extends the existing handshake call; regrouping unrelated display options
 // would broaden this lifecycle fix across all client entry points.
 #[allow(clippy::too_many_arguments)]
@@ -180,7 +182,7 @@ pub(super) fn do_handshake(
     endpoint_keybindings: bool,
     mouse_capture: bool,
     surface_active: bool,
-    local_transport: bool,
+    direct_transport: bool,
     stopped: &AtomicBool,
 ) -> Result<HandshakeResult, ClientError> {
     stream
@@ -196,7 +198,7 @@ pub(super) fn do_handshake(
             surface_size,
             pixel_mouse: pixel_capabilities.exact_geometry && pixel_capabilities.sgr_mouse,
             direct_graphics: direct_graphics_capability(
-                local_transport,
+                direct_transport,
                 pixel_capabilities.exact_geometry,
                 (cell_width_px, cell_height_px),
                 direct_graphics_profile_allowed(),

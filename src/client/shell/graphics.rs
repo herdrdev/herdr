@@ -56,8 +56,18 @@ impl ClientShellState {
         };
     }
 
+    pub(in crate::client) fn set_graphics_mode(
+        &mut self,
+        mode: crate::client::loop_config::GraphicsMode,
+    ) {
+        self.graphics_mode = mode;
+    }
+
+    /// Kitty hosts get graphics escapes to apply after the text frame; other
+    /// hosts get the images painted into `frame` as half-block cells instead.
     pub(super) fn compose_graphics(
         &mut self,
+        frame: &mut FrameData,
         layout: ClientShellLayout,
         occlusion: &crate::kitty_graphics::surface::Occlusion,
     ) -> crate::kitty_graphics::GraphicsOutput {
@@ -73,12 +83,26 @@ impl ClientShellState {
             .popup
             .as_ref()
             .map(|popup| (popup.inner_rect.x, popup.inner_rect.y));
-        self.graphics.encode_output(
-            visibility,
-            (layout.pane_surface.x, layout.pane_surface.y),
-            popup_origin,
-            self.graphics_cell_size,
-            occlusion,
-        )
+        let main_origin = (layout.pane_surface.x, layout.pane_surface.y);
+        if self.graphics_mode.kitty() {
+            return self.graphics.encode_output(
+                visibility,
+                main_origin,
+                popup_origin,
+                self.graphics_cell_size,
+                occlusion,
+            );
+        }
+        if self.graphics_mode.active() {
+            self.graphics.paint_cells(
+                frame,
+                visibility,
+                main_origin,
+                popup_origin,
+                self.graphics_cell_size,
+                occlusion,
+            );
+        }
+        crate::kitty_graphics::GraphicsOutput::default()
     }
 }

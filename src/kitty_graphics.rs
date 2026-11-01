@@ -13,6 +13,7 @@ use crate::ghostty::{KittyImageDescriptor, KittyImageFormat, KittyImagePlacement
 use crate::layout::PaneId;
 use crate::terminal::TerminalRuntimeRegistry;
 
+pub(crate) mod cells;
 pub(crate) mod output;
 pub(crate) mod surface;
 
@@ -24,7 +25,7 @@ pub(crate) const HEADLESS_GRAPHICS_TRANSACTION_BUDGET: usize =
     crate::protocol::MAX_GRAPHICS_FRAME_SIZE - crate::protocol::MAX_FRAME_SIZE;
 const HOST_IMAGE_ID_BASE: u32 = 10_000;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Hash, PartialEq, Eq)]
 pub(crate) struct HostCellSize {
     pub width_px: u32,
     pub height_px: u32,
