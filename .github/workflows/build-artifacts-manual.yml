@@ -117,7 +117,7 @@ jobs:
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.name }}-${{ inputs.libghostty_optimize }}-simd-${{ inputs.libghostty_simd }}
           path: |
@@ -180,7 +180,7 @@ jobs:
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.name }}-${{ inputs.libghostty_optimize }}-simd-${{ inputs.libghostty_simd }}
           path: |
@@ -240,7 +240,7 @@ jobs:
           "sha256=$hash  herdr-windows-x86_64.zip" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
 
       - name: Upload artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: herdr-windows-x86_64-${{ inputs.libghostty_optimize }}-simd-${{ inputs.libghostty_simd }}
           path: |
