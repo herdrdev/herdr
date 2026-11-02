@@ -463,7 +463,7 @@ impl ClientShellState {
         self.endpoints
             .iter()
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
-            .map_or("Unknown endpoint", |endpoint| endpoint.label.as_str())
+            .map_or("Conexão desconhecida", |endpoint| endpoint.label.as_str())
     }
 
     pub(crate) fn active_endpoint_label(&self) -> &str {

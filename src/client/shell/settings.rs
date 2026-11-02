@@ -324,9 +324,9 @@ impl ClientShellState {
                             details,
                             ..
                         }) => settings.integration_messages.extend(details.messages),
-                        Ok(_) => settings
-                            .integration_messages
-                            .push("endpoint returned an unexpected integration result".into()),
+                        Ok(_) => settings.integration_messages.push(
+                            "a conexão retornou um resultado inesperado para a integração".into(),
+                        ),
                         Err(error) => settings.integration_messages.push(error.message),
                     }
                     settings.installing_integrations = self.pending_integration_installs > 0;

@@ -567,7 +567,9 @@ fn machine_add_reports_strict_host_key_failure() {
         result.output
     );
     assert!(
-        !result.output.contains("lost connection to server"),
+        !result
+            .output
+            .contains("a conexão com o servidor foi perdida"),
         "{}",
         result.output
     );

@@ -741,7 +741,7 @@ async fn run_client_loop(
                             } else {
                                 present_handoff_unavailable(
                                     &mut state,
-                                    "Local is unavailable; reconnecting".into(),
+                                    "O servidor local está indisponível; reconectando".into(),
                                     None,
                                 );
                             }
@@ -2290,7 +2290,7 @@ async fn run_client_loop(
                         &failure.endpoint_id,
                         failure.generation,
                         now,
-                        &format!("{}; reconnecting", failure.message),
+                        &format!("{}; reconectando", failure.message),
                     ) {
                         clear_endpoint_host_effects(
                             &mut state,

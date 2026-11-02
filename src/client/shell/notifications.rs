@@ -76,14 +76,14 @@ pub(super) fn render_mobile_notification_banner(
         SemanticNotificationKind::NeedsAttention => event
             .title
             .strip_suffix(" needs attention")
-            .map(|agent| format!("{agent} waiting"))
+            .map(|agent| format!("{agent} aguardando"))
             .unwrap_or_else(|| event.title.clone()),
         SemanticNotificationKind::Finished => event
             .title
             .strip_suffix(" finished")
-            .map(|agent| format!("{agent} done"))
+            .map(|agent| format!("{agent} concluiu"))
             .unwrap_or_else(|| event.title.clone()),
-        SemanticNotificationKind::UpdateInstalled => "update ready".to_owned(),
+        SemanticNotificationKind::UpdateInstalled => "atualização pronta".to_owned(),
         SemanticNotificationKind::Custom => event.title.clone(),
     };
     let dot_color = match event.kind {
@@ -247,7 +247,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains("pi waiting"));
+        assert!(text.contains("pi aguardando"));
         assert!(text.contains("workspace · tab 1"));
         assert!(buffer.content[18 * 44..19 * 44]
             .iter()

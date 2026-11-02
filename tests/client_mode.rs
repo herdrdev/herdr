@@ -516,15 +516,15 @@ fn server_unreachable_shows_clear_error() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("failed to connect to server"),
+        stderr.contains("não foi possível conectar ao servidor"),
         "stderr should mention connection failure: {stderr}"
     );
     assert!(
-        stderr.contains("Is herdr server running?"),
+        stderr.contains("Abra novamente o Pretorian para iniciar o servidor"),
         "stderr should include actionable guidance: {stderr}"
     );
     assert!(
-        stderr.contains("Socket path:"),
+        stderr.contains("Caminho do socket:"),
         "stderr should include attempted socket path: {stderr}"
     );
 
@@ -641,7 +641,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
 
     let crash_output_lc = crash_output.to_lowercase();
     assert!(
-        crash_output_lc.contains("lost connection to server"),
+        crash_output_lc.contains("a conexão com o servidor foi perdida"),
         "thin client must emit explicit lost-connection message after server crash; output: {crash_output:?}"
     );
 
@@ -971,8 +971,8 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
                 false
             }), "Local must accept input without waiting for SSH (remote selected: {select_remote}): {}", read_output(&output));
             let text = read_output(&output);
-            assert!(!text.contains("Local: connecting"), "{text}");
-            assert!(!text.contains("Local: reconnecting"), "{text}");
+            assert!(!text.contains("Local: conectando"), "{text}");
+            assert!(!text.contains("Local: reconectando"), "{text}");
             drop(input);
             drop(client);
         }
@@ -1238,7 +1238,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     support::stop_spawned_herdr(&mut *remote_server.child);
     assert!(
         wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("reconnecting")
+            read_output(&output)[watermark..].contains("reconectando")
         }),
         "the selected remote must be marked disconnected"
     );
@@ -1392,7 +1392,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     assert!(
         disconnect_output
             .to_lowercase()
-            .contains("lost connection to server"),
+            .contains("a conexão com o servidor foi perdida"),
         "client shell should explain endpoint loss; output: {disconnect_output:?}"
     );
 

@@ -59,7 +59,7 @@ impl ClientShellState {
         self.push_endpoint_notice(
             ClientEndpointNoticeKind::Unavailable,
             format!("machine-unavailable:{}:{message}", id.storage_key()),
-            "Endpoint unavailable",
+            "Conexão indisponível",
             message,
         )
     }

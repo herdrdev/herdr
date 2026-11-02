@@ -584,7 +584,7 @@ pub(super) fn handle_endpoint_disconnect(
             .endpoint_disconnected(
                 endpoints,
                 endpoint_id,
-                format!("endpoint connection was lost while activating {notice}"),
+                format!("a conexão foi perdida durante a ativação de {notice}"),
             );
         match outcome {
             endpoint::ActivationRollback::Pending => {}

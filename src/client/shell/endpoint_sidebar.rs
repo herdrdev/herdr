@@ -608,7 +608,7 @@ fn render_endpoint_row(
     let signal = if auth.required_for(endpoint) {
         "! auth".to_owned()
     } else if endpoint.status == ClientEndpointStatus::Attention {
-        "! error".to_owned()
+        "! erro".to_owned()
     } else if endpoint.endpoint_id.is_local() {
         String::new()
     } else if state.is_empty() {

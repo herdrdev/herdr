@@ -465,7 +465,7 @@ fn connect_once(
                 if error.kind() == std::io::ErrorKind::NotFound {
                     std::io::Error::new(
                         std::io::ErrorKind::ConnectionRefused,
-                        "Local is unavailable; start its server to reconnect",
+                        "O servidor local está indisponível; inicie-o para reconectar",
                     )
                 } else {
                     error
@@ -522,7 +522,7 @@ fn connect_once(
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "this machine needs a server update before it can participate in multi-machine viewing",
+            "atualize o servidor desta máquina para visualizá-la junto com outras máquinas",
         ));
     }
     let reader = stream.try_clone()?;
