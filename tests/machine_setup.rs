@@ -234,14 +234,15 @@ fn setup_options(
             }
         }
     });
-    let mut output = String::new();
+    let mut output_bytes = Vec::new();
     let mut prompts = 0;
     let mut timed_out = false;
     let mut picked = false;
     loop {
         match rx.recv_timeout(Duration::from_secs(20)) {
             Ok(bytes) => {
-                output.push_str(&String::from_utf8_lossy(&bytes));
+                output_bytes.extend_from_slice(&bytes);
+                let output = String::from_utf8_lossy(&output_bytes);
                 if !picked && output.contains("Esc cancel") {
                     writer.write_all(options.selection).unwrap();
                     writer.flush().unwrap();
@@ -268,6 +269,7 @@ fn setup_options(
             }
         }
     }
+    let output = String::from_utf8_lossy(&output_bytes).into_owned();
     let status = child.wait().unwrap();
     drop(writer);
     drop(pair.master);

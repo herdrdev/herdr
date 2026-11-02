@@ -842,7 +842,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
     );
     drop(server);
 
-    let mut crash_output = String::new();
+    let mut crash_output = Vec::new();
     let thin_exited = {
         let deadline = Instant::now() + Duration::from_secs(12);
         let mut exited = false;
@@ -854,7 +854,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
             }
             if let Ok(n) = thin_reader.read(&mut buf) {
                 if n > 0 {
-                    crash_output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    crash_output.extend_from_slice(&buf[..n]);
                 }
             }
             thread::sleep(Duration::from_millis(50));
@@ -877,13 +877,14 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
         match thin_reader.read(&mut buf) {
-            Ok(n) if n > 0 => crash_output.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Ok(n) if n > 0 => crash_output.extend_from_slice(&buf[..n]),
             Ok(_) => break,
             Err(_) => break,
         }
         thread::sleep(Duration::from_millis(30));
     }
 
+    let crash_output = String::from_utf8_lossy(&crash_output);
     let crash_output_lc = crash_output.to_lowercase();
     assert!(
         crash_output_lc.contains("a conexão com o servidor foi perdida"),
