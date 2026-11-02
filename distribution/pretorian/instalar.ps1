@@ -1,7 +1,31 @@
 $ErrorActionPreference = 'Stop'
-if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'x86')) {
-    throw 'Esta plataforma ainda não possui instalador aprovado.'
+function Assert-PretorianNativeMachine([UInt16]$Maquina) {
+    if ($Maquina -ne 0x8664) {
+        throw 'Esta plataforma ainda não possui instalador aprovado.'
+    }
 }
+if (-not ('PretorianNativeMachine' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class PretorianNativeMachine {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWow64Process2(IntPtr process, out ushort processMachine, out ushort nativeMachine);
+}
+'@
+}
+$MaquinaProcesso = [UInt16]0
+$MaquinaNativa = [UInt16]0
+try {
+    $Identificada = [PretorianNativeMachine]::IsWow64Process2([PretorianNativeMachine]::GetCurrentProcess(), [ref]$MaquinaProcesso, [ref]$MaquinaNativa)
+} catch {
+    throw 'Não foi possível confirmar a arquitetura nativa desta plataforma.'
+}
+if (-not $Identificada) { throw 'Não foi possível confirmar a arquitetura nativa desta plataforma.' }
+Assert-PretorianNativeMachine $MaquinaNativa
 $Temporario = Join-Path ([IO.Path]::GetTempPath()) ('pretorian-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Temporario | Out-Null
 try {

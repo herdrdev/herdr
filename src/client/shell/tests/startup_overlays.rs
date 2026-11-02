@@ -761,7 +761,8 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .join("\n");
     assert!(text.contains("v0.8.3"));
     assert!(text.contains("atualização pronta"));
-    assert!(text.contains("detach, run herdr update"));
+    assert!(text.contains("instalador do Pretorian"));
+    assert!(!text.contains("herdr update"));
     assert!(!state.hits.release_notes_scrollbar.is_empty());
     let outer = crate::ui::centered_popup_rect(
         Rect::new(0, 0, 106, 30),

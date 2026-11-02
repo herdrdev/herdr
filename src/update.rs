@@ -1940,23 +1940,8 @@ pub(crate) fn update_install_command() -> &'static str {
     }
 }
 
-pub(crate) fn update_install_instruction(install_command: &str) -> String {
-    match install_command {
-        HERDR_UPDATE_COMMAND => {
-            "detach, run `herdr update`, then run Herdr again to reconnect".to_string()
-        }
-        HOMEBREW_UPDATE_COMMAND => {
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
-                .to_string()
-        }
-        MISE_UPDATE_COMMAND => {
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect".to_string()
-        }
-        NIX_UPDATE_COMMAND => {
-            "detach, update through Nix, then run Herdr again to reconnect".to_string()
-        }
-        command => format!("detach, run `{command}`, then run Herdr again to reconnect"),
-    }
+pub(crate) fn update_install_instruction(_install_command: &str) -> String {
+    "Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil.".to_string()
 }
 
 fn is_homebrew_managed_install() -> bool {
@@ -3254,19 +3239,19 @@ mod tests {
     }
 
     #[test]
-    fn update_install_instruction_distinguishes_install_from_restart() {
-        assert_eq!(
-            update_install_instruction(HERDR_UPDATE_COMMAND),
-            "detach, run `herdr update`, then run Herdr again to reconnect"
-        );
-        assert_eq!(
-            update_install_instruction(HOMEBREW_UPDATE_COMMAND),
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
-        );
-        assert_eq!(
-            update_install_instruction(MISE_UPDATE_COMMAND),
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect"
-        );
+    fn update_install_instruction_uses_only_pretorian_distribution() {
+        for command in [
+            HERDR_UPDATE_COMMAND,
+            HOMEBREW_UPDATE_COMMAND,
+            MISE_UPDATE_COMMAND,
+            NIX_UPDATE_COMMAND,
+            "custom update",
+        ] {
+            let instruction = update_install_instruction(command);
+            assert!(instruction.contains("instalador do Pretorian"));
+            assert!(!instruction.contains(command));
+            assert!(!instruction.contains("herdr update"));
+        }
     }
 
     #[test]

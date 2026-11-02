@@ -158,14 +158,14 @@ fn release_notes_preview_line_entries<'a>(
 
     vec![
         (
-            15,
+            25,
             Line::from(vec![
                 Span::raw(" "),
                 Span::styled(
                     "●",
                     Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(" update ready", title_style),
+                Span::styled(" atualização disponível", title_style),
             ]),
         ),
         (instruction_width + 1, Line::from(instruction_spans)),
@@ -304,16 +304,14 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(lines.len(), 2);
-        assert_eq!(line_text(&lines[0]), " ● update ready");
+        assert_eq!(line_text(&lines[0]), " ● atualização disponível");
         assert_eq!(
             line_text(&lines[1]),
-            " detach, run herdr update, then run Herdr again to reconnect"
+            " Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil."
         );
         assert_eq!(lines[0].spans[1].style.fg, Some(palette.accent));
         assert_eq!(lines[0].spans[2].style.fg, Some(palette.text));
-        assert_eq!(lines[1].spans[2].content.as_ref(), "herdr update");
-        assert_eq!(lines[1].spans[2].style.fg, Some(palette.accent));
-        assert_eq!(lines[1].spans[2].style.bg, Some(palette.surface0));
+        assert!(!line_text(&lines[1]).contains("herdr update"));
     }
 
     #[test]
@@ -328,10 +326,11 @@ mod tests {
 
         let lines = release_notes_display_lines(&notes, "herdr update", &palette);
 
-        assert_eq!(line_text(&lines[0].1), " ● update ready");
+        assert_eq!(line_text(&lines[0].1), " ● atualização disponível");
+        assert_eq!(lines[0].0, lines[0].1.width());
         assert_eq!(
             line_text(&lines[1].1),
-            " detach, run herdr update, then run Herdr again to reconnect"
+            " Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil."
         );
         assert_eq!(line_text(&lines[2].1), "");
         assert_eq!(line_text(&lines[3].1), " ADDED");
