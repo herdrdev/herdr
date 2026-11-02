@@ -117,6 +117,138 @@
           "fonte": "https://github.com/de-vri-es/serial2-rs/blob/65f92d9af1d5f7397c9d96d27abf53000a33ce54/LICENSE-BSD"
         }
       ]
+    },
+    {
+      "arquivo": "windows-rs/license-mit",
+      "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383",
+      "fontes": [
+        {
+          "pacote": "windows",
+          "versao": "0.62.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-collections",
+          "versao": "0.3.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-core",
+          "versao": "0.62.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-future",
+          "versao": "0.3.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-implement",
+          "versao": "0.60.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-interface",
+          "versao": "0.59.3",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-link",
+          "versao": "0.2.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/d468916ac27a36fb8a12bafc1bf5c0ec2fe92238/license-mit"
+        },
+        {
+          "pacote": "windows-numerics",
+          "versao": "0.3.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-result",
+          "versao": "0.4.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-strings",
+          "versao": "0.5.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-sys",
+          "versao": "0.61.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-mit"
+        },
+        {
+          "pacote": "windows-threading",
+          "versao": "0.2.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/d468916ac27a36fb8a12bafc1bf5c0ec2fe92238/license-mit"
+        }
+      ]
+    },
+    {
+      "arquivo": "windows-rs/license-apache-2.0",
+      "sha256": "c16f8dcf1a368b83be78d826ea23de4079fe1b4469a0ab9ee20563f37ff3d44b",
+      "fontes": [
+        {
+          "pacote": "windows",
+          "versao": "0.62.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-collections",
+          "versao": "0.3.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-core",
+          "versao": "0.62.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-future",
+          "versao": "0.3.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-implement",
+          "versao": "0.60.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-interface",
+          "versao": "0.59.3",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-link",
+          "versao": "0.2.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/d468916ac27a36fb8a12bafc1bf5c0ec2fe92238/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-numerics",
+          "versao": "0.3.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-result",
+          "versao": "0.4.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-strings",
+          "versao": "0.5.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-sys",
+          "versao": "0.61.2",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/32c3144490c016fe496a0aed769bce60987a2e9d/license-apache-2.0"
+        },
+        {
+          "pacote": "windows-threading",
+          "versao": "0.2.1",
+          "fonte": "https://github.com/microsoft/windows-rs/blob/d468916ac27a36fb8a12bafc1bf5c0ec2fe92238/license-apache-2.0"
+        }
+      ]
     }
   ]
 }
