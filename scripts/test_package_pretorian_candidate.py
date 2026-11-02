@@ -36,7 +36,8 @@ class PretorianCandidateTests(unittest.TestCase):
             with self.subTest(platform=platform):
                 source = self.root / platform
                 source.write_bytes(header)
-                files = candidate.collect(platform, source, self.notices(candidate.TARGETS[platform]), "a" * 40)
+                files = candidate.collect(platform, source, self.notices(candidate.TARGETS[platform]), "a" * 40, toolchain_notices=self.toolchain(target=candidate.TARGETS[platform]))
+                self.assertEqual(files["licencas/TOOLCHAIN-LICENSES.zip"], (self.root / "toolchain.zip").read_bytes())
                 output = self.root / (platform + "-output")
                 candidate.package(platform, files, "a" * 40, output)
                 metadata = json.loads((output / "candidato.json").read_text())
@@ -67,13 +68,14 @@ class PretorianCandidateTests(unittest.TestCase):
         source = self.root / "wrong-binary"
         source.write_bytes(b"not an ARM64 executable")
         with self.assertRaisesRegex(ValueError, "architecture"):
-            candidate.collect("macos-arm64", source, self.notices("aarch64-apple-darwin"), "a" * 40)
+            candidate.collect("macos-arm64", source, self.notices("aarch64-apple-darwin"), "a" * 40, toolchain_notices=self.toolchain())
 
     def test_build_record_binds_binary_and_notices_to_source_and_target(self):
-        files = {"herdr-pretorian": b"binary", "licencas/RUST-LICENSES.zip": b"notices"}
+        files = {"herdr-pretorian": b"binary", "licencas/RUST-LICENSES.zip": b"notices", "licencas/TOOLCHAIN-LICENSES.zip": b"tools"}
         record = ("commit=" + "a" * 40 + "\ntarget=aarch64-apple-darwin\n"
                   + "sha256=" + hashlib.sha256(b"binary").hexdigest() + "  herdr-macos-aarch64\n"
-                  + "sha256=" + hashlib.sha256(b"notices").hexdigest() + "  RUST-LICENSES.zip\n")
+                  + "sha256=" + hashlib.sha256(b"notices").hexdigest() + "  RUST-LICENSES.zip\n"
+                  + "sha256=" + hashlib.sha256(b"tools").hexdigest() + "  TOOLCHAIN-LICENSES.zip\n")
         candidate.verify_build(files, "macos-arm64", "herdr-macos-aarch64", record, "a" * 40)
         for name in files:
             changed = dict(files)
@@ -89,3 +91,23 @@ class PretorianCandidateTests(unittest.TestCase):
         target = "aarch64-apple-darwin"
         with self.assertRaisesRegex(ValueError, "source commit mismatch"):
             candidate.validate_rust_notices(self.notices(target), target, "b" * 40)
+
+    def toolchain(self, *, changed=False, commit="a" * 40, target="aarch64-apple-darwin"):
+        path = self.root / "toolchain.zip"
+        files = {"rust/COPYRIGHT-library.html": b"Rust original", "zig/LICENSE": b"Zig original",
+                 "zig/musl/COPYRIGHT": b"musl original"}
+        metadata = {"alvo": target, "fonte_commit": commit, "zig_version": "0.16.0",
+                    "rustc_vV": "rustc 1.96.1 (31fca3adb 2026-06-26)\nrelease: 1.96.1",
+                    "arquivos": {n: hashlib.sha256(v).hexdigest() for n, v in files.items()}}
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("origem.json", json.dumps(metadata))
+            for name, data in files.items():
+                archive.writestr(name, b"changed" if changed else data)
+        return path
+
+    def test_toolchain_notices_require_same_build_and_original_bytes(self):
+        path = self.toolchain()
+        self.assertEqual(candidate.validate_toolchain_notices(path, "aarch64-apple-darwin", "a" * 40), path.read_bytes())
+        for options in ({"changed": True}, {"commit": "b" * 40}, {"target": "x86_64-unknown-linux-musl"}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                candidate.validate_toolchain_notices(self.toolchain(**options), "aarch64-apple-darwin", "a" * 40)

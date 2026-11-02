@@ -58,9 +58,36 @@ def validate_rust_notices(path, target, commit):
     return payload
 
 
-def collect(platform, source, rust_notices, commit, root=ROOT):
+
+def validate_toolchain_notices(path, target, commit):
+    payload = read_file(path)
+    expected = {"rust/COPYRIGHT-library.html", "zig/LICENSE", "zig/musl/COPYRIGHT"}
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        members = archive.infolist()
+        if (len(members) != 4 or {m.filename for m in members} != expected | {"origem.json"}
+                or sum(m.file_size for m in members) > 16 * 1024 * 1024
+                or any(stat.S_IFMT(m.external_attr >> 16) not in (0, stat.S_IFREG) for m in members)):
+            raise ValueError("Invalid toolchain notices archive")
+        metadata = json.loads(archive.read("origem.json"))
+        if metadata.get("alvo") != target or metadata.get("fonte_commit") != commit:
+            raise ValueError("Toolchain notices source or target mismatch")
+        rust = metadata.get("rustc_vV", "").splitlines()
+        if metadata.get("zig_version") != "0.16.0" or "release: 1.96.1" not in rust:
+            raise ValueError("Toolchain notices version mismatch")
+        hashes = metadata.get("arquivos", {})
+        if set(hashes) != expected:
+            raise ValueError("Incomplete toolchain notices")
+        for name, digest in hashes.items():
+            data = archive.read(name)
+            if not data or hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError("Toolchain notice hash mismatch")
+    return payload
+
+
+def collect(platform, source, rust_notices, commit, *, toolchain_notices, root=ROOT):
     target = TARGETS[platform]
-    files = {"licencas/RUST-LICENSES.zip": validate_rust_notices(rust_notices, target, commit)}
+    files = {"licencas/RUST-LICENSES.zip": validate_rust_notices(rust_notices, target, commit),
+             "licencas/TOOLCHAIN-LICENSES.zip": validate_toolchain_notices(toolchain_notices, target, commit)}
     for name, origin in (("HERDR-APACHE-2.0.txt", "LICENSE"),
                          ("GHOSTTY.txt", "vendor/libghostty-vt/LICENSE"),
                          ("PORTABLE-PTY.md", "vendor/portable-pty/LICENSE.md")):
@@ -107,7 +134,7 @@ def verify_build(files, platform, source_name, build_info, commit):
             fields[key] = value
     if fields.get("commit") != commit or fields.get("target") != TARGETS[platform]:
         raise ValueError("Build source or target mismatch")
-    sources = {"RUST-LICENSES.zip": files["licencas/RUST-LICENSES.zip"]}
+    sources = {name: files[f"licencas/{name}"] for name in ("RUST-LICENSES.zip", "TOOLCHAIN-LICENSES.zip")}
     if platform == "windows-x64":
         sources.update({("herdr.exe" if name == "herdr-pretorian.exe" else name): data
                         for name, data in files.items() if not name.startswith("licencas/")})
@@ -152,12 +179,13 @@ def main():
     parser.add_argument("--platform", choices=TARGETS, required=True)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--rust-notices", type=Path, required=True)
+    parser.add_argument("--toolchain-notices", type=Path, required=True)
     parser.add_argument("--build-info", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     subprocess.run(["git", "diff", "--quiet", "HEAD"], cwd=ROOT, check=True)
-    files = collect(args.platform, args.source, args.rust_notices, commit)
+    files = collect(args.platform, args.source, args.rust_notices, commit, toolchain_notices=args.toolchain_notices)
     verify_build(files, args.platform, args.source.name,
                  args.build_info.read_text(encoding="utf-8-sig"), commit)
     package(args.platform, files, commit, args.output)
