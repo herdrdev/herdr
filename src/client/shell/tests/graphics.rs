@@ -581,3 +581,28 @@ fn hosts_without_kitty_graphics_get_half_block_cells_and_no_escapes() {
     let bytes = frame.graphics.into_inline_bytes();
     assert!(String::from_utf8_lossy(&bytes).contains("a=t"));
 }
+
+#[test]
+fn cell_hosts_stack_overlapping_images_by_z() {
+    use crate::client::loop_config::GraphicsMode;
+
+    // Raise each image in turn so the result cannot depend on scene order.
+    for top in 0..2 {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        let layout = state.layout(106, 20);
+        let point = (layout.pane_surface.x, layout.pane_surface.y);
+        let mut pane = surface();
+        add_main_image(&mut pane, layout, point, 1);
+        add_main_image(&mut pane, layout, point, 2);
+        pane.graphics.assets[0].data = vec![0x00, 0xff, 0x00, 0xff];
+        pane.graphics.assets[1].data = vec![0xff, 0x00, 0x00, 0xff];
+        pane.graphics.placements[top].z = 5;
+        state.set_graphics_mode(GraphicsMode::Cells);
+        state.set_pane_surface(pane);
+        let frame = state.compose(106, 20).unwrap();
+        let cell = &frame.cells[usize::from(point.1) * 106 + usize::from(point.0)];
+        let expected = [0x02_00_ff_00, 0x02_ff_00_00][top];
+        assert_eq!((cell.fg, cell.bg), (expected, expected), "top image {top}");
+    }
+}

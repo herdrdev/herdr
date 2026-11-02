@@ -543,11 +543,13 @@ impl ClientState {
         if !cell_size.is_known() || self.scope.is_empty() {
             return;
         }
-        let pieces = self
+        let mut pieces = self
             .host_pieces(visibility, main_origin, popup_origin, cell_size, occlusion)
             .into_iter()
             .map(|(host, key)| (host, key.clone()))
             .collect::<Vec<_>>();
+        // Kitty hosts stack placements by z; paint lower layers first to match.
+        pieces.sort_by_key(|(host, _)| host.placement.z);
         for (host, key) in pieces {
             let (Some((clipped, _)), Some(data)) =
                 (clipped_placement(&host), host.raw_data.as_ref())

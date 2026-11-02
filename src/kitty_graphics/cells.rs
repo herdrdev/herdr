@@ -13,6 +13,9 @@ const MAX_SAMPLES_PER_AXIS: u64 = 8;
 /// Averaged alpha at or above this paints the half-cell; below it the cell's
 /// existing background shows through.
 const OPAQUE_ALPHA: u32 = 128;
+/// Largest RGBA buffer a PNG asset may decode into, matching the off-screen
+/// image budget in `surface`.
+const MAX_DECODED_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Where a placement's visible cells sample its image.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
@@ -87,16 +90,17 @@ pub(crate) fn decode_png(data: &[u8], width: u32, height: u32) -> Option<Arc<[u8
     let mut decoder = png::Decoder::new(data);
     decoder.set_transformations(png::Transformations::normalize_to_color8());
     let mut reader = decoder.read_info().ok()?;
-    let mut buffer = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buffer).ok()?;
-    if info.width != width || info.height != height {
+    let header = (reader.info().width, reader.info().height);
+    if header != (width, height) || u64::from(width) * u64::from(height) * 4 > MAX_DECODED_BYTES {
         tracing::debug!(
             declared = ?(width, height),
-            decoded = ?(info.width, info.height),
-            "png asset dimensions disagree with its key"
+            ?header,
+            "png asset disagrees with its key or exceeds the decode budget"
         );
         return None;
     }
+    let mut buffer = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buffer).ok()?;
     let decoded = &buffer[..info.buffer_size()];
     let rgba: Vec<u8> = match info.color_type {
         png::ColorType::Rgba => decoded.to_vec(),
@@ -256,10 +260,14 @@ impl CellImage {
                         cell.fg = rgb(upper);
                         cell.bg = rgb(lower);
                     }
+                    // A half block already in the cell holds the other half's
+                    // color in `fg`; keep it and fill the remaining half.
+                    (Some(upper), None) if cell.symbol == "▄" => cell.bg = rgb(upper),
                     (Some(upper), None) => {
                         cell.symbol = "▀".to_owned();
                         cell.fg = rgb(upper);
                     }
+                    (None, Some(lower)) if cell.symbol == "▀" => cell.bg = rgb(lower),
                     (None, Some(lower)) => {
                         cell.symbol = "▄".to_owned();
                         cell.fg = rgb(lower);
@@ -411,6 +419,50 @@ mod tests {
         assert_eq!(samples[0], None);
         assert_eq!(samples[1], Some([255, 0, 0]));
         assert_eq!(samples[2], Some([0, 127, 127]));
+    }
+
+    #[test]
+    fn painting_half_a_cell_keeps_the_other_half_of_an_earlier_image() {
+        let paint = |out: &mut FrameData, pixels: &[[u8; 4]]| {
+            let data = rgba(pixels);
+            let pixels = Pixels::new(SurfaceGraphicsFormat::Rgba, 1, 2, &data).unwrap();
+            rasterize(&pixels, geometry(1, 1, 1, 2)).paint(out, 0, 0);
+        };
+        let cell = |out: &FrameData| {
+            (
+                out.cells[0].symbol.clone(),
+                out.cells[0].fg,
+                out.cells[0].bg,
+            )
+        };
+
+        let mut out = frame(1, 1);
+        paint(&mut out, &[RED, BLUE]);
+        paint(&mut out, &[CLEAR, GREEN]);
+        assert_eq!(cell(&out), ("▀".to_owned(), 0x02_FF_00_00, 0x02_00_FF_00));
+
+        let mut out = frame(1, 1);
+        paint(&mut out, &[CLEAR, BLUE]);
+        paint(&mut out, &[RED, CLEAR]);
+        assert_eq!(cell(&out), ("▄".to_owned(), 0x02_00_00_FF, 0x02_FF_00_00));
+    }
+
+    #[test]
+    fn png_dimensions_past_the_decode_budget_are_rejected() {
+        // 1-bit grayscale keeps the encoded file small while its RGBA output
+        // would pass the budget.
+        let (width, height) = (4097, 4096);
+        let mut png = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png, width, height);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::One);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&vec![0; (width as usize).div_ceil(8) * height as usize])
+                .unwrap();
+        }
+        assert!(decode_png(&png, width, height).is_none());
     }
 
     #[test]
