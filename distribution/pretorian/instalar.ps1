@@ -25,9 +25,10 @@ try {
     $Nome = 'pretorian-instalar-windows-x64.exe'
     $Release = & $Gh api repos/lamarck-distribution-center/pretorian-cli/releases/latest | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw 'Versão do instalador indisponível.' }
+    if ($Release.tag_name -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { throw 'Versão de distribuição inválida.' }
     $Ativos = @($Release.assets | Where-Object { $_.name -ceq $Nome })
     if ($Ativos.Count -ne 1 -or $Ativos[0].digest -notmatch '^sha256:[a-f0-9]{64}$') { throw 'Instalador não possui hash verificável.' }
-    & $Gh release download --repo lamarck-distribution-center/pretorian-cli --pattern $Nome --dir $Temporario
+    & $Gh release download $Release.tag_name --repo lamarck-distribution-center/pretorian-cli --pattern $Nome --dir $Temporario
     if ($LASTEXITCODE -ne 0) { throw 'Não foi possível baixar o instalador.' }
     $Instalador = Join-Path $Temporario $Nome
     $Digest = 'sha256:' + (Get-FileHash -Algorithm SHA256 $Instalador).Hash.ToLowerInvariant()

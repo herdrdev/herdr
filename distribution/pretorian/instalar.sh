@@ -28,9 +28,11 @@ fi
 PATH="$(dirname "$binario"):$PATH"
 export PATH
 nome="pretorian-instalar-$alvo"
-digest=$("$binario" api repos/lamarck-distribution-center/pretorian-cli/releases/latest --jq ".assets[] | select(.name == \"$nome\") | .digest")
+versao=$("$binario" api repos/lamarck-distribution-center/pretorian-cli/releases/latest --jq .tag_name)
+printf '%s\n' "$versao" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'Versão de distribuição inválida.' >&2; exit 1; }
+digest=$("$binario" api "repos/lamarck-distribution-center/pretorian-cli/releases/tags/$versao" --jq ".assets[] | select(.name == \"$nome\") | .digest")
 case "$digest" in sha256:*) ;; *) echo 'Instalador não possui hash verificável.' >&2; exit 1;; esac
-"$binario" release download --repo lamarck-distribution-center/pretorian-cli --pattern "$nome" --dir "$temporario"
+"$binario" release download "$versao" --repo lamarck-distribution-center/pretorian-cli --pattern "$nome" --dir "$temporario"
 if command -v sha256sum >/dev/null; then
   atual=$(sha256sum "$temporario/$nome" | cut -d ' ' -f 1)
 else
