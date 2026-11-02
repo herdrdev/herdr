@@ -525,7 +525,7 @@ Search the [Config reference](/docs/config-reference/) for scrollback limits, ne
 
 ## Kitty graphics
 
-Applications and plugins integrate through the standard Kitty graphics protocol emitted in pane terminal output. Herdr renders these images by default in compatible outer terminals. The external socket pane-overlay API has been removed; there is no replacement socket image API.
+Applications and plugins integrate through the standard Kitty graphics protocol emitted in pane terminal output. Herdr renders these images by default. When a client attaches, it asks the outer terminal whether it understands the Kitty graphics protocol. Terminals that answer, such as Ghostty, kitty, and WezTerm, receive the images as real pixels. Terminals that do not answer, including Mosh, Terminal.app, and tmux without passthrough, receive the same images as colored half-block text cells at two pixels per cell height, so every attached client sees the image even when several clients with different terminals share one session. Native Windows clients do not ask yet and keep receiving Kitty graphics. The external socket pane-overlay API has been removed; there is no replacement socket image API.
 
 Popups, menus, and notifications crop images around the area they cover; the rest of each image stays visible and the covered part returns when the overlay closes. Images do not dim with dialog backgrounds.
 
@@ -544,7 +544,7 @@ To disable Kitty graphics rendering:
 kitty_graphics = false
 ```
 
-The legacy `experimental.kitty_graphics` setting remains accepted for existing configurations. `terminal.kitty_graphics` takes precedence when both are set.
+Setting `kitty_graphics = false` turns off both pixel output and half-block cell rendering on that client. The legacy `experimental.kitty_graphics` setting remains accepted for existing configurations. `terminal.kitty_graphics` takes precedence when both are set.
 
 Changing this setting requires restarting the affected Herdr server or reattaching the client. In remote sessions, the server's setting controls Kitty graphics parsing, while the local client's setting controls output to the outer terminal.
 

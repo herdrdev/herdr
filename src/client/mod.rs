@@ -48,7 +48,7 @@ use clipboard_forwarding::forward_clipboard;
 use config_reload::reload_local_client_config;
 use config_reload::{apply_reload, init_logging};
 use events::ClientLoopEvent;
-use loop_config::ClientLoopConfig;
+use loop_config::{ClientLoopConfig, GraphicsMode};
 use shell_runtime::*;
 use state::ClientState;
 #[cfg(unix)]
@@ -206,9 +206,9 @@ fn run_client_with_mode(
     let redraw_on_focus_gained = loaded_config.config.ui.redraw_on_focus_gained;
     let host_cursor = loaded_config.config.ui.host_cursor;
     let remote_image_paste_key = client_remote_image_paste_key(&loaded_config.config);
-    let kitty_graphics_enabled =
+    let kitty_graphics_configured =
         loaded_config.config.kitty_graphics_enabled() && client_rendered_shell;
-    let pixel_geometry_enabled = kitty_graphics_enabled || attach_escape.is_some();
+    let pixel_geometry_enabled = kitty_graphics_configured || attach_escape.is_some();
     let endpoint_keybindings = shell_config
         .as_ref()
         .is_some_and(shell::ClientShellConfig::uses_endpoint_keybindings);
@@ -217,9 +217,9 @@ fn run_client_with_mode(
         mouse_scroll_lines,
         redraw_on_focus_gained,
         host_cursor,
-        kitty_graphics_enabled,
+        graphics: GraphicsMode::Off,
         pixel_geometry_enabled,
-        pixel_geometry_fallback: kitty_graphics_enabled,
+        pixel_geometry_fallback: kitty_graphics_configured,
         mouse_capture_active: mouse_capture,
         host_escape_disambiguation_active: false,
         host_sgr_pixel_mouse: None,
@@ -257,13 +257,13 @@ fn run_client_with_mode(
 
     // Get one coherent geometry snapshot before raw mode changes the terminal.
     let (cols, rows, cell_width_px, cell_height_px, exact_cell_size) =
-        initial_terminal_geometry(pixel_geometry_enabled, kitty_graphics_enabled)?;
+        initial_terminal_geometry(pixel_geometry_enabled, kitty_graphics_configured)?;
 
     let direct_attach = attach_escape.is_some();
     let mut terminal_guard = if direct_attach {
         setup_direct_attach_terminal(mouse_capture)
     } else {
-        setup_terminal(mouse_capture)
+        setup_terminal(mouse_capture, kitty_graphics_configured)
     }
     .map_err(|err| {
         eprintln!("herdr: failed to set up terminal: {err}");
@@ -272,6 +272,17 @@ fn run_client_with_mode(
     loop_config.host_escape_disambiguation_active =
         terminal_guard.host_escape_disambiguation_active();
     loop_config.host_sgr_pixel_mouse = terminal_guard.host_sgr_pixel_mouse();
+    loop_config.graphics = GraphicsMode::new(
+        kitty_graphics_configured,
+        terminal_guard.host_kitty_graphics(),
+    );
+    if kitty_graphics_configured {
+        info!(
+            host_kitty_graphics = ?terminal_guard.host_kitty_graphics(),
+            mode = ?loop_config.graphics,
+            "host terminal graphics capability"
+        );
+    }
     loop_config.initial_host_input = terminal_guard.take_buffered_host_input();
 
     let shell_surface_size = loop_config
@@ -295,7 +306,7 @@ fn run_client_with_mode(
                 endpoint_keybindings,
                 loop_config.mouse_capture_active,
                 true,
-                !is_remote_client_process(),
+                !is_remote_client_process() && loop_config.graphics.kitty(),
                 &AtomicBool::new(false),
             )
             .map_err(|error| io::Error::other(error.to_string()))?;
@@ -468,7 +479,7 @@ async fn run_client_loop(
         reported_size: (cols, rows),
         reported_cell_size: (initial_cell_width_px, initial_cell_height_px),
         sound_config: config.sound_config,
-        kitty_graphics_enabled: config.kitty_graphics_enabled,
+        graphics: config.graphics,
         pixel_geometry_enabled: config.pixel_geometry_enabled,
         pixel_geometry_exact: initial_pixel_geometry_exact,
         host_sgr_pixel_mouse: config.host_sgr_pixel_mouse,
@@ -498,6 +509,7 @@ async fn run_client_loop(
         shell.set_host_reports_key_releases(config.host_escape_disambiguation_active);
         shell.set_host_erase_byte(crate::platform::terminal_erase_byte());
         shell.set_graphics_cell_size(initial_cell_width_px, initial_cell_height_px);
+        shell.set_graphics_mode(config.graphics);
         shell.set_endpoint_catalog(&endpoint_catalog.ssh);
         shell.set_endpoint_methods_for(
             &endpoint::ClientEndpointId::Local,
@@ -547,8 +559,8 @@ async fn run_client_loop(
     let stdin_host_theme_query_pending = host_theme_query_pending.clone();
     // Terminals behind ConPTY report no pixel size through the ioctl, so ask the
     // host terminal directly instead of falling back to an assumed cell size.
-    let will_query_host_cell_size = state.attach_escape.is_none()
-        && host_cell_size_query_required(state.kitty_graphics_enabled);
+    let will_query_host_cell_size =
+        state.attach_escape.is_none() && host_cell_size_query_required(state.graphics.active());
     let stdin_quit = should_quit.clone();
     let stdin_mouse_capture_active = host_mouse_capture_active.clone();
     let stdin_sgr_pixels_active = host_sgr_pixels_active.clone();
@@ -613,7 +625,7 @@ async fn run_client_loop(
     });
 
     let mut write_stream = if let Some((stream, handshake)) = initial {
-        let max_frame_size = if state.kitty_graphics_enabled {
+        let max_frame_size = if state.graphics.active() {
             MAX_GRAPHICS_FRAME_SIZE
         } else {
             crate::protocol::MAX_FRAME_SIZE
@@ -794,6 +806,7 @@ async fn run_client_loop(
                     surface_size: shell.surface_size(state.reported_size.0, state.reported_size.1),
                     endpoint_keybindings: config.endpoint_keybindings,
                     mouse_capture: state.shell_mouse_capture_preference,
+                    host_kitty_graphics: state.graphics.kitty(),
                 },
                 &supervisor_tx,
             );
@@ -1623,9 +1636,7 @@ async fn run_client_loop(
                         crate::render_prof::flush_if_due();
                     }
                     ServerMessage::Terminal(frame) => {
-                        if state.kitty_graphics_enabled
-                            && contains_kitty_graphics_bytes(&frame.bytes)
-                        {
+                        if state.graphics.kitty() && contains_kitty_graphics_bytes(&frame.bytes) {
                             record_received_kitty_graphics(&frame.bytes);
                         }
                         let mut stdout = io::stdout();
@@ -1633,7 +1644,7 @@ async fn run_client_loop(
                         let _ = stdout.flush();
                     }
                     ServerMessage::Graphics { bytes } => {
-                        if state.kitty_graphics_enabled {
+                        if state.graphics.kitty() {
                             record_received_kitty_graphics(&bytes);
                             let mut stdout = io::stdout();
                             let _ = stdout.write_all(&bytes);
@@ -1715,7 +1726,7 @@ async fn run_client_loop(
                                             )
                                 });
                             let valid = retirement != RetiredDirectGraphicsMatch::Saturated
-                                && state.kitty_graphics_enabled
+                                && state.graphics.kitty()
                                 && native_valid
                                 && surface_asset_valid
                                 && usize::try_from(expected_len).ok().is_some_and(|len| {

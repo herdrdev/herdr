@@ -27,6 +27,7 @@ pub(crate) struct EndpointConnectOptions {
     pub(crate) surface_size: ClientSurfaceSize,
     pub(crate) endpoint_keybindings: bool,
     pub(crate) mouse_capture: bool,
+    pub(crate) host_kitty_graphics: bool,
 }
 
 pub(crate) enum EndpointSupervisorEvent {
@@ -497,7 +498,7 @@ fn connect_once(
         options.endpoint_keybindings,
         options.mouse_capture,
         false,
-        matches!(target, ConnectTarget::Local(_)),
+        matches!(target, ConnectTarget::Local(_)) && options.host_kitty_graphics,
         &cancelled,
     )
     .map_err(handshake_error)?;
@@ -585,6 +586,7 @@ mod tests {
             surface_size: ClientSurfaceSize { cols: 80, rows: 24 },
             endpoint_keybindings: false,
             mouse_capture: false,
+            host_kitty_graphics: false,
         }
     }
 

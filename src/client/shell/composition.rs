@@ -720,7 +720,7 @@ impl ClientShellState {
             self.hits.pane_splits.clear();
             self.hits.popup = None;
         }
-        let graphics = self.compose_graphics(layout, &occlusion);
+        let graphics = self.compose_graphics(&mut frame, layout, &occlusion);
         Some(crate::client::frame_output::ComposedFrame { frame, graphics })
     }
 }

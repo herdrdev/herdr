@@ -48,7 +48,7 @@ pub(super) struct ClientState {
     pub(super) reported_size: (u16, u16),
     pub(super) reported_cell_size: (u32, u32),
     pub(super) sound_config: crate::config::SoundConfig,
-    pub(super) kitty_graphics_enabled: bool,
+    pub(super) graphics: loop_config::GraphicsMode,
     pub(super) pixel_geometry_enabled: bool,
     pub(super) pixel_geometry_exact: bool,
     /// The host's answer to the SGR pixel mouse probe; None when unknown.
@@ -117,7 +117,7 @@ impl ClientState {
             reported_size: (100, 30),
             reported_cell_size: (0, 0),
             sound_config: Default::default(),
-            kitty_graphics_enabled: false,
+            graphics: loop_config::GraphicsMode::Off,
             pixel_geometry_enabled: false,
             pixel_geometry_exact: false,
             host_sgr_pixel_mouse: None,
@@ -314,7 +314,7 @@ impl ClientState {
     }
 
     pub(super) fn present_graphics(&mut self, graphics: &[u8]) {
-        if self.presentation_frozen || graphics.is_empty() || !self.kitty_graphics_enabled {
+        if self.presentation_frozen || graphics.is_empty() || !self.graphics.kitty() {
             return;
         }
         let mut stdout = io::stdout();
@@ -328,7 +328,7 @@ impl ClientState {
     ) -> io::Result<bool> {
         if self.presentation_frozen
             || self.repaint_pending
-            || (self.kitty_graphics_enabled && !self.pending_native_cleanup.is_empty())
+            || (self.graphics.kitty() && !self.pending_native_cleanup.is_empty())
         {
             crate::render_prof::event("client_surface_patch.fallback.repaint");
             return Ok(false);
@@ -518,7 +518,7 @@ impl ClientState {
         encoded: &[u8],
         mut graphics: crate::kitty_graphics::GraphicsOutput,
     ) -> io::Result<()> {
-        if self.kitty_graphics_enabled {
+        if self.graphics.kitty() {
             if !self.pending_native_cleanup.is_empty() {
                 graphics.operations.insert(
                     0,
@@ -537,7 +537,7 @@ impl ClientState {
             writer.write_all(encoded)?;
         }
         writer.flush()?;
-        if self.kitty_graphics_enabled {
+        if self.graphics.kitty() {
             self.pending_native_cleanup.clear();
         }
         Ok(())
@@ -717,7 +717,7 @@ mod native_cleanup_tests {
     #[test]
     fn queued_cleanup_is_synchronized_and_respects_graphics_capability() {
         let mut state = ClientState::test_new();
-        state.kitty_graphics_enabled = true;
+        state.graphics = loop_config::GraphicsMode::Kitty;
         state.queue_native_image_cleanup(42);
         let encoded = b"\x1b[?2026htext\x1b[?2026l";
         let mut output = Vec::new();
@@ -728,7 +728,7 @@ mod native_cleanup_tests {
         assert!(text.find("\x1b[?2026h").unwrap() < text.find("a=d,d=I,i=42").unwrap());
         assert!(text.find("a=d,d=I,i=42").unwrap() < text.find("\x1b[?2026l").unwrap());
         assert!(state.pending_native_cleanup.is_empty());
-        state.kitty_graphics_enabled = false;
+        state.graphics = loop_config::GraphicsMode::Cells;
         state.queue_native_image_cleanup(43);
         let mut output = Vec::new();
         state
@@ -736,7 +736,7 @@ mod native_cleanup_tests {
             .unwrap();
         assert_eq!(output, encoded);
         assert!(!state.pending_native_cleanup.is_empty());
-        state.kitty_graphics_enabled = true;
+        state.graphics = loop_config::GraphicsMode::Kitty;
         let mut no_capacity = &mut [][..];
         assert!(state
             .write_composed_output(&mut no_capacity, encoded, Default::default())
@@ -840,7 +840,7 @@ mod native_cleanup_tests {
             &ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, 1, 1)),
             None,
         );
-        state.kitty_graphics_enabled = true;
+        state.graphics = loop_config::GraphicsMode::Kitty;
         assert!(!state.try_present_frame(frame.clone()));
         assert_eq!(state.pending_native_cleanup, cleanup);
         state.present_frozen_chrome(frame);
