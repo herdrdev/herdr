@@ -399,9 +399,9 @@ fn render_release_notes_overlay(
     if let Some(footer_area) = stack.footer {
         let footer_line = ratatui::text::Line::from(vec![
             ratatui::text::Span::styled(" rolar ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("wheel ↑↓", base.fg(p.text)),
+            ratatui::text::Span::styled("roda ↑↓", base.fg(p.text)),
             ratatui::text::Span::styled("  ·  ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("close", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("fechar", base.fg(p.overlay0)),
             ratatui::text::Span::styled(" esc / enter ", base.fg(p.text)),
         ]);
         ratatui::widgets::Widget::render(
@@ -515,9 +515,9 @@ fn render_product_announcement_overlay(
     if let Some(footer_area) = stack.footer {
         let footer_line = ratatui::text::Line::from(vec![
             ratatui::text::Span::styled(" rolar ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("wheel ↑↓", base.fg(p.text)),
+            ratatui::text::Span::styled("roda ↑↓", base.fg(p.text)),
             ratatui::text::Span::styled("  ·  ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("close", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("fechar", base.fg(p.overlay0)),
             ratatui::text::Span::styled(" esc / enter ", base.fg(p.text)),
         ]);
         ratatui::widgets::Widget::render(
