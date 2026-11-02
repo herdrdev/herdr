@@ -121,6 +121,13 @@ jobs:
           } >> BUILD_INFO.txt
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
+      - name: Record Rust notices integrity
+        run: python -c "import hashlib, pathlib; p = pathlib.Path('RUST-LICENSES.zip'); f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.write('sha256=' + hashlib.sha256(p.read_bytes()).hexdigest() + '  RUST-LICENSES.zip\n'); f.close()"
+
+      - name: Package Pretorian candidate
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: python scripts/package_pretorian_candidate.py --platform linux-x64 --source ${{ matrix.name }} --rust-notices RUST-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -129,6 +136,7 @@ jobs:
             ${{ matrix.name }}
             BUILD_INFO.txt
             RUST-LICENSES.zip
+            pretorian-candidato/
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
@@ -194,6 +202,13 @@ jobs:
           } >> BUILD_INFO.txt
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
+      - name: Record Rust notices integrity
+        run: python -c "import hashlib, pathlib; p = pathlib.Path('RUST-LICENSES.zip'); f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.write('sha256=' + hashlib.sha256(p.read_bytes()).hexdigest() + '  RUST-LICENSES.zip\n'); f.close()"
+
+      - name: Package Pretorian candidate
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: python scripts/package_pretorian_candidate.py --platform macos-arm64 --source ${{ matrix.name }} --rust-notices RUST-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -202,6 +217,7 @@ jobs:
             ${{ matrix.name }}
             BUILD_INFO.txt
             RUST-LICENSES.zip
+            pretorian-candidato/
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
@@ -264,6 +280,19 @@ jobs:
           "libghostty_vt_simd=$env:LIBGHOSTTY_VT_SIMD" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
           $hash = (Get-FileHash -Algorithm SHA256 herdr-windows-x86_64.zip).Hash.ToLowerInvariant()
           "sha256=$hash  herdr-windows-x86_64.zip" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          Get-ChildItem -Path $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
+            $fileHash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+            "sha256=$fileHash  $relative" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          }
+
+      - name: Record Rust notices integrity
+        run: python -c "import hashlib, pathlib; p = pathlib.Path('RUST-LICENSES.zip'); f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.write('sha256=' + hashlib.sha256(p.read_bytes()).hexdigest() + '  RUST-LICENSES.zip\n'); f.close()"
+
+      - name: Package Pretorian candidate
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          python scripts/package_pretorian_candidate.py --platform windows-x64 --source "$stage" --rust-notices RUST-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -273,6 +302,7 @@ jobs:
             herdr-windows-x86_64.zip
             BUILD_INFO.txt
             RUST-LICENSES.zip
+            pretorian-candidato/
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md

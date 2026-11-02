@@ -75,10 +75,10 @@ def collect(report, root):
     return files, inventory
 
 
-def write_archive(output, target, files, inventory):
+def write_archive(output, target, files, inventory, source_commit):
     if target not in TARGETS:
         raise ValueError("Unsupported target")
-    manifest = {"alvo": target, "gerador": "cargo-about 0.9.3",
+    manifest = {"alvo": target, "gerador": "cargo-about 0.9.3", "fonte_commit": source_commit,
                 "escopo": "dependencias declaradas, incluindo build e excluindo desenvolvimento",
                 "pacotes": inventory}
     payload = dict(files)
@@ -110,7 +110,8 @@ def main():
                         "--format", "json", "--config", str(ROOT / "packaging/licenses/about.toml"),
                         "--output-file", str(report)], cwd=ROOT, check=True)
         files, inventory = collect(json.loads(report.read_text(encoding="utf-8")), ROOT)
-    write_archive(args.output, args.target, files, inventory)
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    write_archive(args.output, args.target, files, inventory, commit)
 
 
 if __name__ == "__main__":

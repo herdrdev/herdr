@@ -31,7 +31,7 @@ class RustLicensePackageTests(unittest.TestCase):
         files, inventory = collect(self.report, self.root)
         first, second = self.root / "first.zip", self.root / "second.zip"
         for output in (first, second):
-            write_archive(output, "aarch64-apple-darwin", files, inventory)
+            write_archive(output, "aarch64-apple-darwin", files, inventory, "a" * 40)
         self.assertEqual(first.read_bytes(), second.read_bytes())
         with zipfile.ZipFile(first) as archive:
             manifest = archive.read("origem.json")
@@ -41,7 +41,7 @@ class RustLicensePackageTests(unittest.TestCase):
             self.assertEqual(record["sha256"], hashlib.sha256(self.original).hexdigest())
         before = first.read_bytes()
         with self.assertRaises(FileExistsError):
-            write_archive(first, "aarch64-apple-darwin", files, inventory)
+            write_archive(first, "aarch64-apple-darwin", files, inventory, "a" * 40)
         self.assertEqual(first.read_bytes(), before)
 
     def test_missing_original_does_not_use_synthesized_text(self):
