@@ -126,7 +126,7 @@ jobs:
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
-            packaging/licenses/uucode/
+            packaging/licenses/
           retention-days: 7
 
   build-macos:
@@ -193,7 +193,7 @@ jobs:
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
-            packaging/licenses/uucode/
+            packaging/licenses/
           retention-days: 7
 
   build-windows:
@@ -257,5 +257,5 @@ jobs:
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
-            packaging/licenses/uucode/
+            packaging/licenses/
           retention-days: 7
