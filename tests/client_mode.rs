@@ -1945,8 +1945,9 @@ fn unavailable_restored_pane_keeps_saved_cwd_in_server() {
     );
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            let screen = read_output(&output);
-            screen.contains("missing-cwd") && screen.contains("unavailable")
+            let bytes = output.lock().unwrap().bytes.clone();
+            let screen = terminal_screen::text(&bytes, 80, 24);
+            screen.contains("missing-cwd") && screen.contains("indisponível")
         }),
         "client shell should render the unavailable pane; output: {:?}",
         read_output(&output)

@@ -335,7 +335,7 @@ fn observed_begin_write_failure_returns_recoverable_partial_activation() {
     else {
         panic!("an observed source write must return partial lifecycle state");
     };
-    assert!(error.contains("focus revoke"));
+    assert!(error.contains("retirada de foco"));
     assert_eq!(
         local_sent.lock().unwrap().first(),
         Some(&crate::protocol::ClientMessage::ClientShellFocus { focused: false })
@@ -345,6 +345,31 @@ fn observed_begin_write_failure_returns_recoverable_partial_activation() {
         activation.rollback(&mut endpoints, error, false),
         ActivationRollback::Unavailable(_)
     ));
+}
+
+#[test]
+fn restore_failure_keeps_external_error_detail_in_presented_message() {
+    let (shell, mut endpoints, _, _) = shell_and_registry_with_source_failure(true);
+    let Err(ActivationBeginError::Partial { mut activation, .. }) =
+        PendingEndpointActivation::begin(
+            &shell,
+            &mut endpoints,
+            endpoint(),
+            None,
+            resize(),
+            10,
+            Instant::now(),
+        )
+    else {
+        panic!("expected a partial activation");
+    };
+    let ActivationRollback::Unavailable(message) =
+        activation.rollback(&mut endpoints, "detalhe externo: 文件".into(), true)
+    else {
+        panic!("expected an unavailable connection");
+    };
+    assert!(message.contains("detalhe externo: 文件"));
+    assert!(message.contains("não foi possível retomar a conexão de origem"));
 }
 
 #[test]
