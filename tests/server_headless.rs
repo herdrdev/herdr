@@ -631,6 +631,13 @@ fn server_stop_request_logs_its_caller() {
 
     let mut spawned = spawn_server(&config_home, &runtime_dir, &api_socket, &client_socket);
     wait_for_socket(&api_socket, Duration::from_secs(10));
+    // API ping is available during startup, when Stop correctly returns busy.
+    wait_for_file(&client_socket, Duration::from_secs(10));
+    let mut client = UnixStream::connect(&client_socket).unwrap();
+    let (version, error) = client_handshake(&mut client, CURRENT_PROTOCOL, 80, 24).unwrap();
+    assert_eq!(version, CURRENT_PROTOCOL);
+    assert!(error.is_none());
+    drop(client);
 
     let mut stream = UnixStream::connect(&api_socket).unwrap();
     writeln!(
@@ -654,6 +661,72 @@ fn server_stop_request_logs_its_caller() {
         "server.stop request".to_string()
     };
     assert!(line.contains(&expected), "{line}");
+
+    let host = || {
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"));
+        command
+            .env("XDG_CONFIG_HOME", &config_home)
+            .env("XDG_RUNTIME_DIR", &runtime_dir)
+            .env("HERDR_SOCKET_PATH", &api_socket)
+            .env_remove("HERDR_CLIENT_SOCKET_PATH")
+            .env_remove("HERDR_SESSION")
+            .env_remove("HERDR_START_EPOCH");
+        command
+    };
+    let control = |args: &[&str]| {
+        host()
+            .args(["remote-client-bridge", "--host-control-v1"])
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let status =
+        || serde_json::from_slice::<serde_json::Value>(&control(&["status"]).stdout).unwrap();
+    let stopped = status();
+    assert_eq!(stopped["state"], "stopped");
+    for args in [
+        vec!["remote-client-bridge"],
+        vec!["remote-client-bridge", "--idle-timeout-v1"],
+    ] {
+        assert!(!host().args(args).status().unwrap().success());
+        assert_eq!(
+            status(),
+            stopped,
+            "fresh offline clients must observe Stop without launching"
+        );
+    }
+    // A partial endpoint is not permission to start or replace a server.
+    {
+        let _partial = std::os::unix::net::UnixListener::bind(&api_socket).unwrap();
+        assert_eq!(status()["state"], "unavailable");
+        assert!(!control(&["start", &stopped["epoch"].to_string()])
+            .status
+            .success());
+    }
+    assert!(control(&["start", &stopped["epoch"].to_string()])
+        .status
+        .success());
+    let running = status();
+    assert_eq!(running["state"], "online");
+    assert!(control(&["start", &running["epoch"].to_string()])
+        .status
+        .success());
+    assert_eq!(
+        status(),
+        running,
+        "Start reuses an existing compatible server"
+    );
+    assert!(host().args(["server", "stop"]).status().unwrap().success());
+    assert!(
+        !host()
+            .arg("server")
+            .env("HERDR_START_EPOCH", running["epoch"].to_string())
+            .status()
+            .unwrap()
+            .success(),
+        "a delayed child must fail before restoring an app"
+    );
+    assert_eq!(status()["state"], "stopped");
 
     cleanup_spawned_herdr(spawned, base);
 }

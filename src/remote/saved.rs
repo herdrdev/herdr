@@ -17,6 +17,20 @@ pub(crate) struct SavedSshStream {
     pub(crate) bridge: SavedSshBridge,
 }
 
+pub(crate) fn start_saved_ssh(
+    profile_id: &str,
+    target: &str,
+    session: &str,
+    epoch: u64,
+    cancelled: Arc<AtomicBool>,
+) -> io::Result<()> {
+    let mut ssh = validated_saved_ssh(profile_id, target, session)?;
+    ssh.cancelled = cancelled;
+    ssh.prepare_shared_transport()?;
+    let remote = find_installed_remote_herdr(&ssh)?;
+    super::attach::start_remote_host(&ssh, &remote, epoch)
+}
+
 pub(crate) fn connect_saved_ssh(
     profile_id: &str,
     target: &str,
@@ -27,6 +41,13 @@ pub(crate) fn connect_saved_ssh(
     ssh.cancelled = Arc::clone(&cancelled);
     ssh.prepare_shared_transport()?;
     let remote_herdr = find_installed_remote_herdr(&ssh)?;
+    if let Some(status) = super::attach::remote_host_status(&ssh, &remote_herdr)? {
+        if status.inactive() {
+            return Err(io::Error::other(status));
+        }
+    } else {
+        super::attach::require_legacy_host_running(&ssh, &remote_herdr)?;
+    }
     let metadata = remote_herdr.machine_metadata();
     if cancelled.load(Ordering::Acquire) {
         return Err(super::process::cancelled());
@@ -190,7 +211,9 @@ fn validated_saved_ssh(profile_id: &str, target: &str, session: &str) -> io::Res
     validate_profile_path_id(profile_id)?;
     crate::session::validate_name(session)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    Ok(RemoteSsh::new_noninteractive(target.to_owned()))
+    let mut ssh = RemoteSsh::new_noninteractive(target.to_owned());
+    ssh.session_name = session.to_owned();
+    Ok(ssh)
 }
 
 fn validate_profile_path_id(profile_id: &str) -> io::Result<()> {
@@ -211,6 +234,19 @@ fn validate_profile_path_id(profile_id: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelled_saved_start_does_not_contact_the_host() {
+        let error = start_saved_ssh(
+            "0123456789abcdef0123456789abcdef",
+            "cancelled.invalid",
+            "default",
+            0,
+            Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::ConnectionAborted);
+    }
 
     #[test]
     fn bridge_paths_use_profile_identity_not_target_or_session() {

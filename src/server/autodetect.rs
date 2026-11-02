@@ -46,7 +46,7 @@ pub fn is_server_listening() -> io::Result<bool> {
 }
 
 /// Checks whether a herdr server is listening at a specific socket path.
-fn is_server_listening_at(socket_path: &Path) -> io::Result<bool> {
+pub(crate) fn is_server_listening_at(socket_path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
     {
         match crate::platform::probe_local_server(socket_path) {
@@ -65,36 +65,18 @@ fn is_server_listening_at(socket_path: &Path) -> io::Result<bool> {
 
     #[cfg(not(windows))]
     {
-        if !socket_path.exists() {
-            return Ok(false);
-        }
-
-        Ok(match crate::ipc::connect_local_stream(socket_path) {
-            Ok(_) => {
-                // Server is listening. Close the test connection immediately.
-                // The server's handshake handler will time out on this connection
-                // since we don't send a handshake, which is fine.
-                true
-            }
+        match crate::ipc::connect_local_stream(socket_path) {
+            Ok(_) => Ok(true),
             Err(err)
                 if matches!(
                     err.kind(),
-                    io::ErrorKind::ConnectionRefused | io::ErrorKind::TimedOut
+                    io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
                 ) =>
             {
-                // Socket file exists but nobody is listening — stale socket.
-                false
+                Ok(false)
             }
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {
-                // Socket file disappeared between exists() and connect().
-                false
-            }
-            Err(err) => {
-                // Other errors (permission denied, etc.) — assume not listening.
-                tracing::warn!(err = %err, "unexpected error checking server socket");
-                false
-            }
-        })
+            Err(err) => Err(err),
+        }
     }
 }
 
@@ -201,7 +183,7 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
 ///   this CLI invocation explicitly selected a session.
 ///
 /// Returns the PID of the spawned server process.
-pub fn spawn_server_daemon() -> io::Result<u32> {
+pub(crate) fn spawn_server_daemon_at_epoch(epoch: u64) -> io::Result<u32> {
     let exe = std::env::current_exe().map_err(|err| {
         io::Error::new(
             err.kind(),
@@ -212,6 +194,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     info!(exe = %exe.display(), "spawning server daemon");
 
     let mut command = build_server_daemon_command(exe);
+    command.env(crate::server::lifecycle::START_EPOCH_ENV, epoch.to_string());
 
     let pid =
         crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
@@ -314,6 +297,9 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     let socket_path = client_socket_path();
     info!(path = %socket_path.display(), "auto-detect launch starting");
 
+    // A stop/delete after this observation must revoke this launch decision.
+    // Receipt errors must still allow attachment to an already-running server.
+    let epoch = crate::server::lifecycle::launch_epoch();
     let startup = is_server_listening().and_then(|listening| {
         if listening {
             info!("server already running, attaching as client");
@@ -324,7 +310,7 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
             }
         } else {
             info!("no server running, spawning server daemon");
-            spawn_server_daemon()
+            spawn_server_daemon_at_epoch(epoch?)
                 .and_then(|_| wait_for_server_socket(&socket_path, SERVER_READY_TIMEOUT))
         }
     });
@@ -681,4 +667,10 @@ test "$sid" = "$$"
         crate::session::clear_explicit_session_for_test();
         let _ = std::fs::remove_dir_all(dir);
     }
+}
+
+#[cfg(all(test, unix))]
+#[test]
+fn invalid_endpoint_probe_is_not_treated_as_absent() {
+    assert!(is_server_listening_at(Path::new(&"x".repeat(256))).is_err());
 }

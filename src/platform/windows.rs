@@ -3466,6 +3466,55 @@ impl Drop for InputSourceRestore {
     }
 }
 
+pub(crate) fn server_lifecycle_identity(
+    path: &std::path::Path,
+) -> std::io::Result<(Vec<u8>, std::path::PathBuf)> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Globalization::{
+        LCMapStringEx, LCMAP_UPPERCASE, LOCALE_NAME_INVARIANT,
+    };
+    // IPC uses this literal namespace name, not a filesystem-resolved path.
+    let source: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let length = i32::try_from(source.len()).map_err(std::io::Error::other)?;
+    let required = unsafe {
+        LCMapStringEx(
+            LOCALE_NAME_INVARIANT,
+            LCMAP_UPPERCASE,
+            source.as_ptr(),
+            length,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut normalized = vec![0u16; required as usize];
+    let written = unsafe {
+        LCMapStringEx(
+            LOCALE_NAME_INVARIANT,
+            LCMAP_UPPERCASE,
+            source.as_ptr(),
+            length,
+            normalized.as_mut_ptr(),
+            required,
+            std::ptr::null(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    if written == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((
+        normalized.into_iter().flat_map(u16::to_le_bytes).collect(),
+        std::path::absolute(path)?,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{

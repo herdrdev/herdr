@@ -207,6 +207,8 @@ fn mobile_endpoint_state(status: ClientEndpointStatus) -> &'static str {
         ClientEndpointStatus::Connecting => "connecting",
         ClientEndpointStatus::Online => "online",
         ClientEndpointStatus::Reconnecting => "reconnecting",
+        ClientEndpointStatus::Stopped(_) => "stopped",
+        ClientEndpointStatus::Offline(_) => "offline",
         ClientEndpointStatus::Attention => "attention",
         ClientEndpointStatus::Disabled => "disabled",
     }
@@ -608,6 +610,21 @@ fn mobile_items(
                 background,
                 target: Some(ClientMobileTarget::Machine(endpoint.endpoint_id.clone())),
             });
+            if matches!(
+                endpoint.status,
+                ClientEndpointStatus::Stopped(_) | ClientEndpointStatus::Offline(_)
+            ) {
+                items.push(MobileItem {
+                    lines: vec![Line::from(Span::styled(
+                        format!("    Start {}", endpoint.label),
+                        Style::default().fg(palette.text).bg(background),
+                    ))],
+                    background,
+                    target: Some(ClientMobileTarget::StartMachine(
+                        endpoint.endpoint_id.clone(),
+                    )),
+                });
+            }
         }
     }
     let agents = super::aggregate_navigation::aggregate_agent_rows(
@@ -1003,6 +1020,9 @@ impl ClientShellState {
             .find(|(rect, _)| super::contains(*rect, point))
             .map(|(_, target)| target.clone());
         match target {
+            Some(ClientMobileTarget::StartMachine(endpoint_id)) => {
+                outcome.repaint |= self.start_machine(&endpoint_id);
+            }
             Some(ClientMobileTarget::Machine(endpoint_id)) => {
                 if endpoint_id == self.active_endpoint_id {
                     self.mode = ClientShellMode::Terminal;

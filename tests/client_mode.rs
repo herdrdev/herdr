@@ -1001,12 +1001,46 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
     let client_socket = runtime_dir.join("herdr-client.sock");
-    let remote_config = base.join("remote-config");
+    let remote_config = base.join("rc");
     let remote_runtime = base.join("remote-runtime");
-    let remote_api = remote_runtime.join("herdr.sock");
-    let remote_client = remote_runtime.join("herdr-client.sock");
-    let mut remote_server =
-        spawn_server(&remote_config, &remote_runtime, &remote_api, &remote_client);
+    let default_api = remote_config.join(app_dir_name()).join("herdr.sock");
+    let default_client = remote_config.join(app_dir_name()).join("herdr-client.sock");
+    let mut default_server = spawn_server(
+        &remote_config,
+        &remote_runtime,
+        &default_api,
+        &default_client,
+    );
+    wait_for_socket(&default_client, Duration::from_secs(10));
+    {
+        let mut client = UnixStream::connect(&default_client).unwrap();
+        client_shell_handshake(&mut client, CURRENT_PROTOCOL, 80, 24).unwrap();
+    }
+    let remote_dir = remote_config.join(app_dir_name()).join("sessions/r");
+    let remote_api = remote_dir.join("herdr.sock");
+    let remote_client = remote_dir.join("herdr-client.sock");
+    let mut remote_server = spawn_client_process_with_args_and_env(
+        &remote_config,
+        &remote_runtime,
+        &remote_api,
+        &["--session", "r", "server"],
+        &[],
+    );
+    let default_epoch = || {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_herdr"))
+            .args([
+                "--session",
+                "default",
+                "remote-client-bridge",
+                "--host-control-v1",
+                "status",
+            ])
+            .env("XDG_CONFIG_HOME", &remote_config)
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["epoch"].clone()
+    };
+    let original_default_epoch = default_epoch();
     wait_for_socket(&remote_api, Duration::from_secs(10));
     wait_for_socket(&remote_client, Duration::from_secs(10));
     let created = send_json_request(
@@ -1034,7 +1068,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     let profile = "0123456789abcdef0123456789abcdef";
     fs::write(catalog_dir.join("endpoints.json"), serde_json::json!({
         "version": 1, "selected_profile": profile,
-        "ssh": [{"id": profile, "label": "Test remote", "target": "test-only", "session": "default", "enabled": true}],
+        "ssh": [{"id": profile, "label": "Test remote", "target": "test-only", "session": "r", "enabled": true}],
     }).to_string()).unwrap();
 
     // The SSH executable is private to this client. Discovery and the stdio bridge run the real
@@ -1234,13 +1268,19 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         || screen_text().contains("REMOTE_STILL_SELECTED")
     ));
 
-    let watermark = output_len(&output);
-    support::stop_spawned_herdr(&mut *remote_server.child);
+    let stopped = send_json_request(
+        &remote_api,
+        r#"{"id":"stop","method":"server.stop","params":{}}"#,
+    );
+    assert!(stopped.get("error").is_none(), "{stopped}");
+    remote_server.child.wait().unwrap();
     assert!(
         wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("reconnecting")
+            let text = screen_text();
+            text.contains("stopped") && text.contains("Start")
         }),
-        "the selected remote must be marked disconnected"
+        "the selected remote must stay stopped and offer Start: {}",
+        screen_text()
     );
     let text = read_output(&output);
     assert!(
@@ -1279,10 +1319,54 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
         "recovered Local must accept input: {}",
         screen_text()
     );
+    let text = screen_text();
+    let (row, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Start"))
+        .unwrap();
+    let column = line[..line.find("Start").unwrap()].chars().count() + 1;
+    write!(
+        input,
+        "\x1b[<0;{column};{}M\x1b[<0;{column};{}m",
+        row + 1,
+        row + 1
+    )
+    .unwrap();
+    wait_for_socket(&remote_api, REMOTE_READY_TIMEOUT);
+    let created = send_json_request(&remote_api, &serde_json::json!({
+        "id":"named-returned", "method":"workspace.create", "params":{"cwd":base,"label":"named-returned","focus":true}
+    }).to_string());
+    assert!(created.get("error").is_none(), "{created}");
+    assert!(
+        wait_until(REMOTE_READY_TIMEOUT, Duration::from_millis(20), || {
+            screen_text().contains("named-returned")
+        }),
+        "saved Start must reconnect to the named session: {}",
+        screen_text()
+    );
+    assert!(default_server.child.try_wait().unwrap().is_none());
+    assert_eq!(
+        default_epoch(),
+        original_default_epoch,
+        "saved Start must not start or replace default"
+    );
+    assert!(send_json_request(
+        &remote_api,
+        r#"{"id":"stop","method":"server.stop","params":{}}"#
+    )
+    .get("error")
+    .is_none());
+    assert!(wait_until(
+        REMOTE_READY_TIMEOUT,
+        Duration::from_millis(20),
+        || screen_text().contains("stopped")
+    ));
     drop(input);
     drop(client);
     drop(restarted);
     drop(remote_server);
+    drop(default_server);
     cleanup_test_base(&base);
 }
 
