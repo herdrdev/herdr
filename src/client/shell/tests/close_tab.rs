@@ -79,7 +79,7 @@ fn last_tab_close_waits_for_keyboard_or_mouse_confirmation() {
         let frame = state.compose(106, 24).unwrap();
         let text = frame_rows(&frame).join("\n");
         assert!(text.contains("Fechar espaço?"));
-        assert!(text.contains("1 pane"));
+        assert!(text.contains("1 painel"));
         let accepted = if menu {
             let primary = state.hits.overlay_primary;
             click(&mut state, primary)

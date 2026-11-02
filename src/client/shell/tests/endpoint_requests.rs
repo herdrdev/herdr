@@ -328,7 +328,7 @@ fn dispatcher_cancels_worktree_requests_on_frozen_surface_or_failed_send() {
         assert!(state
             .visible_endpoint_notice
             .as_ref()
-            .is_some_and(|notice| { notice.title == "Action interrupted" }));
+            .is_some_and(|notice| { notice.title == "Ação interrompida" }));
         assert!(commands.disconnect(&ClientEndpointId::Local).is_empty());
     }
 }

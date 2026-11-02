@@ -515,7 +515,7 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_cl
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("Fechar espaço?"));
-    assert!(text.contains("1 pane"));
+    assert!(text.contains("1 painel"));
 
     let confirm = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &confirm.actions[..] else {

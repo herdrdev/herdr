@@ -1108,7 +1108,7 @@ impl ClientShellState {
                 })
             {
                 self.receive_endpoint_unavailable(
-                    "Close target changed; try closing it again".into(),
+                    "O item a fechar mudou; tente fechá-lo novamente".into(),
                 );
                 return;
             }
@@ -1200,12 +1200,12 @@ impl ClientShellState {
             })
             .sum::<usize>();
         let panes = if pane_count == 1 {
-            "1 pane".to_owned()
+            "1 painel".to_owned()
         } else {
-            format!("{pane_count} panes")
+            format!("{pane_count} painéis")
         };
         let scope = if closes_group {
-            format!("{} workspaces, {panes}", group.len())
+            format!("{} espaços, {panes}", group.len())
         } else {
             panes
         };

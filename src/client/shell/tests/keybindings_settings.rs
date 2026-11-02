@@ -654,7 +654,7 @@ fn unavailable_endpoint_method_is_disabled_without_disconnect() {
         .expect("unsupported action notice");
     assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
     assert_eq!(notice.key.code, "workspace.focus");
-    assert!(notice.body.contains("This server"));
+    assert!(notice.body.contains("Este servidor"));
     assert!(state.endpoint_error.is_none());
 
     let mut repeated = ClientShellInput::default();
@@ -830,7 +830,7 @@ fn custom_binding_missing_from_endpoint_manifest_is_not_forwarded() {
     assert!(state
         .endpoint_error
         .as_deref()
-        .is_some_and(|error| error.contains("not available")));
+        .is_some_and(|error| error.contains("não está disponível")));
 }
 
 #[test]

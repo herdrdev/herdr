@@ -144,7 +144,7 @@ fn workspace_navigation_waits_for_the_target_presentation_fence() {
             assert!(state
                 .visible_endpoint_notice
                 .as_ref()
-                .is_some_and(|notice| notice.title == "Action interrupted"));
+                .is_some_and(|notice| notice.title == "Ação interrompida"));
             assert!(commands.disconnect(&remote).is_empty());
             assert!(sent.lock().unwrap().is_empty());
             continue;
