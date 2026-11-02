@@ -57,6 +57,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Consultar referências históricas oficiais no checkout temporário
+        run: |
+          git fetch --no-tags https://github.com/herdrdev/herdr.git 'refs/tags/v*:refs/tags/v*'
+          test "$(git rev-parse 'v0.9.5^{commit}')" = 2ecf19a92fc3a7fff75b6ce3655ef04f4625ec01
+
       - name: Install Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
