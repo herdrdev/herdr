@@ -27,18 +27,34 @@ pub fn app_dir_name() -> &'static str {
     }
 }
 
-pub fn config_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
+fn isolated_or_xdg(
+    isolated: Option<std::ffi::OsString>,
+    xdg: Option<std::ffi::OsString>,
+    fallback: impl FnOnce() -> PathBuf,
+) -> PathBuf {
+    if let Some(dir) = isolated {
+        return PathBuf::from(dir);
+    }
+    if let Some(dir) = xdg {
         return PathBuf::from(dir).join(app_dir_name());
     }
-    platform_config_dir()
+    fallback()
+}
+
+pub fn config_dir() -> PathBuf {
+    isolated_or_xdg(
+        std::env::var_os("PRETORIAN_HERDR_CONFIG_DIR"),
+        std::env::var_os("XDG_CONFIG_HOME"),
+        platform_config_dir,
+    )
 }
 
 pub fn state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("XDG_STATE_HOME") {
-        return PathBuf::from(dir).join(app_dir_name());
-    }
-    platform_state_dir()
+    isolated_or_xdg(
+        std::env::var_os("PRETORIAN_HERDR_STATE_DIR"),
+        std::env::var_os("XDG_STATE_HOME"),
+        platform_state_dir,
+    )
 }
 
 #[cfg(windows)]
@@ -750,6 +766,22 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pretorian_directory_takes_precedence_without_changing_xdg() {
+        let xdg = std::ffi::OsString::from("/user/config");
+        let result = isolated_or_xdg(
+            Some(std::ffi::OsString::from("/private/herdr")),
+            Some(xdg.clone()),
+            || PathBuf::from("/fallback"),
+        );
+        assert_eq!(result, PathBuf::from("/private/herdr"));
+        assert_eq!(xdg, std::ffi::OsString::from("/user/config"));
+        assert_eq!(
+            isolated_or_xdg(None, Some(xdg), || PathBuf::from("/fallback")),
+            PathBuf::from("/user/config").join(app_dir_name()),
+        );
+    }
 
     #[test]
     fn upsert_top_level_bool_replaces_existing_value() {

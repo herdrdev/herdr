@@ -312,10 +312,10 @@ fn startup_onboarding_is_client_rendered_and_modal() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("terminal workspace manager for coding agents"));
-    assert!(text.contains("this is a mouse-first terminal"));
-    assert!(text.contains("ctrl+b enters prefix mode"));
-    assert!(text.contains("install optional agent integrations"));
+    assert!(text.contains("ambiente de trabalho para agentes"));
+    assert!(text.contains("use o mouse ou o teclado"));
+    assert!(text.contains("ctrl+b abre atalhos"));
+    assert!(text.contains("configure as integrações opcionais"));
     assert_eq!(state.hits.overlay_primary.width, 12);
 
     let ignored = state.handle_input_bytes(b"x");
@@ -364,9 +364,9 @@ fn startup_onboarding_shows_configured_prefix() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("ctrl+shift+b enters prefix mode"));
-    assert!(text.contains("shows keybinds and settings"));
-    assert!(!text.contains("ctrl+b enters prefix mode"));
+    assert!(text.contains("ctrl+shift+b abre atalhos"));
+    assert!(text.contains("mostra atalhos e configurações"));
+    assert!(!text.contains("ctrl+b abre atalhos"));
 }
 
 #[test]

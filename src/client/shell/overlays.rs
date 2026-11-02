@@ -627,7 +627,7 @@ fn render_onboarding_overlay(
     button(
         b,
         primary,
-        " ↵ continue ",
+        " ↵ continuar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
