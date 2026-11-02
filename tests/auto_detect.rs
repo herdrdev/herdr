@@ -296,7 +296,10 @@ fn session_attach_without_terminal_leaves_no_session() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("terminal"), "stderr={stderr}");
-    assert!(stderr.contains("run inside a terminal"), "stderr={stderr}");
+    assert!(
+        stderr.contains("execute dentro de um terminal"),
+        "stderr={stderr}"
+    );
     assert!(
         output.stdout.is_empty(),
         "failed attach emitted terminal output"
