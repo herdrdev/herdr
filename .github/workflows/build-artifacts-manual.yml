@@ -123,6 +123,10 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/uucode/
           retention-days: 7
 
   build-macos:
@@ -186,6 +190,10 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/uucode/
           retention-days: 7
 
   build-windows:
@@ -246,4 +254,8 @@ jobs:
           path: |
             herdr-windows-x86_64.zip
             BUILD_INFO.txt
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/uucode/
           retention-days: 7
