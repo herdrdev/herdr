@@ -286,7 +286,7 @@ fn root_and_command_group_help_point_agents_to_plain_text_docs() {
         assert!(output.status.success(), "herdr {} failed", args.join(" "));
         let stdout = String::from_utf8_lossy(&output.stdout);
         for expected in [
-            "Are you an AI? Use these resources ONLY IF your task specifically asks you to:",
+            "Você é uma IA? Use estes recursos SOMENTE SE sua tarefa pedir especificamente:",
             "herdr --skill",
             "https://github.com/herdrdev/herdr",
         ] {

@@ -122,29 +122,23 @@ pub fn stop_command_for(name: Option<&str>) -> String {
 
 pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
     let restart = match attach_command {
-        Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Herdr with the same socket override."),
+        Some(command) => format!("Execute `{stop_command}` e depois `{command}` novamente."),
+        None => format!(
+            "Execute `{stop_command}` e reinicie o Pretorian com o mesmo caminho de socket."
+        ),
     };
     format!(
-        "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
+        "Encerre o servidor anterior para usar a nova versão.\nIsso encerra os processos dos painéis.\n{restart}"
     )
 }
 
 pub fn active_restart_after_update_guidance() -> String {
-    if !explicit_session_requested() {
-        if let Ok(socket_path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
-            return restart_after_update_guidance(
-                &format!(
-                    "{}={} herdr server stop",
-                    crate::api::SOCKET_PATH_ENV_VAR,
-                    socket_path
-                ),
-                None,
-            );
-        }
-    }
-
-    restart_after_update_guidance(&local_stop_command(), Some(&local_attach_command()))
+    format!(
+        "Encerre somente o servidor associado à sessão Pretorian abaixo.\nIsso encerra os processos dos painéis; salve o trabalho antes.\nSessão: {}\nSocket da API: {}\nDiretório da sessão: {}\nSe não conseguir identificar o processo correto, peça apoio ao responsável pela instalação.\nDepois do encerramento, reabra o perfil Pretorian.",
+        active_name().unwrap_or_else(|| DEFAULT_SESSION_NAME.to_string()),
+        active_api_socket_path().display(),
+        data_dir().display()
+    )
 }
 
 pub fn explicit_session_requested() -> bool {
@@ -1001,7 +995,7 @@ mod tests {
                 "herdr session stop work",
                 Some("herdr session attach work")
             ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herdr session stop work`, then run `herdr session attach work` again."
+            "Encerre o servidor anterior para usar a nova versão.\nIsso encerra os processos dos painéis.\nExecute `herdr session stop work` e depois `herdr session attach work` novamente."
         );
     }
 
@@ -1012,10 +1006,11 @@ mod tests {
         std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
 
-        assert_eq!(
-            active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDR_SOCKET_PATH=/tmp/custom-herdr.sock herdr server stop`, then restart Herdr with the same socket override."
-        );
+        let guidance = active_restart_after_update_guidance();
+        assert!(guidance.contains("/tmp/custom-herdr.sock"));
+        assert!(guidance.contains("Isso encerra os processos dos painéis"));
+        assert!(guidance.contains("reabra o perfil Pretorian"));
+        assert!(!guidance.contains("herdr server stop"));
 
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }

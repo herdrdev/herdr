@@ -605,9 +605,9 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        println!("Pretorian — ambiente de terminal para agentes de IA");
         println!();
-        println!("Usage: herdr [options]");
+        println!("Uso: herdr [options]");
         println!("       herdr --session <name> [options]");
         println!("       herdr --machine <label-or-id> <command>");
         println!("       herdr --remote <ssh-target> [--session <name>]");
@@ -631,92 +631,107 @@ fn main() -> io::Result<()> {
         println!("       herdr session <subcommand> ...");
         println!("       herdr integration <subcommand> ...");
         println!();
-        println!("Common commands:");
+        println!("Comandos comuns:");
         for (command, description) in [
-            ("herdr", "Launch or attach to the persistent session"),
+            ("herdr", "Abrir ou conectar à sessão persistente"),
             (
                 "herdr status [server|client]",
-                "Show local client and running server status",
+                "Mostrar o estado do cliente local e do servidor ativo",
             ),
-            ("herdr update", "Download and install the latest version"),
-            ("herdr completion zsh", "Generate shell completions for zsh"),
+            (
+                "herdr update",
+                "Indisponível neste fork; atualize pelo instalador do Pretorian",
+            ),
+            (
+                "herdr completion zsh",
+                "Gerar sugestões de comandos para zsh",
+            ),
             (
                 "herdr server stop",
-                "Stop the running server via the API socket",
+                "Encerrar o servidor ativo pelo socket da API",
             ),
             (
                 "herdr channel set <stable|preview>",
-                "Choose the stable or preview update channel",
+                "Alteração de canal indisponível neste fork",
             ),
             (
                 "herdr server reload-config",
-                "Reload config.toml in the running server",
+                "Recarregar config.toml no servidor ativo",
             ),
             (
                 "herdr config reset-keys",
-                "Back up config.toml and remove custom keybindings",
+                "Salvar uma cópia de config.toml e remover atalhos personalizados",
             ),
             (
                 "herdr channel <subcommand>",
-                "Manage the stable or preview update channel",
+                "Consultar o canal; alteração indisponível neste fork",
             ),
-            ("herdr machine <subcommand>", "Manage saved SSH machines"),
+            (
+                "herdr machine <subcommand>",
+                "Gerenciar máquinas SSH salvas",
+            ),
             (
                 "herdr api <subcommand>",
-                "Inspect socket API metadata and live runtime state",
+                "Consultar metadados da API de socket e o estado atual",
             ),
             (
                 "herdr workspace <subcommand>",
-                "Workspace helpers over the socket API",
+                "Gerenciar espaços de trabalho pela API de socket",
             ),
             (
                 "herdr worktree <subcommand>",
-                "Git worktree helpers over the socket API",
+                "Gerenciar worktrees Git pela API de socket",
             ),
-            ("herdr tab <subcommand>", "Tab helpers over the socket API"),
+            (
+                "herdr tab <subcommand>",
+                "Gerenciar abas pela API de socket",
+            ),
             (
                 "herdr notification <subcommand>",
-                "Notification helpers over the socket API",
+                "Gerenciar notificações pela API de socket",
             ),
             (
                 "herdr agent <subcommand>",
-                "Agent/terminal helpers over the socket API",
+                "Gerenciar agentes e terminais pela API de socket",
             ),
             (
                 "herdr pane <subcommand>",
-                "Pane control helpers over the socket API",
+                "Controlar painéis pela API de socket",
             ),
             (
                 "herdr session <subcommand>",
-                "Manage named persistent sessions",
+                "Gerenciar sessões persistentes nomeadas",
             ),
             (
                 "herdr integration <subcommand>",
-                "Manage built-in agent integrations",
+                "Gerenciar integrações de agentes incluídas",
             ),
         ] {
             println!("  {command:<32} {description}");
         }
         println!();
-        println!("Advanced commands:");
-        println!("  {:<32} Run as headless server", "herdr server");
+        println!("Comandos avançados:");
+        println!(
+            "  {:<32} Executar como servidor sem interface",
+            "herdr server"
+        );
         println!();
-        println!("Options:");
-        println!("  --session <name>    Use or create a named persistent session");
-        println!("  --machine <label-or-id>  Run an API command on a saved SSH machine");
-        println!("  --remote <target>   Attach through SSH to a remote Herdr server");
+        println!("Opções:");
+        println!("  --session <name>    Usar ou criar uma sessão persistente nomeada");
+        println!("  --machine <label-or-id>  Executar um comando da API em uma máquina SSH salva");
+        println!("  --remote <target>   Conectar por SSH a um servidor remoto");
         println!("  --remote-keybindings <local|server>");
-        println!("                      Keybindings for --remote app attach (default: local)");
-        println!("  --handoff           Opt into live handoff for update or remote attach");
-        println!("  --default-config    Print default configuration and exit");
-        println!("  --skill             Print the agent skill file and exit");
-        println!("  --version, -V       Print version and exit");
-        println!("  --help, -h          Show this help");
+        println!("                      Atalhos ao conectar por --remote (padrão: local)");
+        println!("  --handoff           Permitir transferência da sessão na atualização ou conexão remota");
+        println!("  --default-config    Exibir a configuração padrão e sair");
+        println!("  --skill             Exibir o arquivo de instruções do agente e sair");
+        println!("  --version, -V       Exibir a versão e sair");
+        println!("  --help, -h          Exibir esta ajuda");
         println!();
-        println!("Config: {}", config::config_path().display());
-        println!("Logs:   {}", logging::help_log_paths_summary());
-        println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
+        println!("Configuração: {}", config::config_path().display());
+        println!("Registros:   {}", logging::help_log_paths_summary());
+        println!("Ambiente: HERDR_CONFIG_PATH define o caminho do arquivo de configuração");
+        println!("Projeto: https://github.com/lamarck-nemesis/herdr-pretorian");
         println!();
         println!("{}", cli::AGENT_HELP_FOOTER);
         return Ok(());

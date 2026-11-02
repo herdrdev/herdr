@@ -45,11 +45,11 @@ const TERMINAL_SESSION_OBSERVE_USAGE: &str =
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
     "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
-    "Are you an AI? Use these resources ONLY IF your task specifically asks you to:\n",
-    "  Control Herdr panes, agents, or workspaces:\n",
-    "    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill\n",
-    "  Help a human understand or set up Herdr, or debug a problem with it:\n",
-    "    read the source and docs: https://github.com/herdrdev/herdr",
+    "Você é uma IA? Use estes recursos SOMENTE SE sua tarefa pedir especificamente:\n",
+    "  Controlar painéis, agentes ou espaços de trabalho:\n",
+    "    IGNORE se a skill Herdr já estiver no seu contexto. Caso contrário, execute: herdr --skill\n",
+    "  Ajudar uma pessoa a entender, configurar ou diagnosticar o Herdr:\n",
+    "    consulte o código e a documentação: https://github.com/herdrdev/herdr",
 );
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
