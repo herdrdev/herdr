@@ -98,6 +98,11 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Package original Rust license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked
+          python scripts/package_rust_licenses.py --target ${{ matrix.target }} --output RUST-LICENSES.zip
+
       - name: Package artifact
         run: |
           cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
@@ -123,6 +128,7 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            RUST-LICENSES.zip
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
@@ -171,6 +177,11 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Package original Rust license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked
+          python scripts/package_rust_licenses.py --target ${{ matrix.target }} --output RUST-LICENSES.zip
+
       - name: Package artifact
         run: |
           cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
@@ -190,6 +201,7 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            RUST-LICENSES.zip
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
@@ -229,6 +241,12 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-msvc
 
+      - name: Package original Rust license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/package_rust_licenses.py --target x86_64-pc-windows-msvc --output RUST-LICENSES.zip
+
       - name: Package artifact
         shell: pwsh
         run: |
@@ -254,6 +272,7 @@ jobs:
           path: |
             herdr-windows-x86_64.zip
             BUILD_INFO.txt
+            RUST-LICENSES.zip
             LICENSE
             vendor/libghostty-vt/LICENSE
             vendor/portable-pty/LICENSE.md
