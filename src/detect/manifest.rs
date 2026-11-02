@@ -588,7 +588,11 @@ fn load_manifest(agent: Agent) -> Option<LoadedManifest> {
 
 fn load_manifest_uncached(agent: Agent) -> Option<LoadedManifest> {
     let bundled = bundled_manifest(agent)?;
-    let mut remote = read_remote_manifest(agent, &bundled);
+    let mut remote = if crate::update::upstream_updates_allowed() {
+        read_remote_manifest(agent, &bundled)
+    } else {
+        None
+    };
     let cached_remote_version = remote.as_ref().and_then(|loaded| match &loaded.source {
         _ if loaded.cached_remote_version.is_some() => loaded.cached_remote_version.clone(),
         ManifestSource::Remote { version, .. } => Some(version.clone()),

@@ -174,6 +174,10 @@ fn run_channel_command(args: &[String]) -> std::io::Result<i32> {
 }
 
 fn channel_set(args: &[String]) -> std::io::Result<i32> {
+    if !crate::update::upstream_updates_allowed() {
+        eprintln!("Atualize o Pretorian usando o instalador aprovado.");
+        return Ok(1);
+    }
     let Some(channel) = parse_channel_set_arg(args) else {
         eprintln!("usage: herdr channel set <stable|preview>");
         return Ok(2);

@@ -186,7 +186,15 @@ fn auto_updates_enabled(background_updates: bool) -> bool {
 }
 
 fn background_update_check_enabled(background_updates: bool, check_enabled: bool) -> bool {
-    auto_updates_enabled(background_updates) && check_enabled
+    crate::update::upstream_updates_allowed()
+        && auto_updates_enabled(background_updates)
+        && check_enabled
+}
+
+#[cfg(test)]
+#[test]
+fn pretorian_nao_verifica_atualizacoes_mesmo_com_configuracao_ativa() {
+    assert!(!background_update_check_enabled(true, true));
 }
 
 fn load_plugin_registry(
