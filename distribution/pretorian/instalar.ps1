@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 function Assert-PretorianNativeMachine([UInt16]$Maquina) {
     if ($Maquina -ne 0x8664) {
         throw 'Esta plataforma ainda não possui instalador aprovado.'

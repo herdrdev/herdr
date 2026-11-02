@@ -1,3 +1,4 @@
+import base64
 import os
 import shutil
 import subprocess
@@ -34,7 +35,7 @@ if ($env:PRETORIAN_TEST_FAKE -ne '1') {
     if (-not $ok) { throw 'A consulta real da arquitetura falhou' }
     Write-Output ('NATIVE:' + $nativeMachine)
 }
-Write-Output ('RESULT:' + $result)
+Write-Output ('RESULT64:' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($result)))
 '''
 
 
@@ -50,7 +51,8 @@ class BootstrapArchitecture(unittest.TestCase):
         result = subprocess.run([POWERSHELL, '-NoProfile', '-NonInteractive', '-Command', HARNESS],
                                 env=env, check=True, capture_output=True, text=True)
         lines = result.stdout.splitlines()
-        response = next(line.removeprefix('RESULT:') for line in lines if line.startswith('RESULT:'))
+        encoded = next(line.removeprefix('RESULT64:') for line in lines if line.startswith('RESULT64:'))
+        response = base64.b64decode(encoded, validate=True).decode('utf-8')
         machine = next((int(line.removeprefix('NATIVE:')) for line in lines if line.startswith('NATIVE:')), None)
         return response, machine
 
@@ -63,7 +65,7 @@ class BootstrapArchitecture(unittest.TestCase):
                 if query:
                     self.assertIn('plataforma', result)
                 else:
-                    self.assertIn('arquitetura nativa', result)
+                    self.assertEqual(result, 'Não foi possível confirmar a arquitetura nativa desta plataforma.')
 
     def test_full_script_x64_reaches_blocked_first_effect(self):
         result, _ = self.run_bootstrap(0x8664)
