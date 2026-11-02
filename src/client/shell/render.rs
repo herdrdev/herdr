@@ -72,7 +72,7 @@ pub(super) fn render_mode_bar(
     let prefix_rhs = |bindings: &crate::config::ActionKeybinds| {
         bindings
             .prefix_rhs_label()
-            .unwrap_or_else(|| "unset".to_owned())
+            .unwrap_or_else(|| "não definido".to_owned())
     };
 
     let mut segments = Vec::<(String, Style)>::new();
@@ -118,7 +118,7 @@ pub(super) fn render_mode_bar(
                     ("j/k".to_owned(), key),
                     (" altura  ".to_owned(), base),
                     ("esc".to_owned(), key),
-                    (" done".to_owned(), base),
+                    (" concluir".to_owned(), base),
                 ]);
             }
             ClientShellMode::Copy => {
@@ -162,9 +162,9 @@ pub(super) fn render_mode_bar(
                     return Some(bar);
                 } else {
                     let select = if copy_mode.selection.is_some() {
-                        "selecting"
+                        "selecionando"
                     } else {
-                        "select"
+                        "selecionar"
                     };
                     let match_status = copy_mode
                         .search_current_global
@@ -185,7 +185,7 @@ pub(super) fn render_mode_bar(
                         ("/ ?".to_owned(), key),
                         (" buscar  ".to_owned(), base),
                         ("n/N".to_owned(), key),
-                        (format!(" repeat{match_status}  "), base),
+                        (format!(" repetir{match_status}  "), base),
                         ("v/space".to_owned(), key),
                         (format!(" {select}  "), base),
                         ("y/enter".to_owned(), key),
