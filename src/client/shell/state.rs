@@ -401,11 +401,11 @@ impl ClientSettingsSection {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Theme => "theme",
-            Self::Indicators => "indicators",
-            Self::Sound => "sound",
-            Self::Toast => "toasts",
-            Self::Integrations => "integrations",
+            Self::Theme => "tema",
+            Self::Indicators => "indicadores",
+            Self::Sound => "som",
+            Self::Toast => "avisos",
+            Self::Integrations => "integrações",
         }
     }
 }

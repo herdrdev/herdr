@@ -1069,7 +1069,7 @@ fn outdated_integration_badges_launcher_settings_and_settings_tab() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(settings_text.contains("● integrations"));
+    assert!(settings_text.contains("● integrações"));
     let integrations_tab = state
         .hits
         .settings_tabs
@@ -1246,8 +1246,8 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("update available"));
-    assert!(text.contains("not found"));
+    assert!(text.contains("atualização disponível"));
+    assert!(text.contains("não encontrado"));
     assert!(!text.contains("pane labels"));
 
     let popup = state.hits.settings_popup;
