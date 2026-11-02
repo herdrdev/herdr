@@ -70,7 +70,7 @@ impl ClientShellState {
             && !self.endpoint_is_online(&notification.endpoint_id)
         {
             let label = self.endpoint_label(&notification.endpoint_id).to_owned();
-            self.receive_endpoint_unavailable(format!("{label} is unavailable"));
+            self.receive_endpoint_unavailable(format!("{label} está indisponível"));
             outcome.repaint = true;
             return;
         }

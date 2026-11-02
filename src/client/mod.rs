@@ -703,7 +703,7 @@ async fn run_client_loop(
                             {
                                 if let Some(shell) = state.shell.as_mut() {
                                     shell.receive_endpoint_unavailable(
-                                        "Update the Local server before switching between machines"
+                                        "Atualize o servidor local antes de alternar entre máquinas"
                                             .into(),
                                     );
                                 }
@@ -751,7 +751,7 @@ async fn run_client_loop(
                         warn!(%error, "saved machines could not be reloaded; keeping current connections");
                         if let Some(shell) = state.shell.as_mut() {
                             shell.receive_endpoint_unavailable(format!(
-                                "Saved machines could not be reloaded; keeping current connections: {error}"
+                                "Não foi possível recarregar as máquinas salvas; as conexões atuais foram mantidas: {error}"
                             ));
                         }
                     }

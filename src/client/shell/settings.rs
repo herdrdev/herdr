@@ -304,7 +304,7 @@ impl ClientShellState {
                         }
                         Ok(_) => {
                             self.set_endpoint_error(
-                                "endpoint returned an unexpected integration list result",
+                                "a conexão retornou um resultado inesperado para a lista de integrações",
                             );
                         }
                         Err(_) => {}

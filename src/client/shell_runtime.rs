@@ -250,7 +250,8 @@ pub(super) fn begin_endpoint_activation(
         });
         if let Some(shell) = state.shell.as_mut() {
             shell.receive_endpoint_unavailable(
-                "Local is reconnecting; selection will resume when it is ready".into(),
+                "Reconectando ao servidor local; a seleção será retomada quando ele estiver pronto"
+                    .into(),
             );
         }
         return Ok(());

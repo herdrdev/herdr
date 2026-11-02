@@ -280,7 +280,7 @@ mod tests {
         assert!(state
             .visible_endpoint_notice
             .as_ref()
-            .is_some_and(|notice| notice.body.contains("Local is unavailable")));
+            .is_some_and(|notice| notice.body.contains("Local está indisponível")));
         assert!(outcome.repaint);
     }
 
