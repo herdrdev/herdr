@@ -1587,7 +1587,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("codex needs attention"));
+    assert!(rendered.contains("codex aguardando"));
     let hit = state.hits.notification_toast;
     let click = || {
         RawInputEvent::Mouse(crossterm::event::MouseEvent {

@@ -169,7 +169,7 @@ impl ClientShellState {
 
         let pending = std::mem::take(&mut self.pending_notifications);
         let mut effects = Vec::new();
-        for pending in pending {
+        for mut pending in pending {
             if pending.deadline > now {
                 self.pending_notifications.push(pending);
                 continue;
@@ -208,6 +208,22 @@ impl ClientShellState {
                 }
             }
 
+            pending.event.title = match pending.event.kind {
+                SemanticNotificationKind::NeedsAttention => pending
+                    .event
+                    .title
+                    .strip_suffix(" needs attention")
+                    .map(|agent| format!("{agent} aguardando"))
+                    .unwrap_or_else(|| pending.event.title.clone()),
+                SemanticNotificationKind::Finished => pending
+                    .event
+                    .title
+                    .strip_suffix(" finished")
+                    .map(|agent| format!("{agent} concluiu"))
+                    .unwrap_or_else(|| pending.event.title.clone()),
+                SemanticNotificationKind::UpdateInstalled => "atualização pronta".to_owned(),
+                SemanticNotificationKind::Custom => pending.event.title.clone(),
+            };
             match self.config.toast_delivery {
                 crate::config::ToastDelivery::Off => {}
                 crate::config::ToastDelivery::Herdr if !target_active => {
