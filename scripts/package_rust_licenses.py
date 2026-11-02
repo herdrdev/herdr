@@ -41,7 +41,7 @@ def collect(report, root):
     for license_group in report["licenses"]:
         original = None
         if license_group.get("source_path"):
-            source = Path(license_group["source_path"]).resolve()
+            source = (root / license_group["source_path"]).resolve()
             owner = next(((directory, key) for directory, key in directories
                           if directory in source.parents
                           and (directory != root.resolve() or source == root.resolve() / "LICENSE")), None)

@@ -74,3 +74,10 @@ class RustLicensePackageTests(unittest.TestCase):
         self.report["licenses"][0]["source_path"] = str(secret)
         with self.assertRaisesRegex(ValueError, "outside the dependency sources"):
             collect(self.report, self.root)
+
+    def test_clarified_relative_license_is_resolved_from_project_root(self):
+        self.report["crates"][0]["package"]["manifest_path"] = str(self.root / "Cargo.toml")
+        self.report["licenses"][0]["source_path"] = "LICENSE"
+        self.report["licenses"][0]["text"] = "Herdr license\n"
+        files, _ = collect(self.report, self.root)
+        self.assertEqual(list(files.values()), [b"Herdr license\n"])

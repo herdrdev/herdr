@@ -2,3 +2,10 @@ accepted = ["MIT", "Apache-2.0", "Unicode-3.0", "Unicode-DFS-2016", "BSD-2-Claus
 ignore-dev-dependencies = true
 ignore-build-dependencies = false
 ignore-transitive-dependencies = false
+
+[herdr.clarify]
+license = "Apache-2.0"
+
+[[herdr.clarify.files]]
+path = "LICENSE"
+checksum = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
