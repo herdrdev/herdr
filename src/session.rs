@@ -109,10 +109,12 @@ pub fn local_attach_command() -> String {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub fn local_stop_command() -> String {
     stop_command_for(active_name().as_deref())
 }
 
+#[cfg(any(not(windows), test))]
 pub fn stop_command_for(name: Option<&str>) -> String {
     match name {
         Some(name) => format!("herdr session stop {name}"),
@@ -120,6 +122,7 @@ pub fn stop_command_for(name: Option<&str>) -> String {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
     let restart = match attach_command {
         Some(command) => format!("Execute `{stop_command}` e depois `{command}` novamente."),
