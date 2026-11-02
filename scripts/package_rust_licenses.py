@@ -23,7 +23,7 @@ def collect(report, root):
                    for key, p in packages.items()]
     directories.sort(key=lambda item: len(item[0].parts), reverse=True)
     base = root / "packaging/licenses/rust"
-    supplements = json.loads((base / "fontes-complementares.json").read_text())
+    supplements = json.loads((base / "fontes-complementares.json").read_text(encoding="utf-8"))
     fallback = {}
     for record in supplements["arquivos"]:
         path = (base / record["arquivo"]).resolve()
@@ -109,7 +109,7 @@ def main():
         subprocess.run([args.cargo_about, "generate", "--locked", "--fail", "--target", args.target,
                         "--format", "json", "--config", str(ROOT / "packaging/licenses/about.toml"),
                         "--output-file", str(report)], cwd=ROOT, check=True)
-        files, inventory = collect(json.loads(report.read_text()), ROOT)
+        files, inventory = collect(json.loads(report.read_text(encoding="utf-8")), ROOT)
     write_archive(args.output, args.target, files, inventory)
 
 

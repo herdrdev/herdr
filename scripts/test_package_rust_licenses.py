@@ -19,7 +19,7 @@ class RustLicensePackageTests(unittest.TestCase):
         (self.root / "LICENSE").write_bytes(b"Herdr license\n")
         self.crate = self.root / "dependency"
         self.crate.mkdir()
-        self.original = b"Copyright Example\r\nOriginal license\r\n"
+        self.original = "Copyright João\r\nOriginal license\r\n".encode("utf-8")
         (self.crate / "LICENSE").write_bytes(self.original)
         package = {"name": "example", "version": "1.0.0", "license": "MIT",
                    "manifest_path": str(self.crate / "Cargo.toml")}
