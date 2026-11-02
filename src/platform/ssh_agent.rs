@@ -95,13 +95,15 @@ fn live_socket(path: &Path) -> bool {
 impl SshAgentRegistry {
     pub(crate) fn new(path: PathBuf, inherited: Option<PathBuf>) -> io::Result<Self> {
         let inherited = inherited.filter(|path| !path.as_os_str().is_empty());
-        let managed = inherited.is_some()
-            || fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.file_type().is_symlink());
         // A handoff keeps existing pane environments, including this stable pathname.
         let fallback = fs::read_link(&path)
             .ok()
             .filter(|target| target != &path && usable_socket(target))
             .or_else(|| inherited.filter(|target| target != &path && usable_socket(target)));
+        // A leftover link is a handoff only while its target is still a usable socket: a
+        // dangling one must not be adopted, or every new pane gets pinned to
+        // herdr.sock.unavailable even after the real agent's socket comes back.
+        let managed = inherited.is_some() || fallback.is_some();
         let mut state = State {
             path,
             fallback,
@@ -285,6 +287,24 @@ mod tests {
             );
             drop(registry);
         }
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_stale_agent_link_is_not_adopted_by_an_agentless_server() {
+        let directory =
+            std::env::temp_dir().join(format!("herdr-stale-agent-{}", std::process::id()));
+        fs::create_dir(&directory).unwrap();
+        let stable = directory.join("agent");
+        let gone = directory.join("gone");
+        symlink(&gone, &stable).unwrap();
+        let registry = SshAgentRegistry::new(stable.clone(), None).unwrap();
+        assert_eq!(
+            fs::read_link(&stable).unwrap(),
+            gone,
+            "an agentless server must not repoint a stale agent link at the unavailable address"
+        );
+        drop(registry);
         fs::remove_dir_all(directory).unwrap();
     }
 
