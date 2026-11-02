@@ -307,12 +307,10 @@ fn terminate_and_reap(child: &mut std::process::Child) -> std::io::Result<()> {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 fn linux_audio_players() -> &'static [AudioPlayer] {
-    // Do not add bare aplay here. It does not decode MP3 and plays MP3 bytes as raw PCM.
+    // Do not add bare aplay or paplay here. Neither decodes MP3, so each plays MP3
+    // bytes as raw PCM; paplay (a symlink to pacat on Fedora/Arch) even exits 0, which
+    // silently ends the player chain before a decoder-capable player is tried.
     &[
-        AudioPlayer {
-            program: "paplay",
-            args: &[],
-        },
         AudioPlayer {
             program: "pw-play",
             args: &[],
@@ -338,7 +336,10 @@ fn run_linux_player(path: &Path) -> Result<Output, String> {
 
     for player in linux_audio_players() {
         match player.output(path) {
-            Ok(output) if output.status.success() => return Ok(output),
+            Ok(output) if output.status.success() => {
+                tracing::debug!(player = player.program, "notification sound played");
+                return Ok(output);
+            }
             Ok(output) => errors.push(player_error(*player, &output)),
             Err(err) => errors.push(format!("{} failed: {err}", player.program)),
         }
