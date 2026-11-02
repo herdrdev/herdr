@@ -1,0 +1,122 @@
+{
+  "arquivos": [
+    {
+      "arquivo": "objc2/LICENSE.md",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54",
+      "fontes": [
+        {
+          "pacote": "block2",
+          "versao": "0.6.2",
+          "fonte": "https://github.com/madsmtm/objc2/blob/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md"
+        },
+        {
+          "pacote": "dispatch2",
+          "versao": "0.3.1",
+          "fonte": "https://github.com/madsmtm/objc2/blob/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md"
+        },
+        {
+          "pacote": "objc2",
+          "versao": "0.6.4",
+          "fonte": "https://github.com/madsmtm/objc2/blob/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md"
+        },
+        {
+          "pacote": "objc2-encode",
+          "versao": "4.1.0",
+          "fonte": "https://github.com/madsmtm/objc2/blob/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md"
+        }
+      ]
+    },
+    {
+      "arquivo": "ratatui/LICENSE",
+      "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5",
+      "fontes": [
+        {
+          "pacote": "ratatui",
+          "versao": "0.30.0",
+          "fonte": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+        },
+        {
+          "pacote": "ratatui-core",
+          "versao": "0.1.0",
+          "fonte": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+        },
+        {
+          "pacote": "ratatui-crossterm",
+          "versao": "0.1.0",
+          "fonte": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+        },
+        {
+          "pacote": "ratatui-widgets",
+          "versao": "0.3.0",
+          "fonte": "https://github.com/ratatui/ratatui/blob/0a2a7c0363a4806b0cf05c1915bf7cdd438f756c/LICENSE"
+        }
+      ]
+    },
+    {
+      "arquivo": "interprocess/LICENSE-0BSD.txt",
+      "sha256": "8fab50bdd851f4e8282c3d1a2c8e3490d7b664e4b90cc44dd15d37be8c8d473a",
+      "fontes": [
+        {
+          "pacote": "interprocess",
+          "versao": "2.4.4",
+          "fonte": "https://github.com/kotauskas/interprocess/blob/e27f397daebff9054f8e2f7b3dc034bae36b2867/LICENSE-0BSD.txt"
+        }
+      ]
+    },
+    {
+      "arquivo": "interprocess/LICENSE-APACHE.txt",
+      "sha256": "814fc616d256859d513d7c1a1f76d5a759a6318971cfdc7f9ac934e1d85f58eb",
+      "fontes": [
+        {
+          "pacote": "interprocess",
+          "versao": "2.4.4",
+          "fonte": "https://github.com/kotauskas/interprocess/blob/e27f397daebff9054f8e2f7b3dc034bae36b2867/LICENSE-APACHE.txt"
+        }
+      ]
+    },
+    {
+      "arquivo": "ryu/LICENSE-APACHE",
+      "sha256": "62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a",
+      "fontes": [
+        {
+          "pacote": "ryu",
+          "versao": "1.0.23",
+          "fonte": "https://github.com/dtolnay/ryu/blob/f0b52bb194befe6fd242154f2182fafd43a819b8/LICENSE-APACHE"
+        }
+      ]
+    },
+    {
+      "arquivo": "ryu/LICENSE-BOOST",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "fontes": [
+        {
+          "pacote": "ryu",
+          "versao": "1.0.23",
+          "fonte": "https://github.com/dtolnay/ryu/blob/f0b52bb194befe6fd242154f2182fafd43a819b8/LICENSE-BOOST"
+        }
+      ]
+    },
+    {
+      "arquivo": "serial2/LICENSE-APACHE",
+      "sha256": "da4d60bfcfd15870aa69e0d0891796d7075a860c54e7b38ec5ccd353c66049ed",
+      "fontes": [
+        {
+          "pacote": "serial2",
+          "versao": "0.2.34",
+          "fonte": "https://github.com/de-vri-es/serial2-rs/blob/65f92d9af1d5f7397c9d96d27abf53000a33ce54/LICENSE-APACHE"
+        }
+      ]
+    },
+    {
+      "arquivo": "serial2/LICENSE-BSD",
+      "sha256": "8db3a8bca21e298fa56df51250b723d4253755966a5c7a92f8027cdd3aaf5972",
+      "fontes": [
+        {
+          "pacote": "serial2",
+          "versao": "0.2.34",
+          "fonte": "https://github.com/de-vri-es/serial2-rs/blob/65f92d9af1d5f7397c9d96d27abf53000a33ce54/LICENSE-BSD"
+        }
+      ]
+    }
+  ]
+}
