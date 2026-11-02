@@ -242,7 +242,7 @@ fn render_agent_summary(
     use crate::api::schema::AgentStatus;
     let counts = [
         (AgentStatus::Blocked, "blocked"),
-        (AgentStatus::Done, "done"),
+        (AgentStatus::Done, "pronto"),
         (AgentStatus::Working, "working"),
         (AgentStatus::Idle, "idle"),
     ]

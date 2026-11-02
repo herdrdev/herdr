@@ -94,7 +94,7 @@ fn last_pane_close_waits_for_keyboard_or_mouse_confirmation() {
         ));
         let frame = state.compose(106, 24).unwrap();
         let text = frame_rows(&frame).join("\n");
-        assert!(text.contains("Close workspace?"));
+        assert!(text.contains("Fechar espaço?"));
         assert!(text.contains("1 pane"));
         let accepted = if menu {
             let primary = state.hits.overlay_primary;
@@ -266,7 +266,7 @@ fn last_pane_close_preserves_parent_group_and_linked_workspace_scope() {
                 }),
             );
             assert!(matches!(state.overlay.as_ref(),
-                Some(ClientShellOverlay::ConfirmClose(confirm)) if confirm.title == "Close worktree group?"));
+                Some(ClientShellOverlay::ConfirmClose(confirm)) if confirm.title == "Fechar grupo de cópias?"));
             let accepted = state.handle_input_bytes(b"\r");
             assert!(matches!(accepted.actions.as_slice(),
                 [ClientShellAction::Endpoint { request, .. }]

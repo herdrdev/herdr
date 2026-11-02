@@ -21,8 +21,8 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
             .map(|cell| cell.symbol.as_str())
             .collect::<String>()
     };
-    assert!(row_text(&bottom, 29).contains("update ready"));
-    assert!(!row_text(&bottom, 28).contains("update ready"));
+    assert!(row_text(&bottom, 29).contains("atualização pronta"));
+    assert!(!row_text(&bottom, 28).contains("atualização pronta"));
     assert!(state.hits.tabs.is_empty());
     assert!(state.hits.new_tab.is_empty());
     assert!(state.hits.tab_scroll_left.is_empty());
@@ -45,7 +45,7 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
         deadline: std::time::Instant::now(),
     });
     let top = state.compose(106, 30).expect("top-tab update shell");
-    assert!(row_text(&top, 29).contains("update ready"));
+    assert!(row_text(&top, 29).contains("atualização pronta"));
 
     let mobile = state.compose(44, 30).expect("mobile update shell");
     let mobile_text = mobile
@@ -53,7 +53,10 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(mobile_text.contains("update ready"));
+    assert!(
+        mobile_text.contains("atualização pronta"),
+        "{mobile_text:?}"
+    );
 }
 
 #[test]
@@ -259,8 +262,8 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         "tabs",
         "+ new tab",
         "menu",
-        "settings",
-        "detach",
+        "configurações",
+        "desconectar",
     ] {
         assert!(switcher_text.contains(expected), "missing {expected}");
     }

@@ -371,7 +371,7 @@ detach = "prefix+x"
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("PREFIX"), "frame: {text:?}");
+    assert!(text.contains("ATALHOS"), "frame: {text:?}");
     assert!(text.contains("ctrl+a"), "frame: {text:?}");
 
     let detach = state.handle_input_bytes(b"x");
@@ -898,7 +898,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("no matching keybinds"));
+    assert!(text.contains("nenhum atalho encontrado"));
 
     state.handle_input_bytes(b"\x1b");
     assert!(matches!(

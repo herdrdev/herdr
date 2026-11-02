@@ -78,45 +78,45 @@ pub(super) fn render_mode_bar(
     let mut segments = Vec::<(String, Style)>::new();
     if let Some(error) = endpoint_error {
         segments.extend([
-            (" ERROR ".to_owned(), mode_style),
+            (" ERRO ".to_owned(), mode_style),
             (format!(" {error}"), base),
         ]);
     } else {
         match mode {
             ClientShellMode::Prefix => {
                 segments.extend([
-                    (" PREFIX ".to_owned(), mode_style),
+                    (" ATALHOS ".to_owned(), mode_style),
                     (" ".to_owned(), base),
                     ("esc".to_owned(), key),
-                    (" cancel  ".to_owned(), base),
+                    (" cancelar  ".to_owned(), base),
                     (prefix, key),
-                    (" send prefix  ".to_owned(), base),
+                    (" enviar prefixo  ".to_owned(), base),
                     (prefix_rhs(&keybinds.keybinds.workspace_picker), key),
-                    (" workspace nav  ".to_owned(), base),
+                    (" navegar espaços  ".to_owned(), base),
                     (prefix_rhs(&keybinds.keybinds.help), key),
-                    (" keybinds".to_owned(), base),
+                    (" atalhos".to_owned(), base),
                 ]);
             }
             ClientShellMode::Navigate => {
                 segments.extend([
-                    (" NAVIGATE ".to_owned(), mode_style),
-                    (" esc back  ".to_owned(), base),
+                    (" NAVEGAR ".to_owned(), mode_style),
+                    (" esc voltar  ".to_owned(), base),
                     ("↑/↓".to_owned(), key),
-                    (" workspace  ".to_owned(), base),
+                    (" espaço  ".to_owned(), base),
                     ("tab".to_owned(), key),
-                    (" pane  ".to_owned(), base),
+                    (" painel  ".to_owned(), base),
                     (prefix_rhs(&keybinds.keybinds.help), key),
-                    (" keybinds".to_owned(), base),
+                    (" atalhos".to_owned(), base),
                 ]);
             }
             ClientShellMode::Resize => {
                 segments.extend([
-                    (" RESIZE ".to_owned(), mode_style),
+                    (" REDIMENSIONAR ".to_owned(), mode_style),
                     ("  ".to_owned(), base),
                     ("h/l".to_owned(), key),
-                    (" width  ".to_owned(), base),
+                    (" largura  ".to_owned(), base),
                     ("j/k".to_owned(), key),
-                    (" height  ".to_owned(), base),
+                    (" altura  ".to_owned(), base),
                     ("esc".to_owned(), key),
                     (" done".to_owned(), base),
                 ]);
@@ -128,12 +128,14 @@ pub(super) fn render_mode_bar(
                         crate::api::schema::PaneCopySearchDirection::Forward => "/",
                         crate::api::schema::PaneCopySearchDirection::Backward => "?",
                     };
-                    buffer.set_stringn(bar.x, bar.y, " COPY ", usize::from(bar.width), mode_style);
-                    let prefix = 8.min(bar.width);
-                    if bar.width >= 8 {
-                        buffer.set_string(bar.x + 7, bar.y, marker, key);
+                    let titulo = " COPIAR ";
+                    buffer.set_stringn(bar.x, bar.y, titulo, usize::from(bar.width), mode_style);
+                    let largura = display_width(titulo).saturating_add(1);
+                    let prefix = largura.min(bar.width);
+                    if bar.width >= largura {
+                        buffer.set_string(bar.x + largura - 1, bar.y, marker, key);
                     }
-                    let footer = "  enter search  esc cancel";
+                    let footer = "  enter buscar  esc cancelar";
                     let footer_width = if bar.width >= 50 {
                         footer.len() as u16
                     } else {
@@ -171,23 +173,23 @@ pub(super) fn render_mode_bar(
                         .unwrap_or_default();
                     let (exit_keys, exit_label) =
                         if copy_mode.search_query.is_empty() && copy_mode.selection.is_none() {
-                            ("q/esc", " exit")
+                            ("q/esc", " sair")
                         } else {
-                            ("esc", " clear  q exit")
+                            ("esc", " limpar  q sair")
                         };
                     segments.extend([
-                        (" COPY ".to_owned(), mode_style),
+                        (" COPIAR ".to_owned(), mode_style),
                         (" ".to_owned(), base),
                         ("h/j/k/l w/b/e { }".to_owned(), key),
-                        (" move  ".to_owned(), base),
+                        (" mover  ".to_owned(), base),
                         ("/ ?".to_owned(), key),
-                        (" search  ".to_owned(), base),
+                        (" buscar  ".to_owned(), base),
                         ("n/N".to_owned(), key),
                         (format!(" repeat{match_status}  "), base),
                         ("v/space".to_owned(), key),
                         (format!(" {select}  "), base),
                         ("y/enter".to_owned(), key),
-                        (" copy  ".to_owned(), base),
+                        (" copiar  ".to_owned(), base),
                         (exit_keys.to_owned(), key),
                         (exit_label.to_owned(), base),
                     ]);
@@ -212,14 +214,14 @@ pub(super) fn render_mode_bar(
         );
     }
     if update_available && mode == ClientShellMode::Navigate {
-        let width = 13.min(bar.width);
+        let width = display_width(" atualização pronta").min(bar.width);
         let area = Rect::new(bar.right().saturating_sub(width), bar.y, width, 1);
         buffer.set_style(area, Style::default().bg(palette.panel_bg));
         put_right_text(
             buffer,
             area,
             area.y,
-            " update ready",
+            " atualização pronta",
             Style::default()
                 .fg(palette.accent)
                 .bg(palette.panel_bg)

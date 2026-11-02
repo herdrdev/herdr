@@ -24,30 +24,30 @@ pub(super) fn global_menu_items(
 ) -> Vec<(&'static str, ClientGlobalMenuAction)> {
     let mut items = vec![
         (
-            "settings",
+            "configurações",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Settings),
         ),
         (
-            "keybinds",
+            "atalhos",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Help),
         ),
         (
-            "reload config",
+            "recarregar configuração",
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::ReloadConfig),
         ),
     ];
     if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
         items.push((
             if snapshot.update_available.is_some() {
-                "update ready"
+                "atualização pronta"
             } else {
-                "what's new"
+                "novidades"
             },
             ClientGlobalMenuAction::WhatsNew,
         ));
     }
     items.push((
-        "detach",
+        "desconectar",
         ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Detach),
     ));
     items

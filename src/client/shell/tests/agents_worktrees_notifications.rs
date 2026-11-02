@@ -278,7 +278,7 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                 assert!(close.actions.is_empty());
                 assert!(matches!(state.overlay.as_ref(),
                     Some(ClientShellOverlay::ConfirmClose(confirm))
-                        if confirm.title == "Close workspace?" && !confirm.close_group));
+                        if confirm.title == "Fechar espaço?" && !confirm.close_group));
                 close = state.handle_input_bytes(b"\r");
             }
             assert!(matches!(close.actions.as_slice(),
@@ -1200,7 +1200,7 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("second"));
-    assert!(text.contains("NAVIGATE"));
+    assert!(text.contains("NAVEGAR"));
 
     let focus = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &focus.actions[..] else {
@@ -1249,8 +1249,8 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("new worktree"));
-    assert!(text.contains("create and open"));
+    assert!(text.contains("nova cópia de trabalho"));
+    assert!(text.contains("criar e abrir"));
     assert!(frame.cursor.as_ref().is_some_and(|cursor| cursor.visible));
 
     assert!(state
@@ -1493,8 +1493,8 @@ fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("delete anyway"));
-        assert!(text.contains("permanently deleted"));
+        assert!(text.contains("apagar mesmo assim"));
+        assert!(text.contains("serão apagados"));
         let force = state.handle_input_bytes(b"\r");
         let [ClientShellAction::Endpoint { request, .. }] = &force.actions[..] else {
             panic!("forced worktree remove should use endpoint API");

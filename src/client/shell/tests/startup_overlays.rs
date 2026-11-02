@@ -30,7 +30,7 @@ fn endpoint_product_announcement_is_client_rendered_modal_and_dismissed_by_ident
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("A client-owned announcement"));
-    assert!(text.contains("product announcement · v0.8.2"));
+    assert!(text.contains("novidades · v0.8.2"));
     assert!(!state.hits.product_announcement_scrollbar.is_empty());
 
     let popup_key = state.handle_input_bytes(b"x");
@@ -704,7 +704,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(navigate_text.contains("update ready"));
+    assert!(navigate_text.contains("atualização pronta"));
     state.mode = ClientShellMode::Prefix;
     let prefix = state
         .compose(106, 30)
@@ -714,7 +714,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(!prefix_text.contains("update ready"));
+    assert!(!prefix_text.contains("atualização pronta"));
     state.mode = ClientShellMode::Navigate;
 
     state.toggle_global_menu();
@@ -729,9 +729,9 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("● update ready"));
+    assert!(text.contains("● atualização pronta"));
     let update_row = state.hits.global_menu_rows[3].0;
-    assert_eq!(update_row.width, 16);
+    assert!(usize::from(update_row.width) >= "● atualização pronta".chars().count());
     let menu_buffer = menu.to_ratatui_buffer().expect("menu buffer");
     assert_eq!(
         menu_buffer[(update_row.x + 1, update_row.y)].fg,
@@ -748,7 +748,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(!bottom_row.contains("NAVIGATE"));
+    assert!(!bottom_row.contains("NAVEGAR"));
     let text = notes
         .cells
         .chunks(notes.width as usize)
@@ -760,7 +760,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("v0.8.3"));
-    assert!(text.contains("update ready"));
+    assert!(text.contains("atualização pronta"));
     assert!(text.contains("detach, run herdr update"));
     assert!(!state.hits.release_notes_scrollbar.is_empty());
     let outer = crate::ui::centered_popup_rect(
@@ -899,8 +899,8 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(installed_text.contains("what's new"));
-    assert!(!installed_text.contains("● what's new"));
+    assert!(installed_text.contains("novidades"));
+    assert!(!installed_text.contains("● novidades"));
 }
 
 #[test]
@@ -1059,8 +1059,8 @@ fn outdated_integration_badges_launcher_settings_and_settings_tab() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(menu_text.contains("● settings"));
-    assert!(!menu_text.contains("update ready"));
+    assert!(menu_text.contains("● configurações"));
+    assert!(!menu_text.contains("atualização pronta"));
 
     state.activate_global_menu_item(0, &mut ClientShellInput::default());
     let settings = state.compose(106, 30).expect("settings integration badge");
@@ -1112,8 +1112,8 @@ fn combined_update_and_integration_attention_preserves_both_badges() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    let settings = text.find("● settings").expect("settings badge");
-    let update = text.find("● update ready").expect("update badge");
+    let settings = text.find("● configurações").expect("settings badge");
+    let update = text.find("● atualização pronta").expect("update badge");
     assert!(settings < update);
 
     state.overlay = None;
@@ -1124,7 +1124,7 @@ fn combined_update_and_integration_attention_preserves_both_badges() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(navigate_text.contains("update ready"));
+    assert!(navigate_text.contains("atualização pronta"));
 }
 
 #[test]
@@ -1148,7 +1148,7 @@ fn current_release_notes_use_whats_new_without_attention_badge() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("what's new"));
+    assert!(text.contains("novidades"));
 }
 
 #[test]

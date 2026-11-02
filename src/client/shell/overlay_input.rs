@@ -352,7 +352,7 @@ impl ClientShellState {
             .map(crate::workspace::derive_label_from_cwd)
             .unwrap_or_else(|| "workspace".to_owned());
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "new workspace",
+            title: "novo espaço",
             input: TextEditor::new(&suggested_name, true),
             target: ClientRenameTarget::NewWorkspace {
                 source_workspace_id,
@@ -377,7 +377,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename workspace",
+            title: "renomear espaço",
             input: TextEditor::new(&workspace.label, false),
             target: ClientRenameTarget::Workspace { workspace_id },
         }));
@@ -398,7 +398,7 @@ impl ClientShellState {
             + 1)
         .to_string();
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "new tab",
+            title: "nova aba",
             input: TextEditor::new(&default_name, true),
             target: ClientRenameTarget::NewTab {
                 workspace_id,
@@ -418,7 +418,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename tab",
+            title: "renomear aba",
             input: TextEditor::new(&tab.label, false),
             target: ClientRenameTarget::Tab {
                 tab_id: tab.tab_id.clone(),
@@ -439,7 +439,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename pane",
+            title: "renomear painel",
             input: TextEditor::new(
                 pane.label.as_deref().unwrap_or_default(),
                 pane.label.is_none(),
@@ -1215,9 +1215,9 @@ impl ClientShellState {
                 close_group: closes_group,
                 tab_target,
                 title: if closes_group {
-                    "Close worktree group?".to_owned()
+                    "Fechar grupo de cópias?".to_owned()
                 } else {
-                    "Close workspace?".to_owned()
+                    "Fechar espaço?".to_owned()
                 },
                 detail: format!("{} — {scope}", workspace.label),
             },

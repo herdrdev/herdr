@@ -242,7 +242,7 @@ impl ClientShellState {
                     .map(|workspace| workspace.label.clone());
                 if let Some(label) = label {
                     self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "rename workspace",
+                        title: "renomear espaço",
                         input: TextEditor::new(&label, false),
                         target: ClientRenameTarget::Workspace { workspace_id },
                     }));
@@ -311,7 +311,7 @@ impl ClientShellState {
                         + 1)
                     .to_string();
                     self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "new tab",
+                        title: "nova aba",
                         input: TextEditor::new(&default_name, true),
                         target: ClientRenameTarget::NewTab {
                             workspace_id,
@@ -338,7 +338,7 @@ impl ClientShellState {
                     .and_then(|snapshot| snapshot.tabs.iter().find(|tab| tab.tab_id == tab_id));
                 if let Some(tab) = tab {
                     self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                        title: "rename tab",
+                        title: "renomear aba",
                         input: TextEditor::new(&tab.label, false),
                         target: ClientRenameTarget::Tab {
                             tab_id,
@@ -379,7 +379,7 @@ impl ClientShellState {
                         .and_then(|pane| pane.label.clone())
                 });
                 self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-                    title: "rename pane",
+                    title: "renomear painel",
                     input: TextEditor::new(label.as_deref().unwrap_or_default(), label.is_none()),
                     target: ClientRenameTarget::Pane { pane_id },
                 }));
