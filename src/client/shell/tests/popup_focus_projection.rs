@@ -165,7 +165,7 @@ fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("spaces"));
+    assert!(text.contains("espaços"));
     assert!(text.contains("client-shell"));
     assert!(text.contains("main"));
     assert!(text.contains("LIVE"));

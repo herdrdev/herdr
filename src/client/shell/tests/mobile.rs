@@ -98,7 +98,7 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("machines"));
+    assert!(text.contains("máquinas"));
     assert!(text.contains("Build"));
     let machine = state
         .hits
@@ -161,7 +161,7 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("reconnecting"), "frame: {text}");
+    assert!(text.contains("reconectando"), "frame: {text}");
     assert!(text.contains("network lost"), "frame: {text}");
 }
 
@@ -222,9 +222,9 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
     assert!(header_text.contains("client-shell"));
-    assert!(header_text.contains("tab 1"));
-    assert!(header_text.contains("blocked"));
-    assert!(header_text.contains("switch"));
+    assert!(header_text.contains("aba 1"));
+    assert!(header_text.contains("aguardando"));
+    assert!(header_text.contains("alternar"));
     assert_eq!(state.hits.mobile_switch, Rect::new(34, 0, 10, 2));
 
     let click = |rect: Rect| {
@@ -254,13 +254,13 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         "switcher must clear the pane surface"
     );
     for expected in [
-        "switch",
-        "close",
-        "agents",
-        "spaces",
-        "+ new workspace",
-        "tabs",
-        "+ new tab",
+        "alternar",
+        "fechar",
+        "agentes",
+        "espaços",
+        "+ novo espaço",
+        "abas",
+        "+ nova aba",
         "menu",
         "configurações",
         "desconectar",
@@ -403,7 +403,7 @@ fn mobile_background_workspace_uses_its_own_active_tab_status() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("feature · tab two · 2/2"), "{text}");
+    assert!(text.contains("feature · aba two · 2/2"), "{text}");
     assert!(text.contains("2 · logs"), "{text}");
     assert!(!text.contains("7 · logs"), "{text}");
 }

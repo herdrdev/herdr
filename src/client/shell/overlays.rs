@@ -737,9 +737,9 @@ fn render_navigator_overlay(
         format!(
             " / {}",
             match f {
-                ClientNavigatorFilter::Blocked => "blocked",
-                ClientNavigatorFilter::Working => "working",
-                ClientNavigatorFilter::Idle => "idle",
+                ClientNavigatorFilter::Blocked => "aguardando",
+                ClientNavigatorFilter::Working => "trabalhando",
+                ClientNavigatorFilter::Idle => "livre",
                 ClientNavigatorFilter::Done => "pronto",
             }
         )
@@ -757,7 +757,7 @@ fn render_navigator_overlay(
         if terminal_count == 1 {
             "terminal"
         } else {
-            "terminals"
+            "terminais"
         }
     );
     put_text(
@@ -1132,7 +1132,7 @@ fn render_help_overlay(
         i.x,
         i.y,
         i.width,
-        "keybinds",
+        "atalhos",
         Style::default()
             .fg(p.text)
             .bg(p.panel_bg)

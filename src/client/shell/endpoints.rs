@@ -721,11 +721,11 @@ pub(super) fn endpoint_status_presentation(
     palette: &Palette,
 ) -> (&'static str, &'static str, ratatui::style::Color) {
     match status {
-        ClientEndpointStatus::Connecting => ("◐", "connecting", palette.yellow),
+        ClientEndpointStatus::Connecting => ("◐", "conectando", palette.yellow),
         ClientEndpointStatus::Online => ("●", "online", palette.green),
-        ClientEndpointStatus::Reconnecting => ("◐", "reconnecting", palette.yellow),
-        ClientEndpointStatus::Attention => ("!", "attention", palette.red),
-        ClientEndpointStatus::Disabled => ("·", "disabled", palette.overlay0),
+        ClientEndpointStatus::Reconnecting => ("◐", "reconectando", palette.yellow),
+        ClientEndpointStatus::Attention => ("!", "atenção", palette.red),
+        ClientEndpointStatus::Disabled => ("·", "desativado", palette.overlay0),
     }
 }
 

@@ -7,25 +7,28 @@ impl ClientContextMenuOverlay {
         let item = |label, action| ClientContextMenuItem { label, action };
         match &self.target {
             ClientContextMenuTarget::Workspace { is_git: false, .. } => {
-                vec![item("Rename", Action::Rename), item("Close", Action::Close)]
+                vec![
+                    item("Renomear", Action::Rename),
+                    item("Fechar", Action::Close),
+                ]
             }
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: false,
                 has_worktree_children: false,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
+                item("Renomear", Action::Rename),
+                item("Fechar", Action::Close),
+                item("Nova cópia de trabalho", Action::NewWorktree),
+                item("Abrir cópia de trabalho...", Action::OpenWorktree),
             ],
             ClientContextMenuTarget::Workspace {
                 is_linked_worktree: true,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
-                item("Delete worktree checkout...", Action::RemoveWorktree),
+                item("Renomear", Action::Rename),
+                item("Fechar", Action::Close),
+                item("Apagar cópia de trabalho...", Action::RemoveWorktree),
             ],
             ClientContextMenuTarget::Workspace {
                 has_worktree_children: true,
@@ -33,22 +36,26 @@ impl ClientContextMenuOverlay {
                 collapsed,
                 ..
             } => vec![
-                item("Rename", Action::Rename),
+                item("Renomear", Action::Rename),
                 item(
-                    if *close_group { "Close group" } else { "Close" },
+                    if *close_group {
+                        "Fechar grupo"
+                    } else {
+                        "Fechar"
+                    },
                     Action::Close,
                 ),
-                item("New worktree", Action::NewWorktree),
-                item("Open worktree...", Action::OpenWorktree),
+                item("Nova cópia de trabalho", Action::NewWorktree),
+                item("Abrir cópia de trabalho...", Action::OpenWorktree),
                 item(
-                    if *collapsed { "Expand" } else { "Collapse" },
+                    if *collapsed { "Expandir" } else { "Recolher" },
                     Action::ToggleGroup,
                 ),
             ],
             ClientContextMenuTarget::Tab { .. } => vec![
-                item("New tab", Action::NewTab),
-                item("Rename", Action::Rename),
-                item("Close", Action::Close),
+                item("Nova aba", Action::NewTab),
+                item("Renomear", Action::Rename),
+                item("Fechar", Action::Close),
             ],
             ClientContextMenuTarget::Pane {
                 source_pane_id,
@@ -56,26 +63,26 @@ impl ClientContextMenuOverlay {
                 right_click_passthrough,
                 ..
             } => {
-                let mut items = vec![item("Rename pane", Action::RenamePane)];
+                let mut items = vec![item("Renomear painel", Action::RenamePane)];
                 if *has_manual_label {
-                    items.push(item("Clear pane name", Action::ClearPaneName));
+                    items.push(item("Limpar nome do painel", Action::ClearPaneName));
                 }
                 if source_pane_id.is_some() {
-                    items.push(item("Swap with focused pane", Action::SwapWithFocusedPane));
+                    items.push(item("Trocar com painel ativo", Action::SwapWithFocusedPane));
                 }
                 items.extend([
-                    item("Split right", Action::SplitRight),
-                    item("Split down", Action::SplitDown),
+                    item("Dividir à direita", Action::SplitRight),
+                    item("Dividir abaixo", Action::SplitDown),
                     item("Zoom", Action::Zoom),
                     item(
                         if *right_click_passthrough {
-                            "Use Herdr right-click menu"
+                            "Usar menu do Pretorian"
                         } else {
-                            "Send right-clicks to pane"
+                            "Enviar clique direito ao painel"
                         },
                         Action::ToggleRightClickPassthrough,
                     ),
-                    item("Close pane", Action::ClosePane),
+                    item("Fechar painel", Action::ClosePane),
                 ]);
                 items
             }

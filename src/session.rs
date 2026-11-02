@@ -168,8 +168,19 @@ pub fn data_dir_for(name: Option<&str>) -> PathBuf {
     }
 }
 
+fn socket_dir_with_override(name: Option<&str>, root: Option<std::ffi::OsString>) -> PathBuf {
+    match root {
+        Some(dir) => PathBuf::from(dir).join(name.unwrap_or("default")),
+        None => data_dir_for(name),
+    }
+}
+
+fn socket_dir_for(name: Option<&str>) -> PathBuf {
+    socket_dir_with_override(name, std::env::var_os("PRETORIAN_HERDR_SOCKET_DIR"))
+}
+
 pub fn api_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr.sock")
+    socket_dir_for(name).join("herdr.sock")
 }
 
 pub fn active_api_socket_path() -> PathBuf {
@@ -183,7 +194,7 @@ pub fn active_api_socket_path() -> PathBuf {
 }
 
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr-client.sock")
+    socket_dir_for(name).join("herdr-client.sock")
 }
 
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
@@ -502,6 +513,18 @@ fn normalize_name(name: &str) -> Result<Option<String>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pretorian_sockets_use_private_short_root_per_session() {
+        let root = Some(std::ffi::OsString::from("/tmp/pretorianteste"));
+        let codex = super::socket_dir_with_override(Some("pretorian-codex"), root.clone());
+        let claude = super::socket_dir_with_override(Some("pretorian-claude"), root);
+        assert_eq!(
+            codex,
+            std::path::PathBuf::from("/tmp/pretorianteste/pretorian-codex")
+        );
+        assert_ne!(codex, claude);
+    }
+
     use super::*;
     #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
