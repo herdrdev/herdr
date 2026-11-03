@@ -17,6 +17,31 @@ fn remote_profile() -> SavedSshEndpoint {
     }
 }
 
+#[test]
+fn filtered_combined_sidebar_shows_empty_message_in_portuguese() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_endpoint_catalog(&[remote_profile()]);
+    let mut projected = snapshot();
+    projected.agent_view_label = Some("Equipe".into());
+    projected.agents.clear();
+    projected.agent_order.clear();
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("barra de agentes");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Equipe"), "{text}");
+    assert!(text.contains("nenhum agente encontrado"), "{text}");
+}
+
 fn agent(
     name: &str,
     status: crate::api::schema::AgentStatus,

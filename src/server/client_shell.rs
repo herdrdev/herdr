@@ -181,7 +181,7 @@ pub(super) fn snapshot_with_completions(
         .state
         .agent_view_override
         .as_ref()
-        .map(|view| view.label.clone().unwrap_or_else(|| "filtered".to_owned()));
+        .map(|view| view.label.clone().unwrap_or_else(|| "filtrados".to_owned()));
     let agent_order = crate::ui::agent_panel_entries_from(&app.state, &app.terminal_runtimes)
         .into_iter()
         .filter_map(|entry| app.public_pane_id(entry.ws_idx, entry.pane_id))
@@ -628,6 +628,37 @@ fn split_hit_rect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_view_projection_preserves_custom_label_and_localizes_default() {
+        let (_api_tx, api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = crate::app::App::new(
+            &crate::config::Config::default(),
+            crate::app::AppPolicy::TEST,
+            None,
+            api_rx,
+            crate::api::EventHub::default(),
+        );
+        app.state.agent_view_override = Some(crate::api::schema::AgentViewSetParams {
+            source: "teste".into(),
+            label: None,
+            filter: None,
+            sort: Vec::new(),
+        });
+        assert_eq!(
+            snapshot(&app, "boot", 1, None, None)
+                .agent_view_label
+                .as_deref(),
+            Some("filtrados")
+        );
+        app.state.agent_view_override.as_mut().unwrap().label = Some("Equipe 😀".into());
+        assert_eq!(
+            snapshot(&app, "boot", 2, None, None)
+                .agent_view_label
+                .as_deref(),
+            Some("Equipe 😀")
+        );
+    }
 
     #[tokio::test(flavor = "current_thread")]
     async fn snapshot_metadata_skips_scroll_reads_and_preserves_public_session_data() {
