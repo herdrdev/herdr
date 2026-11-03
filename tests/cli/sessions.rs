@@ -150,7 +150,7 @@ fn named_sessions_use_separate_servers_and_workspace_state() {
     );
     assert_eq!(delete_default.status.code(), Some(1));
     assert!(
-        String::from_utf8_lossy(&delete_default.stderr).contains("default session"),
+        String::from_utf8_lossy(&delete_default.stderr).contains("sessão padrão"),
         "stderr: {}",
         String::from_utf8_lossy(&delete_default.stderr)
     );

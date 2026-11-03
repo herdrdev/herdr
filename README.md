@@ -62,7 +62,7 @@ pretorian
 
 `just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
 
-Windows x64 (PowerShell, com Zig e rustup instalados):
+Windows x64 (PowerShell, com rustup, Zig e Python 3 instalados; o script baixa o ConPTY da Microsoft):
 
 ```powershell
 git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
