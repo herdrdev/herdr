@@ -379,6 +379,12 @@ impl App {
             return None;
         }
         let pane = self.pane_metadata(ws_idx, pane_id)?;
+        let shepherd = crate::shepherd::shepherd_agent_info_for_pane(
+            self.shepherd_enabled,
+            self.shepherd_service.as_ref(),
+            &self.state.shepherd_agents_panel.entries,
+            &pane.pane_id,
+        );
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
@@ -403,6 +409,7 @@ impl App {
             cwd: pane.cwd,
             foreground_cwd: pane.foreground_cwd,
             revision: pane.revision,
+            shepherd,
         })
     }
 

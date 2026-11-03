@@ -295,3 +295,80 @@ El informe del agente no lo dice: las vistas de F3 son **estado puro + render pu
 ### Corrección del revisor (F3b)
 
 Revisado tras el agente: el overlay Tareas/Runs/Skills, `AppState`, la sincronización por tick y el despacho con guardas están cableados y probados con despachador falso. **Pero** los estados de Shepherd en la barra lateral (`[working]`, `[idle]`…) se leen de tokens `shepherd_state`/`notice`/`needs_you` que **nadie rellena** (solo se consumen en `agent_sidebar.rs`), así que hoy ese marcador no se ve; `[NEEDS YOU]` sí aparece, pero porque se dispara con cualquier agente `Blocked` de herdr, sea de Shepherd o no. Pendiente F3c: que el servicio publique el estado/aviso por pane y que el marcador solo salga para agentes de Shepherd. Nada de esto se ha probado contra un herdr real.
+
+## Estado F3c
+
+### Lo hecho
+
+1. **Origen de los datos tipado y retrocompatible**:
+   - Definido `AgentShepherdInfo { id, role, state, notice }` en `src/api/schema/agents.rs`.
+   - Añadido campo opcional y retrocompatible `shepherd: Option<AgentShepherdInfo>` a `AgentInfo` en el esquema de API.
+   - Sincronizado `docs/next/api/herdr-api.schema.json` mediante el test de contrato de protocolo (`HERDR_UPDATE_API_SCHEMA=1`).
+   - Añadido campo opcional `shepherd: Option<AgentShepherdInfo>` en `ClientShellAgent` (`src/protocol/wire.rs`) con `#[serde(default, skip_serializing_if = "Option::is_none")]` preservando la compatibilidad binaria y decodificación de fixtures históricos generación 1 (`frozen_generation_one_snapshot_decodes`).
+
+2. **Resolución en memoria sin I/O en render (`shepherd_agent_info_for_pane`)**:
+   - Implementado en `src/shepherd/mod.rs` `shepherd_agent_info_for_pane`, que consulta el registro en caché del runtime (`svc.cached_registry()`) y `state.shepherd_agents_panel.entries`.
+   - Cero I/O a disco durante el cálculo de vista o renderizado.
+   - Enganche mínimo en `src/app/agents.rs` (`App::agent_info`) para asociar la información de Shepherd al `AgentInfo` del pane.
+   - Mapeo en `src/server/client_shell.rs` (`snapshot_with_completions`) de `agent.shepherd` a `ClientShellAgent`.
+
+3. **Marcador exclusivo para agentes de Shepherd y eliminación de heurísticas**:
+   - En `src/client/shell/agent_sidebar.rs`, se eliminó totalmente la lectura de tokens ficticios (`shepherd_state`, `role`, `needs_you`, `shepherd_needs_you`, `notice`, `shepherd_notice`).
+   - `shepherd_state` y `notice` se obtienen exclusivamente de `agent.shepherd`.
+   - `needs_you` es verdadero **únicamente** cuando el agente pertenece a Shepherd y su estado de Shepherd es `"blocked"`. El estado incidental `AgentStatus::Blocked` de Herdr upstream ya no dispara `[NEEDS YOU]`.
+   - Para agentes normales de Herdr (sin `shepherd`), la fila se dibuja de forma **exactamente idéntica a upstream** (test de caracterización comprobado celda a celda).
+   - Con `shepherd.enabled = false`, no se dibuja ningún marcador ni aviso.
+
+4. **Visualización completa de avisos (`notice`)**:
+   - `agent_row_line_count` asigna una línea adicional a la fila en la barra lateral cuando `shepherd.enabled` está activo y el agente tiene aviso (`notice`).
+   - En `render_agent_row`, si hay altura disponible (`rect.height > rows.len()`), el aviso se renderiza en una sublínea propia con indentación e indicador `↳` en amarillo, evitando truncamiento lateral.
+   - Si el espacio vertical está restringido a 1 línea, el aviso se incluye inline entre paréntesis en la primera línea.
+   - Protección total ante anchos o alturas diminutas (0x0, 1x0, 0x1, 1x1, 5x1, 5x2) sin provocar pánico.
+
+5. **Tests automatizados en verde**:
+   - `shepherd::tests::test_shepherd_agent_info_for_pane_resolution`: resolución de agente por `pane_id` con servicio o panel, y rechazo cuando shepherd está deshabilitado.
+   - `client::shell::agent_sidebar::tests::test_shepherd_agent_in_each_state`: render de los 8 estados (`starting`, `working`, `idle`, `blocked` -> `[NEEDS YOU]`, `done`, `exited`, `killed`, `failed`).
+   - `client::shell::agent_sidebar::tests::test_shepherd_agent_blocked_with_notice`: render completo del aviso tanto en sublínea dedicada como inline.
+   - `client::shell::agent_sidebar::tests::test_non_shepherd_agent_blocked_without_marker`: agente ajeno bloqueado sin `[NEEDS YOU]` ni marcadores de Shepherd.
+   - `client::shell::agent_sidebar::tests::test_characterization_normal_herdr_agent_renders_identically`: caracterización idéntica para agentes ajenos con `shepherd.enabled` apagado y encendido.
+   - `client::shell::agent_sidebar::tests::test_shepherd_enabled_false_no_markers`: conmutación global de shepherd desactiva marcadores.
+   - `client::shell::agent_sidebar::tests::test_small_dimensions_without_panic`: dimensiones cero y reducidas sin pánicos.
+
+### Lo no verificado
+
+- No se ejecutó el binario contra la sesión real del usuario, sockets de producción ni rutas reales (`~/.local/state/shepherd`, `~/.config/herdr*`), respetando estrictamente las directivas de seguridad.
+- El test intermitente conocido upstream `app::api::plugins::tests::manifest_action_invoke_injects_plugin_paths` pasa en solitario.
+
+### Qué NO queda conectado (explícito)
+
+1. **Notificación reactiva push al sidebar ante escrituras externas directas en `agents.json`**:
+   - Si un script externo edita directamente el archivo `agents.json` en disco saltándose el servicio o socket de Herdr, la barra lateral no se refresca inmediatamente por push de inotify/filesystem; espera a la siguiente sincronización en memoria / tick del servidor.
+2. **Filtros específicos de Shepherd en el comando CLI `herdr agent list`**:
+   - `herdr agent list` incluye el campo `shepherd` en la salida JSON de cada agente, pero no se añadieron flags específicos como `--shepherd-only` al CLI de Herdr (previsto para la fase de CLI F4).
+3. **Interactividad del ratón sobre la sublínea de aviso**:
+   - Hacer clic en la sublínea de aviso `↳ <aviso>` enfoca el pane del agente correspondiente (reutilizando el hit rect del agente), pero no despliega un diálogo contextual interactivo exclusivo para el aviso.
+
+### Archivos de herdr modificados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `docs/next/api/herdr-api.schema.json` | Modificación | Definición formal de `AgentShepherdInfo` y propiedad opcional `shepherd` en `AgentInfo`. |
+| `src/api/schema/agents.rs` | Modificación | `AgentShepherdInfo` y campo `shepherd: Option<AgentShepherdInfo>` en `AgentInfo`. |
+| `src/protocol/wire.rs` | Modificación | Campo `shepherd: Option<AgentShepherdInfo>` en `ClientShellAgent` con `#[serde(default, skip_serializing_if = "Option::is_none")]`. |
+| `src/shepherd/mod.rs` | Modificación | Función `shepherd_agent_info_for_pane` (resolución en memoria sin I/O en render) y test unitario de resolución. |
+| `src/app/agents.rs` | Modificación | 7 líneas de enganche en `App::agent_info` para adjuntar `shepherd` a `AgentInfo` vía `crate::shepherd::shepherd_agent_info_for_pane`. |
+| `src/server/client_shell.rs` | Modificación | Paso de `shepherd: agent.shepherd` en `snapshot_with_completions`. |
+| `src/client/shell/agent_sidebar.rs` | Modificación | Eliminación de tokens heurísticos en `agent_row`, cálculo de líneas con aviso (`agent_row_line_count`), renderizado puro de `[estado]`, `[NEEDS YOU]` y aviso completo (`render_agent_row`), y suite completa de tests de render puro. |
+| `src/client/shell/endpoint_agents.rs` | Modificación | Uso de `agent_row_line_count` para asignar altura a filas agregadas con aviso. |
+| `src/client/shell/endpoint_agent_state.rs` | Modificación (test) | `shepherd: None` en helper de test. |
+| `src/client/shell/notifications.rs` | Modificación (test) | `shepherd: None` en 2 tests. |
+| `src/client/shell/tests/agents_worktrees_notifications.rs` | Modificación (test) | `shepherd: None` en fixtures de test. |
+| `src/client/shell/tests/copy.rs` | Modificación (test) | `shepherd: None` en fixture de test. |
+| `src/client/shell/tests/endpoints.rs` | Modificación (test) | `shepherd: None` en helper `agent(...)` de test. |
+| `src/client/shell/tests/mobile.rs` | Modificación (test) | `shepherd: None` en fixture de test. |
+| `src/client/shell/tests/popup_focus_projection.rs` | Modificación (test) | `shepherd: None` en fixture de test. |
+
+
+### Nota del revisor (F3c)
+
+Verificado por áreas (la suite completa de herdr no se puede cerrar en este entorno: el binario de tests muere por SIGPIPE en tests ajenos, ya antes de F3c): `client::shell` 388, `shepherd::` 42, `protocol::` 156, `api::` 318, `server::` 318, `shepherd-core` 63, todo en verde. Intermitentes que fallan solo en paralelo y pasan en solitario: `plugins::*injects_plugin_paths*`, `config::io::tests::config_diagnostic_summary_uses_compact_actionable_banner`. Nunca probado contra un herdr real.

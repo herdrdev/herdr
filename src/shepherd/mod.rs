@@ -189,6 +189,52 @@ pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
     }
 }
 
+/// Resolve Shepherd agent information for a given pane ID without any disk I/O.
+/// Prioritizes the running `ShepherdRuntimeService`'s cached registry, falling back
+/// to `panel_entries` (for in-memory tests).
+pub(crate) fn shepherd_agent_info_for_pane(
+    shepherd_enabled: bool,
+    service: Option<&ShepherdRuntimeService>,
+    panel_entries: &[panel::ShepherdAgentRow],
+    pane_id: &str,
+) -> Option<crate::api::schema::AgentShepherdInfo> {
+    if !shepherd_enabled {
+        return None;
+    }
+    if let Some(svc) = service {
+        let registry = svc.cached_registry();
+        for agent in &registry.agents {
+            if agent.pane == pane_id {
+                return Some(crate::api::schema::AgentShepherdInfo {
+                    id: agent.id.clone(),
+                    role: agent.role.clone(),
+                    state: agent.state.clone(),
+                    notice: if agent.notice.trim().is_empty() {
+                        None
+                    } else {
+                        Some(agent.notice.trim().to_string())
+                    },
+                });
+            }
+        }
+    }
+    for entry in panel_entries {
+        if entry.pane == pane_id {
+            return Some(crate::api::schema::AgentShepherdInfo {
+                id: entry.id.clone(),
+                role: entry.role.clone(),
+                state: entry.state.clone(),
+                notice: if entry.notice.trim().is_empty() {
+                    None
+                } else {
+                    Some(entry.notice.trim().to_string())
+                },
+            });
+        }
+    }
+    None
+}
+
 fn register_default_in_process_factory() {
     shepherd_core::terminals::set_in_process_terminals_factory(Some(Arc::new(|config| {
         let active_session = crate::session::active_name();
@@ -715,5 +761,55 @@ mod tests {
         assert!(resp_json2["result"]["data"].is_array());
 
         app.stop_shepherd_service();
+    }
+
+    #[test]
+    fn test_shepherd_agent_info_for_pane_resolution() {
+        use super::panel::ShepherdAgentRow;
+
+        let entries = vec![
+            ShepherdAgentRow {
+                id: "coder-1".into(),
+                role: "coder".into(),
+                vendor: "anthropic".into(),
+                model: "claude-3-5-sonnet".into(),
+                state: "working".into(),
+                needs_you: false,
+                notice: "".into(),
+                pane: "pane-1".into(),
+                task_text: "implement something".into(),
+            },
+            ShepherdAgentRow {
+                id: "coder-2".into(),
+                role: "coder".into(),
+                vendor: "openai".into(),
+                model: "gpt-4o".into(),
+                state: "blocked".into(),
+                needs_you: true,
+                notice: "waiting for human".into(),
+                pane: "pane-2".into(),
+                task_text: "reviewing".into(),
+            },
+        ];
+
+        // 1. When shepherd is disabled, returns None
+        assert!(super::shepherd_agent_info_for_pane(false, None, &entries, "pane-1").is_none());
+
+        // 2. When shepherd is enabled and pane matches, returns AgentShepherdInfo
+        let info1 = super::shepherd_agent_info_for_pane(true, None, &entries, "pane-1")
+            .expect("should find pane-1");
+        assert_eq!(info1.id, "coder-1");
+        assert_eq!(info1.role, "coder");
+        assert_eq!(info1.state, "working");
+        assert_eq!(info1.notice, None);
+
+        let info2 = super::shepherd_agent_info_for_pane(true, None, &entries, "pane-2")
+            .expect("should find pane-2");
+        assert_eq!(info2.id, "coder-2");
+        assert_eq!(info2.state, "blocked");
+        assert_eq!(info2.notice.as_deref(), Some("waiting for human"));
+
+        // 3. When pane doesn't match, returns None
+        assert!(super::shepherd_agent_info_for_pane(true, None, &entries, "pane-999").is_none());
     }
 }

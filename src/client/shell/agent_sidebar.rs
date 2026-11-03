@@ -82,12 +82,20 @@ pub(super) fn render_agent_panel(
         config,
         agent_scroll,
         hits,
-        |row| row.rows.len(),
+        |row| agent_row_line_count(row, config),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
             render_agent_row(buffer, rect, row, config);
         },
     );
+}
+
+pub(super) fn agent_row_line_count(row: &AgentRow, config: &ClientShellConfig) -> usize {
+    let mut count = row.rows.len().max(1);
+    if config.shepherd_enabled && row.notice.is_some() {
+        count += 1;
+    }
+    count
 }
 
 pub(super) fn render_agent_panel_header(
@@ -313,23 +321,16 @@ pub(super) fn agent_row(
         },
         state_text,
     );
-    let shepherd_state = tokens
-        .get("shepherd_state")
-        .cloned()
-        .or_else(|| tokens.get("role").cloned());
-    let needs_you = tokens
-        .get("needs_you")
-        .map(|v| v == "true" || v == "1")
-        .unwrap_or(false)
-        || tokens
-            .get("shepherd_needs_you")
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false)
-        || agent.agent_status == crate::api::schema::AgentStatus::Blocked;
-    let notice = tokens
-        .get("notice")
-        .cloned()
-        .or_else(|| tokens.get("shepherd_notice").cloned());
+    let (shepherd_state, needs_you, notice) = if let Some(ref shep) = agent.shepherd {
+        let is_blocked = shep.state == "blocked";
+        (
+            Some(shep.state.clone()),
+            is_blocked,
+            shep.notice.clone(),
+        )
+    } else {
+        (None, false, None)
+    };
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
@@ -347,6 +348,9 @@ pub(super) fn render_agent_row(
     row: &AgentRow,
     config: &ClientShellConfig,
 ) {
+    if rect.width == 0 || rect.height == 0 {
+        return;
+    }
     let palette = &config.palette;
     let row_style = if row.focused {
         Style::default().bg(palette.active_row_bg)
@@ -401,17 +405,35 @@ pub(super) fn render_agent_row(
                     status_style.add_modifier(Modifier::DIM),
                 ));
             }
-            if let Some(ref notice) = row.notice {
-                spans.push(ratatui::text::Span::styled(
-                    format!(" ({notice})"),
-                    Style::default().fg(palette.yellow),
-                ));
+            if rect.height <= rows.len() as u16 {
+                if let Some(ref notice) = row.notice {
+                    spans.push(ratatui::text::Span::styled(
+                        format!(" ({notice})"),
+                        Style::default().fg(palette.yellow),
+                    ));
+                }
             }
         }
         Paragraph::new(Line::from(spans)).style(row_style).render(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,
         );
+    }
+    if config.shepherd_enabled && rect.height > rows.len() as u16 {
+        if let Some(ref notice) = row.notice {
+            let notice_y = rect.y + rows.len() as u16;
+            let spans = vec![
+                ratatui::text::Span::raw("   ↳ "),
+                ratatui::text::Span::styled(
+                    notice.as_str(),
+                    Style::default().fg(palette.yellow),
+                ),
+            ];
+            Paragraph::new(Line::from(spans)).style(row_style).render(
+                Rect::new(rect.x, notice_y, rect.width, 1),
+                buffer,
+            );
+        }
     }
 }
 
@@ -434,5 +456,223 @@ fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str 
         AgentStatus::Done => "done",
         AgentStatus::Working => "working",
         AgentStatus::Idle | AgentStatus::Unknown => "idle",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use crate::config::Config;
+
+    fn test_config(shepherd_enabled: bool) -> ClientShellConfig {
+        let mut config = ClientShellConfig::from_config(&Config::default());
+        config.shepherd_enabled = shepherd_enabled;
+        config
+    }
+
+    fn test_snapshot_with_agent(
+        shepherd: Option<crate::api::schema::AgentShepherdInfo>,
+        agent_status: crate::api::schema::AgentStatus,
+    ) -> ClientShellSnapshot {
+        let mut snapshot = crate::client::shell::tests::snapshot();
+        snapshot.workspaces[0].label = "main".into();
+        snapshot.tabs[0].label = "tab1".into();
+        snapshot.agents = vec![crate::protocol::ClientShellAgent {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: Some("coder-1".into()),
+            display_agent: Some("coder".into()),
+            agent: Some("coder".into()),
+            title: Some("my task".into()),
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status,
+            state_change_seq: 1,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: false,
+            shepherd,
+        }];
+        snapshot
+    }
+
+    fn buffer_text(buffer: &Buffer, area: Rect) -> String {
+        buffer
+            .content
+            .chunks(usize::from(area.width))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn test_shepherd_agent_in_each_state() {
+        let states = [
+            ("starting", "[starting]"),
+            ("working", "[working]"),
+            ("idle", "[idle]"),
+            ("blocked", "[NEEDS YOU]"),
+            ("done", "[done]"),
+            ("exited", "[exited]"),
+            ("killed", "[killed]"),
+            ("failed", "[failed]"),
+        ];
+
+        let config = test_config(true);
+
+        for (state, expected_marker) in states {
+            let shepherd_info = crate::api::schema::AgentShepherdInfo {
+                id: "coder-1".into(),
+                role: "coder".into(),
+                state: state.into(),
+                notice: None,
+            };
+            let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Working);
+            let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+            let area = Rect::new(0, 0, 80, 1);
+            let mut buffer = Buffer::empty(area);
+            render_agent_row(&mut buffer, area, &row, &config);
+
+            let text = buffer_text(&buffer, area);
+            assert!(
+                text.contains(expected_marker),
+                "Expected state '{state}' to render marker '{expected_marker}', got text: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_shepherd_agent_blocked_with_notice() {
+        let config = test_config(true);
+        let notice_text = "waiting for human: trust dialog; open tab";
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "blocked".into(),
+            notice: Some(notice_text.into()),
+        };
+        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        // Check row line count calculation
+        let total_lines = agent_row_line_count(&row, &config);
+        assert_eq!(total_lines, row.rows.len() + 1);
+
+        // 1. Extra line available when total_lines allocated (dedicated extra line for notice)
+        let area_extra = Rect::new(0, 0, 80, total_lines as u16);
+        let mut buffer_extra = Buffer::empty(area_extra);
+        render_agent_row(&mut buffer_extra, area_extra, &row, &config);
+        let text_extra = buffer_text(&buffer_extra, area_extra);
+
+        assert!(text_extra.contains("[NEEDS YOU]"), "Line 0 should show [NEEDS YOU]");
+        assert!(text_extra.contains(notice_text), "Extra line should show full notice text");
+        assert!(text_extra.contains("↳"), "Extra line should show subline indicator");
+
+        // 2. Constrained height (inline notice on line 0)
+        let area_inline = Rect::new(0, 0, 80, 1);
+        let mut buffer_inline = Buffer::empty(area_inline);
+        render_agent_row(&mut buffer_inline, area_inline, &row, &config);
+        let text_inline = buffer_text(&buffer_inline, area_inline);
+
+        assert!(text_inline.contains("[NEEDS YOU]"), "Constrained height should show [NEEDS YOU]");
+        assert!(text_inline.contains(notice_text), "Constrained height should contain notice text");
+    }
+
+    #[test]
+    fn test_non_shepherd_agent_blocked_without_marker() {
+        let config = test_config(true);
+        // An external/normal agent detected as Blocked by Herdr, but NOT a Shepherd agent (shepherd: None)
+        let snapshot = test_snapshot_with_agent(None, crate::api::schema::AgentStatus::Blocked);
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        assert!(!row.needs_you, "Non-shepherd agent must never have needs_you true");
+        assert_eq!(row.shepherd_state, None, "Non-shepherd agent must have shepherd_state None");
+
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buffer = Buffer::empty(area);
+        render_agent_row(&mut buffer, area, &row, &config);
+        let text = buffer_text(&buffer, area);
+
+        assert!(!text.contains("[NEEDS YOU]"), "Non-shepherd agent must NOT display [NEEDS YOU]");
+        assert!(!text.contains("[blocked]"), "Non-shepherd agent must NOT display [blocked]");
+    }
+
+    #[test]
+    fn test_characterization_normal_herdr_agent_renders_identically() {
+        let config_disabled = test_config(false);
+        let config_enabled = test_config(true);
+
+        let snapshot = test_snapshot_with_agent(None, crate::api::schema::AgentStatus::Working);
+        let row_disabled = agent_row(&snapshot, "pane_1", &config_disabled, None).unwrap();
+        let row_enabled = agent_row(&snapshot, "pane_1", &config_enabled, None).unwrap();
+
+        let area = Rect::new(0, 0, 80, 1);
+        let mut buf_disabled = Buffer::empty(area);
+        render_agent_row(&mut buf_disabled, area, &row_disabled, &config_disabled);
+
+        let mut buf_enabled = Buffer::empty(area);
+        render_agent_row(&mut buf_enabled, area, &row_enabled, &config_enabled);
+
+        assert_eq!(
+            buf_disabled.content, buf_enabled.content,
+            "Normal Herdr agent must render 100% identically with shepherd_enabled true or false"
+        );
+    }
+
+    #[test]
+    fn test_shepherd_enabled_false_no_markers() {
+        let config = test_config(false);
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "blocked".into(),
+            notice: Some("urgent attention needed".into()),
+        };
+        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        let area = Rect::new(0, 0, 80, 2);
+        let mut buffer = Buffer::empty(area);
+        render_agent_row(&mut buffer, area, &row, &config);
+        let text = buffer_text(&buffer, area);
+
+        assert!(!text.contains("[NEEDS YOU]"), "When shepherd is disabled, must not show [NEEDS YOU]");
+        assert!(!text.contains("[blocked]"), "When shepherd is disabled, must not show [blocked]");
+        assert!(!text.contains("urgent attention needed"), "When shepherd is disabled, must not show notice");
+    }
+
+    #[test]
+    fn test_small_dimensions_without_panic() {
+        let config = test_config(true);
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "blocked".into(),
+            notice: Some("notice".into()),
+        };
+        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let row = agent_row(&snapshot, "pane_1", &config, None).unwrap();
+
+        let test_dimensions = [
+            (0, 0),
+            (1, 0),
+            (0, 1),
+            (1, 1),
+            (2, 1),
+            (5, 1),
+            (5, 2),
+            (10, 1),
+            (10, 2),
+        ];
+
+        for (w, h) in test_dimensions {
+            let area = Rect::new(0, 0, w, h);
+            let mut buffer = Buffer::empty(area);
+            render_agent_row(&mut buffer, area, &row, &config);
+        }
     }
 }

@@ -6644,6 +6644,16 @@
             "screen_detection_skipped": {
               "type": "boolean"
             },
+            "shepherd": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/success_response/$defs/AgentShepherdInfo"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "state_change_seq": {
               "default": 0,
               "format": "uint64",
@@ -6795,6 +6805,31 @@
             "path"
           ],
           "type": "string"
+        },
+        "AgentShepherdInfo": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "notice": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "role": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "state"
+          ],
+          "type": "object"
         },
         "AgentStatus": {
           "enum": [

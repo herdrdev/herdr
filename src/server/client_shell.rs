@@ -173,6 +173,7 @@ pub(super) fn snapshot_with_completions(
                 state_labels,
                 tokens,
                 focused,
+                shepherd: agent.shepherd,
             }
         })
         .collect();
