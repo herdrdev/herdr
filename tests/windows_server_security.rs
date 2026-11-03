@@ -101,9 +101,9 @@ fn server_integrity_requires_startup_consent_on_both_endpoints() {
         directory,
     };
     let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     let session_dir = server
         .directory

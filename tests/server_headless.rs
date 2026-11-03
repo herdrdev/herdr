@@ -104,11 +104,11 @@ fn spawn_server(
     api_socket_path: &Path,
     _client_socket_path: &Path,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("pretorian/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -540,9 +540,9 @@ fn no_hello_client_closed_within_five_seconds() {
 
 fn server_log_path(config_home: &Path) -> PathBuf {
     let app_dir_name = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     config_home.join(app_dir_name).join("herdr-server.log")
 }

@@ -69,9 +69,9 @@ fn server_restores_while_git_metadata_is_blocked() {
         let runtime_dir = base.join("runtime");
         let socket_path = runtime_dir.join("herdr.sock");
         let data_dir = config_home.join(if cfg!(debug_assertions) {
-            "herdr-dev"
+            "pretorian-dev"
         } else {
-            "herdr"
+            "pretorian"
         });
         let repo = base.join("repo");
         fs::create_dir_all(repo.join(".git/objects")).unwrap();

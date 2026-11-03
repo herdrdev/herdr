@@ -20,11 +20,12 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "worktrees",
 ];
 
+/// Diretório próprio do fork: um Herdr pessoal em `~/.config/herdr` fica intocado.
 pub fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     }
 }
 
@@ -783,6 +784,15 @@ fn upsert_section_raw(content: &str, section: &str, key: &str, value: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nome_do_diretorio_e_pretorian() {
+        assert!(app_dir_name().starts_with("pretorian"));
+        assert!(
+            config_dir().ends_with(app_dir_name())
+                || std::env::var_os("PRETORIAN_HERDR_CONFIG_DIR").is_some()
+        );
+    }
 
     #[test]
     fn pretorian_directory_takes_precedence_without_changing_xdg() {
