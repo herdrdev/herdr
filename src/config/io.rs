@@ -12,6 +12,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "remote",
     "server",
     "session",
+    "shepherd",
     "terminal",
     "theme",
     "ui",
@@ -374,6 +375,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.remote = section,
+    );
+    load_live_section(
+        table,
+        "shepherd",
+        "shepherd config",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.shepherd = section,
     );
 
     diagnostics.extend(config.theme.diagnostics());

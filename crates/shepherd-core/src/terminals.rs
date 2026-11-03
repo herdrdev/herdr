@@ -119,6 +119,9 @@ pub trait Terminals: Send + Sync {
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError>;
     fn close(&self, target: &str) -> Result<(), TerminalError>;
     fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError>;
+    fn focus(&self, target: &str) -> Result<(), TerminalError> {
+        self.attach(Some(target), false)
+    }
 }
 
 /// Select the terminal backend from `SHEPHERD_TERMINALS` (highest priority) or `config.herdr.backend` (default `"socket"`).
@@ -317,6 +320,10 @@ impl Terminals for HerdrInProcess {
         }
         herdr_attach_process(&self.session, target, takeover)
     }
+
+    fn focus(&self, target: &str) -> Result<(), TerminalError> {
+        herdr_focus(&self.client, target)
+    }
 }
 
 impl Terminals for HerdrSocket {
@@ -362,6 +369,21 @@ impl Terminals for HerdrSocket {
     fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError> {
         herdr_attach_process(&self.session, target, takeover)
     }
+
+    fn focus(&self, target: &str) -> Result<(), TerminalError> {
+        herdr_focus(&self.client, target)
+    }
+}
+
+fn herdr_focus(client: &HerdrClient, target: &str) -> Result<(), TerminalError> {
+    if client.focus_agent(target).is_ok() {
+        return Ok(());
+    }
+    if client.focus_pane(target).is_ok() {
+        return Ok(());
+    }
+    client.focus_tab(target)?;
+    Ok(())
 }
 
 fn herdr_open_agent(
@@ -487,8 +509,10 @@ fn herdr_agent_status(client: &HerdrClient, target: &str) -> Result<TerminalAgen
             .unwrap_or_default()
             .to_owned(),
         title: agent
-            .get("name")
+            .get("title")
             .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+            .or_else(|| agent.get("name").and_then(Value::as_str))
             .unwrap_or_default()
             .to_owned(),
         seq: agent
@@ -648,13 +672,29 @@ impl HcCli {
         if let Some(env) = env {
             command.envs(env);
         }
-        command.output().map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                TerminalError::Protocol(format!("{} not found in PATH", self.binary.display()))
-            } else {
-                TerminalError::Io(error)
+        let mut attempts = 0;
+        loop {
+            match command.output() {
+                Ok(output) => return Ok(output),
+                Err(error) => {
+                    // On Linux, parallel tests forking child processes can briefly trigger ETXTBSY (26)
+                    // if a write fd was temporarily inherited across fork before close.
+                    if error.raw_os_error() == Some(26) && attempts < 20 {
+                        attempts += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(15));
+                        continue;
+                    }
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        return Err(TerminalError::Protocol(format!(
+                            "{} not found in PATH",
+                            self.binary.display()
+                        )));
+                    } else {
+                        return Err(TerminalError::Io(error));
+                    }
+                }
             }
-        })
+        }
     }
 }
 
@@ -982,7 +1022,9 @@ struct InMemoryState {
     pub prompt_outcomes: HashMap<String, PromptOutcome>,
     pub closed: Vec<String>,
     pub attached: Vec<(Option<String>, bool)>,
+    pub focused: Vec<String>,
     pub create_real_worktrees: bool,
+    pub disable_auto_react: bool,
     pub on_prompt: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
 }
 
@@ -1001,6 +1043,10 @@ impl InMemoryTerminals {
         self.inner.lock().unwrap().on_prompt = Some(Arc::new(callback));
     }
 
+    pub fn set_auto_react_on_prompt(&self, enabled: bool) {
+        self.inner.lock().unwrap().disable_auto_react = !enabled;
+    }
+
     pub fn set_prompt_outcome(&self, target: impl Into<String>, outcome: PromptOutcome) {
         self.inner.lock().unwrap().prompt_outcomes.insert(target.into(), outcome);
     }
@@ -1011,6 +1057,34 @@ impl InMemoryTerminals {
 
     pub fn set_status(&self, target: impl Into<String>, status: TerminalAgentStatus) {
         self.inner.lock().unwrap().statuses.insert(target.into(), status);
+    }
+
+    pub fn remove_status(&self, target: &str) {
+        self.inner.lock().unwrap().statuses.remove(target);
+    }
+
+    pub fn put_open_pane(
+        &self,
+        agent_id: impl Into<String>,
+        pane: impl Into<String>,
+        tab: impl Into<String>,
+        title: impl Into<String>,
+    ) {
+        let agent_id = agent_id.into();
+        let pane = pane.into();
+        let tab = tab.into();
+        let title = title.into();
+        let status = TerminalAgentStatus {
+            state: "live".into(),
+            status: "idle".into(),
+            pane: pane.clone(),
+            tab: tab.clone(),
+            title,
+            seq: 1,
+        };
+        let mut state = self.inner.lock().unwrap();
+        state.statuses.insert(agent_id, status.clone());
+        state.statuses.insert(pane, status);
     }
 
     pub fn opened(&self) -> Vec<OpenAgentRequest> {
@@ -1033,6 +1107,10 @@ impl InMemoryTerminals {
         self.inner.lock().unwrap().closed.clone()
     }
 
+    pub fn focused(&self) -> Vec<String> {
+        self.inner.lock().unwrap().focused.clone()
+    }
+
     pub fn labels_for(&self, target: &str) -> HashMap<String, String> {
         self.inner
             .lock()
@@ -1047,6 +1125,19 @@ impl InMemoryTerminals {
 impl Terminals for InMemoryTerminals {
     fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError> {
         let mut state = self.inner.lock().unwrap();
+        if !request.agent_id.is_empty() {
+            if let Some(existing) = state.statuses.get(&request.agent_id) {
+                if existing.state != "finished" {
+                    return Err(TerminalError::Api {
+                        code: "agent_name_taken".into(),
+                        message: format!(
+                            "agent name {} is already used by pane {} (title {:?})",
+                            request.agent_id, existing.pane, existing.title
+                        ),
+                    });
+                }
+            }
+        }
         state.next_id += 1;
         let n = state.next_id;
         let workspace = format!("ws-{n}");
@@ -1086,9 +1177,19 @@ impl Terminals for InMemoryTerminals {
                     return Ok(PromptOutcome::Blocked);
                 }
             }
-            if let Some(status) = state.statuses.get_mut(target) {
-                status.status = "working".into();
-                status.seq += 1;
+            if !state.disable_auto_react {
+                let mut pane_to_update = None;
+                if let Some(status) = state.statuses.get_mut(target) {
+                    status.status = "working".into();
+                    status.seq += 1;
+                    pane_to_update = Some(status.pane.clone());
+                }
+                if let Some(pane) = pane_to_update.filter(|p| p != target) {
+                    if let Some(pane_status) = state.statuses.get_mut(&pane) {
+                        pane_status.status = "working".into();
+                        pane_status.seq += 1;
+                    }
+                }
             }
             state.on_prompt.clone()
         };
@@ -1171,9 +1272,11 @@ impl Terminals for InMemoryTerminals {
     fn close(&self, target: &str) -> Result<(), TerminalError> {
         let mut state = self.inner.lock().unwrap();
         state.closed.push(target.to_owned());
-        if let Some(status) = state.statuses.get_mut(target) {
-            status.state = "finished".into();
-            status.status = "killed".into();
+        for (key, status) in state.statuses.iter_mut() {
+            if key == target || status.pane == target || status.tab == target {
+                status.state = "finished".into();
+                status.status = "killed".into();
+            }
         }
         Ok(())
     }
@@ -1184,6 +1287,22 @@ impl Terminals for InMemoryTerminals {
             .unwrap()
             .attached
             .push((target.map(str::to_owned), takeover));
+        Ok(())
+    }
+
+    fn focus(&self, target: &str) -> Result<(), TerminalError> {
+        let mut state = self.inner.lock().unwrap();
+        let exists = state.statuses.iter().any(|(key, status)| {
+            status.state != "finished"
+                && (key == target || status.pane == target || status.tab == target)
+        });
+        if !exists {
+            return Err(TerminalError::Api {
+                code: "not_found".into(),
+                message: format!("focus target {target:?} not found"),
+            });
+        }
+        state.focused.push(target.to_owned());
         Ok(())
     }
 }

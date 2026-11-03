@@ -146,7 +146,16 @@ pub fn run_coders_with_terminals(
 /// Human approval is explicit in the CLI. Re-verify the worktree, push its branch, then open a PR.
 pub fn approve_subtask(root: PathBuf, task_ref: &str, number: u32) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let registry_path = config::state_dir().join("agents.json");
-    approve_subtask_with_runner(root, task_ref, number, &registry_path, |command| command.output())
+    approve_subtask_with_registry(root, task_ref, number, &registry_path)
+}
+
+pub fn approve_subtask_with_registry(
+    root: PathBuf,
+    task_ref: &str,
+    number: u32,
+    registry_path: &Path,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    approve_subtask_with_runner(root, task_ref, number, registry_path, |command| command.output())
 }
 
 pub fn approve_plan(root: PathBuf, task_ref: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

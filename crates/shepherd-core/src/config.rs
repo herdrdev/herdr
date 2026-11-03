@@ -100,11 +100,20 @@ pub struct Limits {
     pub max_concurrent_agents: usize,
     pub agent_timeout: String,
     pub protected_branches: Vec<String>,
+    pub non_mcp_done_quiet_secs: u64,
+    pub notice_after_secs: u64,
 }
 
 impl Default for Limits {
     fn default() -> Self {
-        Self { max_spawn_depth: 2, max_concurrent_agents: 4, agent_timeout: "30m".into(), protected_branches: vec!["main".into(), "master".into(), "develop".into()] }
+        Self {
+            max_spawn_depth: 2,
+            max_concurrent_agents: 4,
+            agent_timeout: "30m".into(),
+            protected_branches: vec!["main".into(), "master".into(), "develop".into()],
+            non_mcp_done_quiet_secs: 60,
+            notice_after_secs: 3,
+        }
     }
 }
 

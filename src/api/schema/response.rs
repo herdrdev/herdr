@@ -277,6 +277,9 @@ pub enum ResponseResult {
         active: bool,
         projection_revision: u64,
     },
+    ShepherdCall {
+        data: serde_json::Value,
+    },
     Ok {},
 }
 

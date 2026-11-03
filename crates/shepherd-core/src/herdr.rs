@@ -215,6 +215,18 @@ impl HerdrClient {
         self.call("tab.close", serde_json::json!({"tab_id":tab_id}))
     }
 
+    pub fn focus_agent(&self, target: &str) -> Result<Value, HerdrError> {
+        self.call("agent.focus", serde_json::json!({"target":target}))
+    }
+
+    pub fn focus_tab(&self, tab_id: &str) -> Result<Value, HerdrError> {
+        self.call("tab.focus", serde_json::json!({"tab_id":tab_id}))
+    }
+
+    pub fn focus_pane(&self, pane_id: &str) -> Result<Value, HerdrError> {
+        self.call("pane.focus", serde_json::json!({"pane_id":pane_id}))
+    }
+
     pub fn rename_pane(&self, pane_id: &str, label: &str) -> Result<Value, HerdrError> {
         self.call("pane.rename", serde_json::json!({"pane_id":pane_id,"label":label}))
     }

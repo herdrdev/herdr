@@ -3893,6 +3893,20 @@
           ],
           "type": "object"
         },
+        "ShepherdCallParams": {
+          "properties": {
+            "args": {
+              "default": null
+            },
+            "op": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -6305,6 +6319,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/PluginPaneCloseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.call",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdCallParams"
             }
           },
           "required": [
@@ -10401,6 +10431,20 @@
                 "type",
                 "active",
                 "projection_revision"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "data": true,
+                "type": {
+                  "const": "shepherd_call",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "data"
               ],
               "type": "object"
             },

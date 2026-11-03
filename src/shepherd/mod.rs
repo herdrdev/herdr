@@ -12,8 +12,11 @@
 #![allow(dead_code)]
 
 pub mod panel;
+pub mod service;
 
 pub use panel::ShepherdAgentsPanelState;
+#[allow(unused_imports)] // Re-exported for server runtime and API dispatch in F2
+pub use service::{ShepherdCallJob, ShepherdRuntimeService};
 
 use serde_json::{json, Value};
 use shepherd_core::{
@@ -599,5 +602,101 @@ mod tests {
         assert!(text.contains("state:blocked"));
         assert!(text.contains("NEEDS YOU"));
         assert!(text.contains("Waiting for tool permission in pane w1:p2"));
+    }
+
+    #[test]
+    fn app_shepherd_enabled_config_hook_starts_service_on_boot_and_stops_on_shutdown() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _rt_guard = rt.enter();
+
+        // 1. Default config has shepherd.enabled == false
+        let default_cfg = Config::default();
+        assert!(!default_cfg.shepherd.enabled);
+        let event_hub = EventHub::default();
+        let (api_tx, _api_rx) = tokio_mpsc::unbounded_channel();
+        let (_dummy_tx, dummy_rx) = tokio_mpsc::unbounded_channel();
+        let mut app_disabled = App::new(
+            &default_cfg,
+            AppPolicy::TEST,
+            None,
+            dummy_rx,
+            event_hub.clone(),
+        );
+        app_disabled.start_shepherd_service_if_enabled(Some(api_tx.clone()));
+        assert!(app_disabled.shepherd_service.is_none());
+
+        // 2. When shepherd.enabled == true, service starts, resumes, and stops cleanly
+        let mut enabled_cfg = Config::default();
+        enabled_cfg.shepherd.enabled = true;
+        let (_dummy_tx2, dummy_rx2) = tokio_mpsc::unbounded_channel();
+        let mut app_enabled = App::new(
+            &enabled_cfg,
+            AppPolicy::TEST,
+            None,
+            dummy_rx2,
+            event_hub,
+        );
+        app_enabled.start_shepherd_service_if_enabled(Some(api_tx));
+        assert!(app_enabled.shepherd_service.is_some());
+        assert!(app_enabled.shepherd_service.as_ref().unwrap().is_running());
+
+        app_enabled.stop_shepherd_service();
+        assert!(app_enabled.shepherd_service.is_none());
+    }
+
+    #[test]
+    fn api_shepherd_call_routes_to_running_service_and_fails_cleanly_when_disabled() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _rt_guard = rt.enter();
+
+        let event_hub = EventHub::default();
+        let (_dummy_tx, dummy_rx) = tokio_mpsc::unbounded_channel();
+        let mut app = App::new(
+            &Config::default(),
+            AppPolicy::TEST,
+            None,
+            dummy_rx,
+            event_hub.clone(),
+        );
+
+        // 1. Without shepherd.enabled, shepherd.call returns shepherd_not_running error
+        let req_disabled = Request {
+            id: "call-1".into(),
+            method: Method::ShepherdCall(crate::api::schema::shepherd::ShepherdCallParams {
+                op: "agents".into(),
+                args: json!({}),
+            }),
+        };
+        let resp_raw = app.handle_api_request_after_internal_events_drained(req_disabled);
+        let resp_json: Value = serde_json::from_str(&resp_raw).unwrap();
+        assert_eq!(resp_json["error"]["code"], "shepherd_not_running");
+
+        // 2. Start service on app
+        let (api_tx, _api_rx) = tokio_mpsc::unbounded_channel();
+        app.shepherd_enabled = true;
+        app.start_shepherd_service_if_enabled(Some(api_tx));
+        assert!(app.shepherd_service.is_some());
+
+        // 3. With shepherd.enabled, shepherd.call { op: "agents" } returns shepherd_call result
+        let req_enabled = Request {
+            id: "call-2".into(),
+            method: Method::ShepherdCall(crate::api::schema::shepherd::ShepherdCallParams {
+                op: "agents".into(),
+                args: json!({}),
+            }),
+        };
+        let resp_raw2 = app.handle_api_request_after_internal_events_drained(req_enabled);
+        let resp_json2: Value = serde_json::from_str(&resp_raw2).unwrap();
+        assert_eq!(resp_json2["id"], "call-2");
+        assert_eq!(resp_json2["result"]["type"], "shepherd_call");
+        assert!(resp_json2["result"]["data"].is_array());
+
+        app.stop_shepherd_service();
     }
 }

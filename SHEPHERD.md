@@ -50,8 +50,19 @@ Para mantener los rebases desde `herdrdev/herdr` baratos, todo el código nuevo 
 | `Cargo.toml` | L29 (`shepherd-core = { path = "crates/shepherd-core" }`) | Enlazar el crate del workspace `shepherd-core` dentro del binario `herdr`. |
 | `src/main.rs` | L55 (`mod shepherd;`) | Declarar el módulo `src/shepherd/` en el binario principal sin acoplar otros módulos. |
 | `src/cli.rs` | L103-L105 (`if command == "shepherd" { return crate::shepherd::run_cli(&args[1..]).map(CommandOutcome::Handled); }`) | Delegar el subcomando `herdr shepherd <...>` a `crate::shepherd::run_cli` antes del despacho normal de CLI de `herdr`. |
+| `src/config/model.rs` | L27 y L333 (`ShepherdConfig { pub enabled: bool }`) | Añadir la sección de configuración `shepherd.enabled` (falsa por defecto). |
+| `src/config/io.rs` | L31 y L178 | Parseo y serialización de la sección `[shepherd]` en la configuración TOML de `herdr`. |
+| `src/config.rs` | L27 | Re-exportar el modelo de configuración `ShepherdConfig`. |
 | `src/app/state.rs` | L809 y L1053 (`pub shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState`) | Guardar el estado puro (`AppState`) del panel de solo lectura de agentes de Shepherd (en producción y en `AppState::test_new()`), cumpliendo la separación entre estado y runtime. |
-| `src/app/mod.rs` | L521 (`shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState::default()`) | Inicializar `shepherd_agents_panel` al construir `AppState` en `App::try_new`. |
+| `src/app/mod.rs` | L171, L521, L695, L704-L755 | Inicializar `shepherd_agents_panel`, `shepherd_enabled` y los métodos del ciclo de vida del servicio (`start_shepherd_service_if_enabled`, `stop_shepherd_service`, `sync_shepherd_agents_panel`). |
+| `src/app/actions.rs` | L256-L265 (`toggle_shepherd_agents_panel`, `focus_shepherd_agent_pane`) | Mutaciones de estado puro para alternar el panel y enfocar el pane nativo del agente. |
+| `src/app/api.rs` | L1261-L1279 (`Method::ShepherdCall`) | Despacho síncrono del método de API `shepherd.call` a `ShepherdRuntimeService::call_sync`. |
+| `src/api/schema.rs` | L14, L29, L150 (`ShepherdCall(ShepherdCallParams) => "shepherd.call"`) | Declaración del método genérico de API `shepherd.call`. |
+| `src/api/schema/shepherd.rs` | Módulo aislado nuevo | Parámetros fuertemente tipados de la operación de API `shepherd.call` (`ShepherdCallParams`). |
+| `src/api/schema/response.rs` | L280 (`ResponseResult::ShepherdCall { data }`) | Variante de resultado de respuesta para llamadas a `shepherd.call`. |
+| `src/server/headless.rs` | L327, L496, L2965-L2995 | Arranque del servicio en `HeadlessServer::new`, refresco periódico del panel en el bucle principal y enrutado asíncrono de `shepherd.call` a los workers. |
+| `src/server/headless/lifecycle.rs` | L317 y L339 (`self.app.stop_shepherd_service()`) | Apagado limpio de los workers y del servidor MCP en el ciclo de vida de cierre del servidor. |
+| `docs/next/api/herdr-api.schema.json` | Esquema del protocolo | Esquema JSON formal del contrato para `shepherd.call` y `ShepherdCallParams`. |
 
 ## Estado F1
 
@@ -79,7 +90,46 @@ Para mantener los rebases desde `herdrdev/herdr` baratos, todo el código nuevo 
 - No se ejecutó el binario compilado contra la sesión real de `herdr` del usuario ni contra sus sockets/terminales (prohibido expresamente por las reglas de F1). Toda la verificación de `HerdrInProcess`, `dispatch_api_message_on_app`, `EventHub`, `herdr shepherd ... --json` y el renderizado del panel TUI se realizó mediante tests unitarios y de integración en memoria sin lanzar procesos de agentes reales.
 - El test preexistente `app::api::plugins::tests::manifest_action_invoke_injects_plugin_paths` sigue documentado como intermitente conocido cuando corre dentro de la suite completa (pasa en solitario).
 
-### Qué queda para F2
+## Estado F2
 
-- Conectar los servicios de orquestación en el bucle de ejecución del runtime (`spawn` en worktrees, reconciliación periódica de estado `AppState`/`AgentRegistryFile`, entrega del primer prompt con verificación y hasta 3 reintentos, detección de diálogos de trust/login para marcar `"needs-human"` sin responderlos nunca, reanudación tras reinicio, limpieza y arranque integrado del servidor MCP dentro del proceso del servidor).
-- Conectar un atajo/acción de entrada en `src/app/input.rs` y el bucle de renderizado de cliente en F3 para abrir/cerrar interactivamente `shepherd_agents_panel` y refrescarlo automáticamente desde los eventos del runtime.
+### Lo hecho
+
+1. **Servicio de orquestación (`crates/shepherd-core/src/service.rs` y `src/shepherd/service.rs`)**:
+   - `OrchestrationService` implementa los requisitos 1 a 6 y 8:
+     - **Req 1 (Registro duradero)**: `agents.json` en `state_dir`, permisos 0600 en Unix, escritura atómica vía archivo temporal + rename; lee el formato antiguo (lista de agentes) y el nuevo `{"seq","next","agents"}`; secuencias y contadores `<rol>-<n>` monótonos que nunca retroceden; estados `starting, working, idle, blocked, done, exited, killed, failed`; gestión del campo `notice`.
+     - **Req 2 (Primer prompt con verificación y reintentos)**: espera a que el terminal acepte entrada (hasta 10 min); envía y verifica que reaccione (`working` o avance del contador de eventos `seq`); si no reacciona, reenvía hasta 3 veces; si queda bloqueado >= 3s (`notice_after`), fija `notice` con `"esperando al humano: diálogo de confianza o login; abre su pestaña"` exclusivamente para `blocked` (nunca para not ready) y lo limpia al entregar, fallar o matar; en timeout falla con `"nunca estuvo listo, probablemente esperaba al humano"`. Nunca contesta diálogos por el humano.
+     - **Req 3 (Reconciliación periódica contra el runtime)**: `working` -> `working`; `blocked` -> `blocked` (anunciado una sola vez en el timeline de eventos); `idle` -> `idle` si el agente tiene MCP, o `done` si no (capturando la pantalla final si no hubo `submit_result`); pane desaparecido -> `exited`. Para agentes sin MCP (como `agy`), exige además que la pantalla permanezca quieta >= `non_mcp_done_quiet_secs` (60 s por defecto) antes de darlo por `done`.
+     - **Req 4 (Reanudación al arrancar / `resume_on_startup`)**: reconcilia el registro persistido contra los terminales vivos del servidor; `starting` con panel desaparecido -> `exited`; `starting` que ya está trabajando -> `working`; `starting` que nunca recibió primer prompt -> `failed` con mensaje claro de cómo relanzarlo; limpia `notice`; los tokens sobreviven intactos.
+     - **Req 5 (Operaciones `spawn`, `kill`, `clean`, `focus`)**:
+       - `spawn`: genera id y token únicos, valida límites de concurrencia y profundidad, instala skills de sesión y asigna worktree propio.
+       - `kill`: acepta estado `done`, "panel ya cerrado" cuenta como éxito, rechaza agentes en estados ya definitivos (`exited`, `killed`, `failed`).
+       - `clean`: por lista de ids o todos los definitivos del workspace; cierra paneles residuales de agentes fallidos; mata antes a un `done` si se limpia explícitamente por id; rechaza agentes en ejecución; borra el directorio de sesión validando que el id no contenga componentes de ruta ni traversal (`..`, `/`).
+       - `focus`: selecciona la pestaña/panel nativo en la UI de herdr (`herdr_focus` -> `agent.focus` / `pane.focus` / `tab.focus`); shepherd no dibuja ni emula terminales.
+     - **Req 6 (Nombres únicos y recuperación de restos)**: si un spawn choca con un nombre de panel abierto que es claramente un resto de shepherd (etiqueta `<rol>·...` sin agente registrado), lo cierra y reintenta una vez; si pertenece al usuario u otra sesión, nunca lo cierra y reporta cuál es.
+     - **Req 8 (Log de peticiones fallidas)**: toda operación fallida se registra con marca de tiempo, método y mensaje en `service.log` (0600) y en memoria.
+     - **Reloj inyectable (`trait Clock`, `SystemClock`, `ManualClock`)**: permite probar timeouts de 10 minutos, reintentos y periodos de quietud de 60 segundos de forma determinista y en milisegundos sin dormir hilos.
+2. **Arranque en el runtime de herdr (`src/server/headless.rs`, `src/config/`)**:
+   - Nueva opción de configuración `shepherd.enabled` (booleana, false por defecto).
+   - `HeadlessServer::new` arranca `ShepherdRuntimeService` cuando `shepherd.enabled == true`, ejecutando la reanudación (Req 4), iniciando el servidor MCP en proceso y lanzando los workers de fondo.
+   - `HeadlessServer::initiate_shutdown` y `complete_shutdown` apagan el servicio limpiamente.
+3. **Control desde CLI y UI con operación genérica de API (`shepherd.call`)**:
+   - Definida una sola operación en la API de herdr: `shepherd.call { op: String, args: Value }` (`ShepherdCallParams`), enrutada de forma asíncrona al worker del servicio en `HeadlessServer` y síncrona en `App`.
+   - Esquema JSON formal documentado y congelado en `docs/next/api/herdr-api.schema.json`.
+   - Soporte para `herdr shepherd spawn|kill|clean|focus|agents|run|approve` en `crates/shepherd-core/src/cli.rs`. Sin servicio en marcha, los comandos de solo lectura (`agents`, `task list`, etc.) funcionan de forma local como en F1.
+4. **Servidor MCP en proceso y gates de workflow (Req 7 y 9)**:
+   - `RunningMcpServer::start` arranca el servidor HTTP MCP loopback (puerto efímero `127.0.0.1:0`), autenticando cada petición mediante el token del agente con las 13 herramientas del crate.
+   - `run_workflow` y `approve_plan` / `approve_subtask` ejecutan el ciclo plan > code > review > PR; push y PR siempre esperan aprobación humana explícita (gate) salvo bandera `--auto-push`.
+5. **Panel de agentes sincronizado y navegación (Req 5 `focus`)**:
+   - `ShepherdAgentsPanelState` se actualiza en memoria en cada tick del servidor (`HeadlessServer` -> `sync_shepherd_agents_panel`) sin realizar I/O en la ruta de render.
+   - Métodos puros en `ShepherdAgentsPanelState` y `AppState`: `toggle`, `open_panel`, `close_panel`, `select_next`, `select_prev`, `focus_shepherd_agent_pane`.
+   - Atajo interactivo en el panel: `Enter` enfoca el panel nativo del agente seleccionado (`focus enter`), `Esc` cierra el modal.
+
+### Lo no verificado
+
+- No se ejecutó el binario contra la sesión real de `herdr` del usuario ni contra sus rutas persistidas reales (`~/.local/state/shepherd` o `~/.config/herdr*`), respetando estrictamente las directivas de seguridad. Todas las pruebas automatizadas se ejecutaron usando sesiones aisladas en memoria y temporales con `AppPolicy::TEST`.
+- El test intermitente preexistente de plugins de herdr `app::api::plugins::tests::manifest_action_invoke_injects_plugin_paths` continúa como intermitente conocido dentro de la suite completa upstream (pasa en solitario).
+
+### Qué queda para F3
+
+- Integrar las teclas y atajos interactivos del client shell (`ClientShellOverlay` / keybindings en `src/client/shell/`) para invocar el panel de agentes (`shepherd_agents_panel`).
+- Vistas completas del TUI para el árbol de tareas, runs, skills y estado de git/ramas/PR según el diseño de UI de herdr (ratatui, mouse-first, render puro).

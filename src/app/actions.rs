@@ -252,6 +252,20 @@ impl AppState {
         }
         false
     }
+
+    // F2 pure presentation methods; interactive key wiring into client shell is scheduled for F3.
+    #[allow(dead_code)]
+    pub fn toggle_shepherd_agents_panel(&mut self) {
+        self.shepherd_agents_panel.toggle();
+    }
+
+    // F2 pure presentation methods; interactive key wiring into client shell is scheduled for F3.
+    #[allow(dead_code)]
+    pub fn focus_shepherd_agent_pane(&mut self, ws_idx: usize, pane_id: PaneId) -> bool {
+        let changed = self.focus_pane_in_workspace(ws_idx, pane_id);
+        self.shepherd_agents_panel.open = false;
+        changed
+    }
 }
 
 // ---------------------------------------------------------------------------

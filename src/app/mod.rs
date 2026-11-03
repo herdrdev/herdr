@@ -168,6 +168,8 @@ pub struct App {
     pub(crate) config_reloaded_from_disk: bool,
     client_shell_keybindings_profile: Option<String>,
     endpoint_commands: custom_commands::EndpointCommandRegistry,
+    pub(crate) shepherd_enabled: bool,
+    pub(crate) shepherd_service: Option<crate::shepherd::ShepherdRuntimeService>,
     // Drop after terminal runtimes have shut down their processes. Command
     // workers retain their own references until completion.
     // ponytail: server-lifetime pins defer reclamation until restart; use
@@ -690,11 +692,69 @@ impl App {
             config_reloaded_from_disk: false,
             client_shell_keybindings_profile,
             endpoint_commands,
+            shepherd_enabled: config.shepherd.enabled,
+            shepherd_service: None,
         };
         app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
         app.configure_window_title(&config.ui.window_title);
         app.refresh_restored_workspace_git_metadata();
         Ok(app)
+    }
+
+    pub(crate) fn start_shepherd_service_if_enabled(
+        &mut self,
+        api_tx: Option<crate::api::ApiRequestSender>,
+    ) {
+        if !self.shepherd_enabled || self.shepherd_service.is_some() {
+            return;
+        }
+        let Some(api_tx) = api_tx else {
+            return;
+        };
+        let session = crate::session::active_name();
+        let state_dir = if !self.policy.persist_session {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0);
+            Some(std::env::temp_dir().join(format!("herdr-shep-test-{}-{nonce}", std::process::id())))
+        } else if let Some(ref s) = session {
+            Some(crate::session::data_dir_for(Some(s)).join("shepherd"))
+        } else {
+            None
+        };
+        match crate::shepherd::ShepherdRuntimeService::start_for_app(
+            api_tx,
+            self.event_hub.clone(),
+            session.as_deref(),
+            state_dir,
+            None,
+        ) {
+            Ok(svc) => {
+                self.state
+                    .shepherd_agents_panel
+                    .refresh_from_registry(&svc.cached_registry());
+                self.shepherd_service = Some(svc);
+            }
+            Err(err) => {
+                tracing::warn!(%err, "failed to start Shepherd runtime service");
+            }
+        }
+    }
+
+    pub(crate) fn stop_shepherd_service(&mut self) {
+        if let Some(mut svc) = self.shepherd_service.take() {
+            svc.shutdown();
+        }
+    }
+
+    pub(crate) fn sync_shepherd_agents_panel(&mut self) {
+        if let Some(ref svc) = self.shepherd_service {
+            let cached = svc.cached_registry();
+            self.state
+                .shepherd_agents_panel
+                .refresh_from_registry(&cached);
+        }
     }
 
     #[cfg(unix)]

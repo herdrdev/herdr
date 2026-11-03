@@ -1259,6 +1259,25 @@ impl App {
             Method::PluginPaneClose(params) => {
                 return self.handle_plugin_pane_close(request.id, params);
             }
+            Method::ShepherdCall(params) => {
+                if let Some(ref svc) = self.shepherd_service {
+                    match svc.call_sync(&params.op, params.args) {
+                        Ok(data) => SuccessResponse {
+                            id: request.id,
+                            result: ResponseResult::ShepherdCall { data },
+                        },
+                        Err(message) => {
+                            return responses::encode_error(request.id, "shepherd_error", &message);
+                        }
+                    }
+                } else {
+                    return responses::encode_error(
+                        request.id,
+                        "shepherd_not_running",
+                        "Shepherd service is not running; enable shepherd in config (shepherd.enabled = true)",
+                    );
+                }
+            }
             _ => {
                 return responses::encode_error(
                     request.id,

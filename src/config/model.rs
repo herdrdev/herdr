@@ -308,6 +308,13 @@ pub fn validated_sidebar_bounds(min: u16, max: u16) -> Option<(u16, u16)> {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ShepherdConfig {
+    /// Start the in-process Shepherd orchestration service on server startup. Default: false.
+    pub enabled: bool,
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -323,6 +330,7 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    pub shepherd: ShepherdConfig,
 }
 
 #[derive(Debug)]

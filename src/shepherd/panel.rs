@@ -94,6 +94,32 @@ impl ShepherdAgentsPanelState {
     pub fn needs_you_count(&self) -> usize {
         self.entries.iter().filter(|row| row.needs_you).count()
     }
+
+    pub fn toggle(&mut self) {
+        self.open = !self.open;
+    }
+
+    pub fn open_panel(&mut self) {
+        self.open = true;
+    }
+
+    pub fn close_panel(&mut self) {
+        self.open = false;
+    }
+
+    pub fn select_next(&mut self) {
+        if !self.entries.is_empty() {
+            self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1));
+        }
+    }
+
+    pub fn select_prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn selected_agent(&self) -> Option<&ShepherdAgentRow> {
+        self.entries.get(self.selected)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -260,8 +286,8 @@ pub fn render_shepherd_agents_panel(
             Span::styled(" scroll ", base.fg(palette.overlay0)),
             Span::styled("wheel ↑↓", base.fg(palette.text)),
             Span::styled("  ·  ", base.fg(palette.overlay0)),
-            Span::styled("attach ", base.fg(palette.overlay0)),
-            Span::styled("native herdr pane", base.fg(palette.text)),
+            Span::styled("focus ", base.fg(palette.overlay0)),
+            Span::styled("enter", base.fg(palette.text)),
             Span::styled("  ·  ", base.fg(palette.overlay0)),
             Span::styled("close ", base.fg(palette.overlay0)),
             Span::styled("esc", base.fg(palette.text)),
@@ -423,4 +449,62 @@ fn draw_modal_box(buffer: &mut Buffer, area: Rect, palette: &Palette) -> Option<
         area.width - 2,
         area.height - 2,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use shepherd_core::{Agent, AgentRegistryFile};
+
+    #[test]
+    fn shepherd_agents_panel_state_navigation_and_focus() {
+        let mut reg = AgentRegistryFile::default();
+        let a1 = reg.create(
+            Agent {
+                role: "brain".into(),
+                vendor: "claude".into(),
+                pane: "w1:p1".into(),
+                ..Agent::default()
+            },
+            "tok1".into(),
+            "2026-04-20T00:00:00Z",
+        );
+        let a2 = reg.create(
+            Agent {
+                role: "coder".into(),
+                vendor: "codex".into(),
+                pane: "w1:p2".into(),
+                ..Agent::default()
+            },
+            "tok2".into(),
+            "2026-04-20T00:00:00Z",
+        );
+
+        let mut panel = ShepherdAgentsPanelState::from_registry(&reg);
+        assert!(!panel.open);
+        panel.toggle();
+        assert!(panel.open);
+        assert_eq!(panel.selected, 0);
+        assert_eq!(panel.selected_agent().unwrap().id, a1.id);
+
+        panel.select_next();
+        assert_eq!(panel.selected, 1);
+        assert_eq!(panel.selected_agent().unwrap().id, a2.id);
+
+        panel.select_next(); // stays at last item
+        assert_eq!(panel.selected, 1);
+
+        panel.select_prev();
+        assert_eq!(panel.selected, 0);
+
+        let mut app_state = AppState::test_new();
+        app_state.workspaces = vec![crate::workspace::Workspace::test_new("test")];
+        assert!(!app_state.shepherd_agents_panel.open);
+        app_state.toggle_shepherd_agents_panel();
+        assert!(app_state.shepherd_agents_panel.open);
+
+        let root_pane = app_state.workspaces[0].tabs[0].layout.pane_ids()[0];
+        app_state.focus_shepherd_agent_pane(0, root_pane);
+        assert!(!app_state.shepherd_agents_panel.open);
+    }
 }

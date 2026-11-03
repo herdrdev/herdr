@@ -8,6 +8,7 @@ pub mod terminals;
 pub mod bus;
 pub mod cli;
 pub mod config;
+pub mod service;
 pub mod skills;
 pub mod spawn;
 pub mod mcp;
@@ -327,6 +328,7 @@ impl AgentRegistryFile {
     }
 
     pub fn remove(&mut self, id: &str) -> bool {
+        self.recover_counters();
         let old_len = self.agents.len();
         self.agents.retain(|agent| agent.id != id);
         old_len != self.agents.len()
@@ -406,6 +408,7 @@ pub fn save_agent_registry(path: impl AsRef<Path>, registry: &AgentRegistryFile)
     let path = path.as_ref();
     if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
     let mut registry = registry.clone();
+    registry.recover_counters();
     registry.agents.sort_by_key(|agent| agent.seq);
     let mut bytes = serde_json::to_vec_pretty(&registry)?;
     bytes.push(b'\n');
@@ -421,6 +424,11 @@ pub fn save_agent_registry(path: impl AsRef<Path>, registry: &AgentRegistryFile)
     }
     use std::io::Write;
     options.open(&tmp)?.write_all(&bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600))?;
+    }
     std::fs::rename(tmp, path)?;
     Ok(())
 }

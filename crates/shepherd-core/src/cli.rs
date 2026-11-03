@@ -5,6 +5,7 @@ use crate::{
     config::{self, available_vendors, load_config, resolve_all, validate},
     create_task, find_task, list_tasks, load_agent_registry, parse_plan, read_task_section,
     roles_list_json, save_task_status, schedule_subtasks,
+    service::{OrchestrationService, ServiceConfig, SystemClock},
     spawn::{self, SpawnRequest},
     task_context, task_list_json, task_section_path, task_show_json,
     terminals::{connect_terminals, Terminals},
@@ -56,6 +57,15 @@ where
     }
     if area == "spawn" {
         return spawn_command(root, args.collect(), terminals);
+    }
+    if area == "kill" {
+        return kill_command(root, args.collect(), terminals);
+    }
+    if area == "clean" {
+        return clean_command(root, args.collect(), terminals);
+    }
+    if area == "focus" {
+        return focus_command(root, args.collect(), terminals);
     }
     let Some(command) = args.next() else {
         return usage();
@@ -195,6 +205,118 @@ fn spawn_command(
             "worktree {} ({})",
             spawned.agent.worktree, spawned.agent.branch
         );
+    }
+    Ok(())
+}
+
+fn kill_command(
+    root: PathBuf,
+    args: Vec<String>,
+    terminals: Option<Arc<dyn Terminals>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut id = None;
+    let mut json = false;
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else if !arg.starts_with('-') && id.is_none() {
+            id = Some(arg);
+        }
+    }
+    let Some(id) = id else {
+        return Err("usage: shepherd kill <id> [--json]".into());
+    };
+    let terminals = match terminals {
+        Some(t) => t,
+        None => Arc::from(connect_terminals(&load_config(&root).unwrap_or_default())?),
+    };
+    let svc = OrchestrationService::new(
+        ServiceConfig::default(),
+        load_config(&root).unwrap_or_default(),
+        terminals,
+        Arc::new(SystemClock::new()),
+    );
+    let agent = svc.kill(&id)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&agent.public())?);
+    } else {
+        println!("killed agent {} ({})", agent.id, agent.state);
+    }
+    Ok(())
+}
+
+fn clean_command(
+    root: PathBuf,
+    args: Vec<String>,
+    terminals: Option<Arc<dyn Terminals>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut ids = Vec::new();
+    let mut workspace = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--json" {
+            json = true;
+        } else if arg == "--workspace" {
+            i += 1;
+            workspace = args.get(i).cloned();
+        } else if !arg.starts_with('-') {
+            ids.push(arg.clone());
+        }
+        i += 1;
+    }
+    let terminals = match terminals {
+        Some(t) => t,
+        None => Arc::from(connect_terminals(&load_config(&root).unwrap_or_default())?),
+    };
+    let svc = OrchestrationService::new(
+        ServiceConfig::default(),
+        load_config(&root).unwrap_or_default(),
+        terminals,
+        Arc::new(SystemClock::new()),
+    );
+    let cleaned = svc.clean(&ids, workspace.as_deref())?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "cleaned": cleaned }))?);
+    } else {
+        println!("cleaned {} agent(s): {}", cleaned.len(), cleaned.join(", "));
+    }
+    Ok(())
+}
+
+fn focus_command(
+    root: PathBuf,
+    args: Vec<String>,
+    terminals: Option<Arc<dyn Terminals>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut id = None;
+    let mut json = false;
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else if !arg.starts_with('-') && id.is_none() {
+            id = Some(arg);
+        }
+    }
+    let Some(id) = id else {
+        return Err("usage: shepherd focus <id> [--json]".into());
+    };
+    let terminals = match terminals {
+        Some(t) => t,
+        None => Arc::from(connect_terminals(&load_config(&root).unwrap_or_default())?),
+    };
+    let svc = OrchestrationService::new(
+        ServiceConfig::default(),
+        load_config(&root).unwrap_or_default(),
+        terminals,
+        Arc::new(SystemClock::new()),
+    );
+    let agent = svc.focus(&id)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&agent.public())?);
+    } else {
+        println!("focused agent {} in native herdr terminal", agent.id);
     }
     Ok(())
 }
@@ -714,6 +836,12 @@ mod tests {
 
         let fake = Arc::new(InMemoryTerminals::new());
         let terminals_dyn: Arc<dyn Terminals> = Arc::clone(&fake) as Arc<dyn Terminals>;
+        run_cli_in_root(
+            root.clone(),
+            ["clean", "--json"],
+            Some(Arc::clone(&terminals_dyn)),
+        )
+        .unwrap();
         run_cli_in_root(
             root.clone(),
             ["attach", "coder-1", "--takeover"],

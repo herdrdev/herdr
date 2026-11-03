@@ -47,7 +47,7 @@ struct RuntimeAgent {
     active_skills: Vec<String>,
 }
 
-const RUNTIME_CONSTRAINTS: &str = "## Runtime constraints (take precedence over the role instructions above)\nThe Shepherd MCP server is not connected in this runtime. Do not attempt MCP calls, including get_task_context, read_messages, send_message, update_task_context, or submit_result. Use the task and context included in this prompt, then report your result in the terminal.\n";
+pub(crate) const RUNTIME_CONSTRAINTS: &str = "## Runtime constraints (take precedence over the role instructions above)\nThe Shepherd MCP server is not connected in this runtime. Do not attempt MCP calls, including get_task_context, read_messages, send_message, update_task_context, or submit_result. Use the task and context included in this prompt, then report your result in the terminal.\n";
 
 pub fn spawn(request: SpawnRequest) -> Result<SpawnedAgent, Box<dyn std::error::Error + Send + Sync>> {
     let config = load_config(&request.root)?;
@@ -382,7 +382,7 @@ fn spawn_in_terminals(
     })
 }
 
-fn role_prompt(root: &Path, role_name: &str, role: &crate::config::Role) -> String {
+pub(crate) fn role_prompt(root: &Path, role_name: &str, role: &crate::config::Role) -> String {
     let mut candidates = Vec::new();
     if !role.prompt.is_empty() {
         candidates.push(if Path::new(&role.prompt).is_absolute() {
@@ -428,7 +428,7 @@ pub(crate) fn shell_join(args: impl Iterator<Item = impl AsRef<str>>) -> String 
     .join(" ")
 }
 
-fn mcp_launch_args(
+pub(crate) fn mcp_launch_args(
     vendor: &crate::config::Vendor,
     url: &str,
     token: &str,

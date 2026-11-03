@@ -126,6 +126,84 @@ impl Terminals for SharedTerminals {
     ) -> Result<(), crate::terminals::TerminalError> {
         self.0.attach(target, takeover)
     }
+    fn focus(&self, target: &str) -> Result<(), crate::terminals::TerminalError> {
+        self.0.focus(target)
+    }
+}
+
+pub struct RunningMcpServer {
+    addr: std::net::SocketAddr,
+    url: String,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+impl RunningMcpServer {
+    pub fn start(
+        port: u16,
+        state_dir: PathBuf,
+        terminals: Option<Arc<dyn Terminals>>,
+        active_vendors: Option<Vec<String>>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
+        let addr = listener.local_addr()?;
+        let url = format!("http://{addr}/mcp");
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let state = Arc::new(Mutex::new(State {
+            registry: state_dir.join("agents.json"),
+            bus_path: state_dir.join("messages.jsonl"),
+            mcp_url: Some(url.clone()),
+            active_vendors,
+            terminals,
+        }));
+        let join = std::thread::Builder::new()
+            .name("shepherd-mcp-http".into())
+            .spawn(move || {
+                for incoming in listener.incoming() {
+                    if stop_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Ok(stream) = incoming {
+                        let state = Arc::clone(&state);
+                        std::thread::spawn(move || {
+                            let _ = handle_http(stream, state);
+                        });
+                    } else {
+                        break;
+                    }
+                }
+            })?;
+        Ok(Self {
+            addr,
+            url,
+            stop,
+            join: Some(join),
+        })
+    }
+
+    pub fn addr(&self) -> std::net::SocketAddr {
+        self.addr
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn shutdown(&mut self) {
+        if !self.stop.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = TcpStream::connect_timeout(&self.addr, Duration::from_millis(100));
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for RunningMcpServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
 }
 
 pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {

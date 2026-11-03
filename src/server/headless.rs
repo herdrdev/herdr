@@ -318,12 +318,13 @@ impl HeadlessServer {
     /// 2. Binds the client socket listener
     /// 3. Returns the server ready to run
     pub fn new(
-        app: app::App,
+        mut app: app::App,
         config_diagnostics: &[String],
         api_tx: Option<api::ApiRequestSender>,
         api_server: Option<api::ServerHandle>,
         server_stop: ServerStop,
     ) -> io::Result<Self> {
+        app.start_shepherd_service_if_enabled(api_tx.clone());
         let should_quit = server_stop.flag().clone();
         let client_path = client_socket_path();
         prepare_socket_path(&client_path)?;
@@ -492,6 +493,7 @@ impl HeadlessServer {
 
             self.app.sync_focus_events();
             self.app.sync_session_save_schedule();
+            self.app.sync_shepherd_agents_panel();
 
             // 4. Accept new client connections.
             self.accept_client_connections()?;
@@ -2958,6 +2960,40 @@ impl HeadlessServer {
                 self.handle_notification_show_api(msg.request.id.clone(), params.clone());
             let _ = msg.respond_to.send(response);
             return true;
+        }
+
+        if let api::schema::Method::ShepherdCall(params) = &msg.request.method {
+            if let Some(ref svc) = self.app.shepherd_service {
+                let job = crate::shepherd::ShepherdCallJob {
+                    request_id: msg.request.id.clone(),
+                    op: params.op.clone(),
+                    args: params.args.clone(),
+                    respond_to: msg.respond_to.clone(),
+                };
+                if let Err(err) = svc.enqueue_call(job) {
+                    let response = serde_json::to_string(&api::schema::ErrorResponse {
+                        id: msg.request.id,
+                        error: api::schema::ErrorBody {
+                            code: "shepherd_error".into(),
+                            message: err,
+                        },
+                    })
+                    .unwrap_or_else(|_| "{}".to_string());
+                    let _ = msg.respond_to.send(response);
+                }
+                return true;
+            } else {
+                let response = serde_json::to_string(&api::schema::ErrorResponse {
+                    id: msg.request.id,
+                    error: api::schema::ErrorBody {
+                        code: "shepherd_not_running".into(),
+                        message: "Shepherd service is not running; enable shepherd in config (shepherd.enabled = true)".into(),
+                    },
+                })
+                .unwrap_or_else(|_| "{}".to_string());
+                let _ = msg.respond_to.send(response);
+                return false;
+            }
         }
 
         match &msg.request.method {
