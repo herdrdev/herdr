@@ -1161,9 +1161,9 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err("uso: herdr update [--handoff]".to_string());
             }
-            _ => return Err(format!("unknown update option: {arg}")),
+            _ => return Err(format!("opção de atualização desconhecida: {arg}")),
         }
     }
     Ok(options)
@@ -3305,7 +3305,7 @@ mod tests {
         );
         assert_eq!(
             parse_self_update_args(&["--unknown".to_string()]).unwrap_err(),
-            "unknown update option: --unknown"
+            "opção de atualização desconhecida: --unknown"
         );
     }
 

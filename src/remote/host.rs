@@ -15,7 +15,7 @@ pub(crate) fn run_remote_client_bridge(args: &[String]) -> io::Result<()> {
         _ => {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "unsupported remote client bridge option",
+                "opção da ponte remota não suportada",
             ))
         }
     };
@@ -28,7 +28,7 @@ pub(crate) fn run_remote_client_bridge(args: &[String]) -> io::Result<()> {
         io::Error::new(
             err.kind(),
             format!(
-                "failed to connect to remote Herdr client socket {}: {err}",
+                "não foi possível conectar ao socket remoto do cliente {}: {err}",
                 socket_path.display()
             ),
         )
@@ -44,7 +44,7 @@ fn ensure_remote_server_running() -> io::Result<()> {
             &crate::api::socket_path(),
             Duration::from_millis(500),
         )?
-        .ok_or_else(|| io::Error::other("remote server status API is unavailable"))?;
+        .ok_or_else(|| io::Error::other("a API de estado do servidor remoto está indisponível"))?;
         if status
             .capabilities
             .as_ref()
@@ -54,7 +54,7 @@ fn ensure_remote_server_running() -> io::Result<()> {
             return Ok(());
         }
         return Err(io::Error::other(
-            "remote herdr server needs one final update before this bridge can attach; rerun `herdr --remote` from an interactive terminal to approve it",
+            "o servidor remoto precisa de uma última atualização antes de anexar; execute `herdr --remote` em um terminal interativo para aprová-la",
         ));
     }
 

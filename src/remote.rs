@@ -20,7 +20,7 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
                 std::io::Error::new(
                     error.kind(),
                     format!(
-                        "failed to connect to remote Herdr API socket {}: {error}",
+                        "não foi possível conectar ao socket da API remota {}: {error}",
                         path.display()
                     ),
                 )
@@ -33,7 +33,7 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
         }
         _ => Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "usage: herdr remote-api-bridge [--check]",
+            "uso: herdr remote-api-bridge [--check]",
         )),
     }
 }
@@ -41,7 +41,7 @@ pub(crate) fn run_remote_api_bridge(args: &[String]) -> std::io::Result<()> {
 pub(crate) fn print_saved_ssh_error_hint(err: &std::io::Error, target: &str) {
     if is_remote_host_key_error(err) {
         eprintln!(
-            "hint: saved machines use strict host-key checking; add the host key to the configured known_hosts file, then retry."
+            "dica: máquinas salvas usam verificação estrita da chave do host; adicione a chave ao known_hosts configurado e tente novamente."
         );
     } else {
         print_remote_error_hint(err, target);
@@ -51,11 +51,11 @@ pub(crate) fn print_saved_ssh_error_hint(err: &std::io::Error, target: &str) {
 pub(crate) fn print_remote_error_hint(err: &std::io::Error, target: &str) {
     if is_remote_auth_error(err) {
         eprintln!(
-            "hint: verify SSH access first with `{}`.",
+            "dica: verifique o acesso SSH primeiro com `{}`.",
             ssh_check_command(target)
         );
         eprintln!(
-            "hint: if your SSH key has a passphrase, load it into ssh-agent with `ssh-add` before running `herdr --remote`."
+            "dica: se a sua chave SSH tem senha, carregue-a no ssh-agent com `ssh-add` antes de executar `herdr --remote`."
         );
     }
 }

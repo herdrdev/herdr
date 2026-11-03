@@ -400,7 +400,7 @@ fn print_json(value: &impl Serialize) -> std::io::Result<()> {
 fn current_exe_label() -> String {
     std::env::current_exe()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|err| format!("unknown ({err})"))
+        .unwrap_or_else(|err| format!("desconhecido ({err})"))
 }
 
 fn print_status_help() {

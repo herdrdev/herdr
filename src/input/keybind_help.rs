@@ -134,15 +134,15 @@ pub(crate) fn keybind_help_groups(
                 entry(binding_label(&keybinds.new_workspace), "novo espaço"),
                 entry(
                     binding_label(&keybinds.new_worktree),
-                    "nova árvore de trabalho",
+                    "nova cópia de trabalho",
                 ),
                 entry(
                     binding_label(&keybinds.open_worktree),
-                    "abrir árvore de trabalho",
+                    "abrir cópia de trabalho",
                 ),
                 entry(
                     binding_label(&keybinds.remove_worktree),
-                    "excluir árvore de trabalho",
+                    "excluir cópia de trabalho",
                 ),
                 entry(binding_label(&keybinds.rename_workspace), "renomear espaço"),
                 entry(binding_label(&keybinds.close_workspace), "fechar espaço"),

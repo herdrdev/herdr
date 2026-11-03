@@ -378,7 +378,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "worktrees",
-        "configuração de árvore de trabalho",
+        "configuração de cópia de trabalho",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.worktrees = section,

@@ -44,10 +44,10 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Ok(args.to_vec());
         }
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("uso: herdr session attach <nome>".to_string());
         };
         if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("uso: herdr session attach <nome>".to_string());
         }
         apply_explicit_name(name)?;
         return Ok(cleaned);
@@ -63,7 +63,7 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
         }
         if arg == "--session" {
             let Some(value) = args.get(index + 1) else {
-                return Err("missing value for --session".to_string());
+                return Err("falta o valor de --session".to_string());
             };
             requested_session = Some(value.clone());
             index += 2;
@@ -264,7 +264,7 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
     let socket_path = api_socket_path_for(name);
     let client_socket_path = client_socket_path_for(name);
-    let label = format!("session {}", name.unwrap_or(DEFAULT_SESSION_NAME));
+    let label = format!("a sessão {}", name.unwrap_or(DEFAULT_SESSION_NAME));
     stop_socket_with_timeout(
         socket_path.clone(),
         vec![socket_path, client_socket_path],
@@ -288,7 +288,7 @@ fn stop_socket_with_timeout(
     });
     let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
         format!(
-            "{label} is not running or cannot be reached at {}: {err}",
+            "{label} não está em execução ou não pôde ser alcançada em {}: {err}",
             socket_path.display()
         )
     })?;
@@ -301,7 +301,7 @@ fn stop_socket_with_timeout(
     if !wait_until_stopped_until(&stopped_socket_paths, deadline) {
         let reachable = reachable_socket_paths(&stopped_socket_paths);
         return Err(format!(
-            "{label} did not stop within {}ms; sockets are still reachable at {}",
+            "{label} não parou em {}ms; sockets ainda acessíveis em {}",
             timeout.as_millis(),
             reachable
                 .iter()
@@ -315,7 +315,7 @@ fn stop_socket_with_timeout(
 
 pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
     if name == DEFAULT_SESSION_NAME {
-        return Err("deleting the default session is not supported".to_string());
+        return Err("não é possível excluir a sessão padrão".to_string());
     }
     validate_name(name)?;
     let Some(dir) = exact_session_dir_for_delete(name)? else {
@@ -324,7 +324,7 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
     let socket_path = dir.join("herdr.sock");
     if is_running_at(&socket_path) {
         return Err(format!(
-            "session {name} is running; stop it before deleting"
+            "a sessão {name} está em execução; pare-a antes de excluir"
         ));
     }
     let info = session_info(Some(name));
@@ -353,7 +353,7 @@ fn exact_session_dir_for_delete(name: &str) -> Result<Option<PathBuf>, String> {
     // filesystems. Never probe its socket or delete it without an exact entry.
     match std::fs::symlink_metadata(sessions_dir.join(name)) {
         Ok(_) => Err(format!(
-            "session {name} does not match an exact session name; use the spelling shown by `herdr session list`"
+            "a sessão {name} não corresponde a um nome exato; use a grafia mostrada por `herdr session list`"
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
@@ -468,22 +468,22 @@ fn socket_timeout_from_remaining(remaining: Duration) -> Option<Duration> {
 
 pub fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
-        return Err("session name cannot be empty".to_string());
+        return Err("o nome da sessão não pode ser vazio".to_string());
     }
     if name.len() > MAX_SESSION_NAME_LEN {
         return Err(format!(
-            "session name cannot be longer than {MAX_SESSION_NAME_LEN} bytes"
+            "o nome da sessão não pode ter mais de {MAX_SESSION_NAME_LEN} bytes"
         ));
     }
     if name == "." || name == ".." {
-        return Err("session name cannot be . or ..".to_string());
+        return Err("o nome da sessão não pode ser . ou ..".to_string());
     }
     if !name
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         return Err(
-            "session name may only contain ASCII letters, numbers, '.', '_' and '-'".to_string(),
+            "o nome da sessão só pode conter letras ASCII, números, '.', '_' e '-'".to_string(),
         );
     }
     Ok(())
@@ -732,7 +732,7 @@ mod tests {
         let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
             .expect_err("silent session should fail after timeout");
 
-        assert!(err.contains("did not stop"), "{err}");
+        assert!(err.contains("não parou"), "{err}");
         keep_running.store(false, Ordering::Relaxed);
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&config_home);
@@ -1126,7 +1126,7 @@ mod tests {
         let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
             .expect_err("still-running session should fail");
 
-        assert!(err.contains("did not stop"), "{err}");
+        assert!(err.contains("não parou"), "{err}");
         assert!(
             err.contains(socket_path.to_string_lossy().as_ref()),
             "{err}"

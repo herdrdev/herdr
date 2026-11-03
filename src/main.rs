@@ -601,7 +601,7 @@ fn main() -> io::Result<()> {
         match update::self_update(options) {
             Ok(_) => return Ok(()),
             Err(e) => {
-                if e.starts_with("self-update is disabled") {
+                if e.starts_with("Atualize o Pretorian") {
                     eprintln!("{e}");
                 } else {
                     eprintln!("falha na atualização: {e}");
@@ -688,7 +688,7 @@ fn main() -> io::Result<()> {
             ),
             (
                 "herdr worktree <subcommand>",
-                "Gerenciar worktrees Git pela API de socket",
+                "Gerenciar cópias de trabalho Git pela API de socket",
             ),
             (
                 "herdr tab <subcommand>",
