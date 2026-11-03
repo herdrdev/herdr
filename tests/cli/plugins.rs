@@ -1316,7 +1316,7 @@ command = ["sh", "-c", "echo should-not-install"]
         stderr.contains("  comando: definitely-missing-herdr-build-tool-xyz"),
         "{stderr}"
     );
-    assert!(stderr.contains("  error: failed to start:"), "{stderr}");
+    assert!(stderr.contains("  erro: falha ao iniciar:"), "{stderr}");
     assert!(stderr.contains("O plugin não foi instalado."), "{stderr}");
     assert!(!stderr.contains("Error: Custom"), "{stderr}");
 

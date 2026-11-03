@@ -220,13 +220,17 @@ try {
                     # Drain pipes asynchronously; server output must never block readiness.
                     $serverOut = $server.StandardOutput.ReadToEndAsync(); $serverErr = $server.StandardError.ReadToEndAsync()
                     $deadline = [DateTime]::UtcNow.AddSeconds(30)
+                    $serverReady = $false
                     do {
                         Update-GauntletLease $root
-                        try { $status = Invoke-GauntletProcess $exe @('--session', $nonce, 'status', 'server') $plan -Timeout 5 } catch { $status = '' }
-                        if ($status -match 'status: running') { break }
+                        try {
+                            $status = Invoke-GauntletProcess $exe @('--session', $nonce, 'status', 'server', '--json') $plan -Timeout 5
+                            $serverReady = ($status | ConvertFrom-Json -ErrorAction Stop).status -ceq 'running'
+                        } catch { $serverReady = $false }
+                        if ($serverReady) { break }
                         Start-Sleep -Milliseconds 200
                     } while ([DateTime]::UtcNow -lt $deadline)
-                    if ($status -notmatch 'status: running') { throw 'Owned server did not become ready' }
+                    if (-not $serverReady) { throw 'Owned server did not become ready' }
                     $created = (Invoke-GauntletProcess $exe @('--session', $nonce, 'workspace', 'create', '--cwd', $work, '--focus') $plan) | ConvertFrom-Json
                     $pane = $created.result.root_pane.pane_id
                     if (-not $pane) { throw 'Missing owned probe pane identity' }
