@@ -1498,6 +1498,13 @@ pub(crate) fn configure_background_command_platform(command: &mut std::process::
     command.creation_flags(CREATE_NO_WINDOW);
 }
 
+mod remote_start;
+#[cfg(test)]
+pub(crate) use remote_start::WindowsSignInRequired;
+pub(crate) use remote_start::{
+    bootstrap_remote_server, is_windows_sign_in_required, launch_remote_server_daemon_command,
+};
+
 pub fn launch_server_daemon_command(command: &mut std::process::Command) -> std::io::Result<u32> {
     if current_job_kills_processes_on_close()? {
         launch_server_daemon_with_wmi(command)

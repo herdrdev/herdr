@@ -17,6 +17,12 @@
       "title": "Server",
       "keys": [
         {
+          "key": "server.allow_headless_remote_start",
+          "type": "boolean",
+          "default": "false",
+          "description": "Windows only: allow remote startup without a same-account Windows sign-in, where Codex sandbox, computer use and desktop tools may fail."
+        },
+        {
           "key": "server.allow_unelevated_clients",
           "type": "boolean",
           "default": "false",

@@ -225,6 +225,9 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Size of the virtual terminal used when no client is attached.
 # Attached clients always use their own terminal size.
 [server]
+# Windows only: allow remote startup without Windows sign-in.
+# Codex sandbox, computer use and desktop tools may fail.
+# allow_headless_remote_start = false
 # Windows only: allow ordinary same-account clients to control an elevated server.
 # Requires a server restart.
 # allow_unelevated_clients = false
@@ -517,6 +520,8 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     };
+    #[cfg(windows)]
+    let raw_args = platform::bootstrap_remote_server(raw_args)?;
     #[cfg(windows)]
     if let Some(result) = platform::maybe_activate_desktop_notification(&raw_args) {
         return result;
