@@ -129,7 +129,73 @@ Para mantener los rebases desde `herdrdev/herdr` baratos, todo el código nuevo 
 - No se ejecutó el binario contra la sesión real de `herdr` del usuario ni contra sus rutas persistidas reales (`~/.local/state/shepherd` o `~/.config/herdr*`), respetando estrictamente las directivas de seguridad. Todas las pruebas automatizadas se ejecutaron usando sesiones aisladas en memoria y temporales con `AppPolicy::TEST`.
 - El test intermitente preexistente de plugins de herdr `app::api::plugins::tests::manifest_action_invoke_injects_plugin_paths` continúa como intermitente conocido dentro de la suite completa upstream (pasa en solitario).
 
-### Qué queda para F3
+## Estado F3
 
-- Integrar las teclas y atajos interactivos del client shell (`ClientShellOverlay` / keybindings en `src/client/shell/`) para invocar el panel de agentes (`shepherd_agents_panel`).
-- Vistas completas del TUI para el árbol de tareas, runs, skills y estado de git/ramas/PR según el diseño de UI de herdr (ratatui, mouse-first, render puro).
+### Lo hecho
+
+1. **Panel de agentes interactivo (`src/shepherd/panel.rs`)**:
+   - Navegación e interactividad completa por teclado (`j`/`k`, `Up`/`Down`, `Home`/`End`) y por ratón (clic para seleccionar fila o botones, doble clic para enfocar).
+   - `Enter` y doble clic: emiten `ShepherdAgentsAction::FocusAgentPane` para enfocar la terminal nativa del agente seleccionado sin emular pantallas en el TUI.
+   - Formulario de lanzamiento (`s` -> `AgentsSubModal::SpawnForm`): rol obligatorio, tarea, vendor/modelo opcional, skills adicionales separados por coma; validaciones idénticas a las del servicio con visualización de errores.
+   - Acciones destructivas con guardas de confirmación explícitas (`AgentsSubModal::ConfirmKill`, `ConfirmClean`, `ConfirmCleanAll`):
+     - `K`: advertencia de matar agente en ejecución (`SIGKILL`).
+     - `x`: confirmación de limpieza que explica explícitamente que los agentes en estado `done` cerrarán su pestaña/panel de Herdr.
+     - `X`: limpieza masiva de agentes en estados definitivos (`exited`, `killed`, `failed`), mostrando el conteo exacto de agentes a limpiar.
+   - Visualización íntegra de avisos ("NEEDS YOU"): los agentes bloqueados o que requieren al humano se destacan visualmente con badge y borde de advertencia, y su aviso (`notice`) se muestra completo y formateado sin truncar ni perderse por scrolling.
+   - Estricto modelo modal: exactamente un sub-modal o formulario activo a la vez; `Esc` cancela cualquier modal y vuelve al panel base.
+   - Pruebas unitarias de estado puro y tests de render puro con `ratatui::buffer::Buffer`.
+
+2. **Vista de tareas (`src/shepherd/tasks.rs`)**:
+   - Modelo de estado puro `ShepherdTasksState` con navegación y selección (`j`/`k`, `Up`/`Down`, clic de ratón).
+   - Vista previa con formateo markdown básico de especificación (`spec`), issue y criterios de aceptación (`criteria`).
+   - Formulario de creación de tareas (`n` -> `TasksSubModal::CreateTask`): valida que el título y la descripción no estén vacíos, y valida explícitamente que no existan rutas de archivos inexistentes o rotas en los adjuntos.
+   - Importación de issues de GitHub (`i` -> `TasksSubModal::ImportGh`): valida número/URL de issue; gestiona errores de ejecución de `gh` de forma limpia sin dejar estados inconsistentes a medias.
+   - Confirmación de archivado (`a` -> `TasksSubModal::ConfirmArchive`): guarda destructiva antes de archivar tareas completadas o canceladas.
+   - Edición externa: la tecla `e` emite la acción `ShepherdTasksAction::OpenEditorInNewPane` para invocar `$EDITOR` en un nuevo panel de Herdr sin contaminar la vista del TUI.
+   - Pruebas unitarias y de render puro verificando listas, validaciones y guardas de confirmación.
+
+3. **Vista de runs y gates (`src/shepherd/runs.rs`)**:
+   - Modelo de estado puro `ShepherdRunsState`: lista de ejecuciones con estado por tarea (`Running`, `Completed`, `Failed` con motivo detallado de error, `Cancelled`).
+   - Formulario de opciones de lanzamiento y reanudación (`l` / `r` -> `RunsSubModal::LaunchOptions`):
+     - La opción `auto_push` arranca **estrictamente apagada (`false`)** al abrir el formulario, y su texto advierte explícitamente que aprueba `push` y `PR` por adelantado sin revisión humana posterior.
+     - La opción de replanificar (`replan`) está estrictamente bloqueada si la tarea no tiene un plan previamente guardado.
+   - Cancelación de run (`c` -> `RunsSubModal::ConfirmCancelRun`): advierte de forma explícita que los agentes de código ya lanzados permanecerán vivos en sus paneles de Herdr.
+   - Aprobación y rechazo de gates (`a` -> `ConfirmApproveGate`, `d` -> `ConfirmRejectGate`):
+     - La confirmación de aprobación explica taxativamente que aprobar desencadenará la publicación (`push`) de la rama y la creación del `Pull Request`. Push y PR nunca se ejecutan sin esta confirmación expresa.
+   - Pruebas de estado puro y de render puro cubriendo estados de run, guardas de confirmación y opciones de lanzamiento.
+
+4. **Vista de skills (`src/shepherd/skills.rs`)**:
+   - Modelo de estado puro `ShepherdSkillsState` y modos de vista (por agente y catálogo general).
+   - Para cada agente, visualiza los tres niveles de resolución jerárquica (global, rol, sesión/agente) con su origen (`default`, `user`, `repo`) y marca indicadora de si ha sido editada (`edited`).
+   - Activación y desactivación de skills por agente: incluye un aviso destacado en el panel indicando explícitamente que *"Añadir o quitar skills se aplica al REINICIAR el agente; editar el texto sí llega en vivo"*.
+   - Detección de shadowing: si un cambio de configuración no tiene efecto debido a que otra capa superior lo solapa/tapa, la operación falla inmediatamente con un error descriptivo (`Err(...)`) en lugar de fingir éxito.
+   - Restauración de copias editadas (`r` -> `SkillsSubModal::ConfirmRestore`): guarda de confirmación destructiva antes de revertir al contenido base.
+   - Gestión del catálogo (`c` -> modo catálogo): crear, editar, alternar global, y borrado con confirmación (`ConfirmDelete`), con protección estricta de las skills empaquetadas por defecto (`Scope::Default`), impidiendo su eliminación y permitiendo borrar únicamente skills con ámbito `user` o `repo`.
+   - Pruebas unitarias y de render puro verificando la jerarquía de 3 niveles, aviso de reinicio vs vivo, protección de catálogo y detección de shadowing.
+
+### Lo no verificado
+
+- No se ejecutó contra el estado real del usuario (`~/.local/state/shepherd`, `~/.config/herdr*`, sockets o sesiones reales de Herdr con tokens), en estricto cumplimiento de las directivas de seguridad.
+- La ejecución del comando externo `gh` y del `$EDITOR` se verificó a nivel de contrato de interfaz, acciones emitidas y pruebas con fallos simulados sin invocar procesos externos interactivos en el entorno de desarrollo.
+- El test intermitente preexistente de plugins de herdr upstream `app::api::plugins::tests::manifest_action_invoke_injects_plugin_paths` continúa como intermitente conocido (pasa en solitario).
+
+### Archivos de herdr tocados
+
+Todo el código de F3 se aisló estrictamente dentro del submódulo `src/shepherd/`, sin requerir modificaciones en los archivos de la suite de herdr upstream:
+
+| Archivo | Tipo de cambio | Contenido |
+|---|---|---|
+| `src/shepherd/panel.rs` | Modificación | Interactividad con teclado y ratón, sub-modales (`SpawnForm`, `ConfirmKill`, `ConfirmClean`, `ConfirmCleanAll`), y visualización completa y no truncada de avisos `notice`. |
+| `src/shepherd/tasks.rs` | Archivo nuevo | Modelo de estado puro `ShepherdTasksState`, vista previa con markdown, formulario de creación con validación de adjuntos no rotos, importación con `gh`, confirmación de archivado, emisión de `$EDITOR` en nuevo pane y render puro. |
+| `src/shepherd/runs.rs` | Archivo nuevo | Modelo de estado puro `ShepherdRunsState`, opciones de lanzamiento (`auto_push` estrictamente `false` al abrir, replan bloqueado sin plan previo), confirmación de cancelación con advertencia de agentes vivos, confirmaciones de gates explicando push y PR, y render puro. |
+| `src/shepherd/skills.rs` | Archivo nuevo | Modelo de estado puro `ShepherdSkillsState`, 3 niveles jerárquicos (global/rol/agente), aviso de reinicio vs en vivo, protección de skills `default` frente a borrado, guardas de confirmación y detección de fallos por shadowing. |
+| `src/shepherd/mod.rs` | Modificación | Declaración de los submódulos `tasks`, `runs`, `skills` y re-exportación de sus estados (`ShepherdTasksState`, `ShepherdRunsState`, `ShepherdSkillsState`). |
+
+### Qué queda para F4
+
+- Métodos de API y subcomandos de la CLI de `shepherd` sobre el socket de herdr (uso headless y automatización) con salida JSON.
+- Vista de estado de git, ramas, worktrees y PR en el TUI.
+
+### Corrección del revisor (F3)
+
+El informe del agente no lo dice: las vistas de F3 son **estado puro + render puro + acciones emitidas, probados de forma aislada, pero no están conectados al TUI**. No hay enrutado de teclado ni ratón desde `src/client/shell` / `src/input`, no se componen en pantalla, `AppState` solo guarda el estado del panel de agentes (no el de tareas, runs ni skills) y nadie despacha las acciones emitidas (`FocusAgentPane`, `OpenEditorInNewPane`, lanzar, matar, aprobar…) hacia `shepherd.call` o hacia herdr. Con el binario actual el usuario **no ve ni puede usar** estas vistas. Pendiente, fase **F3b**: cablear las cuatro vistas al cliente (atajos globales y clic, composición en el layout, `AppState`, despacho de acciones) con los hooks mínimos en archivos de herdr, y listar esos archivos aquí.

@@ -12,9 +12,18 @@
 #![allow(dead_code)]
 
 pub mod panel;
+pub mod runs;
 pub mod service;
+pub mod skills;
+pub mod tasks;
 
 pub use panel::ShepherdAgentsPanelState;
+#[allow(unused_imports)]
+pub use runs::ShepherdRunsState;
+#[allow(unused_imports)]
+pub use skills::ShepherdSkillsState;
+#[allow(unused_imports)]
+pub use tasks::ShepherdTasksState;
 #[allow(unused_imports)] // Re-exported for server runtime and API dispatch in F2
 pub use service::{ShepherdCallJob, ShepherdRuntimeService};
 
