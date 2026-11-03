@@ -88,6 +88,14 @@ build:
 build:
     python scripts/package_windows_conpty.py build-local
 
+# Compila em release e instala como ~/.local/bin/pretorian, sem substituir um herdr pessoal
+[unix]
+instalar destino=(env_var('HOME') / '.local/bin'):
+    cargo build --release --locked
+    mkdir -p "{{destino}}"
+    install -m 755 "${CARGO_TARGET_DIR:-target}/release/herdr" "{{destino}}/pretorian"
+    @echo "instalado em {{destino}}/pretorian"
+
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:
     cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1

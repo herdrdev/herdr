@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Pretorian
+- Tema claro `pretorian`, título externo `Pretorian` e cabeçalho `Pretorian · Nome` passam a ser o padrão embutido; um `config.toml` explícito continua prevalecendo.
+- Nova seção **usuário** nas configurações grava `[pretorian] nome` e atualiza o cabeçalho sem reiniciar.
+- Configuração e estado ficam em `~/.config/pretorian` e `~/.local/state/pretorian`, sem tocar em um Herdr pessoal.
+- Botões `esc fechar` e `↵ continuar` deixam de sair cortados; avisos acentuados são medidos em colunas.
+- Mensagens próprias de conexão, sessão, servidor, ponte remota e validação de configuração traduzidas; `just instalar` compila e instala `pretorian` a partir do clone.
+
 ## [0.9.5] - 2026-10-14
 
 This is a hotfix release for v0.9.4. See the v0.9.4 notes for the full feature release: https://github.com/herdrdev/herdr/releases/tag/v0.9.4
