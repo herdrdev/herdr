@@ -237,7 +237,7 @@ fn client_owned_sidebar_dividers_resize_live() {
         waiting_text.contains(" espaços"),
         "local sidebar must keep spaces while resizing: {waiting_text}"
     );
-    assert!(!waiting_text.contains(" machines"));
+    assert!(!waiting_text.contains(" máquinas"));
     assert!(!waiting_text.contains("Selecione uma máquina conectada"));
     assert!(!waiting_text.contains("LIVE"));
     assert!(waiting_frame.cursor.is_none());

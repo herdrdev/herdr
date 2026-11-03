@@ -1808,7 +1808,7 @@ async fn run_client_loop(
                             &endpoint_id,
                             io::Error::new(
                                 io::ErrorKind::ConnectionAborted,
-                                reason.unwrap_or_else(|| "server stopped".into()),
+                                reason.unwrap_or_else(|| "servidor parado".into()),
                             ),
                         );
                     }

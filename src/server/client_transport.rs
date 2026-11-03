@@ -795,7 +795,7 @@ pub(crate) fn handle_client_handshake(
                 version: PROTOCOL_VERSION,
                 encoding: RenderEncoding::SemanticFrame,
                 error: Some(
-                    "this client predates the stable endpoint protocol; upgrade the Herdr client"
+                    "este cliente é anterior ao protocolo estável de conexão; atualize o cliente Pretorian"
                         .to_owned(),
                 ),
             };
@@ -938,7 +938,7 @@ fn send_shutdown_to_unregistered_client(writer: &ClientWriter) {
     if protocol::write_message(
         &mut framed,
         &ServerMessage::ServerShutdown {
-            reason: Some("server is shutting down".to_owned()),
+            reason: Some("o servidor está sendo encerrado".to_owned()),
         },
     )
     .is_ok()

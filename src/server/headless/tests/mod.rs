@@ -4184,7 +4184,7 @@ fn terminal_attach_rejects_missing_terminal_and_removes_client() {
     let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
     assert_eq!(
         reason,
-        Some("terminal attach failed: terminal term_missing not found".to_owned())
+        Some("falha ao anexar terminal: terminal term_missing não encontrado".to_owned())
     );
 }
 
@@ -4678,7 +4678,7 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
         assert_eq!(
                 reason,
                 Some(format!(
-                    "terminal attach failed: terminal {terminal_id_string} has a read in progress; retry"
+                    "falha ao anexar terminal: o terminal {terminal_id_string} tem uma leitura em andamento; tente novamente"
                 ))
             );
     });
@@ -7480,7 +7480,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 5000012 bytes; Herdr's limit is 1048576 bytes"
+            "Colagem recusada: a mensagem de entrada tem 5000012 bytes; o limite do Pretorian é 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7510,7 +7510,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 7000000 bytes; Herdr's limit is 1048576 bytes"
+            "Colagem recusada: a mensagem de entrada tem 7000000 bytes; o limite do Pretorian é 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }

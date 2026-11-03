@@ -258,7 +258,7 @@ pub(super) fn render_expanded(
         workspace_area.x,
         workspace_area.y,
         workspace_area.width,
-        " machines",
+        " máquinas",
         Style::default()
             .fg(palette.overlay0)
             .add_modifier(Modifier::BOLD),

@@ -243,7 +243,7 @@ pub(super) fn do_handshake(
             return Err(ClientError::Protocol(protocol::FramingError::Io(
                 io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "server does not support the stable Herdr endpoint protocol; update this machine",
+                    "o servidor não suporta o protocolo estável de conexão; atualize esta máquina",
                 ),
             )));
         };
@@ -255,7 +255,7 @@ pub(super) fn do_handshake(
         let welcome: EndpointServerWelcome = serde_json::from_str(&data).map_err(|error| {
             ClientError::Protocol(protocol::FramingError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("invalid endpoint welcome: {error}"),
+                format!("boas-vindas de conexão inválidas: {error}"),
             )))
         })?;
         if let Some(error) = welcome.error {
@@ -272,7 +272,8 @@ pub(super) fn do_handshake(
         {
             return Err(ClientError::HandshakeRejected {
                 version: welcome.generation,
-                error: "server has no compatible endpoint core; update this machine".into(),
+                error: "o servidor não tem um núcleo de conexão compatível; atualize esta máquina"
+                    .into(),
             });
         }
         info!(
