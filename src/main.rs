@@ -98,6 +98,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [theme.custom.light]
 # panel_bg = "#eff1f5"
 # text = "#4c4f69"
+
+# Seção própria do Pretorian. O nome aparece no cabeçalho como "Pretorian · Nome";
+# também pode ser definido em configurações > usuário. Um ui.tab_bar_right explícito
+# substitui esse cabeçalho.
+# [pretorian]
+# nome = ""
 #
 # [theme.custom.dark]
 # panel_bg = "#1e1e2e"

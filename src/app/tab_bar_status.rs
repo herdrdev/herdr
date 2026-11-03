@@ -531,6 +531,15 @@ mod tests {
         )
     }
 
+    #[test]
+    fn app_padrao_mostra_cabecalho_pretorian() {
+        let app = test_app();
+        assert_eq!(
+            app.state.tab_bar_right,
+            vec![TabBarStatusSegment::Text(Some("Pretorian".into()))]
+        );
+    }
+
     #[cfg(unix)]
     const MULTILINE_COMMAND: &str = "printf 'old\\nfinal\\n'";
     #[cfg(windows)]

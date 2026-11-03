@@ -409,6 +409,18 @@
       ]
     },
     {
+      "id": "pretorian",
+      "title": "Pretorian",
+      "keys": [
+        {
+          "key": "pretorian.nome",
+          "type": "string",
+          "default": "unset",
+          "description": "Nome mostrado no cabeçalho como \"Pretorian · Nome\". Vazio ou ausente mostra só \"Pretorian\". Um ui.tab_bar_right explícito substitui esse cabeçalho."
+        }
+      ]
+    },
+    {
       "id": "terminal",
       "title": "Terminal",
       "keys": [

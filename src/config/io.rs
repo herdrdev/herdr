@@ -9,6 +9,7 @@ const KNOWN_TOP_LEVEL_CONFIG_KEYS: &[&str] = &[
     "experimental",
     "keys",
     "onboarding",
+    "pretorian",
     "remote",
     "server",
     "session",
@@ -396,6 +397,14 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.remote = section,
+    );
+    load_live_section(
+        table,
+        "pretorian",
+        "configuração do Pretorian",
+        &mut diagnostics,
+        &mut invalid_sections,
+        |section| config.pretorian = section,
     );
 
     diagnostics.extend(config.theme.diagnostics());
@@ -939,6 +948,19 @@ resume_agents_on_restore = true
         assert!(loaded.config.session.resume_agents_on_restore);
         assert!(loaded.diagnostics.is_empty());
         assert!(loaded.invalid_sections.is_empty());
+    }
+
+    #[test]
+    fn secao_pretorian_e_conhecida_na_recarga() {
+        let loaded = load_live_config_from_str("[pretorian]\nnome = \"Ana\"\n").unwrap();
+
+        assert_eq!(loaded.config.pretorian.nome.as_deref(), Some("Ana"));
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert!(loaded.invalid_sections.is_empty());
+
+        let invalido = load_live_config_from_str("[pretorian]\nnome = 7\n").unwrap();
+        assert_eq!(invalido.config.pretorian.nome, None);
+        assert_eq!(invalido.invalid_sections, vec!["pretorian".to_string()]);
     }
 
     #[test]

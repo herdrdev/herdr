@@ -699,7 +699,10 @@ impl App {
             client_shell_keybindings_profile,
             endpoint_commands,
         };
-        app.configure_tab_bar_status(&config.ui.tab_bar_right, &config.ui.tab_bar_right_separator);
+        app.configure_tab_bar_status(
+            &config.tab_bar_right_efetivo(),
+            &config.ui.tab_bar_right_separator,
+        );
         app.configure_window_title(&config.ui.window_title);
         app.refresh_restored_workspace_git_metadata();
         Ok(app)
@@ -930,7 +933,7 @@ impl App {
                 self.state.show_agent_labels_on_pane_borders =
                     config.ui.show_agent_labels_on_pane_borders;
                 self.configure_tab_bar_status(
-                    &config.ui.tab_bar_right,
+                    &config.tab_bar_right_efetivo(),
                     &config.ui.tab_bar_right_separator,
                 );
                 self.configure_window_title(&config.ui.window_title);
