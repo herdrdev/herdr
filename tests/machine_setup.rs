@@ -360,7 +360,9 @@ fn machine_add_fresh_host_offers_installation_and_cancellation_saves_nothing() {
     assert_eq!(result.probes, "platform\ncandidates\n", "{}", result.output);
     assert_eq!(result.prompts, 1, "{}", result.output);
     assert!(
-        result.output.contains("instalação remota do Herdr cancelada"),
+        result
+            .output
+            .contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
@@ -385,7 +387,9 @@ fn machine_setup_accepts_a_native_windows_probe_without_a_posix_probe() {
     assert_eq!(order.first().copied(), Some("windows"), "{}", result.output);
     assert!(!order.contains(&"posix-probe"), "{}", result.output);
     assert!(
-        result.output.contains("instalação remota do Herdr cancelada"),
+        result
+            .output
+            .contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
