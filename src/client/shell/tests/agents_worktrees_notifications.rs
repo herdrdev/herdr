@@ -1690,7 +1690,7 @@ fn empty_workspace_name_suggestion_is_localized() {
     assert!(
         matches!(state.overlay.as_ref(), Some(ClientShellOverlay::Rename(ClientRenameOverlay {
         input, target: ClientRenameTarget::NewWorkspace { cwd: None, suggested_name, .. }, ..
-    })) if input.as_str() == "espaco" && suggested_name == "espaco")
+    })) if input.as_str() == "espaço" && suggested_name == "espaço")
     );
 }
 

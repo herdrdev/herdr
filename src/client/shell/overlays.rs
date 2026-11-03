@@ -1080,7 +1080,7 @@ fn help_lines(
     let mut lines = Vec::new();
     for (group, entries) in groups {
         lines.push((
-            group.len() + 1,
+            usize::from(display_width(group)) + 1,
             Line::from(Span::styled(
                 format!(" {group}"),
                 Style::default()
