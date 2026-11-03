@@ -989,7 +989,7 @@ pub struct UiConfig {
     /// Text inserted between visible right-side tab bar entries. Default: one space.
     pub tab_bar_right_separator: String,
     /// Format for the outer terminal window title. Empty leaves the title alone.
-    /// Default: "{hostname}: {workspace}".
+    /// Default: "Pretorian".
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,

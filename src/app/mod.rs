@@ -247,6 +247,7 @@ fn normalize_theme_name(name: &str) -> String {
 
 fn sibling_theme_names(name: &str) -> (String, String) {
     match normalize_theme_name(name).as_str() {
+        "pretorian" => ("catppuccin".to_string(), "pretorian".to_string()),
         "catppuccin" | "catppuccin-mocha" | "catppuccin-latte" | "latte" | "light" => {
             ("catppuccin".to_string(), "catppuccin-latte".to_string())
         }
@@ -280,7 +281,7 @@ fn theme_runtime_config(
         .theme
         .name
         .clone()
-        .unwrap_or_else(|| "catppuccin".to_string());
+        .unwrap_or_else(|| "pretorian".to_string());
     let (default_dark, default_light) = sibling_theme_names(&manual_name);
     state::ThemeRuntimeConfig {
         manual_name,
@@ -352,7 +353,7 @@ fn resolve_effective_theme(
             ),
         }
     } else {
-        (&runtime.manual_name, "catppuccin", None)
+        (&runtime.manual_name, "pretorian", None)
     };
     (
         resolve_palette_for_theme_name(name, fallback, runtime, mode_custom),
@@ -368,7 +369,7 @@ pub(crate) fn client_palette_for_theme(
     runtime: &state::ThemeRuntimeConfig,
     name: &str,
 ) -> state::Palette {
-    resolve_palette_for_theme_name(name, "catppuccin", runtime, None)
+    resolve_palette_for_theme_name(name, "pretorian", runtime, None)
 }
 
 pub(crate) fn client_palette_from_config(config: &Config) -> state::Palette {
@@ -1129,6 +1130,19 @@ mod tests {
         } else {
             std::env::remove_var("XDG_STATE_HOME");
         }
+    }
+
+    #[test]
+    fn tema_padrao_e_pretorian() {
+        let config = Config::default();
+        assert_eq!(
+            client_theme_runtime_from_config(&config).manual_name,
+            "pretorian"
+        );
+        assert_eq!(
+            client_palette_from_config(&config),
+            state::Palette::pretorian()
+        );
     }
 
     #[test]

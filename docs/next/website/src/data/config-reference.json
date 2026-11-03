@@ -43,7 +43,7 @@
         {
           "key": "theme.name",
           "type": "string",
-          "default": "\"catppuccin\"",
+          "default": "\"pretorian\"",
           "description": "Built-in theme name."
         },
         {
@@ -1037,7 +1037,7 @@
         {
           "key": "ui.window_title",
           "type": "string",
-          "default": "\"{hostname}: {workspace}\"",
+          "default": "\"Pretorian\"",
           "description": "Title Herdr writes to the terminal it runs in. Tokens: {hostname}, {workspace}, {tab}, {pane}, {terminal_title}. Empty leaves the outer title alone."
         },
         {

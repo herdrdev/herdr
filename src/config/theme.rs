@@ -2,6 +2,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 pub const THEME_NAMES: &[&str] = &[
+    "pretorian",
     "catppuccin",
     "catppuccin-latte",
     "terminal",
@@ -24,6 +25,7 @@ pub const THEME_NAMES: &[&str] = &[
 
 pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
     match name.to_lowercase().replace([' ', '_'], "-").as_str() {
+        "pretorian" => Some("pretorian"),
         "catppuccin" | "catppuccin-mocha" => Some("catppuccin"),
         "catppuccin-latte" | "latte" | "light" => Some("catppuccin-latte"),
         "terminal" => Some("terminal"),
@@ -59,7 +61,7 @@ pub(crate) fn canonical_theme_name(name: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ThemeConfig {
-    /// Built-in theme name. Default: "catppuccin".
+    /// Built-in theme name. Default: "pretorian".
     pub name: Option<String>,
     /// Follow host terminal light/dark appearance and switch between theme names.
     pub auto_switch: bool,
@@ -75,7 +77,7 @@ impl ThemeConfig {
     pub(crate) fn diagnostics(&self) -> Vec<String> {
         let valid = THEME_NAMES.join(", ");
         [
-            ("theme.name", self.name.as_deref(), "catppuccin"),
+            ("theme.name", self.name.as_deref(), "pretorian"),
             ("theme.dark_name", self.dark_name.as_deref(), "catppuccin"),
             (
                 "theme.light_name",
@@ -248,10 +250,17 @@ light_name = "lattee"
         let diagnostics = config.theme.diagnostics();
         assert_eq!(diagnostics.len(), 3);
         assert!(diagnostics[0].contains("theme.name = \"catppucin\""));
-        assert!(diagnostics[0].contains("usando \"catppuccin\""));
+        assert!(diagnostics[0].contains("usando \"pretorian\""));
         assert!(diagnostics[1].contains("theme.dark_name = \"tokio-night\""));
         assert!(diagnostics[2].contains("theme.light_name = \"lattee\""));
         assert!(diagnostics[2].contains("usando \"catppuccin-latte\""));
+    }
+
+    #[test]
+    fn tema_pretorian_e_canonico_e_primeiro_da_lista() {
+        assert_eq!(canonical_theme_name("pretorian"), Some("pretorian"));
+        assert_eq!(canonical_theme_name("Pretorian"), Some("pretorian"));
+        assert_eq!(THEME_NAMES[0], "pretorian");
     }
 
     #[test]

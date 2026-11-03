@@ -2,7 +2,7 @@
 pub(crate) const MAX_WINDOW_TITLE_CHARS: usize = 200;
 
 pub(crate) fn default_window_title() -> String {
-    "{hostname}: {workspace}".to_string()
+    "Pretorian".to_string()
 }
 
 pub(crate) fn sanitize_window_title_text(value: &str) -> Option<String> {
@@ -154,6 +154,19 @@ mod tests {
         assert!(WindowTitleTemplate::parse(&default_window_title())
             .expect("parse")
             .is_some());
+    }
+
+    #[test]
+    fn titulo_padrao_e_pretorian_sem_marcadores() {
+        assert_eq!(default_window_title(), "Pretorian");
+        let template = WindowTitleTemplate::parse(&default_window_title())
+            .expect("parse")
+            .expect("template");
+        assert_eq!(
+            template.parts(),
+            [WindowTitlePart::Literal("Pretorian".into())]
+        );
+        assert!(!template.uses(WindowTitleToken::Hostname));
     }
 
     #[test]

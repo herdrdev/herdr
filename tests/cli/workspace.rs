@@ -592,12 +592,14 @@ fn config_check_reports_unknown_theme_names() {
     let stdout = String::from_utf8_lossy(&checked.stdout);
     assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(
-        stdout.contains(
-            "nome de tema desconhecido theme.name = \"catppucin\"; usando \"catppuccin\""
-        ),
+        stdout
+            .contains("nome de tema desconhecido theme.name = \"catppucin\"; usando \"pretorian\""),
         "{stdout}"
     );
-    assert!(stdout.contains("temas válidos: catppuccin"), "{stdout}");
+    assert!(
+        stdout.contains("temas válidos: pretorian, catppuccin"),
+        "{stdout}"
+    );
 
     cleanup_test_base(&base);
 }
