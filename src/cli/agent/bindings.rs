@@ -40,7 +40,7 @@ pub(crate) fn text_position(
 
 pub(crate) fn until() -> Input<Vec<AgentStatus>> {
     Input::<Vec<AgentStatus>>::value("until", "STATUS", |slot, value| {
-        slot.push(parse_choice(STATUSES, "agent status", value)?);
+        slot.push(parse_choice(STATUSES, "estado do agente", value)?);
         Ok(())
     })
     .configure(|arg| choices(arg, STATUSES))
@@ -62,7 +62,7 @@ fn validate_timeout(value: &str) -> Result<String, String> {
 
 pub(crate) fn source() -> Input<ReadSource> {
     Input::value("source", "SOURCE", |slot, value| {
-        *slot = parse_choice(READ_SOURCES, "read source", value)?;
+        *slot = parse_choice(READ_SOURCES, "origem da leitura", value)?;
         Ok(())
     })
     .configure(|arg| choices(arg, READ_SOURCES))
@@ -70,7 +70,7 @@ pub(crate) fn source() -> Input<ReadSource> {
 
 pub(crate) fn format() -> Input<ReadFormat> {
     Input::value("format", "FORMAT", |slot, value| {
-        *slot = parse_choice(READ_FORMATS, "read format", value)?;
+        *slot = parse_choice(READ_FORMATS, "formato da leitura", value)?;
         Ok(())
     })
     .configure(|arg| choices(arg, READ_FORMATS))
@@ -218,7 +218,7 @@ cli_projection! {
         agent => Field::new(None).input(optional_text("agent", "LABEL").configure(|arg| arg.requires("file").conflicts_with("target"))),
         json => Field::new(false)
             .input(Input::flag("json", |slot, _| { *slot = true; Ok(()) }))
-            .input(Input::value("format", "FORMAT", |slot, value| { *slot = parse_choice(EXPLAIN_FORMATS, "explain format", value)?; Ok(()) })
+            .input(Input::value("format", "FORMAT", |slot, value| { *slot = parse_choice(EXPLAIN_FORMATS, "formato do diagnóstico", value)?; Ok(()) })
                 .configure(|arg| choices(arg, EXPLAIN_FORMATS))),
         verbose => Field::new(false).input(Input::flag("verbose", |slot, _| { *slot = true; Ok(()) }).configure(|arg| arg.short('v'))),
     }
@@ -274,7 +274,7 @@ pub(crate) fn command() -> Command {
 
 pub(crate) fn from_matches(matches: &ArgMatches) -> Result<Operation, ParseError> {
     let Some((name, matches)) = matches.subcommand() else {
-        return Err(ParseError::Usage("missing agent command".into()));
+        return Err(ParseError::Usage("falta o comando agent".into()));
     };
     Ok(match name {
         "list" => Operation::List,
@@ -298,7 +298,11 @@ pub(crate) fn from_matches(matches: &ArgMatches) -> Result<Operation, ParseError
         "start" => Operation::Start(AgentStartProjection::from_matches(matches)?),
         "attach" => Operation::Attach(AttachProjection::from_matches(matches)?),
         "explain" => Operation::Explain(ExplainProjection::from_matches(matches)?),
-        _ => return Err(ParseError::Usage(format!("unknown agent command: {name}"))),
+        _ => {
+            return Err(ParseError::Usage(format!(
+                "comando agent desconhecido: {name}"
+            )))
+        }
     })
 }
 

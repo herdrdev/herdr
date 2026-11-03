@@ -85,7 +85,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
                 .map_err(|error| {
                     io::Error::new(
                         error.kind(),
-                        format!("machine '{}': {error}", target.profile.label),
+                        format!("máquina '{}': {error}", target.profile.label),
                     )
                 })?,
             );
@@ -93,7 +93,7 @@ pub(super) fn api_client() -> io::Result<ApiClient> {
         let bridge = target
             .bridge
             .as_ref()
-            .ok_or_else(|| io::Error::other("machine bridge unavailable"))?;
+            .ok_or_else(|| io::Error::other("conexão intermediária da máquina indisponível"))?;
         Ok(ApiClient::for_target(ConnectionTarget::SocketPath(
             bridge.socket_path().to_owned(),
         )))
@@ -162,7 +162,7 @@ pub(super) fn remote_error(error: io::Error) -> io::Error {
         io::Error::new(
             error.kind(),
             format!(
-                "machine '{}' (session {}): {error}",
+                "máquina '{}' (sessão {}): {error}",
                 target.profile.label, target.profile.session
             ),
         )
@@ -171,7 +171,7 @@ pub(super) fn remote_error(error: io::Error) -> io::Error {
 
 pub(super) fn restart_guidance() -> String {
     TARGET.with(|target| match target.borrow().as_ref() {
-        Some(target) => format!("Update Herdr and restart the server on machine '{}' (session {}). Stopping the server exits its pane processes.", target.profile.label, target.profile.session),
+        Some(target) => format!("Atualize o Herdr e reinicie o servidor na máquina '{}' (sessão {}). Encerrar o servidor termina os processos dos painéis.", target.profile.label, target.profile.session),
         None => crate::session::active_restart_after_update_guidance(),
     })
 }
@@ -220,7 +220,7 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
     while let Some(arg) = args.get(index) {
         if arg == "--machine" || arg.starts_with("--machine=") {
             if machine.is_some() {
-                return Err("--machine can only be specified once".into());
+                return Err("--machine só pode ser informado uma vez".into());
             }
             let value = if let Some(value) = arg.strip_prefix("--machine=") {
                 value.to_owned()
@@ -228,10 +228,10 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
                 index += 1;
                 args.get(index)
                     .cloned()
-                    .ok_or("missing value for --machine")?
+                    .ok_or("falta valor para --machine")?
             };
             if value.trim().is_empty() || value.starts_with('-') {
-                return Err("--machine requires a saved machine label or profile ID".into());
+                return Err("--machine exige o nome ou ID de uma máquina salva".into());
             }
             machine = Some(value);
         } else if arg.starts_with('-') && arg != "--" {
@@ -251,10 +251,10 @@ fn parse_machine_prefix(args: &[String]) -> Result<Option<(String, Vec<String>)>
         return Ok(None);
     };
     if other_prefix {
-        return Err("--machine cannot be combined with other launch options; it uses the saved machine's session".into());
+        return Err("--machine não pode ser combinado com outras opções de inicialização; ele usa a sessão da máquina salva".into());
     }
     if index >= args.len() || args[index] == "--" {
-        return Err("usage: herdr --machine <label-or-id> <command>".into());
+        return Err("Uso: herdr --machine <label-or-id> <command>".into());
     }
     let mut cleaned = vec![args[0].clone()];
     cleaned.extend_from_slice(&args[index..]);
@@ -315,7 +315,7 @@ fn validate_machine_command(args: &[String]) -> Result<(), String> {
     if supported {
         Ok(())
     } else {
-        Err(format!("`{command} {subcommand}` is not an API-backed machine command; --machine does not run local management commands or attach a TUI"))
+        Err(format!("`{command} {subcommand}` não é um comando de máquina suportado pela API; --machine não executa comandos de administração locais nem abre uma interface"))
     }
 }
 

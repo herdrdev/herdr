@@ -33,7 +33,7 @@ const STATES: &[Choice<PaneAgentState>] = &[
 
 pub(crate) fn state() -> Input<PaneAgentState> {
     Input::value("state", "STATE", |slot, value| {
-        *slot = parse_choice(STATES, "agent state", value)?;
+        *slot = parse_choice(STATES, "estado do agente", value)?;
         Ok(())
     })
     .required()
@@ -72,7 +72,7 @@ pub(crate) fn target(positional: bool) -> Field<Option<String>> {
             Input::positional("pane_id", 0, |slot, value| {
                 // Single-dash ids are accepted; `--` words are mistyped options.
                 if value.starts_with("--") {
-                    return Err(ParseError::Usage(format!("unknown option: {value}")));
+                    return Err(ParseError::Usage(format!("opção desconhecida: {value}")));
                 }
                 *slot = Some(crate::cli::normalize_pane_id(value));
                 Ok(())
@@ -120,7 +120,7 @@ pub(crate) fn optional_direction() -> Input<Option<crate::api::schema::PaneDirec
 
 pub(crate) fn split_direction() -> Input<SplitDirection> {
     Input::value("direction", "DIRECTION", |slot, value| {
-        *slot = parse_choice(SPLITS, "split direction", value)?;
+        *slot = parse_choice(SPLITS, "direção da divisão", value)?;
         Ok(())
     })
     .required()
@@ -144,7 +144,7 @@ pub(crate) fn finite(name: &'static str) -> Input<Option<f32>> {
 
 pub(crate) fn right_click() -> Input<PaneRightClickTarget> {
     Input::value("right-click", "TARGET", |slot, value| {
-        *slot = parse_choice(RIGHT_CLICK, "right-click target", value)?;
+        *slot = parse_choice(RIGHT_CLICK, "destino do clique direito", value)?;
         Ok(())
     })
     .configure(|arg| choices(arg, RIGHT_CLICK))
@@ -199,7 +199,7 @@ pub(crate) fn label() -> Field<Option<String>> {
 
 pub(crate) fn read_source(include_detection: bool) -> Input<ReadSource> {
     Input::value("source", "SOURCE", |slot, value| {
-        *slot = parse_choice(READ_SOURCES, "read source", value)?;
+        *slot = parse_choice(READ_SOURCES, "origem da leitura", value)?;
         Ok(())
     })
     .configure(|arg| {
@@ -238,7 +238,7 @@ pub(crate) fn read_format() -> Field<ReadFormat> {
     Field::new(ReadFormat::Text)
         .input(
             Input::value("format", "FORMAT", |slot, value| {
-                *slot = parse_choice(READ_FORMATS, "read format", value)?;
+                *slot = parse_choice(READ_FORMATS, "formato da leitura", value)?;
                 Ok(())
             })
             .configure(|arg| choices(arg, READ_FORMATS)),
@@ -312,7 +312,7 @@ pub(crate) fn state_label() -> Input<HashMap<String, String>> {
     Input::<HashMap<String, String>>::value("state-label", "STATUS=TEXT", |slot, value| {
         let Some((status, label)) = value.split_once('=') else {
             return Err(ParseError::Usage(
-                "expected --state-label STATUS=TEXT".into(),
+                "esperado --state-label STATUS=TEXT".into(),
             ));
         };
         let status = status.trim().to_ascii_lowercase();
@@ -320,7 +320,9 @@ pub(crate) fn state_label() -> Input<HashMap<String, String>> {
             status.as_str(),
             "idle" | "working" | "blocked" | "done" | "unknown"
         ) {
-            return Err(ParseError::Usage(format!("unknown state label: {status}")));
+            return Err(ParseError::Usage(format!(
+                "rótulo de estado desconhecido: {status}"
+            )));
         }
         slot.insert(status, label.to_owned());
         Ok(())
@@ -606,7 +608,7 @@ pub(super) const LEAVES: &[Leaf] = &[
             if matches.get_flag("current") {
                 params.pane_id = crate::cli::target::caller_pane_id()
                     .map(|value| crate::cli::normalize_pane_id(&value))
-                    .ok_or_else(|| ParseError::Usage("--current requires HERDR_PANE_ID".into()))?;
+                    .ok_or_else(|| ParseError::Usage("--current exige HERDR_PANE_ID".into()))?;
             }
             Ok(Method::PaneInputSet(params))
         },

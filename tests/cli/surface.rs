@@ -210,7 +210,7 @@ fn pane_report_metadata_rejects_blank_source_before_socket_request() {
 
     assert_eq!(run.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("missing required --source"),
+        String::from_utf8_lossy(&run.stderr).contains("falta a opção obrigatória --source"),
         "stderr: {}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -348,7 +348,7 @@ fn removed_wait_and_agent_send_commands_are_rejected() {
         .output()
         .unwrap();
     assert_eq!(wait.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&wait.stderr).contains("unknown command: wait"));
+    assert!(String::from_utf8_lossy(&wait.stderr).contains("comando desconhecido: wait"));
     let help = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .arg("--help")
         .output()
@@ -483,7 +483,7 @@ fn api_schema_default_output_is_a_short_summary() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Herdr API schema"), "stdout: {stdout}");
+    assert!(stdout.contains("Esquema da API Herdr"), "stdout: {stdout}");
     assert!(
         stdout.contains("Use `herdr api schema --json`"),
         "stdout: {stdout}"
@@ -565,7 +565,7 @@ fn api_schema_output_writes_bundled_schema_to_file() {
 
     assert!(output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("wrote API schema"),
+        String::from_utf8_lossy(&output.stdout).contains("esquema da API gravado"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
@@ -613,7 +613,7 @@ fn removed_show_changelog_flag_fails_before_nested_guard() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown option: --show-changelog"),
+        stderr.contains("opção desconhecida: --show-changelog"),
         "stderr: {stderr}"
     );
     assert!(

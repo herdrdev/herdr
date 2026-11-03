@@ -166,7 +166,7 @@ mod tests {
                 })
             );
             assert!(
-                matches!(parse(&["open", "--path", "relative"]), Err(ParseError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput && error.to_string() == "remote worktree paths must be absolute or start with ~/")
+                matches!(parse(&["open", "--path", "relative"]), Err(ParseError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput && error.to_string() == "caminhos de worktree remoto devem ser absolutos ou começar com ~/")
             );
         });
     }

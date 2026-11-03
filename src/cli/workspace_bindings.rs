@@ -46,7 +46,9 @@ pub(crate) fn source() -> Input<String> {
 
 pub(crate) fn validate_source(source: &str) -> Result<(), ParseError> {
     if source.trim().is_empty() {
-        return Err(ParseError::Usage("missing required --source".into()));
+        return Err(ParseError::Usage(
+            "falta a opção obrigatória --source".into(),
+        ));
     }
     Ok(())
 }
@@ -68,7 +70,9 @@ pub(crate) fn clear_token() -> Input<HashMap<String, Option<String>>> {
 
 pub(crate) fn validate_tokens(tokens: &HashMap<String, Option<String>>) -> Result<(), ParseError> {
     if tokens.is_empty() {
-        return Err(ParseError::Usage("missing token to set or clear".into()));
+        return Err(ParseError::Usage(
+            "falta o token para definir ou limpar".into(),
+        ));
     }
     Ok(())
 }
@@ -304,13 +308,13 @@ mod tests {
             })
         );
         assert!(
-            matches!(request("report-metadata", &["id", "--source", "valid", "--seq", "bad"]), Err(ParseError::Io(error)) if error.to_string() == "invalid value for --seq: bad")
+            matches!(request("report-metadata", &["id", "--source", "valid", "--seq", "bad"]), Err(ParseError::Io(error)) if error.to_string() == "valor inválido para --seq: bad")
         );
         assert!(
-            matches!(request("report-metadata", &["id", "--source", " "]), Err(ParseError::Usage(message)) if message == "missing required --source")
+            matches!(request("report-metadata", &["id", "--source", " "]), Err(ParseError::Usage(message)) if message == "falta a opção obrigatória --source")
         );
         assert!(
-            matches!(request("report-metadata", &["id", "--source", "valid"]), Err(ParseError::Usage(message)) if message == "missing token to set or clear")
+            matches!(request("report-metadata", &["id", "--source", "valid"]), Err(ParseError::Usage(message)) if message == "falta o token para definir ou limpar")
         );
     }
 
@@ -341,7 +345,7 @@ mod tests {
             matches!(request("get", &["id", "--help"]), Err(ParseError::Clap(error)) if error.kind() == clap::error::ErrorKind::DisplayHelp && error.exit_code() == 0)
         );
         assert!(
-            matches!(request("create", &["--env", "=value"]), Err(ParseError::Usage(message)) if message == "env key must not be empty")
+            matches!(request("create", &["--env", "=value"]), Err(ParseError::Usage(message)) if message == "o nome da variável de ambiente não pode estar vazio")
         );
     }
 }

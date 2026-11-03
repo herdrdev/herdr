@@ -96,16 +96,13 @@ fn named_sessions_use_separate_servers_and_workspace_state() {
     let human_sessions = run_named_cli(&config_home, &runtime_dir, &["session", "list"]);
     assert!(human_sessions.status.success());
     let human_sessions = String::from_utf8_lossy(&human_sessions.stdout);
-    assert!(human_sessions.contains("name"), "stdout: {human_sessions}");
+    assert!(human_sessions.contains("nome"), "stdout: {human_sessions}");
     assert!(
-        human_sessions.contains("status"),
+        human_sessions.contains("estado"),
         "stdout: {human_sessions}"
     );
     assert!(human_sessions.contains("alpha"), "stdout: {human_sessions}");
-    assert!(
-        human_sessions.contains("running"),
-        "stdout: {human_sessions}"
-    );
+    assert!(human_sessions.contains("ativa"), "stdout: {human_sessions}");
     assert!(
         human_sessions.contains("/sessions/beta"),
         "stdout: {human_sessions}"

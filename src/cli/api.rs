@@ -32,17 +32,17 @@ fn api_schema(args: &[String]) -> std::io::Result<i32> {
         }
         [flag, path] if flag == "--output" => {
             write_schema_file(std::path::Path::new(path))?;
-            println!("wrote API schema to {path}");
+            println!("esquema da API gravado em {path}");
         }
         [flag] if flag == "--output" => {
-            eprintln!("missing value for --output");
+            eprintln!("falta o valor de --output");
             return Ok(2);
         }
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
             print_api_schema_help();
         }
         [other] if other.starts_with('-') => {
-            eprintln!("unknown option: {other}");
+            eprintln!("opção desconhecida: {other}");
             return Ok(2);
         }
         _ => {
@@ -74,22 +74,22 @@ fn schema_summary_text() -> std::io::Result<String> {
     let protocol = value
         .get("protocol")
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| std::io::Error::other("API schema is missing protocol"))?;
+        .ok_or_else(|| std::io::Error::other("o esquema da API não contém protocol"))?;
     let schema_version = value
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
-        .ok_or_else(|| std::io::Error::other("API schema is missing schema_version"))?;
+        .ok_or_else(|| std::io::Error::other("o esquema da API não contém schema_version"))?;
     let mut schemas: Vec<&str> = value
         .get("schemas")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| std::io::Error::other("API schema is missing schemas"))?
+        .ok_or_else(|| std::io::Error::other("o esquema da API não contém schemas"))?
         .keys()
         .map(String::as_str)
         .collect();
     schemas.sort();
 
     Ok(format!(
-        "Herdr API schema\nprotocol: {}\nschema_version: {}\nschemas: {}\n\nUse `herdr api schema --json` to print the full schema.\nUse `herdr api schema --output PATH` to write it to a file.\n",
+        "Esquema da API Herdr\nprotocol: {}\nschema_version: {}\nschemas: {}\n\nUse `herdr api schema --json` para exibir o esquema completo.\nUse `herdr api schema --output PATH` para gravá-lo em arquivo.\n",
         protocol,
         schema_version,
         schemas.join(", ")
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn schema_summary_text_stays_human_sized() {
         let text = super::schema_summary_text().unwrap();
-        assert!(text.contains("Herdr API schema"));
+        assert!(text.contains("Esquema da API Herdr"));
         assert!(text.contains("Use `herdr api schema --json`"));
         assert!(text.len() < 400);
     }

@@ -500,7 +500,7 @@ fn config_check_reports_invalid_config_without_server() {
         String::from_utf8_lossy(&checked.stderr)
     );
     let stdout = String::from_utf8_lossy(&checked.stdout);
-    assert!(stdout.contains("config: issues found"), "{stdout}");
+    assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(stdout.contains("TOML parse error"), "{stdout}");
     assert!(stdout.contains("line 1"), "{stdout}");
 
@@ -551,7 +551,7 @@ new_tabb = "ctrl+t"
         String::from_utf8_lossy(&checked.stderr)
     );
     let stdout = String::from_utf8_lossy(&checked.stdout);
-    assert!(stdout.contains("config: issues found"), "{stdout}");
+    assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(
         stdout.contains("unknown config key made_up_toplevel; ignoring key"),
         "{stdout}"
@@ -590,7 +590,7 @@ fn config_check_reports_unknown_theme_names() {
 
     assert_eq!(checked.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&checked.stdout);
-    assert!(stdout.contains("config: issues found"), "{stdout}");
+    assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(
         stdout.contains("unknown theme name theme.name = \"catppucin\"; using \"catppuccin\""),
         "{stdout}"
@@ -612,7 +612,7 @@ fn config_check_reports_unreadable_config_path() {
 
     assert_eq!(checked.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&checked.stdout);
-    assert!(stdout.contains("config: issues found"), "{stdout}");
+    assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(stdout.contains("config read error"), "{stdout}");
     assert!(stdout.contains("using defaults"), "{stdout}");
 
@@ -646,7 +646,7 @@ fn config_check_rejects_json_output() {
     assert!(checked.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&checked.stderr),
-        "usage: herdr config check\n"
+        "Uso: herdr config check\n"
     );
 
     cleanup_test_base(&base);

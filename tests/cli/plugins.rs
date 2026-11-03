@@ -961,7 +961,7 @@ command = ["sh", "-c", "sleep 5"]
         &["plugin", "log", "list", "--limit", "not-a-number"],
     );
     assert_eq!(invalid_limit.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&invalid_limit.stderr).contains("invalid --limit value"));
+    assert!(String::from_utf8_lossy(&invalid_limit.stderr).contains("valor inválido para --limit"));
 
     let unlinked = run_cli_json(&socket_path, &["plugin", "unlink", "example.layout"]);
     assert_eq!(unlinked["result"]["type"], "plugin_unlinked");

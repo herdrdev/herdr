@@ -470,7 +470,9 @@ fn random_nested_message() -> &'static str {
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merro:\x1b[0m abrir o Pretorian dentro de outra sessão está desativado por padrão.");
+        eprintln!(
+            "\x1b[1merro:\x1b[0m abrir o Pretorian dentro de outra sessão está desativado por padrão."
+        );
         eprintln!("consulte a configuração se quiser ativar essa opção.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
@@ -486,7 +488,7 @@ where
         .enumerate()
         .map(|(index, arg)| {
             arg.into_string()
-                .map_err(|_| format!("argument {index} is not valid UTF-8"))
+                .map_err(|_| format!("argumento {index} não é UTF-8 válido"))
         })
         .collect()
 }
@@ -512,8 +514,8 @@ fn main() -> io::Result<()> {
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
@@ -527,16 +529,16 @@ fn main() -> io::Result<()> {
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
     let (args, remote_launch) = match remote::extract_remote_args(&args) {
         Ok(parsed) => parsed,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
@@ -550,8 +552,8 @@ fn main() -> io::Result<()> {
             )
         })
     {
-        eprintln!("error: --remote can only be used with the default launch command");
-        eprintln!("run 'herdr --help' for usage");
+        eprintln!("erro: --remote só pode ser usado com o comando de abertura padrão");
+        eprintln!("use 'herdr --help' para consultar a ajuda");
         std::process::exit(2);
     }
 
@@ -586,7 +588,7 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: herdr update [--handoff]");
+                eprintln!("Uso: herdr update [--handoff]");
                 std::process::exit(2);
             }
         };
@@ -596,7 +598,7 @@ fn main() -> io::Result<()> {
                 if e.starts_with("self-update is disabled") {
                     eprintln!("{e}");
                 } else {
-                    eprintln!("update failed: {e}");
+                    eprintln!("falha na atualização: {e}");
                 }
                 std::process::exit(1);
             }
@@ -722,7 +724,9 @@ fn main() -> io::Result<()> {
         println!("  --remote <target>   Conectar por SSH a um servidor remoto");
         println!("  --remote-keybindings <local|server>");
         println!("                      Atalhos ao conectar por --remote (padrão: local)");
-        println!("  --handoff           Permitir transferência da sessão na atualização ou conexão remota");
+        println!(
+            "  --handoff           Permitir transferência da sessão na atualização ou conexão remota"
+        );
         println!("  --default-config    Exibir a configuração padrão e sair");
         println!("  --skill             Exibir o arquivo de instruções do agente e sair");
         println!("  --version, -V       Exibir a versão e sair");
@@ -771,8 +775,8 @@ fn main() -> io::Result<()> {
     for arg in &args[1..] {
         let arg_name = arg.split_once('=').map(|(name, _)| name).unwrap_or(arg);
         if arg.starts_with('-') && !known_flags.contains(&arg_name) {
-            eprintln!("unknown option: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("opção desconhecida: {arg}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
         if !arg.starts_with('-')
@@ -793,8 +797,8 @@ fn main() -> io::Result<()> {
             ]
             .contains(&arg.as_str())
         {
-            eprintln!("unknown command: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("comando desconhecido: {arg}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     }
@@ -802,7 +806,7 @@ fn main() -> io::Result<()> {
     if let Some(remote_launch) = remote_launch {
         let remote_target = remote_launch.target.clone();
         if let Err(err) = remote::run_remote(remote_launch) {
-            eprintln!("error: {err}");
+            eprintln!("erro: {err}");
             remote::print_remote_error_hint(&err, &remote_target);
             std::process::exit(1);
         }
@@ -898,7 +902,7 @@ mod tests {
         ];
         assert_eq!(
             args_as_utf8(args).unwrap_err(),
-            "argument 2 is not valid UTF-8"
+            "argumento 2 não é UTF-8 válido"
         );
     }
 }

@@ -169,12 +169,12 @@ pub(crate) fn group_request(
         |matches| {
             let (name, matches) = matches
                 .subcommand()
-                .ok_or_else(|| ParseError::Usage(format!("missing {group_name} command")))?;
+                .ok_or_else(|| ParseError::Usage(format!("falta o comando {group_name}")))?;
             let leaf = leaves
                 .iter()
                 .find(|leaf| leaf.name == name)
                 .ok_or_else(|| {
-                    ParseError::Usage(format!("unknown {group_name} command: {name}"))
+                    ParseError::Usage(format!("comando {group_name} desconhecido: {name}"))
                 })?;
             Ok(Request {
                 id: leaf.id.into(),
@@ -472,7 +472,7 @@ pub(crate) fn parse_choice<T: Clone>(
         .iter()
         .find(|choice| choice.name == value)
         .map(|choice| choice.value.clone())
-        .ok_or_else(|| ParseError::Usage(format!("invalid {label}: {value}")))
+        .ok_or_else(|| ParseError::Usage(format!("valor inválido para {label}: {value}")))
 }
 
 /// Fails when an API enum gains a value the CLI table cannot spell.
@@ -590,7 +590,7 @@ impl<T> Field<T> {
                     if input.once && indices.len() > 1 {
                         return Err(ParseError::Clap(clap::Error::raw(
                             clap::error::ErrorKind::ArgumentConflict,
-                            format!("the argument '--{id}' cannot be used multiple times\n"),
+                            format!("o argumento '--{id}' não pode ser usado várias vezes\n"),
                         )));
                     }
                     for (index, value) in indices.zip(string_values(matches, &input.argument)) {

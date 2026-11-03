@@ -29,7 +29,7 @@ pub(crate) fn request(args: &[String]) -> Result<Request, ParseError> {
     projection::parse(command().bin_name("herdr notification"), args, |matches| {
         let matches = matches
             .subcommand_matches("show")
-            .ok_or_else(|| ParseError::Usage("missing notification show command".into()))?;
+            .ok_or_else(|| ParseError::Usage("falta o comando notification show".into()))?;
         Ok(Request {
             id: "cli:notification:show".into(),
             method: Method::NotificationShow(NotificationShowProjection::from_matches(matches)?),

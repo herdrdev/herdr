@@ -134,7 +134,7 @@ mod tests {
             );
         }
         assert!(
-            matches!(parse(&["create", "--env", "=value"]), Err(ParseError::Usage(message)) if message == "env key must not be empty")
+            matches!(parse(&["create", "--env", "=value"]), Err(ParseError::Usage(message)) if message == "o nome da variável de ambiente não pode estar vazio")
         );
     }
 

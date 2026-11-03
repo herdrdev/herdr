@@ -41,9 +41,9 @@ pub(crate) mod workspace_bindings;
 pub(crate) mod worktree;
 
 const TERMINAL_SESSION_OBSERVE_USAGE: &str =
-    "usage: herdr terminal session observe <target> [--cols N] [--rows N]";
+    "Uso: herdr terminal session observe <target> [--cols N] [--rows N]";
 const TERMINAL_SESSION_CONTROL_USAGE: &str =
-    "usage: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
+    "Uso: herdr terminal session control <target> [--takeover] [--cols N] [--rows N]";
 pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
     "Você é uma IA? Use estes recursos SOMENTE SE sua tarefa pedir especificamente:\n",
     "  Controlar painéis, agentes ou espaços de trabalho:\n",
@@ -54,23 +54,23 @@ pub(crate) const AGENT_HELP_FOOTER: &str = concat!(
 
 pub(crate) fn parse_token_assignment(raw: &str) -> Result<(String, Option<String>), String> {
     let Some((key, value)) = raw.split_once('=') else {
-        return Err("token must use NAME=VALUE".into());
+        return Err("token deve usar NAME=VALUE".into());
     };
     if key.is_empty() {
-        return Err("token name must not be empty".into());
+        return Err("nome do token não pode estar vazio".into());
     }
     Ok((key.to_string(), Some(value.to_string())))
 }
 
 pub(crate) fn parse_env_assignment(raw: &str) -> Result<(String, String), String> {
     let Some((key, value)) = raw.split_once('=') else {
-        return Err("env must use KEY=VALUE".into());
+        return Err("a variável de ambiente deve usar KEY=VALUE".into());
     };
     if key.is_empty() {
-        return Err("env key must not be empty".into());
+        return Err("o nome da variável de ambiente não pode estar vazio".into());
     }
     if key.contains('\0') || value.contains('\0') {
-        return Err("env must not contain NUL bytes".into());
+        return Err("a variável de ambiente não pode conter bytes NUL".into());
     }
     Ok((key.to_string(), value.to_string()))
 }
@@ -179,7 +179,7 @@ fn channel_set(args: &[String]) -> std::io::Result<i32> {
         return Ok(1);
     }
     let Some(channel) = parse_channel_set_arg(args) else {
-        eprintln!("usage: herdr channel set <stable|preview>");
+        eprintln!("Uso: herdr channel set <stable|preview>");
         return Ok(2);
     };
 
@@ -283,9 +283,11 @@ fn channel_set_install_action(
 }
 
 fn print_channel_help() {
-    eprintln!("herdr channel commands:");
-    eprintln!("  herdr channel show                  print the configured update channel");
-    eprintln!("  herdr channel set <stable|preview>  choose the update channel");
+    eprintln!("Comandos de herdr channel:");
+    eprintln!("  herdr channel show                  mostrar o canal de atualização configurado");
+    eprintln!(
+        "  herdr channel set <stable|preview>  alteração indisponível; use o instalador Pretorian"
+    );
 }
 
 fn run_config_command(args: &[String]) -> std::io::Result<i32> {
@@ -312,11 +314,11 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     match args {
         [] => {}
         [flag] if matches!(flag.as_str(), "help" | "--help" | "-h") => {
-            eprintln!("usage: herdr config check");
+            eprintln!("Uso: herdr config check");
             return Ok(0);
         }
         _ => {
-            eprintln!("usage: herdr config check");
+            eprintln!("Uso: herdr config check");
             return Ok(2);
         }
     }
@@ -325,7 +327,7 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
     if diagnostics.is_empty() {
         println!("config: ok");
     } else {
-        println!("config: issues found");
+        println!("config: problemas encontrados");
         for diagnostic in &diagnostics {
             println!("{diagnostic}");
         }
@@ -336,14 +338,14 @@ fn config_check(args: &[String]) -> std::io::Result<i32> {
 
 fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     if !args.is_empty() {
-        eprintln!("usage: herdr config reset-keys");
+        eprintln!("Uso: herdr config reset-keys");
         return Ok(2);
     }
 
     let path = crate::config::config_path();
     if !path.exists() {
         println!(
-            "No config file found at {}. Built-in v2 keybindings already apply.",
+            "Nenhum arquivo de configuração encontrado em {}. Os atalhos padrão v2 já estão ativos.",
             path.display()
         );
         return Ok(0);
@@ -354,7 +356,7 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
         Ok(value) => value,
         Err(err) => {
             eprintln!(
-                "config file at {} is invalid TOML: {err}. Fix it manually or move it aside to use defaults.",
+                "O arquivo de configuração em {} contém TOML inválido: {err}. Corrija-o ou mova-o para usar os padrões.",
                 path.display()
             );
             return Ok(1);
@@ -362,7 +364,7 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     };
     let Some(table) = parsed.as_table() else {
         eprintln!(
-            "config file at {} is invalid TOML: top-level config must be a table.",
+            "O arquivo de configuração em {} contém TOML inválido: a configuração principal deve ser uma tabela.",
             path.display()
         );
         return Ok(1);
@@ -370,7 +372,7 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
 
     if !table.contains_key("keys") {
         println!(
-            "No [keys] config found in {}. Built-in v2 keybindings already apply.",
+            "Nenhuma configuração [keys] encontrada em {}. Os atalhos padrão v2 já estão ativos.",
             path.display()
         );
         return Ok(0);
@@ -379,14 +381,14 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     let (updated, removed) = crate::config::remove_keybinding_config_sections(&content);
     if !removed {
         eprintln!(
-            "could not safely remove keybinding config from {} without rewriting comments; edit the file manually or remove the top-level keys setting.",
+            "Não foi possível remover os atalhos de {} com segurança sem reescrever comentários; edite o arquivo ou remova a configuração keys principal.",
             path.display()
         );
         return Ok(1);
     }
     if let Err(err) = updated.parse::<toml::Value>() {
         eprintln!(
-            "removing keybinding config would make {} invalid TOML: {err}; leaving config unchanged",
+            "Remover os atalhos tornaria {} um TOML inválido: {err}; configuração preservada",
             path.display()
         );
         return Ok(1);
@@ -396,15 +398,19 @@ fn config_reset_keys(args: &[String]) -> std::io::Result<i32> {
     std::fs::copy(&path, &backup_path)?;
     std::fs::write(&path, updated)?;
 
-    println!("Created backup: {}", backup_path.display());
+    println!("Cópia de segurança criada: {}", backup_path.display());
     println!(
-        "Removed [keys], [keys.indexed], and [[keys.command]] from {}.",
+        "Removidos [keys], [keys.indexed] e [[keys.command]] de {}.",
         path.display()
     );
-    println!("Built-in v2 keybindings will apply after Herdr restarts or reloads config.");
-    println!("If a Herdr server is running, run `herdr server reload-config` to apply this now.");
     println!(
-        "To restore: cp {} {}",
+        "Os atalhos padrão v2 serão aplicados após reiniciar o Herdr ou recarregar a configuração."
+    );
+    println!(
+        "Se o servidor Herdr estiver ativo, execute `herdr server reload-config` para aplicar agora."
+    );
+    println!(
+        "Para restaurar: cp {} {}",
         backup_path.display(),
         path.display()
     );
@@ -471,15 +477,15 @@ fn session_attach_help(args: &[String]) -> std::io::Result<i32> {
         args.first().map(String::as_str),
         Some("help" | "--help" | "-h")
     ) {
-        eprintln!("usage: herdr session attach <name>");
+        eprintln!("Uso: herdr session attach <name>");
         return Ok(0);
     }
-    eprintln!("usage: herdr session attach <name>");
+    eprintln!("Uso: herdr session attach <name>");
     Ok(2)
 }
 
 fn session_list(args: &[String]) -> std::io::Result<i32> {
-    let json = match parse_session_json_only(args, "usage: herdr session list [--json]") {
+    let json = match parse_session_json_only(args, "Uso: herdr session list [--json]") {
         Ok(json) => json,
         Err(code) => return Ok(code),
     };
@@ -497,7 +503,7 @@ fn session_list(args: &[String]) -> std::io::Result<i32> {
 
 fn session_stop(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session stop <name> [--json]") {
+        match parse_session_name_and_json(args, "Uso: herdr session stop <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -517,7 +523,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
                     "session": session,
                 }));
             } else {
-                println!("stopped session {}", session.name);
+                println!("sessão encerrada {}", session.name);
             }
             Ok(0)
         }
@@ -530,7 +536,7 @@ fn session_stop(args: &[String]) -> std::io::Result<i32> {
 
 fn session_delete(args: &[String]) -> std::io::Result<i32> {
     let (name, json) =
-        match parse_session_name_and_json(args, "usage: herdr session delete <name> [--json]") {
+        match parse_session_name_and_json(args, "Uso: herdr session delete <name> [--json]") {
             Ok(parsed) => parsed,
             Err(code) => return Ok(code),
         };
@@ -543,7 +549,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
                     "session": session,
                 }));
             } else {
-                println!("deleted session {}", session.name);
+                println!("sessão excluída {}", session.name);
             }
             Ok(0)
         }
@@ -557,7 +563,7 @@ fn session_delete(args: &[String]) -> std::io::Result<i32> {
 fn terminal_attach(args: &[String]) -> std::io::Result<i32> {
     let (terminal_id, takeover) = match parse_attach_target(
         args,
-        "usage: herdr terminal attach <terminal_id> [--takeover]",
+        "Uso: herdr terminal attach <terminal_id> [--takeover]",
     ) {
         Ok(parsed) => parsed,
         Err(code) => return Ok(code),
@@ -674,7 +680,7 @@ fn parse_terminal_session_options(
                 return Ok(Err(0));
             }
             other => {
-                eprintln!("unknown terminal session {command} option: {other}");
+                eprintln!("opção desconhecida de terminal session {command}: {other}");
                 eprintln!("{usage}");
                 return Ok(Err(2));
             }
@@ -693,13 +699,13 @@ fn parse_terminal_dimension(raw: &str, flag: &str) -> std::io::Result<u16> {
     let parsed = raw.parse::<u16>().map_err(|_| {
         std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("{flag} must be an integer between 1 and {}", u16::MAX),
+            format!("{flag} deve ser um inteiro entre 1 e {}", u16::MAX),
         )
     })?;
     if parsed == 0 {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("{flag} must be greater than 0"),
+            format!("{flag} deve ser maior que 0"),
         ));
     }
     Ok(parsed)
@@ -723,7 +729,7 @@ pub(super) fn parse_attach_target(args: &[String], usage: &str) -> Result<(Strin
                 return Err(0);
             }
             other => {
-                eprintln!("unknown option: {other}");
+                eprintln!("opção desconhecida: {other}");
                 return Err(2);
             }
         }
@@ -794,9 +800,9 @@ pub(super) fn send_request_unchecked(request: &Request) -> std::io::Result<serde
 fn ensure_server_protocol_compatible(client: &ApiClient, request_id: &str) -> std::io::Result<()> {
     let status = target::server_status(client)
         .map_err(|err| map_server_not_running_or_io(err, request_id, client))?;
-    let server_protocol = status
-        .protocol
-        .ok_or_else(|| std::io::Error::other("server ping did not include a protocol version"))?;
+    let server_protocol = status.protocol.ok_or_else(|| {
+        std::io::Error::other("a resposta do servidor não incluiu a versão do protocolo")
+    })?;
     let Some(response) =
         protocol_guard::mismatch_response(request_id, server_protocol, &target::restart_guidance())
     else {
@@ -882,13 +888,13 @@ pub(super) fn normalize_pane_id(value: &str) -> String {
 pub(super) fn parse_u32_flag(flag: &str, value: &str) -> std::io::Result<u32> {
     value
         .parse::<u32>()
-        .map_err(|_| std::io::Error::other(format!("invalid value for {flag}: {value}")))
+        .map_err(|_| std::io::Error::other(format!("valor inválido para {flag}: {value}")))
 }
 
 pub(super) fn parse_u64_flag(flag: &str, value: &str) -> std::io::Result<u64> {
     value
         .parse::<u64>()
-        .map_err(|_| std::io::Error::other(format!("invalid value for {flag}: {value}")))
+        .map_err(|_| std::io::Error::other(format!("valor inválido para {flag}: {value}")))
 }
 
 /// Expand `--flag=value` tokens into separate `--flag` and `value` tokens so
@@ -946,17 +952,17 @@ fn parse_session_name_and_json(args: &[String], usage: &str) -> Result<(String, 
 }
 
 fn print_session_table(sessions: &[crate::session::SessionInfo]) {
-    println!("{:<20} {:<8} {:<48} socket", "name", "status", "directory");
+    println!("{:<20} {:<12} {:<48} socket", "nome", "estado", "diretório");
     for session in sessions {
         println!(
-            "{:<20} {:<8} {:<48} {}",
+            "{:<20} {:<12} {:<48} {}",
             session.name,
             if session.connection_error.is_some() {
-                "unavailable"
+                "indisponível"
             } else if session.running {
-                "running"
+                "ativa"
             } else {
-                "stopped"
+                "encerrada"
             },
             session.session_dir,
             session.socket_path
@@ -981,28 +987,30 @@ fn print_session_error(code: &str, message: &str) {
 }
 
 fn print_config_help() {
-    eprintln!("herdr config commands:");
-    eprintln!("  herdr config check  validate config.toml and print diagnostics");
-    eprintln!("  herdr config reset-keys  back up config.toml and remove custom keybindings");
+    eprintln!("Comandos de herdr config:");
+    eprintln!("  herdr config check  validar config.toml e mostrar diagnósticos");
+    eprintln!(
+        "  herdr config reset-keys  salvar cópia de config.toml e remover atalhos personalizados"
+    );
 }
 
 fn print_terminal_help() {
-    eprintln!("herdr terminal commands:");
+    eprintln!("Comandos de herdr terminal:");
     eprintln!("  herdr terminal attach <terminal_id> [--takeover]");
     eprintln!("  herdr terminal session control <target> [--takeover] [--cols N] [--rows N]");
     eprintln!("  herdr terminal session observe <target> [--cols N] [--rows N]");
     eprintln!("  herdr terminal title set <title>");
     eprintln!("  herdr terminal title clear");
-    eprintln!("  detach from direct attach with ctrl+b q; send literal ctrl+b with ctrl+b ctrl+b");
+    eprintln!("  desconecte com ctrl+b q; envie ctrl+b literal com ctrl+b ctrl+b");
 }
 
 fn print_session_help() {
-    eprintln!("herdr session commands:");
+    eprintln!("Comandos de herdr session:");
     eprintln!("  herdr session list [--json]");
     eprintln!("  herdr session attach <name>");
     eprintln!("  herdr session stop <name> [--json]");
     eprintln!("  herdr session delete <name> [--json]");
-    eprintln!("  use 'default' as <name> to target the default session for stop");
+    eprintln!("  use 'default' como <name> para encerrar a sessão padrão");
 }
 
 fn _print_json<T: Serialize>(value: &T) {
@@ -1075,7 +1083,7 @@ mod tests {
     fn parse_env_assignment_requires_key_value_separator() {
         assert_eq!(
             super::parse_env_assignment("HERDR_ROLE").unwrap_err(),
-            "env must use KEY=VALUE"
+            "a variável de ambiente deve usar KEY=VALUE"
         );
     }
 

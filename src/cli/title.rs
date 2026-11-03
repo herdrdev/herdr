@@ -29,7 +29,7 @@ fn request(matches: &ArgMatches) -> Result<Request, ParseError> {
             id: "cli:terminal:title:clear".into(),
             method: Method::ClientWindowTitleClear(EmptyParams::default()),
         }),
-        _ => Err(ParseError::Usage("expected title set or clear".into())),
+        _ => Err(ParseError::Usage("esperado title set ou clear".into())),
     }
 }
 

@@ -15,7 +15,7 @@ fn normalize_path_arg(value: &str) -> std::io::Result<String> {
         }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "remote worktree paths must be absolute or start with ~/",
+            "caminhos de worktree remoto devem ser absolutos ou começar com ~/",
         ));
     }
     let path = crate::worktree::expand_tilde_path(value);

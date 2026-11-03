@@ -61,7 +61,7 @@ pub(crate) fn limit() -> Input<Option<usize>> {
         *slot = Some(
             value
                 .parse()
-                .map_err(|_| ParseError::Usage(format!("invalid --limit value: {value}")))?,
+                .map_err(|_| ParseError::Usage(format!("valor inválido para --limit: {value}")))?,
         );
         Ok(())
     })
@@ -88,7 +88,7 @@ pub(crate) fn placement() -> Input<Option<PluginPanePlacement>> {
                 .iter()
                 .find(|(name, _, _)| *name == value)
                 .map(|(_, placement, _)| *placement)
-                .ok_or_else(|| ParseError::Usage(format!("invalid pane placement: {value}")))?,
+                .ok_or_else(|| ParseError::Usage(format!("posição de painel inválida: {value}")))?,
         );
         Ok(())
     })
@@ -108,7 +108,9 @@ pub(crate) fn direction() -> Input<Option<SplitDirection>> {
                 .iter()
                 .find(|(name, _)| *name == value)
                 .map(|(_, direction)| direction.clone())
-                .ok_or_else(|| ParseError::Usage(format!("invalid split direction: {value}")))?,
+                .ok_or_else(|| {
+                    ParseError::Usage(format!("direção da divisão inválida: {value}"))
+                })?,
         );
         Ok(())
     })
@@ -333,11 +335,11 @@ pub(crate) fn command() -> Command {
 fn leaf_matches(leaves: &[Leaf], matches: &ArgMatches) -> Result<(Method, bool), ParseError> {
     let (name, matches) = matches
         .subcommand()
-        .ok_or_else(|| ParseError::Usage("missing plugin command".into()))?;
+        .ok_or_else(|| ParseError::Usage("falta o comando plugin".into()))?;
     leaves
         .iter()
         .find(|leaf| leaf.name == name)
-        .ok_or_else(|| ParseError::Usage(format!("unknown plugin command: {name}")))?
+        .ok_or_else(|| ParseError::Usage(format!("comando plugin desconhecido: {name}")))?
         .method(matches)
 }
 

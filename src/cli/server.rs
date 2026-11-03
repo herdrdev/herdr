@@ -114,7 +114,7 @@ fn server_update_agent_manifests(args: &[String]) -> std::io::Result<i32> {
             if json {
                 return super::print_response(&agent_manifest_update_error_response(&err));
             }
-            eprintln!("failed to update agent detection manifests: {err}");
+            eprintln!("falha ao atualizar manifestos de detecção de agentes: {err}");
             return Ok(1);
         }
     };
@@ -164,10 +164,10 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
     let last_check = result["last_check_unix"]
         .as_u64()
         .map(|value| value.to_string())
-        .unwrap_or_else(|| "never".to_string());
-    let last_result = result["last_result"].as_str().unwrap_or("not checked");
-    println!("last check: {last_check}");
-    println!("result: {last_result}");
+        .unwrap_or_else(|| "nunca".to_string());
+    let last_result = result["last_result"].as_str().unwrap_or("não verificado");
+    println!("última verificação: {last_check}");
+    println!("resultado: {last_result}");
     println!();
 
     let Some(manifests) = result["manifests"].as_array() else {
@@ -180,7 +180,7 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
         let remote_version = manifest["cached_remote_version"].as_str().unwrap_or("-");
         let remote_result = manifest["remote_update_result"]
             .as_str()
-            .unwrap_or("not checked");
+            .unwrap_or("não verificado");
         let local_override_shadowing_remote = manifest["local_override_shadowing_remote"]
             .as_bool()
             .unwrap_or(false);
@@ -192,12 +192,12 @@ fn print_agent_manifest_status(response: &serde_json::Value) {
             " "
         };
         println!(
-            "{marker} {agent:<9} {source:<14} active {active_version:<14} remote {remote_version:<14} {remote_result}"
+            "{marker} {agent:<9} {source:<14} ativo {active_version:<14} remoto {remote_version:<14} {remote_result}"
         );
         if let Some(error) = manifest["remote_update_error"].as_str() {
             println!("  {error}");
         } else if local_override_shadowing_remote {
-            println!("  local override shadows cached remote rules");
+            println!("  configuração local substitui regras remotas em cache");
         } else if let Some(warning) = manifest["warning"].as_str() {
             println!("  {warning}");
         }
@@ -230,7 +230,7 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     if response.get("error").is_some() {
         let rendered = serde_json::to_string(&response).unwrap_or_else(|err| {
             format!(
-                "{{\"error\":{{\"code\":\"render_failed\",\"message\":\"failed to render error response: {err}\"}}}}"
+                "{{\"error\":{{\"code\":\"render_failed\",\"message\":\"falha ao apresentar resposta de erro: {err}\"}}}}"
             )
         });
         eprintln!("{rendered}");
@@ -238,7 +238,7 @@ fn server_live_handoff(args: &[String]) -> std::io::Result<i32> {
     }
 
     eprintln!(
-        "live handoff complete; server log: {}",
+        "transferência concluída; registro do servidor: {}",
         crate::session::data_dir()
             .join("herdr-server.log")
             .display()
@@ -258,13 +258,19 @@ fn print_server_help() {
     eprintln!("Comandos de herdr server:");
     eprintln!("  herdr server                executar como servidor sem interface");
     #[cfg(windows)]
-    eprintln!("  herdr server --allow-unelevated-clients  permitir clientes comuns da mesma conta controlar servidor elevado");
+    eprintln!(
+        "  herdr server --allow-unelevated-clients  permitir clientes comuns da mesma conta controlar servidor elevado"
+    );
     eprintln!("  herdr server stop           encerrar servidor ativo pelo socket da API");
     eprintln!("  herdr server live-handoff   transferir painéis ativos para novo servidor local");
     eprintln!("  herdr server reload-config  recarregar config.toml no servidor ativo");
     eprintln!("  herdr server agent-manifests [--json]  mostrar estado dos manifestos de detecção");
-    eprintln!("  herdr server update-agent-manifests [--json]  atualização indisponível; use o instalador do Pretorian");
-    eprintln!("  herdr server reload-agent-manifests  recarregar manifestos de detecção no servidor ativo");
+    eprintln!(
+        "  herdr server update-agent-manifests [--json]  atualização indisponível; use o instalador do Pretorian"
+    );
+    eprintln!(
+        "  herdr server reload-agent-manifests  recarregar manifestos de detecção no servidor ativo"
+    );
 }
 
 #[cfg(test)]
