@@ -159,6 +159,7 @@ impl ClientShellConfig {
             preferences: preferences::ClientChromePreferences::default(),
             startup_config_diagnostic: None,
             startup_onboarding: false,
+            shepherd_enabled: config.shepherd.enabled,
         }
     }
 

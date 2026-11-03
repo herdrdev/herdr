@@ -605,6 +605,10 @@ impl ClientShellState {
             return;
         }
 
+        if self.route_shepherd_overlay_key(key, outcome) {
+            return;
+        }
+
         if matches!(self.overlay, Some(ClientShellOverlay::ContextMenu(_))) {
             match key.code {
                 KeyCode::Esc => {

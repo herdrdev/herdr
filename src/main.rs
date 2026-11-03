@@ -147,6 +147,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # Prefix-mode actions
 # help = "prefix+?"
 # settings = "prefix+s"
+# shepherd = "prefix+a"
 # detach = "prefix+q"
 # reload_config = "prefix+shift+r"
 # open_notification_target = "prefix+o"

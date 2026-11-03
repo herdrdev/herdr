@@ -15,6 +15,9 @@ pub(super) struct AgentRow {
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
+    pub(super) shepherd_state: Option<String>,
+    pub(super) needs_you: bool,
+    pub(super) notice: Option<String>,
 }
 
 pub(super) fn ordered_agent_pane_ids(
@@ -310,11 +313,31 @@ pub(super) fn agent_row(
         },
         state_text,
     );
+    let shepherd_state = tokens
+        .get("shepherd_state")
+        .cloned()
+        .or_else(|| tokens.get("role").cloned());
+    let needs_you = tokens
+        .get("needs_you")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false)
+        || tokens
+            .get("shepherd_needs_you")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false)
+        || agent.agent_status == crate::api::schema::AgentStatus::Blocked;
+    let notice = tokens
+        .get("notice")
+        .cloned()
+        .or_else(|| tokens.get("shepherd_notice").cloned());
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
         rows,
+        shepherd_state,
+        needs_you,
+        notice,
     })
 }
 
@@ -366,6 +389,25 @@ pub(super) fn render_agent_row(
             palette,
             rect.width.saturating_sub(indent as u16) as usize,
         ));
+        if config.shepherd_enabled && index == 0 {
+            if row.needs_you {
+                spans.push(ratatui::text::Span::styled(
+                    " [NEEDS YOU]",
+                    Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+                ));
+            } else if let Some(ref state) = row.shepherd_state {
+                spans.push(ratatui::text::Span::styled(
+                    format!(" [{state}]"),
+                    status_style.add_modifier(Modifier::DIM),
+                ));
+            }
+            if let Some(ref notice) = row.notice {
+                spans.push(ratatui::text::Span::styled(
+                    format!(" ({notice})"),
+                    Style::default().fg(palette.yellow),
+                ));
+            }
+        }
         Paragraph::new(Line::from(spans)).style(row_style).render(
             Rect::new(rect.x, rect.y + index as u16, rect.width, 1),
             buffer,

@@ -531,6 +531,7 @@ impl ClientShellState {
                 | PendingEndpointKind::ReleaseNotesDismiss
                 | PendingEndpointKind::PopupCommand
                 | PendingEndpointKind::ReloadConfig
+                | PendingEndpointKind::ShepherdCall { .. }
                 | PendingEndpointKind::IntegrationList
                 | PendingEndpointKind::IntegrationInstall
                 | PendingEndpointKind::SelectionCopy

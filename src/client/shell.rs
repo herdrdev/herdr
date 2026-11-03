@@ -31,6 +31,7 @@ mod preferences;
 mod render;
 mod scroll;
 mod settings;
+mod shepherd;
 mod state;
 mod surface_patch;
 mod text_editor;

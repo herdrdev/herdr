@@ -924,7 +924,7 @@ fn mobile_items(
     }
 
     items.push(MobileItem::section("menu", palette));
-    for (index, (label, _)) in super::global_menu::global_menu_items(snapshot)
+    for (index, (label, _)) in super::global_menu::global_menu_items(snapshot, false)
         .into_iter()
         .enumerate()
     {
@@ -1070,7 +1070,7 @@ impl ClientShellState {
             }
             Some(ClientMobileTarget::Menu(index)) => {
                 let actionable = self.snapshot.as_deref().is_some_and(|snapshot| {
-                    super::global_menu::global_menu_items(snapshot)
+                    super::global_menu::global_menu_items(snapshot, self.config.shepherd_enabled)
                         .get(index)
                         .is_some_and(|(_, action)| {
                             *action != super::global_menu::ClientGlobalMenuAction::WhatsNew

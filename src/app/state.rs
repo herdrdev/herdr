@@ -809,6 +809,12 @@ pub struct AppState {
     // Exercised by Shepherd F1 panel tests; wired to interactive TUI overlay dispatch in F3.
     #[allow(dead_code)]
     pub shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState,
+    #[allow(dead_code)]
+    pub shepherd_tasks_panel: crate::shepherd::ShepherdTasksState,
+    #[allow(dead_code)]
+    pub shepherd_runs_panel: crate::shepherd::ShepherdRunsState,
+    #[allow(dead_code)]
+    pub shepherd_skills_panel: crate::shepherd::ShepherdSkillsState,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
@@ -1053,6 +1059,9 @@ impl AppState {
             latest_release_notes: None,
             product_announcement: None,
             shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState::default(),
+            shepherd_tasks_panel: crate::shepherd::ShepherdTasksState::default(),
+            shepherd_runs_panel: crate::shepherd::ShepherdRunsState::default(),
+            shepherd_skills_panel: crate::shepherd::ShepherdSkillsState::default(),
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

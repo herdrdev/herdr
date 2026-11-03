@@ -11,12 +11,20 @@
 // and wired into the runtime orchestration and interactive client loop in F2/F3.
 #![allow(dead_code)]
 
+pub mod overlay;
 pub mod panel;
 pub mod runs;
 pub mod service;
 pub mod skills;
 pub mod tasks;
 
+#[allow(unused_imports)]
+pub use overlay::{
+    handle_shepherd_mouse_click, render_shepherd_overlay, route_agent_modal_key,
+    route_shepherd_key, ClientShepherdAgentModal, ClientShepherdOverlay, FakeShepherdDispatcher,
+    ShepherdActionDispatcher, ShepherdClickOutcome, ShepherdKeyOutcome, ShepherdOverlayHits,
+    ShepherdTab, SHEPHERD_OVERLAY_MODAL_SIZE,
+};
 pub use panel::ShepherdAgentsPanelState;
 #[allow(unused_imports)]
 pub use runs::ShepherdRunsState;

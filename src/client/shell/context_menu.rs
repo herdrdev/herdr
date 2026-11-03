@@ -54,6 +54,7 @@ impl ClientContextMenuOverlay {
                 source_pane_id,
                 has_manual_label,
                 right_click_passthrough,
+                shepherd_enabled,
                 ..
             } => {
                 let mut items = vec![item("Rename pane", Action::RenamePane)];
@@ -75,8 +76,15 @@ impl ClientContextMenuOverlay {
                         },
                         Action::ToggleRightClickPassthrough,
                     ),
-                    item("Close pane", Action::ClosePane),
                 ]);
+                if *shepherd_enabled {
+                    items.extend([
+                        item("Launch Shepherd agent...", Action::ShepherdSpawnAgent),
+                        item("Kill Shepherd agent", Action::ShepherdKillAgent),
+                        item("Clean Shepherd agents", Action::ShepherdCleanAgents),
+                    ]);
+                }
+                items.push(item("Close pane", Action::ClosePane));
                 items
             }
         }
@@ -160,6 +168,7 @@ impl ClientShellState {
                 source_pane_id,
                 has_manual_label: pane.label.is_some(),
                 right_click_passthrough: pane.right_click_passthrough,
+                shepherd_enabled: self.config.shepherd_enabled,
             },
             x,
             y,
@@ -448,6 +457,32 @@ impl ClientShellState {
                 outcome,
             ),
             ClientContextMenuAction::ClosePane => self.request_pane_close(pane_id, outcome),
+            ClientContextMenuAction::ShepherdSpawnAgent => {
+                self.open_shepherd_spawn_form(outcome);
+            }
+            ClientContextMenuAction::ShepherdKillAgent => {
+                let agent_id = self
+                    .snapshot
+                    .as_deref()
+                    .and_then(|s| s.agents.iter().find(|a| a.pane_id == pane_id))
+                    .and_then(|a| a.name.as_deref().or(a.display_agent.as_deref()))
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| pane_id.clone());
+                self.open_shepherd_kill_confirm(&agent_id, outcome);
+            }
+            ClientContextMenuAction::ShepherdCleanAgents => {
+                let agent_id = self
+                    .snapshot
+                    .as_deref()
+                    .and_then(|s| s.agents.iter().find(|a| a.pane_id == pane_id))
+                    .and_then(|a| a.name.as_deref().or(a.display_agent.as_deref()))
+                    .map(str::to_owned);
+                if let Some(id) = agent_id {
+                    self.open_shepherd_clean_confirm(&id, outcome);
+                } else {
+                    self.open_shepherd_clean_all_confirm(outcome);
+                }
+            }
             _ => {}
         }
     }

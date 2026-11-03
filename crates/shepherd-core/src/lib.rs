@@ -470,7 +470,7 @@ pub struct NewTask {
     pub links: Vec<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CreatedTask {
     pub status: TaskStatus,
     pub directory: std::path::PathBuf,

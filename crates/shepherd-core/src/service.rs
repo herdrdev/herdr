@@ -1535,6 +1535,107 @@ impl OrchestrationService {
                 let public: Vec<Agent> = reg.agents.iter().map(Agent::public).collect();
                 serde_json::to_value(public).map_err(|e| e.to_string())
             }
+            "tasks" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let archived = args.get("archived").and_then(Value::as_bool).unwrap_or(false);
+                let tasks = crate::list_tasks(&root, archived).map_err(|e| e.to_string())?;
+                serde_json::to_value(tasks).map_err(|e| e.to_string())
+            }
+            "task_create" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let title = args
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'title' for task_create".to_owned())?
+                    .to_owned();
+                let description = args
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                let criteria: Vec<String> = args
+                    .get("criteria")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .unwrap_or_default();
+                let attachments: Vec<String> = args
+                    .get("attachments")
+                    .and_then(Value::as_array)
+                    .map(|a| a.iter().filter_map(Value::as_str).map(str::to_owned).collect())
+                    .unwrap_or_default();
+                let new_task = crate::NewTask {
+                    id: 0,
+                    title,
+                    description,
+                    criteria,
+                    issue: None,
+                    issue_markdown: None,
+                    links: attachments,
+                };
+                let created = crate::create_task(&root, new_task).map_err(|e| e.to_string())?;
+                serde_json::to_value(created).map_err(|e| e.to_string())
+            }
+            "task_archive" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let id = args
+                    .get("id")
+                    .and_then(|v| v.as_u64().map(|n| n.to_string()).or_else(|| v.as_str().map(str::to_owned)))
+                    .ok_or_else(|| "missing 'id' for task_archive".to_owned())?;
+                let path = crate::archive_task(&root, &id).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({ "archived": true, "path": path.display().to_string() }))
+            }
+            "skills" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let cat = crate::skills::Catalog::load(Some(&root), None);
+                let all = cat.all();
+                serde_json::to_value(all).map_err(|e| e.to_string())
+            }
+            "runs" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let tasks = crate::list_tasks(&root, false).unwrap_or_default();
+                let runs: Vec<serde_json::Value> = tasks
+                    .into_iter()
+                    .map(|t| {
+                        let has_plan = t.directory.join("plan.md").is_file();
+                        let pending_gate = if t.status.state == "awaiting-approval" {
+                            Some("approve_plan")
+                        } else {
+                            None
+                        };
+                        serde_json::json!({
+                            "task_id": t.status.id,
+                            "task_title": t.status.title,
+                            "status": t.status.state,
+                            "current_stage": t.status.state,
+                            "has_saved_plan": has_plan,
+                            "pending_gate": pending_gate,
+                            "active_agents": t.status.agents,
+                            "subtasks_progress": [0, 0]
+                        })
+                    })
+                    .collect();
+                Ok(serde_json::json!(runs))
+            }
             other => {
                 let msg = format!("unknown shepherd operation {other:?}");
                 self.record_failure(other, &msg);
@@ -2250,5 +2351,50 @@ mod tests {
         assert_eq!(failures.last().unwrap().method, "spawn");
         let log_on_disk = std::fs::read_to_string(service.service_config().log_path()).unwrap();
         assert!(log_on_disk.contains("method=spawn"));
+    }
+
+    #[test]
+    fn test_handle_call_tasks_runs_skills() {
+        let tmp = TestDir::new("call-ops");
+        let (service, _terminals, _clock) = test_service(tmp.path());
+
+        // 1. Task create
+        let create_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "title": "Test task F3b",
+            "description": "Task description for testing",
+            "criteria": ["- [ ] first criteria"],
+            "attachments": []
+        });
+        let created = service.handle_call("task_create", create_args).unwrap();
+        let task_id = created["status"]["id"].as_u64().unwrap();
+        assert_eq!(task_id, 1);
+
+        // 2. Tasks list
+        let list_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap()
+        });
+        let tasks = service.handle_call("tasks", list_args.clone()).unwrap();
+        let arr = tasks.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["status"]["title"], "Test task F3b");
+
+        // 3. Runs list
+        let runs = service.handle_call("runs", list_args.clone()).unwrap();
+        let runs_arr = runs.as_array().unwrap();
+        assert_eq!(runs_arr.len(), 1);
+        assert_eq!(runs_arr[0]["task_id"], 1);
+
+        // 4. Skills list
+        let skills = service.handle_call("skills", list_args).unwrap();
+        assert!(skills.is_array());
+
+        // 5. Task archive
+        let archive_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "id": 1
+        });
+        let archived = service.handle_call("task_archive", archive_args).unwrap();
+        assert_eq!(archived["archived"], true);
     }
 }

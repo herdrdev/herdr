@@ -23,3 +23,8 @@ La terminal nativa de herdr de cada agente es la forma de verlo y hablarle (acci
 ## Criterio de terminado
 
 `./cargo-fork.sh build`, `./cargo-fork.sh test -p shepherd-core` y los tests de herdr de las áreas tocadas en verde (los tests intermitentes de plugins conocidos pasan en solitario: anótalos, no los arregles). Con `shepherd.enabled` apagado ningún test existente de herdr cambia de resultado. Termina con un mensaje final claro, que diga cómo abrir cada vista en el binario y qué falta.
+
+## CORRECCIÓN DEL DUEÑO (prioritaria sobre el alcance de arriba)
+
+Los **agentes NO llevan pestaña ni panel propio**: se usan la barra lateral de agentes, el estado por agente, las pestañas y las terminales nativas que **herdr ya trae** (`src/client/shell/agent_sidebar.rs`, `endpoint_agents.rs`, `sidebar.rs`, menú contextual). Lo que aporte Shepherd a los agentes (estado starting/working/idle/blocked/done, destacar "needs you" con su aviso, lanzar con rol/tarea, matar, limpiar con sus confirmaciones) se integra ahí: marcadores en las filas existentes, entradas en el menú contextual y en el menú global, formulario de lanzar como overlay del patrón existente. "Ir a la terminal" = enfocar el pane nativo, sin más. Todo lo que herdr ya hace sigue funcionando igual.
+El overlay "Shepherd" nuevo contiene solo lo que herdr no tiene: **Tareas / Runs / Skills**. Retira o reutiliza `panel.rs` como piezas (formularios, confirmaciones) en vez de una vista de agentes paralela. Refleja esto en tu "Diseño F3b".
