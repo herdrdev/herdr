@@ -57,7 +57,9 @@ jobs:
           - os: ubuntu-latest
             kind: unix
             nextest_filter: all()
-          - os: macos-latest
+          # Temporário: o pool arm64 (macos-latest) não atendeu esta organização em 03/11/2026;
+          # restaurar macos-latest quando houver capacidade.
+          - os: macos-15-intel
             kind: unix
             nextest_filter: not binary(live_handoff)
           - os: windows-latest
