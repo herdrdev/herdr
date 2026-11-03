@@ -653,7 +653,7 @@ impl HeadlessServer {
                     ) => {
                         if let Ok(message) =
                             Self::frame_server_message(&ServerMessage::ServerShutdown {
-                                reason: Some("o servidor está sendo encerrado".to_owned()),
+                                reason: Some("servidor encerrando".to_owned()),
                             })
                         {
                             let _ = writer.control.send(message);
@@ -1083,7 +1083,7 @@ impl HeadlessServer {
             | ServerEvent::ClientShellConnected { writer, .. } = event
             {
                 if let Ok(message) = Self::frame_server_message(&ServerMessage::ServerShutdown {
-                    reason: Some("o servidor está sendo encerrado".to_owned()),
+                    reason: Some("servidor encerrando".to_owned()),
                 }) {
                     let _ = writer.control.send(message);
                 }
@@ -2899,11 +2899,11 @@ impl HeadlessServer {
             id: msg.request.id,
             error: api::schema::ErrorBody {
                 code: "server_unavailable".into(),
-                message: "o servidor está sendo encerrado".into(),
+                message: "servidor encerrando".into(),
             },
         })
         .unwrap_or_else(|_| {
-            r#"{"id":"","error":{"code":"server_unavailable","message":"o servidor está sendo encerrado"}}"#
+            r#"{"id":"","error":{"code":"server_unavailable","message":"servidor encerrando"}}"#
                 .to_string()
         });
         let _ = msg.respond_to.send(response);

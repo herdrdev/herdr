@@ -317,7 +317,7 @@ impl HeadlessServer {
 
         // Clear client-local host graphics, then send ServerShutdown to all connected clients.
         let shutdown_msg = ServerMessage::ServerShutdown {
-            reason: Some("o servidor está sendo encerrado".to_owned()),
+            reason: Some("servidor encerrando".to_owned()),
         };
         self.send_to_all_clients(shutdown_msg);
 
@@ -340,7 +340,7 @@ impl HeadlessServer {
         // Send ServerShutdown to all remaining clients.
         if !self.clients.is_empty() {
             let shutdown_msg = ServerMessage::ServerShutdown {
-                reason: Some("o servidor está sendo encerrado".to_owned()),
+                reason: Some("servidor encerrando".to_owned()),
             };
             self.send_to_all_clients(shutdown_msg);
 

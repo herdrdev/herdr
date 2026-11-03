@@ -938,7 +938,7 @@ fn send_shutdown_to_unregistered_client(writer: &ClientWriter) {
     if protocol::write_message(
         &mut framed,
         &ServerMessage::ServerShutdown {
-            reason: Some("o servidor está sendo encerrado".to_owned()),
+            reason: Some("servidor encerrando".to_owned()),
         },
     )
     .is_ok()
