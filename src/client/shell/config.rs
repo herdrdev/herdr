@@ -132,6 +132,11 @@ impl ClientShellConfig {
             copy_on_select: config.ui.copy_on_select,
             clipboard_toast_enabled: config.ui.toast.clipboard.enabled,
             clipboard_toast_position: config.ui.toast.clipboard.position,
+            nome_usuario: config
+                .pretorian
+                .nome
+                .as_deref()
+                .and_then(crate::config::sanitizar_nome),
             theme_name: theme_runtime.manual_name.clone(),
             theme_runtime,
             palette: crate::app::client_palette_from_config(config),
@@ -380,6 +385,13 @@ impl ClientShellConfig {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
         }
+        if !invalid_section("pretorian") {
+            self.nome_usuario = config
+                .pretorian
+                .nome
+                .as_deref()
+                .and_then(crate::config::sanitizar_nome);
+        }
 
         diagnostics
     }
@@ -487,10 +499,12 @@ mod tests {
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
         next.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
+        next.pretorian.nome = Some(" Ana ".into());
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
 
         assert!(diagnostics.is_empty());
+        assert_eq!(shell.nome_usuario.as_deref(), Some("Ana"));
         assert_eq!(shell.sidebar_width, 31);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(

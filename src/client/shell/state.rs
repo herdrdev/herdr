@@ -32,6 +32,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) copy_on_select: bool,
     pub(super) clipboard_toast_enabled: bool,
     pub(super) clipboard_toast_position: crate::config::ToastClipboardPosition,
+    pub(super) nome_usuario: Option<String>,
     pub(super) theme_name: String,
     pub(super) theme_runtime: crate::app::state::ThemeRuntimeConfig,
     pub(super) palette: Palette,
@@ -383,6 +384,7 @@ pub(super) struct ClientGlobalMenuOverlay {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientSettingsSection {
+    Usuario,
     Theme,
     Indicators,
     Sound,
@@ -392,6 +394,7 @@ pub(super) enum ClientSettingsSection {
 
 impl ClientSettingsSection {
     pub(super) const ALL: &[Self] = &[
+        Self::Usuario,
         Self::Theme,
         Self::Indicators,
         Self::Sound,
@@ -401,6 +404,7 @@ impl ClientSettingsSection {
 
     pub(super) fn label(self) -> &'static str {
         match self {
+            Self::Usuario => "usuário",
             Self::Theme => "tema",
             Self::Indicators => "indicadores",
             Self::Sound => "som",
@@ -414,6 +418,7 @@ impl ClientSettingsSection {
 pub(super) struct ClientSettingsOverlay {
     pub(super) section: ClientSettingsSection,
     pub(super) selected: usize,
+    pub(super) nome: TextEditor,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,

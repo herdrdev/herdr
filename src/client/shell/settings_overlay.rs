@@ -127,7 +127,11 @@ pub(super) fn render_settings_overlay(
         inner.height.saturating_sub(7),
     );
     let mut choice_hits = Vec::new();
+    let mut cursor = None;
     match settings.section {
+        ClientSettingsSection::Usuario => {
+            cursor = render_usuario_section(buffer, content, settings, palette);
+        }
         ClientSettingsSection::Theme => {
             let visible = usize::from(content.height);
             let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));
@@ -242,7 +246,11 @@ pub(super) fn render_settings_overlay(
         inner.x,
         inner.bottom().saturating_sub(2),
         inner.width,
-        " ↑↓ selecionar  tab seção",
+        if settings.section == ClientSettingsSection::Usuario {
+            " digite o nome  ^c limpar  tab seção"
+        } else {
+            " ↑↓ selecionar  tab seção"
+        },
         Style::default().fg(palette.overlay1).bg(palette.panel_bg),
     );
 
@@ -253,8 +261,59 @@ pub(super) fn render_settings_overlay(
         settings_popup: popup,
         settings_tabs: tab_hits,
         settings_choices: choice_hits,
+        cursor,
         ..OverlayRender::default()
     })
+}
+
+fn render_usuario_section(
+    buffer: &mut Buffer,
+    area: Rect,
+    settings: &ClientSettingsOverlay,
+    palette: &Palette,
+) -> Option<crate::protocol::CursorState> {
+    put_text(
+        buffer,
+        area.x,
+        area.y,
+        area.width,
+        "seu nome",
+        Style::default()
+            .fg(palette.text)
+            .bg(palette.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        buffer,
+        area.x,
+        area.y + 1,
+        area.width,
+        "aparece no cabeçalho como Pretorian · nome",
+        Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+    );
+    if area.height < 6 {
+        return None;
+    }
+    let input = Rect::new(area.x, area.y + 3, area.width, 1);
+    let input_style = Style::default().fg(palette.text).bg(palette.surface0);
+    buffer.set_style(input, input_style);
+    let cursor = text_editor::render(
+        buffer,
+        Rect::new(input.x + 1, input.y, input.width.saturating_sub(1), 1),
+        &settings.nome,
+        input_style,
+    );
+    let previa =
+        crate::config::cabecalho(crate::config::sanitizar_nome(settings.nome.as_str()).as_deref());
+    put_text(
+        buffer,
+        area.x,
+        area.y + 5,
+        area.width,
+        &format!("prévia: {previa}"),
+        Style::default().fg(palette.subtext0).bg(palette.panel_bg),
+    );
+    cursor
 }
 
 fn render_choice_section(
