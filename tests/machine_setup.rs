@@ -568,7 +568,7 @@ fn machine_add_reports_strict_host_key_failure() {
     assert!(
         result
             .output
-            .contains("saved machines use strict host-key checking"),
+            .contains("máquinas salvas usam verificação estrita da chave do host"),
         "{}",
         result.output
     );
