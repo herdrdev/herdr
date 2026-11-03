@@ -41,15 +41,18 @@ fn wait_for_file(
     timeout: Duration,
     framed_shell: bool,
     stderr: &mpsc::Receiver<Vec<u8>>,
+    fases: &Path,
 ) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
         if Instant::now() >= deadline {
             let captured = stderr.try_iter().flatten().collect::<Vec<_>>();
+            let captured = String::from_utf8_lossy(&captured);
             panic!(
-                "timed out waiting for fake ssh marker {} (framed_shell={framed_shell}); stderr: {}",
-                path.display(),
-                String::from_utf8_lossy(&captured)
+                "timed out waiting for fake ssh marker {:?} (framed_shell={framed_shell}); probe_windows: {}; primeira_chamada: {}; segunda_chamada: {}; stderr_bytes: {}; aviso: {}; url: {}; erro_final: {}",
+                path.file_name(), fases.join("probe-windows").exists(),
+                fases.join("primeira-chamada").exists(), fases.join("segunda-chamada").exists(),
+                captured.len(), captured.contains(CHECK_NOTICE), captured.contains(CHECK_URL), captured.contains(LATER_FAILURE)
             );
         }
         thread::sleep(Duration::from_millis(10));
@@ -77,6 +80,11 @@ fn check_authentication_output(framed_shell: bool) {
         reader: None,
     };
     fs::create_dir_all(&temp_dir).expect("create test directory");
+    fs::set_permissions(&temp_dir, fs::Permissions::from_mode(0o700))
+        .expect("secure test directory");
+    fs::create_dir(temp_dir.join("runtime")).expect("create runtime directory");
+    fs::set_permissions(temp_dir.join("runtime"), fs::Permissions::from_mode(0o700))
+        .expect("secure runtime directory");
 
     let started_path = temp_dir.join("ssh-started");
     let approval_path = temp_dir.join("ssh-approved");
@@ -88,7 +96,7 @@ fn check_authentication_output(framed_shell: bool) {
         format!(
             r#"#!/bin/sh
 case "$*" in
-    *powershell.exe*) exit 1 ;;
+    *powershell.exe*) : > "$FAKE_SSH_FASES/probe-windows"; exit 1 ;;
 esac
 authenticate() {{
     : > "$FAKE_SSH_STARTED"
@@ -98,12 +106,14 @@ authenticate() {{
     done
 }}
 if [ ! -e "$FAKE_SSH_FIRST_DONE" ]; then
+    : > "$FAKE_SSH_FASES/primeira-chamada"
     : > "$FAKE_SSH_FIRST_DONE"
     if [ "$FAKE_SSH_FRAMED" = 0 ]; then authenticate; fi
     /bin/cat >/dev/null
     printf 'login banner\nherdr-remote-output-ready:1\nLinux\nx86_64\n'
     exit 0
 fi
+: > "$FAKE_SSH_FASES/segunda-chamada"
 if [ "$FAKE_SSH_FRAMED" = 1 ] && [ ! -e "$FAKE_SSH_STARTED" ]; then
     authenticate
 fi
@@ -118,22 +128,27 @@ exit 255
     fs::set_permissions(&ssh_path, fs::Permissions::from_mode(0o755))
         .expect("make fake ssh executable");
 
-    let inherited_path = std::env::var("PATH").unwrap_or_default();
-    let path = format!("{}:{inherited_path}", temp_dir.display());
+    let path = format!("{}:/usr/bin:/bin", temp_dir.display());
     let child = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .args(["--remote", "check-host"])
+        .env_clear()
         .env("PATH", path)
+        .env("HOME", &temp_dir)
+        .env("TMPDIR", &temp_dir)
+        .env("XDG_CONFIG_HOME", temp_dir.join("config"))
+        .env("XDG_DATA_HOME", temp_dir.join("data"))
+        .env("XDG_CACHE_HOME", temp_dir.join("cache"))
+        .env("XDG_STATE_HOME", temp_dir.join("state"))
+        .env("XDG_RUNTIME_DIR", temp_dir.join("runtime"))
+        .env("PRETORIAN_HERDR_CONFIG_DIR", temp_dir.join("config-herdr"))
+        .env("PRETORIAN_HERDR_STATE_DIR", temp_dir.join("state-herdr"))
         .env("FAKE_SSH_FRAMED", if framed_shell { "1" } else { "0" })
+        .env("FAKE_SSH_FASES", &temp_dir)
         .env("FAKE_SSH_STARTED", &started_path)
         .env("FAKE_SSH_APPROVED", &approval_path)
         .env("FAKE_SSH_ADVANCED", &advanced_path)
         .env("FAKE_SSH_FIRST_DONE", &first_done_path)
         .env("HERDR_CONFIG_PATH", temp_dir.join("config.toml"))
-        .env_remove("HERDR_ENV")
-        .env_remove("HERDR_SESSION")
-        .env_remove("HERDR_SOCKET_PATH")
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_REMOTE_BINARY")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -159,6 +174,7 @@ exit 255
         Duration::from_secs(2),
         framed_shell,
         &line_rx,
+        &temp_dir,
     );
     let mut before_approval = Vec::new();
     while !String::from_utf8_lossy(&before_approval).contains(CHECK_URL) {
@@ -173,6 +189,7 @@ exit 255
         Duration::from_secs(2),
         framed_shell,
         &line_rx,
+        &temp_dir,
     );
 
     let status = child.wait().expect("wait for remote attach");
