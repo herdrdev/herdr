@@ -784,6 +784,7 @@ dependencies = [
  "serde_ignored",
  "serde_json",
  "sha2",
+ "shepherd-core",
  "signal-hook",
  "time",
  "tokio",

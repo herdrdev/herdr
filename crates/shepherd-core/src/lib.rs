@@ -6,11 +6,14 @@
 pub mod herdr;
 pub mod terminals;
 pub mod bus;
+pub mod cli;
 pub mod config;
 pub mod skills;
 pub mod spawn;
 pub mod mcp;
 pub mod workflow;
+
+pub use cli::{run_cli, run_cli_in_root, run_cli_with_terminals};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

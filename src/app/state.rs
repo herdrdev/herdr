@@ -806,6 +806,9 @@ pub struct AppState {
     /// Latest endpoint-owned release notes, cached outside render paths.
     pub latest_release_notes: Option<crate::release_notes::ReleaseNotes>,
     pub product_announcement: Option<ProductAnnouncementState>,
+    // Exercised by Shepherd F1 panel tests; wired to interactive TUI overlay dispatch in F3.
+    #[allow(dead_code)]
+    pub shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
@@ -1049,6 +1052,7 @@ impl AppState {
             worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
             latest_release_notes: None,
             product_announcement: None,
+            shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState::default(),
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

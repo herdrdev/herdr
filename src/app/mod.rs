@@ -518,6 +518,7 @@ impl App {
                     preview: announcement.preview,
                 }
             }),
+            shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState::default(),
             view: state::ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

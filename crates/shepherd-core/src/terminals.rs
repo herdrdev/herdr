@@ -1,4 +1,4 @@
-//! Terminal runtime port (`trait Terminals`) and adapters (`HerdrSocket`, `HcCli`, `InMemoryTerminals`).
+//! Terminal runtime port (`trait Terminals`) and adapters (`HerdrInProcess`, `HerdrSocket`, `HcCli`, `InMemoryTerminals`).
 //!
 //! Shepherd's core workflow, spawner, and MCP server depend only on `Terminals`.
 
@@ -8,12 +8,13 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendKind {
+    InProcess,
     Socket,
     Hc,
 }
@@ -135,22 +136,98 @@ pub fn select_backend_with_env(config: &Config, env_override: Option<&str>) -> R
             if cfg.is_empty() { "socket" } else { cfg }
         });
     match raw {
+        "in-process" | "in_process" => Ok(BackendKind::InProcess),
         "socket" => Ok(BackendKind::Socket),
         "hc" => Ok(BackendKind::Hc),
         other => Err(TerminalError::Config(format!(
-            "unknown terminal backend {other:?} (expected \"socket\" or \"hc\")"
+            "unknown terminal backend {other:?} (expected \"in-process\", \"socket\", or \"hc\")"
         ))),
+    }
+}
+
+pub type InProcessTerminalsFactory =
+    dyn Fn(&Config) -> Result<Box<dyn Terminals>, TerminalError> + Send + Sync;
+
+fn in_process_factory_slot() -> &'static Mutex<Option<Arc<InProcessTerminalsFactory>>> {
+    static FACTORY: OnceLock<Mutex<Option<Arc<InProcessTerminalsFactory>>>> = OnceLock::new();
+    FACTORY.get_or_init(|| Mutex::new(None))
+}
+
+/// Register an in-process `Terminals` factory used when `BackendKind::InProcess` is selected.
+pub fn set_in_process_terminals_factory(
+    factory: Option<Arc<InProcessTerminalsFactory>>,
+) {
+    if let Ok(mut guard) = in_process_factory_slot().lock() {
+        *guard = factory;
     }
 }
 
 /// Instantiate the active `Terminals` adapter according to `SHEPHERD_TERMINALS` and `config.herdr`.
 pub fn connect_terminals(config: &Config) -> Result<Box<dyn Terminals>, TerminalError> {
     match select_backend(config)? {
+        BackendKind::InProcess => {
+            let factory = in_process_factory_slot()
+                .lock()
+                .ok()
+                .and_then(|guard| guard.clone())
+                .ok_or_else(|| {
+                    TerminalError::Config(
+                        "in-process terminal backend selected, but no in-process runtime is registered"
+                            .into(),
+                    )
+                })?;
+            factory(config)
+        }
         BackendKind::Socket => Ok(Box::new(HerdrSocket::connect(
             Some(&config.herdr.session),
             config.herdr.autostart,
         )?)),
         BackendKind::Hc => Ok(Box::new(HcCli::new())),
+    }
+}
+
+/// In-process adapter for Herdr's runtime API (`trait Terminals`), avoiding external NDJSON socket I/O
+/// in `shepherd-core` by routing RPC calls through a direct handler (`App` channel or `ApiClient`).
+pub struct HerdrInProcess {
+    client: HerdrClient,
+    session: String,
+    attach_handler: Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
+}
+
+impl HerdrInProcess {
+    pub fn new(
+        session: impl Into<String>,
+        handler: impl Fn(&str, Value) -> Result<Value, HerdrError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            client: HerdrClient::in_process(handler),
+            session: session.into(),
+            attach_handler: None,
+        }
+    }
+
+    pub fn with_client(client: HerdrClient, session: impl Into<String>) -> Self {
+        Self {
+            client,
+            session: session.into(),
+            attach_handler: None,
+        }
+    }
+
+    pub fn with_attach_handler(
+        mut self,
+        handler: impl Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync + 'static,
+    ) -> Self {
+        self.attach_handler = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn client(&self) -> &HerdrClient {
+        &self.client
+    }
+
+    pub fn session(&self) -> &str {
+        &self.session
     }
 }
 
@@ -194,64 +271,9 @@ pub fn herdr_attach_args(session: &str, target: Option<&str>, takeover: bool) ->
     args
 }
 
-impl Terminals for HerdrSocket {
+impl Terminals for HerdrInProcess {
     fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError> {
-        let mut worktree_path = String::new();
-        let mut branch = String::new();
-        let workspace_id;
-        let initial_tab_id;
-        if let Some(wt) = &request.worktree {
-            let created = self.client.create_worktree(
-                &request.root.display().to_string(),
-                &wt.branch,
-                &wt.base,
-                &request.label,
-            )?;
-            workspace_id = nested_string(&created, &["workspace", "workspace_id"])?;
-            initial_tab_id = nested_string(&created, &["tab", "tab_id"])?;
-            worktree_path = nested_string(&created, &["worktree", "path"])?;
-            branch = nested_string(&created, &["worktree", "branch"]).unwrap_or_else(|_| wt.branch.clone());
-        } else {
-            workspace_id = match find_workspace(&self.client.snapshot()?, &request.root) {
-                Some(id) => id,
-                None => {
-                    let label = request.root.file_name().unwrap_or_default().to_string_lossy();
-                    let created = self.client.create_workspace(&request.root.display().to_string(), &label)?;
-                    nested_string(&created, &["workspace", "workspace_id"])?
-                }
-            };
-            initial_tab_id = String::new();
-        }
-        let cwd = if worktree_path.is_empty() {
-            request.root.display().to_string()
-        } else {
-            worktree_path.clone()
-        };
-        let created_tab = self.client.create_tab(&workspace_id, &cwd, &request.label, &request.env)?;
-        let tab_id = nested_string(&created_tab, &["tab", "tab_id"])?;
-        let pane_id = nested_string(&created_tab, &["root_pane", "pane_id"])?;
-        if !initial_tab_id.is_empty() {
-            let _ = self.client.close_tab(&initial_tab_id);
-        }
-        let _ = self.client.rename_pane(&pane_id, &request.label);
-        let _ = self.client.report_metadata(&pane_id, &request.role, &request.agent_id, &request.vendor_name, &request.label);
-
-        if request.herdr_agent.is_empty() {
-            let command = crate::spawn::shell_join(
-                std::iter::once(request.command.as_str()).chain(request.args.iter().map(String::as_str)),
-            );
-            self.client.send_input(&pane_id, &command)?;
-        } else {
-            start_herdr_agent(&self.client, &pane_id, &request.agent_id, &request.herdr_agent, &request.args)?;
-        }
-
-        Ok(OpenedAgent {
-            workspace: workspace_id,
-            tab: tab_id,
-            pane: pane_id,
-            worktree: worktree_path,
-            branch,
-        })
+        herdr_open_agent(&self.client, request)
     }
 
     fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
@@ -269,80 +291,19 @@ impl Terminals for HerdrSocket {
     }
 
     fn read_screen(&self, target: &str, lines: u32) -> Result<String, TerminalError> {
-        let result = self.client.read_pane(target, lines)?;
-        Ok(result
-            .get("text")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned())
+        herdr_read_screen(&self.client, target, lines)
     }
 
     fn wait(&self, target: &str, timeout: Duration) -> Result<TerminalWaitResult, TerminalError> {
-        let result = self.client.wait_agent(target, &["idle", "done", "blocked"], timeout)?;
-        let event = result.get("event").unwrap_or(&result);
-        let name = event.get("event").and_then(Value::as_str).unwrap_or("status").to_owned();
-        let status = event
-            .get("data")
-            .and_then(|d| d.get("agent_status"))
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        Ok(TerminalWaitResult {
-            ended: true,
-            status,
-            reason: name,
-        })
+        herdr_wait(&self.client, target, timeout)
     }
 
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
-        let agent = self.client.get_agent(target)?;
-        Ok(TerminalAgentStatus {
-            state: "live".into(),
-            status: agent
-                .get("agent_status")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown")
-                .to_owned(),
-            pane: agent
-                .get("pane_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            tab: agent
-                .get("tab_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            title: agent
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            seq: agent
-                .get("state_change_seq")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-        })
+        herdr_agent_status(&self.client, target)
     }
 
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
-        let title = labels
-            .get("title")
-            .or_else(|| labels.get("label"))
-            .map(String::as_str)
-            .unwrap_or("");
-        if !title.is_empty() {
-            let _ = self.client.rename_pane(target, title);
-        }
-        self.client.call(
-            "pane.report_metadata",
-            serde_json::json!({
-                "pane_id": target,
-                "source": "shepherd",
-                "title": title,
-                "tokens": labels,
-            }),
-        )?;
-        Ok(())
+        herdr_label(&self.client, target, labels)
     }
 
     fn close(&self, target: &str) -> Result<(), TerminalError> {
@@ -351,13 +312,228 @@ impl Terminals for HerdrSocket {
     }
 
     fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError> {
-        let args = herdr_attach_args(&self.session, target, takeover);
-        let status = Command::new("herdr").args(args).status()?;
-        if !status.success() {
-            return Err(TerminalError::Protocol(format!("herdr attach exited with {status}")));
+        if let Some(handler) = &self.attach_handler {
+            return handler(target, takeover);
         }
+        herdr_attach_process(&self.session, target, takeover)
+    }
+}
+
+impl Terminals for HerdrSocket {
+    fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError> {
+        herdr_open_agent(&self.client, request)
+    }
+
+    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
+        deliver_prompt(&self.client, target, text)
+    }
+
+    fn send_text(&self, target: &str, text: &str) -> Result<(), TerminalError> {
+        self.client.send_input(target, text)?;
         Ok(())
     }
+
+    fn send_keys(&self, target: &str, keys: &[String]) -> Result<(), TerminalError> {
+        self.client.send_keys(target, keys)?;
+        Ok(())
+    }
+
+    fn read_screen(&self, target: &str, lines: u32) -> Result<String, TerminalError> {
+        herdr_read_screen(&self.client, target, lines)
+    }
+
+    fn wait(&self, target: &str, timeout: Duration) -> Result<TerminalWaitResult, TerminalError> {
+        herdr_wait(&self.client, target, timeout)
+    }
+
+    fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
+        herdr_agent_status(&self.client, target)
+    }
+
+    fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
+        herdr_label(&self.client, target, labels)
+    }
+
+    fn close(&self, target: &str) -> Result<(), TerminalError> {
+        self.client.close_tab(target)?;
+        Ok(())
+    }
+
+    fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError> {
+        herdr_attach_process(&self.session, target, takeover)
+    }
+}
+
+fn herdr_open_agent(
+    client: &HerdrClient,
+    request: &OpenAgentRequest,
+) -> Result<OpenedAgent, TerminalError> {
+    let mut worktree_path = String::new();
+    let mut branch = String::new();
+    let workspace_id;
+    let initial_tab_id;
+    if let Some(wt) = &request.worktree {
+        let created = client.create_worktree(
+            &request.root.display().to_string(),
+            &wt.branch,
+            &wt.base,
+            &request.label,
+        )?;
+        workspace_id = nested_string(&created, &["workspace", "workspace_id"])?;
+        initial_tab_id = nested_string(&created, &["tab", "tab_id"])?;
+        worktree_path = nested_string(&created, &["worktree", "path"])?;
+        branch = nested_string(&created, &["worktree", "branch"]).unwrap_or_else(|_| wt.branch.clone());
+    } else {
+        workspace_id = match find_workspace(&client.snapshot()?, &request.root) {
+            Some(id) => id,
+            None => {
+                let label = request.root.file_name().unwrap_or_default().to_string_lossy();
+                let created = client.create_workspace(&request.root.display().to_string(), &label)?;
+                nested_string(&created, &["workspace", "workspace_id"])?
+            }
+        };
+        initial_tab_id = String::new();
+    }
+    let cwd = if worktree_path.is_empty() {
+        request.root.display().to_string()
+    } else {
+        worktree_path.clone()
+    };
+    let created_tab = client.create_tab(&workspace_id, &cwd, &request.label, &request.env)?;
+    let tab_id = nested_string(&created_tab, &["tab", "tab_id"])?;
+    let pane_id = nested_string(&created_tab, &["root_pane", "pane_id"])?;
+    if !initial_tab_id.is_empty() {
+        let _ = client.close_tab(&initial_tab_id);
+    }
+    let _ = client.rename_pane(&pane_id, &request.label);
+    let _ = client.report_metadata(
+        &pane_id,
+        &request.role,
+        &request.agent_id,
+        &request.vendor_name,
+        &request.label,
+    );
+
+    if request.herdr_agent.is_empty() {
+        let command = crate::spawn::shell_join(
+            std::iter::once(request.command.as_str()).chain(request.args.iter().map(String::as_str)),
+        );
+        client.send_input(&pane_id, &command)?;
+    } else {
+        start_herdr_agent(client, &pane_id, &request.agent_id, &request.herdr_agent, &request.args)?;
+    }
+
+    Ok(OpenedAgent {
+        workspace: workspace_id,
+        tab: tab_id,
+        pane: pane_id,
+        worktree: worktree_path,
+        branch,
+    })
+}
+
+fn herdr_read_screen(client: &HerdrClient, target: &str, lines: u32) -> Result<String, TerminalError> {
+    let result = client.read_pane(target, lines)?;
+    Ok(result
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned())
+}
+
+fn herdr_wait(
+    client: &HerdrClient,
+    target: &str,
+    timeout: Duration,
+) -> Result<TerminalWaitResult, TerminalError> {
+    let result = client.wait_agent(target, &["idle", "done", "blocked"], timeout)?;
+    let event = result.get("event").unwrap_or(&result);
+    let name = event
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("status")
+        .to_owned();
+    let status = event
+        .get("data")
+        .and_then(|d| d.get("agent_status"))
+        .or_else(|| result.get("agent").and_then(|a| a.get("agent_status")))
+        .or_else(|| result.get("agent_status"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    Ok(TerminalWaitResult {
+        ended: true,
+        status,
+        reason: name,
+    })
+}
+
+fn herdr_agent_status(client: &HerdrClient, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
+    let agent = client.get_agent(target)?;
+    Ok(TerminalAgentStatus {
+        state: "live".into(),
+        status: agent
+            .get("agent_status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_owned(),
+        pane: agent
+            .get("pane_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        tab: agent
+            .get("tab_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        title: agent
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        seq: agent
+            .get("state_change_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    })
+}
+
+fn herdr_label(
+    client: &HerdrClient,
+    target: &str,
+    labels: &HashMap<String, String>,
+) -> Result<(), TerminalError> {
+    let title = labels
+        .get("title")
+        .or_else(|| labels.get("label"))
+        .map(String::as_str)
+        .unwrap_or("");
+    if !title.is_empty() {
+        let _ = client.rename_pane(target, title);
+    }
+    client.call(
+        "pane.report_metadata",
+        serde_json::json!({
+            "pane_id": target,
+            "source": "shepherd",
+            "title": title,
+            "tokens": labels,
+        }),
+    )?;
+    Ok(())
+}
+
+fn herdr_attach_process(
+    session: &str,
+    target: Option<&str>,
+    takeover: bool,
+) -> Result<(), TerminalError> {
+    let args = herdr_attach_args(session, target, takeover);
+    let status = Command::new("herdr").args(args).status()?;
+    if !status.success() {
+        return Err(TerminalError::Protocol(format!("herdr attach exited with {status}")));
+    }
+    Ok(())
 }
 
 fn start_herdr_agent(
@@ -1022,6 +1198,12 @@ mod tests {
         assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Socket);
         config.herdr.backend = "hc".into();
         assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Hc);
+        config.herdr.backend = "in-process".into();
+        assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::InProcess);
+        assert_eq!(
+            select_backend_with_env(&config, Some("in_process")).unwrap(),
+            BackendKind::InProcess
+        );
         assert_eq!(
             select_backend_with_env(&config, Some("socket")).unwrap(),
             BackendKind::Socket
@@ -1031,6 +1213,170 @@ mod tests {
             BackendKind::Hc
         );
         assert!(select_backend_with_env(&config, Some("invalid")).is_err());
+    }
+
+    #[test]
+    fn herdr_in_process_executes_every_terminals_operation_without_socket() {
+        let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
+        let attached: Arc<Mutex<Vec<(Option<String>, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let calls_ref = Arc::clone(&calls);
+        let attached_ref = Arc::clone(&attached);
+
+        let adapter = HerdrInProcess::new("shepherd", move |method, params| {
+            calls_ref.lock().unwrap().push((method.to_owned(), params.clone()));
+            match method {
+                "worktree.create" => Ok(serde_json::json!({
+                    "workspace": { "workspace_id": "w1" },
+                    "tab": { "tab_id": "w1:t0" },
+                    "worktree": {
+                        "path": "/repo/.worktrees/shep-1",
+                        "branch": params["branch"],
+                    }
+                })),
+                "session.snapshot" => Ok(serde_json::json!({
+                    "snapshot": {
+                        "workspaces": [
+                            {
+                                "workspace_id": "w-existing",
+                                "worktree": { "checkout_path": "/repo" }
+                            }
+                        ]
+                    }
+                })),
+                "tab.create" => Ok(serde_json::json!({
+                    "tab": { "tab_id": "w1:t1" },
+                    "root_pane": { "pane_id": "w1:p1" },
+                })),
+                "tab.close" | "pane.rename" | "pane.report_metadata" | "agent.start"
+                | "pane.send_input" => Ok(serde_json::json!({"ok": true})),
+                "agent.prompt" => {
+                    if params["text"] == "BLOCK_ME" {
+                        Err(HerdrError::Api {
+                            code: "agent_blocked".into(),
+                            message: "agent waiting for input".into(),
+                        })
+                    } else {
+                        Ok(serde_json::json!({"delivered": true}))
+                    }
+                }
+                "pane.read" => Ok(serde_json::json!({
+                    "read": { "text": "in-process screen line 1\nin-process screen line 2" }
+                })),
+                "agent.wait" => Ok(serde_json::json!({
+                    "type": "agent_info",
+                    "agent": {
+                        "name": "coder-1",
+                        "agent_status": "idle",
+                        "pane_id": "w1:p1",
+                        "tab_id": "w1:t1",
+                        "state_change_seq": 5
+                    }
+                })),
+                "agent.get" => Ok(serde_json::json!({
+                    "agent": {
+                        "name": "coder-1",
+                        "agent_status": "working",
+                        "pane_id": "w1:p1",
+                        "tab_id": "w1:t1",
+                        "state_change_seq": 7
+                    }
+                })),
+                other => Err(HerdrError::Api {
+                    code: "unexpected".into(),
+                    message: format!("unexpected method {other}"),
+                }),
+            }
+        })
+        .with_attach_handler(move |target, takeover| {
+            attached_ref
+                .lock()
+                .unwrap()
+                .push((target.map(str::to_owned), takeover));
+            Ok(())
+        });
+
+        assert!(adapter.client().is_in_process());
+        assert_eq!(adapter.session(), "shepherd");
+
+        let opened = adapter
+            .open_agent(&OpenAgentRequest {
+                root: PathBuf::from("/repo"),
+                role: "coder".into(),
+                agent_id: "coder-1".into(),
+                vendor_name: "codex".into(),
+                command: "codex".into(),
+                herdr_agent: "codex".into(),
+                args: vec!["-m".into(), "gpt-5".into()],
+                label: "coder·codex·task".into(),
+                env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
+                worktree: Some(WorktreeSpec {
+                    branch: "shep/1-task".into(),
+                    base: "main".into(),
+                }),
+            })
+            .unwrap();
+        assert_eq!(opened.workspace, "w1");
+        assert_eq!(opened.tab, "w1:t1");
+        assert_eq!(opened.pane, "w1:p1");
+        assert_eq!(opened.worktree, "/repo/.worktrees/shep-1");
+        assert_eq!(opened.branch, "shep/1-task");
+
+        assert_eq!(
+            adapter.prompt("coder-1", "implement F1").unwrap(),
+            PromptOutcome::Delivered
+        );
+        assert_eq!(
+            adapter.prompt("coder-1", "BLOCK_ME").unwrap(),
+            PromptOutcome::Blocked
+        );
+        adapter.send_text("w1:p1", "cargo test").unwrap();
+        adapter
+            .send_keys("w1:p1", &["Enter".into(), "Escape".into()])
+            .unwrap();
+        assert_eq!(
+            adapter.read_screen("w1:p1", 40).unwrap(),
+            "in-process screen line 1\nin-process screen line 2"
+        );
+        let waited = adapter.wait("coder-1", Duration::from_secs(5)).unwrap();
+        assert!(waited.ended);
+        assert_eq!(waited.status.as_deref(), Some("idle"));
+
+        let status = adapter.agent_status("coder-1").unwrap();
+        assert_eq!(status.state, "live");
+        assert_eq!(status.status, "working");
+        assert_eq!(status.pane, "w1:p1");
+        assert_eq!(status.tab, "w1:t1");
+        assert_eq!(status.title, "coder-1");
+        assert_eq!(status.seq, 7);
+
+        adapter
+            .label(
+                "w1:p1",
+                &HashMap::from([
+                    ("role".into(), "coder".into()),
+                    ("title".into(), "coder·codex".into()),
+                ]),
+            )
+            .unwrap();
+        adapter.attach(Some("coder-1"), true).unwrap();
+        adapter.close("w1:t1").unwrap();
+
+        let recorded = calls.lock().unwrap();
+        let methods: Vec<&str> = recorded.iter().map(|(m, _)| m.as_str()).collect();
+        assert!(methods.contains(&"worktree.create"));
+        assert!(methods.contains(&"tab.create"));
+        assert!(methods.contains(&"agent.start"));
+        assert!(methods.contains(&"agent.prompt"));
+        assert!(methods.contains(&"pane.send_input"));
+        assert!(methods.contains(&"pane.read"));
+        assert!(methods.contains(&"agent.wait"));
+        assert!(methods.contains(&"agent.get"));
+        assert!(methods.contains(&"pane.report_metadata"));
+        assert!(methods.contains(&"tab.close"));
+        assert_eq!(
+            *attached.lock().unwrap(),
+            vec![(Some("coder-1".to_owned()), true)]
+        );
     }
 
     #[test]

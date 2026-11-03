@@ -26,6 +26,7 @@ default-members = [".", "crates/ghostty-vt"]
 
 [dependencies]
 ghostty-vt = { path = "crates/ghostty-vt" }
+shepherd-core = { path = "crates/shepherd-core" }
 base64 = "0.22.1"
 bincode = { version = "2", features = ["serde"] }
 bytes = "1"

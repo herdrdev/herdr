@@ -129,15 +129,23 @@ impl Terminals for SharedTerminals {
 }
 
 pub fn serve(port: u16) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    serve_with_terminals(port, None)
+}
+
+pub fn serve_with_terminals(
+    port: u16,
+    terminals: Option<Arc<dyn Terminals>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     let addr = listener.local_addr()?;
     println!("MCP endpoint: http://{addr}/mcp");
-    serve_listener(listener, Some(format!("http://{addr}/mcp")))
+    serve_listener(listener, Some(format!("http://{addr}/mcp")), terminals)
 }
 
 fn serve_listener(
     listener: TcpListener,
     mcp_url: Option<String>,
+    terminals: Option<Arc<dyn Terminals>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let state_dir = config::state_dir();
     let state = Arc::new(Mutex::new(State {
@@ -145,7 +153,7 @@ fn serve_listener(
         bus_path: state_dir.join("messages.jsonl"),
         mcp_url,
         active_vendors: None,
-        terminals: None,
+        terminals,
     }));
     for incoming in listener.incoming() {
         match incoming {

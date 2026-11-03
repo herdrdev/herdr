@@ -100,6 +100,10 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         return Ok(CommandOutcome::NotCli);
     };
 
+    if command == "shepherd" {
+        return crate::shepherd::run_cli(&args[1..]).map(CommandOutcome::Handled);
+    }
+
     if spec::print_requested_help(args)? {
         return Ok(CommandOutcome::Handled(0));
     }

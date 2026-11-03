@@ -3,7 +3,17 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{path::PathBuf, process::Command, sync::atomic::{AtomicU64, Ordering}, time::Duration};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
+pub type InProcessRpcHandler = dyn Fn(&str, Value) -> Result<Value, HerdrError> + Send + Sync;
 
 #[derive(Debug)]
 pub enum HerdrError {
@@ -73,37 +83,85 @@ fn parse_socket_path(output: &str) -> Option<&str> {
 
 pub struct HerdrClient {
     socket: PathBuf,
+    in_process: Option<Arc<InProcessRpcHandler>>,
     sequence: AtomicU64,
 }
 
 impl HerdrClient {
-    pub fn new(socket: impl Into<PathBuf>) -> Self { Self { socket: socket.into(), sequence: AtomicU64::new(1) } }
-    pub fn from_session(session: Option<&str>) -> Result<Self, HerdrError> { Ok(Self::new(resolve_socket(session)?)) }
-    pub fn socket(&self) -> &std::path::Path { &self.socket }
+    pub fn new(socket: impl Into<PathBuf>) -> Self {
+        Self {
+            socket: socket.into(),
+            in_process: None,
+            sequence: AtomicU64::new(1),
+        }
+    }
+
+    /// Construct a `HerdrClient` that dispatches API calls in-process without opening a socket.
+    pub fn in_process(
+        handler: impl Fn(&str, Value) -> Result<Value, HerdrError> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            socket: PathBuf::new(),
+            in_process: Some(Arc::new(handler)),
+            sequence: AtomicU64::new(1),
+        }
+    }
+
+    pub fn is_in_process(&self) -> bool {
+        self.in_process.is_some()
+    }
+
+    pub fn from_session(session: Option<&str>) -> Result<Self, HerdrError> {
+        Ok(Self::new(resolve_socket(session)?))
+    }
+
+    pub fn socket(&self) -> &std::path::Path {
+        &self.socket
+    }
 
     pub fn ensure_session(session: Option<&str>, autostart: bool) -> Result<Self, HerdrError> {
         let existing = Self::from_session(session);
         if let Ok(client) = &existing {
-            if client.call("ping", serde_json::json!({})).is_ok() { return Ok(Self::new(client.socket.clone())); }
+            if client.call("ping", serde_json::json!({})).is_ok() {
+                return Ok(Self::new(client.socket.clone()));
+            }
         }
-        if !autostart { return existing; }
+        if !autostart {
+            return existing;
+        }
         start_server(session)?;
         let deadline = std::time::Instant::now() + Duration::from_secs(20);
         loop {
             if let Ok(client) = Self::from_session(session) {
-                if client.call("ping", serde_json::json!({})).is_ok() { return Ok(client); }
+                if client.call("ping", serde_json::json!({})).is_ok() {
+                    return Ok(client);
+                }
             }
-            if std::time::Instant::now() >= deadline { return Err(HerdrError::Protocol("Herdr server was started but did not answer within 20 seconds".into())); }
+            if std::time::Instant::now() >= deadline {
+                return Err(HerdrError::Protocol(
+                    "Herdr server was started but did not answer within 20 seconds".into(),
+                ));
+            }
             std::thread::sleep(Duration::from_millis(200));
         }
     }
 
     /// Send a single Herdr API request and return its `result` value.
     pub fn call(&self, method: &str, params: Value) -> Result<Value, HerdrError> {
+        if let Some(handler) = &self.in_process {
+            return handler(method, params);
+        }
         #[cfg(unix)]
-        { self.call_unix(method, params) }
+        {
+            self.call_unix(method, params)
+        }
         #[cfg(not(unix))]
-        { let _ = (method, params); Err(HerdrError::Protocol("Herdr socket transport is not available on this platform".into())) }
+        {
+            let _ = (method, params);
+            Err(HerdrError::Protocol(
+                "Herdr socket transport is not available on this platform".into(),
+            ))
+        }
     }
 
     pub fn snapshot(&self) -> Result<Value, HerdrError> {
@@ -230,6 +288,28 @@ mod tests {
     fn resolves_socket_line_and_ignores_blank_values() {
         assert_eq!(parse_socket_path("pid: 42\nsocket: /tmp/herdr.sock\n"), Some("/tmp/herdr.sock"));
         assert_eq!(parse_socket_path("socket: \n"), None);
+    }
+
+    #[test]
+    fn in_process_client_dispatches_without_socket() {
+        let client = HerdrClient::in_process(|method, params| match method {
+            "session.snapshot" => Ok(serde_json::json!({
+                "snapshot": {
+                    "version": "in-process-test",
+                    "params": params,
+                }
+            })),
+            other => Err(HerdrError::Api {
+                code: "unsupported".into(),
+                message: format!("unexpected method {other}"),
+            }),
+        });
+        assert!(client.is_in_process());
+        assert!(client.socket().as_os_str().is_empty());
+        let snapshot = client.snapshot().unwrap();
+        assert_eq!(snapshot["version"], "in-process-test");
+        let err = client.call("unknown.method", serde_json::json!({})).unwrap_err();
+        assert!(err.to_string().contains("unsupported"));
     }
 
     #[cfg(unix)]
