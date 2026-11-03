@@ -379,7 +379,8 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
         ],
     );
     assert_eq!(malformed.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&malformed.stderr).contains("invalid plugin subdir segment"));
+    assert!(String::from_utf8_lossy(&malformed.stderr)
+        .contains("segmento de subdiretório do plugin inválido"));
 
     for (subdir, id) in [("first", "example.first"), ("second", "example.second")] {
         fs::write(
@@ -408,7 +409,7 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
         &[("GIT_CONFIG_GLOBAL", &git_config)],
     );
     assert!(selected.status.success());
-    assert!(String::from_utf8_lossy(&selected.stdout).contains("Updated example.first"));
+    assert!(String::from_utf8_lossy(&selected.stdout).contains("Atualizado example.first"));
     let listed = run_named_cli_json(
         &config_home,
         &runtime_dir,
@@ -447,7 +448,7 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
     assert!(all.status.success());
     let stdout = String::from_utf8_lossy(&all.stdout);
     assert!(stdout.contains("example.first já está atualizado"));
-    assert!(stdout.contains("Updated example.second"));
+    assert!(stdout.contains("Atualizado example.second"));
     let listed = run_named_cli_json(
         &config_home,
         &runtime_dir,
@@ -596,7 +597,7 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     let updated = child.wait_with_output().unwrap();
     assert!(!updated.status.success());
     assert!(String::from_utf8_lossy(&updated.stderr)
-        .contains("changed while its update was in progress"));
+        .contains("mudou durante a atualização; tente atualizar novamente"));
 
     let listed = run_named_cli_json(
         &config_home,
@@ -821,7 +822,7 @@ mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
         &[("GIT_CONFIG_GLOBAL", &git_config)],
     );
     assert!(!failed.status.success());
-    assert!(String::from_utf8_lossy(&failed.stderr).contains("plugin files retained at"));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("arquivos do plugin preservados em"));
     assert_eq!(fs::read(&registry).unwrap(), original_registry);
     assert_eq!(current_root(), new_root);
     assert_eq!(fs::read_to_string(old_root.join("version")).unwrap(), "old");

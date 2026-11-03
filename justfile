@@ -5,7 +5,7 @@ python := if os() == "windows" { "python" } else { "python3" }
 
 # Run tests
 test:
-    cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
+    cargo nextest run --locked --no-fail-fast --status-level fail --final-status-level fail --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test
@@ -46,7 +46,7 @@ ci filter='all()': lint
 
 # Keep the test build independently configurable from clippy in CI.
 ci-tests filter='all()':
-    cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
+    cargo nextest run --locked --no-fail-fast -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test

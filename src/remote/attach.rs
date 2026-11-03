@@ -2875,7 +2875,7 @@ fn confirm_remote_install(
     if !read_remote_confirmation(&mut io::stdin().lock(), true)? {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr installation cancelled",
+            "instalação remota do Herdr cancelada",
         ));
     }
 

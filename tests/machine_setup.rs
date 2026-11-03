@@ -350,7 +350,7 @@ fn machine_add_accepts_help_argument_order() {
     fs::remove_dir_all(root).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("machine was not saved"), "{stderr}");
+    assert!(stderr.contains("a máquina não foi salva"), "{stderr}");
     assert!(!saved, "failed preparation must not save a machine");
 }
 
@@ -360,7 +360,7 @@ fn machine_add_fresh_host_offers_installation_and_cancellation_saves_nothing() {
     assert_eq!(result.probes, "platform\ncandidates\n", "{}", result.output);
     assert_eq!(result.prompts, 1, "{}", result.output);
     assert!(
-        result.output.contains("installation cancelled"),
+        result.output.contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
@@ -385,7 +385,7 @@ fn machine_setup_accepts_a_native_windows_probe_without_a_posix_probe() {
     assert_eq!(order.first().copied(), Some("windows"), "{}", result.output);
     assert!(!order.contains(&"posix-probe"), "{}", result.output);
     assert!(
-        result.output.contains("installation cancelled"),
+        result.output.contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
@@ -462,7 +462,7 @@ fn machine_add_discovers_sessions_once_and_prepares_the_selected_session() {
         if !selection.is_empty() {
             let picker = result
                 .output
-                .split("Running sessions on fake-host:")
+                .split("Sessões em execução em fake-host:")
                 .nth(1)
                 .unwrap();
             assert!(
@@ -488,7 +488,7 @@ fn machine_add_failed_discovery_and_cancel_never_prepare_or_save() {
         (
             r#"{"sessions":[{"name":"default","running":true},{"name":"agents","running":true}]}"#,
             &b"\x1b"[..],
-            "selection cancelled",
+            "seleção da sessão remota cancelada",
         ),
     ] {
         let result = setup_options(
@@ -506,7 +506,7 @@ fn machine_add_failed_discovery_and_cancel_never_prepare_or_save() {
         assert!(result.actions.is_empty(), "{}", result.output);
         assert!(result.output.contains(expected), "{}", result.output);
         assert!(
-            result.output.contains("machine was not saved"),
+            result.output.contains("a máquina não foi salva"),
             "{}",
             result.output
         );
@@ -600,7 +600,7 @@ fn machine_setup_old_install_enter_cancels_without_remote_changes() {
     let result = setup("old", "\n", false);
     assert!(result.actions.is_empty(), "{}", result.output);
     assert!(
-        result.output.contains("machine was not saved"),
+        result.output.contains("a máquina não foi salva"),
         "{}",
         result.output
     );

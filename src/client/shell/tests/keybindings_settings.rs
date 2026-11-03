@@ -881,7 +881,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("custom"));
+    assert!(text.contains("personalizados"));
     assert!(text.contains("run plugin action"));
     state.handle_input_bytes(b"\x1b");
 

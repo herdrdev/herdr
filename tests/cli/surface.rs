@@ -241,7 +241,7 @@ fn pane_report_metadata_rejects_blank_applies_to_source_before_socket_request() 
 
     assert_eq!(run.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("missing value for --applies-to-source"),
+        String::from_utf8_lossy(&run.stderr).contains("falta valor para --applies-to-source"),
         "stderr: {}",
         String::from_utf8_lossy(&run.stderr)
     );
