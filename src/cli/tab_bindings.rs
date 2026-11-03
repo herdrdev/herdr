@@ -16,42 +16,42 @@ cli_projection! {
 const LEAVES: [Leaf; 6] = [
     Leaf {
         name: "list",
-        about: "List tabs",
+        about: "Listar abas",
         id: "cli:tab:list",
         arguments: TabListProjection::arguments,
         method: |matches| TabListProjection::from_matches(matches).map(Method::TabList),
     },
     Leaf {
         name: "create",
-        about: "Create a tab",
+        about: "Criar aba",
         id: "cli:tab:create",
         arguments: TabCreateProjection::arguments,
         method: |matches| TabCreateProjection::from_matches(matches).map(Method::TabCreate),
     },
     Leaf {
         name: "get",
-        about: "Show a tab",
+        about: "Mostrar aba",
         id: "cli:tab:get",
         arguments: TabTargetProjection::arguments,
         method: |matches| TabTargetProjection::from_matches(matches).map(Method::TabGet),
     },
     Leaf {
         name: "focus",
-        about: "Focus a tab",
+        about: "Focar aba",
         id: "cli:tab:focus",
         arguments: TabTargetProjection::arguments,
         method: |matches| TabTargetProjection::from_matches(matches).map(Method::TabFocus),
     },
     Leaf {
         name: "rename",
-        about: "Rename a tab",
+        about: "Renomear aba",
         id: "cli:tab:rename",
         arguments: TabRenameProjection::arguments,
         method: |matches| TabRenameProjection::from_matches(matches).map(Method::TabRename),
     },
     Leaf {
         name: "close",
-        about: "Close a tab",
+        about: "Fechar aba",
         id: "cli:tab:close",
         arguments: TabTargetProjection::arguments,
         method: |matches| TabTargetProjection::from_matches(matches).map(Method::TabClose),
@@ -60,7 +60,7 @@ const LEAVES: [Leaf; 6] = [
 
 pub(crate) fn command() -> Command {
     Command::new("tab")
-        .about("Manage tabs over the socket API")
+        .about("Gerenciar abas pela API de socket")
         .subcommand_required(true)
         .subcommands(LEAVES.iter().map(Leaf::command))
 }

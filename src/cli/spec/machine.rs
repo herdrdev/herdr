@@ -4,51 +4,49 @@ use super::{json_flag, option};
 
 pub(super) fn command() -> Command {
     Command::new("machine")
-        .about("Manage saved SSH machines")
+        .about("Gerenciar máquinas SSH salvas")
         .subcommand(
             Command::new("list")
-                .about("List saved SSH machines")
+                .about("Listar máquinas SSH salvas")
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("status")
-                .about("Check saved machines without prompting for authentication")
+                .about("Verificar máquinas salvas sem solicitar autenticação")
                 .arg(Arg::new("machine").value_name("LABEL_OR_ID"))
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("reconnect")
-                .about("Authenticate a saved machine in this terminal and verify connectivity")
+                .about("Autenticar uma máquina salva neste terminal e verificar a conexão")
                 .arg(Arg::new("machine").value_name("LABEL_OR_ID").required(true)),
         )
         .subcommand(
             Command::new("add")
-                .about("Prepare the remote Herdr server and save an SSH machine")
+                .about("Preparar o servidor Herdr remoto e salvar uma máquina SSH")
                 .arg(
                     Arg::new("ssh-target")
                         .value_name("SSH_TARGET")
                         .required(true),
                 )
-                .arg(
-                    option("label", "LABEL").help(
-                        "Set the machine label shown in the sidebar (defaults to the SSH host, or host/session)",
-                    ),
-                )
+                .arg(option("label", "LABEL").help(
+                    "Definir nome da máquina na barra lateral (padrão: host SSH ou host/sessão)",
+                ))
                 .arg(
                     option("remote-session", "NAME")
-                        .help("Select a session explicitly (default without an interactive terminal)"),
+                        .help("Selecionar sessão explicitamente (padrão sem terminal interativo)"),
                 ),
         )
         .subcommand(
-            profile_command("rename", "Rename a saved SSH machine").arg(
+            profile_command("rename", "Renomear máquina SSH salva").arg(
                 option("label", "LABEL")
                     .required(true)
-                    .help("Set the machine label shown in the sidebar"),
+                    .help("Definir nome da máquina na barra lateral"),
             ),
         )
-        .subcommand(profile_command("remove", "Remove a saved SSH machine"))
-        .subcommand(profile_command("enable", "Enable a saved SSH machine"))
-        .subcommand(profile_command("disable", "Disable a saved SSH machine"))
+        .subcommand(profile_command("remove", "Remover máquina SSH salva"))
+        .subcommand(profile_command("enable", "Ativar máquina SSH salva"))
+        .subcommand(profile_command("disable", "Desativar máquina SSH salva"))
 }
 
 fn profile_command(name: &'static str, about: &'static str) -> Command {

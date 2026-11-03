@@ -7,27 +7,33 @@ mod machine;
 
 pub(super) fn command() -> Command {
     let command = Command::new("herdr")
-        .about("terminal workspace manager for AI coding agents")
+        .about("ambiente de terminal para agentes de IA")
         .disable_help_flag(true)
         .disable_version_flag(true)
         .arg(help_flag())
-        .arg(option("session", "NAME").help("Use or create a named persistent session"))
-        .arg(option("machine", "LABEL-OR-ID").help("Run an API command on a saved SSH machine"))
-        .arg(option("remote", "TARGET").help("Attach through SSH to a remote Herdr server"))
+        .arg(option("session", "NAME").help("Usar ou criar uma sessão persistente nomeada"))
+        .arg(
+            option("machine", "LABEL-OR-ID")
+                .help("Executar comando da API em uma máquina SSH salva"),
+        )
+        .arg(option("remote", "TARGET").help("Conectar por SSH a um servidor Herdr remoto"))
         .arg(
             option("remote-keybindings", "MODE")
                 .value_parser(["local", "server"])
-                .help("Choose local or server keybindings for remote attach"),
+                .help("Escolher atalhos locais ou do servidor para conexão remota"),
         )
-        .arg(flag("handoff").help("Opt into live handoff for update or remote attach"))
-        .arg(flag("default-config").help("Print default configuration and exit"))
-        .arg(flag("skill").help("Print the agent skill file and exit"))
+        .arg(
+            flag("handoff")
+                .help("Permitir transferência da sessão na atualização ou conexão remota"),
+        )
+        .arg(flag("default-config").help("Exibir configuração padrão e sair"))
+        .arg(flag("skill").help("Exibir instruções do agente e sair"))
         .arg(
             Arg::new("version")
                 .short('V')
                 .long("version")
                 .action(ArgAction::SetTrue)
-                .help("Print version and exit"),
+                .help("Exibir versão e sair"),
         )
         .subcommand(completion::command())
         .subcommand(update_command())
@@ -50,18 +56,92 @@ pub(super) fn command() -> Command {
     configure_help(command, 0)
 }
 
-fn configure_help(command: Command, depth: usize) -> Command {
+pub(super) fn configure_help(command: Command, depth: usize) -> Command {
     let command = if depth == 0 {
         command
     } else {
-        command.disable_help_flag(false)
+        command.disable_help_flag(true).arg(
+            Arg::new("help")
+                .short('h')
+                .long("help")
+                .action(ArgAction::Help)
+                .help("Exibir ajuda"),
+        )
     };
     let command = if depth == 1 && command.has_subcommands() {
         command.after_help(super::AGENT_HELP_FOOTER)
     } else {
         command
     };
+    let mut template = String::from("{before-help}{about-with-newline}\nUso: {usage}\n");
+    if command
+        .get_subcommands()
+        .any(|subcommand| !subcommand.is_hide_set())
+    {
+        template.push_str("\nComandos:\n{subcommands}\n");
+    }
+    if command.get_positionals().any(|arg| !arg.is_hide_set()) {
+        template.push_str("\nArgumentos:\n{positionals}\n");
+    }
+    if command
+        .get_arguments()
+        .any(|arg| !arg.is_positional() && !arg.is_hide_set())
+    {
+        template.push_str("\nOpções:\n{options}\n");
+    }
+    template.push_str("{after-help}");
     command
+        .help_template(template)
+        .mut_args(|arg| {
+            let descricao =
+                arg.get_help()
+                    .map(ToString::to_string)
+                    .map(|descricao| match descricao.as_str() {
+                        "State to match; repeat for more than one state" => {
+                            "Estado a encontrar; repita para mais de um estado".to_string()
+                        }
+                        "State to match after --wait; repeat for more than one state" => {
+                            "Estado a encontrar após --wait; repita para mais de um estado"
+                                .to_string()
+                        }
+                        "Fail after this many milliseconds" => {
+                            "Falhar após essa quantidade de milissegundos".to_string()
+                        }
+                        "Wait for interactive readiness (default: 30000; max: 300000)" => {
+                            "Aguardar disponibilidade interativa (padrão: 30000; máximo: 300000)"
+                                .to_string()
+                        }
+                        _ => descricao,
+                    });
+            let valores = arg
+                .get_possible_values()
+                .into_iter()
+                .filter(|valor| !valor.is_hide_set())
+                .map(|valor| match valor.get_help() {
+                    Some(ajuda) => format!("{}: {}", valor.get_name(), ajuda),
+                    None => valor.get_name().to_string(),
+                })
+                .collect::<Vec<_>>();
+            let tem_valores = !valores.is_empty();
+            let descricao = if valores.is_empty() {
+                descricao
+            } else {
+                let valores = format!("Valores possíveis: {}", valores.join(", "));
+                Some(match descricao {
+                    Some(texto) => format!("{texto}\n\n{valores}"),
+                    None => valores,
+                })
+            };
+            let arg = if tem_valores {
+                arg.hide_possible_values(true)
+            } else {
+                arg
+            };
+            match descricao {
+                Some(texto) => arg.help(texto),
+                None => arg,
+            }
+        })
         .disable_help_subcommand(true)
         .mut_subcommands(|subcommand| configure_help(subcommand, depth + 1))
 }
@@ -115,82 +195,86 @@ fn write_requested_help(
 
 fn update_command() -> Command {
     Command::new("update")
-        .about("Download and install the latest version")
-        .arg(flag("handoff").help("Try live handoff after installing"))
+        .about("Atualização indisponível; use o instalador do Pretorian")
+        .arg(flag("handoff").help("Transferência após instalação indisponível neste fork"))
 }
 
 fn status_command() -> Command {
     Command::new("status")
-        .about("Show local client and running server status")
+        .about("Mostrar estado do cliente local e do servidor ativo")
         .arg(json_flag())
         .subcommand(
             Command::new("server")
-                .about("Show running server status")
+                .about("Mostrar estado do servidor ativo")
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("client")
-                .about("Show local client status")
+                .about("Mostrar estado do cliente local")
                 .arg(json_flag()),
         )
 }
 
 fn config_command() -> Command {
     Command::new("config")
-        .about("Manage local configuration")
-        .subcommand(Command::new("check").about("Validate config.toml and print diagnostics"))
-        .subcommand(Command::new("reset-keys").about("Reset custom keybindings"))
+        .about("Gerenciar configuração local")
+        .subcommand(Command::new("check").about("Validar config.toml e exibir diagnóstico"))
+        .subcommand(Command::new("reset-keys").about("Remover atalhos personalizados"))
 }
 
 fn channel_command() -> Command {
     Command::new("channel")
-        .about("Manage stable and preview update channels")
-        .subcommand(Command::new("show").about("Print the configured update channel"))
+        .about("Consultar o canal; alteração indisponível neste fork")
+        .subcommand(Command::new("show").about("Exibir canal de atualização configurado"))
         .subcommand(
-            Command::new("set").about("Choose the update channel").arg(
-                Arg::new("channel")
-                    .value_name("CHANNEL")
-                    .required(true)
-                    .value_parser(["stable", "preview"]),
-            ),
+            Command::new("set")
+                .about("Alteração de canal indisponível neste fork")
+                .arg(
+                    Arg::new("channel")
+                        .value_name("CHANNEL")
+                        .required(true)
+                        .value_parser(["stable", "preview"]),
+                ),
         )
 }
 
 fn server_command() -> Command {
     let command = Command::new("server")
-        .about("Run or control the headless server")
+        .about("Executar ou controlar o servidor sem interface")
         .subcommand(super::server::live_handoff_command())
-        .subcommand(Command::new("stop").about("Stop the running server"))
-        .subcommand(Command::new("reload-config").about("Reload config in the running server"))
+        .subcommand(Command::new("stop").about("Encerrar o servidor ativo"))
+        .subcommand(
+            Command::new("reload-config").about("Recarregar configuração no servidor ativo"),
+        )
         .subcommand(
             Command::new("agent-manifests")
-                .about("Show active agent detection manifests")
+                .about("Mostrar manifestos ativos de detecção de agentes")
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("update-agent-manifests")
-                .about("Fetch and reload agent detection manifests")
+                .about("Atualização indisponível; use o instalador do Pretorian")
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("reload-agent-manifests")
-                .about("Reload local agent detection manifest overrides"),
+                .about("Recarregar substituições locais dos manifestos de detecção"),
         );
     #[cfg(windows)]
     let command = command.arg(
         flag("allow-unelevated-clients")
-            .help("Allow ordinary same-account clients to control this elevated server"),
+            .help("Permitir que clientes comuns da mesma conta controlem este servidor elevado"),
     );
     command
 }
 
 fn api_command() -> Command {
     Command::new("api")
-        .about("Inspect socket API metadata and live runtime state")
-        .subcommand(Command::new("snapshot").about("Print the live session snapshot"))
+        .about("Consultar metadados da API de socket e estado atual")
+        .subcommand(Command::new("snapshot").about("Exibir instantâneo da sessão ativa"))
         .subcommand(
             Command::new("schema")
-                .about("Print or write the bundled API schema")
+                .about("Exibir ou gravar o esquema da API incluído")
                 .arg(json_flag())
                 .arg(path_option("output", "PATH")),
         )
@@ -222,19 +306,19 @@ fn pane_command() -> Command {
 
 fn terminal_command() -> Command {
     Command::new("terminal")
-        .about("Attach to or observe raw terminal streams")
+        .about("Conectar ou observar fluxos brutos de terminal")
         .subcommand(
             Command::new("attach")
-                .about("Attach directly to a terminal stream")
+                .about("Conectar diretamente a um fluxo de terminal")
                 .arg(required("terminal_id", "TERMINAL_ID"))
                 .arg(flag("takeover")),
         )
         .subcommand(
             Command::new("session")
-                .about("Work with terminal sessions")
+                .about("Gerenciar sessões de terminal")
                 .subcommand(
                     Command::new("control")
-                        .about("Control a terminal stream")
+                        .about("Controlar um fluxo de terminal")
                         .arg(required("target", "TARGET"))
                         .arg(flag("takeover"))
                         .arg(option("cols", "N"))
@@ -242,7 +326,7 @@ fn terminal_command() -> Command {
                 )
                 .subcommand(
                     Command::new("observe")
-                        .about("Observe a terminal stream")
+                        .about("Observar um fluxo de terminal")
                         .arg(required("target", "TARGET"))
                         .arg(option("cols", "N"))
                         .arg(option("rows", "N")),
@@ -253,22 +337,26 @@ fn terminal_command() -> Command {
 
 fn session_command() -> Command {
     Command::new("session")
-        .about("Manage named persistent sessions")
-        .subcommand(Command::new("list").about("List sessions").arg(json_flag()))
+        .about("Gerenciar sessões persistentes nomeadas")
+        .subcommand(
+            Command::new("list")
+                .about("Listar sessões")
+                .arg(json_flag()),
+        )
         .subcommand(
             Command::new("attach")
-                .about("Attach to a session")
+                .about("Conectar a uma sessão")
                 .arg(required("name", "NAME")),
         )
         .subcommand(
             Command::new("stop")
-                .about("Stop a session")
+                .about("Encerrar uma sessão")
                 .arg(required("name", "NAME"))
                 .arg(json_flag()),
         )
         .subcommand(
             Command::new("delete")
-                .about("Delete a stopped session")
+                .about("Excluir uma sessão encerrada")
                 .arg(required("name", "NAME"))
                 .arg(json_flag()),
         )
@@ -276,20 +364,20 @@ fn session_command() -> Command {
 
 fn integration_command() -> Command {
     Command::new("integration")
-        .about("Manage built-in agent integrations")
+        .about("Gerenciar integrações de agentes incluídas")
         .subcommand(
             Command::new("install")
-                .about("Install an integration")
+                .about("Instalar uma integração")
                 .arg(integration_target_arg()),
         )
         .subcommand(
             Command::new("uninstall")
-                .about("Uninstall an integration")
+                .about("Desinstalar uma integração")
                 .arg(integration_target_arg()),
         )
         .subcommand(
             Command::new("status")
-                .about("Show integration status")
+                .about("Mostrar estado das integrações")
                 .arg(flag("outdated-only")),
         )
 }
@@ -323,7 +411,7 @@ fn help_flag() -> Arg {
         .short('h')
         .long("help")
         .action(ArgAction::SetTrue)
-        .help("Show help")
+        .help("Exibir ajuda")
 }
 
 fn flag(name: &'static str) -> Arg {
@@ -447,10 +535,24 @@ mod tests {
                 );
                 let output = String::from_utf8(output).unwrap();
                 assert!(
-                    output.contains(&format!("Usage: herdr {}", path.join(" "))),
+                    output.contains(&format!("Uso: herdr {}", path.join(" "))),
                     "unexpected help for herdr {}: {output}",
                     path.join(" ")
                 );
+                for rotulo in [
+                    "\nUsage:",
+                    "\nArguments:",
+                    "\nOptions:",
+                    "\nCommands:",
+                    "possible values:",
+                    "Print help",
+                ] {
+                    assert!(
+                        !output.contains(rotulo),
+                        "rótulo {rotulo:?} em herdr {}: {output}",
+                        path.join(" ")
+                    );
+                }
             }
         }
     }
@@ -567,7 +669,7 @@ mod tests {
         .unwrap();
         assert!(String::from_utf8(help)
             .unwrap()
-            .contains("Usage: herdr agent rename <TARGET> <NAME>|--clear"));
+            .contains("Uso: herdr agent rename <TARGET> <NAME>|--clear"));
     }
 
     #[test]
@@ -683,6 +785,18 @@ mod tests {
     }
 
     #[test]
+    fn ajuda_subcomandos_apresenta_portugues_sem_alterar_opcoes() {
+        let ajuda = long_help(&["agent", "wait"]);
+        assert!(ajuda.contains("Aguardar"), "{ajuda}");
+        assert!(ajuda.contains("Uso:"), "{ajuda}");
+        assert!(ajuda.contains("--until"), "{ajuda}");
+        assert!(ajuda.contains("--timeout"), "{ajuda}");
+        assert!(ajuda.contains("blocked"), "{ajuda}");
+        assert!(long_help(&["update"]).contains("indisponível"));
+        assert!(long_help(&["channel", "set"]).contains("indisponível"));
+    }
+
+    #[test]
     fn agent_resources_appear_on_command_groups_but_not_leaf_commands() {
         for group in ["agent", "pane", "workspace", "terminal"] {
             let help = long_help(&[group]);
@@ -703,18 +817,18 @@ mod tests {
     fn next_step_hints_render_without_replacing_existing_after_help() {
         let agent_start = long_help(&["agent", "start"]);
         assert!(
-            agent_start.contains("The pane must be at its interactive shell prompt."),
+            agent_start.contains("O painel deve estar no prompt de shell interativo."),
             "agent start dropped its existing after_help: {agent_start}"
         );
         assert!(
-            agent_start.contains("next: herdr agent prompt <TARGET> <TEXT> --wait"),
+            agent_start.contains("Próximo passo: herdr agent prompt <TARGET> <TEXT> --wait"),
             "agent start is missing its next-step hint: {agent_start}"
         );
 
         let pane_send_text = long_help(&["pane", "send-text"]);
         assert!(
             pane_send_text.contains(
-                "next: herdr pane run <PANE_ID> <COMMAND> sends text and Enter in one call"
+                "Próximo passo: herdr pane run <PANE_ID> <COMMAND> envia texto e Enter em uma chamada"
             ),
             "pane send-text is missing its next-step hint: {pane_send_text}"
         );

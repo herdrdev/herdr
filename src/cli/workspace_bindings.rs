@@ -33,7 +33,7 @@ pub(crate) fn environment() -> Input<HashMap<String, String>> {
         slot.insert(key, value);
         Ok(())
     })
-    .help("Set an environment variable for the launched process")
+    .help("Definir variável de ambiente para o processo iniciado")
 }
 
 pub(crate) fn source() -> Input<String> {
@@ -128,7 +128,7 @@ impl Leaf {
 pub(crate) const LEAVES: [Leaf; 7] = [
     Leaf {
         name: "list",
-        about: "List workspaces",
+        about: "Listar espaços de trabalho",
         id: "cli:workspace:list",
         quiet: false,
         arguments: WorkspaceListProjection::arguments,
@@ -136,7 +136,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "create",
-        about: "Create a workspace",
+        about: "Criar espaço de trabalho",
         id: "cli:workspace:create",
         quiet: false,
         arguments: WorkspaceCreateProjection::arguments,
@@ -146,7 +146,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "get",
-        about: "Show a workspace",
+        about: "Mostrar espaço de trabalho",
         id: "cli:workspace:get",
         quiet: false,
         arguments: WorkspaceTargetProjection::arguments,
@@ -156,7 +156,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "focus",
-        about: "Focus a workspace",
+        about: "Focar espaço de trabalho",
         id: "cli:workspace:focus",
         quiet: false,
         arguments: WorkspaceTargetProjection::arguments,
@@ -166,7 +166,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "rename",
-        about: "Rename a workspace",
+        about: "Renomear espaço de trabalho",
         id: "cli:workspace:rename",
         quiet: false,
         arguments: WorkspaceRenameProjection::arguments,
@@ -176,7 +176,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "report-metadata",
-        about: "Report display-only workspace metadata",
+        about: "Informar metadados de exibição do espaço de trabalho",
         id: "cli:request",
         quiet: true,
         arguments: WorkspaceMetadataProjection::arguments,
@@ -186,7 +186,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
     },
     Leaf {
         name: "close",
-        about: "Close a workspace",
+        about: "Fechar espaço de trabalho",
         id: "cli:workspace:close",
         quiet: false,
         arguments: WorkspaceCloseProjection::arguments,
@@ -198,7 +198,7 @@ pub(crate) const LEAVES: [Leaf; 7] = [
 
 pub(crate) fn command() -> Command {
     Command::new("workspace")
-        .about("Manage workspaces over the socket API")
+        .about("Gerenciar espaços de trabalho pela API de socket")
         .subcommands(LEAVES.iter().map(Leaf::command))
 }
 

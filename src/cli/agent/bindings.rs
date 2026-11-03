@@ -116,7 +116,7 @@ pub(crate) fn kind() -> Input<String> {
     })
     .required()
     .configure(|arg| arg.value_parser(AgentKindCodec))
-    .help("Supported agent kind and canonical executable")
+    .help("Tipo de agente compatível e executável correspondente")
 }
 
 /// Lists kinds for help and completion. Only the final `--kind` is validated, by
@@ -151,7 +151,7 @@ pub(crate) fn pane() -> Input<String> {
         Ok(())
     })
     .required()
-    .help("Existing pane at an interactive shell prompt")
+    .help("Painel existente no prompt de shell interativo")
 }
 
 pub(crate) fn rename_name() -> Input<Option<String>> {
@@ -180,7 +180,7 @@ pub(crate) fn wait_presence() -> Input<Option<crate::api::schema::AgentPromptWai
         });
         Ok(())
     })
-    .help("Wait for the first matching state observed after submission")
+    .help("Aguardar o primeiro estado correspondente observado após o envio")
 }
 
 cli_projection! {
@@ -244,31 +244,31 @@ fn leaf(name: &'static str, arguments: Vec<clap::Arg>, about: &'static str) -> C
 
 pub(crate) fn command() -> Command {
     Command::new("agent")
-        .about("Control and inspect agent panes")
+        .about("Controlar e inspecionar painéis de agentes")
         .subcommand_required(true)
-        .subcommand(leaf("list", Vec::new(), "List agents"))
-        .subcommand(leaf("get", TargetProjection::arguments(), "Show an agent"))
-        .subcommand(leaf("focus", TargetProjection::arguments(), "Focus an agent"))
-        .subcommand(leaf("read", AgentReadProjection::arguments(), "Read agent terminal output")
+        .subcommand(leaf("list", Vec::new(), "Listar agentes"))
+        .subcommand(leaf("get", TargetProjection::arguments(), "Mostrar agente"))
+        .subcommand(leaf("focus", TargetProjection::arguments(), "Focar agente"))
+        .subcommand(leaf("read", AgentReadProjection::arguments(), "Ler saída do terminal do agente")
             .override_usage("herdr agent read <TARGET> [OPTIONS]"))
-        .subcommand(leaf("send-keys", AgentSendKeysProjection::arguments(), "Send key presses to an agent")
-            .after_help("Use esc as the canonical Escape key name; escape is also accepted."))
-        .subcommand(leaf("rename", AgentRenameProjection::arguments(), "Rename an agent")
+        .subcommand(leaf("send-keys", AgentSendKeysProjection::arguments(), "Enviar teclas a um agente")
+            .after_help("Use esc como nome da tecla Escape; escape também é aceito."))
+        .subcommand(leaf("rename", AgentRenameProjection::arguments(), "Renomear agente")
             .override_usage("herdr agent rename <TARGET> <NAME>|--clear")
             .group(ArgGroup::new("rename").args(["name", "clear"]).required(true)))
-        .subcommand(leaf("wait", AgentWaitProjection::arguments(), "Wait until an agent reaches one of the requested states")
+        .subcommand(leaf("wait", AgentWaitProjection::arguments(), "Aguardar o agente alcançar um dos estados solicitados")
             .override_usage("herdr agent wait <TARGET> [OPTIONS]")
-            .after_help("Without --until, matches idle, done, or blocked. Use --until unknown explicitly when needed. Without --timeout, waits indefinitely."))
-        .subcommand(leaf("prompt", AgentPromptProjection::arguments(), "Submit a prompt to an agent")
+            .after_help("Sem --until, corresponde a idle, done ou blocked. Use --until unknown explicitamente quando necessário. Sem --timeout, aguarda indefinidamente."))
+        .subcommand(leaf("prompt", AgentPromptProjection::arguments(), "Enviar uma solicitação ao agente")
             .args(AgentPromptWaitProjection::arguments().into_iter().map(|arg| arg.requires("wait")))
             .override_usage("herdr agent prompt <TARGET> <TEXT> [OPTIONS]")
-            .after_help("If the agent is already blocked, submission is rejected with agent_blocked before any input is sent. When an accepted submission starts from another non-working state, --wait requires an observed working or blocked state within 5000ms; otherwise it returns agent_prompt_stalled. A caller timeout that expires first returns timeout. It then matches idle, done, or blocked by default, or any exact --until state. It does not track turns: if the agent is already working, that active turn's completion may match."))
-        .subcommand(leaf("start", AgentStartProjection::arguments(), "Start a supported interactive agent in an existing pane")
+            .after_help("Se o agente já estiver em blocked, o envio é recusado com agent_blocked antes de qualquer entrada. Quando um envio aceito começa em outro estado diferente de working, --wait exige observar working ou blocked em até 5000ms; caso contrário, retorna agent_prompt_stalled. Se o prazo definido pelo chamador vencer primeiro, retorna timeout. Em seguida, corresponde a idle, done ou blocked por padrão, ou ao estado exato de --until. Não acompanha turnos: se o agente já estiver em working, a conclusão do turno ativo pode corresponder."))
+        .subcommand(leaf("start", AgentStartProjection::arguments(), "Iniciar agente interativo compatível em painel existente")
             .override_usage("herdr agent start <NAME> --kind <KIND> --pane <ID> [OPTIONS] [-- [AGENT_ARG]...]")
-            .after_help("The pane must be at its interactive shell prompt. Success means the expected agent was detected in the same terminal and is ready for input.\n\nnext: herdr agent prompt <TARGET> <TEXT> --wait"))
-        .subcommand(leaf("attach", AttachProjection::arguments(), "Attach directly to an agent terminal")
+            .after_help("O painel deve estar no prompt de shell interativo. O sucesso indica que o agente esperado foi detectado no mesmo terminal e está pronto para receber entrada.\n\nPróximo passo: herdr agent prompt <TARGET> <TEXT> --wait"))
+        .subcommand(leaf("attach", AttachProjection::arguments(), "Conectar diretamente ao terminal de um agente")
             .override_usage("herdr agent attach <TARGET> [OPTIONS]"))
-        .subcommand(leaf("explain", ExplainProjection::arguments(), "Explain agent detection state")
+        .subcommand(leaf("explain", ExplainProjection::arguments(), "Explicar estado de detecção do agente")
             .group(ArgGroup::new("explain_source").args(["target", "file"]).required(true)))
 }
 

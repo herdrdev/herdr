@@ -63,7 +63,7 @@ fn parse_status_scope_args(
         None => Some((scope, false)),
         Some("--json") if args.len() == 2 => Some((scope, true)),
         _ => {
-            eprintln!("usage: {usage}");
+            eprintln!("Uso: {usage}");
             None
         }
     }
@@ -401,10 +401,12 @@ fn current_exe_label() -> String {
 }
 
 fn print_status_help() {
-    eprintln!("herdr status commands:");
-    eprintln!("  herdr status [--json]         show local client and running server status");
-    eprintln!("  herdr status server [--json]  show running server status");
-    eprintln!("  herdr status client [--json]  show local client binary status");
+    eprintln!("Comandos de herdr status:");
+    eprintln!(
+        "  herdr status [--json]         mostrar estado do cliente local e do servidor ativo"
+    );
+    eprintln!("  herdr status server [--json]  mostrar estado do servidor ativo");
+    eprintln!("  herdr status client [--json]  mostrar estado do executável do cliente local");
 }
 
 #[cfg(test)]

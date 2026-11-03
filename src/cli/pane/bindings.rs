@@ -156,7 +156,7 @@ pub(crate) fn environment() -> Input<HashMap<String, String>> {
         slot.insert(key, value);
         Ok(())
     })
-    .help("Set an environment variable for the launched process")
+    .help("Definir variável de ambiente para o processo iniciado")
 }
 
 pub(crate) fn joined(name: &'static str, value: &'static str) -> Input<String> {
@@ -262,7 +262,7 @@ pub(crate) fn matcher() -> Field<OutputMatch> {
         })
         .once()
         .configure(|arg| arg.conflicts_with("regex").required_unless_present("regex"))
-        .help("Match a literal substring"),
+        .help("Encontrar um trecho literal"),
     )
     .input(
         Input::value("regex", "PATTERN", |slot, value| {
@@ -273,7 +273,7 @@ pub(crate) fn matcher() -> Field<OutputMatch> {
         })
         .once()
         .configure(|arg| arg.conflicts_with("match").required_unless_present("match"))
-        .help("Match a Rust regular expression"),
+        .help("Encontrar uma expressão regular Rust"),
     )
 }
 
@@ -289,7 +289,7 @@ pub(crate) fn resume() -> Input<Option<Vec<String>>> {
     .value_name("RESUME_ARG")
     .configure(|arg| arg.required(false).num_args(0..).last(true))
     .help(
-        "Command that resumes this session after a Herdr restart; starts with a plain command name",
+        "Comando que retoma esta sessão após reiniciar o Herdr; começa com um nome de comando simples",
     )
 }
 
@@ -372,10 +372,10 @@ pub(crate) fn destination() -> Field<PaneMoveDestination> {
 cli_projection! { pub(crate) PaneWaitProjection for PaneWaitForOutputParams {
     pane_id => Field::new(String::new()).input(pane_id()),
     source => Field::new(ReadSource::Recent).input(read_source(false)),
-    lines => Field::new(None).input(lines().help("Restrict the searched snapshot to N lines")),
+    lines => Field::new(None).input(lines().help("Limitar a N linhas o instantâneo pesquisado")),
     r#match => matcher(),
-    timeout_ms => Field::new(None).input(number("timeout", "MS").help("Fail after this many milliseconds")),
-    strip_ansi => Field::new(true).input(boolean("raw", false).help("Keep ANSI escape sequences while matching")),
+    timeout_ms => Field::new(None).input(number("timeout", "MS").help("Falhar após essa quantidade de milissegundos")),
+    strip_ansi => Field::new(true).input(boolean("raw", false).help("Manter sequências ANSI durante a busca")),
 } }
 
 cli_projection! { pub(crate) PaneTargetProjection for PaneTarget {
@@ -404,9 +404,9 @@ impl Leaf {
         match self.name {
             "input" => command.group(clap::ArgGroup::new("selector").args(["pane_id", "pane", "current"]).required(true)),
             "move" => command.group(clap::ArgGroup::new("destination").args(["tab", "new-tab", "new-workspace"]).required(true)),
-            "send-text" => command.after_help("next: herdr pane run <PANE_ID> <COMMAND> sends text and Enter in one call"),
-            "send-keys" => command.after_help("Use esc as the canonical Escape key name; escape is also accepted."),
-            "wait-output" => command.after_help("The selected snapshot is searched immediately, including existing output, then polled. Without --timeout, this waits indefinitely."),
+            "send-text" => command.after_help("Próximo passo: herdr pane run <PANE_ID> <COMMAND> envia texto e Enter em uma chamada"),
+            "send-keys" => command.after_help("Use esc como nome da tecla Escape; escape também é aceito."),
+            "wait-output" => command.after_help("O instantâneo selecionado é pesquisado imediatamente, inclusive a saída existente, e depois consultado periodicamente. Sem --timeout, aguarda indefinidamente."),
             _ => command,
         }
     }
@@ -453,7 +453,7 @@ macro_rules! leaf {
 pub(super) const LEAVES: &[Leaf] = &[
     leaf!(
         "list",
-        "List panes",
+        "Listar painéis",
         "cli:pane:list",
         Json,
         PaneListProjection,
@@ -461,7 +461,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "current",
-        about: "Show the current pane",
+        about: "Mostrar painel atual",
         id: "cli:pane:current",
         output: Output::Json,
         arguments: PaneCurrentProjection::arguments,
@@ -479,7 +479,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     leaf!(
         "get",
-        "Show a pane",
+        "Mostrar painel",
         "cli:pane:get",
         Json,
         PaneTargetProjection,
@@ -487,7 +487,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "layout",
-        about: "Show pane layout information",
+        about: "Mostrar organização do painel",
         id: "cli:pane:layout",
         output: Output::Json,
         arguments: PaneLayoutProjection::arguments,
@@ -505,7 +505,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "process-info",
-        about: "Show pane process information",
+        about: "Mostrar processos do painel",
         id: "cli:pane:process_info",
         output: Output::Json,
         arguments: PaneProcessInfoProjection::arguments,
@@ -523,7 +523,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     leaf!(
         "neighbor",
-        "Find a pane neighbor",
+        "Encontrar painel vizinho",
         "cli:pane:neighbor",
         Json,
         PaneNeighborProjection,
@@ -531,7 +531,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "edges",
-        about: "Show pane edge information",
+        about: "Mostrar bordas do painel",
         id: "cli:pane:edges",
         output: Output::Json,
         arguments: PaneEdgesProjection::arguments,
@@ -549,7 +549,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     leaf!(
         "focus",
-        "Focus a neighboring pane",
+        "Focar painel vizinho",
         "cli:pane:focus",
         Json,
         PaneFocusProjection,
@@ -557,7 +557,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "resize",
-        "Resize a pane split",
+        "Redimensionar divisão de painel",
         "cli:pane:resize",
         Json,
         PaneResizeProjection,
@@ -565,7 +565,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "zoom",
-        "Toggle or set pane zoom",
+        "Alternar ou definir zoom do painel",
         "cli:pane:zoom",
         Json,
         PaneZoomProjection,
@@ -573,7 +573,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "read",
-        about: "Read pane terminal output",
+        about: "Ler saída do terminal do painel",
         id: "cli:pane:read",
         output: Output::Read,
         arguments: PaneReadProjection::arguments,
@@ -589,7 +589,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     leaf!(
         "rename",
-        "Rename a pane",
+        "Renomear painel",
         "cli:pane:rename",
         Json,
         PaneRenameProjection,
@@ -597,7 +597,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "input",
-        about: "Set pane input routing",
+        about: "Definir encaminhamento de entrada do painel",
         id: "cli:pane:input:set",
         output: Output::Json,
         arguments: PaneInputProjection::arguments,
@@ -613,7 +613,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "split",
-        about: "Split a pane",
+        about: "Dividir painel",
         id: "cli:pane:split",
         output: Output::Json,
         arguments: PaneSplitProjection::arguments,
@@ -631,7 +631,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "swap",
-        about: "Swap panes",
+        about: "Trocar painéis",
         id: "cli:pane:swap",
         output: Output::Json,
         arguments: PaneSwapProjection::arguments,
@@ -639,7 +639,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "move",
-        about: "Move a pane",
+        about: "Mover painel",
         id: "cli:pane:move",
         output: Output::Json,
         arguments: PaneMoveProjection::arguments,
@@ -647,7 +647,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     leaf!(
         "close",
-        "Close a pane",
+        "Fechar painel",
         "cli:pane:close",
         Json,
         PaneTargetProjection,
@@ -655,7 +655,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "send-text",
-        "Send literal text to a pane",
+        "Enviar texto literal a um painel",
         "cli:request",
         Quiet,
         PaneSendTextProjection,
@@ -663,7 +663,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "send-keys",
-        "Send key presses to a pane",
+        "Enviar teclas a um painel",
         "cli:request",
         Quiet,
         PaneSendKeysProjection,
@@ -671,7 +671,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "wait-output",
-        "Wait for matching pane output",
+        "Aguardar saída correspondente do painel",
         "cli:pane:wait-output",
         Json,
         PaneWaitProjection,
@@ -679,7 +679,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     leaf!(
         "run",
-        "Run a command in a pane",
+        "Executar comando em um painel",
         "cli:request",
         Quiet,
         PaneRunProjection,
@@ -687,7 +687,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     ),
     Leaf {
         name: "report-agent",
-        about: "Report pane agent lifecycle state",
+        about: "Informar estado do ciclo de vida do agente no painel",
         id: "cli:request",
         output: Output::Quiet,
         arguments: PaneReportAgentProjection::arguments,
@@ -699,7 +699,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "report-agent-session",
-        about: "Report pane agent session identity",
+        about: "Informar identidade da sessão do agente no painel",
         id: "cli:request",
         output: Output::Quiet,
         arguments: PaneReportSessionProjection::arguments,
@@ -711,7 +711,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "release-agent",
-        about: "Release pane agent lifecycle authority",
+        about: "Liberar controle do ciclo de vida do agente no painel",
         id: "cli:request",
         output: Output::Quiet,
         arguments: PaneReleaseProjection::arguments,
@@ -723,7 +723,7 @@ pub(super) const LEAVES: &[Leaf] = &[
     },
     Leaf {
         name: "report-metadata",
-        about: "Report display-only pane metadata",
+        about: "Informar metadados de exibição do painel",
         id: "cli:request",
         output: Output::Quiet,
         arguments: PaneMetadataProjection::arguments,
@@ -733,7 +733,7 @@ pub(super) const LEAVES: &[Leaf] = &[
 
 pub(super) fn command() -> Command {
     Command::new("pane")
-        .about("Control terminal panes")
+        .about("Controlar painéis de terminal")
         .subcommands(LEAVES.iter().map(Leaf::command))
 }
 

@@ -7,14 +7,14 @@ use super::projection::{self, ParseError};
 
 pub(crate) fn command() -> Command {
     Command::new("title")
-        .about("Manage the outer terminal title")
+        .about("Gerenciar título externo do terminal")
         .subcommand_required(true)
         .arg_required_else_help(true)
         .subcommand(
             projection::command("set", ClientWindowTitleSetProjection::arguments())
-                .about("Set the outer terminal title"),
+                .about("Definir título externo do terminal"),
         )
-        .subcommand(Command::new("clear").about("Clear the outer terminal title"))
+        .subcommand(Command::new("clear").about("Limpar título externo do terminal"))
 }
 
 fn request(matches: &ArgMatches) -> Result<Request, ParseError> {

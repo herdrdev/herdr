@@ -302,24 +302,18 @@ fn root_and_command_group_help_point_agents_to_plain_text_docs() {
 #[test]
 fn subcommand_help_explains_automation_semantics_without_a_server() {
     let cases: &[(&[&str], &str)] = &[
-        (&["agent", "wait", "--help"], "Without --until"),
+        (&["agent", "wait", "--help"], "Sem --until"),
         (
             &["agent", "prompt", "--help"],
-            "first matching state observed after submission",
+            "primeiro estado correspondente observado após o envio",
         ),
-        (&["agent", "start", "--help"], "ready for input"),
-        (
-            &["agent", "send-keys", "--help"],
-            "canonical Escape key name",
-        ),
+        (&["agent", "start", "--help"], "pronto para receber entrada"),
+        (&["agent", "send-keys", "--help"], "nome da tecla Escape"),
         (
             &["pane", "wait-output", "--help"],
-            "including existing output",
+            "inclusive a saída existente",
         ),
-        (
-            &["pane", "send-keys", "--help"],
-            "canonical Escape key name",
-        ),
+        (&["pane", "send-keys", "--help"], "nome da tecla Escape"),
     ];
 
     for (args, expected) in cases {
