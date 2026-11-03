@@ -69,18 +69,18 @@ fn describe_integration_state(
 ) -> String {
     let version = match installed_version {
         Some(version) => format!("v{version}"),
-        None => "legacy".to_string(),
+        None => "legado".to_string(),
     };
     match state {
-        crate::integration::IntegrationStatusKind::NotInstalled => "not installed".to_string(),
-        crate::integration::IntegrationStatusKind::Current => format!("current ({version})"),
+        crate::integration::IntegrationStatusKind::NotInstalled => "não instalado".to_string(),
+        crate::integration::IntegrationStatusKind::Current => format!("atual (versão {version})"),
         crate::integration::IntegrationStatusKind::Outdated
             if installed_version.is_some_and(|installed| installed >= expected_version) =>
         {
-            format!("needs repair ({version})")
+            format!("precisa de reparo ({version})")
         }
         crate::integration::IntegrationStatusKind::Outdated => {
-            format!("outdated ({version} < v{expected_version})")
+            format!("desatualizado ({version} < v{expected_version})")
         }
     }
 }
@@ -180,9 +180,9 @@ fn parse_integration_target(
         }
         "grok" => IntegrationCommandTarget::Builtin(IntegrationTarget::Grok),
         _ => {
-            eprintln!("unknown integration target: {target}");
+            eprintln!("integração desconhecida: {target}");
             eprintln!(
-                "currently supported: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
+                "integrações disponíveis: pi, omp, claude, codex, copilot, devin, droid, kimi, opencode, kilo, hermes, qodercli, qwen, letta, cursor, mastracode, antigravity-cli, grok"
             );
             return Ok(None);
         }
@@ -230,4 +230,30 @@ fn print_integration_help() {
     eprintln!("  herdr integration uninstall antigravity-cli");
     eprintln!("  herdr integration uninstall grok");
     eprintln!("  herdr integration status [--outdated-only]");
+}
+
+#[cfg(test)]
+mod testes_traducao {
+    use super::describe_integration_state;
+    use crate::integration::IntegrationStatusKind;
+
+    #[test]
+    fn estados_apresentam_versao_em_portugues() {
+        assert_eq!(
+            describe_integration_state(IntegrationStatusKind::NotInstalled, None, 3),
+            "não instalado"
+        );
+        assert_eq!(
+            describe_integration_state(IntegrationStatusKind::Current, Some(3), 3),
+            "atual (versão v3)"
+        );
+        assert_eq!(
+            describe_integration_state(IntegrationStatusKind::Outdated, Some(3), 3),
+            "precisa de reparo (v3)"
+        );
+        assert_eq!(
+            describe_integration_state(IntegrationStatusKind::Outdated, Some(2), 3),
+            "desatualizado (v2 < v3)"
+        );
+    }
 }

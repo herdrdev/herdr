@@ -28,11 +28,11 @@ pub(crate) fn install_experimental_letta() -> io::Result<Vec<String>> {
     let result = install_letta().map(|installed| {
         vec![
             format!(
-                "installed letta integration hook to {}",
+                "Instalado: gancho de integração do Letta em {}",
                 installed.hook_path.display()
             ),
             format!(
-                "ensured letta settings at {}",
+                "Verificado: configurações do Letta em {}",
                 installed.settings_path.display()
             ),
         ]
@@ -48,23 +48,23 @@ pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
         let mut messages = Vec::new();
         if result.removed_hook_file {
             messages.push(format!(
-                "removed letta hook at {}",
+                "Removido: gancho do Letta em {}",
                 result.hook_path.display()
             ));
         } else {
             messages.push(format!(
-                "no letta hook found at {}",
+                "Não encontrado: gancho do Letta em {}",
                 result.hook_path.display()
             ));
         }
         if result.updated_settings {
             messages.push(format!(
-                "removed herdr letta hook entry from {}",
+                "Entrada de gancho do Herdr para Letta removida em {}",
                 result.settings_path.display()
             ));
         } else {
             messages.push(format!(
-                "no herdr letta hook entry found in {}",
+                "Nenhuma entrada de gancho do Herdr para Letta encontrada em {}",
                 result.settings_path.display()
             ));
         }
@@ -78,7 +78,7 @@ pub(crate) fn uninstall_experimental_letta() -> io::Result<Vec<String>> {
 fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Result<Vec<String>> {
     if !integration_target_supported(target) {
         return Err(io::Error::other(format!(
-            "{} integration is not supported on Windows",
+            "A integração {} não é suportada no Windows",
             integration_target_label(target)
         )));
     }
@@ -91,14 +91,14 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
     let mut messages = match target {
         crate::api::schema::IntegrationTarget::Pi => {
             let path = install_pi()?;
-            vec![format!("installed pi integration to {}", path.display())]
+            vec![format!("Instalado: integração do Pi em {}", path.display())]
         }
         crate::api::schema::IntegrationTarget::Omp => {
             let installed = install_omp()?;
             let mut messages = Vec::new();
             if installed.removed_legacy_pi_extension {
                 messages.push(format!(
-                    "removed legacy pi integration from omp extension directory at {}",
+                    "Integração antiga do pi removida do diretório de extensão do OMP em {}",
                     installed
                         .extension_path
                         .with_file_name(PI_EXTENSION_INSTALL_NAME)
@@ -106,7 +106,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
                 ));
             }
             messages.push(format!(
-                "installed omp integration to {}",
+                "Instalado: integração do OMP em {}",
                 installed.extension_path.display()
             ));
             messages
@@ -115,11 +115,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_claude()?;
             vec![
                 format!(
-                    "installed claude integration hook to {}",
+                    "Instalado: gancho de integração do Claude em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured claude settings at {}",
+                    "Verificado: configurações do Claude em {}",
                     installed.settings_path.display()
                 ),
             ]
@@ -128,12 +128,15 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_codex()?;
             vec![
                 format!(
-                    "installed codex integration hook to {}",
+                    "Instalado: gancho de integração do Codex em {}",
                     installed.hook_path.display()
                 ),
-                format!("ensured codex hooks at {}", installed.hooks_path.display()),
                 format!(
-                    "ensured codex config at {}",
+                    "Verificado: ganchos do Codex em {}",
+                    installed.hooks_path.display()
+                ),
+                format!(
+                    "Verificado: configuração do Codex em {}",
                     installed.config_path.display()
                 ),
             ]
@@ -142,11 +145,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_copilot()?;
             vec![
                 format!(
-                    "installed copilot integration hook to {}",
+                    "Instalado: gancho de integração do Copilot em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured copilot settings at {}",
+                    "Verificado: configurações do Copilot em {}",
                     installed.settings_path.display()
                 ),
             ]
@@ -155,11 +158,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_devin()?;
             vec![
                 format!(
-                    "installed devin integration hook to {}",
+                    "Instalado: gancho de integração do Devin em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured devin settings at {}",
+                    "Verificado: configurações do Devin em {}",
                     installed.settings_path.display()
                 ),
             ]
@@ -168,28 +171,31 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_kimi()?;
             vec![
                 format!(
-                    "installed kimi integration hook to {}",
+                    "Instalado: gancho de integração do Kimi em {}",
                     installed.hook_path.display()
                 ),
-                format!("ensured kimi config at {}", installed.config_path.display()),
-                format!("requires kimi code {KIMI_MIN_VERSION} or newer"),
+                format!(
+                    "Verificado: configuração do Kimi em {}",
+                    installed.config_path.display()
+                ),
+                format!("Exige kimi code {KIMI_MIN_VERSION} ou mais recente"),
             ]
         }
         crate::api::schema::IntegrationTarget::Droid => {
             let installed = install_droid()?;
             let mut messages = vec![
                 format!(
-                    "installed droid integration hook to {}",
+                    "Instalado: gancho de integração do Droid em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured droid hooks at {}",
+                    "Verificado: ganchos do Droid em {}",
                     installed.settings_path.display()
                 ),
             ];
             if installed.updated_legacy_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "Entradas de gancho antigo do Herdr para Droid removidas em {}",
                     installed.hooks_path.display()
                 ));
             }
@@ -199,21 +205,21 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_opencode()?;
             let mut messages = vec![
                 format!(
-                    "installed opencode integration plugin to {}",
+                    "Instalado: plugin de integração do OpenCode em {}",
                     installed.plugin_path.display()
                 ),
                 format!(
-                    "installed opencode tui integration plugin to {}",
+                    "Plugin de integração da interface do OpenCode instalado em {}",
                     installed.tui_plugin_path.display()
                 ),
                 format!(
-                    "ensured opencode tui plugin config at {}",
+                    "Configuração do plugin da interface do OpenCode verificada em {}",
                     installed.tui_config_path.display()
                 ),
             ];
             if installed.cli_config_path.is_none() {
                 messages.push(
-                    "to enable OpenCode V2, start opencode2 once, then reinstall this integration"
+                    "Para ativar OpenCode V2, inicie opencode2 uma vez e reinstale esta integração"
                         .to_string(),
                 );
             }
@@ -222,7 +228,7 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
         crate::api::schema::IntegrationTarget::Kilo => {
             let installed = install_kilo()?;
             vec![format!(
-                "installed kilo integration plugin to {}",
+                "Instalado: plugin de integração do Kilo em {}",
                 installed.plugin_path.display()
             )]
         }
@@ -230,11 +236,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_hermes()?;
             vec![
                 format!(
-                    "installed hermes integration plugin to {}",
+                    "Instalado: plugin de integração do Hermes em {}",
                     installed.plugin_dir.display()
                 ),
                 format!(
-                    "enabled hermes plugin in {}",
+                    "Ativado: plugin do Hermes em {}",
                     installed.config_path.display()
                 ),
             ]
@@ -243,11 +249,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_qodercli()?;
             vec![
                 format!(
-                    "installed qodercli integration hook to {}",
+                    "Instalado: gancho de integração do Qoder CLI em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured qodercli settings at {}",
+                    "Verificado: configurações do Qoder CLI em {}",
                     installed.settings_path.display()
                 ),
             ]
@@ -256,11 +262,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_qwen()?;
             vec![
                 format!(
-                    "installed qwen integration hook to {}",
+                    "Instalado: gancho de integração do Qwen em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured qwen settings at {}",
+                    "Verificado: configurações do Qwen em {}",
                     installed.settings_path.display()
                 ),
             ]
@@ -269,21 +275,24 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_cursor()?;
             vec![
                 format!(
-                    "installed cursor integration hook to {}",
+                    "Instalado: gancho de integração do Cursor em {}",
                     installed.hook_path.display()
                 ),
-                format!("updated cursor hooks at {}", installed.hooks_path.display()),
+                format!(
+                    "Atualizado: ganchos do Cursor em {}",
+                    installed.hooks_path.display()
+                ),
             ]
         }
         crate::api::schema::IntegrationTarget::Mastracode => {
             let installed = install_mastracode()?;
             vec![
                 format!(
-                    "installed mastracode integration hook to {}",
+                    "Instalado: gancho de integração do Mastra Code em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured mastracode hooks at {}",
+                    "Verificado: ganchos do Mastra Code em {}",
                     installed.hooks_path.display()
                 ),
             ]
@@ -292,11 +301,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_antigravity_cli()?;
             vec![
                 format!(
-                    "installed antigravity-cli integration hook to {}",
+                    "Instalado: gancho de integração do antigravity-cli em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "ensured antigravity-cli hooks at {}",
+                    "Verificado: ganchos do antigravity-cli em {}",
                     installed.hooks_path.display()
                 ),
             ]
@@ -305,11 +314,11 @@ fn install_target_inner(target: crate::api::schema::IntegrationTarget) -> io::Re
             let installed = install_grok()?;
             vec![
                 format!(
-                    "installed grok integration hook to {}",
+                    "Instalado: gancho de integração do Grok em {}",
                     installed.hook_path.display()
                 ),
                 format!(
-                    "registered grok hook config at {}",
+                    "Registrado: configuração de gancho do Grok em {}",
                     installed.config_path.display()
                 ),
             ]
@@ -331,12 +340,12 @@ pub(crate) fn uninstall_target(
             let result = uninstall_pi()?;
             if result.removed_extension {
                 vec![format!(
-                    "removed pi integration extension at {}",
+                    "Removido: extensão de integração do Pi em {}",
                     result.extension_path.display()
                 )]
             } else {
                 vec![format!(
-                    "no pi integration extension found at {}",
+                    "Não encontrado: extensão de integração do Pi em {}",
                     result.extension_path.display()
                 )]
             }
@@ -345,12 +354,12 @@ pub(crate) fn uninstall_target(
             let result = uninstall_omp()?;
             if result.removed_extension {
                 vec![format!(
-                    "removed omp integration extension at {}",
+                    "Removido: extensão de integração do OMP em {}",
                     result.extension_path.display()
                 )]
             } else {
                 vec![format!(
-                    "no omp integration extension found at {}",
+                    "Não encontrado: extensão de integração do OMP em {}",
                     result.extension_path.display()
                 )]
             }
@@ -360,23 +369,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed claude hook at {}",
+                    "Removido: gancho do Claude em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no claude hook found at {}",
+                    "Não encontrado: gancho do Claude em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr claude hook entries from {}",
+                    "Entradas de gancho do Herdr para Claude removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr claude hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Claude encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -387,28 +396,28 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed codex hook at {}",
+                    "Removido: gancho do Codex em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no codex hook found at {}",
+                    "Não encontrado: gancho do Codex em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr codex hook entries from {}",
+                    "Entradas de gancho do Herdr para Codex removidas em {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr codex hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Codex encontrada em {}",
                     result.hooks_path.display()
                 ));
             }
             messages.push(format!(
-                "left codex config unchanged at {}",
+                "Mantido sem alteração: configuração do Codex em {}",
                 result.config_path.display()
             ));
             messages
@@ -418,23 +427,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed copilot hook at {}",
+                    "Removido: gancho do Copilot em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no copilot hook found at {}",
+                    "Não encontrado: gancho do Copilot em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr copilot hook entries from {}",
+                    "Entradas de gancho do Herdr para Copilot removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr copilot hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Copilot encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -445,23 +454,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed devin hook at {}",
+                    "Removido: gancho do Devin em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no devin hook found at {}",
+                    "Não encontrado: gancho do Devin em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr devin hook entries from {}",
+                    "Entradas de gancho do Herdr para Devin removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr devin hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Devin encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -472,23 +481,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed kimi hook at {}",
+                    "Removido: gancho do Kimi em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no kimi hook found at {}",
+                    "Não encontrado: gancho do Kimi em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_config {
                 messages.push(format!(
-                    "removed herdr kimi hook entries from {}",
+                    "Entradas de gancho do Herdr para Kimi removidas em {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr kimi hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Kimi encontrada em {}",
                     result.config_path.display()
                 ));
             }
@@ -499,34 +508,34 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed droid hook at {}",
+                    "Removido: gancho do Droid em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no droid hook found at {}",
+                    "Não encontrado: gancho do Droid em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed legacy herdr droid hook entries from {}",
+                    "Entradas de gancho antigo do Herdr para Droid removidas em {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no legacy herdr droid hook entries found in {}",
+                    "Nenhuma entrada de gancho antigo do Herdr para Droid encontrada em {}",
                     result.hooks_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr droid hook entries from {}",
+                    "Entradas de gancho do Herdr para Droid removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr droid hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Droid encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -536,29 +545,29 @@ pub(crate) fn uninstall_target(
             let result = uninstall_opencode()?;
             let mut messages = vec![if result.removed_plugin {
                 format!(
-                    "removed opencode integration plugin at {}",
+                    "Removido: plugin de integração do OpenCode em {}",
                     result.plugin_path.display()
                 )
             } else {
                 format!(
-                    "no opencode integration plugin found at {}",
+                    "Não encontrado: plugin de integração do OpenCode em {}",
                     result.plugin_path.display()
                 )
             }];
             messages.push(if result.removed_tui_plugin {
                 format!(
-                    "removed opencode tui integration plugin at {}",
+                    "Plugin de integração da interface do OpenCode removido em {}",
                     result.tui_plugin_path.display()
                 )
             } else {
                 format!(
-                    "no opencode tui integration plugin found at {}",
+                    "Plugin de integração da interface do OpenCode não encontrado em {}",
                     result.tui_plugin_path.display()
                 )
             });
             for path in result.updated_tui_configs {
                 messages.push(format!(
-                    "removed herdr opencode plugin entry from {}",
+                    "Entrada do plugin Herdr removida da configuração OpenCode em {}",
                     path.display()
                 ));
             }
@@ -568,12 +577,12 @@ pub(crate) fn uninstall_target(
             let result = uninstall_kilo()?;
             if result.removed_plugin {
                 vec![format!(
-                    "removed kilo integration plugin at {}",
+                    "Removido: plugin de integração do Kilo em {}",
                     result.plugin_path.display()
                 )]
             } else {
                 vec![format!(
-                    "no kilo integration plugin found at {}",
+                    "Não encontrado: plugin de integração do Kilo em {}",
                     result.plugin_path.display()
                 )]
             }
@@ -583,23 +592,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_plugin_dir {
                 messages.push(format!(
-                    "removed hermes integration plugin at {}",
+                    "Removido: plugin de integração do Hermes em {}",
                     result.plugin_dir.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no hermes integration plugin found at {}",
+                    "Não encontrado: plugin de integração do Hermes em {}",
                     result.plugin_dir.display()
                 ));
             }
             if result.updated_config {
                 messages.push(format!(
-                    "disabled hermes plugin in {}",
+                    "Desativado: plugin do Hermes em {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no hermes plugin entry found in {}",
+                    "Nenhuma entrada do plugin Hermes encontrada em {}",
                     result.config_path.display()
                 ));
             }
@@ -610,23 +619,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed qodercli hook at {}",
+                    "Removido: gancho do Qoder CLI em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no qodercli hook found at {}",
+                    "Não encontrado: gancho do Qoder CLI em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qodercli hook entries from {}",
+                    "Entradas de gancho do Herdr para Qoder CLI removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qodercli hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Qoder CLI encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -637,23 +646,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed qwen hook at {}",
+                    "Removido: gancho do Qwen em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no qwen hook found at {}",
+                    "Não encontrado: gancho do Qwen em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_settings {
                 messages.push(format!(
-                    "removed herdr qwen hook entries from {}",
+                    "Entradas de gancho do Herdr para Qwen removidas em {}",
                     result.settings_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr qwen hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Qwen encontrada em {}",
                     result.settings_path.display()
                 ));
             }
@@ -664,23 +673,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed cursor hook at {}",
+                    "Removido: gancho do Cursor em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no cursor hook found at {}",
+                    "Não encontrado: gancho do Cursor em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr cursor hook entries from {}",
+                    "Entradas de gancho do Herdr para Cursor removidas em {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr cursor hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Cursor encontrada em {}",
                     result.hooks_path.display()
                 ));
             }
@@ -691,23 +700,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed mastracode hook at {}",
+                    "Removido: gancho do Mastra Code em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no mastracode hook found at {}",
+                    "Não encontrado: gancho do Mastra Code em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr mastracode hook entries from {}",
+                    "Entradas de gancho do Herdr para Mastra Code removidas em {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr mastracode hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para Mastra Code encontrada em {}",
                     result.hooks_path.display()
                 ));
             }
@@ -718,23 +727,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed antigravity-cli hook at {}",
+                    "Removido: gancho do antigravity-cli em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no antigravity-cli hook found at {}",
+                    "Não encontrado: gancho do antigravity-cli em {}",
                     result.hook_path.display()
                 ));
             }
             if result.updated_hooks {
                 messages.push(format!(
-                    "removed herdr antigravity-cli hook entries from {}",
+                    "Entradas de gancho do Herdr para antigravity-cli removidas em {}",
                     result.hooks_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no herdr antigravity-cli hook entries found in {}",
+                    "Nenhuma entrada de gancho do Herdr para antigravity-cli encontrada em {}",
                     result.hooks_path.display()
                 ));
             }
@@ -745,23 +754,23 @@ pub(crate) fn uninstall_target(
             let mut messages = Vec::new();
             if result.removed_hook_file {
                 messages.push(format!(
-                    "removed grok hook at {}",
+                    "Removido: gancho do Grok em {}",
                     result.hook_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no grok hook found at {}",
+                    "Não encontrado: gancho do Grok em {}",
                     result.hook_path.display()
                 ));
             }
             if result.removed_config_file {
                 messages.push(format!(
-                    "removed grok hook config at {}",
+                    "Removido: configuração de gancho do Grok em {}",
                     result.config_path.display()
                 ));
             } else {
                 messages.push(format!(
-                    "no grok hook config found at {}",
+                    "Não encontrado: configuração de gancho do Grok em {}",
                     result.config_path.display()
                 ));
             }

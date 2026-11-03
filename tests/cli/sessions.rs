@@ -210,7 +210,7 @@ fn dead_server_cli_reports_one_session_aware_json_line() {
         assert_eq!(
             response["error"]["message"],
             format!(
-                "no herdr server is running at {}; run `{attach_command}` to start or attach it",
+                "nenhum servidor Herdr está em execução em {}; execute `{attach_command}` para iniciá-lo ou conectar-se a ele",
                 socket_path.display()
             )
         );
@@ -293,8 +293,8 @@ fn integration_commands_run_locally_when_server_is_missing() {
         .unwrap();
     assert_eq!(integration_status.status.code(), Some(0));
     let status_stdout = String::from_utf8_lossy(&integration_status.stdout);
-    assert!(status_stdout.contains("pi: current (v9)"));
-    assert!(status_stdout.contains("claude: not installed"));
+    assert!(status_stdout.contains("pi: atual (versão v9)"));
+    assert!(status_stdout.contains("claude: não instalado"));
 
     let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .args(["integration", "uninstall", "pi"])
@@ -338,10 +338,22 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("installed herdr integrations need updating"));
+    assert!(stderr.contains("integrações instaladas do Herdr precisam ser atualizadas"));
     assert!(stderr.contains("herdr integration install pi"));
 
     cleanup_test_base(&base);
+}
+
+#[test]
+fn integration_unknown_target_reports_available_targets_in_portuguese() {
+    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+        .args(["integration", "install", "nao-existe"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("integração desconhecida: nao-existe"));
+    assert!(stderr.contains("integrações disponíveis: pi, omp, claude, codex"));
 }
 
 #[test]
@@ -383,34 +395,34 @@ fn status_commands_report_client_and_server_versions() {
         String::from_utf8_lossy(&full.stderr)
     );
     let full_stdout = String::from_utf8_lossy(&full.stdout);
-    assert!(full_stdout.contains("client:\n"), "stdout: {full_stdout}");
+    assert!(full_stdout.contains("cliente:\n"), "stdout: {full_stdout}");
     assert!(
-        full_stdout.contains(&format!("  version: {}", env!("CARGO_PKG_VERSION"))),
+        full_stdout.contains(&format!("  versão: {}", env!("CARGO_PKG_VERSION"))),
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  protocol: 22"),
+        full_stdout.contains("  protocolo: 22"),
         "stdout: {full_stdout}"
     );
-    assert!(full_stdout.contains("server:\n"), "stdout: {full_stdout}");
+    assert!(full_stdout.contains("servidor:\n"), "stdout: {full_stdout}");
     assert!(
-        full_stdout.contains("  status: running"),
-        "stdout: {full_stdout}"
-    );
-    assert!(
-        full_stdout.contains("  private_protocol_compatible: yes"),
+        full_stdout.contains("  estado: em execução"),
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  endpoint_compatible: yes"),
+        full_stdout.contains("  protocolo privado compatível: sim"),
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  restart_needed: no"),
+        full_stdout.contains("  endpoint compatível: sim"),
         "stdout: {full_stdout}"
     );
     assert!(
-        full_stdout.contains("  server_binary_stale: no"),
+        full_stdout.contains("  reinicialização necessária: não"),
+        "stdout: {full_stdout}"
+    );
+    assert!(
+        full_stdout.contains("  binário do servidor desatualizado: não"),
         "stdout: {full_stdout}"
     );
     assert!(
@@ -422,15 +434,15 @@ fn status_commands_report_client_and_server_versions() {
     assert!(server.status.success());
     let server_stdout = String::from_utf8_lossy(&server.stdout);
     assert!(
-        server_stdout.contains("status: running"),
+        server_stdout.contains("estado: em execução"),
         "stdout: {server_stdout}"
     );
     assert!(
-        server_stdout.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))),
+        server_stdout.contains(&format!("versão: {}", env!("CARGO_PKG_VERSION"))),
         "stdout: {server_stdout}"
     );
     assert!(
-        server_stdout.contains("private_protocol: 22"),
+        server_stdout.contains("protocolo privado: 22"),
         "stdout: {server_stdout}"
     );
 
@@ -438,19 +450,19 @@ fn status_commands_report_client_and_server_versions() {
     assert!(client.status.success());
     let client_stdout = String::from_utf8_lossy(&client.stdout);
     assert!(
-        client_stdout.contains(&format!("version: {}", env!("CARGO_PKG_VERSION"))),
+        client_stdout.contains(&format!("versão: {}", env!("CARGO_PKG_VERSION"))),
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("protocol: 22"),
+        client_stdout.contains("protocolo: 22"),
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("endpoint_protocol_generation: 1"),
+        client_stdout.contains("geração do protocolo do endpoint: 1"),
         "stdout: {client_stdout}"
     );
     assert!(
-        client_stdout.contains("binary: "),
+        client_stdout.contains("binário: "),
         "stdout: {client_stdout}"
     );
 
@@ -502,10 +514,16 @@ fn status_reports_not_running_when_server_socket_is_missing() {
     let status = run_cli(&socket_path, &["status"]);
     assert!(status.status.success());
     let stdout = String::from_utf8_lossy(&status.stdout);
-    assert!(stdout.contains("  status: not running"), "stdout: {stdout}");
-    assert!(stdout.contains("  restart_needed: no"), "stdout: {stdout}");
     assert!(
-        stdout.contains("  server_binary_stale: no"),
+        stdout.contains("  estado: não está em execução"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("  reinicialização necessária: não"),
+        "stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("  binário do servidor desatualizado: não"),
         "stdout: {stdout}"
     );
     assert!(

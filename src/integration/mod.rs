@@ -321,7 +321,7 @@ const GROK_HOOK_ASSET: &str = if cfg!(windows) {
 };
 const GROK_INTEGRATION_VERSION: u32 = 3;
 
-pub(crate) const INSTALL_WARNING_PREFIX: &str = "warning:";
+pub(crate) const INSTALL_WARNING_PREFIX: &str = "aviso:";
 
 #[cfg(test)]
 mod test_support;

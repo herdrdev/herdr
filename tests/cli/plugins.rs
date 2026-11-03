@@ -446,7 +446,7 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
     );
     assert!(all.status.success());
     let stdout = String::from_utf8_lossy(&all.stdout);
-    assert!(stdout.contains("example.first is already up to date"));
+    assert!(stdout.contains("example.first já está atualizado"));
     assert!(stdout.contains("Updated example.second"));
     let listed = run_named_cli_json(
         &config_home,
@@ -993,7 +993,7 @@ fn plugin_install_usage_errors_include_options_without_installing() {
         );
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("usage: herdr plugin install"), "{stderr}");
+        assert!(stderr.contains("Uso: herdr plugin install"), "{stderr}");
         assert!(stderr.contains("[--ref REF] [--yes|-y]"), "{stderr}");
         assert!(!config_home.join("herdr-dev/plugins").exists());
         assert!(!config_home.join("herdr-dev/plugins.json").exists());
@@ -1204,18 +1204,21 @@ command = ["sh", "-c", "echo should-not-install"]
     );
     assert_eq!(install.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&install.stderr);
-    assert!(stderr.contains("error: plugin build failed"), "{stderr}");
-    assert!(stderr.contains("  plugin: example.build-fail"), "{stderr}");
-    assert!(stderr.contains("  build: 1/1"), "{stderr}");
-    assert!(stderr.contains("  cwd: "), "{stderr}");
     assert!(
-        stderr.contains("  command: sh -c echo before-fail && echo failed-build >&2 && exit 7"),
+        stderr.contains("erro: falha na compilação do plugin"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("  plugin: example.build-fail"), "{stderr}");
+    assert!(stderr.contains("  compilação: 1/1"), "{stderr}");
+    assert!(stderr.contains("  diretório: "), "{stderr}");
+    assert!(
+        stderr.contains("  comando: sh -c echo before-fail && echo failed-build >&2 && exit 7"),
         "{stderr}"
     );
     assert!(stderr.contains("  status: exit status: 7"), "{stderr}");
     assert!(stderr.contains("stdout:\nbefore-fail"), "{stderr}");
     assert!(stderr.contains("stderr:\nfailed-build"), "{stderr}");
-    assert!(stderr.contains("Plugin was not installed."), "{stderr}");
+    assert!(stderr.contains("O plugin não foi instalado."), "{stderr}");
     assert!(!stderr.contains("Error: Custom"), "{stderr}");
 
     let listed = run_named_cli_json(
@@ -1300,18 +1303,21 @@ command = ["sh", "-c", "echo should-not-install"]
     );
     assert_eq!(install.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&install.stderr);
-    assert!(stderr.contains("error: plugin build failed"), "{stderr}");
+    assert!(
+        stderr.contains("erro: falha na compilação do plugin"),
+        "{stderr}"
+    );
     assert!(
         stderr.contains("  plugin: example.missing-tool"),
         "{stderr}"
     );
-    assert!(stderr.contains("  build: 1/1"), "{stderr}");
+    assert!(stderr.contains("  compilação: 1/1"), "{stderr}");
     assert!(
-        stderr.contains("  command: definitely-missing-herdr-build-tool-xyz"),
+        stderr.contains("  comando: definitely-missing-herdr-build-tool-xyz"),
         "{stderr}"
     );
     assert!(stderr.contains("  error: failed to start:"), "{stderr}");
-    assert!(stderr.contains("Plugin was not installed."), "{stderr}");
+    assert!(stderr.contains("O plugin não foi instalado."), "{stderr}");
     assert!(!stderr.contains("Error: Custom"), "{stderr}");
 
     let listed = run_named_cli_json(
@@ -1409,7 +1415,7 @@ EOF
     );
     let stderr = String::from_utf8_lossy(&install.stderr);
     assert!(
-        stderr.contains("plugin build changed herdr-plugin.toml after install preview"),
+        stderr.contains("a compilação do plugin alterou herdr-plugin.toml após a prévia"),
         "{stderr}"
     );
 

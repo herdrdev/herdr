@@ -32,7 +32,7 @@ pub(super) fn response(request_id: &str, socket_path: &Path) -> ErrorResponse {
         error: ErrorBody {
             code: "server_not_running".into(),
             message: format!(
-                "no herdr server is running at {}; run `{attach_command}` to start or attach it",
+                "nenhum servidor Herdr está em execução em {}; execute `{attach_command}` para iniciá-lo ou conectar-se a ele",
                 socket_path.display()
             ),
         },

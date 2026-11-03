@@ -272,18 +272,18 @@ pub(super) fn resolve_machine<'a>(
         profile
     } else {
         let mut matches = profiles.iter().filter(|profile| profile.label == selector);
-        let profile = matches
-            .next()
-            .ok_or_else(|| format!("unknown machine '{selector}'; use `herdr machine list`"))?;
+        let profile = matches.next().ok_or_else(|| {
+            format!("máquina '{selector}' não encontrada; use `herdr machine list`")
+        })?;
         if matches.next().is_some() {
             return Err(format!(
-                "machine label '{selector}' is ambiguous; use its profile ID"
+                "nome de máquina '{selector}' é ambíguo; use o ID do perfil"
             ));
         }
         profile
     };
     if !profile.enabled {
-        return Err(format!("machine '{selector}' is disabled"));
+        return Err(format!("máquina '{selector}' está desativada"));
     }
     Ok(profile)
 }

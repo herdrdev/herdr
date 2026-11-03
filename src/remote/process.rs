@@ -10,7 +10,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub(super) fn cancelled() -> io::Error {
     io::Error::new(
         io::ErrorKind::ConnectionAborted,
-        "SSH connection attempt cancelled",
+        "tentativa de conexão SSH cancelada",
     )
 }
 
@@ -206,7 +206,7 @@ fn wait_with_output(
             if Instant::now() >= deadline {
                 break Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "noninteractive SSH command timed out",
+                    "o comando SSH não interativo excedeu o prazo",
                 ));
             }
             thread::sleep(POLL_INTERVAL);

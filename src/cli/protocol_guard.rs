@@ -7,7 +7,7 @@ pub(super) struct ProtocolMismatchReported;
 
 impl fmt::Display for ProtocolMismatchReported {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("protocol mismatch was already reported")
+        f.write_str("incompatibilidade de protocolo já informada")
     }
 }
 
@@ -25,11 +25,11 @@ pub(super) fn mismatch_response(
 
     let message = if client_protocol > server_protocol {
         format!(
-            "client protocol {client_protocol} is newer than server protocol {server_protocol}; restart the Herdr server before using this command. {restart_guidance}"
+            "o protocolo do cliente {client_protocol} é mais recente que o protocolo do servidor {server_protocol}; reinicie o servidor Herdr antes de usar este comando. {restart_guidance}"
         )
     } else {
         format!(
-            "client protocol {client_protocol} is older than server protocol {server_protocol}; upgrade the Herdr client before using this command"
+            "o protocolo do cliente {client_protocol} é anterior ao protocolo do servidor {server_protocol}; atualize o cliente Herdr antes de usar este comando"
         )
     };
 
@@ -73,11 +73,11 @@ mod tests {
         assert_eq!(response.id, "cli:agent:wait");
         assert_eq!(response.error.code, "protocol_mismatch");
         assert!(response.error.message.contains(&format!(
-            "client protocol {}",
+            "protocolo do cliente {}",
             crate::protocol::PROTOCOL_VERSION
         )));
         assert!(response.error.message.contains(&format!(
-            "server protocol {}",
+            "protocolo do servidor {}",
             crate::protocol::PROTOCOL_VERSION - 1
         )));
         assert!(response.error.message.contains("restart"));
@@ -95,8 +95,8 @@ mod tests {
         assert!(response
             .error
             .message
-            .contains("older than server protocol"));
-        assert!(response.error.message.contains("upgrade the Herdr client"));
+            .contains("anterior ao protocolo do servidor"));
+        assert!(response.error.message.contains("atualize o cliente Herdr"));
         assert!(!response.error.message.contains("unused restart guidance"));
     }
 
@@ -104,7 +104,7 @@ mod tests {
     fn reported_error_is_recognizable_without_string_matching() {
         assert!(was_reported(&reported_error()));
         assert!(!was_reported(&std::io::Error::other(
-            "protocol mismatch was already reported"
+            "incompatibilidade de protocolo já informada"
         )));
     }
 }

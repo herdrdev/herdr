@@ -805,11 +805,14 @@ fn help_overlay_uses_live_keymap_and_owns_filter_state() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("keybinds"));
-    assert!(text.contains("prefix mode"));
+    assert!(text.contains("atalhos"));
+    assert!(text.contains("modo de prefixo"));
 
     assert!(state.handle_input_bytes(b"/").actions.is_empty());
-    assert!(state.handle_input_bytes(b"workspace").actions.is_empty());
+    assert!(state
+        .handle_input_bytes("espaço".as_bytes())
+        .actions
+        .is_empty());
     let filtered = state.compose(106, 30).expect("filtered help");
     let text = filtered
         .cells
@@ -821,8 +824,8 @@ fn help_overlay_uses_live_keymap_and_owns_filter_state() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("workspace navigation"));
-    assert!(!text.contains("prefix mode"));
+    assert!(text.contains("navegar espaços"));
+    assert!(!text.contains("modo de prefixo"));
     assert!(filtered
         .cursor
         .as_ref()
