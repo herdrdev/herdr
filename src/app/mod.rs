@@ -2024,7 +2024,7 @@ mod tests {
         );
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; revise a configuração do Pretorian")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -2086,7 +2086,7 @@ mod tests {
         assert_eq!(app.state.pane_borders, target_pane_borders);
         assert_eq!(
             app.state.config_diagnostic.as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml contém opções desconhecidas; revise a configuração do Pretorian")
         );
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
@@ -2215,7 +2215,7 @@ mod tests {
             .config_diagnostic
             .as_deref()
             .is_some_and(|message| {
-                message == "config.toml invalid; keeping current config; herdr config check"
+                message == "config.toml inválido; mantendo configuração atual; revise a configuração do Pretorian"
             }));
         assert!(app.state.toast.is_none());
 

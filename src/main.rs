@@ -3,12 +3,12 @@ use std::io;
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 const NESTED_HERDR_MESSAGES: [&str; 6] = [
-    "inception detected. we need to go deeper... said no one ever.",
-    "recursion is a pathway to many abilities some consider to be... unnatural.",
-    "you were so preoccupied with whether you could, you didn't stop to think if you should. — dr. malcolm",
-    "recursive herdring is disabled. somewhere, a call stack breathes a sigh of relief.",
-    "recursive descent denied. there is, in fact, such a thing as too much herdr.",
-    "recursion detected. base case not found. aborting.",
+    "origem detectada. precisamos ir mais fundo... disse ninguém, nunca.",
+    "a recursão leva a muitas habilidades que alguns consideram... antinaturais.",
+    "você estava tão preocupado em saber se podia que não parou para pensar se devia. — dr. malcolm",
+    "o Pretorian recursivo está desativado. em algum lugar, uma pilha de chamadas suspira aliviada.",
+    "descida recursiva negada. sim, é possível ter Pretorian demais.",
+    "recursão detectada. caso base não encontrado. interrompendo.",
 ];
 
 mod agent_resume;
@@ -470,8 +470,8 @@ fn random_nested_message() -> &'static str {
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merror:\x1b[0m nested herdr is disabled by default.");
-        eprintln!("see configuration if you want to enable it.");
+        eprintln!("\x1b[1merro:\x1b[0m abrir o Pretorian dentro de outra sessão está desativado por padrão.");
+        eprintln!("consulte a configuração se quiser ativar essa opção.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
         std::process::exit(1);

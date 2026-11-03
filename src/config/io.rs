@@ -233,29 +233,31 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         .any(|diagnostic| diagnostic.contains("using defaults"))
     {
         if read_error {
-            " unreadable; using defaults"
+            " ilegível; usando padrões"
         } else {
-            " invalid; using defaults"
+            " inválido; usando padrões"
         }
     } else if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.contains("keeping current config"))
     {
         if read_error {
-            " unreadable; keeping current config"
+            " ilegível; mantendo configuração atual"
         } else {
-            " invalid; keeping current config"
+            " inválido; mantendo configuração atual"
         }
     } else if diagnostics
         .iter()
         .all(|diagnostic| diagnostic.starts_with("unknown config key "))
     {
-        " has unknown keys"
+        " contém opções desconhecidas"
     } else {
         ""
     };
 
-    Some(format!("{target}{impact}; herdr config check"))
+    Some(format!(
+        "{target}{impact}; revise a configuração do Pretorian"
+    ))
 }
 
 pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
@@ -820,7 +822,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; revise a configuração do Pretorian")
         );
     }
 
@@ -833,7 +835,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml has unknown keys; herdr config check")
+            Some("config.toml contém opções desconhecidas; revise a configuração do Pretorian")
         );
     }
 
@@ -846,7 +848,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml; herdr config check")
+            Some("config.toml; revise a configuração do Pretorian")
         );
     }
 
@@ -859,7 +861,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; using defaults; herdr config check")
+            Some("config.toml inválido; usando padrões; revise a configuração do Pretorian")
         );
     }
 
@@ -868,14 +870,14 @@ mod tests {
         let startup = vec!["config read error: permission denied; using defaults".to_string()];
         assert_eq!(
             config_diagnostic_summary(&startup).as_deref(),
-            Some("config.toml unreadable; using defaults; herdr config check")
+            Some("config.toml ilegível; usando padrões; revise a configuração do Pretorian")
         );
 
         let reload =
             vec!["config read error: permission denied; keeping current config".to_string()];
         assert_eq!(
             config_diagnostic_summary(&reload).as_deref(),
-            Some("config.toml unreadable; keeping current config; herdr config check")
+            Some("config.toml ilegível; mantendo configuração atual; revise a configuração do Pretorian")
         );
     }
 
@@ -888,7 +890,7 @@ mod tests {
 
         assert_eq!(
             config_diagnostic_summary(&diagnostics).as_deref(),
-            Some("config.toml invalid; keeping current config; herdr config check")
+            Some("config.toml inválido; mantendo configuração atual; revise a configuração do Pretorian")
         );
     }
 

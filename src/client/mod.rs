@@ -266,7 +266,7 @@ fn run_client_with_mode(
         setup_terminal(mouse_capture)
     }
     .map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
+        eprintln!("Pretorian: não foi possível preparar o terminal: {err}");
         err
     })?;
     loop_config.host_escape_disambiguation_active =

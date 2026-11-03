@@ -597,7 +597,7 @@ fn explicit_client_command_respects_nested_guard() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("nested herdr is disabled by default"),
+        stderr.contains("abrir o Pretorian dentro de outra sessão está desativado por padrão"),
         "client should fail at the nested guard before connecting: {stderr}"
     );
 }

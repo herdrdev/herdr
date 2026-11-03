@@ -6,9 +6,9 @@ pub(super) fn merged_config_diagnostic(
 ) -> Option<String> {
     match (local, endpoint) {
         (Some(local), Some(endpoint)) if local == endpoint => {
-            Some(format!("client + endpoint: {local}"))
+            Some(format!("cliente + conexão: {local}"))
         }
-        (Some(local), Some(endpoint)) => Some(format!("client: {local}\nendpoint: {endpoint}")),
+        (Some(local), Some(endpoint)) => Some(format!("cliente: {local}\nconexão: {endpoint}")),
         (Some(local), None) => Some(local.to_owned()),
         (None, Some(endpoint)) => Some(endpoint.to_owned()),
         (None, None) => None,

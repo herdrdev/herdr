@@ -468,8 +468,13 @@ fn client_sees_headless_startup_config_diagnostic() {
     );
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            let output = read_output(&output);
-            output.contains("config.toml") && output.contains("herdr config check")
+            let bytes = output
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .bytes
+                .clone();
+            let tela = terminal_screen::text(&bytes, 80, 24);
+            tela.contains("config.toml") && tela.contains("revise a configuração")
         }),
         "client shell should render startup config diagnostic; output: {:?}",
         read_output(&output)

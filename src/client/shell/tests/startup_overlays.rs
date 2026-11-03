@@ -519,7 +519,7 @@ fn startup_config_diagnostics_are_client_rendered_and_persist_until_replaced() {
     state.set_snapshot(Box::new(shared_snapshot));
     assert_eq!(
         state.config_diagnostic.as_deref(),
-        Some("client + endpoint: local config warning")
+        Some("cliente + conexão: local config warning")
     );
 
     let mut endpoint_snapshot = snapshot();
@@ -538,8 +538,8 @@ fn startup_config_diagnostics_are_client_rendered_and_persist_until_replaced() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("client: local config warning"));
-    assert!(text.contains("endpoint: endpoint config warning"));
+    assert!(text.contains("cliente: local config warning"));
+    assert!(text.contains("conexão: endpoint config warning"));
 
     state.handle_input_bytes(b"x");
     assert!(state.config_diagnostic.is_some());
