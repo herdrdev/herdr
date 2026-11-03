@@ -588,7 +588,7 @@ fn machine_setup_old_install_requires_one_explicit_stop_approval() {
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );
@@ -617,7 +617,7 @@ fn machine_setup_new_install_old_server_enter_does_not_stop_or_handoff() {
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );
@@ -637,7 +637,7 @@ fn machine_setup_explicit_remote_handoff_remains_available_but_restart_fallback_
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );

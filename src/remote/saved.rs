@@ -172,6 +172,9 @@ pub(crate) fn saved_ssh_failure_needs_attention(error: &io::Error) -> bool {
         "unsupported remote platform",
         "not ready",
         "install or update",
+        "plataforma remota não suportada:",
+        "servidor remoto ainda não está pronto para máquinas salvas",
+        "herdr compatível ainda não está pronto em ",
         "protocol",
         "handshake",
     ]
@@ -203,7 +206,7 @@ fn validate_profile_path_id(profile_id: &str) -> io::Result<()> {
     } else {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "invalid SSH endpoint profile id",
+            "identificador do perfil SSH inválido",
         ))
     }
 }
@@ -245,5 +248,31 @@ mod tests {
             io::ErrorKind::TimedOut,
             "network timed out"
         )));
+    }
+
+    #[test]
+    fn localized_remote_failures_and_external_ssh_errors_keep_attention_classification() {
+        for message in [
+            "plataforma remota não suportada: Windows X86",
+            "o servidor remoto ainda não está pronto para máquinas salvas",
+            "Herdr compatível ainda não está pronto em servidor; execute comando para instalar ou atualizar",
+            "Permission denied (publickey)",
+            "Host key verification failed",
+            "REMOTE HOST IDENTIFICATION HAS CHANGED",
+            "no matching host key type found",
+        ] {
+            assert!(saved_ssh_failure_needs_attention(&io::Error::other(message)), "{message}");
+        }
+        for message in [
+            "connection timed out",
+            "falha temporária na rede",
+            "servidor pronto",
+            "não é necessário instalar ou atualizar",
+        ] {
+            assert!(
+                !saved_ssh_failure_needs_attention(&io::Error::other(message)),
+                "{message}"
+            );
+        }
     }
 }

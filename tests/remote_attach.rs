@@ -36,10 +36,22 @@ impl Drop for TestCleanup {
     }
 }
 
-fn wait_for_file(path: &Path, timeout: Duration) {
+fn wait_for_file(
+    path: &Path,
+    timeout: Duration,
+    framed_shell: bool,
+    stderr: &mpsc::Receiver<Vec<u8>>,
+) {
     let deadline = Instant::now() + timeout;
     while !path.exists() {
-        assert!(Instant::now() < deadline, "timed out waiting for fake ssh");
+        if Instant::now() >= deadline {
+            let captured = stderr.try_iter().flatten().collect::<Vec<_>>();
+            panic!(
+                "timed out waiting for fake ssh marker {} (framed_shell={framed_shell}); stderr: {}",
+                path.display(),
+                String::from_utf8_lossy(&captured)
+            );
+        }
         thread::sleep(Duration::from_millis(10));
     }
 }
@@ -142,7 +154,12 @@ exit 255
         }
     }));
 
-    wait_for_file(&started_path, Duration::from_secs(2));
+    wait_for_file(
+        &started_path,
+        Duration::from_secs(2),
+        framed_shell,
+        &line_rx,
+    );
     let mut before_approval = Vec::new();
     while !String::from_utf8_lossy(&before_approval).contains(CHECK_URL) {
         match line_rx.recv_timeout(Duration::from_secs(2)) {
@@ -151,7 +168,12 @@ exit 255
         }
     }
     fs::write(&approval_path, b"approved").expect("release fake ssh approval");
-    wait_for_file(&advanced_path, Duration::from_secs(2));
+    wait_for_file(
+        &advanced_path,
+        Duration::from_secs(2),
+        framed_shell,
+        &line_rx,
+    );
 
     let status = child.wait().expect("wait for remote attach");
     cleanup.child = None;

@@ -13,7 +13,7 @@ impl RemoteKeybindings {
         match value {
             "local" => Ok(Self::Local),
             "server" => Ok(Self::Server),
-            _ => Err("--remote-keybindings must be 'local' or 'server'".to_string()),
+            _ => Err("--remote-keybindings deve ser 'local' ou 'server'".to_string()),
         }
     }
 
@@ -58,10 +58,10 @@ pub(crate) fn extract_remote_args(
         }
         if arg == "--remote" {
             if remote_target.is_some() {
-                return Err("--remote can only be specified once".to_string());
+                return Err("--remote só pode ser informado uma vez".to_string());
             }
             let Some(value) = args.get(index + 1) else {
-                return Err("missing value for --remote".to_string());
+                return Err("falta o valor de --remote".to_string());
             };
             remote_target = Some(validate_remote_target(value)?.to_owned());
             index += 2;
@@ -69,7 +69,7 @@ pub(crate) fn extract_remote_args(
         }
         if let Some(value) = arg.strip_prefix("--remote=") {
             if remote_target.is_some() {
-                return Err("--remote can only be specified once".to_string());
+                return Err("--remote só pode ser informado uma vez".to_string());
             }
             remote_target = Some(validate_remote_target(value)?.to_owned());
             index += 1;
@@ -77,10 +77,10 @@ pub(crate) fn extract_remote_args(
         }
         if arg == "--remote-keybindings" {
             if keybindings_seen {
-                return Err("--remote-keybindings can only be specified once".to_string());
+                return Err("--remote-keybindings só pode ser informado uma vez".to_string());
             }
             let Some(value) = args.get(index + 1) else {
-                return Err("missing value for --remote-keybindings".to_string());
+                return Err("falta o valor de --remote-keybindings".to_string());
             };
             keybindings = RemoteKeybindings::parse(value)?;
             keybindings_seen = true;
@@ -89,7 +89,7 @@ pub(crate) fn extract_remote_args(
         }
         if let Some(value) = arg.strip_prefix("--remote-keybindings=") {
             if keybindings_seen {
-                return Err("--remote-keybindings can only be specified once".to_string());
+                return Err("--remote-keybindings só pode ser informado uma vez".to_string());
             }
             keybindings = RemoteKeybindings::parse(value)?;
             keybindings_seen = true;
@@ -107,7 +107,7 @@ pub(crate) fn extract_remote_args(
         live_handoff,
     });
     if remote.is_none() && keybindings_seen {
-        return Err("--remote-keybindings requires --remote".to_string());
+        return Err("--remote-keybindings exige --remote".to_string());
     }
     if remote.is_none() && live_handoff {
         cleaned.push("--handoff".to_string());
@@ -118,10 +118,39 @@ pub(crate) fn extract_remote_args(
 
 pub(crate) fn validate_remote_target(target: &str) -> Result<&str, String> {
     if target.is_empty() {
-        return Err("missing value for --remote".to_string());
+        return Err("falta o valor de --remote".to_string());
     }
     if target.starts_with('-') {
-        return Err("--remote target must not start with '-'".to_string());
+        return Err("o destino de --remote não pode começar com '-'".to_string());
     }
     Ok(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_arguments_keep_values_and_report_invalid_input_in_portuguese() {
+        let args = [
+            "herdr",
+            "--remote",
+            "dev@host",
+            "--remote-keybindings",
+            "server",
+        ]
+        .map(str::to_owned);
+        let (_, launch) = extract_remote_args(&args).unwrap();
+        let launch = launch.unwrap();
+        assert_eq!(launch.target, "dev@host");
+        assert_eq!(launch.keybindings, RemoteKeybindings::Server);
+        assert_eq!(
+            extract_remote_args(&["herdr".into(), "--remote".into()]).unwrap_err(),
+            "falta o valor de --remote"
+        );
+        assert_eq!(
+            RemoteKeybindings::parse("other").unwrap_err(),
+            "--remote-keybindings deve ser 'local' ou 'server'"
+        );
+    }
 }
