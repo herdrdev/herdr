@@ -2,6 +2,8 @@
 
 Decision of the owner (2026-11-03): **Shepherd is a fork of herdr**, "a herdr with more features", not a separate program that calls herdr. This replaces the earlier idea of an external `shepherd-core` + adapter (kept as library code to be ported in).
 
+Name (owner, 2026-11-03): **shepherd**, for the product and the binary. Credit to herdr stays in README and NOTICE. The Cargo package/binary rename is done in F5 (not earlier, to keep upstream rebases cheap); until then the binary is still built as `herdr`.
+
 Base: `herdrdev/herdr` 0.9.5 (Apache-2.0), the terminal UI. The graphical `herdr-app` is not in that repository, so it is not part of this fork. Credit to herdr stays in the README and NOTICE; no upstream issues, PRs or pushes (the upstream `AGENTS.md` forbids them for forks). The `upstream` remote has its push URL disabled on purpose.
 
 ## Product
