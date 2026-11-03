@@ -572,7 +572,7 @@ fn mensagens_pi_em_portugues_preservam_caminho_real() {
     let _lock = integration_env_lock();
     let base = unique_base();
     let home = base.join("home");
-    let ext_dir = home.join(".pi/agent/extensions");
+    let ext_dir = home.join(".pi").join("agent").join("extensions");
     fs::create_dir_all(&ext_dir).unwrap();
     std::env::set_var("HOME", &home);
     let target = crate::api::schema::IntegrationTarget::Pi;

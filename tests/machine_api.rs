@@ -777,7 +777,7 @@ fn machine_api_protocol_mismatch_never_sends_the_mutation() {
     assert_eq!(server.join().unwrap()["method"], "ping");
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("protocol_mismatch"), "{error}");
-    assert!(error.contains("machine 'mac'"), "{error}");
+    assert!(error.contains("máquina 'mac'"), "{error}");
     assert!(!error.contains("HERDR_SOCKET_PATH="), "{error}");
     harness.assert_local_untouched();
 }

@@ -1684,7 +1684,10 @@ pub(super) fn discover_remote_api_metadata(
         // re-expanded, so a WSL-backed Windows host is discovered correctly.
         let output = ssh.sh_output(&posix_remote_api_discovery_script(&platform, session))?;
         if !output.status.success() {
-            return Err(command_failed("remote binary discovery failed", &output));
+            return Err(command_failed(
+                "falha na busca do executável remoto",
+                &output,
+            ));
         }
         let metadata = crate::client::endpoint::SshMachineMetadata {
             os: platform.os.to_owned(),
@@ -1854,7 +1857,10 @@ fn remote_binary_candidates(
     if remote_herdr.platform.is_windows() {
         let output = ssh.framed_user_shell_output(&windows_remote_binary_candidate_command())?;
         if !output.status.success() {
-            return Err(command_failed("remote binary discovery failed", &output));
+            return Err(command_failed(
+                "falha na busca do executável remoto",
+                &output,
+            ));
         }
         return Ok(windows_remote_binary_candidates(
             remote_herdr,
@@ -1872,7 +1878,10 @@ fn remote_binary_candidates(
         &remote_herdr.platform,
     ))?;
     if !output.status.success() {
-        return Err(command_failed("remote binary discovery failed", &output));
+        return Err(command_failed(
+            "falha na busca do executável remoto",
+            &output,
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     for candidate in remote_herdrs_from_path_discovery(remote_herdr, &stdout) {

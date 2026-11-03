@@ -176,7 +176,8 @@ exit 255
     );
     assert!(
         later_lines.lines().any(|line| {
-            line.contains("error: remote binary discovery failed") && line.contains(LATER_FAILURE)
+            line.contains("erro: falha na busca do executável remoto")
+                && line.contains(LATER_FAILURE)
         }),
         "failed SSH stderr should remain in the contextual error: {later_lines:?}"
     );
