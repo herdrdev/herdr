@@ -31,6 +31,7 @@ pub(crate) struct OverlayRender {
     pub(crate) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(crate) release_notes_max_scroll: usize,
     pub(crate) cursor: Option<crate::protocol::CursorState>,
+    pub(crate) shepherd_hits: Option<crate::shepherd::ShepherdOverlayHits>,
 }
 
 pub(crate) fn render_client_overlay(
@@ -79,6 +80,24 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::WorktreeRemove(v) => {
             worktree_overlays::render_worktree_remove_overlay(b, v, p)
         }
+        ClientShellOverlay::Shepherd(v) => {
+            let hits = crate::shepherd::render_shepherd_overlay(b, v, p)?;
+            Some(OverlayRender {
+                area: hits.popup,
+                shepherd_hits: Some(hits),
+                ..OverlayRender::default()
+            })
+        }
+        ClientShellOverlay::ShepherdAgentModal(v) => {
+            let mut panel_state = crate::shepherd::ShepherdAgentsPanelState::default();
+            panel_state.sub_modal = v.sub_modal.clone();
+            panel_state.open = true;
+            let rendered = crate::shepherd::panel::render_shepherd_agents_panel(b, b.area, &panel_state, p)?;
+            Some(OverlayRender {
+                area: rendered.area,
+                ..OverlayRender::default()
+            })
+        }
         ClientShellOverlay::ContextMenu(_) | ClientShellOverlay::GlobalMenu(_) => None,
     }
 }
@@ -88,9 +107,10 @@ pub(crate) fn render_global_menu(
     launcher: Rect,
     menu: &ClientGlobalMenuOverlay,
     snapshot: &ClientShellSnapshot,
+    shepherd_enabled: bool,
     palette: &Palette,
 ) -> Option<OverlayRender> {
-    let items = super::super::global_menu::global_menu_items(snapshot);
+    let items = super::super::global_menu::global_menu_items(snapshot, shepherd_enabled);
     let screen = buffer.area;
     let width = items
         .iter()

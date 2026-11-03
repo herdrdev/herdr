@@ -62,6 +62,13 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                if action == crate::input::KeybindAction::Shepherd {
+                    if self.config.shepherd_enabled {
+                        self.open_shepherd_overlay(outcome);
+                        outcome.repaint = true;
+                    }
+                    return;
+                }
                 if action == crate::input::KeybindAction::OpenNotificationTarget {
                     self.focus_visible_notification(outcome);
                     return;
@@ -829,6 +836,11 @@ impl ClientShellState {
                     Err(_) => true,
                 };
                 return (repaint, Vec::new());
+            }
+            PendingEndpointKind::ShepherdCall { op } => {
+                let mut outcome = ClientShellInput::default();
+                self.handle_shepherd_endpoint_result(&op, result, &mut outcome);
+                return (true, outcome.actions);
             }
             kind @ (PendingEndpointKind::IntegrationList
             | PendingEndpointKind::IntegrationInstall) => {

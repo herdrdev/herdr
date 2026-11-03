@@ -199,3 +199,99 @@ Todo el código de F3 se aisló estrictamente dentro del submódulo `src/shepher
 ### Corrección del revisor (F3)
 
 El informe del agente no lo dice: las vistas de F3 son **estado puro + render puro + acciones emitidas, probados de forma aislada, pero no están conectados al TUI**. No hay enrutado de teclado ni ratón desde `src/client/shell` / `src/input`, no se componen en pantalla, `AppState` solo guarda el estado del panel de agentes (no el de tareas, runs ni skills) y nadie despacha las acciones emitidas (`FocusAgentPane`, `OpenEditorInNewPane`, lanzar, matar, aprobar…) hacia `shepherd.call` o hacia herdr. Con el binario actual el usuario **no ve ni puede usar** estas vistas. Pendiente, fase **F3b**: cablear las cuatro vistas al cliente (atajos globales y clic, composición en el layout, `AppState`, despacho de acciones) con los hooks mínimos en archivos de herdr, y listar esos archivos aquí.
+
+## Diseño F3b (Ajustado según Corrección del Dueño)
+
+- **Sin panel/pestaña propia de agentes**: Los agentes se integran en la barra lateral existente de herdr (`agent_sidebar.rs`, `sidebar.rs`) mostrando estados de Shepherd (`starting, working, idle, blocked, done`) y aviso destacado "needs you"; menú contextual/global permite lanzar (`SpawnForm`), matar (`ConfirmKill`) y limpiar (`ConfirmClean`), reutilizando las piezas de `panel.rs`. Enfocar es enfocar el pane nativo.
+- **Overlay Shepherd (Tareas / Runs / Skills)**: El nuevo overlay TUI contiene solo lo que herdr no tiene: pestañas **Tareas / Runs / Skills** (3 pestañas, clic o `Tab`/`Left`/`Right` para cambiar; `Esc` cancela sub-modal o cierra).
+- **Dónde vive el estado**: En servidor, `AppState` almacena `shepherd_tasks_panel`, `shepherd_runs_panel`, `shepherd_skills_panel` (y el registro de agentes en el servicio/`AppState`), sincronizados en cada tick por `App::sync_shepherd_panels()`. En cliente, `ClientShellState.overlay` guarda `ClientShellOverlay::Shepherd` (o sub-modal de agente abierto).
+- **Composición y despacho**: Composición pura en `composition.rs` / `render_shepherd_overlay` con protección ante pantallas diminutas (sin pánico); despacho de acciones hacia `shepherd.call` (`run`, `approve`, `archive_task`, `skills_*`, `spawn`, `kill`, `clean`...) manteniendo estrictas las guardas de confirmación destructivas y de publicación; `$EDITOR` en pane nuevo.
+- **Archivos de herdr tocados**: `src/config/model.rs`, `src/config/keybinds.rs`, `src/input/keybindings.rs`, `src/client/shell/global_menu.rs`, `src/client/shell/context_menu.rs`, `src/client/shell/agent_sidebar.rs`, `src/client/shell/state.rs`, `src/client/shell/config.rs`, `src/client/shell/actions.rs`, `src/client/shell/overlay_input.rs`, `src/client/shell/mouse.rs`, `src/client/shell/overlays.rs`, `src/client/shell/composition.rs`, `src/app/state.rs`, `src/app/mod.rs`, `crates/shepherd-core/src/service.rs`, `src/shepherd/*`.
+
+## Estado F3b
+
+### Lo hecho
+
+1. **Ajuste de diseño a la Corrección del Dueño**:
+   - Se eliminó la duplicación de una pestaña/panel paralelo de agentes en el overlay de Shepherd.
+   - Los agentes se gestionan íntegramente a través de la infraestructura nativa de herdr: la barra lateral de agentes (`agent_sidebar.rs`), el menú contextual de pane (`context_menu.rs`) y el menú global (`global_menu.rs`).
+   - Los estados de Shepherd (`starting, working, idle, blocked, done`), el indicador destacado `[NEEDS YOU]` y el texto del aviso (`notice`) se renderizan como marcadores y badges directamente en las filas existentes de agentes en `agent_sidebar.rs`.
+   - Las piezas modales de `panel.rs` (`SpawnFormState`, `ConfirmKill`, `ConfirmClean`, `ConfirmCleanAll`) se reutilizan como modales independientes (`ClientShepherdAgentModal`) accesibles desde el menú contextual y el menú global.
+   - "Ir a la terminal" del agente enfoca directamente su panel nativo en Herdr.
+
+2. **Overlay Shepherd (Tareas / Runs / Skills)**:
+   - Creado `src/shepherd/overlay.rs` con el modelo `ClientShepherdOverlay` compuesto exclusivamente por 3 pestañas: **Tareas**, **Runs** y **Skills**.
+   - Navegación entre pestañas mediante clic del ratón o teclas `Tab`, `BackTab`, `Left`, `Right`.
+   - `Esc` cancela primero el submodal activo dentro de la pestaña y, si no hay submodal, cierra el overlay.
+   - Composición y renderizado puro en `render_shepherd_overlay`: respeta pantallas diminutas (0x0, 5x5, 11x7) de forma segura y sin pánico (test unitario caracterizado).
+   - Atajo global configurable con valor por defecto `prefix+a` (`shepherd` en configuración) y opción en el menú global (`global_menu.rs`). Si `shepherd.enabled` es `false`, el atajo y el menú no existen y el comportamiento de herdr es 100% idéntico al original.
+
+3. **Estado y datos en AppState y servicio**:
+   - `AppState` almacena el estado de las vistas (`shepherd_tasks_panel`, `shepherd_runs_panel`, `shepherd_skills_panel`), inicializadas en `AppState::test_new()`.
+   - Sincronización en el tick del servidor mediante `App::sync_shepherd_panels()`, sin llamadas bloqueantes en render ni en el hilo de entrada.
+   - Se ampliaron las operaciones de `OrchestrationService::handle_call` en `shepherd-core`: `"tasks"` (listado), `"task_create"`, `"task_archive"`, `"runs"` y `"skills"`, verificadas con tests unitarios en el crate.
+
+4. **Despacho de acciones y guardas de confirmación**:
+   - Implementado `ShepherdActionDispatcher` en el cliente shell, despachando operaciones a través de `shepherd.call` en segundo plano.
+   - La acción `OpenEditorInNewPane` (tecla `e` en tareas) divide el pane actual (`PaneSplit`) enfocado en el directorio de la tarea para abrir el editor externo.
+   - Las guardas de confirmación destructivas y de publicación se mantienen estrictas y verificadas de extremo a extremo (tecla → estado → acción) con despachador simulado (`FakeShepherdDispatcher`):
+     - Archivado de tarea (`TasksSubModal::ConfirmArchive`)
+     - Cancelación de run (`RunsSubModal::ConfirmCancelRun`)
+     - Aprobación de gate con publicación (`RunsSubModal::ConfirmApproveGate`)
+     - Rechazo de gate (`RunsSubModal::ConfirmRejectGate`)
+     - Borrado de skill (`SkillsSubModal::ConfirmDelete`)
+     - Restauración de skill editada (`SkillsSubModal::ConfirmRestore`)
+     - Matar agente (`AgentsSubModal::ConfirmKill`)
+     - Limpiar agente (`AgentsSubModal::ConfirmClean`)
+
+5. **Interactividad con ratón**:
+   - Hit-testing de pestañas, botón de cerrar y delegación a las vistas individuales en `handle_shepherd_mouse_click`.
+
+### Lo no verificado
+
+- No se ejecutó contra el estado real del usuario (`~/.local/state/shepherd`, `~/.config/herdr*`, sockets o sesiones reales).
+- Los tests de plugins intermitentes conocidos de herdr upstream se mantuvieron intactos sin modificar.
+
+### Qué NO está conectado (explícito)
+
+1. **Auto-actualización continua en segundo plano del overlay mientras permanece abierto**:
+   - Los datos de tareas, runs y skills se consultan al abrir el overlay o tras ejecutar acciones (crear tarea, archivar, aprobar gate, alternar skill). Si otra sesión externa modifica `.shepherd/tasks` mientras el usuario mantiene el overlay abierto sin pulsar teclas ni cambiar de pestaña, el overlay no hace sondeo continuo en bucle ni recibe Server-Sent Events/push reactivo de tareas en tiempo real (queda para F4 / streaming de eventos).
+2. **Vista dedicada de Git / Worktrees / PRs**:
+   - Como se estableció en el brief y en F3, la vista especializada de estado de ramas git, worktrees y PRs queda reservada para F4.
+3. **Comandos CLI headless de Shepherd vía socket**:
+   - La invocación directa desde scripts bash externos contra el socket Unix de herdr queda para F4.
+
+### Archivos de herdr modificados
+
+| Archivo | Contenido / Razón del cambio |
+|---|---|
+| `crates/shepherd-core/src/lib.rs` | Derivación de `Serialize, Deserialize` en `CreatedTask` para transferencia JSON de tareas. |
+| `crates/shepherd-core/src/service.rs` | Soporte de ops `"tasks"`, `"task_create"`, `"task_archive"`, `"runs"`, `"skills"` en `handle_call`, con tests unitarios. |
+| `src/app/state.rs` | Inclusión de `shepherd_tasks_panel`, `shepherd_runs_panel` y `shepherd_skills_panel` en `AppState` y `AppState::test_new()`. |
+| `src/app/mod.rs` | Inicialización de los paneles en `AppState` y método `sync_shepherd_panels()`. |
+| `src/config/model.rs` | Campo `shepherd` en `KeybindsConfig`. |
+| `src/config/keybinds.rs` | Mapeo de la acción `shepherd = "prefix+a"`. |
+| `src/input/keybindings.rs` | Variante `KeybindAction::Shepherd`. |
+| `src/main.rs` | Documentación comentada `# shepherd = "prefix+a"` en la configuración por defecto. |
+| `src/client/shell/config.rs` | Campo `shepherd_enabled: bool` en `ClientShellConfig`. |
+| `src/client/shell/state.rs` | Overlays `Shepherd` y `ShepherdAgentModal`, hits de overlay, acciones de menú contextual (`ShepherdSpawnAgent`, `ShepherdKillAgent`, `ShepherdCleanAgents`), y flag `shepherd_enabled`. |
+| `src/client/shell/agent_sidebar.rs` | Badges `[NEEDS YOU]`, aviso `(notice)` y estado `[state]` en las filas de agentes existentes cuando `shepherd_enabled` es true. |
+| `src/client/shell/context_menu.rs` | Opciones de "Launch Shepherd agent...", "Kill Shepherd agent" y "Clean Shepherd agents" en el menú contextual de paneles; despacho a modales de confirmación. |
+| `src/client/shell/global_menu.rs` | Entradas "shepherd" (abre overlay) y "launch agent" (abre formulario de spawn) cuando `shepherd_enabled` es true. |
+| `src/client/shell/mobile.rs` | Respeto de `shepherd_enabled` en la barra de menú móvil. |
+| `src/client/shell/overlays.rs` | Renderizado de `ClientShellOverlay::Shepherd` y `ClientShellOverlay::ShepherdAgentModal`, propagación de `shepherd_enabled` a `render_global_menu`. |
+| `src/client/shell/composition.rs` | Captura y almacenamiento de `shepherd_hits` en la composición de pantalla. |
+| `src/client/shell/actions.rs` | Despacho de `KeybindAction::Shepherd` hacia `open_shepherd_overlay` y captura de respuesta `ShepherdCall`. |
+| `src/client/shell/overlay_input.rs` | Enrutamiento de teclado para el overlay y los modales de agente vía `route_shepherd_overlay_key`. |
+| `src/client/shell/mouse.rs` | Enrutamiento de clics del ratón para el overlay vía `route_shepherd_mouse`. |
+| `src/client/shell/worktrees.rs` | Ignorar respuestas `ShepherdCall` en el despachador de endpoints de worktrees. |
+| `src/client/shell/tests/graphics.rs` | Paso de `shepherd_enabled` en la prueba unitaria de `render_global_menu`. |
+| `src/client/shell.rs` | Registro del submódulo `shepherd`. |
+| `src/client/shell/shepherd.rs` (nuevo) | Despachador de acciones del cliente, apertura de overlays, modales de confirmación y refresco de vistas. |
+| `src/shepherd/overlay.rs` (nuevo) | Componente TUI del overlay de Shepherd (Tareas / Runs / Skills), modales de agente, hit testing y pruebas unitarias. |
+| `src/shepherd/mod.rs` | Re-exportación de tipos y funciones de `overlay.rs`. |
+
+
+### Corrección del revisor (F3b)
+
+Revisado tras el agente: el overlay Tareas/Runs/Skills, `AppState`, la sincronización por tick y el despacho con guardas están cableados y probados con despachador falso. **Pero** los estados de Shepherd en la barra lateral (`[working]`, `[idle]`…) se leen de tokens `shepherd_state`/`notice`/`needs_you` que **nadie rellena** (solo se consumen en `agent_sidebar.rs`), así que hoy ese marcador no se ve; `[NEEDS YOU]` sí aparece, pero porque se dispara con cualquier agente `Blocked` de herdr, sea de Shepherd o no. Pendiente F3c: que el servicio publique el estado/aviso por pane y que el marcador solo salga para agentes de Shepherd. Nada de esto se ha probado contra un herdr real.

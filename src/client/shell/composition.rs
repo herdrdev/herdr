@@ -656,6 +656,7 @@ impl ClientShellState {
                     self.hits.global_launcher,
                     menu,
                     snapshot,
+                    self.config.shepherd_enabled,
                     &self.config.palette,
                 )?;
                 occlusion.cover(rendered.area);
@@ -697,6 +698,7 @@ impl ClientShellState {
                 self.hits.release_notes_scrollbar = rendered.release_notes_scrollbar;
                 self.hits.release_notes_scroll_metrics = rendered.release_notes_scroll_metrics;
                 self.hits.release_notes_max_scroll = rendered.release_notes_max_scroll;
+                self.hits.shepherd_hits = rendered.shepherd_hits;
                 rendered.cursor
             };
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);

@@ -4,6 +4,7 @@ use super::*;
 pub(super) enum ClientGlobalMenuAction {
     Binding(crate::input::KeybindAction),
     WhatsNew,
+    ShepherdSpawn,
 }
 
 pub(super) fn global_menu_attention(snapshot: &ClientShellSnapshot) -> bool {
@@ -21,6 +22,7 @@ pub(super) fn global_menu_item_has_badge(
 
 pub(super) fn global_menu_items(
     snapshot: &ClientShellSnapshot,
+    shepherd_enabled: bool,
 ) -> Vec<(&'static str, ClientGlobalMenuAction)> {
     let mut items = vec![
         (
@@ -36,6 +38,16 @@ pub(super) fn global_menu_items(
             ClientGlobalMenuAction::Binding(crate::input::KeybindAction::ReloadConfig),
         ),
     ];
+    if shepherd_enabled {
+        items.push((
+            "shepherd",
+            ClientGlobalMenuAction::Binding(crate::input::KeybindAction::Shepherd),
+        ));
+        items.push((
+            "launch agent",
+            ClientGlobalMenuAction::ShepherdSpawn,
+        ));
+    }
     if snapshot.update_available.is_some() || snapshot.latest_release_notes_available {
         items.push((
             if snapshot.update_available.is_some() {
@@ -65,10 +77,11 @@ impl ClientShellState {
     }
 
     pub(super) fn move_global_menu_selection(&mut self, delta: isize) {
+        let shepherd_enabled = self.config.shepherd_enabled;
         let item_count = self
             .snapshot
             .as_deref()
-            .map(global_menu_items)
+            .map(|s| global_menu_items(s, shepherd_enabled))
             .map_or(0, |items| items.len());
         let Some(ClientShellOverlay::GlobalMenu(menu)) = self.overlay.as_mut() else {
             return;
@@ -82,8 +95,9 @@ impl ClientShellState {
         index: usize,
         outcome: &mut ClientShellInput,
     ) {
+        let shepherd_enabled = self.config.shepherd_enabled;
         let Some(action) = self.snapshot.as_deref().and_then(|snapshot| {
-            global_menu_items(snapshot)
+            global_menu_items(snapshot, shepherd_enabled)
                 .get(index)
                 .map(|(_, action)| *action)
         }) else {
@@ -104,6 +118,7 @@ impl ClientShellState {
                 self.record_binding(crate::input::KeybindMatch::Action(binding), outcome)
             }
             ClientGlobalMenuAction::WhatsNew => self.open_release_notes(),
+            ClientGlobalMenuAction::ShepherdSpawn => self.open_shepherd_spawn_form(outcome),
         }
         outcome.repaint = true;
     }

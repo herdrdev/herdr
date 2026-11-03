@@ -1570,6 +1570,15 @@ impl ClientShellState {
             }
             return;
         }
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::Shepherd(_) | ClientShellOverlay::ShepherdAgentModal(_))
+        ) {
+            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+                self.route_shepherd_mouse(point, outcome);
+            }
+            return;
+        }
         if matches!(self.overlay, Some(ClientShellOverlay::Help(_))) {
             match mouse.kind {
                 MouseEventKind::ScrollUp => {

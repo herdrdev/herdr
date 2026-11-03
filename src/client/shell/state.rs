@@ -51,6 +51,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) preferences: preferences::ClientChromePreferences,
     pub(super) startup_config_diagnostic: Option<String>,
     pub(super) startup_onboarding: bool,
+    pub(super) shepherd_enabled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +139,7 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
+    pub(super) shepherd_hits: Option<crate::shepherd::ShepherdOverlayHits>,
 }
 
 #[derive(Clone)]
@@ -291,6 +293,8 @@ pub(super) enum ClientShellOverlayKind {
     ContextMenu,
     GlobalMenu,
     Settings,
+    Shepherd,
+    ShepherdAgentModal,
 }
 
 #[derive(Debug)]
@@ -525,6 +529,9 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+    ShepherdSpawnAgent,
+    ShepherdKillAgent,
+    ShepherdCleanAgents,
 }
 
 #[derive(Debug)]
@@ -547,6 +554,7 @@ pub(super) enum ClientContextMenuTarget {
         source_pane_id: Option<String>,
         has_manual_label: bool,
         right_click_passthrough: bool,
+        shepherd_enabled: bool,
     },
 }
 
@@ -594,6 +602,8 @@ pub(super) enum ClientShellOverlay {
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
+    Shepherd(crate::shepherd::ClientShepherdOverlay),
+    ShepherdAgentModal(crate::shepherd::ClientShepherdAgentModal),
 }
 
 impl ClientShellOverlay {
@@ -612,6 +622,8 @@ impl ClientShellOverlay {
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
+            Self::Shepherd(_) => ClientShellOverlayKind::Shepherd,
+            Self::ShepherdAgentModal(_) => ClientShellOverlayKind::ShepherdAgentModal,
         }
     }
 }
@@ -626,6 +638,9 @@ pub(super) enum PendingEndpointKind {
     ReleaseNotesDismiss,
     PopupCommand,
     ReloadConfig,
+    ShepherdCall {
+        op: String,
+    },
     IntegrationList,
     IntegrationInstall,
     PrepareWorktreeCreate {
