@@ -316,7 +316,7 @@ fn startup_onboarding_is_client_rendered_and_modal() {
     assert!(text.contains("use o mouse ou o teclado"));
     assert!(text.contains("ctrl+b abre atalhos"));
     assert!(text.contains("configure as integrações opcionais"));
-    assert_eq!(state.hits.overlay_primary.width, 12);
+    assert_eq!(state.hits.overlay_primary.width, 13);
 
     let ignored = state.handle_input_bytes(b"x");
     assert!(ignored.requests.is_empty());
@@ -467,7 +467,7 @@ fn onboarding_completion_persists_and_opens_endpoint_integrations() {
     assert!(state
         .config_diagnostic
         .as_deref()
-        .is_some_and(|diagnostic| diagnostic.contains("failed to read config")));
+        .is_some_and(|diagnostic| diagnostic.contains("não foi possível ler a configuração")));
     assert!(unreadable_path.is_dir());
     std::fs::remove_dir(&unreadable_path).expect("remove unreadable config path");
 
