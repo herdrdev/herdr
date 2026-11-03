@@ -639,7 +639,7 @@ fn endpoint_keybindings_hide_only_local_keybinding_diagnostics() {
     let config = ClientShellConfig::from_config(&Config::default())
         .with_keybinding_source(ClientShellKeybindingSource::Endpoint);
     let diagnostics = vec![
-        "unsafe direct keybinding: keys.close_pane would intercept typing".into(),
+        "atalho direto inseguro: keys.close_pane interceptaria a digitação".into(),
         "theme warning".into(),
     ];
 
@@ -656,7 +656,7 @@ fn live_client_config_keeps_sound_diagnostics() {
     let diagnostics = shell_config.apply_live_config(&config, &[], &[]);
     assert!(diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.contains("expected an mp3 file")));
+        .any(|diagnostic| diagnostic.contains("esperado arquivo mp3")));
 }
 
 #[test]

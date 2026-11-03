@@ -3909,13 +3909,13 @@ fn retained_test_server_with_control(
 #[test]
 fn server_keybinding_filter_keeps_whole_config_failures() {
     assert!(!config::is_keybinding_config_diagnostic(
-        "config parse error: invalid value at `keys.new_tab = @`; using defaults"
+        "erro de leitura da configuração TOML: invalid value at `keys.new_tab = @`; usando padrões"
     ));
     assert!(!config::is_keybinding_config_diagnostic(
-        "config read error: permission denied at keys.toml; using defaults"
+        "erro ao ler a configuração: permission denied at keys.toml; usando padrões"
     ));
     assert!(config::is_keybinding_config_diagnostic(
-        "unsafe direct keybinding: keys.close_pane would intercept typing"
+        "atalho direto inseguro: keys.close_pane interceptaria a digitação"
     ));
 }
 

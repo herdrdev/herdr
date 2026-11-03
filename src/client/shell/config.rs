@@ -330,14 +330,16 @@ impl ClientShellConfig {
                 Err(keybind_diagnostics) => diagnostics.extend(
                     keybind_diagnostics
                         .into_iter()
-                        .map(|diagnostic| format!("{diagnostic}; kept current keybinds")),
+                        .map(|diagnostic| format!("{diagnostic}; mantendo atalhos atuais")),
                 ),
             }
         }
 
         if !invalid_section("ui") {
             if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
-                diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
+                diagnostics.push(format!(
+                    "{diagnostic}; mantendo a configuração anterior de [ui]"
+                ));
             } else {
                 let ui = &config.ui;
                 diagnostics.extend(ui.sound.diagnostics());

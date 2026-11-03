@@ -805,8 +805,9 @@ impl App {
     fn mark_release_notes_seen(&mut self, preview: bool) {
         if !preview {
             if let Err(err) = crate::release_notes::mark_current_version_seen() {
-                self.state.config_diagnostic =
-                    Some(format!("failed to update release notes status: {err}"));
+                self.state.config_diagnostic = Some(format!(
+                    "não foi possível atualizar o estado das notas de versão: {err}"
+                ));
                 self.config_diagnostic_deadline = Some(Instant::now() + Duration::from_secs(5));
             }
         }
@@ -818,8 +819,9 @@ impl App {
                 if let Err(err) =
                     crate::product_announcements::mark_seen(&announcement.version, &announcement.id)
                 {
-                    self.state.config_diagnostic =
-                        Some(format!("failed to update announcement status: {err}"));
+                    self.state.config_diagnostic = Some(format!(
+                        "não foi possível atualizar o estado do anúncio: {err}"
+                    ));
                     self.config_diagnostic_deadline = Some(Instant::now() + Duration::from_secs(5));
                 }
             }
@@ -885,7 +887,7 @@ impl App {
                     match config.local_keybindings_profile_toml() {
                         Ok(profile) => self.client_shell_keybindings_profile = Some(profile),
                         Err(err) => diagnostics.push(format!(
-                            "failed to publish server keybindings: {err}; kept previous keybindings"
+                            "não foi possível publicar os atalhos do servidor: {err}; mantendo atalhos anteriores"
                         )),
                     }
                     diagnostics.extend(keybind_diagnostics);
@@ -894,7 +896,7 @@ impl App {
                     diagnostics.extend(
                         keybind_diagnostics
                             .into_iter()
-                            .map(|diagnostic| format!("{diagnostic}; kept current keybinds")),
+                            .map(|diagnostic| format!("{diagnostic}; mantendo atalhos atuais")),
                     );
                 }
             }
@@ -906,7 +908,9 @@ impl App {
             // the previous settings and skip the section so the re-clamp below
             // — and every subsequent render/drag — can never panic.
             if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
-                diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
+                diagnostics.push(format!(
+                    "{diagnostic}; mantendo a configuração anterior de [ui]"
+                ));
             } else {
                 diagnostics.extend(config.ui.sound.diagnostics());
                 diagnostics.extend(crate::config::tab_bar_right_diagnostics(
@@ -943,7 +947,7 @@ impl App {
                 != self.startup_per_agent_delay
         {
             diagnostics.push(
-                "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
+                "alterações em session.startup_per_agent_delay_ms exigem reiniciar o Herdr; mantendo o valor atual"
                     .into(),
             );
         }
@@ -954,7 +958,7 @@ impl App {
             && config.kitty_graphics_enabled() != self.state.kitty_graphics_enabled
         {
             diagnostics.push(
-                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                "alterações em terminal.kitty_graphics exigem reiniciar o Herdr; mantendo o valor atual"
                     .into(),
             );
         }
@@ -975,7 +979,9 @@ impl App {
 
         if !invalid_section("server") {
             if let Some(diagnostic) = config.invalid_headless_size_diagnostic() {
-                diagnostics.push(format!("{diagnostic}; keeping current [server] settings"));
+                diagnostics.push(format!(
+                    "{diagnostic}; mantendo os ajustes atuais de [server]"
+                ));
             } else {
                 self.state.headless_size = config.headless_size();
             }
@@ -1044,8 +1050,8 @@ impl App {
             if notify_success {
                 self.state.toast = Some(crate::app::state::ToastNotification {
                     kind: crate::app::state::ToastKind::UpdateInstalled,
-                    title: "reloaded config".to_string(),
-                    context: "using config.toml".to_string(),
+                    title: "configuração recarregada".to_string(),
+                    context: "usando config.toml".to_string(),
                     position: None,
                     target: None,
                 });
@@ -1056,8 +1062,8 @@ impl App {
             if notify_success {
                 self.state.toast = Some(crate::app::state::ToastNotification {
                     kind: crate::app::state::ToastKind::UpdateInstalled,
-                    title: "reloaded config".to_string(),
-                    context: "with warnings".to_string(),
+                    title: "configuração recarregada".to_string(),
+                    context: "com avisos".to_string(),
                     position: None,
                     target: None,
                 });
@@ -1819,8 +1825,8 @@ mod tests {
         assert!(app.state.config_diagnostic.is_none());
         let toast = app.state.toast.as_ref().unwrap();
         assert_eq!(toast.kind, crate::app::state::ToastKind::UpdateInstalled);
-        assert_eq!(toast.title, "reloaded config");
-        assert_eq!(toast.context, "using config.toml");
+        assert_eq!(toast.title, "configuração recarregada");
+        assert_eq!(toast.context, "usando config.toml");
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -1841,10 +1847,13 @@ mod tests {
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert!(app.state.kitty_graphics_enabled);
+        let resumo = crate::config::config_diagnostic_summary(&report.diagnostics).unwrap();
+        assert!(!resumo.contains("inválido"), "{resumo}");
+        assert!(!resumo.contains("mantendo configuração atual"), "{resumo}");
         assert_eq!(
             report.diagnostics,
             vec![
-                "terminal.kitty_graphics changes require restarting Herdr; kept current setting"
+                "alterações em terminal.kitty_graphics exigem reiniciar o Herdr; mantendo o valor atual"
                     .to_owned()
             ]
         );
@@ -1865,7 +1874,7 @@ mod tests {
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert_eq!(app.startup_per_agent_delay, Duration::from_millis(100));
         assert_eq!(report.diagnostics, vec![
-            "session.startup_per_agent_delay_ms changes require restarting Herdr; kept current setting"
+            "alterações em session.startup_per_agent_delay_ms exigem reiniciar o Herdr; mantendo o valor atual"
         ]);
 
         let report = app.apply_live_config(&config, &[], &["session".into()], false);
@@ -2016,7 +2025,7 @@ mod tests {
         assert!(report.diagnostics.iter().any(|diagnostic| {
             diagnostic.contains("sidebar_min_width")
                 && diagnostic.contains("sidebar_max_width")
-                && diagnostic.contains("greater")
+                && diagnostic.contains("é maior que")
         }));
         assert_eq!(
             app.state.pane_borders, original_pane_borders,
@@ -2049,7 +2058,7 @@ mod tests {
 
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert!(report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.contains("keys.new_workspace") && diagnostic.contains("disabling binding")
+            diagnostic.contains("keys.new_workspace") && diagnostic.contains("desativando atalho")
         }));
         assert_eq!(app.state.prefix_keys, original_prefix);
         assert!(app.state.keybinds.new_workspace.bindings.is_empty());
@@ -2081,7 +2090,7 @@ mod tests {
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
         assert_eq!(
             report.diagnostics,
-            vec!["unknown config key ui.mouse_captur; ignoring key"]
+            vec!["opção de configuração desconhecida ui.mouse_captur; opção ignorada"]
         );
         assert_eq!(app.state.pane_borders, target_pane_borders);
         assert_eq!(
@@ -2145,7 +2154,7 @@ mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.contains("invalid ui config")));
+            .any(|diagnostic| diagnostic.contains("erro em configuração de interface")));
         assert!(app
             .state
             .keybinds
@@ -2181,7 +2190,7 @@ mod tests {
         assert!(report
             .diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.contains("invalid terminal config")));
+            .any(|diagnostic| diagnostic.contains("erro em configuração de terminal")));
         assert_eq!(app.state.default_shell, original_default_shell);
         assert_eq!(app.state.shell_mode, original_shell_mode);
         assert_eq!(app.state.new_terminal_cwd, original_new_cwd);

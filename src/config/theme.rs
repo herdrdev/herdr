@@ -88,7 +88,7 @@ impl ThemeConfig {
             let value = value?;
             canonical_theme_name(value).is_none().then(|| {
                 format!(
-                    "unknown theme name {field} = {value:?}; using {fallback:?}; valid themes: {valid}"
+                    "nome de tema desconhecido {field} = {value:?}; usando {fallback:?}; temas válidos: {valid}"
                 )
             })
         })
@@ -212,7 +212,7 @@ pub fn parse_color(s: &str) -> ratatui::style::Color {
         "lightmagenta" => Color::LightMagenta,
         "lightcyan" => Color::LightCyan,
         _ => {
-            warn!(color = s, "unknown color, defaulting to cyan");
+            warn!(color = s, "cor desconhecida; usando ciano");
             Color::Cyan
         }
     }
@@ -248,10 +248,10 @@ light_name = "lattee"
         let diagnostics = config.theme.diagnostics();
         assert_eq!(diagnostics.len(), 3);
         assert!(diagnostics[0].contains("theme.name = \"catppucin\""));
-        assert!(diagnostics[0].contains("using \"catppuccin\""));
+        assert!(diagnostics[0].contains("usando \"catppuccin\""));
         assert!(diagnostics[1].contains("theme.dark_name = \"tokio-night\""));
         assert!(diagnostics[2].contains("theme.light_name = \"lattee\""));
-        assert!(diagnostics[2].contains("using \"catppuccin-latte\""));
+        assert!(diagnostics[2].contains("usando \"catppuccin-latte\""));
     }
 
     #[test]

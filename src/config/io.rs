@@ -156,10 +156,10 @@ impl Config {
                 };
             }
             Err(err) => {
-                warn!(err = %err, "config read error, using defaults");
+                warn!(err = %err, "erro ao ler a configuração; usando padrões");
                 return LoadedConfig {
                     config: Self::default(),
-                    diagnostics: vec![format!("config read error: {err}; using defaults")],
+                    diagnostics: vec![format!("erro ao ler a configuração: {err}; usando padrões")],
                     invalid_sections: Vec::new(),
                 };
             }
@@ -186,10 +186,12 @@ impl Config {
                 }
             }
             Err(err) => {
-                warn!(err = %err, "config parse error, using defaults");
+                warn!(err = %err, "erro ao interpretar a configuração; usando padrões");
                 LoadedConfig {
                     config: Self::default(),
-                    diagnostics: vec![format!("config parse error: {err}; using defaults")],
+                    diagnostics: vec![format!(
+                        "erro de leitura da configuração TOML: {err}; usando padrões"
+                    )],
                     invalid_sections: Vec::new(),
                 }
             }
@@ -227,10 +229,10 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         .to_string();
     let read_error = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.starts_with("config read error:"));
+        .any(|diagnostic| diagnostic.starts_with("erro ao ler a configuração:"));
     let impact = if diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.contains("using defaults"))
+        .any(|diagnostic| diagnostic.contains("usando padrões"))
     {
         if read_error {
             " ilegível; usando padrões"
@@ -239,7 +241,7 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         }
     } else if diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.contains("keeping current config"))
+        .any(|diagnostic| diagnostic.contains("mantendo a configuração atual"))
     {
         if read_error {
             " ilegível; mantendo configuração atual"
@@ -248,7 +250,7 @@ pub fn config_diagnostic_summary(diagnostics: &[String]) -> Option<String> {
         }
     } else if diagnostics
         .iter()
-        .all(|diagnostic| diagnostic.starts_with("unknown config key "))
+        .all(|diagnostic| diagnostic.starts_with("opção de configuração desconhecida "))
     {
         " contém opções desconhecidas"
     } else {
@@ -273,7 +275,7 @@ pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
         }
         Err(err) => {
             return Err(vec![format!(
-                "config read error: {err}; keeping current config"
+                "erro ao ler a configuração: {err}; mantendo a configuração atual"
             )]);
         }
     };
@@ -281,12 +283,14 @@ pub fn load_live_config() -> Result<LoadedConfig, Vec<String>> {
 }
 
 fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>> {
-    let value = content
-        .parse::<toml::Value>()
-        .map_err(|err| vec![format!("config parse error: {err}; keeping current config")])?;
+    let value = content.parse::<toml::Value>().map_err(|err| {
+        vec![format!(
+            "erro de leitura da configuração TOML: {err}; mantendo a configuração atual"
+        )]
+    })?;
     let table = value.as_table().ok_or_else(|| {
         vec![
-            "config parse error: top-level config must be a table; keeping current config"
+            "erro de leitura da configuração TOML: a configuração principal deve ser uma tabela; mantendo a configuração atual"
                 .to_string(),
         ]
     })?;
@@ -300,7 +304,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
         match value.clone().try_into::<Option<bool>>() {
             Ok(onboarding) => config.onboarding = onboarding,
             Err(err) => diagnostics.push(format!(
-                "invalid onboarding setting: {err}; keeping current onboarding state"
+                "configuração onboarding inválida: {err}; mantendo estado atual de onboarding"
             )),
         }
     }
@@ -308,7 +312,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "theme",
-        "theme config",
+        "configuração de tema",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.theme = section,
@@ -316,7 +320,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "keys",
-        "keybinding config",
+        "configuração de atalhos",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.keys = section,
@@ -324,7 +328,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "terminal",
-        "terminal config",
+        "configuração de terminal",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.terminal = section,
@@ -332,7 +336,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "session",
-        "session config",
+        "configuração de sessão",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.session = section,
@@ -340,7 +344,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "server",
-        "server config",
+        "configuração do servidor",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.server = section,
@@ -348,7 +352,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "update",
-        "update config",
+        "configuração de atualização",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.update = section,
@@ -356,7 +360,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "ui",
-        "ui config",
+        "configuração de interface",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.ui = section,
@@ -364,7 +368,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "advanced",
-        "advanced config",
+        "configuração avançada",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.advanced = section,
@@ -372,7 +376,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "worktrees",
-        "worktree config",
+        "configuração de árvore de trabalho",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.worktrees = section,
@@ -380,7 +384,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "experimental",
-        "experimental config",
+        "configuração experimental",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.experimental = section,
@@ -388,7 +392,7 @@ fn load_live_config_from_str(content: &str) -> Result<LoadedConfig, Vec<String>>
     load_live_section(
         table,
         "remote",
-        "remote config",
+        "configuração remota",
         &mut diagnostics,
         &mut invalid_sections,
         |section| config.remote = section,
@@ -449,10 +453,12 @@ fn unknown_top_level_section_diagnostic(key: &str, value: &toml::Value) -> Optio
 
     if key == "toast" {
         Some(format!(
-            "unknown config section {header}; did you mean [ui.toast]? ignoring section"
+            "seção de configuração desconhecida {header}; você quis dizer [ui.toast]? seção ignorada"
         ))
     } else {
-        Some(format!("unknown config section {header}; ignoring section"))
+        Some(format!(
+            "seção de configuração desconhecida {header}; seção ignorada"
+        ))
     }
 }
 
@@ -536,7 +542,7 @@ fn unknown_config_key_diagnostics(
         .into_iter()
         .map(|path| {
             format!(
-                "unknown config key {}; ignoring key",
+                "opção de configuração desconhecida {}; opção ignorada",
                 format_config_key_path(&path)
             )
         })
@@ -578,7 +584,7 @@ fn load_live_section<T>(
         }
         Err(err) => {
             diagnostics.push(format!(
-                "invalid {label}: {err}; keeping current {section} settings"
+                "erro em {label}: {err}; mantendo configuração atual de {section}"
             ));
             invalid_sections.push(section.to_string());
         }
@@ -829,8 +835,8 @@ mod tests {
     #[test]
     fn config_diagnostic_summary_reports_unknown_keys_compactly() {
         let diagnostics = vec![
-            "unknown config key ui.mouse_captur; ignoring key".to_string(),
-            "unknown config key keys.new_tabb; ignoring key".to_string(),
+            "opção de configuração desconhecida ui.mouse_captur; opção ignorada".to_string(),
+            "opção de configuração desconhecida keys.new_tabb; opção ignorada".to_string(),
         ];
 
         assert_eq!(
@@ -842,8 +848,8 @@ mod tests {
     #[test]
     fn config_diagnostic_summary_keeps_mixed_diagnostics_generic() {
         let diagnostics = vec![
-            "invalid ui config: invalid type: string; keeping current ui settings".to_string(),
-            "unknown config key keys.new_tabb; ignoring key".to_string(),
+            "erro em configuração de interface: invalid type: string; mantendo configuração atual de ui".to_string(),
+            "opção de configuração desconhecida keys.new_tabb; opção ignorada".to_string(),
         ];
 
         assert_eq!(
@@ -855,7 +861,7 @@ mod tests {
     #[test]
     fn config_diagnostic_summary_reports_default_fallback() {
         let diagnostics = vec![
-            "config parse error: TOML parse error at line 33, column 8\n   |\n33 | type = \"popup\"\n   |        ^^^^^^^\nunknown variant `popup`; using defaults"
+            "erro de leitura da configuração TOML: TOML parse error at line 33, column 8\n   |\n33 | type = \"popup\"\n   |        ^^^^^^^\nunknown variant `popup`; usando padrões"
                 .to_string(),
         ];
 
@@ -867,14 +873,17 @@ mod tests {
 
     #[test]
     fn config_diagnostic_summary_reports_unreadable_config_impact() {
-        let startup = vec!["config read error: permission denied; using defaults".to_string()];
+        let startup =
+            vec!["erro ao ler a configuração: permission denied; usando padrões".to_string()];
         assert_eq!(
             config_diagnostic_summary(&startup).as_deref(),
             Some("config.toml ilegível; usando padrões; revise a configuração do Pretorian")
         );
 
-        let reload =
-            vec!["config read error: permission denied; keeping current config".to_string()];
+        let reload = vec![
+            "erro ao ler a configuração: permission denied; mantendo a configuração atual"
+                .to_string(),
+        ];
         assert_eq!(
             config_diagnostic_summary(&reload).as_deref(),
             Some("config.toml ilegível; mantendo configuração atual; revise a configuração do Pretorian")
@@ -884,7 +893,7 @@ mod tests {
     #[test]
     fn config_diagnostic_summary_reports_retained_live_config() {
         let diagnostics = vec![
-            "config parse error: TOML parse error at line 7, column 4; keeping current config"
+            "erro de leitura da configuração TOML: TOML parse error at line 7, column 4; mantendo a configuração atual"
                 .to_string(),
         ];
 
@@ -903,16 +912,14 @@ mod tests {
         std::env::set_var(CONFIG_PATH_ENV_VAR, &path);
 
         let startup = Config::load();
-        assert!(startup
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.contains("config read error")
-                && diagnostic.contains("using defaults")));
+        assert!(startup.diagnostics.iter().any(|diagnostic| diagnostic
+            .contains("erro ao ler a configuração")
+            && diagnostic.contains("usando padrões")));
 
         let reload = load_live_config().unwrap_err();
         assert!(reload.iter().any(|diagnostic| {
-            diagnostic.contains("config read error")
-                && diagnostic.contains("keeping current config")
+            diagnostic.contains("erro ao ler a configuração")
+                && diagnostic.contains("mantendo a configuração atual")
         }));
 
         std::env::remove_var(CONFIG_PATH_ENV_VAR);
@@ -963,7 +970,7 @@ delivery = "herdr"
 
         assert_eq!(
             loaded.diagnostics,
-            vec!["unknown config section [toast]; did you mean [ui.toast]? ignoring section"]
+            vec!["seção de configuração desconhecida [toast]; você quis dizer [ui.toast]? seção ignorada"]
         );
         assert!(loaded.invalid_sections.is_empty());
         assert_eq!(
@@ -1012,14 +1019,14 @@ claude = [["terminal_title"]]
         assert_eq!(
             loaded.diagnostics,
             vec![
-                "unknown config key plugin; ignoring key",
-                "unknown config key theme.custom.accentt; ignoring key",
-                "unknown config key keys.command.0.descrption; ignoring key",
-                "unknown config key keys.new_tabb; ignoring key",
-                "unknown config key ui.\"foo.?.bar\"; ignoring key",
-                "unknown config key ui.\"foo.bar\"; ignoring key",
-                "unknown config key ui.mouse_captur; ignoring key",
-                "unknown config key ui.toast.delivry; ignoring key",
+                "opção de configuração desconhecida plugin; opção ignorada",
+                "opção de configuração desconhecida theme.custom.accentt; opção ignorada",
+                "opção de configuração desconhecida keys.command.0.descrption; opção ignorada",
+                "opção de configuração desconhecida keys.new_tabb; opção ignorada",
+                "opção de configuração desconhecida ui.\"foo.?.bar\"; opção ignorada",
+                "opção de configuração desconhecida ui.\"foo.bar\"; opção ignorada",
+                "opção de configuração desconhecida ui.mouse_captur; opção ignorada",
+                "opção de configuração desconhecida ui.toast.delivry; opção ignorada",
             ]
         );
         assert!(loaded.invalid_sections.is_empty());
@@ -1069,8 +1076,8 @@ mouse_captur = true
         .unwrap();
 
         assert_eq!(loaded.diagnostics.len(), 1);
-        assert!(loaded.diagnostics[0].contains("invalid ui config"));
-        assert!(!loaded.diagnostics[0].starts_with("unknown config key"));
+        assert!(loaded.diagnostics[0].contains("erro em configuração de interface"));
+        assert!(!loaded.diagnostics[0].starts_with("opção de configuração desconhecida"));
         assert_eq!(loaded.invalid_sections, vec!["ui"]);
     }
 
@@ -1116,7 +1123,7 @@ delivery = "system"
 
         assert_eq!(
             loaded.diagnostics,
-            vec!["unknown config section [[plugin]]; ignoring section"]
+            vec!["seção de configuração desconhecida [[plugin]]; seção ignorada"]
         );
         assert_eq!(
             loaded.config.ui.toast.delivery,

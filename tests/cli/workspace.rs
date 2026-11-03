@@ -553,19 +553,19 @@ new_tabb = "ctrl+t"
     let stdout = String::from_utf8_lossy(&checked.stdout);
     assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(
-        stdout.contains("unknown config key made_up_toplevel; ignoring key"),
+        stdout.contains("opção de configuração desconhecida made_up_toplevel; opção ignorada"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("unknown config key \"made.up\"; ignoring key"),
+        stdout.contains("opção de configuração desconhecida \"made.up\"; opção ignorada"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("unknown config key ui.mouse_captur; ignoring key"),
+        stdout.contains("opção de configuração desconhecida ui.mouse_captur; opção ignorada"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("unknown config key keys.new_tabb; ignoring key"),
+        stdout.contains("opção de configuração desconhecida keys.new_tabb; opção ignorada"),
         "{stdout}"
     );
     assert!(!stdout.contains("commented_out"), "{stdout}");
@@ -592,10 +592,12 @@ fn config_check_reports_unknown_theme_names() {
     let stdout = String::from_utf8_lossy(&checked.stdout);
     assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
     assert!(
-        stdout.contains("unknown theme name theme.name = \"catppucin\"; using \"catppuccin\""),
+        stdout.contains(
+            "nome de tema desconhecido theme.name = \"catppucin\"; usando \"catppuccin\""
+        ),
         "{stdout}"
     );
-    assert!(stdout.contains("valid themes: catppuccin"), "{stdout}");
+    assert!(stdout.contains("temas válidos: catppuccin"), "{stdout}");
 
     cleanup_test_base(&base);
 }
@@ -613,8 +615,8 @@ fn config_check_reports_unreadable_config_path() {
     assert_eq!(checked.status.code(), Some(1));
     let stdout = String::from_utf8_lossy(&checked.stdout);
     assert!(stdout.contains("config: problemas encontrados"), "{stdout}");
-    assert!(stdout.contains("config read error"), "{stdout}");
-    assert!(stdout.contains("using defaults"), "{stdout}");
+    assert!(stdout.contains("erro ao ler a configuração"), "{stdout}");
+    assert!(stdout.contains("usando padrões"), "{stdout}");
 
     cleanup_test_base(&base);
 }

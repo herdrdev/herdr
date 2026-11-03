@@ -88,17 +88,17 @@ impl WindowTitleTemplate {
                         name.push(ch);
                     }
                     if !closed {
-                        return Err("has an unclosed '{'".to_string());
+                        return Err("contém '{' sem fechamento".to_string());
                     }
                     let Some(token) = WindowTitleToken::parse(name.trim()) else {
-                        return Err(format!("has unknown token '{{{name}}}'"));
+                        return Err(format!("contém marcador desconhecido '{{{name}}}'"));
                     };
                     if !literal.is_empty() {
                         parts.push(WindowTitlePart::Literal(std::mem::take(&mut literal)));
                     }
                     parts.push(WindowTitlePart::Token(token));
                 }
-                '}' => return Err("has an unmatched '}'".to_string()),
+                '}' => return Err("contém '}' sem abertura".to_string()),
                 _ => literal.push(ch),
             }
         }
@@ -123,7 +123,7 @@ impl WindowTitleTemplate {
 pub(crate) fn window_title_diagnostics(template: &str) -> Option<String> {
     WindowTitleTemplate::parse(template)
         .err()
-        .map(|err| format!("ui.window_title {err}; leaving the outer terminal title alone"))
+        .map(|err| format!("ui.window_title {err}; mantendo o título do terminal externo"))
 }
 
 #[cfg(test)]
@@ -166,13 +166,13 @@ mod tests {
     fn invalid_templates_report_diagnostics() {
         assert!(window_title_diagnostics("{hostname")
             .expect("diagnostic")
-            .contains("unclosed"));
+            .contains("sem fechamento"));
         assert!(window_title_diagnostics("a } b")
             .expect("diagnostic")
-            .contains("unmatched"));
+            .contains("sem abertura"));
         assert!(window_title_diagnostics("{session}")
             .expect("diagnostic")
-            .contains("unknown token '{session}'"));
+            .contains("marcador desconhecido '{session}'"));
     }
 
     #[test]

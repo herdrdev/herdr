@@ -208,7 +208,7 @@ impl ActionKeybinds {
             match parse_binding_string(label) {
                 Some(ParsedBinding::Single(binding)) => bindings.push(binding),
                 Some(ParsedBinding::Range(range)) => bindings.extend(range),
-                None => return Err(format!("invalid endpoint command binding: {label}")),
+                None => return Err(format!("atalho de comando do endpoint inválido: {label}")),
             }
         }
         Ok(Self { bindings })
@@ -786,13 +786,17 @@ fn reserve_navigate_runtime_keys(registry: &mut BindingRegistry) {
         (KeyCode::Left, KeyModifiers::empty()),
         (KeyCode::Right, KeyModifiers::empty()),
     ] {
-        registry.reserve_direct(combo, "navigate reserved keys", BindingSource::Default);
+        registry.reserve_direct(
+            combo,
+            "teclas reservadas para navegação",
+            BindingSource::Default,
+        );
     }
 
     for idx in '1'..='9' {
         registry.reserve_direct(
             (KeyCode::Char(idx), KeyModifiers::empty()),
-            "navigate reserved keys",
+            "teclas reservadas para navegação",
             BindingSource::Default,
         );
     }
@@ -809,7 +813,9 @@ fn append_custom_command_bindings(
         let command_field = format!("keys.command[{index}].command");
 
         if command.command.trim().is_empty() {
-            let diag = format!("empty custom command: {command_field}; disabling custom command");
+            let diag = format!(
+                "comando personalizado vazio: {command_field}; desativando comando personalizado"
+            );
             warn!(message = %diag, "config diagnostic");
             diagnostics.push(diag);
             continue;
@@ -837,7 +843,7 @@ fn append_custom_command_bindings(
         } else {
             if command.width.is_some() || command.height.is_some() {
                 let diag = format!(
-                    "popup size on non-popup custom command: keys.command[{index}]; ignoring width and height"
+                    "tamanho de popup em comando personalizado que não é popup: keys.command[{index}]; ignorando largura e altura"
                 );
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
@@ -879,12 +885,12 @@ fn parse_action_bindings(
                 bindings.push(binding);
             }
             Some(ParsedBinding::Range(_)) => {
-                let diag = format!("range keybinding is only valid for indexed actions: {field} = {raw:?}; disabling binding");
+                let diag = format!("intervalo de atalhos só é válido para ações indexadas: {field} = {raw:?}; desativando atalho");
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
             }
             None => {
-                let diag = format!("invalid keybinding: {field} = {raw:?}; disabling binding");
+                let diag = format!("atalho inválido: {field} = {raw:?}; desativando atalho");
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
             }
@@ -915,12 +921,12 @@ fn parse_navigate_bindings(
                 bindings.push(binding);
             }
             Some(ParsedBinding::Range(_)) => {
-                let diag = format!("range keybinding is only valid for indexed actions: {field} = {raw:?}; disabling binding");
+                let diag = format!("intervalo de atalhos só é válido para ações indexadas: {field} = {raw:?}; desativando atalho");
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
             }
             None => {
-                let diag = format!("invalid keybinding: {field} = {raw:?}; disabling binding");
+                let diag = format!("atalho inválido: {field} = {raw:?}; desativando atalho");
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
             }
@@ -959,7 +965,7 @@ fn parse_indexed_bindings(
                 }
             }
             None => {
-                let diag = format!("invalid keybinding: {field} = {raw:?}; disabling binding");
+                let diag = format!("atalho inválido: {field} = {raw:?}; desativando atalho");
                 warn!(message = %diag, "config diagnostic");
                 diagnostics.push(diag);
             }
@@ -978,7 +984,7 @@ fn push_indexed_binding(
 ) {
     if !matches!(binding.trigger.combo().0, KeyCode::Char('1'..='9')) {
         let diag = format!(
-            "indexed keybinding must use 1..9: {field} = {:?}; disabling binding",
+            "atalho indexado deve usar 1..9: {field} = {:?}; desativando atalho",
             binding.label
         );
         warn!(message = %diag, "config diagnostic");
@@ -1007,9 +1013,8 @@ fn append_legacy_indexed_bindings(
         return;
     }
     let Some(modifiers) = parse_modifier_combo(configured_label) else {
-        let diag = format!(
-            "invalid indexed keybinding: {field} = {configured_label:?}; disabling binding"
-        );
+        let diag =
+            format!("atalho indexado inválido: {field} = {configured_label:?}; desativando atalho");
         warn!(message = %diag, "config diagnostic");
         diagnostics.push(diag);
         return;
@@ -1044,7 +1049,7 @@ fn reject_navigate_binding(
 ) -> bool {
     if binding.trigger.is_prefix() {
         let diag = format!(
-            "navigate keybinding must not include prefix: {field} = {:?}; disabling binding",
+            "atalho de navegação não deve incluir prefixo: {field} = {:?}; desativando atalho",
             binding.label
         );
         warn!(message = %diag, "config diagnostic");
@@ -1054,7 +1059,7 @@ fn reject_navigate_binding(
 
     if matches!(normalize_key_combo(binding.trigger.combo()).0, KeyCode::Esc) {
         let diag = format!(
-            "navigate keybinding cannot use esc: {field} = {:?}; disabling binding",
+            "atalho de navegação não pode usar esc: {field} = {:?}; desativando atalho",
             binding.label
         );
         warn!(message = %diag, "config diagnostic");
@@ -1067,7 +1072,10 @@ fn reject_navigate_binding(
             return true;
         }
         let first_field = &first_binding.field;
-        let diag = format!("{}: kept {first_field}, disabled {field}", binding.label);
+        let diag = format!(
+            "{}: mantido {first_field}, desativado {field}",
+            binding.label
+        );
         warn!(message = %diag, "config diagnostic");
         diagnostics.push(diag);
         return true;
@@ -1088,7 +1096,7 @@ fn reject_binding(
             return true;
         }
         let diag = format!(
-            "reserved keybinding: {field} = {:?} uses keys.prefix as the prefix-mode key; pressing the prefix twice sends a literal prefix key, so this binding is disabled",
+            "atalho reservado: {field} = {:?} usa keys.prefix como tecla de prefixo; pressioná-la duas vezes envia a própria tecla, então este atalho foi desativado",
             binding.label
         );
         warn!(message = %diag, "config diagnostic");
@@ -1101,7 +1109,10 @@ fn reject_binding(
             return true;
         }
         let first_field = &first_binding.field;
-        let diag = format!("{}: kept {first_field}, disabled {field}", binding.label);
+        let diag = format!(
+            "{}: mantido {first_field}, desativado {field}",
+            binding.label
+        );
         warn!(message = %diag, "config diagnostic");
         diagnostics.push(diag);
         return true;
@@ -1110,7 +1121,7 @@ fn reject_binding(
     if binding.trigger.is_direct() && is_unmodified_printable(binding.trigger.combo()) {
         let suggestion = format!("prefix+{}", binding.label);
         let diag = format!(
-            "unsafe direct keybinding: {field} = {:?} would intercept typing; use {:?} to require the prefix; disabling binding",
+            "atalho direto inseguro: {field} = {:?} interceptaria a digitação; use {:?} para exigir o prefixo; desativando atalho",
             binding.label, suggestion
         );
         warn!(message = %diag, "config diagnostic");
@@ -1375,14 +1386,14 @@ fn parse_prefix_keys(config: &BindingConfig) -> (Vec<KeyCombo>, Option<String>, 
             Some(combo) if !combos.contains(&combo) => combos.push(combo),
             Some(_) => {}
             None => diagnostics.push(format!(
-                "invalid keybinding: keys.prefix = {raw:?}; ignoring prefix"
+                "atalho inválido: keys.prefix = {raw:?}; ignorando prefixo"
             )),
         }
     }
 
     if combos.is_empty() {
         let reject = Some(format!(
-            "invalid keybinding: keys.prefix; using fallback {}",
+            "atalho inválido: keys.prefix; usando alternativa {}",
             format_key_combo(DEFAULT_PREFIX)
         ));
         return (vec![DEFAULT_PREFIX], reject, diagnostics);
@@ -1749,15 +1760,15 @@ close_tab = "X"
         let keybinds = config.keybinds();
         assert!(keybinds.new_tab.bindings.is_empty());
         assert!(keybinds.close_tab.bindings.is_empty());
+        assert!(diagnostics
+            .iter()
+            .any(|diag| diag.contains("atalho direto inseguro") && diag.contains("keys.new_tab")));
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.contains("unsafe direct keybinding")
-                    && diag.contains("keys.new_tab"))
+                .any(|diag| diag.contains("atalho direto inseguro")
+                    && diag.contains("keys.close_tab"))
         );
-        assert!(diagnostics.iter().any(
-            |diag| diag.contains("unsafe direct keybinding") && diag.contains("keys.close_tab")
-        ));
     }
 
     #[test]
@@ -1954,7 +1965,7 @@ help = "prefix+ctrl+a"
         let diagnostics = config.collect_diagnostics();
         assert!(config.keybinds().help.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("reserved keybinding")
+            diag.contains("atalho reservado")
                 && diag.contains("keys.help")
                 && diag.contains("keys.prefix")
         }));
@@ -2008,7 +2019,7 @@ help = "prefix+ctrl+s"
         assert!(reserved
             .collect_diagnostics()
             .iter()
-            .any(|diag| diag.contains("reserved keybinding")));
+            .any(|diag| diag.contains("atalho reservado")));
     }
 
     #[test]
@@ -2027,7 +2038,7 @@ prefix = ["ctrl+a", "wat"]
         assert!(config
             .collect_diagnostics()
             .iter()
-            .any(|diag| diag.contains("keys.prefix") && diag.contains("ignoring prefix")));
+            .any(|diag| diag.contains("keys.prefix") && diag.contains("ignorando prefixo")));
     }
 
     #[test]
@@ -2109,8 +2120,8 @@ navigate_pane_down = "ctrl+j"
             .pane_down
             .matches_direct_key(&TerminalKey::new(KeyCode::Char('j'), KeyModifiers::CONTROL)));
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.navigate_workspace_up")
-                && diag.contains("disabled keys.navigate_workspace_down")
+            diag.contains("mantido keys.navigate_workspace_up")
+                && diag.contains("desativado keys.navigate_workspace_down")
         }));
     }
 
@@ -2131,8 +2142,8 @@ navigate_workspace_up = ["esc", "alt+esc", "enter", "1", "tab", "shift+tab", "le
             diagnostics
                 .iter()
                 .filter(|diag| {
-                    (diag.contains("navigate reserved keys")
-                        || diag.contains("navigate keybinding cannot use esc"))
+                    (diag.contains("teclas reservadas para navegação")
+                        || diag.contains("atalho de navegação não pode usar esc"))
                         && diag.contains("keys.navigate_workspace_up")
                 })
                 .count(),
@@ -2166,7 +2177,7 @@ command = "echo hi"
             .matches_direct_key(&TerminalKey::new(KeyCode::Char('f'), KeyModifiers::empty())));
         assert!(!keybinds.custom_commands.is_empty());
         assert!(!diagnostics.iter().any(|diag| {
-            diag.contains("disabled keys.navigate_workspace_down")
+            diag.contains("desativado keys.navigate_workspace_down")
                 && (diag.contains("keys.next_tab") || diag.contains("keys.command"))
         }));
     }
@@ -2205,11 +2216,11 @@ navigate_workspace_down = "ctrl+a"
         assert!(keybinds.navigate.workspace_up.bindings.is_empty());
         assert!(keybinds.navigate.workspace_down.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("navigate keybinding must not include prefix")
+            diag.contains("atalho de navegação não deve incluir prefixo")
                 && diag.contains("keys.navigate_workspace_up")
         }));
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.prefix") && diag.contains("keys.navigate_workspace_down")
+            diag.contains("mantido keys.prefix") && diag.contains("keys.navigate_workspace_down")
         }));
     }
 
@@ -2229,7 +2240,7 @@ command = "echo no"
         let diagnostics = config.collect_diagnostics();
         assert!(config.keybinds().custom_commands.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("reserved keybinding") && diag.contains("keys.command[0].key")
+            diag.contains("atalho reservado") && diag.contains("keys.command[0].key")
         }));
     }
 
@@ -2248,7 +2259,7 @@ command = "echo no"
         let diagnostics = config.collect_diagnostics();
         assert!(config.keybinds().custom_commands.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("unsafe direct keybinding") && diag.contains("keys.command[0].key")
+            diag.contains("atalho direto inseguro") && diag.contains("keys.command[0].key")
         }));
     }
 
@@ -2270,7 +2281,7 @@ command = "echo no"
         assert!(!keybinds.new_tab.bindings.is_empty());
         assert!(keybinds.custom_commands.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.new_tab") && diag.contains("disabled keys.command[0].key")
+            diag.contains("mantido keys.new_tab") && diag.contains("desativado keys.command[0].key")
         }));
     }
 
@@ -2329,7 +2340,7 @@ tabs = "bogus"
 
         assert!(kb.switch_tab.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("invalid indexed keybinding") && diag.contains("keys.indexed.tabs")
+            diag.contains("atalho indexado inválido") && diag.contains("keys.indexed.tabs")
         }));
     }
 
@@ -2355,10 +2366,10 @@ switch_tab = "prefix+?"
             ))]
         );
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("indexed keybinding must use 1..9") && diag.contains("keys.switch_tab")
+            diag.contains("atalho indexado deve usar 1..9") && diag.contains("keys.switch_tab")
         }));
         assert!(!diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.switch_tab") && diag.contains("disabled keys.help")
+            diag.contains("mantido keys.switch_tab") && diag.contains("desativado keys.help")
         }));
     }
 
@@ -2433,7 +2444,7 @@ new_workspace = "prefix+n"
         let kb = config.keybinds();
         assert!(kb.next_tab.bindings.is_empty() || kb.new_workspace.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.new_workspace") && diag.contains("disabled keys.next_tab")
+            diag.contains("mantido keys.new_workspace") && diag.contains("desativado keys.next_tab")
         }));
     }
 
@@ -2501,8 +2512,8 @@ swap_pane_right = "prefix+shift+l"
         );
         assert!(kb.swap_pane_right.bindings.is_empty());
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("kept keys.previous_workspace")
-                && diag.contains("disabled keys.swap_pane_right")
+            diag.contains("mantido keys.previous_workspace")
+                && diag.contains("desativado keys.swap_pane_right")
         }));
     }
 
@@ -2569,9 +2580,12 @@ width = "80%"
 
         let keybinds = config.keybinds();
         assert_eq!(keybinds.custom_commands[0].width, None);
-        assert!(config
-            .collect_diagnostics()
-            .iter()
-            .any(|diag| diag.contains("popup size on non-popup custom command")));
+        assert!(
+            config
+                .collect_diagnostics()
+                .iter()
+                .any(|diag| diag
+                    .contains("tamanho de popup em comando personalizado que não é popup"))
+        );
     }
 }
