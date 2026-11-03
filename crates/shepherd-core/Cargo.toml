@@ -1,0 +1,22 @@
+[package]
+name = "shepherd-core"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Domain logic for the Shepherd multi-agent orchestrator"
+
+[lib]
+name = "shepherd_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "shepherd"
+path = "src/main.rs"
+
+[dependencies]
+getrandom = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+serde_yaml_ng = "0.10.0"
+unicode-normalization = "0.1.26"
+

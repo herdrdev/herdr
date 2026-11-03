@@ -1,0 +1,12 @@
+{
+  "plan": "## Subtasks\n\n### 1. Token model\n- Depends on: none\n- Verify: go test ./auth\n\n### 2. Login endpoint\n- Depends on: 1\n- Verify: go test ./api\n",
+  "fallback_title": "Whole task",
+  "subtasks": [
+    {"number": 1, "title": "Token model", "depends_on": [], "verify": ["go test ./auth"]},
+    {"number": 2, "title": "Login endpoint", "depends_on": [1], "verify": ["go test ./api"]}
+  ],
+  "review": "VERDICT: APPROVE\n\nCRITERIA\n- [x] login works\n- [x] refresh works\n\nCOMMENTS\n- none\n",
+  "want_criteria": 2,
+  "acceptance": "# Acceptance criteria\n\n- [ ] login works\n- [ ] refresh works\n",
+  "criteria_count": 2
+}
