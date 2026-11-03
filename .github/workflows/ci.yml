@@ -65,7 +65,8 @@ jobs:
           - os: windows-latest
             kind: windows
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # Temporário com o runner Intel: cache frio em x86_64 leva ~10 min só no clippy. Voltar a 15.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
