@@ -1682,3 +1682,63 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
 }
+
+#[test]
+fn empty_workspace_name_suggestion_is_localized() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.open_new_workspace_overlay();
+    assert!(
+        matches!(state.overlay.as_ref(), Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        input, target: ClientRenameTarget::NewWorkspace { cwd: None, suggested_name, .. }, ..
+    })) if input.as_str() == "espaco" && suggested_name == "espaco")
+    );
+}
+
+#[test]
+fn worktree_status_is_localized_without_changing_search() {
+    for (aberta, desanexada, busca, exibicao) in [
+        (true, false, "open", "aberta"),
+        (false, false, "root", "principal"),
+        (false, true, "detached", "desanexada"),
+    ] {
+        let entry = ClientWorktreeOpenEntry {
+            path: "/repo".into(),
+            branch: None,
+            is_linked_worktree: desanexada,
+            is_detached: desanexada,
+            open_workspace_id: aberta.then(|| "ws_1".to_owned()),
+            label: "repo".into(),
+        };
+        assert!(entry.matches_query(busca));
+        assert!(entry.matches_query(exibicao));
+        assert!(entry.matches_query("/repo"));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.overlay = Some(ClientShellOverlay::WorktreeOpen(
+            ClientWorktreeOpenOverlay {
+                source_workspace_id: "ws_1".into(),
+                entries: vec![entry],
+                selected: 0,
+                query: TextEditor::default(),
+                search_focused: false,
+                error: None,
+                opening: false,
+            },
+        ));
+        let frame = state.compose(106, 30).expect("worktree modal");
+        let text = frame_rows(&frame).join("\n");
+        assert!(text.contains(exibicao), "{text}");
+    }
+    let ramo = ClientWorktreeOpenEntry {
+        path: "/caminho/repositorio".into(),
+        branch: Some("feature/nova".into()),
+        is_linked_worktree: true,
+        is_detached: false,
+        open_workspace_id: None,
+        label: "projeto".into(),
+    };
+    assert!(ramo.matches_query("feature/nova"));
+    assert!(ramo.matches_query("/caminho/repositorio"));
+    assert!(!ramo.matches_query("ramo-ausente"));
+}

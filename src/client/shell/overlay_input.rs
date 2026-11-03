@@ -350,7 +350,7 @@ impl ClientShellState {
             .as_deref()
             .map(std::path::Path::new)
             .map(crate::workspace::derive_label_from_cwd)
-            .unwrap_or_else(|| "workspace".to_owned());
+            .unwrap_or_else(|| "espaco".to_owned());
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
             title: "novo espaço",
             input: TextEditor::new(&suggested_name, true),

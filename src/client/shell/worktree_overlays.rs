@@ -222,7 +222,7 @@ pub(super) fn render_worktree_open_overlay(
             &format!(" {}", entry.label),
             style.add_modifier(Modifier::BOLD),
         );
-        let status = entry.status_label();
+        let status = entry.display_status_label();
         if !status.is_empty() {
             put_right_text(b, rect, rect.y, status, style);
         }

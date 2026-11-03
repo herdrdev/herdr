@@ -675,3 +675,50 @@ fn mobile_switcher_scroll_close_and_width_transition_clear_mobile_hits() {
     assert!(state.hits.mobile_close.is_empty());
     assert!(state.hits.mobile_targets.is_empty());
 }
+
+#[test]
+fn mobile_agent_defaults_are_localized_and_custom_labels_are_preserved() {
+    for (status, labels, nome, esperado) in [
+        (AgentStatus::Working, vec![], None, "trabalhando · agente"),
+        (AgentStatus::Blocked, vec![], None, "aguardando · agente"),
+        (AgentStatus::Done, vec![], None, "concluído · agente"),
+        (AgentStatus::Idle, vec![], None, "livre · agente"),
+        (AgentStatus::Unknown, vec![], None, "livre · agente"),
+        (
+            AgentStatus::Blocked,
+            vec![("blocked".into(), "waiting".into())],
+            Some("Nome externo"),
+            "waiting · Nome externo",
+        ),
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut projected = snapshot();
+        projected.agents.push(ClientShellAgent {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: nome.map(str::to_string),
+            display_agent: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: status,
+            state_change_seq: 1,
+            state_labels: labels,
+            tokens: Vec::new(),
+            focused: true,
+        });
+        state.set_snapshot(Box::new(projected));
+        for endpoint in &mut state.endpoints {
+            if let Some(snapshot) = endpoint.snapshot.as_mut() {
+                snapshot.agents[0].agent_status = status;
+            }
+        }
+        state.set_pane_surface(surface());
+        state.mode = ClientShellMode::Navigate;
+        let frame = state.compose(44, 30).expect("mobile switcher");
+        let text = frame_rows(&frame).join("\n");
+        assert!(text.contains(esperado), "{text}");
+    }
+}

@@ -455,15 +455,25 @@ impl ClientWorktreeOpenEntry {
         }
     }
 
+    pub(super) fn display_status_label(&self) -> &'static str {
+        match self.status_label() {
+            "open" => "aberta",
+            "root" => "principal",
+            "detached" => "desanexada",
+            status => status,
+        }
+    }
+
     pub(super) fn matches_query(&self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         query.is_empty()
             || format!(
-                "{} {} {} {}",
+                "{} {} {} {} {}",
                 self.label,
                 self.branch.as_deref().unwrap_or_default(),
                 self.path,
-                self.status_label()
+                self.status_label(),
+                self.display_status_label()
             )
             .to_lowercase()
             .contains(&query)

@@ -3020,3 +3020,12 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
 }
+
+#[test]
+fn endpoint_sidebar_new_workspace_label_is_localized() {
+    let (mut state, _) = state_with_remote();
+    state.config.mouse_capture = true;
+    let frame = state.compose(106, 30).expect("sidebar");
+    let text = frame_rows(&frame).join("\n");
+    assert!(text.contains("novo ·"), "{text}");
+}

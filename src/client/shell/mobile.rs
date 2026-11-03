@@ -652,7 +652,7 @@ fn mobile_items(
                 .as_deref()
                 .or(agent.name.as_deref())
                 .or(agent.agent.as_deref())
-                .unwrap_or("agent");
+                .unwrap_or("agente");
             let primary = workspace
                 .map(|workspace| workspace.label.as_str())
                 .unwrap_or(agent_label);
@@ -674,11 +674,14 @@ fn mobile_items(
                     .find(|(key, _)| key == status_key)
                     .map(|(_, label)| label.clone())
                     .unwrap_or_else(|| {
-                        if agent.agent_status == crate::api::schema::AgentStatus::Unknown {
-                            "idle".to_owned()
-                        } else {
-                            status_key.to_owned()
+                        use crate::api::schema::AgentStatus;
+                        match agent.agent_status {
+                            AgentStatus::Working => "trabalhando",
+                            AgentStatus::Blocked => "aguardando",
+                            AgentStatus::Done => "concluído",
+                            AgentStatus::Idle | AgentStatus::Unknown => "livre",
                         }
+                        .to_owned()
                     }),
             );
             detail.push(agent_label.to_owned());
