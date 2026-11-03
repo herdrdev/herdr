@@ -10,10 +10,10 @@ pub(crate) enum ConfigEdit<'a> {
 impl ConfigEdit<'_> {
     pub(crate) fn description(self) -> &'static str {
         match self {
-            Self::Theme(_) => "theme",
-            Self::StatusIndicators(_) => "status indicators",
-            Self::Sound(_) => "sound setting",
-            Self::ToastDelivery(_) => "toast setting",
+            Self::Theme(_) => "tema",
+            Self::StatusIndicators(_) => "indicadores de estado",
+            Self::Sound(_) => "configuração de som",
+            Self::ToastDelivery(_) => "configuração de avisos",
             Self::Nome(_) => "nome do usuário",
         }
     }
@@ -60,20 +60,22 @@ pub(crate) fn update_file_at(
     update: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create config directory: {error}"))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!("não foi possível criar o diretório de configuração: {error}")
+        })?;
     }
     let content = match super::io::read_optional_config(path) {
         Ok(Some(content)) => content,
         Ok(None) => String::new(),
         Err(error) => {
             return Err(format!(
-                "failed to read config before saving {description}: {error}"
+                "não foi possível ler a configuração antes de salvar {description}: {error}"
             ));
         }
     };
     let updated = update(&content)?;
-    std::fs::write(path, updated).map_err(|error| format!("failed to save {description}: {error}"))
+    std::fs::write(path, updated)
+        .map_err(|error| format!("não foi possível salvar {description}: {error}"))
 }
 
 pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {

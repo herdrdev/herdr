@@ -64,7 +64,7 @@ impl TryFrom<RawRule> for SidebarTokenRule {
         .count();
         if count != 1 {
             return Err(
-                "sidebar rule requires exactly one of equals, contains, starts_with, gt, lt".into(),
+                "a regra da barra lateral exige exatamente um entre equals, contains, starts_with, gt, lt".into(),
             );
         }
         let condition = if let Some(value) = raw.equals {
@@ -80,10 +80,12 @@ impl TryFrom<RawRule> for SidebarTokenRule {
                 _ => unreachable!("validated condition count"),
             };
             if !value.is_finite() {
-                return Err("sidebar numeric rule threshold must be finite".into());
+                return Err("o limite numérico da regra da barra lateral deve ser finito".into());
             }
             if raw.ignore_case.is_some() {
-                return Err("ignore_case applies only to sidebar text conditions".into());
+                return Err(
+                    "ignore_case só se aplica a condições de texto da barra lateral".into(),
+                );
             }
             if greater {
                 Condition::GreaterThan(value)

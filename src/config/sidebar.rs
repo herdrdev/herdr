@@ -25,7 +25,7 @@ where
 fn validate_sidebar_rows<T>(rows: &[Vec<T>]) -> Result<(), String> {
     if rows.len() > MAX_SIDEBAR_ROWS {
         return Err(format!(
-            "sidebar layouts may contain at most {MAX_SIDEBAR_ROWS} rows"
+            "a barra lateral pode ter no máximo {MAX_SIDEBAR_ROWS} linhas"
         ));
     }
     if rows
@@ -33,7 +33,7 @@ fn validate_sidebar_rows<T>(rows: &[Vec<T>]) -> Result<(), String> {
         .any(|row| row.len() > MAX_SIDEBAR_TOKENS_PER_ROW)
     {
         return Err(format!(
-            "sidebar rows may contain at most {MAX_SIDEBAR_TOKENS_PER_ROW} tokens"
+            "cada linha da barra lateral pode ter no máximo {MAX_SIDEBAR_TOKENS_PER_ROW} marcadores"
         ));
     }
     Ok(())
@@ -74,7 +74,7 @@ impl<'de> Deserialize<'de> for SidebarTokenColor {
         });
         let Some(hex) = hex else {
             return Err(serde::de::Error::custom(
-                "sidebar token fg must be #RGB or #RRGGBB",
+                "fg do marcador da barra lateral deve ser #RGB ou #RRGGBB",
             ));
         };
         let (r, g, b) = if hex.len() == 3 {
@@ -197,12 +197,14 @@ impl RawSidebarToken {
             Self::Plain(token) => Ok((token, None, Vec::new())),
             Self::Styled(token) => {
                 if token.rules.len() > 16 {
-                    return Err("sidebar tokens may contain at most 16 rules".into());
+                    return Err("marcadores da barra lateral podem ter no máximo 16 regras".into());
                 }
                 if !token.rules.is_empty()
                     && matches!(token.token.as_str(), "state_icon" | "git_status")
                 {
-                    return Err("sidebar rules require a text-valued token".into());
+                    return Err(
+                        "regras da barra lateral exigem um marcador com valor de texto".into(),
+                    );
                 }
                 Ok((
                     token.token,
@@ -227,7 +229,7 @@ where
     }
     let Some(name) = value.strip_prefix('$') else {
         return Err(format!(
-            "unknown sidebar token `{value}`; custom tokens must start with `$`"
+            "marcador desconhecido da barra lateral `{value}`; marcadores personalizados começam com `$`"
         ));
     };
     if name.is_empty()
@@ -236,7 +238,9 @@ where
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
     {
-        return Err(format!("invalid custom sidebar token `{value}`"));
+        return Err(format!(
+            "marcador personalizado inválido da barra lateral `{value}`"
+        ));
     }
     Ok(T::from(name.to_string()))
 }
@@ -411,7 +415,7 @@ where
     for (id, rows) in &rows_by_agent {
         if crate::detect::parse_canonical_agent_label(id).is_none() {
             return Err(serde::de::Error::custom(format!(
-                "unknown canonical agent id `{id}` in sidebar rows_by_agent"
+                "id canônico de agente desconhecido `{id}` em rows_by_agent da barra lateral"
             )));
         }
         validate_sidebar_rows(rows).map_err(serde::de::Error::custom)?;

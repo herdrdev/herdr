@@ -19,25 +19,28 @@ impl PopupSize {
 
     pub(crate) fn parse_cli(value: &str) -> Result<Self, String> {
         if let Some(percent) = value.strip_suffix('%') {
-            let percent = percent
-                .parse::<u8>()
-                .map_err(|_| "must be a number of cells or a percentage like 80%".to_string())?;
+            let percent = percent.parse::<u8>().map_err(|_| {
+                "deve ser um número de células ou uma porcentagem como 80%".to_string()
+            })?;
             if !(1..=100).contains(&percent) {
-                return Err("percentage must be between 1% and 100%".to_string());
+                return Err("a porcentagem deve ficar entre 1% e 100%".to_string());
             }
             return Ok(Self::Percent(percent));
         }
         value
             .parse::<u16>()
             .map(Self::Cells)
-            .map_err(|_| "must be a number of cells or a percentage like 80%".to_string())
+            .map_err(|_| "deve ser um número de células ou uma porcentagem como 80%".to_string())
     }
 
     fn parse_percent_string(value: &str) -> Result<Self, String> {
         if value.ends_with('%') {
             return Self::parse_cli(value);
         }
-        Err("string sizes must be percentages like 80%; use a number for cells".to_string())
+        Err(
+            "tamanhos em texto devem ser porcentagens como 80%; use um número para células"
+                .to_string(),
+        )
     }
 }
 
@@ -112,15 +115,15 @@ impl<'de> Deserialize<'de> for PopupSize {
             type Value = PopupSize;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                formatter.write_str("a cell count or percentage string like 80%")
+                formatter.write_str("um número de células ou uma porcentagem como 80%")
             }
 
             fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
-                let value =
-                    u16::try_from(value).map_err(|_| E::custom("cell count must fit in u16"))?;
+                let value = u16::try_from(value)
+                    .map_err(|_| E::custom("o número de células deve caber em u16"))?;
                 Ok(PopupSize::Cells(value))
             }
 
@@ -129,7 +132,7 @@ impl<'de> Deserialize<'de> for PopupSize {
                 E: serde::de::Error,
             {
                 let value = u16::try_from(value)
-                    .map_err(|_| E::custom("cell count must be between 0 and 65535"))?;
+                    .map_err(|_| E::custom("o número de células deve ficar entre 0 e 65535"))?;
                 Ok(PopupSize::Cells(value))
             }
 

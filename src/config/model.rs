@@ -161,7 +161,7 @@ impl<'de> Deserialize<'de> for RightClickPassthroughModifierConfig {
             .map(Self)
             .ok_or_else(|| {
                 de::Error::custom(
-                    "right_click_passthrough_modifier must be empty, off, none, disabled, ctrl/control, alt/option, cmd/command/super, meta, hyper, or a + separated combination without shift",
+                    "right_click_passthrough_modifier deve ser vazio, off, none, disabled, ctrl/control, alt/option, cmd/command/super, meta, hyper ou uma combinação separada por + sem shift",
                 )
             })
     }
@@ -910,7 +910,7 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
             type Value = PaneBordersConfig;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("\"auto\", \"always\", \"off\", or a legacy boolean")
+                formatter.write_str("\"auto\", \"always\", \"off\" ou um booleano antigo")
             }
 
             fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
@@ -1300,7 +1300,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
         let delay_seconds = raw.delay_seconds.unwrap_or(default.delay_seconds);
         if delay_seconds > MAX_TOAST_DELAY_SECONDS {
             return Err(de::Error::custom(format!(
-                "ui.toast.delay_seconds must be between 0 and {MAX_TOAST_DELAY_SECONDS}"
+                "ui.toast.delay_seconds deve ficar entre 0 e {MAX_TOAST_DELAY_SECONDS}"
             )));
         }
         Ok(Self {
@@ -1510,12 +1510,12 @@ status_indicators = "symbols"
         let unknown = toml::from_str::<Config>("[ui]\npane_borders = \"framed\"")
             .unwrap_err()
             .to_string();
-        assert!(unknown.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+        assert!(unknown.contains("\"auto\", \"always\", \"off\" ou um booleano antigo"));
 
         let wrong_type = toml::from_str::<Config>("[ui]\npane_borders = 3")
             .unwrap_err()
             .to_string();
-        assert!(wrong_type.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+        assert!(wrong_type.contains("\"auto\", \"always\", \"off\" ou um booleano antigo"));
     }
 
     #[test]
@@ -1965,7 +1965,7 @@ delay_seconds = {}
 
         let error = toml::from_str::<Config>(&toml).unwrap_err().to_string();
 
-        assert!(error.contains("ui.toast.delay_seconds must be between 0 and 3600"));
+        assert!(error.contains("ui.toast.delay_seconds deve ficar entre 0 e 3600"));
     }
 
     #[test]
