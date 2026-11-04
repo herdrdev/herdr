@@ -69,7 +69,7 @@ pub(super) fn render_worktree_create_overlay(
             Style::default().fg(p.red).bg(p.panel_bg),
         );
     }
-    let buttons = row(inner, &[20, 12], 2, 9);
+    let buttons = row(inner, &[20, 14], 2, 9);
     let [primary, cancel] = buttons.as_slice() else {
         return None;
     };
@@ -268,7 +268,7 @@ pub(super) fn render_worktree_open_overlay(
             Style::default().fg(p.red).bg(p.panel_bg),
         );
     }
-    let buttons = row(inner, &[10, 12], 2, inner.height.saturating_sub(1));
+    let buttons = row(inner, &[10, 14], 2, inner.height.saturating_sub(1));
     let [primary, cancel] = buttons.as_slice() else {
         return None;
     };
@@ -376,7 +376,7 @@ pub(super) fn render_worktree_remove_overlay(
             Style::default().fg(p.red).bg(p.panel_bg),
         );
     }
-    let buttons = row(inner, &[24, 12], 2, 7);
+    let buttons = row(inner, &[24, 14], 2, 7);
     let [primary, cancel] = buttons.as_slice() else {
         return None;
     };
