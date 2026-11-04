@@ -49,7 +49,7 @@ Pré-requisitos (uma vez por máquina):
 
 - [rustup](https://rustup.rs) — a versão do Rust vem de `rust-toolchain.toml` e é instalada automaticamente no primeiro build.
 - [Zig 0.16.0](https://ziglang.org/download/) no `PATH` (ou aponte `ZIG=/caminho/para/zig`): compila o `libghostty-vt` vendorizado.
-- [just](https://github.com/casey/just) (opcional; os comandos crus estão abaixo).
+- [just](https://github.com/casey/just) atual, via `cargo install just` (opcional; os comandos crus estão abaixo). O pacote `just` do Ubuntu 24.04 é antigo e não lê este `justfile`.
 
 macOS e Linux:
 
@@ -60,7 +60,7 @@ just instalar          # ou: cargo build --release --locked && install -m 755 ta
 pretorian
 ```
 
-Até a proposta ser incorporada em `master`, acrescente `-b trabalho/interface-pretorian` ao `git clone`. `just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
+`just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
 
 Windows x64 (PowerShell, com rustup, Zig e Python 3 instalados; o script baixa o ConPTY da Microsoft):
 
