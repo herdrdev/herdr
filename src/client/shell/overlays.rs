@@ -1279,7 +1279,7 @@ fn render_confirm_close_overlay(
         &format!(" {}", c.detail),
         Style::default().fg(p.text).bg(p.panel_bg),
     );
-    let rs = row(i, &[13, 12], 2, 3);
+    let rs = row(i, &[13, 14], 2, 3);
     let [ok, cancel] = rs.as_slice() else {
         return None;
     };
