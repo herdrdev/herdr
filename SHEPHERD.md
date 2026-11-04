@@ -372,3 +372,16 @@ Revisado tras el agente: el overlay Tareas/Runs/Skills, `AppState`, la sincroniz
 ### Nota del revisor (F3c)
 
 Verificado por áreas (la suite completa de herdr no se puede cerrar en este entorno: el binario de tests muere por SIGPIPE en tests ajenos, ya antes de F3c): `client::shell` 388, `shepherd::` 42, `protocol::` 156, `api::` 318, `server::` 318, `shepherd-core` 63, todo en verde. Intermitentes que fallan solo en paralelo y pasan en solitario: `plugins::*injects_plugin_paths*`, `config::io::tests::config_diagnostic_summary_uses_compact_actionable_banner`. Nunca probado contra un herdr real.
+
+## Prueba aislada (2026-11-04) — hallazgos
+
+Binario del fork (`target/debug/herdr`), sesión `iso`, `HOME`/`XDG_*` temporales, dentro de tmux. Notas de método: el build de desarrollo lee `$XDG_CONFIG_HOME/herdr-dev/config.toml` (no `herdr/`); el servicio guarda su registro en `<config>/sessions/<sesión>/shepherd/agents.json`.
+
+Funciona: con `shepherd.enabled=true` el overlay se abre con `prefix+a`; `shepherd.call` por el socket responde (`tasks`, `runs`, `skills`, `agents`, `task_create` creó y listó una tarea real en `.shepherd/tasks/`).
+
+Fallos reales:
+1. **El overlay no puede hablar con el servicio**: `ShepherdCall` está declarado en `src/api/schema.rs` con `client_shell=false`, así que el cliente muestra «Action unavailable: This server does not support shepherd.call yet» ante cualquier acción. (Arreglar exige añadir el método a las huellas de contrato de `src/server/client_commands.rs` como método aditivo.)
+2. **Marco doble en el overlay**: el marco «Shepherd» contiene otro marco «Shepherd Tareas … esc close» propio de la vista; sobra uno.
+3. **Arranque bloqueado con un registro no vacío**: `resume_on_startup` llama a `terminals.agent_status` de forma síncrona por el canal interno de la App durante el arranque, cuando la App aún no atiende; da `method=resume error=timeout`, el servidor tarda más de 15 s en estar listo y no reanuda nada. Con registro vacío arranca bien.
+
+No verificado: marcadores y aviso en la barra lateral con un agente de Shepherd real (por el fallo 3 no pude sembrar uno), lanzar agentes, ratón en el overlay.
