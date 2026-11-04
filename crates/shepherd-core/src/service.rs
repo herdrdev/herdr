@@ -790,6 +790,11 @@ impl OrchestrationService {
                             agent.notice.clear();
                             changed = true;
                         }
+                        if agent.state == "blocked" {
+                            agent.state = if agent.mcp { "idle".into() } else { "working".into() };
+                            agent.updated = now_str.clone();
+                            changed = true;
+                        }
                         if agent.mcp {
                             if agent.state != "done" && agent.state != "idle" {
                                 agent.state = "idle".into();
@@ -840,6 +845,9 @@ impl OrchestrationService {
             if changed {
                 self.save_registry(&registry)?;
             }
+
+            self.deliver_pending_non_mcp_messages(&mut registry);
+
             Ok(registry)
         })();
         self.log_err("reconcile", result)
@@ -1645,13 +1653,266 @@ impl OrchestrationService {
             }
         }
     }
+
+    fn deliver_pending_non_mcp_messages(&self, registry: &mut AgentRegistryFile) {
+        let bus = match self.bus() {
+            Ok(b) => b,
+            Err(e) => {
+                self.record_failure(
+                    "deliver_bus_messages",
+                    &format!("cannot open message bus: {e}"),
+                );
+                return;
+            }
+        };
+
+        let mut registry_dirty = false;
+        let reg_snapshot = registry.clone();
+
+        for agent in &mut registry.agents {
+            // Only live non-MCP agents (not mcp, not gone, not done, not starting)
+            if agent.mcp || agent.gone() || agent.state == "done" || agent.state == "starting" {
+                continue;
+            }
+
+            let messages = match bus.since(agent.delivery_cursor) {
+                Ok(all) => {
+                    let mut msgs: Vec<Message> = all
+                        .into_iter()
+                        .filter(|m| m.to == agent.id && m.kind != KIND_SYSTEM)
+                        .collect();
+                    msgs.sort_by_key(|m| m.id);
+                    msgs
+                }
+                Err(e) => {
+                    self.record_failure(
+                        "deliver_bus_messages",
+                        &format!(
+                            "cannot read bus since {} for agent {}: {e}",
+                            agent.delivery_cursor, agent.id
+                        ),
+                    );
+                    continue;
+                }
+            };
+
+            if messages.is_empty() {
+                continue;
+            }
+
+            // Only type when pane is free (idle and quiet screen, not blocked, not working)
+            if !self.is_pane_free_for_delivery(agent) {
+                continue;
+            }
+
+            let target = if !agent.pane.is_empty() {
+                agent.pane.clone()
+            } else {
+                agent.id.clone()
+            };
+
+            for msg in messages {
+                if !self.is_pane_free_for_delivery(agent) {
+                    break;
+                }
+
+                let line = format_shep_message(&msg.from, &msg.content, &reg_snapshot);
+                let delivered =
+                    self.deliver_single_message_with_retries(agent, &target, msg.id, &line);
+                if delivered {
+                    agent.delivery_cursor = msg.id;
+                    agent.updated = self.clock.now_rfc3339();
+                    registry_dirty = true;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if registry_dirty {
+            if let Err(e) = self.save_registry(registry) {
+                self.record_failure(
+                    "deliver_bus_messages",
+                    &format!("cannot save registry after message delivery: {e}"),
+                );
+            }
+        }
+    }
+
+    fn is_pane_free_for_delivery(&self, agent: &Agent) -> bool {
+        if !agent.notice.is_empty() || agent.state == "blocked" {
+            return false;
+        }
+
+        let st = if !agent.id.is_empty() {
+            if let Ok(st) = self.terminals.agent_status(&agent.id) {
+                if st.status != "unknown" {
+                    Some(st)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let status = match st {
+            Some(s) => s,
+            None => {
+                let target = if !agent.pane.is_empty() {
+                    &agent.pane
+                } else {
+                    &agent.id
+                };
+                match self.terminals.agent_status(target) {
+                    Ok(s) => s,
+                    Err(_) => return false,
+                }
+            }
+        };
+
+        if status.state == "finished" || status.status != "idle" {
+            return false;
+        }
+
+        let s1 = self.read_screen_best_effort(agent);
+        self.clock.sleep(Duration::from_millis(50));
+        let s2 = self.read_screen_best_effort(agent);
+
+        s1 == s2
+    }
+
+    fn read_screen_best_effort(&self, agent: &Agent) -> String {
+        let targets = [&agent.pane, &agent.id];
+        for t in targets {
+            if !t.is_empty() {
+                if let Ok(screen) = self.terminals.read_screen(t, 200) {
+                    if !screen.is_empty() {
+                        return screen;
+                    }
+                }
+            }
+        }
+        for t in targets {
+            if !t.is_empty() {
+                if let Ok(screen) = self.terminals.read_screen(t, 200) {
+                    return screen;
+                }
+            }
+        }
+        String::new()
+    }
+
+    fn deliver_single_message_with_retries(
+        &self,
+        agent: &Agent,
+        target: &str,
+        msg_id: i64,
+        line: &str,
+    ) -> bool {
+        let max_retries = self.service_config.max_prompt_resends;
+        let total_attempts = 1 + max_retries;
+        let reaction_timeout_ms = self.service_config.reaction_timeout.as_millis() as u64;
+        let poll_interval = self.service_config.reaction_poll_interval;
+
+        for attempt in 0..total_attempts {
+            if let Err(e) = self.terminals.send_text(target, line) {
+                if attempt + 1 == total_attempts {
+                    self.record_failure(
+                        "deliver_bus_messages",
+                        &format!(
+                            "cannot send text to {target} for message {msg_id} after {max_retries} retries: {e}"
+                        ),
+                    );
+                }
+                continue;
+            }
+
+            let check_start_ms = self.clock.now_ms();
+            let mut verified = false;
+            let normalized_line: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+
+            loop {
+                let screen = self.read_screen_best_effort(agent);
+                if screen.contains(line) {
+                    verified = true;
+                    break;
+                }
+                let normalized_screen: String =
+                    screen.split_whitespace().collect::<Vec<_>>().join(" ");
+                if normalized_screen.contains(&normalized_line) {
+                    verified = true;
+                    break;
+                }
+
+                if self.clock.now_ms().saturating_sub(check_start_ms) >= reaction_timeout_ms {
+                    break;
+                }
+                self.clock.sleep(poll_interval);
+            }
+
+            if verified {
+                return true;
+            }
+        }
+
+        self.record_failure(
+            "deliver_bus_messages",
+            &format!(
+                "message {msg_id} delivered to agent {} in pane {target} was not verified on screen after {max_retries} retries",
+                agent.id
+            ),
+        );
+        false
+    }
+}
+
+pub const MAX_DELIVERED_MESSAGE_LEN: usize = 500;
+
+pub fn format_shep_sender(from: &str, registry: &AgentRegistryFile) -> String {
+    if let Some(agent) = registry.agents.iter().find(|a| a.id == from) {
+        if let Some((role, num)) = agent.id.rsplit_once('-') {
+            if !role.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
+                return format!("{role}#{num}");
+            }
+        }
+        return format!("{}#{}", agent.role, agent.seq);
+    }
+    if let Some((role, num)) = from.rsplit_once('-') {
+        if !role.is_empty() && num.chars().all(|c| c.is_ascii_digit()) {
+            return format!("{role}#{num}");
+        }
+    }
+    from.to_owned()
+}
+
+pub fn format_shep_content(content: &str) -> String {
+    let replaced = content
+        .replace("\r\n", " ")
+        .replace('\n', " ")
+        .replace('\r', " ");
+    let char_count = replaced.chars().count();
+    if char_count > MAX_DELIVERED_MESSAGE_LEN {
+        let truncated: String = replaced.chars().take(MAX_DELIVERED_MESSAGE_LEN).collect();
+        format!("{truncated}…")
+    } else {
+        replaced
+    }
+}
+
+pub fn format_shep_message(from: &str, content: &str, registry: &AgentRegistryFile) -> String {
+    let sender = format_shep_sender(from, registry);
+    let clean_content = format_shep_content(content);
+    format!("[shep] from {sender}: {clean_content}")
 }
 
 fn status_query_target(agent: &Agent) -> String {
-    if !agent.id.is_empty() {
-        agent.id.clone()
-    } else {
+    if !agent.pane.is_empty() {
         agent.pane.clone()
+    } else {
+        agent.id.clone()
     }
 }
 
@@ -2398,5 +2659,415 @@ mod tests {
         });
         let archived = service.handle_call("task_archive", archive_args).unwrap();
         assert_eq!(archived["archived"], true);
+    }
+
+    #[test]
+    fn format_exact_sender_and_content_truncation() {
+        let mut registry = AgentRegistryFile::default();
+        let a1 = registry.create(
+            Agent {
+                role: "coder".into(),
+                ..Agent::default()
+            },
+            "token".into(),
+            "2026-04-20T00:00:00Z",
+        );
+        assert_eq!(a1.id, "coder-1");
+        assert_eq!(format_shep_sender("coder-1", &registry), "coder#1");
+        assert_eq!(format_shep_sender("brain-20", &registry), "brain#20");
+        assert_eq!(format_shep_sender("user", &registry), "user");
+
+        let custom = Agent {
+            id: "special_agent".into(),
+            seq: 7,
+            role: "reviewer".into(),
+            ..Agent::default()
+        };
+        registry.agents.push(custom);
+        assert_eq!(format_shep_sender("special_agent", &registry), "reviewer#7");
+
+        let newlines = "first\nsecond\r\nthird\rfourth";
+        assert_eq!(format_shep_content(newlines), "first second third fourth");
+
+        let short_content = "short content";
+        assert_eq!(format_shep_content(short_content), "short content");
+
+        let long_content = "a".repeat(520);
+        let truncated = format_shep_content(&long_content);
+        assert_eq!(truncated.chars().count(), 501);
+        assert!(truncated.ends_with('…'));
+        assert_eq!(&truncated[..500], &"a".repeat(500));
+
+        let formatted = format_shep_message("coder-1", "hello\nworld", &registry);
+        assert_eq!(formatted, "[shep] from coder#1: hello world");
+    }
+
+    #[test]
+    fn req7_deliver_bus_messages_order_once_non_mcp_and_persists_cursor() {
+        let tmp = TestDir::new("test");
+        let (service, terminals, _clock) = test_service(tmp.path());
+
+        // Spawn non-MCP agent (docs) and MCP agent (coder)
+        let non_mcp = service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "docs".into(),
+                task: "doc-task".into(),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+        assert!(!non_mcp.mcp);
+
+        let mcp = service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "coder".into(),
+                task: "code-task".into(),
+                mcp_url: Some("http://127.0.0.1:9999/mcp".into()),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+        assert!(mcp.mcp);
+
+        // Set non-MCP agent to idle and give it a screen
+        terminals.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "idle".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 10,
+            },
+        );
+        terminals.set_screen(&non_mcp.pane, "docs-shell$ ");
+
+        // Set MCP agent to idle
+        terminals.set_status(
+            &mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "idle".into(),
+                pane: mcp.pane.clone(),
+                tab: mcp.tab.clone(),
+                title: mcp.label.clone(),
+                seq: 10,
+            },
+        );
+        terminals.set_screen(&mcp.pane, "mcp-shell$ ");
+
+        // Send messages to the bus
+        let bus = service.bus().unwrap();
+        let _m1 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "first instruction".into(),
+            })
+            .unwrap();
+        let m2 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "second instruction\nmultiline".into(),
+            })
+            .unwrap();
+        let _m3 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: mcp.id.clone(),
+                kind: "msg".into(),
+                content: "for mcp agent".into(),
+            })
+            .unwrap();
+        let _m4 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: "user".into(),
+                kind: "msg".into(),
+                content: "for user".into(),
+            })
+            .unwrap();
+
+        // Run reconcile tick
+        let reg = service.reconcile_once().unwrap();
+
+        // 1. Check delivery to non-MCP agent: exact format, newlines as spaces, order
+        let sent = terminals.sent_text();
+        let non_mcp_sent: Vec<_> = sent
+            .iter()
+            .filter(|(target, _)| target == &non_mcp.pane || target == &non_mcp.id)
+            .map(|(_, text)| text.as_str())
+            .collect();
+
+        assert_eq!(
+            non_mcp_sent,
+            vec![
+                "[shep] from brain#1: first instruction",
+                "[shep] from brain#1: second instruction multiline"
+            ]
+        );
+
+        // 2. Neither MCP agent nor user received typed messages
+        assert!(
+            !sent.iter().any(|(t, _)| t == &mcp.pane || t == &mcp.id),
+            "MCP agents must NOT receive typed messages in terminal"
+        );
+        assert!(
+            !sent.iter().any(|(t, _)| t == "user"),
+            "user messages must NOT be typed"
+        );
+
+        // 3. Cursor advanced to m2.id
+        let updated_non_mcp = reg.result(&non_mcp.id).unwrap();
+        assert_eq!(updated_non_mcp.delivery_cursor, m2.id);
+
+        // 4. Second reconcile tick does not re-deliver
+        let sent_len_before = terminals.sent_text().len();
+        service.reconcile_once().unwrap();
+        assert_eq!(
+            terminals.sent_text().len(),
+            sent_len_before,
+            "messages must be delivered only once"
+        );
+
+        // 5. Restart service: cursor persists from disk, previously delivered messages are not resent
+        let (service2, terminals2, _clock2) = test_service(tmp.path());
+        terminals2.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "idle".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 11,
+            },
+        );
+        terminals2.set_screen(&non_mcp.pane, "docs-shell$ ");
+
+        service2.reconcile_once().unwrap();
+        assert!(
+            terminals2.sent_text().is_empty(),
+            "cursor must persist across service restart"
+        );
+
+        // Send a new message after restart -> only the new message is delivered
+        let m5 = service2
+            .bus()
+            .unwrap()
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "coder-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "third instruction".into(),
+            })
+            .unwrap();
+
+        let reg2 = service2.reconcile_once().unwrap();
+        let sent2 = terminals2.sent_text();
+        assert_eq!(sent2.len(), 1);
+        assert_eq!(sent2[0].1, "[shep] from coder#1: third instruction");
+        assert_eq!(reg2.result(&non_mcp.id).unwrap().delivery_cursor, m5.id);
+    }
+
+    #[test]
+    fn req7_deliver_bus_messages_blocked_working_and_terminal_states() {
+        let tmp = TestDir::new("test");
+        let (service, terminals, _clock) = test_service(tmp.path());
+
+        let non_mcp = service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "docs".into(),
+                task: "doc-task".into(),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+        terminals.set_screen(&non_mcp.pane, "shell$ ");
+
+        let bus = service.bus().unwrap();
+        let m1 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "do not type yet".into(),
+            })
+            .unwrap();
+
+        // 1. Working: pane is busy -> no delivery
+        terminals.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "working".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 1,
+            },
+        );
+        let reg = service.reconcile_once().unwrap();
+        assert!(terminals.sent_text().is_empty());
+        assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, 0);
+
+        // 2. Blocked: trust dialog -> no delivery
+        terminals.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "blocked".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 2,
+            },
+        );
+        let reg = service.reconcile_once().unwrap();
+        assert!(terminals.sent_text().is_empty());
+        assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, 0);
+
+        // 3. Released to idle -> delivery succeeds!
+        terminals.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "idle".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 3,
+            },
+        );
+        let reg = service.reconcile_once().unwrap();
+        assert_eq!(terminals.sent_text().len(), 1);
+        assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, m1.id);
+
+        // 4. Agent transitions to "done" -> further messages are NOT delivered
+        let mut reg_file = service.load_registry().unwrap();
+        reg_file.agents[0].state = "done".into();
+        service.save_registry(&reg_file).unwrap();
+
+        let _m2 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "agent is already done".into(),
+            })
+            .unwrap();
+
+        let sent_before = terminals.sent_text().len();
+        service.reconcile_once().unwrap();
+        assert_eq!(
+            terminals.sent_text().len(),
+            sent_before,
+            "done agents must NOT receive messages"
+        );
+
+        // 5. Agent transitions to "exited" (gone) -> no delivery
+        let mut reg_file = service.load_registry().unwrap();
+        reg_file.agents[0].state = "exited".into();
+        service.save_registry(&reg_file).unwrap();
+
+        let _m3 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "agent is exited".into(),
+            })
+            .unwrap();
+
+        service.reconcile_once().unwrap();
+        assert_eq!(
+            terminals.sent_text().len(),
+            sent_before,
+            "gone agents must NOT receive messages"
+        );
+    }
+
+    #[test]
+    fn req7_deliver_bus_messages_retry_on_verification_failure() {
+        let tmp = TestDir::new("test");
+        let (service, terminals, _clock) = test_service(tmp.path());
+
+        let non_mcp = service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "docs".into(),
+                task: "doc-task".into(),
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+        terminals.set_status(
+            &non_mcp.id,
+            TerminalAgentStatus {
+                state: "live".into(),
+                status: "idle".into(),
+                pane: non_mcp.pane.clone(),
+                tab: non_mcp.tab.clone(),
+                title: non_mcp.label.clone(),
+                seq: 1,
+            },
+        );
+        terminals.set_screen(&non_mcp.pane, "shell$ ");
+
+        let bus = service.bus().unwrap();
+        let m1 = bus
+            .send(Message {
+                id: 0,
+                ts: String::new(),
+                from: "brain-1".into(),
+                to: non_mcp.id.clone(),
+                kind: "msg".into(),
+                content: "needs verification".into(),
+            })
+            .unwrap();
+
+        // Disable echo on send_text so verification fails
+        terminals.set_echo_on_send_text(false);
+
+        // Reconcile tick runs, retries 3 times, records failure, does NOT fail tick
+        let reg = service.reconcile_once().unwrap();
+        assert_eq!(
+            reg.result(&non_mcp.id).unwrap().delivery_cursor,
+            0,
+            "cursor must not advance if verification fails"
+        );
+
+        // Check service log has the failure recorded
+        let log_content =
+            std::fs::read_to_string(tmp.path().join("state").join("service.log")).unwrap_or_default();
+        assert!(log_content.contains("was not verified on screen"));
+
+        // Now enable echo on send_text and run next tick -> succeeds and advances cursor!
+        terminals.set_echo_on_send_text(true);
+        let reg = service.reconcile_once().unwrap();
+        assert_eq!(
+            reg.result(&non_mcp.id).unwrap().delivery_cursor,
+            m1.id,
+            "cursor must advance when verification succeeds"
+        );
     }
 }

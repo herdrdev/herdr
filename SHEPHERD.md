@@ -791,3 +791,130 @@ Observaciones:
 - `get_task_context` devuelve «this agent has no task context» cuando el agente se lanza sin `task_id` (esperable, pero el prompt del coder le manda llamarlo primero).
 - Los worktrees se crean bajo el `HOME` con el que corre el servidor: con `SHF_HOME` real se crearon en `~/.herdr/worktrees/` (limpiados a mano); la config de confianza de claude/codex/agy conserva la entrada `/tmp/shfiso/repo`.
 - Sigue el fallo de los agentes **sin MCP** (agy): los mensajes del bus no se teclean en su terminal.
+
+## Estado F3g (2026-11-04)
+
+Implementación del repartidor de mensajes del bus a terminal para agentes vivos y sin MCP (`mcp: false`), con cursor de entrega persistente, cautelas de pantalla quieta, reintentos y tolerancia a fallos.
+
+### Lo hecho
+
+1. **Cursor de entrega persistente y retrocompatible**:
+   - En `crates/shepherd-core/src/lib.rs`, se añadió `#[serde(default)] pub delivery_cursor: i64` a la estructura `Agent`.
+   - Se serializa y persiste de forma duradera en `agents.json`, sobreviviendo a reinicios del servicio sin duplicar ni perder mensajes.
+
+2. **Repartidor de mensajes a terminal (`service.rs`)**:
+   - En cada tick del bucle de reconciliación (`reconcile_once`), se evalúan los agentes vivos y sin MCP (`!agent.mcp && !agent.gone() && !agent.terminal() && agent.state != "starting"`).
+   - Se leen los mensajes del bus dirigidos al agente (`to == agent.id`) cuyo `id > agent.delivery_cursor`. Los mensajes `to == "user"` nunca se entregan.
+   - Formateo exacto según especificación: `[shep] from <rol>#<n>: <contenido>` (remitente derivado de rol y seq del agente en el registro, e.g. `brain#1`; una sola línea con `\n`/`\r` convertidos a espacios; contenido recortado con `…` hasta un máximo razonable de 500 caracteres).
+   - Cautelas aplicadas antes de teclear:
+     - El agente debe estar en estado libre (`agent.state == "idle"` o `"working"`, pero su estado de terminal en herdr debe ser `"idle"`).
+     - No debe tener avisos de bloqueo (`agent.notice.is_empty()`) ni estar bloqueado.
+     - La pantalla del pane debe estar quieta (delta de pantalla durante 50 ms).
+   - Verificación y reintentos:
+     - Tras teclear el mensaje mediante `send_text`, se verifica que el texto aparezca en la pantalla del pane esperando con polling hasta `reaction_timeout`.
+     - Si la verificación falla, se reintenta hasta 3 veces (`max_prompt_resends`).
+     - Solo tras verificar la aparición del texto se avanza y persiste `delivery_cursor = msg.id`.
+     - Si un mensaje falla tras los reintentos, se registra la incidencia en `service.log` y el tick de reconciliación continúa sin abortar.
+
+3. **Soporte en mock `InMemoryTerminals`**:
+   - Soporte de eco configurable en `send_text` (`set_echo_on_send_text(bool)`).
+   - Sincronización de estados entre `agent.id` y `agent.pane` en `set_status` y `remove_status`.
+
+4. **Tests con fakes (`InMemoryTerminals` + reloj inyectado)**:
+   - `format_exact_sender_and_content_truncation`: formato exacto `[shep] from <rol>#<n>: <contenido>`, roles desconocidos / fallback seq, eliminación de saltos de línea y truncado con `…`.
+   - `req7_deliver_bus_messages_order_once_non_mcp_and_persists_cursor`: entrega ordenada, una sola vez, exclusión de agentes MCP y destinatario `"user"`, y persistencia del cursor tras reinicio del servicio.
+   - `req7_deliver_bus_messages_blocked_working_and_terminal_states`: omisión durante estados ocupados/bloqueados, entrega inmediata al liberarse el pane a `idle`, y exclusión de agentes terminados (`done`, `exited`).
+   - `req7_deliver_bus_messages_retry_on_verification_failure`: 3 reintentos ante fallos de verificación en pantalla, registro del fallo en `service.log` sin tumbar el tick, y entrega exitosa posterior.
+
+### Verificación real con `./scripts/shepherd-iso.sh` (sin agentes reales)
+
+Se configuró un entorno aislado mediante `./scripts/shepherd-iso.sh` con el siguiente procedimiento exacto:
+1. `seed` con un `agents.json` de prueba conteniendo dos agentes:
+   - Destino sin MCP: `id: "coder-1"`, `role: "coder"`, `vendor: "gemini"`, `mcp: false`, `pane: "w1:p1"`, `delivery_cursor: 0`.
+   - Remitente con MCP: `id: "brain-1"`, `role: "brain"`, `vendor: "claude"`, `mcp: true`, `token: "token-brain-f3g-verify-42"`.
+2. Arranque del servidor con `./scripts/shepherd-iso.sh start`.
+3. Reporte del pane `w1:p1` como agente herdr en estado `idle`:
+   `call pane.report_agent '{"pane_id":"w1:p1","source":"herdr:test","agent":"agy","state":"idle"}'`.
+4. Envío de mensaje MCP por HTTP (puerto local obtenido con `ss -ltnp | grep herdr`):
+   ```bash
+   curl -s -X POST "http://127.0.0.1:$PORT/mcp" \
+     -H "Authorization: Bearer token-brain-f3g-verify-42" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"send_message","arguments":{"to":"coder-1","content":"hola coder-1 desde brain"}}}'
+   ```
+   Respuesta del MCP: `{"id":1,"jsonrpc":"2.0","result":{"content":[{"text":"delivered message 1 to coder-1","type":"text"}],"isError":false}}`.
+5. Espera de 3 segundos para el tick del bucle de reconciliación (intervalo 2 s).
+6. Captura de pantalla (`./scripts/shepherd-iso.sh screen`):
+
+```text
+ spaces                     │   1      +
+                            │apolo@apolo:/tmp/shfiso/repo$ [shep] from brain#1: hola coder-1 desde brain
+ ○ repo                     │[shep]: command not found
+   master                   │apolo@apolo:/tmp/shfiso/repo$
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+ new                    menu│
+────────────────────────────│
+ agents              grouped│
+                            │
+ ○ repo [working]           │
+   agy                      │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                            │
+                           «│
+```
+
+El mensaje `[shep] from brain#1: hola coder-1 desde brain` fue tecleado limpiamente en el pane de la terminal, ejecutado por la shell activa, y el cursor de entrega de `coder-1` en `agents.json` avanzó de `0` a `1`.
+7. Parada limpia con `./scripts/shepherd-iso.sh stop`.
+
+### Archivos tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/lib.rs` | Modificación | Añadido campo `#[serde(default)] pub delivery_cursor: i64` a la estructura `Agent`. |
+| `crates/shepherd-core/src/service.rs` | Modificación | Implementación del formateador `[shep] from ...`, comprobación de pane libre/pantalla quieta, reintentos de verificación en pantalla, integración de `deliver_pending_non_mcp_messages` en `reconcile_once`, y tests unitarios. |
+| `crates/shepherd-core/src/terminals.rs` | Modificación | Soporte de eco en `send_text` para `InMemoryTerminals` y sincronización bidireccional de `pane`/`id` en `set_status` / `remove_status`. |
+| `SHEPHERD.md` | Documentación | Registro de Estado F3g, capturas y notas de verificación. |
+
+### Qué NO queda conectado (explícito)
+
+1. **Agentes reales de línea de comandos sin MCP**:
+   - No se invocaron binarios reales de agentes CLI externos (p. ej. procesos reales de `agy` contra APIs externas de LLM) por directiva explícita del brief; la verificación se realizó con el terminal pane real de herdr (shell de bash) y el servidor MCP loopback HTTP.
+2. **Skill `shepherd-comms`**:
+   - El texto existente en `crates/shepherd-core/assets/skills/shepherd-comms/SKILL.md` bajo «Without MCP» promete exactamente el comportamiento implementado (`[shep] from <role>#<n>: ...`), por lo que no requirió modificaciones adicionales.
+

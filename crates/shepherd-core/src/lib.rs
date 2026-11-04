@@ -276,6 +276,8 @@ pub struct Agent {
     pub notice: String,
     #[serde(default)]
     pub has_result: bool,
+    #[serde(default)]
+    pub delivery_cursor: i64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
     pub started: String,

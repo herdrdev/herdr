@@ -1025,12 +1025,17 @@ struct InMemoryState {
     pub focused: Vec<String>,
     pub create_real_worktrees: bool,
     pub disable_auto_react: bool,
+    pub disable_echo_on_send_text: bool,
     pub on_prompt: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
 }
 
 impl InMemoryTerminals {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_echo_on_send_text(&self, enabled: bool) {
+        self.inner.lock().unwrap().disable_echo_on_send_text = !enabled;
     }
 
     pub fn with_real_worktrees() -> Self {
@@ -1056,11 +1061,21 @@ impl InMemoryTerminals {
     }
 
     pub fn set_status(&self, target: impl Into<String>, status: TerminalAgentStatus) {
-        self.inner.lock().unwrap().statuses.insert(target.into(), status);
+        let mut state = self.inner.lock().unwrap();
+        let target_str = target.into();
+        if !status.pane.is_empty() && status.pane != target_str {
+            state.statuses.insert(status.pane.clone(), status.clone());
+        }
+        state.statuses.insert(target_str, status);
     }
 
     pub fn remove_status(&self, target: &str) {
-        self.inner.lock().unwrap().statuses.remove(target);
+        let mut state = self.inner.lock().unwrap();
+        if let Some(removed) = state.statuses.remove(target) {
+            if !removed.pane.is_empty() && removed.pane != target {
+                state.statuses.remove(&removed.pane);
+            }
+        }
     }
 
     pub fn put_open_pane(
@@ -1200,7 +1215,37 @@ impl Terminals for InMemoryTerminals {
     }
 
     fn send_text(&self, target: &str, text: &str) -> Result<(), TerminalError> {
-        self.inner.lock().unwrap().sent_text.push((target.to_owned(), text.to_owned()));
+        let mut state = self.inner.lock().unwrap();
+        state.sent_text.push((target.to_owned(), text.to_owned()));
+        if !state.disable_echo_on_send_text {
+            let mut updated = false;
+            if let Some(screen) = state.screens.get_mut(target) {
+                if !screen.ends_with('\n') && !screen.is_empty() {
+                    screen.push('\n');
+                }
+                screen.push_str(text);
+                screen.push('\n');
+                updated = true;
+            }
+            if !updated {
+                let alternate = state.statuses.get(target).and_then(|s| {
+                    if s.pane != target && !s.pane.is_empty() {
+                        Some(s.pane.clone())
+                    } else {
+                        None
+                    }
+                });
+                if let Some(alt) = alternate {
+                    if let Some(screen) = state.screens.get_mut(&alt) {
+                        if !screen.ends_with('\n') && !screen.is_empty() {
+                            screen.push('\n');
+                        }
+                        screen.push_str(text);
+                        screen.push('\n');
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
