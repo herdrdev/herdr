@@ -780,10 +780,22 @@ fn parse_subtask_heading(line: &str) -> Option<(u32, String)> {
 }
 
 fn field_value<'a>(line: &'a str, field: &str) -> Option<&'a str> {
-    let line = line.trim().trim_start_matches(|c| c == '-' || c == '*').trim();
-    let line = line.trim_matches('*').trim();
     let (key, value) = line.split_once(':')?;
-    key.trim().eq_ignore_ascii_case(field).then_some(value.trim())
+    let key = key
+        .trim()
+        .trim_start_matches(|c: char| c == '-' || c == '*' || c == '_' || c.is_whitespace())
+        .trim_end_matches(|c: char| c == '*' || c == '_' || c.is_whitespace());
+    if !key.eq_ignore_ascii_case(field) {
+        return None;
+    }
+    let mut value = value.trim();
+    while let Some(stripped) = value.strip_prefix('*').or_else(|| value.strip_prefix('_')) {
+        value = stripped.trim_start();
+    }
+    while let Some(stripped) = value.strip_suffix("**").or_else(|| value.strip_suffix("__")) {
+        value = stripped.trim_end();
+    }
+    Some(value)
 }
 
 fn strip_backticks(value: &str) -> &str {
@@ -1040,6 +1052,57 @@ mod tests {
         assert_eq!(parsed[0].verify, ["cargo test -p api"]);
         assert_eq!(parsed[1].depends_on, [1]);
         assert!(validate_plan(&parsed).is_ok());
+    }
+
+    #[test]
+    fn field_value_tolerates_markdown_bold_and_list_markers() {
+        assert_eq!(field_value("- **Verify:** `cmd`", "verify"), Some("`cmd`"));
+        assert_eq!(field_value("**Verify**: cmd", "verify"), Some("cmd"));
+        assert_eq!(field_value("* **Depends on:** 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("Verify: cmd", "verify"), Some("cmd"));
+        assert_eq!(field_value("- Verify: `cmd`", "verify"), Some("`cmd`"));
+        assert_eq!(field_value("- Verify: cmd", "verify"), Some("cmd"));
+        assert_eq!(field_value("* Depends on: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("Depends on: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("* **Depends on**: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("- **Depends on**: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("**Depends on:** 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("**Depends on**: 1, 2", "depends on"), Some("1, 2"));
+        assert_eq!(field_value("- **Depends on:** none", "depends on"), Some("none"));
+        assert_eq!(field_value("- **Depends on:** **none**", "depends on"), Some("none"));
+        assert_eq!(field_value("- **Verify:** `printf 'hello from shepherd' | cmp - hello.txt && echo OK`", "verify"), Some("`printf 'hello from shepherd' | cmp - hello.txt && echo OK`"));
+        assert_eq!(field_value("Verify: ls *", "verify"), Some("ls *"));
+        assert_eq!(field_value("Verify: echo 'a: b'", "verify"), Some("echo 'a: b'"));
+        assert_eq!(field_value("- **Verify:** **`cmd`**", "verify"), Some("`cmd`"));
+        assert_eq!(field_value("__Verify:__ `cmd`", "verify"), Some("`cmd`"));
+        assert_eq!(field_value("__Verify__: cmd", "verify"), Some("cmd"));
+        assert_eq!(field_value("**VERDICT:** APPROVE", "verdict"), Some("APPROVE"));
+        assert_eq!(field_value("**VERDICT**: APPROVE", "verdict"), Some("APPROVE"));
+        assert_eq!(field_value("VERDICT: **APPROVE**", "verdict"), Some("APPROVE"));
+        assert_eq!(field_value("**VERDICT:** **APPROVE**", "verdict"), Some("APPROVE"));
+    }
+
+    #[test]
+    fn parse_plan_handles_markdown_bold_verify_and_dependencies() {
+        let plan = r#"
+### 1. First
+- **Verify:** `printf 'hello from shepherd' | cmp - hello.txt && echo OK`
+
+### 2. Second
+**Verify**: cmd
+* **Depends on:** 1
+
+### 3. Third
+Verify: plain_cmd
+Depends on: 1, 2
+"#;
+        let parsed = parse_plan(plan, "fallback");
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].verify, ["printf 'hello from shepherd' | cmp - hello.txt && echo OK"]);
+        assert_eq!(parsed[1].verify, ["cmd"]);
+        assert_eq!(parsed[1].depends_on, [1]);
+        assert_eq!(parsed[2].verify, ["plain_cmd"]);
+        assert_eq!(parsed[2].depends_on, [1, 2]);
     }
 
     #[test]

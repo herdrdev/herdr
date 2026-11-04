@@ -1713,3 +1713,24 @@ Cuando una llamada al servidor falla o da error, no se emite un `[]` silencioso;
    - La actualización del estado de un run en el overlay se realiza tras cada acción humana o apertura del modal; no existe suscripción push websocket/evento en tiempo real para el progreso de subhilos de un run en curso.
 3. **Múltiples aprobadores o políticas avanzadas de gates**:
    - La aprobación de gate es actualmente 1:1 por subtarea o plan. Políticas multi-firma o aprobaciones escalonadas quedan para fases posteriores.
+
+## Estado F6b (2026-11-04)
+
+Corrección en el parser de planes (`field_value` en `crates/shepherd-core/src/lib.rs`) para tolerar negritas Markdown (`**` y `__`) antes y después de los dos puntos en campos como `Verify`, `Depends on` y `Verdict`.
+
+### Contexto del fallo
+
+En pruebas reales con brains LLM, se guardó un plan con la línea:
+`- **Verify:** `printf 'hello from shepherd' | cmp - hello.txt && echo OK``
+El parser anterior recortaba únicamente los `*` del principio de la línea antes de hacer `split_once(':')`. Como la línea no terminaba en `*` (terminaba en backtick), los asteriscos de cierre de la clave (`Verify:**`) quedaban intactos en el valor (`** `printf ...``), convirtiendo el comando en basura y provocando que el subtask pasara a `needs-human` (exit 127). Asimismo, formatos como `**Verify**: cmd` fallaban completamente al quedar `Verify**` como clave no coincidente.
+
+### Cambios realizados
+
+1. **Corrección de `field_value` (`crates/shepherd-core/src/lib.rs`)**:
+   - `split_once(':')` divide primero clave y valor.
+   - La clave se limpia de prefijos de lista (`-`, `*`), negritas (`**`, `*`, `__`, `_`) y espacios tanto al inicio como al final.
+   - El valor recorta los asteriscos/guiones bajos de apertura o cierre de negrita generados tras los dos puntos (`**`, `*`, `__`, `_`), respetando comandos que legítimamente contengan `*` o `:` internamente (como `Verify: ls *`).
+2. **Pruebas añadidas con TDD**:
+   - Tests unitarios en `crates/shepherd-core/src/lib.rs` verificando `- **Verify:** `cmd``, `**Verify**: cmd`, `* **Depends on:** 1, 2`, `Verify: cmd`, formas sin negritas y con viñetas, así como variantes con `none`, comandos reales de prueba y veredictos en reviews.
+   - Suite completa de `shepherd-core` (90 tests) y suites por áreas (`shepherd::` 52, `client::shell` 391, `protocol::` 156, `server::` 318) verificadas y en verde.
+   - Comprobación de `./scripts/rename-from-herdr.sh --check` completamente limpia.
