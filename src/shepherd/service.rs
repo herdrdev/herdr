@@ -39,6 +39,7 @@ pub struct ShepherdRuntimeService {
     mcp_server: Option<RunningMcpServer>,
     call_worker: Option<JoinHandle<()>>,
     reconcile_worker: Option<JoinHandle<()>>,
+    resume_done: Arc<AtomicBool>,
 }
 
 impl ShepherdRuntimeService {
@@ -93,20 +94,29 @@ impl ShepherdRuntimeService {
         core.set_mcp_url(Some(mcp_url));
         let core = Arc::new(core);
 
-        // Requirement 4: Resume on startup before accepting calls.
-        let initial_registry = core.resume_on_startup()?;
+        // Load initial registry without blocking startup; resume runs deferred on the service thread.
+        let initial_registry = core.load_registry().unwrap_or_default();
         let latest_registry = Arc::new(Mutex::new(initial_registry));
 
         let (call_tx, call_rx) = mpsc::channel::<ShepherdCallJob>();
         let stop_flag = Arc::new((Mutex::new(false), Condvar::new()));
         let running = Arc::new(AtomicBool::new(true));
+        let resume_done = Arc::new(AtomicBool::new(false));
 
         let core_for_calls = Arc::clone(&core);
         let reg_for_calls = Arc::clone(&latest_registry);
+        let resume_done_calls = Arc::clone(&resume_done);
         let call_worker = std::thread::Builder::new()
             .name("shepherd-call-worker".into())
             .spawn(move || {
                 while let Ok(job) = call_rx.recv() {
+                    if !resume_done_calls.swap(true, Ordering::SeqCst) {
+                        if let Ok(reg) = core_for_calls.resume_on_startup() {
+                            if let Ok(mut guard) = reg_for_calls.lock() {
+                                *guard = reg;
+                            }
+                        }
+                    }
                     let result = core_for_calls.handle_call(&job.op, job.args);
                     if let Ok(reg) = core_for_calls.load_registry() {
                         if let Ok(mut guard) = reg_for_calls.lock() {
@@ -138,6 +148,7 @@ impl ShepherdRuntimeService {
             let core_for_rec = Arc::clone(&core);
             let reg_for_rec = Arc::clone(&latest_registry);
             let stop_for_rec = Arc::clone(&stop_flag);
+            let resume_done_rec = Arc::clone(&resume_done);
             let interval = core.service_config().reconcile_interval;
             Some(
                 std::thread::Builder::new()
@@ -153,9 +164,11 @@ impl ShepherdRuntimeService {
                                 break;
                             }
                             drop(guard);
-                            if let Ok(reg) = core_for_rec.reconcile_once() {
-                                if let Ok(mut latest) = reg_for_rec.lock() {
-                                    *latest = reg;
+                            if resume_done_rec.load(Ordering::SeqCst) {
+                                if let Ok(reg) = core_for_rec.reconcile_once() {
+                                    if let Ok(mut latest) = reg_for_rec.lock() {
+                                        *latest = reg;
+                                    }
                                 }
                             }
                         }
@@ -175,6 +188,7 @@ impl ShepherdRuntimeService {
             mcp_server: Some(mcp_server),
             call_worker: Some(call_worker),
             reconcile_worker,
+            resume_done,
         })
     }
 
@@ -210,6 +224,17 @@ impl ShepherdRuntimeService {
             .lock()
             .map(|g| g.clone())
             .unwrap_or_default()
+    }
+
+    /// Ensure startup resume has completed on the service thread.
+    pub fn ensure_resumed(&self) {
+        if !self.resume_done.swap(true, Ordering::SeqCst) {
+            if let Ok(reg) = self.core.resume_on_startup() {
+                if let Ok(mut guard) = self.latest_registry.lock() {
+                    *guard = reg;
+                }
+            }
+        }
     }
 
     /// Enqueue an asynchronous `shepherd.call` request so the caller (`App` / `HeadlessServer`)
@@ -344,11 +369,11 @@ mod tests {
         .unwrap();
 
         assert!(svc.is_running());
+        // At startup before any call is processed, cached registry is served as-is from disk
         let cached = svc.cached_registry();
-        let resumed_brain = cached.result("brain-1").unwrap();
-        assert_eq!(resumed_brain.state, "working");
-        assert!(resumed_brain.notice.is_empty());
-        assert_eq!(resumed_brain.token, "secret-brain-token");
+        let starting_brain = cached.result("brain-1").unwrap();
+        assert_eq!(starting_brain.state, "starting");
+        assert_eq!(starting_brain.token, "secret-brain-token");
 
         // Verify in-process loopback HTTP MCP server is live and authenticates bearer token
         let mcp_url = svc.mcp_url().unwrap();
@@ -393,8 +418,82 @@ mod tests {
         assert_eq!(parsed["result"]["type"], "shepherd_call");
         assert_eq!(parsed["result"]["data"][0]["id"], "brain-1");
 
+        // After the first attended request, deferred startup resume has run
+        let cached_resumed = svc.cached_registry();
+        let resumed_brain = cached_resumed.result("brain-1").unwrap();
+        assert_eq!(resumed_brain.state, "working");
+        assert!(resumed_brain.notice.is_empty());
+
         svc.shutdown();
         assert!(!svc.is_running());
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_start_for_app_does_not_block_on_startup_with_non_empty_registry() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let tmp_dir = std::env::temp_dir().join(format!(
+            "herdr-shep-nonblocking-startup-{}-{nonce}",
+            std::process::id()
+        ));
+        let state_dir = tmp_dir.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+
+        // Seed with a non-empty registry (blocked agent with notice)
+        let mut reg = AgentRegistryFile::default();
+        let mut seeded = reg.create(
+            Agent {
+                id: "coder-1".into(),
+                role: "coder".into(),
+                vendor: "gemini".into(),
+                pane: "w1:p1".into(),
+                tab: "w1:t1".into(),
+                workspace: "w1".into(),
+                state: "blocked".into(),
+                notice: "trust dialog: open tab and accept".into(),
+                ..Agent::default()
+            },
+            "secret-coder-token".into(),
+            "2026-11-04T07:50:00Z",
+        );
+        seeded.pane = "w1:p1".into();
+        seeded.tab = "w1:t1".into();
+        seeded.state = "blocked".into();
+        seeded.notice = "trust dialog: open tab and accept".into();
+        reg.agents[0] = seeded;
+        shepherd_core::save_agent_registry(state_dir.join("agents.json"), &reg).unwrap();
+
+        // Create an api_tx whose receiver is NEVER read/drained (simulating App during boot)
+        let (api_tx, _api_rx) = tokio::sync::mpsc::unbounded_channel();
+        let event_hub = crate::shepherd::EventHub::default();
+
+        let start_time = std::time::Instant::now();
+        let mut svc = ShepherdRuntimeService::start_for_app(
+            api_tx,
+            event_hub,
+            Some("iso"),
+            Some(state_dir),
+            Some(tmp_dir.clone()),
+        )
+        .expect("start_for_app must succeed immediately without blocking");
+
+        let elapsed = start_time.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "start_for_app must never block on unserviced App channel, took {elapsed:?}"
+        );
+
+        // Cached registry must be served immediately as-is
+        let cached = svc.cached_registry();
+        assert_eq!(cached.agents.len(), 1);
+        let coder = cached.result("coder-1").expect("coder-1 in cached registry");
+        assert_eq!(coder.state, "blocked");
+        assert_eq!(coder.notice, "trust dialog: open tab and accept");
+
+        svc.shutdown();
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 }

@@ -557,45 +557,21 @@ pub fn render_shepherd_tasks_panel(
     state: &ShepherdTasksState,
     palette: &Palette,
 ) -> Option<ShepherdTasksRender> {
-    let outer = crate::ui::centered_popup_rect(
-        area,
-        SHEPHERD_TASKS_MODAL_SIZE.0,
-        SHEPHERD_TASKS_MODAL_SIZE.1,
-    )?;
-
-    let inner = draw_tasks_box(buffer, outer, palette.panel_bg, palette.accent)?;
-    if inner.height < 6 || inner.width < 20 {
+    if area.height < 6 || area.width < 20 {
         return Some(ShepherdTasksRender {
-            area: outer,
+            area,
             ..ShepherdTasksRender::default()
         });
     }
 
-    let stack = crate::ui::modal_stack_areas(inner, 3, 2, 0, 1);
+    let inner = area;
+    let stack = crate::ui::modal_stack_areas(inner, 2, 2, 0, 1);
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
     // Header
-    let title_area = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
-    let button_bar = Rect::new(stack.header.x + 1, stack.header.y + 2, stack.header.width.saturating_sub(2), 1);
+    let button_bar = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
 
-    buffer.set_stringn(
-        title_area.x,
-        title_area.y,
-        "Shepherd Tareas",
-        usize::from(title_area.width),
-        base.fg(palette.text).add_modifier(Modifier::BOLD),
-    );
-
-    let sub_title = format!("{} tarea(s) · vista previa y edición en $EDITOR", state.tasks.len());
-    buffer.set_stringn(
-        title_area.x,
-        title_area.y + 1,
-        &sub_title,
-        usize::from(title_area.width),
-        base.fg(palette.overlay0),
-    );
-
-    // Action buttons in header
+    // Action buttons in header (row 0)
     let mut btn_x = button_bar.x;
     let new_task_btn = Rect::new(btn_x, button_bar.y, 16, 1);
     render_btn(buffer, new_task_btn, "+ Nueva (n)", palette.accent, palette);
@@ -612,14 +588,15 @@ pub fn render_shepherd_tasks_panel(
     let archive_btn = Rect::new(btn_x, button_bar.y, 16, 1);
     render_btn(buffer, archive_btn, "📦 Archivar (a)", palette.yellow, palette);
 
-    // Close button
-    let close_rect = crate::ui::release_notes_close_button_rect(Rect::new(
-        stack.header.x,
-        stack.header.y,
-        stack.header.width,
-        1,
-    ));
-    render_btn(buffer, close_rect, " esc close ", palette.accent, palette);
+    // Subtitle in header (row 1)
+    let sub_title = format!("{} tarea(s) · vista previa y edición en $EDITOR", state.tasks.len());
+    buffer.set_stringn(
+        stack.header.x + 1,
+        stack.header.y + 1,
+        &sub_title,
+        usize::from(stack.header.width.saturating_sub(2)),
+        base.fg(palette.overlay0),
+    );
 
     // Split content area: Left (List, 38 cols) | Right (Preview, remaining)
     let body = stack.content;
@@ -741,8 +718,8 @@ pub fn render_shepherd_tasks_panel(
     }
 
     Some(ShepherdTasksRender {
-        area: outer,
-        close_button: close_rect,
+        area: inner,
+        close_button: Rect::default(),
         task_rows,
         new_task_button: new_task_btn,
         import_gh_button: import_gh_btn,
@@ -1332,7 +1309,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("Shepherd Tareas"));
+        assert!(text.contains("tarea(s)"));
         assert!(text.contains("Render Test"));
         assert!(text.contains("Especificación"));
         assert!(text.contains("Criterios de Aceptación"));

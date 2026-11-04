@@ -385,3 +385,165 @@ Fallos reales:
 3. **Arranque bloqueado con un registro no vacío**: `resume_on_startup` llama a `terminals.agent_status` de forma síncrona por el canal interno de la App durante el arranque, cuando la App aún no atiende; da `method=resume error=timeout`, el servidor tarda más de 15 s en estar listo y no reanuda nada. Con registro vacío arranca bien.
 
 No verificado: marcadores y aviso en la barra lateral con un agente de Shepherd real (por el fallo 3 no pude sembrar uno), lanzar agentes, ratón en el overlay.
+
+## Estado F3d (2026-11-04)
+
+Corrección de los tres fallos detectados durante la prueba aislada mediante TDD y verificación real con `./scripts/shepherd-iso.sh`.
+
+### Lo hecho
+
+1. **`shepherd.call` admisible y anunciado al cliente de terminal**:
+   - En `src/api/schema.rs`, se cambió `client_shell = true` en `ShepherdCall` para permitir que los clientes TUI invoquen métodos del servicio Shepherd.
+   - En `src/server/client_commands.rs`, se registró `shepherd.call` como método aditivo en el mapa de huellas de contrato (`3fd905e0f2b2ff38463cb28ff9c30d51b3f89155d536c4fe0aca751842c4f1fe`), manteniendo inmutable la fixture congelada v1 (mismo patrón aditivo que `pane.clear` y `pane.link.resolve`).
+   - En `crates/shepherd-core/src/service.rs`, se habilitaron alias compatibles para `"task_create" | "create_task"` y `"task_archive" | "archive_task"`.
+   - En `src/client/shell/shepherd.rs`, se añadieron `"task_create"` y `"task_archive"` al manejador de respuestas para refrescar las vistas automáticamente tras crear o archivar tareas.
+
+2. **Eliminación del marco interior doble en el overlay**:
+   - Se removió el contenedor secundario `centered_popup_rect` y los recuadros interiores `draw_tasks_box`, `draw_runs_box` y `draw_skills_box` en `src/shepherd/tasks.rs`, `src/shepherd/runs.rs` y `src/shepherd/skills.rs`.
+   - Se eliminaron los títulos redundantes de las sub-vistas y el aviso sobrante `esc close`.
+   - El overlay (`src/shepherd/overlay.rs`) conserva un único marco exterior unificado con pestañas (`Tareas`, `Runs`, `Skills`), botón `[x]` y barra inferior de atajos.
+   - Manejo jerárquico de `Esc`: si hay un submodal activo (crear tarea, importar issue, confirmación), el primer `Esc` cancela únicamente el submodal y deja visible la vista del overlay; un segundo `Esc` cierra el overlay completo.
+   - Test unitario de render puro añadido: `test_overlay_renders_single_frame_without_inner_double_box_or_redundant_esc_close`.
+
+3. **Arranque asíncrono no bloqueante con registro no vacío**:
+   - En `src/shepherd/service.rs`, `start_for_app` ya no llama a `resume_on_startup()` de forma síncrona durante el inicio del servidor; en su lugar, inicializa el estado con `core.load_registry().unwrap_or_default()`.
+   - La reanudación (`core.resume_on_startup()`) se difiere y ejecuta en el worker thread asíncrono (`call_worker`) antes de procesar peticiones, cuando el canal interno de la `App` ya está plenamente operativo y atendiendo mensajes.
+   - Se añadió control atómico `resume_done` en `RuntimeServiceWorkerState` para garantizar que la reanudación se intente una única vez y no interfiera con peticiones entrantes.
+   - Test unitario añadido: `test_start_for_app_does_not_block_on_startup_with_non_empty_registry`.
+
+### Comprobaciones reales con `./scripts/shepherd-iso.sh` (capturas de pantalla)
+
+#### 1. Arranque con registro poblado y barra lateral de agentes
+Se sembró con `seed` un registro que contenía `coder-1` en estado `blocked` con aviso `trust dialog: open tab and accept`. Al ejecutar `start`, el servidor estuvo listo en menos de 3 segundos (sin colgarse). Tras `call pane.report_agent '{"pane_id":"w1:p1","source":"herdr:test","agent":"agy","state":"blocked"}'`, la barra lateral reflejó de inmediato el marcador y el aviso:
+
+```text
+ spaces                  │   1      +
+                         │apolo@apolo:/tmp/shfiso/repo$
+ ● repo                  │
+   master                │
+                         │
+ new                 menu│
+─────────────────────────│
+ agents           grouped│
+                         │
+ ● repo [NEEDS YOU]      │
+   agy                   │
+   ↳ trust dialog: open t│
+```
+
+#### 2. Overlay con marco único y pestañas
+Al pulsar `prefix + a` (`C-b` luego `a`), el overlay se abre con un solo marco limpio sin dobles recuadros ni texto redundante:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Shepherd                                                                                  [x]│
+│ Tareas   Runs   Skills                                                                       │
+│──────────────────────────────────────────────────────────────────────────────────────────────│
+│ + Nueva (n)       ↓ GitHub issue (i)  ✎ $EDITOR (e)     📦 Archivar (a)                      │
+│ 0 tarea(s) · vista previa y edición en $EDITOR                                               │
+│                                                                                              │
+│                                      │                                                       │
+│ No hay tareas activas.               │ Selecciona una tarea para ver su preview.             │
+│                                      │                                                       │
+│                                                                                              │
+│ n crear  ·   i importar gh  ·   e editar en $EDITOR  ·   a archivar  ·   Esc cerrar          │
+│                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 3. Submodal de creación y tecla Esc jerárquica
+Al pulsar `n`, se superpone el formulario de creación de tarea. Al pulsar `Esc`, se cierra únicamente el submodal volviendo a la lista de tareas; un segundo `Esc` cierra el overlay completo.
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Shepherd                                                                                  [x]│
+│ Tareas   Runs   Skills                                                                       │
+│──────────────────────────────────────────────────────────────────────────────────────────────│
+│ + Nueva (n)       ↓ GitHub issue (i)  ✎ $EDITOR (e)     📦 Archivar (a)                      │
+│ 0 tarea(s) · vista previa y edición en $EDITOR                                               │
+│         ┌──────────────────────────────────────────────────────────────────────────┐         │
+│         │ Crear Nueva Tarea (Shepherd)                                             │         │
+│         │                                                                          │         │
+│         │ Título (*):                                                              │         │
+│         │ █                                                                        │         │
+│         │ Descripción / Spec (*):                                                  │         │
+│         │ <Descripción / Spec (*)>                                                 │         │
+│         │ Criterios de aceptación (separados por ; o salto de línea):              │         │
+│         │ <Criterios de aceptación (separados por ; o salto de línea)>             │         │
+│         │ Archivos adjuntos (rutas existentes en disco, separadas por espacio):    │         │
+│         │ <Archivos adjuntos (rutas existentes en disco, separadas por espacio)>   │         │
+│         │                                                                          │         │
+│         │   ↵ Crear tarea     esc Cancelar                                         │         │
+│         └──────────────────────────────────────────────────────────────────────────┘         │
+│                                                                                              │
+│ n crear  ·   i importar gh  ·   e editar en $EDITOR  ·   a archivar  ·   Esc cerrar          │
+│                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### 4. Creación real de tarea y refresco de vista sin errores
+Se introdujo título y descripción y se confirmó con `Enter`. `shepherd.call` ejecutó `task_create`, el core escribió el archivo en `/tmp/shfiso/repo/.shepherd/tasks/1/spec.md`, el cliente recibió la confirmación y la lista se actualizó en pantalla sin mostrar «Action unavailable»:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Shepherd                                                                                  [x]│
+│ Tareas   Runs   Skills                                                                       │
+│──────────────────────────────────────────────────────────────────────────────────────────────│
+│ + Nueva (n)       ↓ GitHub issue (i)  ✎ $EDITOR (e)     📦 Archivar (a)                      │
+│ 1 tarea(s) · vista previa y edición en $EDITOR                                               │
+│                                                                                              │
+│ · #1  Test Task F3d                  │ # Tarea #1: Test Task F3d                             │
+│                                      │ Estado: new  ·  Directorio: /tmp/shfiso/repo/.shepher │
+│                                      │                                                       │
+│                                      │ ## Especificación / Descripción                       │
+│                                      │ # Spec                                                │
+│                                      │                                                       │
+│                                      │ Design decisions, constraints, interfaces. Agents rea │
+│                                      │                                                       │
+│                                      │ ## Criterios de Aceptación                            │
+│                                      │   (Sin criterios definidos)                           │
+│                                                                                              │
+│ n crear  ·   i importar gh  ·   e editar en $EDITOR  ·   a archivar  ·   Esc cerrar          │
+│                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Lo no verificado
+
+- Conexión real con modelos de LLM en la nube o proveedores remotos (se verificó el runtime local de Shepherd y el protocolo cliente-servidor).
+- Modificaciones en repositorios de producción o estados reales de usuario (`~/.local/state/shepherd`, etc.).
+- Suite completa de herdr (falla por SIGPIPE ajeno en este entorno; los tests de plugins/config en paralelo son intermitentes, anótalos tal como pide el brief).
+
+### Qué NO queda conectado
+
+1. **Atajos para comandos externos no implementados en el core**:
+   - `cancel_run` y `reject_gate` están preparados en el overlay pero `shepherd-core` aún no implementa cancelación o rechazo de fases fuera del flujo de aprobación estándar.
+2. **Flags de filtrado de Shepherd en el comando global `herdr agent list`**:
+   - No se alteró el CLI base de Herdr para flags específicos de Shepherd.
+3. **Persistencia de sesión reactiva a cambios externos de archivo sin socket**:
+   - Si un proceso externo manipula `agents.json` directamente sin pasar por el socket de Herdr, la TUI se actualiza en el próximo ciclo de reconciliación / tick, no por watcher de disco inmediato.
+
+### Archivos de herdr y shepherd-core tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/service.rs` | Modificación | Alias para operaciones `task_create` / `create_task` y `task_archive` / `archive_task`. |
+| `src/api/schema.rs` | Modificación | `ShepherdCall` marcado con `client_shell = true`. |
+| `src/server/client_commands.rs` | Modificación | Método aditivo `shepherd.call` con su digest Sha256 en las comprobaciones de contrato. |
+| `src/shepherd/service.rs` | Modificación | Desacople del arranque: `start_for_app` usa `load_registry` sin bloquear; reanudación diferida en el worker con `ensure_resumed`; test de arranque rápido con registro poblado. |
+| `src/shepherd/tasks.rs` | Modificación | Eliminación de recuadro doble, marco interior y títulos redundantes en panel de tareas. |
+| `src/shepherd/runs.rs` | Modificación | Eliminación de recuadro doble, marco interior y títulos redundantes en panel de runs. |
+| `src/shepherd/skills.rs` | Modificación | Eliminación de recuadro doble, marco interior y títulos redundantes en panel de skills. |
+| `src/shepherd/overlay.rs` | Modificación | Unificación del marco exterior, ajuste de dimensiones y test de render de marco único. |
+| `src/client/shell/shepherd.rs` | Modificación | Reconocimiento de `task_create` y `task_archive` en el manejador de respuestas para refresco de vistas. |
+
+
+### Nota del revisor (F3d), repetida por el revisor con `scripts/shepherd-iso.sh`
+
+Verificado de verdad (capturas, sesión aislada): arranque con registro sembrado en ~2,5 s (antes >15 s y sin reanudar); overlay con marco único y sin «Action unavailable»; crear una tarea desde el overlay (`n`, Tab, Enter) la escribe en `.shepherd/tasks/` y la lista; `Esc` cierra; la barra lateral muestra `[NEEDS YOU]` y el aviso de un agente de Shepherd (`[exited]` después, porque la reconciliación marca como salido al agente sembrado, que no existe de verdad). Tests por áreas en verde (`api::` con el intermitente de plugins).
+
+Fallos que quedan (candidatos F3e):
+1. **Vista previa de tarea incorrecta**: lee `spec.md` (plantilla) en vez de `issue.md`, y no entiende el formato `- [ ] criterio` de `acceptance.md` («Sin criterios definidos» aunque los haya).
+2. **Aviso truncado** en la barra lateral (`↳ trust dialog: open t`): el brief pedía leerlo entero (ajustar a varias líneas o mostrarlo completo en el menú contextual).
+3. **Pestaña Skills**: «Agente '' (rol: )» sin agente seleccionado, aparece vacía en vez del catálogo, y «Borrar» está duplicado (`D` y `d`).
+4. Sigue sin probarse: lanzar un agente real desde el TUI, aprobar un gate, el ratón en el overlay.

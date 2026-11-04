@@ -493,54 +493,21 @@ pub fn render_shepherd_runs_panel(
     state: &ShepherdRunsState,
     palette: &Palette,
 ) -> Option<ShepherdRunsRender> {
-    let outer = crate::ui::centered_popup_rect(
-        area,
-        SHEPHERD_RUNS_MODAL_SIZE.0,
-        SHEPHERD_RUNS_MODAL_SIZE.1,
-    )?;
-
-    let inner = draw_runs_box(buffer, outer, palette.panel_bg, palette.accent)?;
-    if inner.height < 6 || inner.width < 20 {
+    if area.height < 6 || area.width < 20 {
         return Some(ShepherdRunsRender {
-            area: outer,
+            area,
             ..ShepherdRunsRender::default()
         });
     }
 
-    let stack = crate::ui::modal_stack_areas(inner, 3, 2, 0, 1);
+    let inner = area;
+    let stack = crate::ui::modal_stack_areas(inner, 2, 2, 0, 1);
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
     // Header
-    let title_area = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
-    let button_bar = Rect::new(stack.header.x + 1, stack.header.y + 2, stack.header.width.saturating_sub(2), 1);
+    let button_bar = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
 
-    buffer.set_stringn(
-        title_area.x,
-        title_area.y,
-        "Shepherd Runs & Gates de Workflow",
-        usize::from(title_area.width),
-        base.fg(palette.text).add_modifier(Modifier::BOLD),
-    );
-
-    let sub_title = format!("{} run(s) · human gates protegen push y PR", state.runs.len());
-    buffer.set_stringn(
-        title_area.x,
-        title_area.y + 1,
-        &sub_title,
-        usize::from(title_area.width),
-        base.fg(palette.overlay0),
-    );
-
-    // Close button
-    let close_rect = crate::ui::release_notes_close_button_rect(Rect::new(
-        stack.header.x,
-        stack.header.y,
-        stack.header.width,
-        1,
-    ));
-    render_runs_btn(buffer, close_rect, " esc close ", palette.accent, palette);
-
-    // Buttons in header
+    // Buttons in header (row 0)
     let mut btn_x = button_bar.x;
     let launch_btn = Rect::new(btn_x, button_bar.y, 16, 1);
     render_runs_btn(buffer, launch_btn, "▶ Lanzar/Reanudar", palette.accent, palette);
@@ -556,6 +523,16 @@ pub fn render_shepherd_runs_panel(
 
     let reject_gate_btn = Rect::new(btn_x, button_bar.y, 16, 1);
     render_runs_btn(buffer, reject_gate_btn, "✗ Rechazar gate", palette.red, palette);
+
+    // Subtitle in header (row 1)
+    let sub_title = format!("{} run(s) · human gates protegen push y PR", state.runs.len());
+    buffer.set_stringn(
+        stack.header.x + 1,
+        stack.header.y + 1,
+        &sub_title,
+        usize::from(stack.header.width.saturating_sub(2)),
+        base.fg(palette.overlay0),
+    );
 
     // Body content: list of runs with progress and gates
     let body = stack.content;
@@ -701,8 +678,8 @@ pub fn render_shepherd_runs_panel(
     }
 
     Some(ShepherdRunsRender {
-        area: outer,
-        close_button: close_rect,
+        area: inner,
+        close_button: Rect::default(),
         run_rows,
         launch_button: launch_btn,
         cancel_run_button: cancel_run_btn,
@@ -1162,7 +1139,7 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(text.contains("Runs & Gates"));
+        assert!(text.contains("human gates"));
         assert!(text.contains("Render runs test"));
         assert!(text.contains("EN CURSO"));
         assert!(text.contains("GATE:"));

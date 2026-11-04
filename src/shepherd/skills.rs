@@ -547,67 +547,19 @@ pub fn render_shepherd_skills_panel(
     state: &ShepherdSkillsState,
     palette: &Palette,
 ) -> Option<ShepherdSkillsRender> {
-    let outer = crate::ui::centered_popup_rect(
-        area,
-        SHEPHERD_SKILLS_MODAL_SIZE.0,
-        SHEPHERD_SKILLS_MODAL_SIZE.1,
-    )?;
-
-    let inner = draw_skills_box(buffer, outer, palette.panel_bg, palette.accent)?;
-    if inner.height < 6 || inner.width < 20 {
+    if area.height < 6 || area.width < 20 {
         return Some(ShepherdSkillsRender {
-            area: outer,
+            area,
             ..ShepherdSkillsRender::default()
         });
     }
 
-    let stack = crate::ui::modal_stack_areas(inner, 5, 2, 0, 1);
+    let inner = area;
+    let stack = crate::ui::modal_stack_areas(inner, 4, 2, 0, 1);
     let base = Style::default().fg(palette.text).bg(palette.panel_bg);
 
-    // Title line
-    let title_area = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
-    let notice_line1_area = Rect::new(stack.header.x + 1, stack.header.y + 1, stack.header.width.saturating_sub(2), 1);
-    let notice_line2_area = Rect::new(stack.header.x + 1, stack.header.y + 2, stack.header.width.saturating_sub(2), 1);
-    let button_bar_area = Rect::new(stack.header.x + 1, stack.header.y + 3, stack.header.width.saturating_sub(2), 1);
-
-    let title_text = match state.mode {
-        SkillsViewMode::AgentView => format!("Shepherd Skills · Agente '{}' (rol: {})", state.selected_agent_id, state.agent_role),
-        SkillsViewMode::CatalogView => "Shepherd Skills · Catálogo Completo (Repo > User > Default)".to_string(),
-    };
-    buffer.set_stringn(
-        title_area.x,
-        title_area.y,
-        &title_text,
-        usize::from(title_area.width),
-        base.fg(palette.text).add_modifier(Modifier::BOLD),
-    );
-
-    // Notice: Los cambios de añadir/quitar se aplican al reiniciar el agente; editar el texto sí llega en vivo
-    buffer.set_stringn(
-        notice_line1_area.x,
-        notice_line1_area.y,
-        "Nota: Añadir o quitar skills a este agente se aplicará al REINICIAR el agente.",
-        usize::from(notice_line1_area.width),
-        base.fg(palette.yellow),
-    );
-    buffer.set_stringn(
-        notice_line2_area.x,
-        notice_line2_area.y,
-        "Modificar el texto de una skill sí llega en vivo.",
-        usize::from(notice_line2_area.width),
-        base.fg(palette.teal),
-    );
-
-    // Close button
-    let close_rect = crate::ui::release_notes_close_button_rect(Rect::new(
-        stack.header.x,
-        stack.header.y,
-        stack.header.width,
-        1,
-    ));
-    render_skills_btn(buffer, close_rect, " esc close ", palette.accent, palette);
-
-    // Buttons
+    // Buttons on row 0
+    let button_bar_area = Rect::new(stack.header.x + 1, stack.header.y, stack.header.width.saturating_sub(2), 1);
     let mut btn_x = button_bar_area.x;
     let mode_label = match state.mode {
         SkillsViewMode::AgentView => "Ver Catálogo (v)",
@@ -623,6 +575,39 @@ pub fn render_shepherd_skills_panel(
 
     let restore_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
     render_skills_btn(buffer, restore_btn, "↺ Restaurar (r)", palette.teal, palette);
+    btn_x = btn_x.saturating_add(18);
+
+    let delete_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
+    render_skills_btn(buffer, delete_btn, "🗑 Borrar (D)", palette.red, palette);
+
+    // Context / Mode on row 1
+    let mode_text = match state.mode {
+        SkillsViewMode::AgentView => format!("Agente '{}' (rol: {})", state.selected_agent_id, state.agent_role),
+        SkillsViewMode::CatalogView => "Catálogo Completo (Repo > User > Default)".to_string(),
+    };
+    buffer.set_stringn(
+        stack.header.x + 1,
+        stack.header.y + 1,
+        &mode_text,
+        usize::from(stack.header.width.saturating_sub(2)),
+        base.fg(palette.text).add_modifier(Modifier::BOLD),
+    );
+
+    // Notice on rows 2 & 3
+    buffer.set_stringn(
+        stack.header.x + 1,
+        stack.header.y + 2,
+        "Nota: Añadir o quitar skills a este agente se aplicará al REINICIAR el agente.",
+        usize::from(stack.header.width.saturating_sub(2)),
+        base.fg(palette.yellow),
+    );
+    buffer.set_stringn(
+        stack.header.x + 1,
+        stack.header.y + 3,
+        "Modificar el texto de una skill sí llega en vivo.",
+        usize::from(stack.header.width.saturating_sub(2)),
+        base.fg(palette.teal),
+    );
     btn_x = btn_x.saturating_add(18);
 
     let delete_btn = Rect::new(btn_x, button_bar_area.y, 14, 1);
@@ -813,8 +798,8 @@ pub fn render_shepherd_skills_panel(
     }
 
     Some(ShepherdSkillsRender {
-        area: outer,
-        close_button: close_rect,
+        area: inner,
+        close_button: Rect::default(),
         view_toggle_button: toggle_mode_btn,
         new_skill_button: new_skill_btn,
         restore_button: restore_btn,

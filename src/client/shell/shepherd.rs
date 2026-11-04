@@ -384,7 +384,7 @@ impl ClientShellState {
                         // If skills JSON is returned, update skills view
                         overlay.status_message = None;
                     }
-                    "archive_task" | "create_task" | "import_task" => {
+                    "archive_task" | "create_task" | "import_task" | "task_create" | "task_archive" => {
                         overlay.status_message = Some(format!("Tarea actualizada exitosamente ({op})"));
                         self.refresh_shepherd_views(outcome);
                     }

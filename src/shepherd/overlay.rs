@@ -803,6 +803,34 @@ mod tests {
     }
 
     #[test]
+    fn test_overlay_renders_single_frame_without_inner_double_box_or_redundant_esc_close() {
+        let overlay = ClientShepherdOverlay::default();
+        let palette = test_palette();
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+
+        let hits = render_shepherd_overlay(&mut buffer, &overlay, &palette).expect("render overlay");
+        assert_eq!(hits.area, area);
+
+        let text = buffer
+            .content
+            .chunks(usize::from(area.width))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // The outer overlay frame contains " Shepherd " and the tabs
+        assert!(text.contains(" Shepherd "));
+        assert!(text.contains(" Tareas "));
+        assert!(text.contains(" Runs "));
+        assert!(text.contains(" Skills "));
+
+        // Single frame: the redundant inner title and "esc close" button must NOT be present
+        assert!(!text.contains("Shepherd Tareas"));
+        assert!(!text.contains("esc close"));
+    }
+
+    #[test]
     fn test_esc_cancels_submodal_first_then_closes_overlay() {
         let mut overlay = ClientShepherdOverlay::default();
         let mut dispatcher = FakeShepherdDispatcher::default();

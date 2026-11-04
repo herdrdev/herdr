@@ -254,6 +254,10 @@ mod tests {
             actual.remove("pane.link.resolve").as_deref(),
             Some("f5e4a3e01453ae7b188f127ce951c12c20e0bebcc17cc364eeb6d1a01fd5bf81")
         );
+        assert_eq!(
+            actual.remove("shepherd.call").as_deref(),
+            Some("3fd905e0f2b2ff38463cb28ff9c30d51b3f89155d536c4fe0aca751842c4f1fe")
+        );
 
         assert_eq!(
             actual, expected,

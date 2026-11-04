@@ -1545,7 +1545,7 @@ impl OrchestrationService {
                 let tasks = crate::list_tasks(&root, archived).map_err(|e| e.to_string())?;
                 serde_json::to_value(tasks).map_err(|e| e.to_string())
             }
-            "task_create" => {
+            "task_create" | "create_task" => {
                 let root = args
                     .get("root")
                     .and_then(Value::as_str)
@@ -1583,7 +1583,7 @@ impl OrchestrationService {
                 let created = crate::create_task(&root, new_task).map_err(|e| e.to_string())?;
                 serde_json::to_value(created).map_err(|e| e.to_string())
             }
-            "task_archive" => {
+            "task_archive" | "archive_task" => {
                 let root = args
                     .get("root")
                     .and_then(Value::as_str)
