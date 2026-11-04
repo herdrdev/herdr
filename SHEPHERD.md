@@ -677,3 +677,16 @@ Al pulsar `d` sobre `code-review` (default), muestra el error de protección en 
 ### Nota del revisor (F3e)
 
 Repetido por el revisor con `scripts/shepherd-iso.sh` y capturas: vista previa de tarea con descripción y criterios `- [ ]`; aviso de `[NEEDS YOU]` en varias líneas con «…» solo si no cabe; pestaña Skills sin agente muestra el catálogo y «Borrar» una sola vez. Tests en verde por áreas. Pequeño resto cosmético: en la vista de catálogo aparece la nota «Añadir o quitar skills a este agente…», que ahí no aplica. Sigue sin probarse: lanzar un agente real desde el TUI, aprobar un gate, ratón en el overlay.
+
+## Prueba con agente real (2026-11-04)
+
+Sesión aislada (`scripts/shepherd-iso.sh`, `SHF_HOME=$HOME` solo para que agy encuentre sus credenciales; `XDG_*` aislados) y un agente agy real (`gemini-3.8-flash-high`, `--mode accept-edits`).
+
+Funciona: `spawn` por `shepherd.call` crea el pane y arranca agy; mientras espera el diálogo de confianza la barra lateral muestra el agente con el aviso «esperando al humano: diálogo de confianza o login; abre su pestaña»; tras aceptarlo el primer prompt llegó, el agente creó `hello.txt` con el texto pedido y Shepherd lo pasó a `done` con `has_result`; `kill` cerró el pane (`killed`) y `clean` lo quitó del registro.
+
+Fallos observados:
+1. **`worktree: true` falla siempre que `workflow.base_branch` esté vacío** (valor por defecto): Shepherd envía `base: ""` a `worktree.create` y herdr responde `worktree_create_failed: fatal: invalid reference:` (`crates/shepherd-core/src/spawn.rs:297`, `herdr.rs:181`). Debe omitir `base` o usar `HEAD`.
+2. **El marcador `[estado]` de la barra lateral no se ve con etiquetas largas**: con la etiqueta real `repo · coder·gemini·crea…` la primera línea se llena y el marcador queda fuera; la fila solo mostró `coder-2`.
+3. La llamada `spawn` tarda más de 20 s en responder (espera la verificación del primer prompt, que depende de que el humano acepte la confianza); el overlay la despacha en segundo plano, pero conviene que devuelva el agente enseguida y que el estado avance por el registro.
+
+Sin probar: lanzar el agente desde el formulario del TUI (solo por API), runs y gates reales, ratón en el overlay.

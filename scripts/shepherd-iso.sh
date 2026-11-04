@@ -7,7 +7,7 @@ R=/tmp/shfiso; BIN=$(readlink -f "${BIN:-./target/debug/herdr}"); S=iso
 mkdir -p $R/home $R/cfg/herdr-dev $R/state $R/data $R/run $R/repo; chmod 700 $R/run
 [ -d $R/repo/.git ] || (cd $R/repo && git init -q && git -c user.email=a@b -c user.name=t commit -q --allow-empty -m init)
 [ -f $R/cfg/herdr-dev/config.toml ] || printf 'onboarding = false\n[shepherd]\nenabled = true\n' > $R/cfg/herdr-dev/config.toml
-E="HOME=$R/home XDG_CONFIG_HOME=$R/cfg XDG_STATE_HOME=$R/state XDG_DATA_HOME=$R/data XDG_RUNTIME_DIR=$R/run"
+E="HOME=${SHF_HOME:-$R/home} XDG_CONFIG_HOME=$R/cfg XDG_STATE_HOME=$R/state XDG_DATA_HOME=$R/data XDG_RUNTIME_DIR=$R/run"
 SOCK=$R/cfg/herdr-dev/sessions/$S/herdr.sock
 case "${1:-}" in
  start) tmux -L shfiso kill-server 2>/dev/null
@@ -25,7 +25,7 @@ while not d.endswith(b"\n"):
     c=s.recv(65536)
     if not c: break
     d+=c
-print(d.decode()[:3000])
+print(d.decode()[:200000])
 PY
  ;;
  seed) mkdir -p $R/cfg/herdr-dev/sessions/$S/shepherd && cp "$2" $R/cfg/herdr-dev/sessions/$S/shepherd/agents.json; echo seeded;;
