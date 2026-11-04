@@ -2157,3 +2157,14 @@ Reglas para TODO el código nuevo y migrado (puerta de revisión en cada brief):
 4. Métrica de coste de fusión por fase: nº de archivos de herdr tocados y líneas, y una ejecución en seco de `scripts/upstream-sync.sh --dry-run` contra un upstream simulado, anotadas en el «Estado» de la fase.
 
 Orden de trabajo actualizado (el estilo y la API tipada van antes de seguir añadiendo funcionalidad, para no multiplicar la deuda): F8b (en curso, ya en vuelo) → **F9a → F9b → F9c → F9d → F9e** → F10a → F10b → F10c → F8c → F8d → F10d. F9e incluye pasar `cargo fmt` a todo el crate (las 814 diferencias) como primer paso mecánico, antes de partir módulos, para que los diffs posteriores sean legibles.
+
+## Regla ampliada: también el comportamiento de la interfaz sigue a herdr (2026-11-05)
+
+Decisión del dueño: mantener el estilo de herdr **en todo lo posible, salvo que el cambio sea necesario, incluido el comportamiento de la interfaz visual**, para poder actualizar el fork con upstream muchas veces sin fricción.
+
+Consecuencias para la UI (F10 y cualquier pantalla nueva):
+1. **Mismo vocabulario de interacción que herdr**: ratón primero, mismas convenciones de foco, desplazamiento, selección, cierre (Esc), atajos y prefijo, mismos controles (listas, pestañas, botones, campos de texto), mismo tema y colores (usar los tokens de tema de herdr, nunca colores propios), mismos tamaños mínimos y comportamiento en terminales pequeños.
+2. **Mapear antes de inventar**: cada pantalla de Shepherd se construye con los componentes y patrones de `src/client/shell/*` que ya existen; solo se crea un componente nuevo si ninguno sirve, y entonces se escribe en la forma en que herdr escribe los suyos (estado puro + render puro + hits) y en `src/shepherd/`.
+3. **Desviaciones solo si son necesarias**, y cada una queda registrada en una tabla «Desviaciones de UI respecto a herdr» de `SHEPHERD.md` con: qué comportamiento de herdr se cambia, por qué es necesario, alternativa descartada y coste de fusión. Sin entrada en la tabla, no hay desviación.
+4. **Tensión conocida con el requisito «sin ventanas emergentes»**: herdr usa sus propios overlays (ajustes, navegador, ayuda, creación de worktree). F10a debe comprobar si herdr tiene un mecanismo de paneles/pestañas dentro de la ventana que cubra lo que Shepherd necesita; si lo tiene, se usa tal cual; si solo hay overlays, se plantea al dueño la decisión (seguir el patrón de herdr con un overlay a pantalla completa tipo pestaña, o crear un panel propio, que es una desviación con coste de fusión) antes de construir nada.
+5. F10a añade a su entregable un **catálogo de comportamientos de UI de herdr** (con referencias a código) que sirva de contrato para F10b–F10d y para revisar cada fase.
