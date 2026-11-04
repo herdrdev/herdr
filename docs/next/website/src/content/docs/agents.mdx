@@ -69,6 +69,12 @@ For agents that support Herdr, the agent's own reports decide the state.
 
 On Linux and macOS, a host-visible wrapper can hide the real agent process from Herdr. Set `HERDR_AGENT=<agent>` on the wrapper command to tell Herdr which existing agent screen manifest to use. For example, run `HERDR_AGENT=claude fence -- claude` on Linux or `HERDR_AGENT=claude nono run --profile claude-code -- claude` on macOS. The hint applies only to that foreground process. Herdr cannot see it if you set it only inside a VM or container. Avoid exporting it globally unless every inherited foreground process should be treated as that agent.
 
+A sandbox that hides the socket can mount `herdr-agent.sock` as the value of
+`HERDR_SOCKET_PATH` to keep state reporting and resume working. The agent socket
+accepts only the report, metadata, authority-clear, and release methods, so it
+does not grant input control over other panes. See
+[Socket API](/docs/socket-api/#agent-socket).
+
 Some restricted Linux runtimes do not expose a terminal foreground process group. Start the Herdr server with `HERDR_PROCESS_DETECTION=child-groups` to opt into direct child-process-group inference when native detection is unavailable. Native detection remains preferred, and the default `native` mode never performs this inference. The opt-in mode is best effort: a newer background job can be mistaken for the foreground job. The variable is read by the server and requires a restart; set it in the remote server environment rather than on an attaching client.
 
 ## Blocked state

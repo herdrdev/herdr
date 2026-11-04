@@ -479,7 +479,7 @@ herdr plugin pane close <pane_id>
 
 新窗格使用 `TERM_PROGRAM=herdr` 标识自身，并将 `TERM_PROGRAM_VERSION` 设为 Herdr 的版本。它们保留 `TERM=xterm-256color` 和 `COLORTERM=truecolor`。由于 Herdr 会在调整大小时重排文本,新窗格还会获得 `fish_handle_reflow=0`;继承或显式指定的 `fish_handle_reflow` 值会保留。应用显式的启动环境值之前，Herdr 会移除继承的外层终端会话标记（iTerm2、WezTerm、Kitty、Windows Terminal、tmux、screen 和 Zellij）、iTerm2 的 `LC_TERMINAL` 身份，以及已知的 Claude Code、Codex 和 OMP 会话标记。这可防止新窗格冒充最初启动服务器的终端或智能体会话。API 密钥和显示设置等普通环境变量仍会继承，而不会被连接客户端的环境替换。SSH 智能体转发有自己的重连处理。现有窗格进程不受此清理影响。
 
-`--env KEY=VALUE` 可以在启动进程的命令上重复使用,只作用于新启动的进程。当与调用方提供的环境变量冲突时,`HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_ENTRYPOINT_ID` 和 `HERDR_PLUGIN_CONTEXT_JSON` 等 Herdr 管理的变量保持权威。
+`--env KEY=VALUE` 可以在启动进程的命令上重复使用,只作用于新启动的进程。当与调用方提供的环境变量冲突时,`HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_ENTRYPOINT_ID` 和 `HERDR_PLUGIN_CONTEXT_JSON` 等 Herdr 管理的变量保持权威。
 
 ## 读取来源
 
@@ -499,6 +499,7 @@ herdr plugin pane close <pane_id>
 | `HERDR_CONFIG_PATH` | 覆盖配置文件路径。 |
 | `HERDR_SESSION` | 为 CLI 命令选择命名会话。 |
 | `HERDR_SOCKET_PATH` | 底层 socket 路径覆盖。 |
+| `HERDR_AGENT_SOCKET_PATH` | 受限 agent socket 的底层路径覆盖。 |
 | `HERDR_ENV` | 在 Herdr 管理的窗格进程内设为 `1`。 |
 | `HERDR_PANE_ID` | 运行中窗格进程的公开窗格 id。 |
 | `HERDR_TAB_ID` | 运行中窗格进程的公开标签页 id。 |

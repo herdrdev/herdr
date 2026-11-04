@@ -111,6 +111,10 @@ Raw socket method names use dot notation:
 | Integrations | `integration.install`, `integration.uninstall` |
 | Plugins | `plugin.link`, `plugin.list`, `plugin.unlink`, `plugin.enable`, `plugin.disable`, `plugin.action.list`, `plugin.action.invoke`, `plugin.log.list`, `plugin.pane.open`, `plugin.pane.focus`, `plugin.pane.close` |
 
+Only `ping` and the `pane.report_agent`, `pane.report_agent_session`,
+`pane.report_metadata`, `pane.clear_agent_authority`, and `pane.release_agent`
+methods are available on `herdr-agent.sock`. See the [agent socket](#agent-socket).
+
 `agent.wait` is server-owned and event-driven. It pins the resolved pane occupant so a replacement cannot satisfy the wait. `agent.prompt` accepts an optional `wait` object with `until` and `timeout_ms`; this submits the prompt and starts the wait in one request, avoiding a race between separate calls. If the resolved agent is already `blocked`, `agent.prompt` returns `agent_blocked` without sending input or starting the wait.
 
 `workspace.move_block` atomically moves the ordered `workspace_ids` before `before_workspace_id`; omit the anchor to move the block to the end. The ids must be unique and the anchor cannot be part of the block. The response contains the authoritative ordered workspace list.
@@ -640,22 +644,59 @@ Named sessions have separate sockets:
 ~/.config/herdr/sessions/<name>/herdr.sock
 ```
 
+`herdr-client.sock` and `herdr-agent.sock` sit next to each `herdr.sock`.
+
 Resolution order:
 
 1. explicit CLI `--session <name>`
-2. `HERDR_SOCKET_PATH`
+2. `HERDR_SOCKET_PATH` (the agent socket is derived as `herdr-agent.sock` beside it)
 3. `HERDR_SESSION=<name>`
 4. default session socket
 
-Use `HERDR_SOCKET_PATH` only for low-level overrides.
+Use `HERDR_SOCKET_PATH` only for low-level overrides. `HERDR_AGENT_SOCKET_PATH`
+overrides only the agent socket when `HERDR_SOCKET_PATH` is unset. Panes inherit
+both variables.
 
 For plugins, prefer invoking `HERDR_BIN_PATH` and the CLI wrappers when you need
 portable Windows behavior. Raw socket clients are responsible for using the
 platform-native local socket form.
 
+## Agent socket
+
+`herdr-agent.sock` is a restricted API surface for processes inside a sandbox.
+Mount it into the sandbox as the socket that `HERDR_SOCKET_PATH` points to. Only
+these methods are accepted:
+
+- `ping`
+- `pane.report_agent`
+- `pane.report_agent_session`
+- `pane.report_metadata`
+- `pane.clear_agent_authority`
+- `pane.release_agent`
+
+Any other method returns error code `forbidden_method`. This keeps agent state
+reporting working without letting the sandbox send input to panes, read pane
+output, or control layout.
+
+For example, with a container that mounts the config directory:
+
+```bash
+podman run --rm \
+  -v "$HERDR_AGENT_SOCKET_PATH:/run/herdr/herdr.sock" \
+  -e HERDR_SOCKET_PATH=/run/herdr/herdr.sock \
+  -e HERDR_ENV=1 \
+  -e "HERDR_PANE_ID=$HERDR_PANE_ID" \
+  -e "HERDR_BIN_PATH=$HERDR_BIN_PATH" \
+  my-agent-image
+```
+
+A reported `resume_argv` is executed by the server after a restart, outside the
+sandbox. Keep that in mind when a sandboxed agent chooses its own resume command.
+
 ## Agent state reporting
 
-Integrations report agent state with `pane.report_agent`.
+Integrations report agent state with `pane.report_agent`. In a sandbox, connect
+to `herdr-agent.sock` instead of `herdr.sock`; the report methods are the same.
 
 ```json
 {

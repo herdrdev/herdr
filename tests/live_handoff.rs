@@ -831,10 +831,12 @@ fn live_handoff_preserves_named_session_socket_paths() {
     let runtime_dir = base.join("runtime");
     let session_dir = config_home.join("herdr-dev/sessions/work");
     let api_socket = session_dir.join("herdr.sock");
+    let agent_socket = session_dir.join("herdr-agent.sock");
     let client_socket = session_dir.join("herdr-client.sock");
 
     let spawned = spawn_named_session_server(&config_home, &runtime_dir, "work");
     wait_for_socket(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&agent_socket, Duration::from_secs(5));
     register_runtime_dir(&runtime_dir);
 
     assert_ok(request(
@@ -843,6 +845,7 @@ fn live_handoff_preserves_named_session_socket_paths() {
     ));
     drop(spawned);
     wait_for_api(&api_socket, Duration::from_secs(10));
+    wait_for_socket(&agent_socket, Duration::from_secs(5));
     wait_for_socket(&client_socket, Duration::from_secs(5));
     assert!(
         !config_home.join("herdr-dev/herdr.sock").exists(),

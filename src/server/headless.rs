@@ -70,7 +70,7 @@ use crate::server::pane_input::{
 };
 use crate::server::shutdown::{ServerStop, ShutdownReason};
 use crate::server::socket_paths::{
-    client_socket_path, prepare_socket_path, restrict_socket_permissions,
+    agent_socket_path, client_socket_path, prepare_socket_path, restrict_socket_permissions,
 };
 use crate::server::terminal_attach::paste_payload_for_runtime;
 

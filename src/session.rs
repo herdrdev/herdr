@@ -186,6 +186,10 @@ pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
     data_dir_for(name).join("herdr-client.sock")
 }
 
+pub fn agent_socket_path_for(name: Option<&str>) -> PathBuf {
+    data_dir_for(name).join("herdr-agent.sock")
+}
+
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
     let mut sessions = vec![session_info(None)];
     let sessions_dir = crate::config::config_dir().join("sessions");
@@ -245,9 +249,10 @@ pub fn stop_session(name: Option<&str>) -> Result<SessionInfo, String> {
 pub(crate) fn stop_active_server() -> Result<(), String> {
     let socket_path = active_api_socket_path();
     let client_socket_path = crate::server::socket_paths::client_socket_path();
+    let agent_socket_path = crate::server::socket_paths::agent_socket_path();
     stop_socket_with_timeout(
         socket_path.clone(),
-        vec![socket_path, client_socket_path],
+        vec![socket_path, client_socket_path, agent_socket_path],
         STOP_WAIT_TIMEOUT,
         "server",
     )
@@ -256,10 +261,11 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
     let socket_path = api_socket_path_for(name);
     let client_socket_path = client_socket_path_for(name);
+    let agent_socket_path = agent_socket_path_for(name);
     let label = format!("session {}", name.unwrap_or(DEFAULT_SESSION_NAME));
     stop_socket_with_timeout(
         socket_path.clone(),
-        vec![socket_path, client_socket_path],
+        vec![socket_path, client_socket_path, agent_socket_path],
         timeout,
         &label,
     )?;
@@ -716,6 +722,23 @@ mod tests {
         keep_running.store(false, Ordering::Relaxed);
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&config_home);
+        std::env::remove_var("XDG_CONFIG_HOME");
+    }
+
+    #[test]
+    fn agent_socket_path_for_uses_session_directory() {
+        let _guard = env_lock().lock().unwrap();
+        let config_home =
+            std::env::temp_dir().join(format!("herdr-session-agent-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        assert_eq!(
+            agent_socket_path_for(Some("work")),
+            config_home
+                .join(crate::config::app_dir_name())
+                .join("sessions")
+                .join("work")
+                .join("herdr-agent.sock")
+        );
         std::env::remove_var("XDG_CONFIG_HOME");
     }
 

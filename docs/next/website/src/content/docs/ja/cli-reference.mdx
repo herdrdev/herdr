@@ -479,7 +479,7 @@ herdr plugin pane close <pane_id>
 
 新しいペインでは `TERM_PROGRAM=herdr` として識別され、`TERM_PROGRAM_VERSION` には Herdr のバージョンが設定されます。`TERM=xterm-256color` と `COLORTERM=truecolor` は維持されます。リサイズ時に Herdr がテキストを折り返し直すため、`fish_handle_reflow=0` も設定します。継承した値や明示的な `fish_handle_reflow` の指定は優先されます。Herdr は、明示的な起動環境の値を適用する前に、継承した外側のターミナルのセッションマーカー（iTerm2、WezTerm、Kitty、Windows Terminal、tmux、screen、Zellij）、iTerm2 の `LC_TERMINAL` 識別子、既知の Claude Code、Codex、OMP セッションマーカーを削除します。これにより、新しいペインがサーバーを最初に起動したターミナルやエージェントのセッションを名乗ることを防ぎます。API キーやディスプレイ設定を含む通常の環境変数は、アタッチ中クライアントの環境に置き換えられず、引き続き継承されます。SSH エージェント転送には独自の再接続処理があります。このクリーンアップによって既存ペインのプロセスは変更されません。
 
-`--env KEY=VALUE` はプロセスを起動するコマンドで繰り返し指定できます。新しく起動されるプロセスにのみ適用されます。`HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_ENTRYPOINT_ID`、`HERDR_PLUGIN_CONTEXT_JSON` のような Herdr 管理の変数は、呼び出し側が与えた環境変数と衝突した場合も権威を保ちます。
+`--env KEY=VALUE` はプロセスを起動するコマンドで繰り返し指定できます。新しく起動されるプロセスにのみ適用されます。`HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_ENTRYPOINT_ID`、`HERDR_PLUGIN_CONTEXT_JSON` のような Herdr 管理の変数は、呼び出し側が与えた環境変数と衝突した場合も権威を保ちます。
 
 ## 読み取りソース
 
@@ -499,6 +499,7 @@ herdr plugin pane close <pane_id>
 | `HERDR_CONFIG_PATH` | 設定ファイルパスを上書きする。 |
 | `HERDR_SESSION` | CLI コマンドの名前付きセッションを選択する。 |
 | `HERDR_SOCKET_PATH` | 低レベルなソケットパスの上書き。 |
+| `HERDR_AGENT_SOCKET_PATH` | 制限付きエージェントソケットの低レベルなパス上書き。 |
 | `HERDR_ENV` | Herdr 管理のペインプロセス内で `1` に設定される。 |
 | `HERDR_PANE_ID` | 実行中ペインプロセスの公開ペイン id。 |
 | `HERDR_TAB_ID` | 実行中ペインプロセスの公開タブ id。 |

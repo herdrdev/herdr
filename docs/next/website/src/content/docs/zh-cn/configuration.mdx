@@ -238,7 +238,7 @@ description = "apply layout"
 
 可以提供可选的 `description`。指定后，该描述会在按键绑定帮助面板（通过 `prefix+?` 打开）中显示，替代默认的 `'custom command'` 标签。
 
-在相应值可用时，自定义命令会收到 `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID` 和 `HERDR_ACTIVE_PANE_CWD`。当 Herdr 能检测到聚焦窗格的工作目录时，shell 命令会从该目录运行。
+在相应值可用时，自定义命令会收到 `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID` 和 `HERDR_ACTIVE_PANE_CWD`。当 Herdr 能检测到聚焦窗格的工作目录时，shell 命令会从该目录运行。
 
 在 Windows 上，自定义命令字符串使用 `cmd.exe /d /c`，因此环境变量应采用 `%HERDR_BIN_PATH%` 语法。若要运行 PowerShell 语法，请显式调用它，例如 `powershell.exe -NoProfile -Command "..."`。
 
@@ -592,6 +592,7 @@ switch_ascii_input_source_in_prefix = true
 | `HERDR_CONFIG_PATH` | 覆盖配置文件路径。 |
 | `HERDR_SESSION` | 为 CLI 命令选择命名会话。 |
 | `HERDR_SOCKET_PATH` | 覆盖底层 socket 路径。 |
+| `HERDR_AGENT_SOCKET_PATH` | 覆盖受限 agent socket 路径。 |
 | `HERDR_LOG` | 设置日志过滤，例如 `HERDR_LOG=herdr=debug`。 |
 | `HERDR_DISABLE_SOUND` | 即使 `[ui.sound] enabled = true` 也禁用声音播放。 |
 

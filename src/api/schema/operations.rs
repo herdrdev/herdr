@@ -5,10 +5,12 @@ pub(crate) struct Operation {
     pub name: &'static str,
     pub changes_ui: bool,
     pub client_shell: bool,
+    /// Available on the restricted `herdr-agent.sock` surface.
+    pub agent: bool,
 }
 
 macro_rules! define_operations {
-    ($( $variant:ident($params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal; )*) => {
+    ($( $variant:ident($params:ty) => $name:literal, $changes_ui:literal, $client_shell:literal, $agent:literal; )*) => {
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
         #[serde(tag = "method", content = "params")]
         // Request enums are short-lived wire values; keeping variants direct preserves
@@ -24,8 +26,14 @@ macro_rules! define_operations {
                     name: $name,
                     changes_ui: $changes_ui,
                     client_shell: $client_shell,
+                    agent: $agent,
                 },)*
             ];
+
+            /// Whether this method is exposed on the restricted agent socket.
+            pub(crate) fn allowed_on_agent_socket(&self) -> bool {
+                self.operation().agent
+            }
 
             pub(crate) fn operation(&self) -> operations::Operation {
                 match self {
@@ -33,6 +41,7 @@ macro_rules! define_operations {
                         name: $name,
                         changes_ui: $changes_ui,
                         client_shell: $client_shell,
+                        agent: $agent,
                     },)*
                 }
             }
@@ -47,6 +56,19 @@ pub(crate) fn client_shell_method_names() -> &'static [&'static str] {
         let mut names: Vec<_> = super::Method::OPERATIONS
             .iter()
             .filter(|operation| operation.client_shell)
+            .map(|operation| operation.name)
+            .collect();
+        names.sort_unstable();
+        names
+    });
+    &NAMES
+}
+
+pub(crate) fn agent_method_names() -> &'static [&'static str] {
+    static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+        let mut names: Vec<_> = super::Method::OPERATIONS
+            .iter()
+            .filter(|operation| operation.agent)
             .map(|operation| operation.name)
             .collect();
         names.sort_unstable();
@@ -144,7 +166,32 @@ mod tests {
                 crate::server::client_commands::supports_client_shell_method_name(name),
                 operation.client_shell
             );
+            assert_eq!(request.method.allowed_on_agent_socket(), operation.agent);
         }
+    }
+
+    #[test]
+    fn agent_socket_method_catalog_is_minimal() {
+        let expected = [
+            "ping",
+            "pane.report_agent",
+            "pane.report_agent_session",
+            "pane.report_metadata",
+            "pane.clear_agent_authority",
+            "pane.release_agent",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let actual = Method::OPERATIONS
+            .iter()
+            .filter(|operation| operation.agent)
+            .map(|operation| operation.name)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            super::agent_method_names(),
+            expected.into_iter().collect::<Vec<_>>()
+        );
     }
 
     #[test]

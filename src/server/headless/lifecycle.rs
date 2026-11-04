@@ -174,9 +174,10 @@ impl HeadlessServer {
         }
 
         if let Some(api_server) = &self.api_server {
-            let _ = api_server.remove_socket_file_if_owned();
+            let _ = api_server.remove_socket_files_if_owned();
         } else {
             let _ = std::fs::remove_file(crate::api::socket_path());
+            let _ = std::fs::remove_file(agent_socket_path());
         }
         let _ = remove_socket_file_if_owned(&self.client_socket_path, &self.client_socket_identity);
         if let Err(err) = crate::server::handoff::wait_ready(&mut stream) {
@@ -386,12 +387,15 @@ impl HeadlessServer {
 pub(super) fn wait_for_old_public_sockets_to_close(timeout: Duration) -> io::Result<()> {
     let deadline = Instant::now() + timeout;
     let api_socket = api::socket_path();
+    let agent_socket = agent_socket_path();
     let client_socket = client_socket_path();
     while Instant::now() < deadline {
         let api_open = api_socket.exists() && crate::ipc::connect_local_stream(&api_socket).is_ok();
+        let agent_open =
+            agent_socket.exists() && crate::ipc::connect_local_stream(&agent_socket).is_ok();
         let client_open =
             client_socket.exists() && crate::ipc::connect_local_stream(&client_socket).is_ok();
-        if !api_open && !client_open {
+        if !api_open && !agent_open && !client_open {
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));

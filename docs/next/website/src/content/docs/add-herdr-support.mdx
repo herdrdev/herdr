@@ -24,6 +24,7 @@ Every process in a Herdr pane inherits these environment variables:
 | `HERDR_PANE_ID` | The pane your agent runs in |
 | `HERDR_BIN_PATH` | The Herdr binary that owns this pane |
 | `HERDR_SOCKET_PATH` | Herdr's API socket |
+| `HERDR_AGENT_SOCKET_PATH` | Restricted agent socket for sandboxes |
 
 Your agent makes three kinds of reports through `"$HERDR_BIN_PATH"`:
 
@@ -97,6 +98,10 @@ If your agent exits without releasing, Herdr notices once the pane is back at it
 ## Use the socket directly
 
 `HERDR_BIN_PATH` and the CLI are the portable choice, including on Windows. If your agent needs direct IPC, send the equivalent `pane.report_agent`, `pane.report_agent_session`, and `pane.release_agent` requests described in the [Socket API](/docs/socket-api/#agent-state-reporting). The resume command goes in the `resume_argv` array.
+
+Inside a sandbox, connect to `HERDR_AGENT_SOCKET_PATH` instead of
+`HERDR_SOCKET_PATH`. The agent socket exposes the report methods and rejects
+everything else with `forbidden_method`; see the [agent socket](/docs/socket-api/#agent-socket).
 
 ## Check your integration
 

@@ -102,7 +102,9 @@ herdr pane read w1:p2 --source recent --lines 50
 | 窗格 | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | 弹窗 | `popup.close` |
 | 布局 | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
-| 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
+| 智能体 | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`herdr-agent.sock` 只提供 `ping` 以及 `pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority` 和 `pane.release_agent`。参见 [agent socket](#agent-socket)。
+
+`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
 | 事件 | `events.subscribe`、`events.wait` |
 | 集成 | `integration.install`、`integration.uninstall` |
 | 插件 | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
@@ -202,7 +204,7 @@ CLI 的 `herdr api snapshot` 会把当前 `session.snapshot` 响应输出为 JSO
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
 ```
 
-启动进程的方法接受一个 `env` 对象。Herdr 只把这些键值对应用到新启动的进程。Herdr 还向受管窗格进程注入 `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID`。与调用方提供的环境变量冲突时,Herdr 管理的变量保持权威。
+启动进程的方法接受一个 `env` 对象。Herdr 只把这些键值对应用到新启动的进程。Herdr 还向受管窗格进程注入 `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID`。与调用方提供的环境变量冲突时,Herdr 管理的变量保持权威。
 
 `pane.swap` 支持按方向和显式两种形式:
 
@@ -448,7 +450,7 @@ action = "bootstrap"
 
 `plugin.action.invoke` 解析清单动作,启动清单命令,并返回 Herdr 构建的调用上下文和已启动命令的日志记录。缺失的上下文字段会从活动工作区、标签页、聚焦窗格、worktree 来源信息和请求 id 补全。调用被禁用插件的动作返回 `plugin_disabled` 错误。
 
-Herdr 注入 `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_CONTEXT_JSON`,以及可用的 `HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID` 值。动作命令还收到 `HERDR_PLUGIN_ACTION_ID`;事件钩子收到 `HERDR_PLUGIN_EVENT` 和 `HERDR_PLUGIN_EVENT_JSON`;窗格命令收到 `HERDR_PLUGIN_ENTRYPOINT_ID`。
+Herdr 注入 `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_CONTEXT_JSON`,以及可用的 `HERDR_WORKSPACE_ID`、`HERDR_TAB_ID` 和 `HERDR_PANE_ID` 值。动作命令还收到 `HERDR_PLUGIN_ACTION_ID`;事件钩子收到 `HERDR_PLUGIN_EVENT` 和 `HERDR_PLUGIN_EVENT_JSON`;窗格命令收到 `HERDR_PLUGIN_ENTRYPOINT_ID`。
 
 列出最近的动作和事件命令日志:
 
@@ -499,14 +501,22 @@ Herdr 在本地 socket 上使用换行分隔的 JSON。在 Unix 上,那个 socke
 ~/.config/herdr/sessions/<name>/herdr.sock
 ```
 
+`herdr-client.sock` 和 `herdr-agent.sock` 位于各 `herdr.sock` 旁。
+
 解析顺序:
 
 1. 显式的 CLI `--session <name>`
-2. `HERDR_SOCKET_PATH`
+2. `HERDR_SOCKET_PATH`(agent socket 由旁边的 `herdr-agent.sock` 推导)
 3. `HERDR_SESSION=<name>`
 4. 默认会话 socket
 
-`HERDR_SOCKET_PATH` 只用于底层覆盖。
+`HERDR_SOCKET_PATH` 只用于底层覆盖。`HERDR_AGENT_SOCKET_PATH` 仅在 `HERDR_SOCKET_PATH` 未设置时覆盖 agent socket。窗格会继承这两个变量。
+
+## Agent socket
+
+`herdr-agent.sock` 是面向沙箱内进程的限制 API 表面。把它挂载为 `HERDR_SOCKET_PATH` 指向的 socket。它只接受 `ping`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority` 和 `pane.release_agent`;其他方法返回 `forbidden_method`。这让 agent 状态报告继续可用,同时沙箱不能向窗格发送输入、读取窗格输出或控制布局。
+
+报告的 `resume_argv` 会在重启后由服务器在沙箱外执行。
 
 对插件来说,需要可移植的 Windows 行为时,优先调用 `HERDR_BIN_PATH` 和 CLI 包装命令。原始 socket 客户端要自己负责使用平台原生的本地 socket 形式。
 

@@ -102,7 +102,9 @@ herdr pane read w1:p2 --source recent --lines 50
 | ペイン | `pane.split`、`pane.swap`、`pane.move`、`pane.zoom`、`pane.layout`、`pane.process_info`、`pane.neighbor`、`pane.edges`、`pane.focus_direction`、`pane.resize`、`pane.list`、`pane.current`、`pane.get`、`pane.rename`、`pane.send_text`、`pane.send_keys`、`pane.send_input`、`pane.read`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent`、`pane.close`、`pane.wait_for_output` |
 | ポップアップ | `popup.close` |
 | レイアウト | `layout.export`、`layout.apply`、`layout.set_split_ratio` |
-| エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
+| エージェント | `agent.list`、`agent.get`、`agent.read`、`agent.explain`、`agent.send_keys`、`agent.prompt`、`herdr-agent.sock` で利用できるのは `ping` と `pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent` だけです。[エージェントソケット](#エージェントソケット)を参照してください。
+
+`agent.wait`、`agent.rename`、`agent.focus`、`agent.start` |
 | イベント | `events.subscribe`、`events.wait` |
 | インテグレーション | `integration.install`、`integration.uninstall` |
 | プラグイン | `plugin.link`、`plugin.list`、`plugin.unlink`、`plugin.enable`、`plugin.disable`、`plugin.action.list`、`plugin.action.invoke`、`plugin.log.list`、`plugin.pane.open`、`plugin.pane.focus`、`plugin.pane.close` |
@@ -202,7 +204,7 @@ macOS では、`pane.send_input`（`pane run` が使用）と `agent.start` は�
 {"id":"req_ratio","method":"layout.set_split_ratio","params":{"tab_id":"w1:t1","path":[],"ratio":0.6}}
 ```
 
-プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Herdr はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Herdr は管理下のペインプロセスに `HERDR_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Herdr 管理の変数が権威を持ちます。
+プロセスを起動するメソッドは `env` オブジェクトを受け付けます。Herdr はそのキー/値ペアを新しく起動されるプロセスにのみ適用します。Herdr は管理下のペインプロセスに `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_ENV=1`、`HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` も注入します。呼び出し側が与えた環境変数と衝突した場合、Herdr 管理の変数が権威を持ちます。
 
 `pane.swap` は方向指定と明示指定の両方の形式をサポートします:
 
@@ -452,7 +454,7 @@ action = "bootstrap"
 
 `plugin.action.invoke` はマニフェストのアクションを解決し、マニフェストのコマンドを起動し、Herdr が構築した呼び出しコンテキストと、開始されたコマンドのログレコードを返します。欠けているコンテキストフィールドは、アクティブなワークスペース、タブ、フォーカス中のペイン、worktree の出自情報、リクエスト id から補完されます。無効化されたプラグインのアクションの呼び出しは `plugin_disabled` エラーを返します。
 
-Herdr は `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_CONTEXT_JSON`、そして利用可能な `HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` の値を注入します。アクションコマンドは加えて `HERDR_PLUGIN_ACTION_ID` を受け取ります。イベントフックは `HERDR_PLUGIN_EVENT` と `HERDR_PLUGIN_EVENT_JSON` を、ペインコマンドは `HERDR_PLUGIN_ENTRYPOINT_ID` を受け取ります。
+Herdr は `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ENV=1`、`HERDR_PLUGIN_ID`、`HERDR_PLUGIN_ROOT`、`HERDR_PLUGIN_CONFIG_DIR`、`HERDR_PLUGIN_STATE_DIR`、`HERDR_PLUGIN_CONTEXT_JSON`、そして利用可能な `HERDR_WORKSPACE_ID`、`HERDR_TAB_ID`、`HERDR_PANE_ID` の値を注入します。アクションコマンドは加えて `HERDR_PLUGIN_ACTION_ID` を受け取ります。イベントフックは `HERDR_PLUGIN_EVENT` と `HERDR_PLUGIN_EVENT_JSON` を、ペインコマンドは `HERDR_PLUGIN_ENTRYPOINT_ID` を受け取ります。
 
 直近のアクションおよびイベントコマンドのログを一覧する:
 
@@ -503,14 +505,22 @@ JSON のデコードまで到達したリクエスト行では、メソッドや
 ~/.config/herdr/sessions/<name>/herdr.sock
 ```
 
+`herdr-client.sock` と `herdr-agent.sock` は各 `herdr.sock` の隣に置かれます。
+
 解決順:
 
 1. 明示的な CLI の `--session <name>`
-2. `HERDR_SOCKET_PATH`
+2. `HERDR_SOCKET_PATH`（エージェントソケットはその隣の `herdr-agent.sock` として導出されます）
 3. `HERDR_SESSION=<name>`
 4. デフォルトセッションのソケット
 
-`HERDR_SOCKET_PATH` は低レベルな上書きにのみ使ってください。
+`HERDR_SOCKET_PATH` は低レベルな上書きにのみ使ってください。`HERDR_AGENT_SOCKET_PATH` は `HERDR_SOCKET_PATH` が未設定のときエージェントソケットだけを上書きします。ペインは両方の変数を継承します。
+
+## エージェントソケット
+
+`herdr-agent.sock` はサンドボックス内のプロセス向けの制限付き API 面です。`HERDR_SOCKET_PATH` が指すソケットとしてサンドボックスへマウントしてください。受け付けるメソッドは `ping`、`pane.report_agent`、`pane.report_agent_session`、`pane.report_metadata`、`pane.clear_agent_authority`、`pane.release_agent` だけです。それ以外は `forbidden_method` を返します。エージェント状態の報告は動き続け、サンドボックスは他のペインへの入力、ペイン出力の読み取り、レイアウト操作を行えません。
+
+報告された `resume_argv` は再起動後にサーバーがサンドボックスの外で実行します。
 
 プラグインでは、移植性のある Windows の挙動が必要なときは `HERDR_BIN_PATH` と CLI ラッパーの呼び出しを推奨します。生のソケットクライアントは、プラットフォームネイティブのローカルソケット形式を使う責任を負います。
 

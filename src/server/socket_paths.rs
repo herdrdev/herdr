@@ -8,6 +8,9 @@ use std::path::{Path, PathBuf};
 /// client-only override when `HERDR_SOCKET_PATH` is not set.
 pub const CLIENT_SOCKET_PATH_ENV_VAR: &str = "HERDR_CLIENT_SOCKET_PATH";
 
+/// Environment variable for overriding the restricted agent socket path.
+pub const AGENT_SOCKET_PATH_ENV_VAR: &str = "HERDR_AGENT_SOCKET_PATH";
+
 /// Socket permission mode (owner read/write only).
 const SOCKET_PERMISSION_MODE: u32 = 0o600;
 
@@ -30,6 +33,48 @@ pub fn client_socket_path() -> PathBuf {
             .as_deref(),
         std::env::var(CLIENT_SOCKET_PATH_ENV_VAR).ok().as_deref(),
     )
+}
+
+/// Returns the path for the restricted agent socket.
+///
+/// Resolution mirrors the client socket: an explicit session wins, an API
+/// socket override derives `herdr-agent.sock` beside it, and otherwise the
+/// active session data directory is used.
+pub fn agent_socket_path() -> PathBuf {
+    if crate::session::explicit_session_requested() {
+        return crate::session::agent_socket_path_for(crate::session::active_name().as_deref());
+    }
+    agent_socket_path_from_overrides(
+        std::env::var(crate::api::SOCKET_PATH_ENV_VAR)
+            .ok()
+            .as_deref(),
+        std::env::var(AGENT_SOCKET_PATH_ENV_VAR).ok().as_deref(),
+    )
+}
+
+pub(crate) fn agent_socket_path_from_overrides(
+    api_socket_override: Option<&str>,
+    agent_socket_override: Option<&str>,
+) -> PathBuf {
+    if let Some(api_socket_override) = api_socket_override {
+        return derive_agent_socket_from_api_socket(Path::new(api_socket_override));
+    }
+
+    if let Some(agent_socket_override) = agent_socket_override {
+        return PathBuf::from(agent_socket_override);
+    }
+
+    crate::session::agent_socket_path_for(crate::session::active_name().as_deref())
+}
+
+pub(crate) fn derive_agent_socket_from_api_socket(api_socket_path: &Path) -> PathBuf {
+    let stem = api_socket_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("herdr");
+    let parent = api_socket_path.parent().unwrap_or_else(|| Path::new(""));
+
+    parent.join(format!("{stem}-agent.sock"))
 }
 
 pub(crate) fn client_socket_path_from_overrides(
@@ -108,6 +153,41 @@ mod tests {
         crate::session::clear_explicit_session_for_test();
         let path = client_socket_path_from_overrides(None, None);
         assert_eq!(path, crate::config::config_dir().join("herdr-client.sock"));
+    }
+
+    #[test]
+    fn agent_socket_path_derived_from_api_socket_override() {
+        let path = agent_socket_path_from_overrides(Some("/tmp/test-herdr.sock"), None);
+        assert_eq!(path, PathBuf::from("/tmp/test-herdr-agent.sock"));
+    }
+
+    #[test]
+    fn agent_socket_path_api_override_takes_precedence_over_agent_override() {
+        let path = agent_socket_path_from_overrides(
+            Some("/tmp/test-herdr.sock"),
+            Some("/tmp/custom-agent.sock"),
+        );
+        assert_eq!(path, PathBuf::from("/tmp/test-herdr-agent.sock"));
+    }
+
+    #[test]
+    fn agent_socket_path_respects_override_without_api_override() {
+        let path = agent_socket_path_from_overrides(None, Some("/tmp/test-herdr-agent.sock"));
+        assert_eq!(path, PathBuf::from("/tmp/test-herdr-agent.sock"));
+    }
+
+    #[test]
+    fn agent_socket_path_defaults_to_config_dir() {
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+        crate::session::clear_explicit_session_for_test();
+        let path = agent_socket_path_from_overrides(None, None);
+        assert_eq!(path, crate::config::config_dir().join("herdr-agent.sock"));
+    }
+
+    #[test]
+    fn derive_agent_socket_from_api_socket_without_sock_extension() {
+        let derived = derive_agent_socket_from_api_socket(Path::new("/tmp/custom-api"));
+        assert_eq!(derived, PathBuf::from("/tmp/custom-api-agent.sock"));
     }
 
     #[test]

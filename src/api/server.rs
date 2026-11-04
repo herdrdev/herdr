@@ -19,9 +19,10 @@ use crate::api::{request_changes_ui, socket_path, ApiRequestMessage, ApiRequestS
 use crate::ipc::{
     bind_local_listener, is_connection_closed_error, local_stream_peer_closed,
     poll_local_stream_read, remove_socket_file_if_owned, set_local_stream_polling,
-    socket_file_identity, LocalStream, LocalStreamRead, SocketFileIdentity,
+    socket_file_identity, LocalListener, LocalStream, LocalStreamRead, SocketFileIdentity,
 };
 use crate::server::shutdown::{ServerStop, ShutdownReason};
+use crate::server::socket_paths::agent_socket_path;
 
 #[cfg(test)]
 mod subscription_socket_tests;
@@ -38,7 +39,14 @@ pub struct ServerHandle {
     _thread: std::thread::JoinHandle<()>,
     path: PathBuf,
     identity: SocketFileIdentity,
+    agent: Option<AgentSocketHandle>,
     running: Arc<AtomicBool>,
+}
+
+struct AgentSocketHandle {
+    _thread: std::thread::JoinHandle<()>,
+    path: PathBuf,
+    identity: SocketFileIdentity,
 }
 
 impl Drop for ServerHandle {
@@ -53,8 +61,37 @@ impl Drop for ServerHandle {
     }
 }
 
+impl Drop for AgentSocketHandle {
+    fn drop(&mut self) {
+        if let Err(err) = self.remove_socket_file_if_owned() {
+            if err.kind() != std::io::ErrorKind::NotFound {
+                warn!(path = %self.path.display(), err = %err, "failed to remove agent socket on shutdown");
+            }
+        }
+    }
+}
+
 impl ServerHandle {
     pub(crate) fn remove_socket_file_if_owned(&self) -> std::io::Result<()> {
+        let api_result = remove_socket_file_if_owned(&self.path, &self.identity);
+        let agent_result = self
+            .agent
+            .as_ref()
+            .map(AgentSocketHandle::remove_socket_file_if_owned)
+            .transpose();
+        api_result.and(agent_result.map(|_| ()))
+    }
+
+    /// Removes both public socket files, leaving the listeners bound.
+    /// Live handoff, the only caller, is Unix-only.
+    #[cfg(unix)]
+    pub(crate) fn remove_socket_files_if_owned(&self) -> std::io::Result<()> {
+        self.remove_socket_file_if_owned()
+    }
+}
+
+impl AgentSocketHandle {
+    fn remove_socket_file_if_owned(&self) -> std::io::Result<()> {
         remove_socket_file_if_owned(&self.path, &self.identity)
     }
 }
@@ -78,6 +115,12 @@ fn default_capabilities() -> Option<ServerCapabilities> {
     })
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ConnectionAccess {
+    Full,
+    Agent,
+}
+
 fn start_server_inner(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
@@ -85,12 +128,36 @@ fn start_server_inner(
     server_stop: Option<ServerStop>,
 ) -> std::io::Result<ServerHandle> {
     let path = socket_path();
+    let agent_path = agent_socket_path();
     prepare_socket_path(&path)?;
+    prepare_socket_path(&agent_path)?;
 
     let listener = bind_local_listener(&path)?;
-    restrict_socket_permissions(&path)?;
-    let identity = socket_file_identity(&path)?;
+    let agent_listener = match bind_local_listener(&agent_path) {
+        Ok(listener) => listener,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            return Err(err);
+        }
+    };
+    let prepared = (|| {
+        restrict_socket_permissions(&path)?;
+        restrict_socket_permissions(&agent_path)?;
+        Ok::<_, io::Error>((
+            socket_file_identity(&path)?,
+            socket_file_identity(&agent_path)?,
+        ))
+    })();
+    let (identity, agent_identity) = match prepared {
+        Ok(identities) => identities,
+        Err(err) => {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_file(&agent_path);
+            return Err(err);
+        }
+    };
     info!(path = %path.display(), "api server listening");
+    info!(path = %agent_path.display(), "agent api socket listening");
 
     #[cfg(unix)]
     let ssh_agents = match crate::platform::ssh_agent::SshAgentRegistry::new(
@@ -118,18 +185,86 @@ fn start_server_inner(
     }
 
     let running = Arc::new(AtomicBool::new(true));
-    let listener_running = Arc::clone(&running);
-    let spawned = crate::thread_spawn::spawn_named("herdr-api-accept", move || {
+    let thread = match spawn_accept_thread(
+        "herdr-api-accept",
+        listener,
+        ConnectionAccess::Full,
+        Arc::clone(&running),
+        api_tx.clone(),
+        event_hub.clone(),
+        capabilities.clone(),
+        server_stop.clone(),
+        #[cfg(unix)]
+        ssh_agents.clone(),
+    ) {
+        Ok(thread) => thread,
+        Err(err) => {
+            // No ServerHandle owns the sockets yet, so its Drop cleanup won't run.
+            let _ = remove_socket_file_if_owned(&path, &identity);
+            let _ = remove_socket_file_if_owned(&agent_path, &agent_identity);
+            return Err(err);
+        }
+    };
+
+    let agent_thread = match spawn_accept_thread(
+        "herdr-agent-accept",
+        agent_listener,
+        ConnectionAccess::Agent,
+        Arc::clone(&running),
+        api_tx,
+        event_hub,
+        capabilities,
+        server_stop,
+        #[cfg(unix)]
+        None,
+    ) {
+        Ok(thread) => thread,
+        Err(err) => {
+            running.store(false, Ordering::Relaxed);
+            let _ = remove_socket_file_if_owned(&path, &identity);
+            let _ = remove_socket_file_if_owned(&agent_path, &agent_identity);
+            return Err(err);
+        }
+    };
+
+    Ok(ServerHandle {
+        _thread: thread,
+        path,
+        identity,
+        agent: Some(AgentSocketHandle {
+            _thread: agent_thread,
+            path: agent_path,
+            identity: agent_identity,
+        }),
+        running,
+    })
+}
+
+// Both listeners need the same dispatch context; grouping it into a struct
+// would only move the arguments to a construction site.
+#[allow(clippy::too_many_arguments)]
+fn spawn_accept_thread(
+    name: &'static str,
+    listener: LocalListener,
+    access: ConnectionAccess,
+    running: Arc<AtomicBool>,
+    api_tx: ApiRequestSender,
+    event_hub: EventHub,
+    capabilities: Option<ServerCapabilities>,
+    server_stop: Option<ServerStop>,
+    #[cfg(unix)] ssh_agents: Option<crate::platform::ssh_agent::SshAgentRegistry>,
+) -> io::Result<std::thread::JoinHandle<()>> {
+    crate::thread_spawn::spawn_named(name, move || {
         run_accept_loop(
             listener.incoming(),
-            &listener_running,
+            &running,
             ACCEPT_ERROR_BACKOFF,
             |stream| {
                 let api_tx = api_tx.clone();
                 let event_hub = event_hub.clone();
                 let capabilities = capabilities.clone();
                 let server_stop = server_stop.clone();
-                let connection_running = Arc::clone(&listener_running);
+                let connection_running = Arc::clone(&running);
                 #[cfg(unix)]
                 let ssh_agents = ssh_agents.clone();
                 spawn_connection_handler(move || {
@@ -138,6 +273,7 @@ fn start_server_inner(
                         &api_tx,
                         &event_hub,
                         &connection_running,
+                        access,
                         capabilities,
                         server_stop.as_ref(),
                         #[cfg(unix)]
@@ -148,22 +284,7 @@ fn start_server_inner(
                 });
             },
         );
-        debug!("api server thread exiting");
-    });
-    let thread = match spawned {
-        Ok(thread) => thread,
-        Err(err) => {
-            // No ServerHandle owns the socket yet, so its Drop cleanup won't run.
-            let _ = remove_socket_file_if_owned(&path, &identity);
-            return Err(err);
-        }
-    };
-
-    Ok(ServerHandle {
-        _thread: thread,
-        path,
-        identity,
-        running,
+        debug!("{name} thread exiting");
     })
 }
 
@@ -318,7 +439,28 @@ fn handle_connection(
         api_tx,
         event_hub,
         running,
+        ConnectionAccess::Full,
         capabilities,
+        None,
+        #[cfg(unix)]
+        None,
+    )
+}
+
+#[cfg(all(test, unix))]
+fn handle_agent_connection(
+    stream: LocalStream,
+    api_tx: &ApiRequestSender,
+    event_hub: &EventHub,
+    running: &Arc<AtomicBool>,
+) -> std::io::Result<()> {
+    handle_connection_with_stop(
+        stream,
+        api_tx,
+        event_hub,
+        running,
+        ConnectionAccess::Agent,
+        None,
         None,
         #[cfg(unix)]
         None,
@@ -330,6 +472,7 @@ fn handle_connection_with_stop(
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
     running: &Arc<AtomicBool>,
+    access: ConnectionAccess,
     capabilities: Option<ServerCapabilities>,
     server_stop: Option<&ServerStop>,
     #[cfg(unix)] ssh_agents: Option<&crate::platform::ssh_agent::SshAgentRegistry>,
@@ -380,6 +523,25 @@ fn handle_connection_with_stop(
     let method = api_method_name(&request.method);
     let changes_ui = request_changes_ui(&request);
     crate::logging::api_request_started(&request_id, method, changes_ui);
+
+    if access == ConnectionAccess::Agent && !request.method.allowed_on_agent_socket() {
+        let response = error_response_json(
+            request_id.clone(),
+            "forbidden_method",
+            format!(
+                "method {method} is not available on the agent socket; accepted methods: {}",
+                crate::api::schema::operations::agent_method_names().join(", ")
+            ),
+        );
+        let result = write_text_line_allow_disconnect(&mut stream, &response);
+        match &result {
+            Ok(()) => {
+                crate::logging::api_request_completed(&request_id, method, "forbidden", changes_ui)
+            }
+            Err(err) => crate::logging::api_request_failed(&request_id, method, &err.to_string()),
+        }
+        return result;
+    }
 
     match request.method {
         #[cfg(unix)]
@@ -1102,6 +1264,7 @@ mod tests {
                 &tx,
                 &EventHub::default(),
                 &Arc::new(AtomicBool::new(true)),
+                ConnectionAccess::Full,
                 None,
                 None,
                 Some(&worker_registry),
@@ -1199,7 +1362,9 @@ mod tests {
         let dir = unique_test_path("api-accept-spawn-failure");
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("herdr.sock");
+        let agent_path = dir.join("herdr-agent.sock");
         std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &path);
+        std::env::remove_var(crate::server::socket_paths::AGENT_SOCKET_PATH_ENV_VAR);
         let (api_tx, _api_rx) = mpsc::unbounded_channel();
 
         crate::thread_spawn::test_hook::fail_next_spawns(1);
@@ -1208,6 +1373,77 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!path.exists(), "bound socket must be removed");
+        assert!(!agent_path.exists(), "bound agent socket must be removed");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn started_server_binds_restricted_agent_socket() {
+        let _guard = env_lock().lock().unwrap();
+        let dir = unique_test_path("agent-socket-start");
+        fs::create_dir_all(&dir).unwrap();
+        let api_path = dir.join("herdr.sock");
+        let agent_path = dir.join("herdr-agent.sock");
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, &api_path);
+        std::env::remove_var(crate::server::socket_paths::AGENT_SOCKET_PATH_ENV_VAR);
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let dispatched = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let responder_dispatched = Arc::clone(&dispatched);
+        let responder = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let msg = api_rx.blocking_recv().expect("dispatched request");
+                responder_dispatched.fetch_add(1, Ordering::Relaxed);
+                msg.respond_to
+                    .send(
+                        serde_json::to_string(&SuccessResponse {
+                            id: msg.request.id,
+                            result: ResponseResult::Ok {},
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
+            }
+        });
+
+        let handle =
+            start_server_with_stop_control(api_tx, EventHub::default(), ServerStop::default())
+                .unwrap();
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+
+        assert!(api_path.exists(), "primary api socket must be bound");
+        assert!(agent_path.exists(), "agent socket must be bound");
+        let mode = fs::metadata(&agent_path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, SOCKET_PERMISSION_MODE);
+
+        let mut forbidden = crate::ipc::connect_local_stream(&agent_path).unwrap();
+        forbidden
+            .write_all(b"{\"id\":\"forbidden\",\"method\":\"pane.get\",\"params\":{\"pane_id\":\"w1:p1\"}}\n")
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut forbidden)).unwrap();
+        assert_eq!(response["error"]["code"], "forbidden_method");
+
+        let mut full = crate::ipc::connect_local_stream(&api_path).unwrap();
+        full.write_all(
+            b"{\"id\":\"full\",\"method\":\"pane.get\",\"params\":{\"pane_id\":\"w1:p1\"}}\n",
+        )
+        .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut full)).unwrap();
+        assert_eq!(response["result"]["type"], "ok");
+
+        let mut allowed = crate::ipc::connect_local_stream(&agent_path).unwrap();
+        allowed
+            .write_all(
+                b"{\"id\":\"report\",\"method\":\"pane.report_agent\",\"params\":{\"pane_id\":\"w1:p1\",\"source\":\"custom:test\",\"agent\":\"test\",\"state\":\"idle\"}}\n",
+            )
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut allowed)).unwrap();
+        assert_eq!(response["result"]["type"], "ok");
+
+        assert_eq!(dispatched.load(Ordering::Relaxed), 2);
+        drop(handle);
+        assert!(!api_path.exists(), "api socket must be removed on drop");
+        assert!(!agent_path.exists(), "agent socket must be removed on drop");
+        drop(responder);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -1328,6 +1564,103 @@ mod tests {
             assert!(response.get("result").is_none(), "{method}");
             assert!(api_rx.try_recv().is_err(), "{method} reached the app");
         }
+    }
+
+    #[test]
+    fn agent_connection_rejects_methods_outside_the_agent_surface() {
+        let (mut client, server, path) = local_stream_pair("agent-forbidden");
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        client
+            .write_all(b"{\"id\":\"forbidden\",\"method\":\"pane.get\",\"params\":{\"pane_id\":\"w1:p1\"}}\n")
+            .unwrap();
+        client.flush().unwrap();
+
+        handle_agent_connection(
+            server,
+            &api_tx,
+            &EventHub::default(),
+            &Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap();
+
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(response["id"], "forbidden");
+        assert_eq!(response["error"]["code"], "forbidden_method");
+        assert!(response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("pane.get")));
+        assert!(
+            api_rx.try_recv().is_err(),
+            "forbidden request reached the app"
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn agent_connection_dispatches_allowed_report_method() {
+        let (mut client, server, path) = local_stream_pair("agent-allowed");
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        let responder = std::thread::spawn(move || {
+            let msg = api_rx.blocking_recv().expect("report request");
+            assert_eq!(
+                crate::api::api_method_name(&msg.request.method),
+                "pane.report_agent"
+            );
+            msg.respond_to
+                .send(
+                    serde_json::to_string(&SuccessResponse {
+                        id: msg.request.id,
+                        result: ResponseResult::Ok {},
+                    })
+                    .unwrap(),
+                )
+                .unwrap();
+        });
+        client
+            .write_all(
+                b"{\"id\":\"report\",\"method\":\"pane.report_agent\",\"params\":{\"pane_id\":\"w1:p1\",\"source\":\"custom:test\",\"agent\":\"test\",\"state\":\"idle\"}}\n",
+            )
+            .unwrap();
+        client.flush().unwrap();
+
+        handle_agent_connection(
+            server,
+            &api_tx,
+            &EventHub::default(),
+            &Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap();
+
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(response["id"], "report");
+        assert_eq!(response["result"]["type"], "ok");
+        assert!(response.get("error").is_none());
+        responder.join().unwrap();
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn agent_connection_answers_ping_without_dispatching() {
+        let (mut client, server, path) = local_stream_pair("agent-ping");
+        let (api_tx, mut api_rx) = mpsc::unbounded_channel::<ApiRequestMessage>();
+        client
+            .write_all(b"{\"id\":\"ping\",\"method\":\"ping\",\"params\":{}}\n")
+            .unwrap();
+        client.flush().unwrap();
+
+        handle_agent_connection(
+            server,
+            &api_tx,
+            &EventHub::default(),
+            &Arc::new(AtomicBool::new(true)),
+        )
+        .unwrap();
+
+        let response: serde_json::Value = serde_json::from_str(&read_line(&mut client)).unwrap();
+        assert_eq!(response["id"], "ping");
+        assert_eq!(response["result"]["type"], "pong");
+        assert!(api_rx.try_recv().is_err(), "ping reached the app");
+        let _ = fs::remove_file(path);
     }
 
     #[test]

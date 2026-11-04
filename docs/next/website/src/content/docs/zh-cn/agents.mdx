@@ -69,6 +69,8 @@ Herdr 能识别这些智能体,并从它们在屏幕上绘制的内容读取状�
 
 在 Linux 和 macOS 上,宿主可见的包装器可能会向 Herdr 隐藏真实的智能体进程。在包装器命令上设置 `HERDR_AGENT=<agent>`,告诉 Herdr 应使用哪个已有智能体的屏幕清单。例如,在 Linux 上运行 `HERDR_AGENT=claude fence -- claude`,或在 macOS 上运行 `HERDR_AGENT=claude nono run --profile claude-code -- claude`。这个提示的作用范围只限于该前台进程;仅在 VM 或容器内部设置时 Herdr 无法看到它,而且除非所有继承的前台进程都应被视为该智能体,否则不要全局 export。
 
+沙箱隐藏 socket 时,把 `herdr-agent.sock` 挂载为 `HERDR_SOCKET_PATH` 的值,可以让状态报告和恢复继续工作。agent socket 只接受报告、元数据、清除权限和释放方法,因此不会授予对其他窗格的输入控制。参见 [Socket API](/docs/socket-api/#agent-socket)。
+
 某些受限的 Linux 运行环境不会公开终端前台进程组。原生检测不可用时,以 `HERDR_PROCESS_DETECTION=child-groups` 启动 Herdr 服务器,即可选择启用直接子进程组推断。原生检测仍然优先,默认的 `native` 模式不会执行此推断。这个选择加入模式属于尽力而为,较新的后台任务可能会被误判为前台任务。该变量由服务器读取且需要重启;请在远程服务器环境中设置,而不是在连接客户端上设置。
 
 ## blocked 状态

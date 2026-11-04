@@ -238,7 +238,7 @@ description = "apply layout"
 
 任意で `description` を指定できます。指定すると、キーバインドヘルプパネル（`prefix+?` で開く）に、デフォルトの `'custom command'` ラベルの代わりに表示されます。
 
-カスタムコマンドは、利用可能な場合に `HERDR_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID`、`HERDR_ACTIVE_PANE_CWD` を受け取ります。Herdr が検出できる場合、シェルコマンドはフォーカス中のペインの作業ディレクトリから実行されます。
+カスタムコマンドは、利用可能な場合に `HERDR_SOCKET_PATH`、`HERDR_AGENT_SOCKET_PATH`、`HERDR_BIN_PATH`、`HERDR_ACTIVE_WORKSPACE_ID`、`HERDR_ACTIVE_TAB_ID`、`HERDR_ACTIVE_PANE_ID`、`HERDR_ACTIVE_PANE_CWD` を受け取ります。Herdr が検出できる場合、シェルコマンドはフォーカス中のペインの作業ディレクトリから実行されます。
 
 Windows では、カスタムコマンド文字列に `cmd.exe /d /c` が使われるため、環境変数には `%HERDR_BIN_PATH%` 構文を使います。PowerShell 構文を実行するには、たとえば `powershell.exe -NoProfile -Command "..."` のように明示的に呼び出してください。
 
@@ -592,6 +592,7 @@ Windows でのサポートは現時点で韓国語 IME に限定されていま�
 | `HERDR_CONFIG_PATH` | 設定ファイルのパスを上書きする。 |
 | `HERDR_SESSION` | CLI コマンドで名前付きセッションを選択する。 |
 | `HERDR_SOCKET_PATH` | 低レベルなソケットパスを上書きする。 |
+| `HERDR_AGENT_SOCKET_PATH` | 制限付きエージェントソケットのパスを上書きする。 |
 | `HERDR_LOG` | ログフィルタリングを設定する。例: `HERDR_LOG=herdr=debug`。 |
 | `HERDR_DISABLE_SOUND` | `[ui.sound] enabled = true` でも音の再生を無効にする。 |
 
