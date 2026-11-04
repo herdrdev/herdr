@@ -5,9 +5,9 @@ fn workspace_and_pane_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let reloaded = run_cli(&socket_path, &["server", "reload-config"]);
@@ -87,7 +87,7 @@ fn workspace_and_pane_management_commands_work() {
         serde_json::from_slice(&closed_workspace.stdout).unwrap();
     assert_eq!(closed_workspace_json["result"]["type"], "ok");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -95,12 +95,12 @@ fn worktree_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let repo = base.join("repo");
     let checkout = base.join("checkout");
     create_committed_repo(&repo);
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let branch = "worktree/cli-wrapper";
@@ -213,7 +213,7 @@ fn worktree_management_commands_work() {
     assert_eq!(force_removed["result"]["forced"], true);
     assert!(!checkout.exists());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -221,12 +221,12 @@ fn workspace_close_requires_explicit_worktree_group_intent() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let repo = base.join("repo");
     let checkout = base.join("checkout");
     create_committed_repo(&repo);
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli_json(
@@ -290,7 +290,7 @@ fn workspace_close_requires_explicit_worktree_group_intent() {
         "workspace close must not remove the checkout"
     );
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -298,12 +298,12 @@ fn forced_worktree_remove_terminates_processes_inside_checkout() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let repo = base.join("repo");
     let checkout = base.join("checkout-with-process");
     create_committed_repo(&repo);
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli_json(
@@ -359,7 +359,7 @@ fn forced_worktree_remove_terminates_processes_inside_checkout() {
     assert!(wait_for_pid_exit(pid, Duration::from_secs(3)));
     assert!(!checkout.exists());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -367,7 +367,7 @@ fn worktree_open_existing_checkout_by_path_and_branch() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let repo = base.join("repo");
     let checkout = base.join("external-checkout");
     create_committed_repo(&repo);
@@ -385,7 +385,7 @@ fn worktree_open_existing_checkout_by_path_and_branch() {
         ],
     );
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let opened = run_cli_json_in_dir(
@@ -475,7 +475,7 @@ fn worktree_open_existing_checkout_by_path_and_branch() {
     );
     assert_eq!(removed["result"]["type"], "worktree_removed");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -646,7 +646,7 @@ fn config_check_rejects_json_output() {
     assert!(checked.stdout.is_empty());
     assert_eq!(
         String::from_utf8_lossy(&checked.stderr),
-        "usage: herdr config check\n"
+        "usage: shepherd config check\n"
     );
 
     cleanup_test_base(&base);
@@ -688,7 +688,7 @@ fn worktree_cli_rejects_local_argument_errors_before_socket_use() {
         assert_eq!(
             output.status.code(),
             Some(2),
-            "herdr {} should fail as local parse error; stdout={} stderr={}",
+            "shepherd {} should fail as local parse error; stdout={} stderr={}",
             args.join(" "),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
@@ -703,9 +703,9 @@ fn tab_management_commands_work() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let created = run_cli(
@@ -763,5 +763,5 @@ fn tab_management_commands_work() {
     let closed_tab_json: serde_json::Value = serde_json::from_slice(&closed_tab.stdout).unwrap();
     assert_eq!(closed_tab_json["result"]["type"], "ok");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }

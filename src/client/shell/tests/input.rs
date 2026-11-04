@@ -491,7 +491,7 @@ fn non_latin_ctrl_chord_release_matches_after_ctrl_is_let_go() {
 }
 
 #[test]
-fn unmatched_release_never_takes_a_held_key_while_herdr_owns_another_press() {
+fn unmatched_release_never_takes_a_held_key_while_shepherd_owns_another_press() {
     use crate::protocol::{ClientKeyCode, ClientKeyKind};
 
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
@@ -499,7 +499,7 @@ fn unmatched_release_never_takes_a_held_key_while_herdr_owns_another_press() {
     state.set_snapshot(Box::new(snapshot()));
     state.set_pane_surface(surface());
 
-    // Hold `a` in the pane, then press the prefix: Herdr owns that press.
+    // Hold `a` in the pane, then press the prefix: Shepherd owns that press.
     let _ = state.handle_input_bytes(b"a");
     let _ = state.handle_input_bytes(b"\x1b[98;5u");
     // A release the leases cannot name must not be charged to the held `a`.
@@ -975,7 +975,7 @@ fn pane_text_commits(outcome: &ClientShellInput) -> Vec<String> {
         .collect()
 }
 
-/// A Kitty host that Herdr switched to report-all for prefix or navigate
+/// A Kitty host that Shepherd switched to report-all for prefix or navigate
 /// mode. Plain text can still arrive: Tern ignores report-all, IMEs commit
 /// text, and Ghostty `text:` binds type their bytes (#5255).
 fn report_all_kitty_host_state(snapshot: crate::protocol::ClientShellSnapshot) -> ClientShellState {

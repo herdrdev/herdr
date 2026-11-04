@@ -58,7 +58,7 @@ impl App {
     pub(crate) fn expire_metadata_at(&mut self, deadline: Instant, now: Instant) {
         let previous_toast = self.state.toast.clone();
         for update in self.state.expire_agent_metadata_at(deadline, now) {
-            self.refresh_new_herdr_toast_context_for_update(&update, &previous_toast);
+            self.refresh_new_shepherd_toast_context_for_update(&update, &previous_toast);
             self.emit_pane_state_update(&update);
         }
         let (panes, workspaces) = self.state.expire_metadata_tokens(now);
@@ -114,7 +114,7 @@ impl App {
         }
 
         let update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-update-check", move || {
+        if let Err(err) = crate::thread_spawn::spawn_named("shepherd-update-check", move || {
             crate::update::auto_update(update_tx)
         }) {
             tracing::warn!(err = %err, "failed to spawn update check thread");
@@ -133,7 +133,7 @@ impl App {
         self.next_agent_manifest_update_check = Some(Instant::now() + AUTO_UPDATE_CHECK_INTERVAL);
 
         let manifest_update_tx = self.event_tx.clone();
-        if let Err(err) = crate::thread_spawn::spawn_named("herdr-manifest-check", move || {
+        if let Err(err) = crate::thread_spawn::spawn_named("shepherd-manifest-check", move || {
             crate::detect::manifest_update::auto_update(manifest_update_tx)
         }) {
             tracing::warn!(err = %err, "failed to spawn agent manifest check thread");

@@ -1,6 +1,6 @@
 //! Runs and gates view for Shepherd.
 //!
-//! Follows Herdr's UI principles:
+//! Follows Shepherd's UI principles:
 //! - Pure state (`ShepherdRunsState`) separated from runtime/I/O.
 //! - Pure render (`render_shepherd_runs_panel`) taking `&ShepherdRunsState` and `&Palette`.
 //! - Mouse-first with keyboard shortcuts.
@@ -250,7 +250,7 @@ impl ShepherdRunsState {
         if let Some(run) = self.selected_run() {
             let task_id = run.task_id;
             let message = format!(
-                "¿Cancelar el run de la tarea '#{task_id}'? Aviso: los agentes ya lanzados seguirán vivos en sus terminales nativas de herdr."
+                "¿Cancelar el run de la tarea '#{task_id}'? Aviso: los agentes ya lanzados seguirán vivos en sus terminales nativas de shepherd."
             );
             self.sub_modal = RunsSubModal::ConfirmCancelRun { task_id, message };
         }

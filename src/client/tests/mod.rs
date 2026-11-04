@@ -204,22 +204,22 @@ fn windows_virtual_terminal_input_mode_sets_only_vti_bit() {
 fn windows_win32_input_mode_defaults_to_win32_and_honors_probe() {
     let _guard = env_lock().lock().unwrap();
     let _removed =
-        EnvVarsRemovedGuard::new(&["HERDR_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
+        EnvVarsRemovedGuard::new(&["SHEPHERD_WINDOWS_INPUT_PROBE", "SSH_CONNECTION", "SSH_TTY"]);
 
     assert!(windows_win32_input_mode_enabled());
     {
         let _ssh = EnvVarGuard::set("SSH_CONNECTION", "1 2 3 4");
         assert!(windows_win32_input_mode_enabled());
-        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "WiN32");
+        let _probe = EnvVarGuard::set("SHEPHERD_WINDOWS_INPUT_PROBE", "WiN32");
         assert!(windows_win32_input_mode_enabled());
     }
     {
         let _ssh = EnvVarGuard::set("SSH_TTY", "terminal");
         assert!(windows_win32_input_mode_enabled());
-        let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "vT");
+        let _probe = EnvVarGuard::set("SHEPHERD_WINDOWS_INPUT_PROBE", "vT");
         assert!(!windows_win32_input_mode_enabled());
     }
-    let _probe = EnvVarGuard::set("HERDR_WINDOWS_INPUT_PROBE", "win32");
+    let _probe = EnvVarGuard::set("SHEPHERD_WINDOWS_INPUT_PROBE", "win32");
     assert!(windows_win32_input_mode_enabled());
 }
 
@@ -356,7 +356,7 @@ impl TempImageFile {
             .unwrap()
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "herdr-client-drop-{name_fragment}-{}-{nanos}.{extension}",
+            "shepherd-client-drop-{name_fragment}-{}-{nanos}.{extension}",
             std::process::id()
         ));
         std::fs::write(&path, bytes).unwrap();
@@ -453,7 +453,7 @@ fn terminal_frame_kitty_detection_matches_apc_prefix() {
 }
 
 #[test]
-fn kitty_graphics_image_id_parser_tracks_herdr_ids_only() {
+fn kitty_graphics_image_id_parser_tracks_shepherd_ids_only() {
     let ids = kitty_graphics_image_ids(
         b"text\x1b_Ga=t,t=d,f=32,s=1,v=1,i=10023,q=2;AAAA\x1b\\\x1b_Ga=p,i=10023,p=7;\x1b\\",
     );
@@ -611,7 +611,7 @@ fn client_error_display_connection_failed() {
         "should mention connection failure: {msg}"
     );
     assert!(
-        msg.contains("herdr server"),
+        msg.contains("shepherd server"),
         "should suggest starting server: {msg}"
     );
 }
@@ -665,7 +665,7 @@ fn client_error_display_detached_default_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr` to reattach"),
+        msg.contains("Run `shepherd` to reattach"),
         "should suggest default reattach command: {msg}"
     );
 }
@@ -680,7 +680,7 @@ fn client_error_display_detached_named_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr session attach work` to reattach"),
+        msg.contains("Run `shepherd session attach work` to reattach"),
         "should suggest named session reattach command: {msg}"
     );
 }
@@ -690,7 +690,7 @@ fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
     let _guard = env_lock().lock().unwrap();
     let _remote_env = EnvVarGuard::set(
         crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
+        "shepherd --remote host --session work",
     );
     let _session_env = EnvVarGuard::set(crate::session::SESSION_ENV_VAR, "work");
     let err = ClientError::ServerShutdown {
@@ -698,7 +698,7 @@ fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Run `shepherd --remote host --session work` to reattach"),
         "should prefer remote reattach command: {msg}"
     );
 }
@@ -720,12 +720,12 @@ fn client_error_display_remote_connection_lost_has_reattach_hint() {
     let _guard = env_lock().lock().unwrap();
     let _remote_env = EnvVarGuard::set(
         crate::remote::REATTACH_COMMAND_ENV_VAR,
-        "herdr --remote host --session work",
+        "shepherd --remote host --session work",
     );
     let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
     let msg = err.to_string();
     assert!(
-        msg.contains("lost connection to remote Herdr"),
+        msg.contains("lost connection to remote Shepherd"),
         "should mention remote connection loss: {msg}"
     );
     assert!(
@@ -733,7 +733,7 @@ fn client_error_display_remote_connection_lost_has_reattach_hint() {
         "should explain possible persistence: {msg}"
     );
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Run `shepherd --remote host --session work` to reattach"),
         "should show remote reattach command: {msg}"
     );
 }
@@ -763,7 +763,7 @@ fn sound_from_notify_message_rejects_unknown_payloads() {
 fn reload_local_client_config_refreshes_local_client_presentation_state() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-config-reload-{}-{}.toml",
+        "shepherd-client-config-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -801,7 +801,7 @@ fn reload_local_client_config_refreshes_local_client_presentation_state() {
 fn reload_local_client_config_keeps_ui_preferences_when_ui_is_invalid() {
     let _guard = crate::config::test_config_env_lock().lock().unwrap();
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-invalid-ui-reload-{}-{}.toml",
+        "shepherd-client-invalid-ui-reload-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

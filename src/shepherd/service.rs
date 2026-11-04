@@ -1,7 +1,7 @@
-//! In-process Shepherd runtime orchestration service for Herdr (Phase F2).
+//! In-process Shepherd runtime orchestration service for Shepherd (Phase F2).
 //!
 //! Runs outside the TUI render loop on background worker threads and communicates
-//! with `App` exclusively through the `HerdrInProcess` channel (`ApiRequestSender` + `EventHub`).
+//! with `App` exclusively through the `ShepherdInProcess` channel (`ApiRequestSender` + `EventHub`).
 
 use std::path::PathBuf;
 use std::sync::{
@@ -317,7 +317,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let tmp_dir = std::env::temp_dir().join(format!(
-            "herdr-shep-runtime-svc-{}-{nonce}",
+            "shepherd-shep-runtime-svc-{}-{nonce}",
             std::process::id()
         ));
         let state_dir = tmp_dir.join("state");
@@ -436,7 +436,7 @@ mod tests {
             .unwrap()
             .as_nanos();
         let tmp_dir = std::env::temp_dir().join(format!(
-            "herdr-shep-nonblocking-startup-{}-{nonce}",
+            "shepherd-shep-nonblocking-startup-{}-{nonce}",
             std::process::id()
         ));
         let state_dir = tmp_dir.join("state");

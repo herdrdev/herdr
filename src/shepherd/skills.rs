@@ -1,6 +1,6 @@
 //! Skills view for Shepherd.
 //!
-//! Follows Herdr's UI principles:
+//! Follows Shepherd's UI principles:
 //! - Pure state (`ShepherdSkillsState`) separated from runtime/I/O.
 //! - Pure render (`render_shepherd_skills_panel`) taking `&ShepherdSkillsState` and `&Palette`.
 //! - Mouse-first with keyboard shortcuts.

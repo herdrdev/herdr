@@ -33,7 +33,7 @@ pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
     let mut command = completion_command(&source);
     if matches!(shell, Shell::Zsh) {
         let mut output = Vec::new();
-        generate(shell, &mut command, "herdr", &mut output);
+        generate(shell, &mut command, "shepherd", &mut output);
         let script = String::from_utf8(output).map_err(|err| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, err.utf8_error())
         })?;
@@ -41,7 +41,7 @@ pub(super) fn run_completion_command(args: &[String]) -> std::io::Result<i32> {
         std::io::stdout().write_all(space_separated_zsh_long_options(&script).as_bytes())?;
     } else {
         crate::platform::begin_cli_output();
-        generate(shell, &mut command, "herdr", &mut std::io::stdout());
+        generate(shell, &mut command, "shepherd", &mut std::io::stdout());
     }
     Ok(0)
 }
@@ -140,7 +140,7 @@ fn parse_shell(shell: &str) -> Option<Shell> {
 }
 
 fn print_completion_help() {
-    eprintln!("usage: herdr completion <{}>", supported_shells_usage());
+    eprintln!("usage: shepherd completion <{}>", supported_shells_usage());
 }
 
 #[cfg(test)]
@@ -148,7 +148,7 @@ mod tests {
     fn script(shell: clap_complete::Shell, source: &clap::Command) -> String {
         let mut command = super::completion_command(source);
         let mut output = Vec::new();
-        clap_complete::generate(shell, &mut command, "herdr", &mut output);
+        clap_complete::generate(shell, &mut command, "shepherd", &mut output);
         String::from_utf8(output).expect("completion is utf8")
     }
 

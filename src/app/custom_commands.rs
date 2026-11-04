@@ -248,7 +248,7 @@ impl App {
         )];
         if let Ok(current_exe) = std::env::current_exe() {
             env.push((
-                "HERDR_BIN_PATH".to_string(),
+                "SHEPHERD_BIN_PATH".to_string(),
                 current_exe.display().to_string(),
             ));
         }
@@ -256,23 +256,23 @@ impl App {
         let mut cwd = None;
         if let Some(ws_idx) = self.state.active {
             env.push((
-                "HERDR_ACTIVE_WORKSPACE_ID".to_string(),
+                "SHEPHERD_ACTIVE_WORKSPACE_ID".to_string(),
                 self.public_workspace_id(ws_idx),
             ));
             if let Some(workspace) = self.state.workspaces.get(ws_idx) {
                 let tab_idx = workspace.active_tab_index();
                 if let Some(tab_id) = self.public_tab_id(ws_idx, tab_idx) {
-                    env.push(("HERDR_ACTIVE_TAB_ID".to_string(), tab_id));
+                    env.push(("SHEPHERD_ACTIVE_TAB_ID".to_string(), tab_id));
                 }
                 if let Some(pane_id) = workspace.focused_pane_id() {
                     if let Some(public_pane_id) = self.public_pane_id(ws_idx, pane_id) {
-                        env.push(("HERDR_ACTIVE_PANE_ID".to_string(), public_pane_id));
+                        env.push(("SHEPHERD_ACTIVE_PANE_ID".to_string(), public_pane_id));
                     }
                     if let Some(pane_cwd) = workspace.active_tab().and_then(|tab| {
                         tab.cwd_for_pane(pane_id, &self.state.terminals, &self.terminal_runtimes)
                     }) {
                         env.push((
-                            "HERDR_ACTIVE_PANE_CWD".to_string(),
+                            "SHEPHERD_ACTIVE_PANE_CWD".to_string(),
                             pane_cwd.display().to_string(),
                         ));
                         if pane_cwd.is_dir() {
@@ -565,7 +565,7 @@ fn unique_scrollback_path(attempt: u32) -> std::path::PathBuf {
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
     std::env::temp_dir().join(format!(
-        "herdr-scrollback-{}-{nanos}-{attempt}.txt",
+        "shepherd-scrollback-{}-{nanos}-{attempt}.txt",
         std::process::id()
     ))
 }
@@ -735,7 +735,7 @@ mod tests {
     fn shell_command_invocation_executes_endpoint_owned_definition() {
         let mut app = test_app();
         let path = std::path::PathBuf::from(format!(
-            "/var/tmp/herdr-command-invoke-{}-{}",
+            "/var/tmp/shepherd-command-invoke-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

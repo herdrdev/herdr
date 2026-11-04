@@ -326,7 +326,7 @@ fn spawn_in_terminals(
         agent_id: agent.id.clone(),
         vendor_name: vendor_name.to_owned(),
         command: vendor.command.clone(),
-        herdr_agent: vendor.herdr_agent.clone(),
+        shepherd_agent: vendor.shepherd_agent.clone(),
         args,
         label: label.clone(),
         env,
@@ -360,7 +360,7 @@ fn spawn_in_terminals(
         prompt.push_str(RUNTIME_CONSTRAINTS);
     }
 
-    let (state, notice) = if vendor.herdr_agent.is_empty() {
+    let (state, notice) = if vendor.shepherd_agent.is_empty() {
         terminals.send_text(&opened.pane, &prompt)?;
         ("starting".to_owned(), String::new())
     } else {
@@ -368,7 +368,7 @@ fn spawn_in_terminals(
             PromptOutcome::Delivered => ("starting".to_owned(), String::new()),
             PromptOutcome::Blocked => (
                 "blocked".to_owned(),
-                "Herdr says the agent is waiting for human input; attach to its pane, resolve the prompt, then send its task.".into(),
+                "Shepherd says the agent is waiting for human input; attach to its pane, resolve the prompt, then send its task.".into(),
             ),
         }
     };

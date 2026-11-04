@@ -22,7 +22,7 @@ describe("official publishing workflow boundaries", () => {
     expect(preview.jobs.build.strategy.matrix.include).toContainEqual({
       target: "x86_64-pc-windows-msvc",
       os: "windows-latest",
-      name: "herdr-windows-x86_64.zip",
+      name: "shepherd-windows-x86_64.zip",
     });
     expect(preview.jobs.publish.needs).toContain("build");
   });
@@ -60,7 +60,7 @@ describe("official publishing workflow boundaries", () => {
   });
 
   test.skipIf(process.platform === "win32")("admin gate permits admins and fails closed for other roles or API errors", () => {
-    const dir = mkdtempSync("/var/tmp/herdr-admin-gate-");
+    const dir = mkdtempSync("/var/tmp/shepherd-admin-gate-");
     try {
       writeFileSync(join(dir, "gh"), `#!/bin/sh
 case "$2" in

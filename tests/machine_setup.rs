@@ -27,26 +27,26 @@ fi
 case "$*" in
     *powershell.exe*)
         if [ "$FAKE_WINDOWS_TRANSPORT_FAILURE" = yes ]; then echo 'ssh: connect to host fake-host port 22: Connection refused' >&2; exit 255; fi
-        if [ "$FAKE_WINDOWS" = yes ]; then printf '\n%s\n%s\n' 'herdr-remote-output-ready:1' 'herdr-windows:AMD64'; exit 0; fi
+        if [ "$FAKE_WINDOWS" = yes ]; then printf '\n%s\n%s\n' 'shepherd-remote-output-ready:1' 'shepherd-windows:AMD64'; exit 0; fi
         exit 1 ;;
 esac
-if [ "$last" = 'command -v herdr' ]; then
-    if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/herdr; fi
+if [ "$last" = 'command -v shepherd' ]; then
+    if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/shepherd; fi
     exit 0
 fi
 case "$last" in
     'tee '*) cat >/dev/null; exit 0 ;;
 esac
 case "$last" in
-    *'herdr-remote-output-ready:1'*) script=$last ;;
+    *'shepherd-remote-output-ready:1'*) script=$last ;;
     *) script=$(cat) ;;
 esac
-printf '\n%s\n' 'herdr-remote-output-ready:1'
+printf '\n%s\n' 'shepherd-remote-output-ready:1'
 case "$script" in
     *'uname -s'*) echo platform >>"$FAKE_ROOT/probes"; uname -s; uname -m ;;
     *'version='*)
         echo candidates >>"$FAKE_ROOT/probes"
-        if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/herdr; fi ;;
+        if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/shepherd; fi ;;
     *'status client --json'*)
         if [ "$FAKE_INSTALLED" = new ] || [ -f "$FAKE_ROOT/installed" ]; then
             printf '%s\n' "$FAKE_CLIENT_STATUS"
@@ -70,9 +70,9 @@ case "$script" in
     *'remote-client-bridge'*)
         printf '%s\n' "$script" >"$FAKE_ROOT/start-command"
         echo start >>"$FAKE_ROOT/actions"; echo 'test startup failure' >&2; exit 1 ;;
-    *'mkdir -p'*) printf '/fake/tmp\000/fake/herdr\000' ;;
+    *'mkdir -p'*) printf '/fake/tmp\000/fake/shepherd\000' ;;
     *'chmod 755'*) echo install >>"$FAKE_ROOT/actions"; touch "$FAKE_ROOT/installed" ;;
-    *'command -v herdr'*) if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/herdr; fi ;;
+    *'command -v shepherd'*) if [ "$FAKE_INSTALLED" != missing ]; then echo /home/remote/.local/bin/shepherd; fi ;;
     *'test -x '*) exit 1 ;;
     *) echo "unexpected fake SSH script: $script" >&2; exit 1 ;;
 esac
@@ -125,7 +125,7 @@ fn setup_options(
     options: SetupOptions<'_>,
 ) -> SetupResult {
     let root = std::path::PathBuf::from(format!(
-        "/var/tmp/herdr-machine-setup-{}-{}-{}-{}-{}-{}",
+        "/var/tmp/shepherd-machine-setup-{}-{}-{}-{}-{}-{}",
         std::process::id(),
         installed,
         answer.trim().is_empty(),
@@ -137,9 +137,9 @@ fn setup_options(
             .as_nanos()
     ));
     let app = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "shepherd-dev"
     } else {
-        "herdr"
+        "shepherd"
     };
     fs::create_dir_all(root.join("bin")).unwrap();
     fs::create_dir_all(root.join("config").join(app)).unwrap();
@@ -150,14 +150,14 @@ fn setup_options(
         "onboarding = false\n[remote]\nmanage_ssh_config = false\n",
     )
     .unwrap();
-    let status = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let status = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["status", "client", "--json"])
         .output()
         .unwrap();
     assert!(status.status.success());
 
     let pair = native_pty_system().openpty(PtySize::default()).unwrap();
-    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_shepherd"));
     if handoff {
         command.args(["--remote", "fake-host", "--handoff"]);
     } else {
@@ -200,12 +200,12 @@ fn setup_options(
         String::from_utf8(status.stdout).unwrap(),
     );
     for name in [
-        "HERDR_ENV",
-        "HERDR_SESSION",
-        "HERDR_SOCKET_PATH",
-        "HERDR_CLIENT_SOCKET_PATH",
-        "HERDR_REMOTE_BINARY",
-        "HERDR_CONFIG_PATH",
+        "SHEPHERD_ENV",
+        "SHEPHERD_SESSION",
+        "SHEPHERD_SOCKET_PATH",
+        "SHEPHERD_CLIENT_SOCKET_PATH",
+        "SHEPHERD_REMOTE_BINARY",
+        "SHEPHERD_CONFIG_PATH",
     ] {
         command.env_remove(name);
     }
@@ -306,14 +306,14 @@ fn machine_add_accepts_help_argument_order() {
         .unwrap()
         .as_nanos();
     let root = std::env::temp_dir().join(format!(
-        "herdr-machine-add-order-{}-{nonce}",
+        "shepherd-machine-add-order-{}-{nonce}",
         std::process::id()
     ));
     fs::create_dir(&root).unwrap();
     let app = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "shepherd-dev"
     } else {
-        "herdr"
+        "shepherd"
     };
     fs::create_dir_all(root.join("config").join(app)).unwrap();
     fs::write(
@@ -321,7 +321,7 @@ fn machine_add_accepts_help_argument_order() {
         "onboarding = false\n[remote]\nmanage_ssh_config = false\n",
     )
     .unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     command.args(["machine", "add", "--label", "coder", "workstation.coder"]);
     // Reach remote preparation, but never execute SSH or start a server.
     command.env("PATH", root.join("no-executables"));
@@ -330,12 +330,12 @@ fn machine_add_accepts_help_argument_order() {
     command.env("XDG_STATE_HOME", root.join("state"));
     command.env("XDG_RUNTIME_DIR", &root);
     for name in [
-        "HERDR_ENV",
-        "HERDR_SESSION",
-        "HERDR_SOCKET_PATH",
-        "HERDR_CLIENT_SOCKET_PATH",
-        "HERDR_REMOTE_BINARY",
-        "HERDR_CONFIG_PATH",
+        "SHEPHERD_ENV",
+        "SHEPHERD_SESSION",
+        "SHEPHERD_SOCKET_PATH",
+        "SHEPHERD_CLIENT_SOCKET_PATH",
+        "SHEPHERD_REMOTE_BINARY",
+        "SHEPHERD_CONFIG_PATH",
     ] {
         command.env_remove(name);
     }

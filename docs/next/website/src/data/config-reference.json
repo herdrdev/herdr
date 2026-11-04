@@ -457,7 +457,7 @@
           "key": "update.channel",
           "type": "enum",
           "default": "\"stable\" (\"preview\" for Windows preview builds)",
-          "description": "Update channel used by background version checks and herdr update. Stable Windows builds default to stable; existing Windows preview installs stay on preview until explicitly switched. Homebrew, mise, and Nix installs ignore the preview channel.",
+          "description": "Update channel used by background version checks and shepherd update. Stable Windows builds default to stable; existing Windows preview installs stay on preview until explicitly switched. Homebrew, mise, and Nix installs ignore the preview channel.",
           "values": [
             "stable",
             "preview"
@@ -467,13 +467,13 @@
           "key": "update.version_check",
           "type": "boolean",
           "default": "true",
-          "description": "Check herdr.dev for new Herdr versions in the background."
+          "description": "Check shepherd.dev for new Shepherd versions in the background."
         },
         {
           "key": "update.manifest_check",
           "type": "boolean",
           "default": "true",
-          "description": "Check herdr.dev for remote agent-detection manifest updates in the background. Bundled manifests and local overrides still apply."
+          "description": "Check shepherd.dev for remote agent-detection manifest updates in the background. Bundled manifests and local overrides still apply."
         }
       ]
     },
@@ -587,7 +587,7 @@
           "key": "keys.detach",
           "type": "keybinding",
           "default": "\"prefix+q\"",
-          "description": "Detach the current client from its Herdr server."
+          "description": "Detach the current client from its Shepherd server."
         },
         {
           "key": "keys.reload_config",
@@ -635,7 +635,7 @@
           "key": "keys.remote_image_paste",
           "type": "string",
           "default": "\"ctrl+v\"",
-          "description": "Local-client shortcut that sends a clipboard image to a remote Herdr session."
+          "description": "Local-client shortcut that sends a clipboard image to a remote Shepherd session."
         },
         {
           "key": "keys.new_tab",
@@ -887,7 +887,7 @@
           "key": "ui.sidebar_start_collapsed",
           "type": "boolean",
           "default": "false",
-          "description": "Start Herdr with the sidebar collapsed. Changes take effect on the next launch."
+          "description": "Start Shepherd with the sidebar collapsed. Changes take effect on the next launch."
         },
         {
           "key": "ui.sidebar_collapsed_mode",
@@ -903,13 +903,13 @@
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",
-          "description": "Terminal width at or below which Herdr uses the mobile single-column layout."
+          "description": "Terminal width at or below which Shepherd uses the mobile single-column layout."
         },
         {
           "key": "ui.mouse_capture",
           "type": "boolean",
           "default": "true",
-          "description": "Capture mouse input for Herdr's mouse UI."
+          "description": "Capture mouse input for Shepherd's mouse UI."
         },
         {
           "key": "ui.copy_on_select",
@@ -1038,7 +1038,7 @@
           "key": "ui.window_title",
           "type": "string",
           "default": "\"{hostname}: {workspace}\"",
-          "description": "Title Herdr writes to the terminal it runs in. Tokens: {hostname}, {workspace}, {tab}, {pane}, {terminal_title}. Empty leaves the outer title alone."
+          "description": "Title Shepherd writes to the terminal it runs in. Tokens: {hostname}, {workspace}, {tab}, {pane}, {terminal_title}. Empty leaves the outer title alone."
         },
         {
           "key": "ui.agent_panel_sort",
@@ -1106,10 +1106,10 @@
           "key": "ui.toast.delivery",
           "type": "enum",
           "default": "\"off\"",
-          "description": "Popup notification delivery. off disables popups, herdr shows in-app toasts, terminal asks the outer terminal for a desktop notification, system asks the OS notification service directly.",
+          "description": "Popup notification delivery. off disables popups, shepherd shows in-app toasts, terminal asks the outer terminal for a desktop notification, system asks the OS notification service directly.",
           "values": [
             "off",
-            "herdr",
+            "shepherd",
             "terminal",
             "system"
           ]
@@ -1118,13 +1118,13 @@
           "key": "ui.toast.delay_seconds",
           "type": "integer",
           "default": "1",
-          "description": "Seconds to wait before sending finished or needs-input agent notifications. Herdr notifies only if the pane is still in the same state when the delay expires. 0 is instant; valid values are 0 through 3600."
+          "description": "Seconds to wait before sending finished or needs-input agent notifications. Shepherd notifies only if the pane is still in the same state when the delay expires. 0 is instant; valid values are 0 through 3600."
         },
         {
-          "key": "ui.toast.herdr.position",
+          "key": "ui.toast.shepherd.position",
           "type": "enum",
           "default": "\"bottom-right\"",
-          "description": "In-app toast position, relative to the full Herdr frame.",
+          "description": "In-app toast position, relative to the full Shepherd frame.",
           "values": [
             "top-left",
             "top-right",
@@ -1434,7 +1434,7 @@
           "key": "session.resume_agents_on_restore",
           "type": "boolean",
           "default": "true",
-          "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Herdr session."
+          "description": "Resume supported AI-agent panes into their native conversation sessions when restoring a Shepherd session."
         },
         {
           "key": "session.startup_per_agent_delay_ms",
@@ -1451,8 +1451,8 @@
         {
           "key": "worktrees.directory",
           "type": "string",
-          "default": "\"~/.herdr/worktrees\"",
-          "description": "Root directory under which Herdr creates <repo>/<branch-slug> checkouts."
+          "default": "\"~/.shepherd/worktrees\"",
+          "description": "Root directory under which Shepherd creates <repo>/<branch-slug> checkouts."
         }
       ]
     },
@@ -1464,7 +1464,7 @@
           "key": "remote.manage_ssh_config",
           "type": "boolean",
           "default": "true",
-          "description": "Add keepalive fallbacks and private connection reuse for `herdr --remote`. Set false to run plain ssh unchanged."
+          "description": "Add keepalive fallbacks and private connection reuse for `shepherd --remote`. Set false to run plain ssh unchanged."
         }
       ]
     },
@@ -1488,7 +1488,7 @@
           "key": "experimental.allow_nested",
           "type": "boolean",
           "default": "false",
-          "description": "Allow launching herdr inside an existing herdr pane."
+          "description": "Allow launching shepherd inside an existing shepherd pane."
         },
         {
           "key": "experimental.kitty_graphics",

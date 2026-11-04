@@ -1,5 +1,5 @@
 {
-  // Project-local Rust tuning for herdr
+  // Project-local Rust tuning for shepherd
   "file_scan_exclusions": [
     "**/.git",
     "**/.svn",

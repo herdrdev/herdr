@@ -11,7 +11,7 @@ param(
     [ValidateSet('default', 'win32', 'vt')][string] $Profile = 'default',
     [ValidateSet('native', 'legacy', 'mok2', 'kitty')][string[]] $Modes = @('native', 'legacy', 'mok2', 'kitty'),
     [ValidateSet('stable', 'preview')][string[]] $Channels = @('stable', 'preview'),
-    [ValidateSet('direct', 'herdr', 'herdr-remote')][string[]] $Paths = @('direct', 'herdr'),
+    [ValidateSet('direct', 'shepherd', 'shepherd-remote')][string[]] $Paths = @('direct', 'shepherd'),
     [string[]] $Cases,
     [int[]] $Widths = @(80, 119, 120, 121, 132, 160, 240),
     [int[]] $Heights = @(24, 50),
@@ -42,7 +42,7 @@ if ($release) {
     $runSpecs = @($matrix.release_plan)
     $releaseCaseIds = @($runSpecs | ForEach-Object { $_.cases } | Sort-Object -Unique)
     $selectedCases = @($matrix.cases | Where-Object id -in $releaseCaseIds)
-    $Channels = @('stable', 'preview'); $Paths = @('herdr'); $Modes = @('legacy', 'mok2', 'kitty')
+    $Channels = @('stable', 'preview'); $Paths = @('shepherd'); $Modes = @('legacy', 'mok2', 'kitty')
     $Widths = @(80); $Heights = @(24)
 } else {
     $runSpecs = @(foreach ($channel in $Channels) { foreach ($path in $Paths) { foreach ($mode in $Modes) {
@@ -54,13 +54,13 @@ if (-not $AllowInputInjection) { throw 'Read scripts/windows_input/README.md, th
 if (-not [Environment]::UserInteractive) { throw 'Interactive desktop unavailable' }
 if ($Widths.Count -eq 0 -or $Heights.Count -eq 0 -or @($Widths | Where-Object { $_ -lt 40 -or $_ -gt 500 }).Count -or @($Heights | Where-Object { $_ -lt 15 -or $_ -gt 150 }).Count) { throw 'Invalid geometry selection' }
 Add-Type -Path "$PSScriptRoot/windows_input/Native.cs"
-[HerdrInputGauntlet.Desktop]::AssertNotElevated($PID)
-[HerdrInputGauntlet.Desktop]::Neutral()
+[ShepherdInputGauntlet.Desktop]::AssertNotElevated($PID)
+[ShepherdInputGauntlet.Desktop]::Neutral()
 $controllerWindow = [IntPtr]::Zero
 if (@($selectedCases | Where-Object id -eq 'mouse-focus-refresh').Count) {
-    $controllerWindow = [HerdrInputGauntlet.Desktop]::GetForegroundWindow()
+    $controllerWindow = [ShepherdInputGauntlet.Desktop]::GetForegroundWindow()
     if ($controllerWindow -eq [IntPtr]::Zero) { throw 'Controller has no foreground window for focus-cycle qualification' }
-    [HerdrInputGauntlet.Desktop]::AssertNotElevated([HerdrInputGauntlet.Desktop]::Pid($controllerWindow))
+    [ShepherdInputGauntlet.Desktop]::AssertNotElevated([ShepherdInputGauntlet.Desktop]::Pid($controllerWindow))
 }
 $needsClipboard = $false
 foreach ($case in $selectedCases) {
@@ -68,8 +68,8 @@ foreach ($case in $selectedCases) {
         @($Modes | Where-Object { $case.expected.ContainsKey($_) }).Count) { $needsClipboard = $true; break }
 }
 $clipboardFormatsAtStart = if ($needsClipboard -and $ClearClipboard) {
-    [HerdrInputGauntlet.Desktop]::ClearClipboardForRun()
-} else { [HerdrInputGauntlet.Desktop]::CountClipboardFormats() }
+    [ShepherdInputGauntlet.Desktop]::ClearClipboardForRun()
+} else { [ShepherdInputGauntlet.Desktop]::CountClipboardFormats() }
 if ($needsClipboard -and -not $ClearClipboard -and $clipboardFormatsAtStart -ne 0) {
     throw 'Clipboard is not empty; save its contents, then clear it or pass -ClearClipboard to discard it before running'
 }
@@ -89,20 +89,20 @@ if (-not $ExePath) {
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     } finally { Pop-Location }
     $targetRoot = if ($env:CARGO_TARGET_DIR) { [IO.Path]::GetFullPath($env:CARGO_TARGET_DIR, $repo) } else { Join-Path $repo 'target' }
-    $builtExe = Join-Path $targetRoot 'release/herdr.exe'
+    $builtExe = Join-Path $targetRoot 'release/shepherd.exe'
     $package = Join-Path $repo '.local/windows-input/cache/Microsoft.Windows.Console.ConPTY.nupkg'
     $stage = Join-Path $root 'package'
     Write-Host 'Staging the current binary with the pinned ConPTY runtime'
-    $null = Invoke-GauntletProcess $python @((Join-Path $PSScriptRoot 'package_windows_conpty.py'), 'stage', '--package', $package, '--herdr-exe', $builtExe, '--output-dir', $stage) -Timeout 300
-    $ExePath = Join-Path $stage 'herdr.exe'
+    $null = Invoke-GauntletProcess $python @((Join-Path $PSScriptRoot 'package_windows_conpty.py'), 'stage', '--package', $package, '--shepherd-exe', $builtExe, '--output-dir', $stage) -Timeout 300
+    $ExePath = Join-Path $stage 'shepherd.exe'
 }
 $exe = (Resolve-Path -LiteralPath $ExePath).Path
 $conpty = Join-Path ([IO.Path]::GetDirectoryName($exe)) 'conpty/conpty.dll'
-if (-not (Test-Path -LiteralPath $conpty -PathType Leaf)) { throw "Selected Herdr binary has no adjacent bundled ConPTY runtime: $exe. Pass -ExePath to a packaged herdr.exe" }
+if (-not (Test-Path -LiteralPath $conpty -PathType Leaf)) { throw "Selected Shepherd binary has no adjacent bundled ConPTY runtime: $exe. Pass -ExePath to a packaged shepherd.exe" }
 $pwsh = (Get-Process -Id $PID).Path
 $exeHash = (Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
 if ($sourceCommit) { Write-Host "Source: $sourceCommit$(if ($sourceDirty) { ' + working tree changes' })" }
-Write-Host "Herdr under test: $exe"
+Write-Host "Shepherd under test: $exe"
 Write-Host "SHA-256: $exeHash"
 Write-Host "Pane observer modes: $($Modes -join ', '); widths: $($Widths -join ', '); heights: $($Heights -join ', ')"
 Write-Host "Campaign: $(if ($release) { 'release matrix' } else { 'diagnostic' }); channels: $($Channels -join ', '); paths: $($Paths -join ', ')"
@@ -144,7 +144,7 @@ function Get-GauntletClientTrace($Plan) {
     # The client writes its mapper trace into the named session's data directory.
     # The client log grows independently of the transport log, so this keeps its
     # own cursor rather than reusing the transport line count.
-    $log = Join-Path $Plan.config_home "herdr/sessions/$($Plan.session)/herdr-client.log"
+    $log = Join-Path $Plan.config_home "shepherd/sessions/$($Plan.session)/shepherd-client.log"
     if (-not (Test-Path -LiteralPath $log)) { return $null }
     $lines = @(Get-Content -LiteralPath $log | Where-Object { $_ -like '*windows input trace: input batch*' })
     $since = if ($Plan.ContainsKey('client_trace_lines')) { [int]$Plan.client_trace_lines } else { 0 }
@@ -155,11 +155,11 @@ function Get-GauntletClientTrace($Plan) {
 function Set-ObservedGeometry($Plan, $Window, $WindowPid, $Width, $Height) {
     # Correct against actual console cell measurements, not a claimed pixel size.
     for ($attempt = 0; $attempt -lt 8; $attempt++) {
-        [HerdrInputGauntlet.Desktop]::Guard($Window, $Plan.nonce, $WindowPid)
+        [ShepherdInputGauntlet.Desktop]::Guard($Window, $Plan.nonce, $WindowPid)
         $outer = Outer-State $Plan
         $w = [int]$outer.geometry[0]; $h = [int]$outer.geometry[1]
         if ($w -eq $Width -and $h -eq $Height) { return $outer }
-        [HerdrInputGauntlet.Desktop]::Resize($Window, $Plan.nonce, $WindowPid, ($Width - $w) * 8, ($Height - $h) * 16)
+        [ShepherdInputGauntlet.Desktop]::Resize($Window, $Plan.nonce, $WindowPid, ($Width - $w) * 8, ($Height - $h) * 16)
         Start-Sleep -Milliseconds 350
         Update-GauntletLease $root
     }
@@ -171,7 +171,7 @@ function New-Observation($HostName, $Plan, $Width, $Height, $Case) {
 }
 
 try {
-    [HerdrInputGauntlet.Desktop]::StartEmergencyStop()
+    [ShepherdInputGauntlet.Desktop]::StartEmergencyStop()
     $terminals = @{ stable = (Resolve-Terminal 'stable' $StablePath); preview = (Resolve-Terminal 'preview' $PreviewPath) }
     foreach ($channel in $Channels) {
         $terminal = $terminals[$channel]
@@ -181,8 +181,8 @@ try {
     $launcherIdentities = @{}; $installationIdentities = @{}
     foreach ($channel in $Channels) {
         if ($terminals[$channel]) {
-            $launcherIdentities[$channel] = [HerdrInputGauntlet.Desktop]::FileIdentity($terminals[$channel].path)
-            $installationIdentities[$channel] = [HerdrInputGauntlet.Desktop]::FileIdentity([IO.Path]::GetDirectoryName($terminals[$channel].path))
+            $launcherIdentities[$channel] = [ShepherdInputGauntlet.Desktop]::FileIdentity($terminals[$channel].path)
+            $installationIdentities[$channel] = [ShepherdInputGauntlet.Desktop]::FileIdentity([IO.Path]::GetDirectoryName($terminals[$channel].path))
         }
     }
     if ($Channels -contains 'stable' -and $Channels -contains 'preview' -and $terminals.stable -and $terminals.preview -and ($launcherIdentities.stable -eq $launcherIdentities.preview -or $installationIdentities.stable -eq $installationIdentities.preview)) {
@@ -201,7 +201,7 @@ try {
         foreach ($spec in @($runSpecs | Where-Object channel -eq $hostName)) {
             $path = [string]$spec.path; $mode = [string]$spec.mode
             $runCases = @($selectedCases | Where-Object id -in $spec.cases)
-            $nonce = 'herdr-gauntlet-' + [guid]::NewGuid().ToString('N')
+            $nonce = 'shepherd-gauntlet-' + [guid]::NewGuid().ToString('N')
             $work = [IO.Directory]::CreateDirectory((Join-Path $root $nonce)).FullName
             $configHome = [IO.Directory]::CreateDirectory((Join-Path $work 'config')).FullName
             $config = Join-Path $configHome 'test.toml'
@@ -215,7 +215,7 @@ try {
             $cursorPosition = $null; $mouseReporting = $false
             Update-GauntletLease $root
             try {
-                if ($path -in @('herdr', 'herdr-remote')) {
+                if ($path -in @('shepherd', 'shepherd-remote')) {
                     $server = New-GauntletProcess $exe @('--session', $nonce, 'server') $plan -Capture
                     # Drain pipes asynchronously; server output must never block readiness.
                     $serverOut = $server.StandardOutput.ReadToEndAsync(); $serverErr = $server.StandardError.ReadToEndAsync()
@@ -236,24 +236,24 @@ try {
                 # Always request a new window. Bootstrap independently clears inherited identity.
                 $terminalArguments = @('-w', 'new', 'new-tab', '--title', $nonce, '--suppressApplicationTitle', '--', $pwsh, '-NoProfile', '-File', "$PSScriptRoot/windows_input/Bootstrap.ps1", '-PlanPath', $planPath)
                 if ($terminal.app_user_model_id) {
-                    $launcher = Get-Process -Id ([HerdrInputGauntlet.Desktop]::ActivateApplication($terminal.app_user_model_id, $terminalArguments)) -ErrorAction SilentlyContinue
+                    $launcher = Get-Process -Id ([ShepherdInputGauntlet.Desktop]::ActivateApplication($terminal.app_user_model_id, $terminalArguments)) -ErrorAction SilentlyContinue
                 } else {
                     $launcher = New-GauntletProcess $terminal.path $terminalArguments $plan
                 }
                 $deadline = [DateTime]::UtcNow.AddSeconds(25)
                 do {
                     Update-GauntletLease $root
-                    $window = [HerdrInputGauntlet.Desktop]::Find($nonce)
+                    $window = [ShepherdInputGauntlet.Desktop]::Find($nonce)
                     if ($window -ne [IntPtr]::Zero) { break }
                     Start-Sleep -Milliseconds 100
                 } while ([DateTime]::UtcNow -lt $deadline)
                 if ($window -eq [IntPtr]::Zero) { throw 'No unique owned Terminal window appeared' }
-                $windowPid = [HerdrInputGauntlet.Desktop]::Pid($window)
+                $windowPid = [ShepherdInputGauntlet.Desktop]::Pid($window)
                 $windowProcess = Get-Process -Id $windowPid
                 if ($windowProcess.ProcessName -ne 'WindowsTerminal') { throw 'Nonce window is not Windows Terminal; refusing injection' }
-                [HerdrInputGauntlet.Desktop]::AssertNotElevated($windowPid)
-                $imageIdentity = [HerdrInputGauntlet.Desktop]::FileIdentity($windowProcess.Path)
-                $installationIdentity = [HerdrInputGauntlet.Desktop]::FileIdentity([IO.Path]::GetDirectoryName($windowProcess.Path))
+                [ShepherdInputGauntlet.Desktop]::AssertNotElevated($windowPid)
+                $imageIdentity = [ShepherdInputGauntlet.Desktop]::FileIdentity($windowProcess.Path)
+                $installationIdentity = [ShepherdInputGauntlet.Desktop]::FileIdentity([IO.Path]::GetDirectoryName($windowProcess.Path))
                 $processIdentity = "$windowPid/$($windowProcess.StartTime.ToUniversalTime().Ticks)"
                 foreach ($otherHost in $document.hosts) {
                     if ($otherHost.channel -ne $hostName -and $otherHost.ContainsKey('runs')) {
@@ -267,10 +267,10 @@ try {
                 $runRecord = @{ nonce = $nonce; path = $path; mode = $mode; hwnd = $window.ToInt64(); pid = $windowPid;
                     terminal_path = $windowProcess.Path; terminal_version = $windowProcess.MainModule.FileVersionInfo.FileVersion;
                     elevated = $false; image_identity = $imageIdentity; installation_identity = $installationIdentity; process_identity = $processIdentity;
-                    layout = [HerdrInputGauntlet.Desktop]::Layout($window) }
+                    layout = [ShepherdInputGauntlet.Desktop]::Layout($window) }
                 $hostRecord.runs += $runRecord
                 $ready = Wait-GauntletJson (Join-Path $work 'ready.json') $root { param($v) $v.nonce -eq $nonce -and $v.mode -eq $mode }
-                [HerdrInputGauntlet.Desktop]::Focus($window, $nonce, $windowPid)
+                [ShepherdInputGauntlet.Desktop]::Focus($window, $nonce, $windowPid)
                 $injectionAuthorized = $true
                 Start-Sleep -Milliseconds 500
                 # Full case catalogue once; boundary geometries run discriminating sentinels.
@@ -292,8 +292,8 @@ try {
                         $layoutChords = $null
                         if ($case.kind -eq 'layout-key') {
                             try {
-                                $layoutChords = @([HerdrInputGauntlet.Desktop]::DeadKeyChord($window, [char]$case.dead), [int[]]@([int]$case.base_vk))
-                                $row.input_layout = [HerdrInputGauntlet.Desktop]::Layout($window)
+                                $layoutChords = @([ShepherdInputGauntlet.Desktop]::DeadKeyChord($window, [char]$case.dead), [int[]]@([int]$case.base_vk))
+                                $row.input_layout = [ShepherdInputGauntlet.Desktop]::Layout($window)
                             } catch {
                                 $row.status = 'not_run'
                                 $row.reason = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
@@ -310,47 +310,47 @@ try {
                         $row.outer_sequence = $fresh.sequence
                         $row.negotiation_hex = $ready.negotiation_hex
                         if ($mode -eq 'kitty' -and -not $ready.kitty_acknowledged) { $row.status = 'inconclusive'; $row.reason = 'Kitty disambiguation query not acknowledged; host support is not established'; continue }
-                        if ($case.kind -in @('paste', 'mouse-interleave', 'clipboard-image', 'clipboard-mixed') -and [HerdrInputGauntlet.Desktop]::CountClipboardFormats() -ne 0) {
+                        if ($case.kind -in @('paste', 'mouse-interleave', 'clipboard-image', 'clipboard-mixed') -and [ShepherdInputGauntlet.Desktop]::CountClipboardFormats() -ne 0) {
                             $row.status = 'not_run'; $row.reason = 'Clipboard is not empty; refusing to replace user data'; continue
                         }
                         if ($case.kind -in @('mouse-interleave', 'mouse-focus-refresh')) { $null = Observer-Request $plan 'mouse-on'; $mouseReporting = $true }
-                        $traceLineCount = if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) { @(Get-Content -LiteralPath $plan.input_trace).Count } else { 0 }
+                        $traceLineCount = if ($path -in @('shepherd', 'shepherd-remote') -and (Test-Path -LiteralPath $plan.input_trace)) { @(Get-Content -LiteralPath $plan.input_trace).Count } else { 0 }
                         $begin = Observer-Request $plan 'begin'
                         $row.ready = $true; $row.pane_geometry = $begin.geometry
-                        [HerdrInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid)
+                        [ShepherdInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid)
                         $row.focus_verified = $true
                         if ($case.kind -eq 'key') {
-                            $row.scans = @([HerdrInputGauntlet.Desktop]::Scans($window, [int[]]$case.chords[0]))
-                            foreach ($chord in $case.chords) { $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
+                            $row.scans = @([ShepherdInputGauntlet.Desktop]::Scans($window, [int[]]$case.chords[0]))
+                            foreach ($chord in $case.chords) { $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
                         } elseif ($case.kind -eq 'paste') {
-                            $clipboardSequence = [HerdrInputGauntlet.Desktop]::SetEmptyClipboard($window, $case.text)
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
+                            $clipboardSequence = [ShepherdInputGauntlet.Desktop]::SetEmptyClipboard($window, $case.text)
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
                         } elseif ($case.kind -in @('clipboard-image', 'clipboard-mixed')) {
                             $text = if ($case.kind -eq 'clipboard-mixed') { [string]$case.text } else { $null }
-                            $clipboardSequence = [HerdrInputGauntlet.Desktop]::SetEmptyClipboardImage($window, $text)
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
+                            $clipboardSequence = [ShepherdInputGauntlet.Desktop]::SetEmptyClipboardImage($window, $text)
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
                         } elseif ($case.kind -eq 'mouse-interleave') {
-                            $cursorPosition = [HerdrInputGauntlet.Desktop]::Cursor()
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(65))
-                            [HerdrInputGauntlet.Desktop]::MouseMoveInside($window, $nonce, $windowPid, -60)
+                            $cursorPosition = [ShepherdInputGauntlet.Desktop]::Cursor()
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(65))
+                            [ShepherdInputGauntlet.Desktop]::MouseMoveInside($window, $nonce, $windowPid, -60)
                             Start-Sleep -Milliseconds 150
-                            $clipboardSequence = [HerdrInputGauntlet.Desktop]::SetEmptyClipboard($window, $case.text)
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
+                            $clipboardSequence = [ShepherdInputGauntlet.Desktop]::SetEmptyClipboard($window, $case.text)
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 86))
                             Start-Sleep -Milliseconds 150
-                            [HerdrInputGauntlet.Desktop]::MouseMoveInside($window, $nonce, $windowPid, 60)
+                            [ShepherdInputGauntlet.Desktop]::MouseMoveInside($window, $nonce, $windowPid, 60)
                             Start-Sleep -Milliseconds 150
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(66))
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(66))
                         } elseif ($case.kind -eq 'mouse-focus-refresh') {
-                            $cursorPosition = [HerdrInputGauntlet.Desktop]::Cursor()
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(65))
-                            [HerdrInputGauntlet.Desktop]::MouseClickWheelInside($window, $nonce, $windowPid, -60)
+                            $cursorPosition = [ShepherdInputGauntlet.Desktop]::Cursor()
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(65))
+                            [ShepherdInputGauntlet.Desktop]::MouseClickWheelInside($window, $nonce, $windowPid, -60)
                             Start-Sleep -Milliseconds 200
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(66))
-                            [HerdrInputGauntlet.Desktop]::FocusAwayAndBack($controllerWindow, $window, $nonce, $windowPid)
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(67))
-                            [HerdrInputGauntlet.Desktop]::MouseClickWheelInside($window, $nonce, $windowPid, 60)
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(66))
+                            [ShepherdInputGauntlet.Desktop]::FocusAwayAndBack($controllerWindow, $window, $nonce, $windowPid)
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(67))
+                            [ShepherdInputGauntlet.Desktop]::MouseClickWheelInside($window, $nonce, $windowPid, 60)
                             Start-Sleep -Milliseconds 200
-                            $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(68))
+                            $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(68))
                         } elseif ($case.kind -eq 'mode-transitions') {
                             foreach ($step in @(
                                 @{ mode = 'legacy'; chords = @([int[]]@(65), [int[]]@(16, 13)) },
@@ -360,23 +360,23 @@ try {
                                 @{ mode = 'legacy'; chords = @([int[]]@(69), [int[]]@(16, 13), [int[]]@(70)) }
                             )) {
                                 if ($step.mode) { $null = Observer-Request $plan 'set-mode' $step.mode; Start-Sleep -Milliseconds 200 }
-                                foreach ($chord in $step.chords) { $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
+                                foreach ($chord in $step.chords) { $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
                             }
                         } elseif ($case.kind -eq 'layout-key') {
-                            foreach ($chord in $layoutChords) { $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
+                            foreach ($chord in $layoutChords) { $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]$chord) }
                         } else {
                             Write-Host "$($case.id): $($case.prompt) Return to this controller and press Enter after the gesture."
                             # Manual waits are bounded by the independent bootstrap lease watchdog.
                             $null = Read-Host
-                            $row.operator_layout = [HerdrInputGauntlet.Desktop]::Layout($window)
+                            $row.operator_layout = [ShepherdInputGauntlet.Desktop]::Layout($window)
                         }
                         Start-Sleep -Milliseconds 500
-                        if ($case.kind -ne 'manual') { [HerdrInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid) }
+                        if ($case.kind -ne 'manual') { [ShepherdInputGauntlet.Desktop]::Guard($window, $nonce, $windowPid) }
                         $end = Observer-Request $plan 'end'
                         if ($case.kind -eq 'mode-transitions') { $null = Observer-Request $plan 'set-mode' $mode }
                         $row.capture_id = $end.id
                         $row.hex = $end.hex; $row.records = $end.records; $row.error = $end.error; $row.complete = $end.quiet_reached
-                        if ($case.kind -eq 'clipboard-image' -and $path -eq 'herdr-remote') {
+                        if ($case.kind -eq 'clipboard-image' -and $path -eq 'shepherd-remote') {
                             $capture = [Convert]::FromHexString([string]$end.hex)
                             if ($capture.Length -ge 12) {
                                 $stagedPath = [Text.Encoding]::UTF8.GetString($capture, 6, $capture.Length - 12)
@@ -387,26 +387,26 @@ try {
                         }
                         $row.final_outer_geometry = (Outer-State $plan).geometry
                         $row.status = 'observed'; $row.final_pane_geometry = $end.geometry
-                        if ($path -in @('herdr', 'herdr-remote') -and (Test-Path -LiteralPath $plan.input_trace)) {
+                        if ($path -in @('shepherd', 'shepherd-remote') -and (Test-Path -LiteralPath $plan.input_trace)) {
                             $traceLines = @(Get-Content -LiteralPath $plan.input_trace)
                             $trace = $traceLines -join "`n"
                             $captureTrace = ($traceLines | Select-Object -Skip $traceLineCount) -join "`n"
                             $row.input_reader = if ($trace.Contains('reader=windows-console')) { 'windows-console' } elseif ($trace.Contains('reader=crossterm')) { 'crossterm' } else { 'unknown' }
                             if ($captureTrace.Contains('transport=win32-serialized')) { $row.input_transport = 'win32-serialized' }
                         }
-                        if ($path -in @('herdr', 'herdr-remote')) {
+                        if ($path -in @('shepherd', 'shepherd-remote')) {
                             # The mapper's own client-event view disambiguates a paste the
                             # terminal issued from a remote-image-bridge reaction (#4314).
                             $clientEvents = Get-GauntletClientTrace $plan
                             if ($null -ne $clientEvents) { $row.client_events = $clientEvents }
                         }
                         if ($null -ne $clipboardSequence) {
-                            if (-not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
+                            if (-not [ShepherdInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { throw 'Could not clear test-owned clipboard' }
                             $clipboardSequence = $null
                         }
                         if ($mouseReporting) { $null = Observer-Request $plan 'mouse-off'; $mouseReporting = $false }
-                        if ($null -ne $cursorPosition) { [HerdrInputGauntlet.Desktop]::RestoreCursor($cursorPosition); $cursorPosition = $null }
-                        if ($case.kind -eq 'manual') { [HerdrInputGauntlet.Desktop]::Focus($window, $nonce, $windowPid) }
+                        if ($null -ne $cursorPosition) { [ShepherdInputGauntlet.Desktop]::RestoreCursor($cursorPosition); $cursorPosition = $null }
+                        if ($case.kind -eq 'manual') { [ShepherdInputGauntlet.Desktop]::Focus($window, $nonce, $windowPid) }
                         Save-Report
                         Update-GauntletLease $root
                     }
@@ -420,10 +420,10 @@ try {
                 if ($mouseReporting) {
                     try { $null = Observer-Request $plan 'mouse-off'; $mouseReporting = $false } catch { $document.cleanup_errors += $_.Exception.Message }
                 }
-                if ($null -ne $cursorPosition -and [HerdrInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
-                    [HerdrInputGauntlet.Desktop]::RestoreCursor($cursorPosition); $cursorPosition = $null
+                if ($null -ne $cursorPosition -and [ShepherdInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
+                    [ShepherdInputGauntlet.Desktop]::RestoreCursor($cursorPosition); $cursorPosition = $null
                 }
-                if ($null -ne $clipboardSequence -and -not [HerdrInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { $document.cleanup_errors += 'Could not clear test-owned clipboard' }
+                if ($null -ne $clipboardSequence -and -not [ShepherdInputGauntlet.Desktop]::ClearOwnedClipboard($window, $clipboardSequence)) { $document.cleanup_errors += 'Could not clear test-owned clipboard' }
                 [IO.File]::WriteAllText((Join-Path $work 'probe-stop'), '')
                 if (Test-Path (Join-Path $work 'ready.json')) {
                     try {
@@ -432,11 +432,11 @@ try {
                     } catch { $document.cleanup_errors += $_.Exception.Message }
                 }
                 # Normal detach only while still owning foreground focus; never type into another window.
-                if ($injectionAuthorized -and $path -in @('herdr', 'herdr-remote') -and [HerdrInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [HerdrInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
+                if ($injectionAuthorized -and $path -in @('shepherd', 'shepherd-remote') -and [ShepherdInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [ShepherdInputGauntlet.Desktop]::GetForegroundWindow() -eq $window) {
                     try {
-                        $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 66))
+                        $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(17, 66))
                         Start-Sleep -Milliseconds 100
-                        $null = [HerdrInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(81))
+                        $null = [ShepherdInputGauntlet.Desktop]::Chord($window, $nonce, $windowPid, [int[]]@(81))
                     } catch { $document.cleanup_errors += $_.Exception.Message }
                 }
                 if ($null -ne $server -and -not $server.HasExited) {
@@ -451,8 +451,8 @@ try {
                         if ($exitRecord.before[2] -ne $exitRecord.after[2]) { $document.cleanup_errors += "$nonce console input mode not restored" }
                     } catch { $document.cleanup_errors += $_.Exception.Message }
                     $windowDeadline = [DateTime]::UtcNow.AddSeconds(5)
-                    while ([HerdrInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [DateTime]::UtcNow -lt $windowDeadline) { Start-Sleep -Milliseconds 100 }
-                    if ([HerdrInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid)) { $document.cleanup_errors += "$nonce Terminal window remained open; close it manually" }
+                    while ([ShepherdInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid) -and [DateTime]::UtcNow -lt $windowDeadline) { Start-Sleep -Milliseconds 100 }
+                    if ([ShepherdInputGauntlet.Desktop]::IsOwned($window, $nonce, $windowPid)) { $document.cleanup_errors += "$nonce Terminal window remained open; close it manually" }
                 }
                 if ($null -ne $server) {
                     if (-not $server.WaitForExit(5000)) {
@@ -470,7 +470,7 @@ try {
     }
 } catch {
     if ($document.errors.Count -eq 0) { $document.errors += $_.Exception.Message }
-} finally { [HerdrInputGauntlet.Desktop]::StopEmergencyStop(); Save-Report }
+} finally { [ShepherdInputGauntlet.Desktop]::StopEmergencyStop(); Save-Report }
 & $python $reportScript report --input $rawReport --output $artifactReport
 $code = $LASTEXITCODE
 Write-Host "Evidence and report: $root"

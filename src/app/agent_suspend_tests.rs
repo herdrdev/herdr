@@ -69,7 +69,7 @@ fn real_exit(app: &mut AppState, pane_id: PaneId, agent: Agent, at: Instant) {
 fn pi_report(app: &mut AppState, pane_id: PaneId, state: AgentState, seq: u64) {
     app.handle_app_event(AppEvent::HookStateReported {
         pane_id,
-        source: "herdr:pi".into(),
+        source: "shepherd:pi".into(),
         agent_label: "pi".into(),
         state,
         message: None,
@@ -86,7 +86,7 @@ fn pi_session_report(
 ) {
     app.handle_app_event(AppEvent::AgentSessionReported {
         pane_id,
-        source: "herdr:pi".into(),
+        source: "shepherd:pi".into(),
         agent_label: "pi".into(),
         seq: Some(seq),
         session_ref: Some(pi_session()),
@@ -97,7 +97,7 @@ fn pi_session_report(
 fn claude_session_report(app: &mut AppState, pane_id: PaneId, seq: u64) {
     app.handle_app_event(AppEvent::AgentSessionReported {
         pane_id,
-        source: "herdr:claude".into(),
+        source: "shepherd:claude".into(),
         agent_label: "claude".into(),
         seq: Some(seq),
         session_ref: Some(claude_session()),

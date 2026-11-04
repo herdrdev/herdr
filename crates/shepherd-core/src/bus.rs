@@ -1,4 +1,4 @@
-//! Shepherd's durable agent message bus. Herdr owns terminals; Shepherd owns agent mail and its timeline.
+//! Shepherd's durable agent message bus. Shepherd owns terminals; Shepherd owns agent mail and its timeline.
 
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::OpenOptions, io::{BufRead, BufReader, Write}, path::{Path, PathBuf}, sync::Mutex};

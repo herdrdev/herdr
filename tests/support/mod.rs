@@ -14,7 +14,7 @@ static RUNTIME_DIR_REGISTRY: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new()
 static INIT: Once = Once::new();
 static CLEANUP_GUARD: OnceLock<CleanupGuard> = OnceLock::new();
 const WATCHDOG_SCAN_INTERVAL: Duration = Duration::from_secs(1);
-const RUNTIME_OWNER_MARKER: &str = ".herdr-test-owner-pid";
+const RUNTIME_OWNER_MARKER: &str = ".shepherd-test-owner-pid";
 pub const CURRENT_PROTOCOL: u32 = 22;
 pub const CURRENT_ENDPOINT_PROTOCOL_GENERATION: u32 = 1;
 pub const SERVER_MESSAGE_SERVER_SHUTDOWN: u32 = 3;
@@ -26,12 +26,12 @@ const CLIENT_MESSAGE_CLIENT_SHELL_PANE_INPUT: u32 = 13;
 const CLIENT_MESSAGE_CLIENT_SHELL_FOCUS: u32 = 18;
 const CLIENT_MESSAGE_ENDPOINT_CONTROL: u32 = 20;
 
-pub fn isolate_herdr_test_process(command: &mut CommandBuilder) {
-    command.env_remove("HERDR_STARTUP_CWD");
-    command.env_remove("HERDR_SESSION");
+pub fn isolate_shepherd_test_process(command: &mut CommandBuilder) {
+    command.env_remove("SHEPHERD_STARTUP_CWD");
+    command.env_remove("SHEPHERD_SESSION");
 }
 
-pub fn register_spawned_herdr_pid(pid: Option<u32>) {
+pub fn register_spawned_shepherd_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
     };
@@ -41,9 +41,9 @@ pub fn register_spawned_herdr_pid(pid: Option<u32>) {
     registry.insert(pid);
 }
 
-/// Asks a spawned herdr process to exit. portable-pty's `kill` sends SIGHUP,
+/// Asks a spawned shepherd process to exit. portable-pty's `kill` sends SIGHUP,
 /// which the server deliberately ignores.
-pub fn stop_spawned_herdr(child: &mut (dyn portable_pty::Child + Send + Sync)) {
+pub fn stop_spawned_shepherd(child: &mut (dyn portable_pty::Child + Send + Sync)) {
     match child.process_id() {
         Some(pid) => unsafe {
             libc::kill(pid as libc::pid_t, libc::SIGTERM);
@@ -54,7 +54,7 @@ pub fn stop_spawned_herdr(child: &mut (dyn portable_pty::Child + Send + Sync)) {
     }
 }
 
-pub fn unregister_spawned_herdr_pid(pid: Option<u32>) {
+pub fn unregister_spawned_shepherd_pid(pid: Option<u32>) {
     let Some(pid) = pid else {
         return;
     };
@@ -90,7 +90,7 @@ pub fn unregister_runtime_dir(path: &Path) {
 }
 
 #[cfg(target_os = "linux")]
-pub fn herdr_server_pids_for_runtime_dir(runtime_dir: &Path) -> std::io::Result<Vec<u32>> {
+pub fn shepherd_server_pids_for_runtime_dir(runtime_dir: &Path) -> std::io::Result<Vec<u32>> {
     let mut pids = Vec::new();
     for pid in iter_worktree_server_pids()? {
         let Some(process_runtime_dir) = process_runtime_dir(pid)? else {
@@ -543,7 +543,7 @@ pub fn wait_for_disconnect(stream: &mut UnixStream, timeout: Duration) -> Result
     result
 }
 
-pub fn cleanup_registered_herdr_pids() {
+pub fn cleanup_registered_shepherd_pids() {
     let pids: Vec<u32> = {
         let mut registry = pid_registry_lock();
         registry.drain().collect()
@@ -571,12 +571,12 @@ fn ensure_cleanup_hooks() {
 
         let previous_hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |panic_info| {
-            cleanup_registered_herdr_pids();
+            cleanup_registered_shepherd_pids();
             previous_hook(panic_info);
         }));
 
         let _ = ctrlc::set_handler(|| {
-            cleanup_registered_herdr_pids();
+            cleanup_registered_shepherd_pids();
             std::process::exit(130);
         });
 
@@ -631,7 +631,7 @@ fn start_global_watchdog() {
         thread::sleep(WATCHDOG_SCAN_INTERVAL);
 
         if let Err(err) = cleanup_servers_with_missing_runtime_dir() {
-            eprintln!("herdr test cleanup watchdog error: {err}");
+            eprintln!("shepherd test cleanup watchdog error: {err}");
         }
     });
 }
@@ -700,7 +700,7 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
             continue;
         }
 
-        if is_test_herdr_server_process(pid) {
+        if is_test_shepherd_server_process(pid) {
             pids.push(pid);
         }
     }
@@ -708,12 +708,12 @@ fn iter_worktree_server_pids() -> std::io::Result<Vec<u32>> {
     Ok(pids)
 }
 
-fn is_test_herdr_server_process(pid: u32) -> bool {
+fn is_test_shepherd_server_process(pid: u32) -> bool {
     let Some(exe_path) = proc_link_target(pid, "exe") else {
         return false;
     };
 
-    if !is_test_herdr_binary(&exe_path) {
+    if !is_test_shepherd_binary(&exe_path) {
         return false;
     }
 
@@ -752,7 +752,7 @@ fn process_runtime_dir(pid: u32) -> std::io::Result<Option<PathBuf>> {
             return Ok(Some(PathBuf::from(value)));
         }
 
-        if let Some(value) = kv.strip_prefix("HERDR_SOCKET_PATH=") {
+        if let Some(value) = kv.strip_prefix("SHEPHERD_SOCKET_PATH=") {
             socket_path = Some(PathBuf::from(value));
         }
     }
@@ -773,25 +773,25 @@ fn runtime_dir_owner_alive(runtime_dir: &Path) -> bool {
     process_exists(owner_pid)
 }
 
-fn is_test_herdr_binary(path: &Path) -> bool {
+fn is_test_shepherd_binary(path: &Path) -> bool {
     // /proc resolves executable symlinks. Match only this Cargo build, including
     // custom target directories; binary identity alone never grants ownership.
     static TEST_BINARY: OnceLock<Option<PathBuf>> = OnceLock::new();
     TEST_BINARY
-        .get_or_init(|| fs::canonicalize(env!("CARGO_BIN_EXE_herdr")).ok())
+        .get_or_init(|| fs::canonicalize(env!("CARGO_BIN_EXE_shepherd")).ok())
         .as_deref()
         .is_some_and(|binary| path == binary)
 }
 
 extern "C" fn run_atexit_cleanup() {
-    cleanup_registered_herdr_pids();
+    cleanup_registered_shepherd_pids();
 }
 
 struct CleanupGuard;
 
 impl Drop for CleanupGuard {
     fn drop(&mut self) {
-        cleanup_registered_herdr_pids();
+        cleanup_registered_shepherd_pids();
     }
 }
 
@@ -874,7 +874,7 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!(
-            "herdr-watchdog-scoping-{label}-{}-{unique}",
+            "shepherd-watchdog-scoping-{label}-{}-{unique}",
             std::process::id()
         ))
     }
@@ -919,29 +919,29 @@ mod tests {
 
     #[test]
     fn test_binary_matcher_accepts_cargo_test_binary() {
-        let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_herdr"))
+        let binary = std::fs::canonicalize(env!("CARGO_BIN_EXE_shepherd"))
             .expect("Cargo-built binary must exist");
         assert!(
-            is_test_herdr_binary(&binary),
+            is_test_shepherd_binary(&binary),
             "Cargo-built binary should be considered test-owned regardless of target directory"
         );
     }
 
     #[test]
     fn test_binary_matcher_rejects_other_binaries() {
-        let nested_build = Path::new(env!("CARGO_MANIFEST_DIR")).join("other/target/debug/herdr");
-        let sibling_build = Path::new(env!("CARGO_BIN_EXE_herdr"))
+        let nested_build = Path::new(env!("CARGO_MANIFEST_DIR")).join("other/target/debug/shepherd");
+        let sibling_build = Path::new(env!("CARGO_BIN_EXE_shepherd"))
             .parent()
             .unwrap()
-            .join("other-build/herdr");
+            .join("other-build/shepherd");
         for binary in [
-            Path::new("/home/can/.local/bin/herdr"),
-            Path::new("/tmp/other-checkout/target/debug/herdr"),
+            Path::new("/home/can/.local/bin/shepherd"),
+            Path::new("/tmp/other-checkout/target/debug/shepherd"),
             nested_build.as_path(),
             sibling_build.as_path(),
         ] {
             assert!(
-                !is_test_herdr_binary(binary),
+                !is_test_shepherd_binary(binary),
                 "other binaries must not be considered test-owned: {}",
                 binary.display()
             );

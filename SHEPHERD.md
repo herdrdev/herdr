@@ -43,7 +43,7 @@ State is separate from runtime (`AppState` is pure data); render is pure; no god
 
 ## Archivos de herdr modificados
 
-Para mantener los rebases desde `herdrdev/herdr` baratos, todo el código nuevo vive en `crates/shepherd-core/` y en el módulo aislado `src/shepherd/`. Los archivos originales de `herdr` solo contienen líneas mínimas de enganche:
+*(Nota post-F5a: Con la fase F5a completada, el renombre integral de herdr a shepherd se gestiona de forma reproducible e idempotente mediante `scripts/rename-from-herdr.sh`. Al realizar un rebase o merge desde `herdrdev/herdr`, se ejecuta dicho script para reaplicar automáticamente todas las adaptaciones necesarias).* En las fases iniciales (F1-F4b), los archivos originales solo contenían líneas mínimas de enganche:
 
 | Archivo | Línea(s) de enganche | Por qué |
 |---|---|---|
@@ -1242,3 +1242,146 @@ Se utilizó `./scripts/shepherd-iso.sh` en un entorno aislado sin agentes reales
 | `src/app/state.rs` | Modificación | Campo `shepherd_git_panel: ShepherdGitState` en `AppState`. |
 | `src/client/shell/shepherd.rs` | Modificación | Despacho de `git_status` al cambiar a la pestaña Git y actualización del estado del overlay al recibir la respuesta. |
 | `SHEPHERD.md` | Documentación | Registro de Estado F4b con verificación en sesión aislada, capturas y alcance completado. |
+
+## Inventario Pre-renombre F5a (Apariciones de `herdr`)
+
+Previo a la ejecución del renombre automatizado mediante `scripts/rename-from-herdr.sh`, se realiza el inventario exhaustivo de las categorías de apariciones de `herdr` en el repositorio:
+
+1. **Paquete y binario (`Cargo.toml`, `build.rs`, `[[bin]]`, `justfile`)**:
+   - `Cargo.toml`: `package.name = "herdr"`, metadatos de descripción, include paths. Pasa a `name = "shepherd"`.
+   - `crates/shepherd-core/Cargo.toml`: contiene `[[bin]] name = "shepherd"`, lo cual colisiona con el nuevo binario raíz `shepherd`. Se renombra el binario de `shepherd-core` a `[[bin]] name = "shepherd-core"`.
+   - `build.rs`: constantes de build, detección de compilación y metadata del ejecutable.
+   - `justfile`: llamadas a `cargo test ... --bin herdr` pasan a `--bin shepherd`.
+
+2. **Módulos, estructuras e identificadores de código (`src/`)**:
+   - Tipos y structs: `ToastHerdrPosition` -> `ToastShepherdPosition`, `RemoteHerdr` -> `RemoteShepherd`, `PreparedRemoteHerdr` -> `PreparedRemoteShepherd`, `HerdrClient` -> `ShepherdClient`, `HerdrInProcess` -> `ShepherdInProcess`, `HerdrError` -> `ShepherdError`.
+   - Funciones y métodos: `install_herdr` -> `install_shepherd`, `prepare_remote_herdr` -> `prepare_remote_shepherd`, `is_herdr_dev` -> `is_shepherd_dev`, `running_inside_herdr` -> `running_inside_shepherd`.
+   - Constantes y literales internos: marcadores de proyectos `__herdr_projects__` -> `__shepherd_projects__`, `__herdr_original__` -> `__shepherd_original__`.
+   - Re-exportaciones y namespaces: `crate::shepherd::...`.
+
+3. **Variables de entorno (`HERDR_*` → `SHEPHERD_*`)**:
+   - Variables de runtime y proceso: `HERDR_ENV` -> `SHEPHERD_ENV`, `HERDR_SOCKET_PATH` -> `SHEPHERD_SOCKET_PATH`, `HERDR_CLIENT_SOCKET_PATH` -> `SHEPHERD_CLIENT_SOCKET_PATH`, `HERDR_SESSION` -> `SHEPHERD_SESSION`, `HERDR_PANE_ID` -> `SHEPHERD_PANE_ID`, `HERDR_TAB_ID` -> `SHEPHERD_TAB_ID`, `HERDR_WORKSPACE_ID` -> `SHEPHERD_WORKSPACE_ID`, `HERDR_CONFIG_PATH` -> `SHEPHERD_CONFIG_PATH`, `HERDR_LOG` -> `SHEPHERD_LOG`, `HERDR_DISABLE_SOUND` -> `SHEPHERD_DISABLE_SOUND`, `HERDR_BIN_PATH` -> `SHEPHERD_BIN_PATH`, `HERDR_AGENT` -> `SHEPHERD_AGENT`.
+   - Plugins: `HERDR_PLUGIN_ID`, `HERDR_PLUGIN_ROOT`, `HERDR_PLUGIN_CONFIG_DIR`, `HERDR_PLUGIN_STATE_DIR`, `HERDR_PLUGIN_CONTEXT_JSON`, `HERDR_PLUGIN_EVENT`, `HERDR_PLUGIN_ACTION_ID`, etc. -> `SHEPHERD_PLUGIN_*`.
+   - Política: **SIN fallback** a `HERDR_*` para prevenir colisiones e interferencias si un herdr oficial corre en la misma máquina.
+
+4. **Rutas en disco y nombres de sockets**:
+   - Configuración: `$XDG_CONFIG_HOME/shepherd` (y `shepherd-dev` en dev/debug).
+   - Estado: `$XDG_STATE_HOME/shepherd` (y `shepherd-dev` en dev/debug).
+   - Datos: `$XDG_DATA_HOME/shepherd`.
+   - Sockets IPC: `shepherd.sock` y `shepherd-client.sock`.
+   - Fallback de lectura exclusiva para `config.toml`: si `$XDG_CONFIG_HOME/shepherd/config.toml` no existe pero sí `$XDG_CONFIG_HOME/herdr/config.toml`, se lee este emitiendo un `tracing::warn`. No se escribe nunca en el directorio de herdr y no se comparte estado ni sockets.
+
+5. **Textos visibles en TUI, CLI y ayuda**:
+   - Textos de `--help`, cadenas de uso de CLI, mensajes de bienvenida (`onboarding`), títulos de ventana predeterminados, banners y textos de error interactivos.
+
+6. **Despacho de CLI y subcomandos**:
+   - Subcomandos de `shepherd-core`: `agents`, `spawn`, `kill`, `clean`, `focus`, `task`, `tasks`, `skills`, `runs`, `roles`, `vendors`, `run`, `approve`, `git`, `mcp`, `msg`, `messages`, `attach` pasan a funcionar directamente como `shepherd <cmd>`.
+   - Alias retrocompatible: `shepherd shepherd <cmd>` se mantiene operativo delegando en la misma función.
+   - Conflictos detectados: `config` (reclamado por herdr para su configuración; `shepherd shepherd config` accede al gestor de config de shepherd-core); `agent` singular (reclamado por herdr; `agents` plural es de shepherd).
+
+7. **Hooks e integraciones (`src/integration/assets/`)**:
+   - Nombres de scripts: `herdr-agent-state.{sh,ps1,js,ts}` -> `shepherd-agent-state.*`, `herdr-agent-session.{sh,ps1}` -> `shepherd-agent-session.*`, `herdr-tui-session.js` -> `shepherd-tui-session.js`.
+   - Invocaciones internas dentro de los hooks: llamadas al binario `shepherd agent report ...` y lectura de variables `SHEPHERD_*`.
+
+8. **Empaquetado y distribución (`packaging/`, `nix/`, `distribution/`)**:
+   - Scripts de instalación: `distribution/install.sh`, `install.ps1`, `install.cmd`.
+   - Empaquetado Nix: `nix/package.nix`.
+   - Empaquetado Windows: `packaging/windows/`.
+
+9. **Scripts auxiliares y harness de pruebas**:
+   - `scripts/shepherd-iso.sh`: apuntando al binario `./target/debug/shepherd` y rutas `shepherd-dev`.
+   - `cargo-fork.sh`: wrapper para Rust 1.96.1 y Zig.
+   - Scripts de python y bash bajo `scripts/`.
+
+10. **Auto-actualización y telemetría de upstream**:
+    - `src/update.rs`: desactivada la consulta y descarga de actualizaciones desde `herdr.dev` / `herdrdev` para evitar la sobreescritura accidental del fork por binarios oficiales.
+
+11. **Exclusiones estrictas (NO renombrar)**:
+    - Licencia y autoría histórica: `LICENSE`, `NOTICE`.
+    - Historial: `CHANGELOG.md`, `docs/next/CHANGELOG.md`.
+    - Repositorio y organización de upstream: `github.com/herdrdev/herdr`, `herdr.dev`, `herdrdev`.
+    - Dependencias externas vendoreadas: `vendor/`.
+    - Artefactos y bloqueos temporales: `target/`, `Cargo.lock`.
+    - Versiones publicadas y previews inmutables: `docs/versions/`, `docs/preview/`.
+    - Fixtures congelados de protocolo v1: `tests/fixtures/endpoint-snapshot-v1.json`, `tests/fixtures/session/legacy-pre-tabs-v2.json`.
+    - Briefs de encargo: `SHEPHERD-F1-BRIEF.md` a `SHEPHERD-F5A-BRIEF.md`.
+
+
+## Estado F5a (2026-11-04)
+
+Renombre completo de herdr a shepherd como proceso automatizado, idempotente y repetible mediante el script `scripts/rename-from-herdr.sh`, preservando compatibilidad de contrato en sockets/wire v1, ofreciendo fallback de lectura para configs previas y cableando los subcomandos de forma directa en el binario `shepherd`.
+
+### 1. Script de Renombre Automatizado (`scripts/rename-from-herdr.sh`)
+
+- **Diseño**: Script escrito en Perl/Bash estructurado para ser re-ejecutable tras merges o rebases de upstream (`herdrdev/herdr`).
+- **Modos de ejecución**:
+  - `scripts/rename-from-herdr.sh` (modo ejecución): aplica transformaciones ordenadas de reemplazo textual y renombrado de ficheros/rutas en git.
+  - `scripts/rename-from-herdr.sh --dry-run`: inspecciona los cambios sin modificar el árbol de trabajo y reporta conteos.
+  - `scripts/rename-from-herdr.sh --check`: modo CI/verificación estricta. Recorre todos los ficheros trackeados (excluyendo excepciones) y falla (código de salida 1) si detecta cualquier ocurrencia no permitida de `herdr`, `Herdr` o `HERDR`.
+- **Métricas de la primera ejecución**:
+  - **446 ficheros modificados**.
+  - **10.250 reemplazos** de contenido (`herdr`: 7.371, `Herdr`: 2.054, `HERDR`: 825).
+  - **24 renombrados de ficheros y directorios** (incluyendo hooks de agentes en `src/integration/assets/`, ficheros de sesiones y esquemas de API).
+- **Idempotencia verificada**:
+  - Re-ejecutar el script sobre el árbol modificado resulta exactamente en **0 ficheros modificados**, **0 reemplazos** y **0 renombrados**.
+  - `./scripts/rename-from-herdr.sh --check` finaliza con código 0 y el mensaje `[OK] No unexcluded occurrences of herdr/Herdr/HERDR found.`.
+
+### 2. Decisiones de Alcance y Exclusiones Estrictas
+
+- **Exclusiones de licencia y upstream**:
+  - Preservados sin alteración: `LICENSE`, `NOTICE`, `CHANGELOG.md`, `docs/next/CHANGELOG.md`, menciones a licencias Apache-2.0 / MIT y atribución de derechos originales.
+  - Preservadas URLs canónicas de upstream: `github.com/herdrdev/herdr`, `herdr.dev`, `herdrdev`.
+  - Excluidos directorios externos: `vendor/`, `target/`, `Cargo.lock`, `docs/versions/`, `docs/preview/`.
+  - Excluidos briefs de especificación del proyecto: `SHEPHERD-F1-BRIEF.md` a `SHEPHERD-F5A-BRIEF.md`.
+- **Compatibilidad de Contrato Wire v1**:
+  - Para no romper la huella criptográfica de `tests/fixtures/endpoint-method-shapes-v1.json` (contrato inmutable de generación 1 para `pane.split` y `pane.input.set`), `PaneRightClickTarget` en `src/api/schema/panes.rs` utiliza `#[serde(rename = "herdr", alias = "shepherd")]`. Esto mantiene compatibilidad exacta en la serialización wire y en schemars mientras deserializa tanto `herdr` como `shepherd`, y la CLI acepta `--right-click shepherd`.
+- **Fallback de Configuración de Usuario**:
+  - En `src/config/io.rs`, si `$XDG_CONFIG_HOME/shepherd/config.toml` (o `shepherd-dev`) no existe, `herdr_fallback_config_path()` busca `$XDG_CONFIG_HOME/herdr/config.toml` (o `herdr-dev`) y emite una advertencia con `tracing::warn!`. Es estrictamente de solo lectura; el estado, sesiones y sockets de shepherd nunca se mezclan con los de herdr.
+- **Desactivación de Auto-actualización de Upstream**:
+  - En `src/update.rs`, se deshabilitaron las consultas y descargas de binarios remotos desde `herdr.dev` para evitar la sobreescritura accidental del fork por releases de upstream.
+
+### 3. CLI y Despacho de Subcomandos
+
+- En `src/cli.rs`, los subcomandos de Shepherd se despachan directamente en la raíz de la CLI:
+  - `shepherd agents [--json]`
+  - `shepherd spawn <role> <task...>`
+  - `shepherd kill <agent-id>`
+  - `shepherd clean`
+  - `shepherd focus <agent-id>`
+  - `shepherd task <new|list|show|plan|edit|path|archive>`
+  - `shepherd tasks`
+  - `shepherd skills <list|...>`
+  - `shepherd runs <list|...>`
+  - `shepherd roles <list|...>`
+  - `shepherd vendors <list|...>`
+  - `shepherd run <task-id>`
+  - `shepherd approve <task-id> <plan|subtask>`
+  - `shepherd git [--json]`
+  - `shepherd mcp serve [port]`
+  - `shepherd msg / shepherd messages`
+  - `shepherd attach <agent-id>`
+- Se conserva retrocompatibilidad completa con el prefijo `shepherd shepherd <cmd>`.
+
+### 4. Verificación de Tests Automatizados (`./cargo-fork.sh`)
+
+Todos los tests del proyecto compilan y pasan limpiamente a través de `./cargo-fork.sh`:
+- **`shepherd-core`**: 82 passed, 0 failed. `./cargo-fork.sh test -p shepherd-core 2>&1 | grep -c testRepo` devuelve **0**.
+- **`client::shell`**: 391 passed, 0 failed, 2 ignored.
+- **`shepherd::`**: 52 passed, 0 failed.
+- **`protocol::`**: 156 passed, 0 failed.
+- **`api::`**: 319 passed, 0 failed, 1 ignored.
+- **`server::`**: 318 passed, 0 failed, 5 ignored (incluyendo `advertised_client_shell_method_shapes_stay_at_the_v1_contract`).
+
+### 5. Verificación en Sesión Aislada (`./scripts/shepherd-iso.sh`)
+
+Verificación de extremo a extremo sin agentes reales en entorno aislado (`/tmp/shfiso`):
+1. **Arranque e inicio limpio**: `./scripts/shepherd-iso.sh start` levanta la sesión `iso` con el binario `./target/debug/shepherd` y socket en `/tmp/shfiso/cfg/shepherd-dev/sessions/iso/shepherd.sock`.
+2. **Consultas CLI directas y con alias**:
+   - `shepherd --session iso agents --json` -> `[]`.
+   - `shepherd --session iso shepherd agents --json` -> `[]`.
+   - `shepherd --session iso roles list --json` -> Listado completo de 5 roles (`brain`, `coder`, `docs`, `reviewer`, `tester`) con la skill `shepherd-comms`.
+3. **Apertura de Overlay (`C-b a`)**:
+   - El overlay muestra como título de ventana `Shepherd [x]`.
+   - Pestañas funcionales: `Tareas   Runs   Skills   Git`.
+   - La captura de pantalla en cada una de las pestañas (`Tareas`, `Runs`, `Skills`) confirma que **no existe ninguna aparición de `herdr` visible en la TUI**.
+4. **Cierre limpio**: `Escape` cierra el overlay y `./scripts/shepherd-iso.sh stop` apaga el servidor y sesión tmux de forma limpia.

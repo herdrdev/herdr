@@ -185,7 +185,7 @@ where
     /// A text press ("?") names a character, not a key, so its release ("/"
     /// after Shift was let go) cannot be matched by identity. When it is the
     /// only tracked key the match is certain; with any other press held,
-    /// forwarded or consumed by Herdr, nothing is taken.
+    /// forwarded or consumed by Shepherd, nothing is taken.
     pub(crate) fn remove_sole_text_press(
         &mut self,
         source: Source,

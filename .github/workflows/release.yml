@@ -80,27 +80,27 @@ jobs:
         include:
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            name: herdr-linux-x86_64
+            name: shepherd-linux-x86_64
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            name: herdr-linux-aarch64
+            name: shepherd-linux-aarch64
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: herdr-macos-x86_64
+            name: shepherd-macos-x86_64
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: herdr-macos-aarch64
+            name: shepherd-macos-aarch64
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
           - target: x86_64-pc-windows-msvc
             os: windows-2022
-            name: herdr-windows-x86_64.zip
+            name: shepherd-windows-x86_64.zip
             libghostty_vt_optimize: ReleaseFast
             libghostty_vt_simd: 'true'
 
@@ -174,7 +174,7 @@ jobs:
       - name: Package artifact
         if: runner.os != 'Windows'
         shell: bash
-        run: cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
+        run: cp target/${{ matrix.target }}/release/shepherd ${{ matrix.name }}
 
       - name: Package artifact
         if: runner.os == 'Windows'
@@ -182,13 +182,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $package = Join-Path $env:RUNNER_TEMP "Microsoft.Windows.Console.ConPTY.nupkg"
-          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          $stage = Join-Path $env:RUNNER_TEMP "shepherd-windows-x86_64"
           .\scripts\package_windows_conpty.ps1 `
-            -HerdrExe target\${{ matrix.target }}\release\herdr.exe `
+            -ShepherdExe target\${{ matrix.target }}\release\shepherd.exe `
             -PackagePath $package `
             -StageDir $stage `
             -OutputPath ${{ matrix.name }}
-          $version = (& (Join-Path $stage "herdr.exe") --version | Out-String).Trim()
+          $version = (& (Join-Path $stage "shepherd.exe") --version | Out-String).Trim()
           $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
           if ($version -notmatch [regex]::Escape($tagVersion) -or $version -match "preview") {
             throw "Packaged Windows binary has unexpected version identity: $version"
@@ -252,11 +252,11 @@ jobs:
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           files: |
-            herdr-linux-x86_64/herdr-linux-x86_64
-            herdr-linux-aarch64/herdr-linux-aarch64
-            herdr-macos-x86_64/herdr-macos-x86_64
-            herdr-macos-aarch64/herdr-macos-aarch64
-            herdr-windows-x86_64.zip/herdr-windows-x86_64.zip
+            shepherd-linux-x86_64/shepherd-linux-x86_64
+            shepherd-linux-aarch64/shepherd-linux-aarch64
+            shepherd-macos-x86_64/shepherd-macos-x86_64
+            shepherd-macos-aarch64/shepherd-macos-aarch64
+            shepherd-windows-x86_64.zip/shepherd-windows-x86_64.zip
           body_path: RELEASE_NOTES.md
 
   update-nix-package:
@@ -271,7 +271,7 @@ jobs:
       - *require-release-admins
       - name: Trigger stable Nix package update
         env:
-          GH_TOKEN: ${{ secrets.HERDR_NIX_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.SHEPHERD_NIX_DISPATCH_TOKEN }}
           GH_HOST: github.com
         run: |
           if ! gh workflow run update-check.yml --repo herdrdev/herdr-nix --ref main; then
@@ -323,7 +323,7 @@ jobs:
           fi
 
           RELEASE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/tag/v${VERSION}"
-          RELEASE_COMMENT_MARKER="<!-- herdr:released:v${VERSION} -->"
+          RELEASE_COMMENT_MARKER="<!-- shepherd:released:v${VERSION} -->"
           RELEASE_COMMENT="${RELEASE_COMMENT_MARKER}"$'\n'"Released in [v${VERSION}](${RELEASE_URL})."
 
           issue_has_comment_marker() {

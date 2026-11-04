@@ -10,7 +10,7 @@ name = "shepherd_core"
 path = "src/lib.rs"
 
 [[bin]]
-name = "shepherd"
+name = "shepherd-core"
 path = "src/main.rs"
 
 [dependencies]

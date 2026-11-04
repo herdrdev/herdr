@@ -1,12 +1,12 @@
 //! Shepherd TUI Overlay (Phase F3b - adjusted per Owner Correction).
 //!
 //! Connects the Shepherd views (Tareas, Runs, Skills) into a cohesive
-//! mouse-first and keyboard-driven modal overlay inside Herdr's TUI.
+//! mouse-first and keyboard-driven modal overlay inside Shepherd's TUI.
 //!
 //! Owner correction:
 //! - Agents do NOT have a separate tab or panel in this overlay; agents are integrated
-//!   into Herdr's existing agent sidebar and context menus.
-//! - The Shepherd overlay contains only what Herdr doesn't have: Tareas, Runs, and Skills.
+//!   into Shepherd's existing agent sidebar and context menus.
+//! - The Shepherd overlay contains only what Shepherd doesn't have: Tareas, Runs, and Skills.
 //! - Forms and confirmations from `panel.rs` (SpawnForm, ConfirmKill, ConfirmClean)
 //!   are reused as standalone dialogs/modals for agent actions.
 //! - State lives in pure data structures (`ClientShepherdOverlay`).

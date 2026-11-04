@@ -1,5 +1,5 @@
 [package]
-name = "herdr"
+name = "shepherd"
 version = "0.9.5"
 edition = "2021"
 build = "build.rs"
@@ -12,7 +12,7 @@ categories = ["command-line-utilities"]
 include = [
     "src/**/*",
     "assets/sounds/*",
-    "docs/next/api/herdr-api.schema.json",
+    "docs/next/api/shepherd-api.schema.json",
     "skills/herdr/SKILL.md",
     "distribution/install.ps1",
     "README.md",

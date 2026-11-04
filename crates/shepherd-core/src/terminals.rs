@@ -1,8 +1,8 @@
-//! Terminal runtime port (`trait Terminals`) and adapters (`HerdrInProcess`, `HerdrSocket`, `HcCli`, `InMemoryTerminals`).
+//! Terminal runtime port (`trait Terminals`) and adapters (`ShepherdInProcess`, `ShepherdSocket`, `HcCli`, `InMemoryTerminals`).
 //!
 //! Shepherd's core workflow, spawner, and MCP server depend only on `Terminals`.
 
-use crate::{config::Config, herdr::{HerdrClient, HerdrError}};
+use crate::{config::Config, shepherd::{ShepherdClient, ShepherdError}};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -46,12 +46,12 @@ impl From<std::io::Error> for TerminalError {
     }
 }
 
-impl From<HerdrError> for TerminalError {
-    fn from(error: HerdrError) -> Self {
+impl From<ShepherdError> for TerminalError {
+    fn from(error: ShepherdError) -> Self {
         match error {
-            HerdrError::Io(io) => Self::Io(io),
-            HerdrError::Api { code, message } => Self::Api { code, message },
-            HerdrError::Protocol(message) => Self::Protocol(message),
+            ShepherdError::Io(io) => Self::Io(io),
+            ShepherdError::Api { code, message } => Self::Api { code, message },
+            ShepherdError::Protocol(message) => Self::Protocol(message),
         }
     }
 }
@@ -69,7 +69,7 @@ pub struct OpenAgentRequest {
     pub agent_id: String,
     pub vendor_name: String,
     pub command: String,
-    pub herdr_agent: String,
+    pub shepherd_agent: String,
     pub args: Vec<String>,
     pub label: String,
     pub env: HashMap<String, String>,
@@ -124,7 +124,7 @@ pub trait Terminals: Send + Sync {
     }
 }
 
-/// Select the terminal backend from `SHEPHERD_TERMINALS` (highest priority) or `config.herdr.backend` (default `"socket"`).
+/// Select the terminal backend from `SHEPHERD_TERMINALS` (highest priority) or `config.shepherd.backend` (default `"socket"`).
 pub fn select_backend(config: &Config) -> Result<BackendKind, TerminalError> {
     let env_value = std::env::var("SHEPHERD_TERMINALS").ok();
     select_backend_with_env(config, env_value.as_deref())
@@ -135,7 +135,7 @@ pub fn select_backend_with_env(config: &Config, env_override: Option<&str>) -> R
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| {
-            let cfg = config.herdr.backend.trim();
+            let cfg = config.shepherd.backend.trim();
             if cfg.is_empty() { "socket" } else { cfg }
         });
     match raw {
@@ -165,7 +165,7 @@ pub fn set_in_process_terminals_factory(
     }
 }
 
-/// Instantiate the active `Terminals` adapter according to `SHEPHERD_TERMINALS` and `config.herdr`.
+/// Instantiate the active `Terminals` adapter according to `SHEPHERD_TERMINALS` and `config.shepherd`.
 pub fn connect_terminals(config: &Config) -> Result<Box<dyn Terminals>, TerminalError> {
     match select_backend(config)? {
         BackendKind::InProcess => {
@@ -181,35 +181,35 @@ pub fn connect_terminals(config: &Config) -> Result<Box<dyn Terminals>, Terminal
                 })?;
             factory(config)
         }
-        BackendKind::Socket => Ok(Box::new(HerdrSocket::connect(
-            Some(&config.herdr.session),
-            config.herdr.autostart,
+        BackendKind::Socket => Ok(Box::new(ShepherdSocket::connect(
+            Some(&config.shepherd.session),
+            config.shepherd.autostart,
         )?)),
         BackendKind::Hc => Ok(Box::new(HcCli::new())),
     }
 }
 
-/// In-process adapter for Herdr's runtime API (`trait Terminals`), avoiding external NDJSON socket I/O
+/// In-process adapter for Shepherd's runtime API (`trait Terminals`), avoiding external NDJSON socket I/O
 /// in `shepherd-core` by routing RPC calls through a direct handler (`App` channel or `ApiClient`).
-pub struct HerdrInProcess {
-    client: HerdrClient,
+pub struct ShepherdInProcess {
+    client: ShepherdClient,
     session: String,
     attach_handler: Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
 }
 
-impl HerdrInProcess {
+impl ShepherdInProcess {
     pub fn new(
         session: impl Into<String>,
-        handler: impl Fn(&str, Value) -> Result<Value, HerdrError> + Send + Sync + 'static,
+        handler: impl Fn(&str, Value) -> Result<Value, ShepherdError> + Send + Sync + 'static,
     ) -> Self {
         Self {
-            client: HerdrClient::in_process(handler),
+            client: ShepherdClient::in_process(handler),
             session: session.into(),
             attach_handler: None,
         }
     }
 
-    pub fn with_client(client: HerdrClient, session: impl Into<String>) -> Self {
+    pub fn with_client(client: ShepherdClient, session: impl Into<String>) -> Self {
         Self {
             client,
             session: session.into(),
@@ -225,7 +225,7 @@ impl HerdrInProcess {
         self
     }
 
-    pub fn client(&self) -> &HerdrClient {
+    pub fn client(&self) -> &ShepherdClient {
         &self.client
     }
 
@@ -234,31 +234,31 @@ impl HerdrInProcess {
     }
 }
 
-/// Adapter for Herdr 0.9.5 local NDJSON Unix socket API (`herdr`).
-pub struct HerdrSocket {
-    client: HerdrClient,
+/// Adapter for Shepherd 0.9.5 local NDJSON Unix socket API (`shepherd`).
+pub struct ShepherdSocket {
+    client: ShepherdClient,
     session: String,
 }
 
-impl HerdrSocket {
-    pub fn new(client: HerdrClient, session: impl Into<String>) -> Self {
+impl ShepherdSocket {
+    pub fn new(client: ShepherdClient, session: impl Into<String>) -> Self {
         Self { client, session: session.into() }
     }
 
     pub fn connect(session: Option<&str>, autostart: bool) -> Result<Self, TerminalError> {
-        let client = HerdrClient::ensure_session(session, autostart)?;
+        let client = ShepherdClient::ensure_session(session, autostart)?;
         Ok(Self {
             client,
             session: session.unwrap_or("shepherd").to_owned(),
         })
     }
 
-    pub fn client(&self) -> &HerdrClient {
+    pub fn client(&self) -> &ShepherdClient {
         &self.client
     }
 }
 
-pub fn herdr_attach_args(session: &str, target: Option<&str>, takeover: bool) -> Vec<String> {
+pub fn shepherd_attach_args(session: &str, target: Option<&str>, takeover: bool) -> Vec<String> {
     let mut args = Vec::new();
     if let Some(target) = target {
         if !session.is_empty() && session != "-" {
@@ -274,9 +274,9 @@ pub fn herdr_attach_args(session: &str, target: Option<&str>, takeover: bool) ->
     args
 }
 
-impl Terminals for HerdrInProcess {
+impl Terminals for ShepherdInProcess {
     fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError> {
-        herdr_open_agent(&self.client, request)
+        shepherd_open_agent(&self.client, request)
     }
 
     fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
@@ -294,19 +294,19 @@ impl Terminals for HerdrInProcess {
     }
 
     fn read_screen(&self, target: &str, lines: u32) -> Result<String, TerminalError> {
-        herdr_read_screen(&self.client, target, lines)
+        shepherd_read_screen(&self.client, target, lines)
     }
 
     fn wait(&self, target: &str, timeout: Duration) -> Result<TerminalWaitResult, TerminalError> {
-        herdr_wait(&self.client, target, timeout)
+        shepherd_wait(&self.client, target, timeout)
     }
 
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
-        herdr_agent_status(&self.client, target)
+        shepherd_agent_status(&self.client, target)
     }
 
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
-        herdr_label(&self.client, target, labels)
+        shepherd_label(&self.client, target, labels)
     }
 
     fn close(&self, target: &str) -> Result<(), TerminalError> {
@@ -318,17 +318,17 @@ impl Terminals for HerdrInProcess {
         if let Some(handler) = &self.attach_handler {
             return handler(target, takeover);
         }
-        herdr_attach_process(&self.session, target, takeover)
+        shepherd_attach_process(&self.session, target, takeover)
     }
 
     fn focus(&self, target: &str) -> Result<(), TerminalError> {
-        herdr_focus(&self.client, target)
+        shepherd_focus(&self.client, target)
     }
 }
 
-impl Terminals for HerdrSocket {
+impl Terminals for ShepherdSocket {
     fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError> {
-        herdr_open_agent(&self.client, request)
+        shepherd_open_agent(&self.client, request)
     }
 
     fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
@@ -346,19 +346,19 @@ impl Terminals for HerdrSocket {
     }
 
     fn read_screen(&self, target: &str, lines: u32) -> Result<String, TerminalError> {
-        herdr_read_screen(&self.client, target, lines)
+        shepherd_read_screen(&self.client, target, lines)
     }
 
     fn wait(&self, target: &str, timeout: Duration) -> Result<TerminalWaitResult, TerminalError> {
-        herdr_wait(&self.client, target, timeout)
+        shepherd_wait(&self.client, target, timeout)
     }
 
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
-        herdr_agent_status(&self.client, target)
+        shepherd_agent_status(&self.client, target)
     }
 
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
-        herdr_label(&self.client, target, labels)
+        shepherd_label(&self.client, target, labels)
     }
 
     fn close(&self, target: &str) -> Result<(), TerminalError> {
@@ -367,15 +367,15 @@ impl Terminals for HerdrSocket {
     }
 
     fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError> {
-        herdr_attach_process(&self.session, target, takeover)
+        shepherd_attach_process(&self.session, target, takeover)
     }
 
     fn focus(&self, target: &str) -> Result<(), TerminalError> {
-        herdr_focus(&self.client, target)
+        shepherd_focus(&self.client, target)
     }
 }
 
-fn herdr_focus(client: &HerdrClient, target: &str) -> Result<(), TerminalError> {
+fn shepherd_focus(client: &ShepherdClient, target: &str) -> Result<(), TerminalError> {
     if client.focus_agent(target).is_ok() {
         return Ok(());
     }
@@ -386,8 +386,8 @@ fn herdr_focus(client: &HerdrClient, target: &str) -> Result<(), TerminalError> 
     Ok(())
 }
 
-fn herdr_open_agent(
-    client: &HerdrClient,
+fn shepherd_open_agent(
+    client: &ShepherdClient,
     request: &OpenAgentRequest,
 ) -> Result<OpenedAgent, TerminalError> {
     let mut worktree_path = String::new();
@@ -436,13 +436,13 @@ fn herdr_open_agent(
         &request.label,
     );
 
-    if request.herdr_agent.is_empty() {
+    if request.shepherd_agent.is_empty() {
         let command = crate::spawn::shell_join(
             std::iter::once(request.command.as_str()).chain(request.args.iter().map(String::as_str)),
         );
         client.send_input(&pane_id, &command)?;
     } else {
-        start_herdr_agent(client, &pane_id, &request.agent_id, &request.herdr_agent, &request.args)?;
+        start_shepherd_agent(client, &pane_id, &request.agent_id, &request.shepherd_agent, &request.args)?;
     }
 
     Ok(OpenedAgent {
@@ -454,7 +454,7 @@ fn herdr_open_agent(
     })
 }
 
-fn herdr_read_screen(client: &HerdrClient, target: &str, lines: u32) -> Result<String, TerminalError> {
+fn shepherd_read_screen(client: &ShepherdClient, target: &str, lines: u32) -> Result<String, TerminalError> {
     let result = client.read_pane(target, lines)?;
     Ok(result
         .get("text")
@@ -463,8 +463,8 @@ fn herdr_read_screen(client: &HerdrClient, target: &str, lines: u32) -> Result<S
         .to_owned())
 }
 
-fn herdr_wait(
-    client: &HerdrClient,
+fn shepherd_wait(
+    client: &ShepherdClient,
     target: &str,
     timeout: Duration,
 ) -> Result<TerminalWaitResult, TerminalError> {
@@ -489,7 +489,7 @@ fn herdr_wait(
     })
 }
 
-fn herdr_agent_status(client: &HerdrClient, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
+fn shepherd_agent_status(client: &ShepherdClient, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
     let agent = client.get_agent(target)?;
     Ok(TerminalAgentStatus {
         state: "live".into(),
@@ -522,8 +522,8 @@ fn herdr_agent_status(client: &HerdrClient, target: &str) -> Result<TerminalAgen
     })
 }
 
-fn herdr_label(
-    client: &HerdrClient,
+fn shepherd_label(
+    client: &ShepherdClient,
     target: &str,
     labels: &HashMap<String, String>,
 ) -> Result<(), TerminalError> {
@@ -547,21 +547,21 @@ fn herdr_label(
     Ok(())
 }
 
-fn herdr_attach_process(
+fn shepherd_attach_process(
     session: &str,
     target: Option<&str>,
     takeover: bool,
 ) -> Result<(), TerminalError> {
-    let args = herdr_attach_args(session, target, takeover);
-    let status = Command::new("herdr").args(args).status()?;
+    let args = shepherd_attach_args(session, target, takeover);
+    let status = Command::new("shepherd").args(args).status()?;
     if !status.success() {
-        return Err(TerminalError::Protocol(format!("herdr attach exited with {status}")));
+        return Err(TerminalError::Protocol(format!("shepherd attach exited with {status}")));
     }
     Ok(())
 }
 
-fn start_herdr_agent(
-    client: &HerdrClient,
+fn start_shepherd_agent(
+    client: &ShepherdClient,
     pane: &str,
     name: &str,
     kind: &str,
@@ -571,10 +571,10 @@ fn start_herdr_agent(
     loop {
         match client.start_agent(pane, name, kind, args) {
             Ok(_) => return Ok(()),
-            Err(HerdrError::Api { code, .. }) if code == "agent_pane_busy" => {
+            Err(ShepherdError::Api { code, .. }) if code == "agent_pane_busy" => {
                 if Instant::now() >= deadline {
                     return Err(TerminalError::Protocol(
-                        "Herdr pane did not become ready for an agent within 30 seconds".into(),
+                        "Shepherd pane did not become ready for an agent within 30 seconds".into(),
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(250));
@@ -584,15 +584,15 @@ fn start_herdr_agent(
     }
 }
 
-fn deliver_prompt(client: &HerdrClient, target: &str, prompt: &str) -> Result<PromptOutcome, TerminalError> {
+fn deliver_prompt(client: &ShepherdClient, target: &str, prompt: &str) -> Result<PromptOutcome, TerminalError> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         match client.prompt_agent(target, prompt) {
             Ok(_) => return Ok(PromptOutcome::Delivered),
-            Err(HerdrError::Api { code, .. }) if code == "agent_blocked" => {
+            Err(ShepherdError::Api { code, .. }) if code == "agent_blocked" => {
                 return Ok(PromptOutcome::Blocked);
             }
-            Err(HerdrError::Api { code, .. }) if code == "agent_not_ready" => {
+            Err(ShepherdError::Api { code, .. }) if code == "agent_not_ready" => {
                 if Instant::now() >= deadline {
                     return Err(TerminalError::Protocol(
                         "agent did not become ready within 30 seconds".into(),
@@ -620,15 +620,15 @@ fn nested_string(value: &Value, path: &[&str]) -> Result<String, TerminalError> 
     let mut current = value;
     for key in path {
         current = current.get(*key).ok_or_else(|| {
-            TerminalError::Protocol(format!("Herdr response is missing {key:?}"))
+            TerminalError::Protocol(format!("Shepherd response is missing {key:?}"))
         })?;
     }
     current.as_str().map(str::to_owned).ok_or_else(|| {
-        TerminalError::Protocol(format!("Herdr response field {} is not a string", path.join(".")))
+        TerminalError::Protocol(format!("Shepherd response field {} is not a string", path.join(".")))
     })
 }
 
-/// Adapter for `herdr-core` CLI (`hc`).
+/// Adapter for `shepherd-core` CLI (`hc`).
 pub struct HcCli {
     binary: PathBuf,
 }
@@ -1360,9 +1360,9 @@ mod tests {
     fn backend_selection_prioritizes_env_over_config_and_defaults_to_socket() {
         let mut config = Config::default();
         assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Socket);
-        config.herdr.backend = "hc".into();
+        config.shepherd.backend = "hc".into();
         assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::Hc);
-        config.herdr.backend = "in-process".into();
+        config.shepherd.backend = "in-process".into();
         assert_eq!(select_backend_with_env(&config, None).unwrap(), BackendKind::InProcess);
         assert_eq!(
             select_backend_with_env(&config, Some("in_process")).unwrap(),
@@ -1380,13 +1380,13 @@ mod tests {
     }
 
     #[test]
-    fn herdr_in_process_executes_every_terminals_operation_without_socket() {
+    fn shepherd_in_process_executes_every_terminals_operation_without_socket() {
         let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
         let attached: Arc<Mutex<Vec<(Option<String>, bool)>>> = Arc::new(Mutex::new(Vec::new()));
         let calls_ref = Arc::clone(&calls);
         let attached_ref = Arc::clone(&attached);
 
-        let adapter = HerdrInProcess::new("shepherd", move |method, params| {
+        let adapter = ShepherdInProcess::new("shepherd", move |method, params| {
             calls_ref.lock().unwrap().push((method.to_owned(), params.clone()));
             match method {
                 "worktree.create" => Ok(serde_json::json!({
@@ -1415,7 +1415,7 @@ mod tests {
                 | "pane.send_input" => Ok(serde_json::json!({"ok": true})),
                 "agent.prompt" => {
                     if params["text"] == "BLOCK_ME" {
-                        Err(HerdrError::Api {
+                        Err(ShepherdError::Api {
                             code: "agent_blocked".into(),
                             message: "agent waiting for input".into(),
                         })
@@ -1445,7 +1445,7 @@ mod tests {
                         "state_change_seq": 7
                     }
                 })),
-                other => Err(HerdrError::Api {
+                other => Err(ShepherdError::Api {
                     code: "unexpected".into(),
                     message: format!("unexpected method {other}"),
                 }),
@@ -1469,7 +1469,7 @@ mod tests {
                 agent_id: "coder-1".into(),
                 vendor_name: "codex".into(),
                 command: "codex".into(),
-                herdr_agent: "codex".into(),
+                shepherd_agent: "codex".into(),
                 args: vec!["-m".into(), "gpt-5".into()],
                 label: "coder·codex·task".into(),
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
@@ -1553,7 +1553,7 @@ mod tests {
                 agent_id: "coder-1".into(),
                 vendor_name: "codex".into(),
                 command: "codex".into(),
-                herdr_agent: "codex".into(),
+                shepherd_agent: "codex".into(),
                 args: vec!["-m".into(), "gpt-5".into()],
                 label: "coder·codex·task".into(),
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
@@ -1663,7 +1663,7 @@ esac
                 agent_id: "coder-1".into(),
                 vendor_name: "codex".into(),
                 command: "codex".into(),
-                herdr_agent: "codex".into(),
+                shepherd_agent: "codex".into(),
                 args: vec!["-m".into(), "gpt-5".into()],
                 label: "coder·codex·test".into(),
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),

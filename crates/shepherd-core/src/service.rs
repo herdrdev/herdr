@@ -396,7 +396,7 @@ impl OrchestrationService {
                         Some(_) => {
                             agent.state = "failed".into();
                             agent.error = format!(
-                                "no recibió su primer prompt antes del reinicio; relánzalo con `herdr shepherd spawn {} --vendor {}`",
+                                "no recibió su primer prompt antes del reinicio; relánzalo con `shepherd shepherd spawn {} --vendor {}`",
                                 agent.role, agent.vendor
                             );
                             agent.updated = now.clone();
@@ -556,13 +556,13 @@ impl OrchestrationService {
                     self.save_registry(&registry)?;
                     return Err(format!("agent {agent_id} was stopped during prompt delivery"));
                 }
-                let herdr_agent = self
+                let shepherd_agent = self
                     .shepherd_config
                     .vendors
                     .get(&agent.vendor)
-                    .map(|v| v.herdr_agent.as_str())
+                    .map(|v| v.shepherd_agent.as_str())
                     .unwrap_or("claude");
-                let is_raw = herdr_agent.is_empty();
+                let is_raw = shepherd_agent.is_empty();
                 let p_target = if is_raw && !agent.pane.is_empty() {
                     agent.pane.clone()
                 } else {
@@ -1074,7 +1074,7 @@ impl OrchestrationService {
             agent_id: agent.id.clone(),
             vendor_name: vendor_name.clone(),
             command: vendor.command.clone(),
-            herdr_agent: vendor.herdr_agent.clone(),
+            shepherd_agent: vendor.shepherd_agent.clone(),
             args,
             label: agent.label.clone(),
             env,
@@ -1310,7 +1310,7 @@ impl OrchestrationService {
     }
 
     /// Requirement 5 (`focus`):
-    /// Only selects/focuses the tab or pane in Herdr's native UI (`agent.focus` / `tab.focus` / `pane.focus`).
+    /// Only selects/focuses the tab or pane in Shepherd's native UI (`agent.focus` / `tab.focus` / `pane.focus`).
     pub fn focus(&self, id: &str) -> Result<Agent, String> {
         let result = (|| {
             let registry = self.load_registry()?;
@@ -2368,7 +2368,7 @@ mod tests {
         let reg = service.reconcile_once().unwrap();
         assert_eq!(reg.result(&mcp_agent.id).unwrap().state, "idle");
 
-        // 3. Non-MCP agent (agy): Herdr reports "done" prematurely while screen is still changing!
+        // 3. Non-MCP agent (agy): Shepherd reports "done" prematurely while screen is still changing!
         terminals.set_status(
             &non_mcp_agent.id,
             TerminalAgentStatus {

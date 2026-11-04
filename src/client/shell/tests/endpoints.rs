@@ -335,7 +335,7 @@ fn machine_badge_retries_and_reports_the_fresh_diagnostic() {
     assert!(notice.body.contains("Permission denied"));
     assert!(notice
         .title
-        .contains("herdr machine reconnect 0123456789abcdef0123456789abcdef"));
+        .contains("shepherd machine reconnect 0123456789abcdef0123456789abcdef"));
     state.set_machine_diagnostic(&id, "a later background failure".into());
     state.report_machine_retry(&id);
     assert!(
@@ -367,12 +367,12 @@ fn active_retry_failure_preserves_diagnostic_and_presentation_freeze() {
         (
             ClientEndpointStatus::Attention,
             "Permission denied (keyboard-interactive)",
-            "herdr machine reconnect",
+            "shepherd machine reconnect",
         ),
         (
             ClientEndpointStatus::Reconnecting,
             "connection refused",
-            "herdr machine status",
+            "shepherd machine status",
         ),
     ] {
         for previous in [

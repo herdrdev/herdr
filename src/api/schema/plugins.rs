@@ -51,7 +51,7 @@ pub struct InstalledPluginInfo {
     pub name: String,
     pub version: String,
     #[serde(default)]
-    pub min_herdr_version: String,
+    pub min_shepherd_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub manifest_path: String,

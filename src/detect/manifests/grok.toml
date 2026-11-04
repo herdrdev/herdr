@@ -12,7 +12,7 @@ aliases = ["grok-build"]
 # that prefix blinks while the terminal is unfocused, so visible blocker
 # rules outrank the title spinner rule.
 #
-# Grok also emits OSC 9;4 progress on supported terminals. Herdr retains the
+# Grok also emits OSC 9;4 progress on supported terminals. Shepherd retains the
 # payload after "9;": "4;1;-1" while busy and "4;0;0" when idle.
 #
 # Working turns render one live status line directly above the prompt box:

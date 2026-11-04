@@ -169,7 +169,7 @@ mod tests {
             .unwrap_or(0);
         std::env::temp_dir()
             .join(format!(
-                "herdr-registry-{name}-{}-{nanos}",
+                "shepherd-registry-{name}-{}-{nanos}",
                 std::process::id()
             ))
             .join("plugins.json")
@@ -180,9 +180,9 @@ mod tests {
             plugin_id: id.to_string(),
             name: "Test Plugin".to_string(),
             version: "0.1.0".to_string(),
-            min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
+            min_shepherd_version: crate::build_info::BASE_VERSION.to_string(),
             description: None,
-            manifest_path: format!("/tmp/{id}/herdr-plugin.toml"),
+            manifest_path: format!("/tmp/{id}/shepherd-plugin.toml"),
             plugin_root: format!("/tmp/{id}"),
             enabled: true,
             platforms: None,
@@ -254,11 +254,11 @@ mod tests {
         entry.source = crate::api::schema::PluginSourceInfo {
             kind: crate::api::schema::PluginSourceKind::Github,
             owner: Some("ogulcancelik".into()),
-            repo: Some("herdr-plugin-examples".into()),
+            repo: Some("shepherd-plugin-examples".into()),
             subdir: Some("worktree-bootstrap".into()),
             requested_ref: Some("main".into()),
             resolved_commit: Some("abc123".into()),
-            managed_path: Some("/tmp/herdr/plugins/github/example.reload".into()),
+            managed_path: Some("/tmp/shepherd/plugins/github/example.reload".into()),
             installed_unix_ms: Some(42),
         };
 
@@ -267,9 +267,9 @@ mod tests {
                 plugin_id: "example.reload".to_string(),
                 name: "Fresh Name".to_string(),
                 version: "0.2.0".to_string(),
-                min_herdr_version: crate::build_info::BASE_VERSION.to_string(),
+                min_shepherd_version: crate::build_info::BASE_VERSION.to_string(),
                 description: Some("refreshed".to_string()),
-                manifest_path: "/tmp/example.reload/herdr-plugin.toml".to_string(),
+                manifest_path: "/tmp/example.reload/shepherd-plugin.toml".to_string(),
                 plugin_root: "/tmp/example.reload".to_string(),
                 enabled: true, // caller would pass stored enabled; fresh parse returns true
                 platforms: None,
@@ -301,9 +301,9 @@ mod tests {
     fn save_preserves_relative_registry_symlink() {
         let path = temp_registry_path("relative-symlink");
         let root = path.parent().unwrap();
-        let target = root.join("dotfiles/herdr/plugins.json");
+        let target = root.join("dotfiles/shepherd/plugins.json");
         save_to_path(&target, &[sample_plugin("example.first")]).unwrap();
-        std::os::unix::fs::symlink("dotfiles/herdr/plugins.json", &path).unwrap();
+        std::os::unix::fs::symlink("dotfiles/shepherd/plugins.json", &path).unwrap();
 
         let result = save_to_path(&path, &[sample_plugin("example.second")]);
         let preserved = std::fs::symlink_metadata(&path)
@@ -317,7 +317,7 @@ mod tests {
 
         result.unwrap();
         assert!(preserved, "saving the registry must preserve its symlink");
-        assert_eq!(link_text.unwrap(), Path::new("dotfiles/herdr/plugins.json"));
+        assert_eq!(link_text.unwrap(), Path::new("dotfiles/shepherd/plugins.json"));
         assert!(same_content);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].plugin_id, "example.second");
@@ -329,17 +329,17 @@ mod tests {
         let path = temp_registry_path("dangling-chain");
         let root = path.parent().unwrap();
         let middle = root.join("links/registry.json");
-        let target = root.join("dotfiles/herdr/plugins.json");
+        let target = root.join("dotfiles/shepherd/plugins.json");
         std::fs::create_dir_all(middle.parent().unwrap()).unwrap();
         std::os::unix::fs::symlink(&middle, &path).unwrap();
-        std::os::unix::fs::symlink("../dotfiles/herdr/plugins.json", &middle).unwrap();
+        std::os::unix::fs::symlink("../dotfiles/shepherd/plugins.json", &middle).unwrap();
 
         save_to_path(&path, &[sample_plugin("example.new")]).unwrap();
 
         assert_eq!(std::fs::read_link(&path).unwrap(), middle);
         assert_eq!(
             std::fs::read_link(&middle).unwrap(),
-            Path::new("../dotfiles/herdr/plugins.json")
+            Path::new("../dotfiles/shepherd/plugins.json")
         );
         assert_eq!(load_from_path(&target)[0].plugin_id, "example.new");
         assert!(!target.with_extension("json.tmp").exists());

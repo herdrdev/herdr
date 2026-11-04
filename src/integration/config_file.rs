@@ -104,7 +104,7 @@ impl Replacement {
         for _ in 0..128 {
             let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
             let temporary = parent.join(format!(
-                ".herdr-config-{}-{sequence}.tmp",
+                ".shepherd-config-{}-{sequence}.tmp",
                 std::process::id()
             ));
             // Existing configs can contain secrets. Start their staging file private;

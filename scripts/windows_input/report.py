@@ -131,9 +131,9 @@ def catalogue():
               "tab", "shift-tab", "paste-lf", "paste-crlf", "paste-cr", "paste-whitespace", "paste-unicode",
               "paste-escape-looking", "mouse-interleave", "mouse-focus-refresh", "mode-transitions"]
     mok2 = ["letter-a", "shift-enter", "ctrl-enter", "ctrl-shift-enter", "paste-lf", "dead-acute"]
-    release_plan = [dict(channel="stable", path="herdr", mode="legacy", cases=legacy),
-                    dict(channel="stable", path="herdr", mode="mok2", cases=mok2),
-                    dict(channel="preview", path="herdr", mode="kitty", cases=sorted(set(legacy + mok2)))]
+    release_plan = [dict(channel="stable", path="shepherd", mode="legacy", cases=legacy),
+                    dict(channel="stable", path="shepherd", mode="mok2", cases=mok2),
+                    dict(channel="preview", path="shepherd", mode="kitty", cases=sorted(set(legacy + mok2)))]
     return dict(schema=1, widths=WIDTHS, heights=HEIGHTS, modes=MODES, cases=cases, release_plan=release_plan)
 
 
@@ -174,10 +174,10 @@ def verdict(case, mode, evidence):
         return "inconclusive", "Missing readiness, focus, or complete capture"
     if evidence.get("error"):
         return "inconclusive", evidence["error"]
-    if case["kind"] == "clipboard-image" and evidence.get("path") == "herdr":
+    if case["kind"] == "clipboard-image" and evidence.get("path") == "shepherd":
         return "not_run", "Clipboard image bridging is active only for remote clients"
-    if evidence.get("path") == "herdr" and case["id"] in ("page-up", "page-down") and "vk" not in expected:
-        expected = {"hex": [""]}  # Plain page keys intentionally control Herdr's host scrollback.
+    if evidence.get("path") == "shepherd" and case["id"] in ("page-up", "page-down") and "vk" not in expected:
+        expected = {"hex": [""]}  # Plain page keys intentionally control Shepherd's host scrollback.
     def geometry(name):
         value = evidence.get(name)
         return value[:2] if isinstance(value, list) and len(value) >= 2 and all(type(v) is int for v in value[:2]) else None
@@ -191,7 +191,7 @@ def verdict(case, mode, evidence):
         return "inconclusive", "Pane geometry changed during capture"
     if final_outer != outer:
         return "inconclusive", "Outer geometry changed during capture"
-    if evidence.get("path") == "herdr" and case["id"] in ("page-up", "page-down") and "vk" in expected:
+    if evidence.get("path") == "shepherd" and case["id"] in ("page-up", "page-down") and "vk" in expected:
         records = evidence.get("records")
         if not isinstance(records, list) or any(not isinstance(record, list) or len(record) != 7
                                                 or not all(type(field) is int for field in record) for record in records):
@@ -199,7 +199,7 @@ def verdict(case, mode, evidence):
         return (("inconclusive", "No positive host-scrollback evidence for the consumed page key")
                 if all(record[0] in (4, 16) for record in records)
                 else ("fail", "Plain page key unexpectedly reached the pane"))
-    if (evidence.get("path") == "herdr" and case["id"] in ("page-up", "page-down")
+    if (evidence.get("path") == "shepherd" and case["id"] in ("page-up", "page-down")
             and evidence.get("hex") == ""):
         return "inconclusive", "No positive host-scrollback evidence for the consumed page key"
     if "vk" in expected:
@@ -256,7 +256,7 @@ def verdict(case, mode, evidence):
             if origin not in (None, "empty-paste"):
                 return "fail", f"Direct empty paste was decoded as {origin}, not an empty paste"
             return "pass", "Terminal emitted an empty bracketed paste for image-only clipboard"
-        if evidence.get("path") != "herdr-remote":
+        if evidence.get("path") != "shepherd-remote":
             return "not_run", "Clipboard image bridge requires the remote-client gauntlet path"
         if not raw.startswith(b"\x1b[200~") or not raw.endswith(b"\x1b[201~"):
             return "fail", "Remote clipboard image did not reach the pane as one paste"
@@ -264,7 +264,7 @@ def verdict(case, mode, evidence):
             path = raw[6:-6].decode("utf-8")
         except UnicodeDecodeError:
             return "fail", "Staged clipboard image path is not UTF-8"
-        valid_path = re.fullmatch(r"[A-Za-z]:\\.*\\herdr-clipboard-images-[^\\]+\\[^\\]+\.png", path)
+        valid_path = re.fullmatch(r"[A-Za-z]:\\.*\\shepherd-clipboard-images-[^\\]+\\[^\\]+\.png", path)
         if not valid_path:
             return "fail", "Pane did not receive a staged clipboard PNG path"
         # A staged image must come from the bridge reacting to an empty paste, not
@@ -354,7 +354,7 @@ def summarize(document):
         if paste_origin is not None:
             observation = {**observation, "paste_origin": paste_origin}
         status, reason = verdict(case, observation["mode"], observation)
-        scope = "direct_host" if observation.get("path") == "direct" else "through_herdr_not_yet_attributed"
+        scope = "direct_host" if observation.get("path") == "direct" else "through_shepherd_not_yet_attributed"
         if status in ("pass", "fail"):
             bound = [run for host in document.get("hosts", []) if host.get("channel") == observation.get("host")
                      for run in host.get("runs", [])
@@ -375,7 +375,7 @@ def summarize(document):
     geometries = [(120, 30, True)] + [(w, h, False) for h in document.get("heights", HEIGHTS) for w in document.get("widths", WIDTHS)] + [(80, 30, False)]
     run_specs = document.get("run_specs") or [dict(channel=host, path=path, mode=mode, cases=document.get("cases") or list(cases))
                                                for host in document.get("channels") or ("stable", "preview")
-                                               for path in document.get("paths") or ("direct", "herdr")
+                                               for path in document.get("paths") or ("direct", "shepherd")
                                                for mode in document.get("modes", MODES)]
     for spec in run_specs:
         for phase, (width, height, full) in enumerate(geometries, 1):
@@ -392,7 +392,7 @@ def summarize(document):
                 and not errors and not document.get("cleanup_errors")
                 and all(r["status"] == "pass" for r in rows)
                 and (document.get("campaign") != "release" or
-                     herdr_protocol_proven({"hosts": hosts, "observations": rows}, {"stable"})))
+                     shepherd_protocol_proven({"hosts": hosts, "observations": rows}, {"stable"})))
     return {**document, "errors": errors, "observations": rows, "counts": counts, "coverage_missing": len(missing), "observed_checks_passed": complete,
             "native_qualification": "Required; this report is not a full Windows support certificate"}
 
@@ -493,38 +493,38 @@ def qualification_matrix(result):
         if release and name == "PageUp/PageDown scroll":
             table.append((name, "MANUAL", "MANUAL"))
             continue
-        herdr_modes = {"legacy"} if name in {"Mouse after resize", "Runtime mode transitions"} else {"mok2"} if "Enter" in name or name in {"Resize 120 -> 80", "Dead-key composition", "AltGr", "IME composition"} else {"legacy"}
-        herdr_path = "herdr-remote" if name == "Remote clipboard image" else "herdr"
+        shepherd_modes = {"legacy"} if name in {"Mouse after resize", "Runtime mode transitions"} else {"mok2"} if "Enter" in name or name in {"Resize 120 -> 80", "Dead-key composition", "AltGr", "IME composition"} else {"legacy"}
+        shepherd_path = "shepherd-remote" if name == "Remote clipboard image" else "shepherd"
         if release:
             required_widths = {120, 80} if name == "Resize 120 -> 80" else None
-            table.append((name, cell(case_ids, width, "herdr", herdr_modes, {"stable"}, required_widths, {"legacy", "mok2"}),
-                          cell(case_ids, width, "herdr", {"kitty"}, {"preview"}, required_widths)))
+            table.append((name, cell(case_ids, width, "shepherd", shepherd_modes, {"stable"}, required_widths, {"legacy", "mok2"}),
+                          cell(case_ids, width, "shepherd", {"kitty"}, {"preview"}, required_widths)))
         else:
-            table.append((name, cell(case_ids, width, herdr_path, herdr_modes),
+            table.append((name, cell(case_ids, width, shepherd_path, shepherd_modes),
                           cell(case_ids, width, "direct", {"legacy"}), cell(case_ids, width, "direct", {"kitty"})))
     return table
 
 
-def herdr_protocol_proven(result, channels=None):
+def shepherd_protocol_proven(result, channels=None):
     runs = {(host.get("channel"), run.get("path"), run.get("mode"), run.get("nonce"))
             for host in result.get("hosts", []) for run in host.get("runs", [])
-            if run.get("path") in {"herdr", "herdr-remote"} and run.get("nonce")
+            if run.get("path") in {"shepherd", "shepherd-remote"} and run.get("nonce")
             and (channels is None or host.get("channel") in channels)}
     proven = {(row.get("host"), row.get("path"), row.get("mode"), row.get("nonce"))
               for row in result.get("observations", [])
-              if row.get("path") in {"herdr", "herdr-remote"} and row.get("input_reader") == "windows-console"
+              if row.get("path") in {"shepherd", "shepherd-remote"} and row.get("input_reader") == "windows-console"
               and row.get("input_transport") == "win32-serialized" and row.get("nonce")}
     return bool(runs) and runs <= proven
 
 
-def herdr_protocol_label(result, channels=None):
-    return "Win32 (Herdr)*" if herdr_protocol_proven(result, channels) else "Herdr default (UNKNOWN)*"
+def shepherd_protocol_label(result, channels=None):
+    return "Win32 (Shepherd)*" if shepherd_protocol_proven(result, channels) else "Shepherd default (UNKNOWN)*"
 
 
 def print_qualification_matrix(result):
-    table = ([("Thing", "Stable WT / " + herdr_protocol_label(result, {"stable"}), "Preview WT / Kitty")]
+    table = ([("Thing", "Stable WT / " + shepherd_protocol_label(result, {"stable"}), "Preview WT / Kitty")]
              if result.get("campaign") == "release" else
-             [("Thing", herdr_protocol_label(result), "Plain VT", "Kitty")]) + qualification_matrix(result)
+             [("Thing", shepherd_protocol_label(result), "Plain VT", "Kitty")]) + qualification_matrix(result)
     widths = [max(len(str(row[column])) for row in table) for column in range(len(table[0]))]
     line = lambda row: " | ".join(str(value).ljust(widths[index]) for index, value in enumerate(row))
     print("\nWindows input qualification results")
@@ -532,7 +532,7 @@ def print_qualification_matrix(result):
     print("-+-".join("-" * width for width in widths))
     for row in table[1:]:
         print(line(row))
-    print("* Herdr protocol label comes from runtime evidence; UNKNOWN is never treated as Win32.")
+    print("* Shepherd protocol label comes from runtime evidence; UNKNOWN is never treated as Win32.")
     if result.get("campaign") == "release":
         print("MANUAL: physically verify PageUp/PageDown scrolling, AltGr, and IME before release.")
     else:
@@ -556,13 +556,13 @@ def main():
               f"{counts['inconclusive']} inconclusive, {counts['not_run']} not run; "
               f"{result['coverage_missing']} planned rows missing")
         if through_failures:
-            print(f"Assessment: {through_failures} through-Herdr failures need attribution; inspect report.json before treating them as product regressions")
+            print(f"Assessment: {through_failures} through-Shepherd failures need attribution; inspect report.json before treating them as product regressions")
         elif result.get("errors") or result.get("cleanup_errors"):
             print("Assessment: harness or cleanup failed; this run does not qualify input behavior")
-        elif result.get("campaign") == "release" and not herdr_protocol_proven(result, {"stable"}):
+        elif result.get("campaign") == "release" and not shepherd_protocol_proven(result, {"stable"}):
             print("Assessment: Stable Win32 runtime evidence missing; the release matrix is incomplete")
         elif direct_failures:
-            print(f"Assessment: {direct_failures} direct-host differences observed; these are not automatically Herdr bugs")
+            print(f"Assessment: {direct_failures} direct-host differences observed; these are not automatically Shepherd bugs")
         elif counts["inconclusive"] or counts["not_run"] or counts["unsupported"] or result["coverage_missing"]:
             print("Assessment: observed assertions passed, but host limitations or qualification gaps remain")
         else:

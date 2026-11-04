@@ -4,7 +4,7 @@ use super::harness::*;
 fn cli_allows_same_protocol_different_version_and_preserves_server_error() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -65,7 +65,7 @@ fn cli_allows_same_protocol_different_version_and_preserves_server_error() {
 fn server_live_handoff_bypasses_protocol_guard() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {
@@ -97,7 +97,7 @@ fn server_live_handoff_bypasses_protocol_guard() {
 fn plugin_list_preserves_protocol_mismatch_envelope() {
     let base = unique_test_dir();
     fs::create_dir_all(&base).unwrap();
-    let socket_path = base.join("herdr.sock");
+    let socket_path = base.join("shepherd.sock");
     let listener = UnixListener::bind(&socket_path).unwrap();
 
     let server = thread::spawn(move || {

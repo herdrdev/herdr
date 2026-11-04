@@ -19,9 +19,9 @@ use windows_sys::Win32::{
     UI::WindowsAndMessaging::*,
 };
 
-const APP_ID: &str = "Herdr.Desktop";
-const WINDOW_CLASS: &str = "HerdrNotificationActivation";
-const ACTIVATION_MESSAGE: &str = "Herdr.Notification.Activate";
+const APP_ID: &str = "Shepherd.Desktop";
+const WINDOW_CLASS: &str = "ShepherdNotificationActivation";
+const ACTIVATION_MESSAGE: &str = "Shepherd.Notification.Activate";
 const SHOW_MESSAGE: u32 = WM_APP + 1;
 const ACTIVATOR: &str = "{D58C72D3-4548-4A40-B55B-092EF0B365C3}";
 
@@ -98,7 +98,7 @@ fn issue_activation(
 fn scheme_for_executable(executable: &std::path::Path) -> String {
     let hash = Sha256::digest(executable.as_os_str().as_encoded_bytes());
     format!(
-        "herdr-notification-{:016x}",
+        "shepherd-notification-{:016x}",
         u64::from_be_bytes(hash[..8].try_into().expect("eight bytes"))
     )
 }
@@ -166,7 +166,7 @@ fn register(executable: &std::path::Path, scheme: &str) -> io::Result<()> {
         ));
     }
     let identity = RegistryKey::create(&format!(r"Software\Classes\AppUserModelId\{APP_ID}"))?;
-    identity.set("DisplayName", "Herdr")?;
+    identity.set("DisplayName", "Shepherd")?;
     // Unpackaged protocol toasts use a stub activator; no COM server is installed.
     identity.set("CustomActivator", ACTIVATOR)?;
     let protocol = RegistryKey::create(&format!(r"Software\Classes\{scheme}"))?;
@@ -362,7 +362,7 @@ pub(crate) fn show_actionable_desktop_notification(
             let (requests, receiver) = mpsc::channel();
             let (ready, response) = mpsc::sync_channel(1);
             std::thread::Builder::new()
-                .name("herdr-windows-notification".into())
+                .name("shepherd-windows-notification".into())
                 .spawn(move || run(receiver, ready))?;
             let window = response
                 .recv_timeout(Duration::from_secs(2))
@@ -498,16 +498,16 @@ mod tests {
 
     #[test]
     fn activation_requires_exact_scheme_window_and_full_issued_token_shape() {
-        let scheme = "herdr-notification-test";
+        let scheme = "shepherd-notification-test";
         let token = 0x0123456789abcdef_fedcba9876543210u128;
         let uri = format!("{scheme}://1a/{token:032x}");
         assert_eq!(parse_activation(&uri, scheme), Some((0x1a, token)));
         for invalid in [
             "other://1a/0123456789abcdeffedcba9876543210",
-            "herdr-notification-test://0/0123456789abcdeffedcba9876543210",
-            "herdr-notification-test://1a/123",
-            "herdr-notification-test://1a/0123456789abcdeffedcba9876543210/extra",
-            "herdr-notification-test://1a/+123456789abcdeffedcba9876543210",
+            "shepherd-notification-test://0/0123456789abcdeffedcba9876543210",
+            "shepherd-notification-test://1a/123",
+            "shepherd-notification-test://1a/0123456789abcdeffedcba9876543210/extra",
+            "shepherd-notification-test://1a/+123456789abcdeffedcba9876543210",
         ] {
             assert_eq!(parse_activation(invalid, scheme), None, "{invalid}");
         }
@@ -517,7 +517,7 @@ mod tests {
     fn notification_text_remains_literal_xml_and_unicode() {
         let _apartment = ComApartment::new().expect("COM");
         let title = "Agent <done> & 😀";
-        let xml = notification_xml(title, Some("body & <tag>"), "herdr-test://1/123").expect("XML");
+        let xml = notification_xml(title, Some("body & <tag>"), "shepherd-test://1/123").expect("XML");
         let texts = xml
             .GetElementsByTagName(&HSTRING::from("text"))
             .expect("texts");

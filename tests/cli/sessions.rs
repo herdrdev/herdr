@@ -132,7 +132,7 @@ fn named_sessions_use_separate_servers_and_workspace_state() {
     assert!(alpha_session["socket_path"]
         .as_str()
         .unwrap()
-        .ends_with("/sessions/alpha/herdr.sock"));
+        .ends_with("/sessions/alpha/shepherd.sock"));
     assert!(beta_session["session_dir"]
         .as_str()
         .unwrap()
@@ -210,7 +210,7 @@ fn dead_server_cli_reports_one_session_aware_json_line() {
         assert_eq!(
             response["error"]["message"],
             format!(
-                "no herdr server is running at {}; run `{attach_command}` to start or attach it",
+                "no shepherd server is running at {}; run `{attach_command}` to start or attach it",
                 socket_path.display()
             )
         );
@@ -228,21 +228,21 @@ fn dead_server_cli_reports_one_session_aware_json_line() {
         &runtime_dir,
         &["--session", "foo", "workspace", "create"],
     );
-    assert_server_not_running(missing, &named_socket, "herdr session attach foo");
+    assert_server_not_running(missing, &named_socket, "shepherd session attach foo");
 
     let stale_socket = runtime_dir.join("stale.sock");
     drop(UnixListener::bind(&stale_socket).unwrap());
-    let stale = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let stale = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["workspace", "create"])
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
-        .env("HERDR_SOCKET_PATH", &stale_socket)
-        .env("HERDR_SESSION", "unrelated")
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV")
+        .env("SHEPHERD_SOCKET_PATH", &stale_socket)
+        .env("SHEPHERD_SESSION", "unrelated")
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_ENV")
         .output()
         .unwrap();
-    assert_server_not_running(stale, &stale_socket, "herdr");
+    assert_server_not_running(stale, &stale_socket, "shepherd");
 
     cleanup_test_base(&base);
 }
@@ -259,23 +259,23 @@ fn integration_commands_run_locally_when_server_is_missing() {
     register_runtime_dir(&runtime_dir);
     let missing_socket = runtime_dir.join("missing.sock");
 
-    let expected_extension = extensions_dir.join("herdr-agent-state.ts");
+    let expected_extension = extensions_dir.join("shepherd-agent-state.ts");
     assert!(
         !expected_extension.exists(),
         "test setup should start without extension file"
     );
 
-    let workspace_list = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let workspace_list = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["workspace", "list"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
     assert_eq!(workspace_list.status.code(), Some(1));
 
-    let integration_install = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let integration_install = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["integration", "install", "pi"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -285,9 +285,9 @@ fn integration_commands_run_locally_when_server_is_missing() {
         "integration install should write local files without a server"
     );
 
-    let integration_status = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let integration_status = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["integration", "status"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -296,9 +296,9 @@ fn integration_commands_run_locally_when_server_is_missing() {
     assert!(status_stdout.contains("pi: current (v9)"));
     assert!(status_stdout.contains("claude: not installed"));
 
-    let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let integration_uninstall = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["integration", "uninstall", "pi"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -318,8 +318,8 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     let extensions_dir = home_dir.join(".pi/agent/extensions");
     fs::create_dir_all(&extensions_dir).unwrap();
     fs::write(
-        extensions_dir.join("herdr-agent-state.ts"),
-        "// legacy herdr integration\n",
+        extensions_dir.join("shepherd-agent-state.ts"),
+        "// legacy shepherd integration\n",
     )
     .unwrap();
 
@@ -328,9 +328,9 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     register_runtime_dir(&runtime_dir);
     let missing_socket = runtime_dir.join("missing.sock");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["integration", "status", "--outdated-only"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -338,8 +338,8 @@ fn integration_status_outdated_only_prints_action_for_legacy_install() {
     assert_eq!(output.status.code(), Some(0));
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("installed herdr integrations need updating"));
-    assert!(stderr.contains("herdr integration install pi"));
+    assert!(stderr.contains("installed shepherd integrations need updating"));
+    assert!(stderr.contains("shepherd integration install pi"));
 
     cleanup_test_base(&base);
 }
@@ -354,9 +354,9 @@ fn integration_status_rejects_unknown_flags() {
     register_runtime_dir(&runtime_dir);
     let missing_socket = runtime_dir.join("missing.sock");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_herdr"))
+    let output = Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(["integration", "status", "--wat"])
-        .env("HERDR_SOCKET_PATH", &missing_socket)
+        .env("SHEPHERD_SOCKET_PATH", &missing_socket)
         .env("HOME", &home_dir)
         .output()
         .unwrap();
@@ -371,9 +371,9 @@ fn status_commands_report_client_and_server_versions() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
 
     let full = run_cli(&socket_path, &["status"]);
@@ -488,7 +488,7 @@ fn status_commands_report_client_and_server_versions() {
         .as_str()
         .is_some_and(|path| !path.is_empty()));
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -533,10 +533,10 @@ fn server_stop_command_shuts_down_running_server() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
+    let client_socket = runtime_dir.join("shepherd-client.sock");
 
-    let mut herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let mut shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
@@ -560,12 +560,12 @@ fn server_stop_command_shuts_down_running_server() {
         "client socket should be removed or stale before server stop returns"
     );
 
-    let pid = herdr.child.process_id();
-    let exit_status = herdr.child.wait().unwrap();
-    unregister_spawned_herdr_pid(pid);
+    let pid = shepherd.child.process_id();
+    let exit_status = shepherd.child.wait().unwrap();
+    unregister_spawned_shepherd_pid(pid);
     assert!(exit_status.success(), "server stop should exit cleanly");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -573,11 +573,11 @@ fn server_stop_then_restart_restores_pane_history() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
+    let client_socket = runtime_dir.join("shepherd-client.sock");
     let marker = "PERSISTED_HISTORY_AFTER_STOP";
 
-    let mut herdr = spawn_herdr_with_pane_history(&config_home, &runtime_dir, &socket_path);
+    let mut shepherd = spawn_shepherd_with_pane_history(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
@@ -619,13 +619,13 @@ fn server_stop_then_restart_restores_pane_history() {
         String::from_utf8_lossy(&stopped.stderr)
     );
 
-    let pid = herdr.child.process_id();
-    let exit_status = herdr.child.wait().unwrap();
-    unregister_spawned_herdr_pid(pid);
+    let pid = shepherd.child.process_id();
+    let exit_status = shepherd.child.wait().unwrap();
+    unregister_spawned_shepherd_pid(pid);
     assert!(exit_status.success(), "server stop should exit cleanly");
-    drop(herdr);
+    drop(shepherd);
 
-    let restarted = spawn_herdr_with_pane_history(&config_home, &runtime_dir, &socket_path);
+    let restarted = spawn_shepherd_with_pane_history(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
@@ -657,7 +657,7 @@ fn server_stop_then_restart_restores_pane_history() {
         "restarted server should restore saved pane history"
     );
 
-    cleanup_spawned_herdr(restarted, base);
+    cleanup_spawned_shepherd(restarted, base);
 }
 
 #[test]
@@ -665,7 +665,7 @@ fn unloaded_session_survives_autosave_and_shutdown_when_recovery_is_blocked() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let data_dir = config_home.join(app_dir_name());
     fs::create_dir_all(&data_dir).unwrap();
     let session_path = data_dir.join("session.json");
@@ -673,7 +673,7 @@ fn unloaded_session_survives_autosave_and_shutdown_when_recovery_is_blocked() {
     fs::write(&session_path, original).unwrap();
     fs::write(data_dir.join("session-backups"), b"blocks recovery").unwrap();
 
-    let mut herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let mut shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     run_cli_json(
         &socket_path,
@@ -683,18 +683,18 @@ fn unloaded_session_survives_autosave_and_shutdown_when_recovery_is_blocked() {
         Duration::from_secs(10),
         Duration::from_millis(25),
         || {
-            fs::read_to_string(data_dir.join("herdr-server.log"))
+            fs::read_to_string(data_dir.join("shepherd-server.log"))
                 .is_ok_and(|log| log.contains("event=\"persist.save\""))
         }
     ));
     assert_eq!(fs::read(&session_path).unwrap(), original);
 
     assert!(run_cli(&socket_path, &["server", "stop"]).status.success());
-    let pid = herdr.child.process_id();
-    assert!(herdr.child.wait().unwrap().success());
-    unregister_spawned_herdr_pid(pid);
+    let pid = shepherd.child.process_id();
+    assert!(shepherd.child.wait().unwrap().success());
+    unregister_spawned_shepherd_pid(pid);
     assert_eq!(fs::read(&session_path).unwrap(), original);
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -702,15 +702,15 @@ fn session_appearing_after_startup_is_preserved_before_autosave() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let data_dir = config_home.join(app_dir_name());
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     // The API socket binds before restore; a read-only App request waits for it.
     let ready = run_cli_json(&socket_path, &["workspace", "list"]);
     assert_eq!(ready["result"]["workspaces"], serde_json::json!([]));
     // The server has already evaluated restore, but has not created any layout.
-    let original = include_bytes!("../fixtures/session/current-herdr-session.json");
+    let original = include_bytes!("../fixtures/session/current-shepherd-session.json");
     fs::write(data_dir.join("session.json"), original).unwrap();
     run_cli_json(
         &socket_path,
@@ -720,7 +720,7 @@ fn session_appearing_after_startup_is_preserved_before_autosave() {
         Duration::from_secs(10),
         Duration::from_millis(25),
         || {
-            fs::read_to_string(data_dir.join("herdr-server.log"))
+            fs::read_to_string(data_dir.join("shepherd-server.log"))
                 .is_ok_and(|log| log.contains("event=\"persist.save\""))
         }
     ));
@@ -729,7 +729,7 @@ fn session_appearing_after_startup_is_preserved_before_autosave() {
         .map(|entry| fs::read(entry.unwrap().path()).unwrap())
         .collect();
     assert_eq!(backups, vec![original.to_vec()]);
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -737,23 +737,23 @@ fn server_start_restores_legacy_session_through_api_identity() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
-    let client_socket = runtime_dir.join("herdr-client.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
+    let client_socket = runtime_dir.join("shepherd-client.sock");
     let data_dir = config_home.join(app_dir_name());
     let pion_cwd = base.join("legacy-pion");
-    let herdr_cwd = base.join("legacy-herdr");
+    let shepherd_cwd = base.join("legacy-shepherd");
 
     fs::create_dir_all(&pion_cwd).unwrap();
-    fs::create_dir_all(&herdr_cwd).unwrap();
+    fs::create_dir_all(&shepherd_cwd).unwrap();
     fs::create_dir_all(&data_dir).unwrap();
     let pion_cwd = pion_cwd.to_str().expect("test cwd should be UTF-8");
-    let herdr_cwd = herdr_cwd.to_str().expect("test cwd should be UTF-8");
+    let shepherd_cwd = shepherd_cwd.to_str().expect("test cwd should be UTF-8");
     let legacy_session = include_str!("../fixtures/session/legacy-pre-tabs-v2.json")
         .replace("/tmp/pion", pion_cwd)
-        .replace("/tmp/herdr", herdr_cwd);
+        .replace("/tmp/shepherd", shepherd_cwd);
     fs::write(data_dir.join("session.json"), legacy_session).unwrap();
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     wait_for_socket(&client_socket, Duration::from_secs(5));
 
@@ -794,7 +794,7 @@ fn server_start_restores_legacy_session_through_api_identity() {
     assert!(panes.iter().any(|pane| {
         pane["pane_id"] == focused_pane_id
             && pane["tab_id"] == format!("{workspace_id}:t1")
-            && pane["cwd"] == herdr_cwd
+            && pane["cwd"] == shepherd_cwd
             && pane["focused"] == true
     }));
 
@@ -828,5 +828,5 @@ fn server_start_restores_legacy_session_through_api_identity() {
     assert_eq!(agents[0]["agent"], "pi");
     assert_eq!(agents[0]["agent_status"], "working");
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }

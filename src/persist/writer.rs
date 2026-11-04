@@ -274,7 +274,7 @@ mod tests {
 
     fn writer(protect_unloaded: bool) -> SessionWriter {
         let directory = std::env::temp_dir().join(format!(
-            "herdr-session-recovery-{}-{}",
+            "shepherd-session-recovery-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -290,7 +290,7 @@ mod tests {
 
     fn snapshot() -> SessionSnapshot {
         serde_json::from_str(include_str!(
-            "../../tests/fixtures/session/current-herdr-session.json"
+            "../../tests/fixtures/session/current-shepherd-session.json"
         ))
         .unwrap()
     }

@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub(super) fn temp_test_dir(name: &str) -> PathBuf {
     let unique = format!(
-        "herdr-workspace-tests-{}-{}-{}",
+        "shepherd-workspace-tests-{}-{}-{}",
         name,
         std::process::id(),
         SystemTime::now()
@@ -19,8 +19,8 @@ pub(super) fn temp_test_dir(name: &str) -> PathBuf {
 fn init_repo_with_commit(repo: &Path) {
     std::fs::create_dir_all(repo).unwrap();
     run_git(repo, &["init", "--quiet"]);
-    run_git(repo, &["config", "user.email", "herdr@example.invalid"]);
-    run_git(repo, &["config", "user.name", "Herdr Test"]);
+    run_git(repo, &["config", "user.email", "shepherd@example.invalid"]);
+    run_git(repo, &["config", "user.name", "Shepherd Test"]);
     run_git(
         repo,
         &["commit", "--quiet", "--allow-empty", "-m", "initial"],
@@ -29,7 +29,7 @@ fn init_repo_with_commit(repo: &Path) {
 
 pub(crate) fn create_repo_with_linked_worktree(name: &str) -> (PathBuf, PathBuf, PathBuf) {
     let base = temp_test_dir(name);
-    let repo = base.join("herdr");
+    let repo = base.join("shepherd");
     let checkout = base.join("testr56");
     init_repo_with_commit(&repo);
     run_git(

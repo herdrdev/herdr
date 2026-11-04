@@ -76,11 +76,11 @@ mod tests {
     #[test]
     fn api_stop_reason_names_the_caller() {
         let reason = ShutdownReason::ApiStop {
-            caller: Some("pid 42 (herdr), parent pid 7 (zsh)".into()),
+            caller: Some("pid 42 (shepherd), parent pid 7 (zsh)".into()),
         };
         assert_eq!(
             reason.to_string(),
-            "server.stop request from pid 42 (herdr), parent pid 7 (zsh)"
+            "server.stop request from pid 42 (shepherd), parent pid 7 (zsh)"
         );
     }
 }

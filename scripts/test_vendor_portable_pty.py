@@ -115,7 +115,7 @@ class VendorPortablePtyTests(unittest.TestCase):
         self.assertIn("LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR", text)
         self.assertIn("LOAD_LIBRARY_SEARCH_SYSTEM32", text)
         self.assertIn("GetModuleHandleW", text)
-        self.assertIn("HERDR_WINDOWS_CONPTY", text)
+        self.assertIn("SHEPHERD_WINDOWS_CONPTY", text)
         self.assertIn("Sha256::new()", text)
         self.assertNotIn('Path::new("conpty.dll")', text)
         self.assertNotIn("shared_library", text)

@@ -1,20 +1,20 @@
-# Contributing to Herdr
+# Contributing to Shepherd
 
-## Herdr does not accept unsolicited pull requests
+## Shepherd does not accept unsolicited pull requests
 
 We tried opening the pull request gate. It did not work.
 
 Some people spent real time reproducing a bug, understanding the code, testing a fix, and writing a clear explanation for another human. We merged good work from those people. If that describes you, I am sorry that this policy also applies to you.
 
-But many new pull requests came from people asking an agent to find anything it could change so they could become a contributor. Those pull requests made maintainers determine whether the reported problem was real, whether it mattered, whether the fix fit Herdr, and whether the tests proved anything. That is not a useful transfer of work. It moves the most important work to the maintainer.
+But many new pull requests came from people asking an agent to find anything it could change so they could become a contributor. Those pull requests made maintainers determine whether the reported problem was real, whether it mattered, whether the fix fit Shepherd, and whether the tests proved anything. That is not a useful transfer of work. It moves the most important work to the maintainer.
 
 A useful contribution starts with a real problem: someone encountered it, reproduced it, checked that it was not already reported, and described it clearly for another human. That now happens too rarely for an open pull request gate to remain workable.
 
 ## The problem is whose agent
 
-Herdr is a runtime for coding agents. We understand that agents write much of today's code, including our own. Using an agent is not the problem.
+Shepherd is a runtime for coding agents. We understand that agents write much of today's code, including our own. Using an agent is not the problem.
 
-We control the agents that work on Herdr. We choose their model, instructions, context, and tools. We watch how they reproduce bugs, inspect the code, run tests, and respond to review. We can correct them when they misunderstand the product or take the implementation in the wrong direction.
+We control the agents that work on Shepherd. We choose their model, instructions, context, and tools. We watch how they reproduce bugs, inspect the code, run tests, and respond to review. We can correct them when they misunderstand the product or take the implementation in the wrong direction.
 
 We cannot know what context someone else's agent received, which model it used, what its first prompt said, what it tested, or how closely the human supervised it. Once that agent opens a pull request, verifying all of those unknowns becomes our work.
 
@@ -42,11 +42,11 @@ Keep the report factual and roughly one screen long. Include only:
 - the expected behavior
 - the shortest exact reproduction
 - the effect on your work
-- the Herdr version, update channel, operating system, and terminal
+- the Shepherd version, update channel, operating system, and terminal
 - the relevant shell or configuration, when needed
 - the smallest useful log excerpt
 
-Do not add root-cause analysis, implementation plans, pseudocode, proposed fixes, full patches, or generated investigation dumps. Herdr's maintainer-controlled issue agent will investigate the report, ask bounded follow-up questions when needed, and either close it, escalate it to a maintainer, or open a project-owned fix pull request.
+Do not add root-cause analysis, implementation plans, pseudocode, proposed fixes, full patches, or generated investigation dumps. Shepherd's maintainer-controlled issue agent will investigate the report, ask bounded follow-up questions when needed, and either close it, escalate it to a maintainer, or open a project-owned fix pull request.
 
 Answer the issue agent's questions directly. If it asks for one technical detail, provide that detail rather than a complete implementation.
 
@@ -79,13 +79,13 @@ Do not turn a rejected pull request into several manufactured issues. Do not tel
 
 ### Understand your code
 
-You must be able to explain what every change does, how it behaves at the edges, what the tests prove, and how it fits Herdr's existing design. Using AI to write code is fine. Submitting code you do not understand is not.
+You must be able to explain what every change does, how it behaves at the edges, what the tests prove, and how it fits Shepherd's existing design. Using AI to write code is fine. Submitting code you do not understand is not.
 
 ### Align before changing the product
 
 Focused bug fixes that preserve the existing design are good pull request candidates. Features and larger changes to behavior, UI, interaction patterns, persistence, architecture, or product direction require discussion and maintainer approval first.
 
-Herdr is opinionated. Its interaction patterns, layout, mouse behavior, terminology, and technical boundaries are deliberate. A working implementation is not enough when it moves the product in a direction maintainers did not choose.
+Shepherd is opinionated. Its interaction patterns, layout, mouse behavior, terminology, and technical boundaries are deliberate. A working implementation is not enough when it moves the product in a direction maintainers did not choose.
 
 ### Keep the change focused
 
@@ -101,7 +101,7 @@ fix: handle pane focus
 refs #128
 ```
 
-Do not use GitHub closing keywords such as `fixes`, `closes`, or `resolves`. Herdr closes released issues after the release is published, not when unreleased code reaches `master`.
+Do not use GitHub closing keywords such as `fixes`, `closes`, or `resolves`. Shepherd closes released issues after the release is published, not when unreleased code reaches `master`.
 
 ### Test the change
 
@@ -130,7 +130,7 @@ just setup-windows-cross
 `xwin` downloads Microsoft's Windows SDK and CRT directly and prompts for license
 acceptance. No Windows machine is needed. For noninteractive setup, pass
 `just setup-windows-cross --accept-license` only after accepting that license.
-The SDK is stored in `~/.local/share/herdr/windows-cross/` and reused across
+The SDK is stored in `~/.local/share/shepherd/windows-cross/` and reused across
 worktrees; subsequent `just check` and `just windows-lint` runs use it automatically.
 An existing SDK can be selected with `LIBGHOSTTY_VT_WINDOWS_LIBC`, pointing to its
 Zig libc configuration file. Ordinary native Linux/macOS builds do not need this

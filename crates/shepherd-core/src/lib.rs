@@ -3,7 +3,7 @@
 //! This crate is intentionally independent of terminal, filesystem, and AI vendor
 //! integrations. Those are adapters around the same workflow rules.
 
-pub mod herdr;
+pub mod shepherd;
 pub mod terminals;
 pub mod bus;
 pub mod cli;
@@ -240,7 +240,7 @@ pub struct SkillAdjust {
     pub remove: Vec<String>,
 }
 
-/// Shepherd's identity and workflow metadata for an agent. Herdr remains the owner of its terminal process.
+/// Shepherd's identity and workflow metadata for an agent. Shepherd remains the owner of its terminal process.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,

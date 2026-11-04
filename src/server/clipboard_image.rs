@@ -76,7 +76,7 @@ fn staging_dir() -> PathBuf {
     let user_id = unsafe { libc::geteuid() };
     #[cfg(windows)]
     let user_id = std::process::id();
-    std::env::temp_dir().join(format!("herdr-clipboard-images-{user_id}"))
+    std::env::temp_dir().join(format!("shepherd-clipboard-images-{user_id}"))
 }
 
 fn ensure_staging_dir() -> io::Result<PathBuf> {

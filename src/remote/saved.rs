@@ -6,7 +6,7 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use super::attach::{find_installed_remote_herdr, RemoteSsh, SshStdioBridge};
+use super::attach::{find_installed_remote_shepherd, RemoteSsh, SshStdioBridge};
 
 pub(crate) struct SavedSshBridge {
     _bridge: SshStdioBridge,
@@ -26,15 +26,15 @@ pub(crate) fn connect_saved_ssh(
     let mut ssh = validated_saved_ssh(profile_id, target, session)?;
     ssh.cancelled = Arc::clone(&cancelled);
     ssh.prepare_shared_transport()?;
-    let remote_herdr = find_installed_remote_herdr(&ssh)?;
-    let metadata = remote_herdr.machine_metadata();
+    let remote_shepherd = find_installed_remote_shepherd(&ssh)?;
+    let metadata = remote_shepherd.machine_metadata();
     if cancelled.load(Ordering::Acquire) {
         return Err(super::process::cancelled());
     }
     let path = saved_bridge_path(profile_id);
     let bridge = SshStdioBridge::start(
         target.to_owned(),
-        remote_herdr,
+        remote_shepherd,
         path.clone(),
         session.to_owned(),
         ssh.options(),
@@ -96,9 +96,9 @@ impl SavedSshApiBridge {
         };
         let command = super::attach::cached_remote_api_command(&metadata, session);
         let path = crate::platform::remote_bridge_endpoint_path(
-            &format!("herdr-api-ssh-{}-{profile_id}.sock", std::process::id()),
+            &format!("shepherd-api-ssh-{}-{profile_id}.sock", std::process::id()),
             &format!(
-                "herdr-api-{}-{}.sock",
+                "shepherd-api-{}-{}.sock",
                 std::process::id(),
                 &profile_id[..16]
             ),
@@ -146,7 +146,7 @@ impl SavedSshApiBridge {
 
 pub(crate) fn saved_ssh_bootstrap_command(target: &str, session: &str) -> String {
     format!(
-        "herdr --remote {} --session {}",
+        "shepherd --remote {} --session {}",
         super::shell_quote(target),
         super::shell_quote(session)
     )
@@ -181,8 +181,8 @@ pub(crate) fn saved_ssh_failure_needs_attention(error: &io::Error) -> bool {
 
 fn saved_bridge_path(profile_id: &str) -> PathBuf {
     let pid = std::process::id();
-    let readable = format!("herdr-ssh-{pid}-{profile_id}.sock");
-    let short = format!("herdr-s-{pid}-{}.sock", &profile_id[..16]);
+    let readable = format!("shepherd-ssh-{pid}-{profile_id}.sock");
+    let short = format!("shepherd-s-{pid}-{}.sock", &profile_id[..16]);
     crate::platform::remote_bridge_endpoint_path(&readable, &short)
 }
 
@@ -225,7 +225,7 @@ mod tests {
     fn bootstrap_command_preserves_the_explicit_remote_session() {
         assert_eq!(
             saved_ssh_bootstrap_command("build host", "agent work"),
-            "herdr --remote 'build host' --session 'agent work'"
+            "shepherd --remote 'build host' --session 'agent work'"
         );
     }
 
@@ -234,7 +234,7 @@ mod tests {
         for message in [
             "Permission denied (publickey)",
             "Host key verification failed",
-            "matching Herdr is not ready; install or update",
+            "matching Shepherd is not ready; install or update",
             "handshake rejected",
         ] {
             assert!(saved_ssh_failure_needs_attention(&io::Error::other(

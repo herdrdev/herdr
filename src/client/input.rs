@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn confirmed_disambiguation_separates_escape_prefixed_binding_from_fast_next_key() {
         // Typing right after an Alt+O / Alt+[ / ESC text binding must not glue
-        // the next key onto it while Herdr is watching for a delayed mouse tail.
+        // the next key onto it while Shepherd is watching for a delayed mouse tail.
         for (binding, next, gap_ms) in [
             (b"\x1bO".as_slice(), b"q".as_slice(), 80),
             (b"\x1b[", b"A", 80),

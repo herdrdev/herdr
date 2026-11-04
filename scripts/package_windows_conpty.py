@@ -20,7 +20,7 @@ from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_METADATA = PROJECT_ROOT / "packaging" / "windows" / "conpty.json"
-MARKER_PATH = PurePosixPath("conpty/herdr-conpty.json")
+MARKER_PATH = PurePosixPath("conpty/shepherd-conpty.json")
 DOWNLOAD_TIMEOUT_SECONDS = 60
 
 
@@ -252,7 +252,7 @@ def stage_bundle(
     metadata_path: Path,
     architecture: str,
     package_path: Path,
-    herdr_exe: Path,
+    shepherd_exe: Path,
     output_dir: Path,
 ) -> None:
     metadata = load_metadata(metadata_path)
@@ -260,22 +260,22 @@ def stage_bundle(
         raise ValueError(f"unsupported Windows architecture: {architecture}")
     if output_dir.exists():
         raise ValueError(f"output directory already exists: {output_dir}")
-    if not herdr_exe.is_file():
-        raise ValueError(f"Herdr executable does not exist: {herdr_exe}")
+    if not shepherd_exe.is_file():
+        raise ValueError(f"Shepherd executable does not exist: {shepherd_exe}")
 
-    validate_static_msvc_runtime(herdr_exe.read_bytes(), herdr_exe.name)
+    validate_static_msvc_runtime(shepherd_exe.read_bytes(), shepherd_exe.name)
 
     acquire_package(metadata["package"], package_path)
     bundle = metadata["bundles"][architecture]
     metadata_root = metadata_path.resolve().parent
 
     with zipfile.ZipFile(package_path) as archive, tempfile.TemporaryDirectory(
-        prefix="herdr-conpty-stage-", dir=output_dir.parent
+        prefix="shepherd-conpty-stage-", dir=output_dir.parent
     ) as temporary:
         validate_nuspec(archive, metadata["package"])
         staging = Path(temporary) / "bundle"
         staging.mkdir()
-        shutil.copy2(herdr_exe, staging / "herdr.exe")
+        shutil.copy2(shepherd_exe, staging / "shepherd.exe")
 
         for item in bundle["files"]:
             try:
@@ -317,13 +317,13 @@ def stage_bundle(
 
 
 def install_local_bundle(
-    metadata_path: Path, architecture: str, package_path: Path, herdr_exe: Path
+    metadata_path: Path, architecture: str, package_path: Path, shepherd_exe: Path
 ) -> None:
-    release_dir = herdr_exe.resolve().parent
+    release_dir = shepherd_exe.resolve().parent
     destination = release_dir / "conpty"
-    with tempfile.TemporaryDirectory(prefix="herdr-conpty-install-", dir=release_dir) as temporary:
+    with tempfile.TemporaryDirectory(prefix="shepherd-conpty-install-", dir=release_dir) as temporary:
         stage = Path(temporary) / "stage"
-        stage_bundle(metadata_path, architecture, package_path, herdr_exe, stage)
+        stage_bundle(metadata_path, architecture, package_path, shepherd_exe, stage)
         staged_bundle = stage / "conpty"
         if destination.exists() or destination.is_symlink():
             staged_files = {
@@ -347,11 +347,11 @@ def install_local_bundle(
                     for relative in staged_files
                 )
             )
-            # ponytail: pin upgrades require stopping Herdr and removing the old local bundle.
+            # ponytail: pin upgrades require stopping Shepherd and removing the old local bundle.
             if not matches:
                 raise ValueError(
                     f"local ConPTY bundle at {destination} differs from the pinned version; "
-                    "stop Herdr, remove that directory, then run just build again"
+                    "stop Shepherd, remove that directory, then run just build again"
                 )
 
         for notice in load_metadata(metadata_path)["notices"]:
@@ -383,7 +383,7 @@ def build_local_bundle(metadata_path: Path) -> None:
             elif (
                 message.get("reason") == "compiler-artifact"
                 and message["manifest_path"] == str(PROJECT_ROOT / "Cargo.toml")
-                and message["target"]["name"] == "herdr"
+                and message["target"]["name"] == "shepherd"
                 and "bin" in message["target"]["kind"]
             ):
                 executable = Path(message["executable"])
@@ -391,7 +391,7 @@ def build_local_bundle(metadata_path: Path) -> None:
     if status:
         raise SystemExit(status)
     if executable is None:
-        raise ValueError("cargo did not report the Herdr executable")
+        raise ValueError("cargo did not report the Shepherd executable")
 
     target = Path(os.environ.get("CARGO_TARGET_DIR", "target"))
     if not target.is_absolute():
@@ -405,7 +405,7 @@ def build_local_bundle(metadata_path: Path) -> None:
 
 
 def expected_stage_files(metadata: dict[str, Any], architecture: str) -> set[str]:
-    files = {"herdr.exe", MARKER_PATH.as_posix()}
+    files = {"shepherd.exe", MARKER_PATH.as_posix()}
     files.update(item["destination"] for item in metadata["bundles"][architecture]["files"])
     files.update(item["destination"] for item in metadata["notices"])
     return files
@@ -428,7 +428,7 @@ def validate_stage(metadata_path: Path, architecture: str, stage_dir: Path) -> N
     # The executable is not hash-pinned (it changes every build), so re-check
     # it here to cover a direct archive of an existing stage or a swap after
     # staging.
-    validate_static_msvc_runtime((stage_dir / "herdr.exe").read_bytes(), "herdr.exe")
+    validate_static_msvc_runtime((stage_dir / "shepherd.exe").read_bytes(), "shepherd.exe")
     for item in metadata["bundles"][architecture]["files"]:
         path = stage_dir / PurePosixPath(item["destination"])
         actual_hash = sha256_file(path)
@@ -453,14 +453,14 @@ def archive_bundle(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Package Herdr with Microsoft's pinned ConPTY runtime")
+    parser = argparse.ArgumentParser(description="Package Shepherd with Microsoft's pinned ConPTY runtime")
     parser.add_argument("--metadata", type=Path, default=DEFAULT_METADATA)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     stage = subparsers.add_parser("stage")
     stage.add_argument("--architecture", choices=("x86_64",), default="x86_64")
     stage.add_argument("--package", type=Path, required=True)
-    stage.add_argument("--herdr-exe", type=Path, required=True)
+    stage.add_argument("--shepherd-exe", type=Path, required=True)
     stage.add_argument("--output-dir", type=Path, required=True)
 
     archive = subparsers.add_parser("archive")
@@ -478,7 +478,7 @@ def main() -> None:
             args.metadata,
             args.architecture,
             args.package,
-            args.herdr_exe,
+            args.shepherd_exe,
             args.output_dir,
         )
     elif args.command == "archive":

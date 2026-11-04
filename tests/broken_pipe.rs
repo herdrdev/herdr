@@ -16,12 +16,12 @@ fn closed_pipe_writer() -> Stdio {
 }
 
 fn run_with_closed_stdout(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_herdr"))
+    Command::new(env!("CARGO_BIN_EXE_shepherd"))
         .args(args)
         .stdout(closed_pipe_writer())
         .stderr(Stdio::piped())
         .output()
-        .expect("run herdr CLI")
+        .expect("run shepherd CLI")
 }
 
 fn assert_quiet_sigpipe(output: Output) {

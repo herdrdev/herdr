@@ -1,8 +1,8 @@
-# herdr
+# shepherd
 
 
 <p align="center">
-  <img src="assets/logo.png" alt="herdr" width="100" />
+  <img src="assets/logo.png" alt="shepherd" width="100" />
 </p>
 
 <p align="center">
@@ -17,7 +17,7 @@
   <a href="https://github.com/herdrdev/herdr/releases"><img src="https://img.shields.io/github/downloads/herdrdev/herdr/total?labelColor=333333&color=666666" alt="total GitHub release downloads" /></a>
   <a href="https://github.com/herdrdev/herdr/stargazers"><img src="https://img.shields.io/github/stars/herdrdev/herdr?labelColor=333333&color=666666&logo=github" alt="GitHub stars" /></a>
   <a href="https://github.com/herdrdev/herdr/releases/latest"><img src="https://img.shields.io/github/v/release/herdrdev/herdr?label=release&labelColor=333333&color=666666" alt="latest stable release" /></a>
-  <a href="https://formulae.brew.sh/formula/herdr"><img src="https://img.shields.io/homebrew/v/herdr?label=homebrew&labelColor=333333&color=666666" alt="Homebrew version" /></a>
+  <a href="https://formulae.brew.sh/formula/shepherd"><img src="https://img.shields.io/homebrew/v/shepherd?label=homebrew&labelColor=333333&color=666666" alt="Homebrew version" /></a>
   <a href="https://x.com/herdrdev"><img src="https://img.shields.io/badge/follow-%40herdrdev-000000?logo=x&logoColor=white" alt="follow @herdrdev on X" /></a>
 </p>
 
@@ -48,7 +48,7 @@ curl -fsSL https://herdr.dev/install.sh | sh
 然后在工作所在的目录启动它：
 
 ```bash
-herdr
+shepherd
 ```
 
 运行你的智能体、分割窗格，然后安心离开。`ctrl+b q` 分离，`herdr` 重新连接。[快速开始 →](https://herdr.dev/zh-cn/docs/quick-start/)
@@ -63,7 +63,7 @@ herdr
 
 [Terminal Trove](https://terminaltrove.com/) 以及 [SPONSORS.md](./SPONSORS.md) 中列出的每一位支持者——谢谢 🐑
 
-企业/合作：hey@herdr.dev
+企业/合作：hey@shepherd.dev
 
 ## 智能体须知
 
@@ -73,7 +73,7 @@ herdr
 
 ```bash
 git clone https://github.com/herdrdev/herdr
-cd herdr
+cd shepherd
 cargo build --release
 
 just test        # 单元测试
@@ -82,4 +82,4 @@ just check       # 格式检查、测试和维护性检查
 
 ## 许可证
 
-herdr 基于 [Apache License 2.0](LICENSE) 许可证发布。
+shepherd 基于 [Apache License 2.0](LICENSE) 许可证发布。

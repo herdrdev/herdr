@@ -85,12 +85,12 @@ fn allowed(stdin_tty: bool, stdout_tty: bool, env: impl Fn(&str) -> Option<OsStr
             "SSH_CLIENT",
             "TMUX",
             "STY",
-            "HERDR_PANE_ID",
-            "HERDR_PANE_RUNTIME_ID",
+            "SHEPHERD_PANE_ID",
+            "SHEPHERD_PANE_RUNTIME_ID",
         ]
         .iter()
         .all(|key| env(key).is_none())
-    // Named-session selection (HERDR_SESSION) and HERDR_REMOTE_KEYBINDINGS
+    // Named-session selection (SHEPHERD_SESSION) and SHEPHERD_REMOTE_KEYBINDINGS
     // deliberately do not affect client locality.
 }
 
@@ -101,8 +101,8 @@ mod tests {
     fn conservative_gate_without_process_environment_mutation() {
         let base = |key: &str| match key {
             "TERM_PROGRAM" => Some(OsString::from("ghostty")),
-            "HERDR_SESSION" => Some(OsString::from("named-session")),
-            "HERDR_REMOTE_KEYBINDINGS" => Some(OsString::from("1")),
+            "SHEPHERD_SESSION" => Some(OsString::from("named-session")),
+            "SHEPHERD_REMOTE_KEYBINDINGS" => Some(OsString::from("1")),
             _ => None,
         };
         assert!(allowed(true, true, base));
@@ -114,8 +114,8 @@ mod tests {
             "SSH_CLIENT",
             "TMUX",
             "STY",
-            "HERDR_PANE_ID",
-            "HERDR_PANE_RUNTIME_ID",
+            "SHEPHERD_PANE_ID",
+            "SHEPHERD_PANE_RUNTIME_ID",
         ] {
             assert!(!allowed(true, true, |name| if name == key {
                 Some(OsString::new())

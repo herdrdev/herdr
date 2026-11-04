@@ -5,7 +5,7 @@ description: Use when you are an agent running under shepherd and need to spawn 
 
 # Working with other agents through shepherd
 
-You run inside a shepherd session. Your id is in `$SHEP_AGENT_ID`. Other agents run in their own herdr tabs.
+You run inside a shepherd session. Your id is in `$SHEP_AGENT_ID`. Other agents run in their own shepherd tabs.
 
 ## Tools (MCP server `shepherd`)
 

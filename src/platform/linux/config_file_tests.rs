@@ -42,7 +42,7 @@ fn attribute(file: &std::fs::File, name: &CStr) -> Option<Vec<u8>> {
 
 #[test]
 fn config_metadata_preserves_ownership_and_acl_without_inheriting_extra_access() {
-    let dir = std::env::temp_dir().join(format!("herdr-config-acl-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("shepherd-config-acl-{}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     // Linux UAPI posix_acl_xattr_header/entry, version 2, little-endian fields.
     // Owner rw, named user 65534 read, group none, mask read, other none.
@@ -69,7 +69,7 @@ fn config_metadata_preserves_ownership_and_acl_without_inheriting_extra_access()
         if has_acl {
             set_attribute(&input, c"system.posix_acl_access", &acl);
         }
-        set_attribute(&input, c"user.herdr-test", b"preserve this attribute");
+        set_attribute(&input, c"user.shepherd-test", b"preserve this attribute");
         let original = input.metadata().unwrap();
         drop(create_config_temporary(&target, true).unwrap());
         let output = std::fs::File::open(&target).unwrap();
@@ -86,7 +86,7 @@ fn config_metadata_preserves_ownership_and_acl_without_inheriting_extra_access()
             attribute(&input, c"system.posix_acl_access")
         );
         assert_eq!(
-            attribute(&output, c"user.herdr-test"),
+            attribute(&output, c"user.shepherd-test"),
             Some(b"preserve this attribute".to_vec())
         );
         assert_eq!(std::fs::read(source).unwrap(), b"old");

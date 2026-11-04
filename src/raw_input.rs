@@ -231,7 +231,7 @@ pub(crate) struct RawInputByteFramer {
 }
 
 const HOST_COLOR_QUERY_REPLIES: u16 = 258;
-/// How long after the last query or reply Herdr still treats `ESC[` / `ESC]`
+/// How long after the last query or reply Shepherd still treats `ESC[` / `ESC]`
 /// as a possible host reply instead of a key.
 const HOST_REPLY_QUIET_WINDOW: Duration = Duration::from_secs(1);
 /// How long an unfinished OSC 10/11 reply may wait for its next read before
@@ -436,7 +436,7 @@ impl RawInputByteFramer {
         if self.buffer.is_empty() {
             return RAW_INPUT_IDLE_FLUSH_TIMEOUT_MS;
         }
-        // A reply Herdr asked for can split right after its introducer.
+        // A reply Shepherd asked for can split right after its introducer.
         if self.awaiting_host_reply() && matches!(self.buffer.as_slice(), b"\x1b[" | b"\x1b]") {
             return INCOMPLETE_SEQUENCE_FLUSH_TIMEOUT_MS;
         }

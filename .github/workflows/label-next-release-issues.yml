@@ -62,8 +62,8 @@ jobs:
               || gh api "repos/${GITHUB_REPOSITORY}/labels/${NEXT_RELEASE_LABEL}" >/dev/null
           fi
 
-          PENDING_COMMENT_MARKER="<!-- herdr:pending-release -->"
-          PENDING_COMMENT="${PENDING_COMMENT_MARKER}"$'\n'"Implemented on master and queued for the next release. This is not available in a published Herdr release yet."
+          PENDING_COMMENT_MARKER="<!-- shepherd:pending-release -->"
+          PENDING_COMMENT="${PENDING_COMMENT_MARKER}"$'\n'"Implemented on master and queued for the next release. This is not available in a published Shepherd release yet."
 
           issue_has_comment_marker() {
             local issue="$1"

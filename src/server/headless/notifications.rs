@@ -535,7 +535,7 @@ impl HeadlessServer {
                 self.send_to_client_shells(ServerMessage::SemanticNotification(
                     protocol::SemanticNotification {
                         kind: protocol::SemanticNotificationKind::UpdateInstalled,
-                        title: format!("Herdr v{version} available"),
+                        title: format!("Shepherd v{version} available"),
                         body: Some(crate::update::update_install_instruction(&install_command)),
                         sound: None,
                         agent: None,

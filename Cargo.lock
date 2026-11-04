@@ -760,48 +760,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "herdr"
-version = "0.9.5"
-dependencies = [
- "base64",
- "bincode",
- "bytes",
- "clap",
- "clap_complete",
- "crossterm",
- "ctrlc",
- "futures-util",
- "ghostty-vt",
- "interprocess",
- "jsonc-parser",
- "libc",
- "png",
- "portable-pty",
- "ratatui",
- "regex",
- "schemars",
- "serde",
- "serde_ignored",
- "serde_json",
- "sha2",
- "shepherd-core",
- "signal-hook",
- "time",
- "tokio",
- "toml",
- "toml_edit 0.22.27",
- "tracing",
- "tracing-subscriber",
- "unicode-segmentation",
- "unicode-width",
- "widestring",
- "windows",
- "windows-sys",
- "wmi",
- "zbus",
-]
-
-[[package]]
 name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1746,6 +1704,48 @@ name = "shell-words"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc6fe69c597f9c37bfeeeeeb33da3530379845f10be461a66d16d03eca2ded77"
+
+[[package]]
+name = "shepherd"
+version = "0.9.5"
+dependencies = [
+ "base64",
+ "bincode",
+ "bytes",
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "ctrlc",
+ "futures-util",
+ "ghostty-vt",
+ "interprocess",
+ "jsonc-parser",
+ "libc",
+ "png",
+ "portable-pty",
+ "ratatui",
+ "regex",
+ "schemars",
+ "serde",
+ "serde_ignored",
+ "serde_json",
+ "sha2",
+ "shepherd-core",
+ "signal-hook",
+ "time",
+ "tokio",
+ "toml",
+ "toml_edit 0.22.27",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-segmentation",
+ "unicode-width",
+ "widestring",
+ "windows",
+ "windows-sys",
+ "wmi",
+ "zbus",
+]
 
 [[package]]
 name = "shepherd-core"

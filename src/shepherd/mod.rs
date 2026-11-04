@@ -1,10 +1,10 @@
-//! Shepherd integration module for Herdr (Phase F1).
+//! Shepherd integration module for Shepherd (Phase F1).
 //!
 //! Provides:
-//! 1. In-process `Terminals` adapters (`HerdrInProcess`) backed either by:
+//! 1. In-process `Terminals` adapters (`ShepherdInProcess`) backed either by:
 //!    - `App`'s internal request channel (`ApiRequestSender` + `EventHub`) with zero socket I/O, or
-//!    - Herdr's typed local `ApiClient` (`src/api/client.rs`) when `herdr shepherd ...` runs as a CLI process.
-//! 2. `herdr shepherd <subcommand>` CLI delegation to `shepherd_core`.
+//!    - Shepherd's typed local `ApiClient` (`src/api/client.rs`) when `shepherd shepherd ...` runs as a CLI process.
+//! 2. `shepherd shepherd <subcommand>` CLI delegation to `shepherd_core`.
 //! 3. Read-only Shepherd agents TUI panel (`panel`).
 
 // F1 in-process channel adapters and TUI panel state are exercised by F1 unit tests
@@ -43,8 +43,8 @@ pub use service::{ShepherdCallJob, ShepherdRuntimeService};
 
 use serde_json::{json, Value};
 use shepherd_core::{
-    herdr::HerdrError,
-    terminals::{BackendKind, HerdrInProcess, TerminalError, Terminals},
+    shepherd::ShepherdError,
+    terminals::{BackendKind, ShepherdInProcess, TerminalError, Terminals},
 };
 use std::{
     path::PathBuf,
@@ -88,16 +88,16 @@ pub(crate) fn dispatch_api_message_on_app(
     }
 }
 
-/// Construct a `HerdrInProcess` adapter that talks directly to `App` over `ApiRequestSender`
+/// Construct a `ShepherdInProcess` adapter that talks directly to `App` over `ApiRequestSender`
 /// and `EventHub` without opening any Unix socket.
 pub fn in_process_from_app_channel(
     api_tx: ApiRequestSender,
     event_hub: EventHub,
     session: Option<&str>,
-) -> HerdrInProcess {
+) -> ShepherdInProcess {
     let seq = AtomicU64::new(1);
     let session_name = session.unwrap_or("shepherd").to_owned();
-    HerdrInProcess::new(session_name, move |method, params| {
+    ShepherdInProcess::new(session_name, move |method, params| {
         let id = format!("shepherd-inproc-{}", seq.fetch_add(1, Ordering::Relaxed));
         let request = decode_schema_request(&id, method, params.clone())?;
         match request.method {
@@ -112,14 +112,14 @@ pub fn in_process_from_app_channel(
     })
 }
 
-/// Construct a `HerdrInProcess` adapter backed by Herdr's internal `ApiClient` (`src/api/client.rs`).
+/// Construct a `ShepherdInProcess` adapter backed by Shepherd's internal `ApiClient` (`src/api/client.rs`).
 pub fn in_process_from_api_client(
     client: ApiClient,
     session: Option<&str>,
-) -> HerdrInProcess {
+) -> ShepherdInProcess {
     let seq = AtomicU64::new(1);
     let session_name = session.unwrap_or("shepherd").to_owned();
-    HerdrInProcess::new(session_name, move |method, params| {
+    ShepherdInProcess::new(session_name, move |method, params| {
         let id = format!("shepherd-apiclient-{}", seq.fetch_add(1, Ordering::Relaxed));
         let timeout = extract_timeout(&params).unwrap_or(DEFAULT_IN_PROCESS_TIMEOUT);
         let request = decode_schema_request(&id, method, params)?;
@@ -127,13 +127,13 @@ pub fn in_process_from_api_client(
             .request_value_with_timeout(&request, timeout)
             .map_err(map_client_error)?;
         let response = parse_response_value(raw).map_err(map_client_error)?;
-        serde_json::to_value(response.result).map_err(|e| HerdrError::Protocol(e.to_string()))
+        serde_json::to_value(response.result).map_err(|e| ShepherdError::Protocol(e.to_string()))
     })
 }
 
-/// Resolve the socket path for a Shepherd/Herdr session name and return a `HerdrInProcess`
-/// adapter if a local Herdr server is reachable for that session.
-pub fn try_connect_local_in_process(session: Option<&str>) -> Option<HerdrInProcess> {
+/// Resolve the socket path for a Shepherd/Shepherd session name and return a `ShepherdInProcess`
+/// adapter if a local Shepherd server is reachable for that session.
+pub fn try_connect_local_in_process(session: Option<&str>) -> Option<ShepherdInProcess> {
     let socket_path = resolve_session_socket_path(session);
     let client = ApiClient::for_target(ConnectionTarget::SocketPath(socket_path));
     client
@@ -165,7 +165,7 @@ fn resolve_session_socket_path(session: Option<&str>) -> PathBuf {
     }
 }
 
-/// Entrypoint for `herdr shepherd <args...>`.
+/// Entrypoint for `shepherd shepherd <args...>`.
 pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
     register_default_in_process_factory();
 
@@ -176,11 +176,11 @@ pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
     let active_session = crate::session::active_name();
     let session_name = active_session
         .as_deref()
-        .or(Some(config.herdr.session.as_str()));
+        .or(Some(config.shepherd.session.as_str()));
     let socket_path = resolve_session_socket_path(session_name);
 
     let client = if socket_path.exists() {
-        Some(shepherd_core::herdr::HerdrClient::new(socket_path))
+        Some(shepherd_core::shepherd::ShepherdClient::new(socket_path))
     } else {
         None
     };
@@ -194,10 +194,16 @@ pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
         }
     };
 
-    let is_json = args.iter().any(|a| a == "--json");
+    let cli_args: Vec<String> = if args.first().map(|s| s.as_str()) == Some("shepherd") {
+        args.iter().skip(1).cloned().collect()
+    } else {
+        args.to_vec()
+    };
+
+    let is_json = cli_args.iter().any(|a| a == "--json");
     match shepherd_core::cli::run_cli_in_root_with_client(
         root,
-        args.iter().skip(1).cloned(),
+        cli_args.into_iter(),
         terminals,
         client,
     ) {
@@ -262,12 +268,12 @@ fn register_default_in_process_factory() {
         let active_session = crate::session::active_name();
         let session_name = active_session
             .as_deref()
-            .or(Some(config.herdr.session.as_str()));
+            .or(Some(config.shepherd.session.as_str()));
         if let Some(adapter) = try_connect_local_in_process(session_name) {
             return Ok(Box::new(adapter));
         }
         Err(TerminalError::Protocol(format!(
-            "no running local Herdr server found for session {:?}",
+            "no running local Shepherd server found for session {:?}",
             session_name.unwrap_or("default")
         )))
     })));
@@ -277,14 +283,14 @@ fn decode_schema_request(
     id: &str,
     method: &str,
     params: Value,
-) -> Result<Request, HerdrError> {
+) -> Result<Request, ShepherdError> {
     let envelope = json!({
         "id": id,
         "method": method,
         "params": params,
     });
     serde_json::from_value(envelope).map_err(|err| {
-        HerdrError::Protocol(format!("invalid Herdr API request for {method}: {err}"))
+        ShepherdError::Protocol(format!("invalid Shepherd API request for {method}: {err}"))
     })
 }
 
@@ -297,7 +303,7 @@ fn dispatch_request_over_channel(
     request: Request,
     api_tx: &ApiRequestSender,
     timeout: Duration,
-) -> Result<Value, HerdrError> {
+) -> Result<Value, ShepherdError> {
     let request_id = request.id.clone();
     let (respond_tx, respond_rx) = mpsc::channel();
     api_tx
@@ -306,27 +312,27 @@ fn dispatch_request_over_channel(
             respond_to: respond_tx,
             response_write_complete: None,
         })
-        .map_err(|_| HerdrError::Protocol("Herdr app channel is closed".into()))?;
+        .map_err(|_| ShepherdError::Protocol("Shepherd app channel is closed".into()))?;
 
     let raw = respond_rx.recv_timeout(timeout).map_err(|err| match err {
-        mpsc::RecvTimeoutError::Timeout => HerdrError::Api {
+        mpsc::RecvTimeoutError::Timeout => ShepherdError::Api {
             code: "timeout".into(),
-            message: "timed out waiting for in-process Herdr app response".into(),
+            message: "timed out waiting for in-process Shepherd app response".into(),
         },
         mpsc::RecvTimeoutError::Disconnected => {
-            HerdrError::Protocol("Herdr app dropped response channel".into())
+            ShepherdError::Protocol("Shepherd app dropped response channel".into())
         }
     })?;
 
     parse_raw_api_response(&request_id, &raw)
 }
 
-fn parse_raw_api_response(expected_id: &str, raw: &str) -> Result<Value, HerdrError> {
+fn parse_raw_api_response(expected_id: &str, raw: &str) -> Result<Value, ShepherdError> {
     let value: Value =
-        serde_json::from_str(raw).map_err(|e| HerdrError::Protocol(e.to_string()))?;
+        serde_json::from_str(raw).map_err(|e| ShepherdError::Protocol(e.to_string()))?;
     if let Some(id) = value.get("id").and_then(Value::as_str) {
         if id != expected_id {
-            return Err(HerdrError::Protocol(format!(
+            return Err(ShepherdError::Protocol(format!(
                 "response id {id:?} does not match request {expected_id:?}"
             )));
         }
@@ -340,14 +346,14 @@ fn parse_raw_api_response(expected_id: &str, raw: &str) -> Result<Value, HerdrEr
         let message = error
             .get("message")
             .and_then(Value::as_str)
-            .unwrap_or("Herdr API error")
+            .unwrap_or("Shepherd API error")
             .to_owned();
-        return Err(HerdrError::Api { code, message });
+        return Err(ShepherdError::Api { code, message });
     }
     value
         .get("result")
         .cloned()
-        .ok_or_else(|| HerdrError::Protocol("success response has no result".into()))
+        .ok_or_else(|| ShepherdError::Protocol("success response has no result".into()))
 }
 
 fn wait_for_agent_in_process(
@@ -355,9 +361,9 @@ fn wait_for_agent_in_process(
     params: crate::api::schema::AgentWaitParams,
     api_tx: &ApiRequestSender,
     event_hub: &EventHub,
-) -> Result<Value, HerdrError> {
+) -> Result<Value, ShepherdError> {
     if params.until.is_empty() {
-        return Err(HerdrError::Api {
+        return Err(ShepherdError::Api {
             code: "invalid_request".into(),
             message: "agent.wait requires a non-empty `until` status list".into(),
         });
@@ -367,7 +373,7 @@ fn wait_for_agent_in_process(
         .map(|ms| Instant::now() + Duration::from_millis(ms));
     let mut last_sequence = event_hub.current_sequence();
 
-    let get_agent = |suffix: &str| -> Result<crate::api::schema::AgentInfo, HerdrError> {
+    let get_agent = |suffix: &str| -> Result<crate::api::schema::AgentInfo, ShepherdError> {
         let req = Request {
             id: format!("{request_id}:{suffix}"),
             method: Method::AgentGet(AgentTarget {
@@ -377,7 +383,7 @@ fn wait_for_agent_in_process(
         let result = dispatch_request_over_channel(req, api_tx, DEFAULT_IN_PROCESS_TIMEOUT)?;
         let agent_val = result.get("agent").cloned().unwrap_or(result);
         serde_json::from_value(agent_val)
-            .map_err(|e| HerdrError::Protocol(format!("failed to decode agent_info: {e}")))
+            .map_err(|e| ShepherdError::Protocol(format!("failed to decode agent_info: {e}")))
     };
 
     let current = get_agent("get")?;
@@ -412,7 +418,7 @@ fn wait_for_agent_in_process(
         }
         if let Some(deadline) = deadline {
             if Instant::now() >= deadline {
-                return Err(HerdrError::Api {
+                return Err(ShepherdError::Api {
                     code: "timeout".into(),
                     message: format!("timed out waiting for agent {}", params.target),
                 });
@@ -422,16 +428,16 @@ fn wait_for_agent_in_process(
     }
 }
 
-fn map_client_error(error: ApiClientError) -> HerdrError {
+fn map_client_error(error: ApiClientError) -> ShepherdError {
     match error {
-        ApiClientError::Io(io) => HerdrError::Io(io),
-        ApiClientError::Json(err) => HerdrError::Protocol(err.to_string()),
-        ApiClientError::ErrorResponse(resp) => HerdrError::Api {
+        ApiClientError::Io(io) => ShepherdError::Io(io),
+        ApiClientError::Json(err) => ShepherdError::Protocol(err.to_string()),
+        ApiClientError::ErrorResponse(resp) => ShepherdError::Api {
             code: resp.error.code,
             message: resp.error.message,
         },
-        ApiClientError::EmptyResponse => HerdrError::Protocol("empty api response".into()),
-        ApiClientError::UnexpectedResult(msg) => HerdrError::Protocol(msg),
+        ApiClientError::EmptyResponse => ShepherdError::Protocol("empty api response".into()),
+        ApiClientError::UnexpectedResult(msg) => ShepherdError::Protocol(msg),
     }
 }
 
@@ -447,7 +453,7 @@ mod tests {
     use tokio::sync::mpsc as tokio_mpsc;
 
     #[test]
-    fn in_process_from_app_channel_drives_herdr_app_without_sockets() {
+    fn in_process_from_app_channel_drives_shepherd_app_without_sockets() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -585,13 +591,13 @@ mod tests {
     }
 
     #[test]
-    fn herdr_shepherd_cli_subcommands_run_agents_tasks_and_roles_json() {
+    fn shepherd_cli_subcommands_run_agents_tasks_and_roles_json() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         let temp_dir = std::env::temp_dir()
-            .join(format!("shepherd-herdr-cli-test-{}-{nonce}", std::process::id()));
+            .join(format!("shepherd-shepherd-cli-test-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(temp_dir.join("shepherd")).unwrap();
         let orig_xdg = std::env::var_os("XDG_STATE_HOME");
         let orig_home = std::env::var_os("HOME");
@@ -599,7 +605,7 @@ mod tests {
         std::env::set_var("HOME", &temp_dir);
 
         let res1 = crate::cli::maybe_run(&[
-            "herdr".into(),
+            "shepherd".into(),
             "shepherd".into(),
             "agents".into(),
             "--json".into(),

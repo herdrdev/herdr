@@ -372,7 +372,7 @@ fn startup_onboarding_shows_configured_prefix() {
 #[test]
 fn onboarding_completion_persists_and_opens_endpoint_integrations() {
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-onboarding-{}-{}.toml",
+        "shepherd-client-onboarding-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -479,7 +479,7 @@ fn unavailable_integration_list_does_not_wedge_settings() {
     let mut config =
         ClientShellConfig::from_config(&Config::default()).with_startup_onboarding(true);
     config.local_config_path = std::env::temp_dir().join(format!(
-        "herdr-client-onboarding-unavailable-{}-{}.toml",
+        "shepherd-client-onboarding-unavailable-{}-{}.toml",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -571,7 +571,7 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
             workspace_id: None,
             tab_id: None,
             pane_id: None,
-            position: Some(crate::config::ToastHerdrPosition::TopRight),
+            position: Some(crate::config::ToastShepherdPosition::TopRight),
         },
         deadline: std::time::Instant::now(),
     });
@@ -599,7 +599,7 @@ fn config_diagnostic_offsets_only_the_pane_rows_it_overlaps() {
         .as_mut()
         .expect("visible notification")
         .event
-        .position = Some(crate::config::ToastHerdrPosition::BottomRight);
+        .position = Some(crate::config::ToastShepherdPosition::BottomRight);
     state.compose(106, 20).expect("bottom notification frame");
     assert_eq!(state.hits.notification_toast.bottom(), 19);
 }
@@ -761,7 +761,7 @@ fn update_ready_menu_opens_client_owned_release_notes_and_dismisses_by_version()
         .join("\n");
     assert!(text.contains("v0.8.3"));
     assert!(text.contains("update ready"));
-    assert!(text.contains("detach, run herdr update"));
+    assert!(text.contains("detach, run shepherd update"));
     assert!(!state.hits.release_notes_scrollbar.is_empty());
     let outer = crate::ui::centered_popup_rect(
         Rect::new(0, 0, 106, 30),
@@ -978,7 +978,7 @@ fn coalesced_release_notes_open_and_mouse_uses_current_geometry() {
     };
     let metrics = crate::ui::release_notes_scroll_metrics(
         &notes,
-        "herdr update",
+        "shepherd update",
         stack.content,
         &state.config.palette,
     );

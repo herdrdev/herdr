@@ -113,7 +113,7 @@ impl ClientShellState {
     /// host sends both as plain text; non-ASCII text has no key in the
     /// keyboard model, so only that is treated as a commit there.
     /// Only text bound for the focused pane is a commit. In prefix, navigate
-    /// and other Herdr-owned input, plain text is still a key that may run a
+    /// and other Shepherd-owned input, plain text is still a key that may run a
     /// binding (#5255).
     fn host_text_commit(&self, key: &crate::input::TerminalKey) -> Option<String> {
         if !self.host_reports_all_keys
@@ -421,7 +421,7 @@ impl ClientShellState {
                     return;
                 };
                 let crate::input::InputLease::Forwarded(lease) = lease else {
-                    // Herdr consumed the press; its release stays with Herdr.
+                    // Shepherd consumed the press; its release stays with Shepherd.
                     return;
                 };
                 // A native record is released as the recorded key. A VT release

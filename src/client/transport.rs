@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn upload_cancellation_preserves_pending_endpoint_download() {
         let path = std::env::temp_dir().join(format!(
-            "herdr-cancel-{}-{}.sock",
+            "shepherd-cancel-{}-{}.sock",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

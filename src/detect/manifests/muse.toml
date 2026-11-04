@@ -4,7 +4,7 @@ min_engine_version = 2
 updated_at = "2026-08-26T00:00:00Z"
 aliases = ["muse-code", "muse-cli"]
 
-# Evidence: live bottom-buffer captures from Muse Code 0.2.1 in Herdr, using a local
+# Evidence: live bottom-buffer captures from Muse Code 0.2.1 in Shepherd, using a local
 # deterministic Responses provider so each UI state could be held and inspected.
 #
 # Idle has a `⟩` prompt and `model · effort · cwd` footer. Active turns show

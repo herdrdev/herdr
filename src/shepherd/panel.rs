@@ -1,10 +1,10 @@
 //! Interactive Shepherd agents TUI panel.
 //!
-//! Follows Herdr's UI principles:
+//! Follows Shepherd's UI principles:
 //! - State (`ShepherdAgentsPanelState`) is pure data separated from runtime/I/O and stored on `AppState`.
 //! - Rendering (`render_shepherd_agents_panel` / `render_shepherd_agents_from_app`) is pure:
 //!   it takes `&AppState` / `&ShepherdAgentsPanelState` and only draws to a `ratatui::buffer::Buffer`.
-//! - Each agent's native Herdr terminal pane remains intact and is the sole surface for viewing
+//! - Each agent's native Shepherd terminal pane remains intact and is the sole surface for viewing
 //!   terminal output or interacting with the agent.
 //! - Mouse and keyboard interactions are supported. Every destructive or publishing action
 //!   requires explicit confirmation before execution.
@@ -619,7 +619,7 @@ pub fn render_shepherd_agents_panel(
         )
     } else {
         format!(
-            "{} agente(s) activos · terminales nativas de herdr intactas",
+            "{} agente(s) activos · terminales nativas de shepherd intactas",
             panel.entries.len()
         )
     };

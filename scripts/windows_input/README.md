@@ -2,7 +2,7 @@
 
 This is local Windows qualification infrastructure, not a claim that all Windows
 input works. It sends real scan-code gestures through a new Windows Terminal
-window, both directly to an observer and through an attached Herdr client. It
+window, both directly to an observer and through an attached Shepherd client. It
 does not substitute `pane send-keys` for host input.
 
 ## Safety and prerequisites
@@ -51,8 +51,8 @@ just test-windows-input
 ```
 
 The default runs the original input matrix as three targeted observer runs:
-Stable WT through Herdr with legacy and modifyOtherKeys observers, and Preview
-WT through Herdr with Kitty. Herdr's outer reader stays on its default Win32
+Stable WT through Shepherd with legacy and modifyOtherKeys observers, and Preview
+WT through Shepherd with Kitty. Shepherd's outer reader stays on its default Win32
 policy. It tests the full selected cases at 120×30, then the existing input,
 paste, and mouse sentinels at 80×24 and 80×30. PageUp/PageDown scrolling,
 AltGr, and IME remain explicit manual checks. The printed matrix has one column
@@ -76,30 +76,30 @@ Or invoke the script directly:
 
 ```powershell
 pwsh -NoProfile -File scripts/test_windows_input.ps1 `
-  -ExePath 'C:\test-app\herdr.exe' -AllowInputInjection -ClearClipboard `
+  -ExePath 'C:\test-app\shepherd.exe' -AllowInputInjection -ClearClipboard `
   -StablePath 'C:\TerminalStable\WindowsTerminal.exe' `
   -PreviewPath 'C:\TerminalPreview\WindowsTerminal.exe'
 ```
 
-The default tests Herdr's **default** input policy. Pass `-Full` for the full
+The default tests Shepherd's **default** input policy. Pass `-Full` for the full
 channel × path × mode × geometry diagnostic catalogue. Any explicit `-Profile`,
 `-Modes`, `-Channels`, `-Paths`, `-Cases`, `-Widths`, `-Heights`, or `-Manual`
 selection also runs a diagnostic campaign. In a direct PowerShell invocation,
 supply arrays normally:
 
 ```powershell
-.\scripts\test_windows_input.ps1 -ExePath 'C:\test-app\herdr.exe' `
+.\scripts\test_windows_input.ps1 -ExePath 'C:\test-app\shepherd.exe' `
   -AllowInputInjection -ClearClipboard -Modes legacy,kitty -Cases mouse-interleave,mode-transitions `
   -Widths 120 -Heights 30
 ```
 
-`-Paths herdr-remote` runs the current client against its disposable local
+`-Paths shepherd-remote` runs the current client against its disposable local
 server with the remote clipboard bridge active. It needs no SSH host. A focused
 clipboard-image qualification is:
 
 ```powershell
 .\scripts\test_windows_input.ps1 -AllowInputInjection -ClearClipboard `
-  -Channels stable -Paths direct,herdr-remote -Modes legacy `
+  -Channels stable -Paths direct,shepherd-remote -Modes legacy `
   -Cases clipboard-image,clipboard-mixed -Widths 80 -Heights 24
 ```
 
@@ -127,7 +127,7 @@ Every run needs a **new** output directory. By default it is
 - Native console records, including down/up, repeat, virtual/scan codes, Unicode,
   modifier state, and raw payloads for other native record types.
 - Legacy VT, modifyOtherKeys level 2, and Kitty disambiguation observer modes.
-  These are **pane consumer modes**, not names for Herdr's outer reader.
+  These are **pane consumer modes**, not names for Shepherd's outer reader.
 - Physical-style Enter/Shift+Enter and other modifier chords, navigation and word
   movement chords, control keys, and editing keys. The oracle checks bytes or
   records; it does not claim that a particular editor implements word selection
@@ -137,7 +137,7 @@ Every run needs a **new** output directory. By default it is
   A host binding or multiline-paste confirmation dialog can intercept the gesture;
   the runner does not dismiss unexpected dialogs or rebind Terminal shortcuts.
 - Image-only Ctrl+V through the remote clipboard bridge, plus a mixed image/text
-  clipboard check that proves Windows Terminal and Herdr preserve the text paste.
+  clipboard check that proves Windows Terminal and Shepherd preserve the text paste.
   The report records `paste_origin`, classified from the client's own mapper trace
   (`terminal-paste`, `empty-paste`, `key-event`, or `none`). A staged image only
   passes when the origin is a positively observed `empty-paste`: a paste the
@@ -146,7 +146,7 @@ Every run needs a **new** output directory. By default it is
 - A full case pass at an observed 120×30 host size; the full diagnostic campaign also runs keyboard/paste sentinels at
   **80, 119, 120, 121, 132, 160, 240 columns**, at 24 and 50 rows; then return to
   80 columns. This exercises narrow→wide→narrow resizing of the actual outer
-  window. Both outer and pane dimensions are captured. Herdr chrome means pane
+  window. Both outer and pane dimensions are captured. Shepherd chrome means pane
   width is not the same as outer width. An unreachable size is not a pass.
 - Automatic active-layout dead-key acute input, plus guided AltGr, extended
   accent, and IME commits, with exact expected committed text.
@@ -155,7 +155,7 @@ Every run needs a **new** output directory. By default it is
   sentinel after resize, and legacy→modifyOtherKeys→Kitty→modifyOtherKeys→legacy
   transitions without restart.
 
-The focus/resize mouse check runs in Windows Terminal. It guards Herdr's recovery
+The focus/resize mouse check runs in Windows Terminal. It guards Shepherd's recovery
 sequence but does not certify the Tabby/Alacritty host-specific report in #4284.
 The catalogue also lists explicit **qualification gaps**: mouse drag and
 right-edge coordinate mapping; visual reflow/wrapping; native held-key repeat;
@@ -167,10 +167,10 @@ positive host-scrollback evidence for native PageUp/PageDown. These are recorded
 separate fixtures/oracles before becoming automated assertions. The catalogue is
 broad; the automated run does **not cover every row**.
 
-Injected PageUp/PageDown remains `inconclusive` through Herdr. On Windows
+Injected PageUp/PageDown remains `inconclusive` through Shepherd. On Windows
 Terminal 1.24, both `SendInput` and `keybd_event` produced zeroed non-key records
 even in the direct-host baseline, so absence of pane input cannot prove that
-Herdr consumed the key. Conclusive qualification requires literal physical input
+Shepherd consumed the key. Conclusive qualification requires literal physical input
 plus a positive pane scroll-offset change; that guided check is not automated yet.
 
 ## Evidence and verdicts
@@ -189,22 +189,22 @@ observations. The default pairs Stable/Win32 with Preview/Kitty; diagnostic
 campaigns retain the direct-host Plain VT column. Filtered, unavailable, or
 operator-assisted cases remain `NOT TESTED` or `MANUAL`; the full evidence and
 reasons remain in `report.json`.
-The Herdr column is labelled Win32 only after the current binary's selected
+The Shepherd column is labelled Win32 only after the current binary's selected
 reader decodes a real nonce-owned Win32 serialized record. Configuration defaults
 alone do not select the label; missing runtime evidence prints `UNKNOWN`.
 
-Direct-host and through-Herdr observations are labelled separately. A direct-host
-failure is **not automatically a Herdr bug**. Each row labels its failure scope as
-`direct_host` or `through_herdr_not_yet_attributed`. For example, a terminal may
+Direct-host and through-Shepherd observations are labelled separately. A direct-host
+failure is **not automatically a Shepherd bug**. Each row labels its failure scope as
+`direct_host` or `through_shepherd_not_yet_attributed`. For example, a terminal may
 intercept Alt+Enter or use a different control-key encoding.
 
 One explicit known-gap rule labels nonce-bound, complete **WT 1.24/1.25
 direct-host mOK captures** of Shift/Ctrl/Ctrl+Shift+Enter or Shift+Tab as
 `unsupported` only when they contain the exact legacy bytes. It does not exempt
-other tests or versions, an empty/malformed capture, Kitty, or any through-Herdr
-failure. Through-Herdr still must preserve the requested gesture.
+other tests or versions, an empty/malformed capture, Kitty, or any through-Shepherd
+failure. Through-Shepherd still must preserve the requested gesture.
 Unsupported remains incomplete coverage, not green. Review captures before
-adding other capability exceptions; never bless lost Shift information in Herdr
+adding other capability exceptions; never bless lost Shift information in Shepherd
 just to make a report green.
 
 Comparisons consume the **complete captured sequence**, including a quiet interval
@@ -227,7 +227,7 @@ an entire Windows host.
 ## Cleanup and native handoff
 
 Every window has a fresh nonce, named session, isolated config root, known
-PowerShell pane shell, and observer acknowledgement. Inherited Herdr socket,
+PowerShell pane shell, and observer acknowledgement. Inherited Shepherd socket,
 backend, session, and SSH variables are cleared in the actual launched process,
 not just in the controller. Setup APIs only create/focus the observer pane.
 
@@ -238,7 +238,7 @@ console-mode mismatches are reported, not hidden behind a passing key test.
 
 For release-risk input changes, qualify Stable and Preview, real focus-loss/F12
 interruption, partial startup, clipboard changes, cleanup, and measured width
-boundaries. Use old and new Herdr binaries in **separate runs** to establish that
+boundaries. Use old and new Shepherd binaries in **separate runs** to establish that
 a known regression is caught. Do not overwrite installations or reuse an earlier
 server. Portable unit tests validate the catalogue and verdict logic; they do not
 replace native Windows evidence.

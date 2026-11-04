@@ -36,7 +36,7 @@ impl SocketTest {
     fn connect(&mut self) -> Client {
         static NEXT_SOCKET: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "herdr-sub-{}-{}",
+            "shepherd-sub-{}-{}",
             std::process::id(),
             NEXT_SOCKET.fetch_add(1, Ordering::Relaxed)
         ));

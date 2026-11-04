@@ -2032,7 +2032,7 @@ impl GhosttyPaneTerminal {
     }
 
     /// libghostty encodes every key for the pane's live keyboard modes. The only
-    /// Herdr policy is the legacy shell table for panes that negotiated nothing.
+    /// Shepherd policy is the legacy shell table for panes that negotiated nothing.
     ///
     /// The terminal lock is held until the key and its grouped repeats are
     /// encoded, so a mode change from the PTY reader cannot split the decision
@@ -4137,19 +4137,19 @@ mod tests {
         let pane = GhosttyPaneTerminal::new(terminal, tx.clone()).unwrap();
         let pane_id = PaneId::from_raw(1);
 
-        let partial = pane.process_pty_bytes(pane_id, 0, b"\x1b]7;file:///tmp/herdr%20", &tx);
+        let partial = pane.process_pty_bytes(pane_id, 0, b"\x1b]7;file:///tmp/shepherd%20", &tx);
         assert_eq!(partial.reported_cwd, None);
 
         let completed = pane.process_pty_bytes(pane_id, 0, b"repo\x07", &tx);
         #[cfg(not(windows))]
         assert_eq!(
             completed.reported_cwd,
-            Some(std::path::PathBuf::from("/tmp/herdr repo"))
+            Some(std::path::PathBuf::from("/tmp/shepherd repo"))
         );
         #[cfg(windows)]
         assert_eq!(
             completed.reported_cwd,
-            Some(std::path::PathBuf::from("\\tmp\\herdr repo"))
+            Some(std::path::PathBuf::from("\\tmp\\shepherd repo"))
         );
 
         let latest = pane.process_pty_bytes(
@@ -4998,7 +4998,7 @@ mod tests {
     #[test]
     fn ghostty_alt_letters_keep_esc_prefix_on_every_platform() {
         // libghostty treats macOS Option as a text modifier unless told otherwise;
-        // Herdr has already decoded Alt from these host bytes.
+        // Shepherd has already decoded Alt from these host bytes.
         for (host_bytes, expected) in [
             ("\x1bf", &b"\x1bf"[..]),
             ("\x1bb", b"\x1bb"),

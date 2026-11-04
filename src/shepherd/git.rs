@@ -1,6 +1,6 @@
 //! Git tab view for Shepherd (Phase F4b).
 //!
-//! Follows Herdr's UI principles:
+//! Follows Shepherd's UI principles:
 //! - Pure state (`ShepherdGitState`) separated from runtime/I/O.
 //! - Pure render (`render_shepherd_git_panel`) taking `&ShepherdGitState` and `&Palette`.
 //! - Mouse-first with keyboard shortcuts (`r` to refresh, `c` to copy/show worktree path).

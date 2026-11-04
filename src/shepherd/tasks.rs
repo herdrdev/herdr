@@ -1,11 +1,11 @@
 //! Tasks view for Shepherd.
 //!
-//! Follows Herdr's UI principles:
+//! Follows Shepherd's UI principles:
 //! - Pure state (`ShepherdTasksState`) separated from runtime/I/O.
 //! - Pure render (`render_shepherd_tasks_panel`) taking `&ShepherdTasksState` and `&Palette`.
 //! - Mouse-first with keyboard shortcuts.
 //! - Destructive actions (archive) require explicit confirmation.
-//! - Editing opens `$EDITOR` in a new Herdr pane (never inside this view).
+//! - Editing opens `$EDITOR` in a new Shepherd pane (never inside this view).
 //! - Task creation validates attachments to avoid broken file paths.
 //! - GitHub issue import shows clean errors on failure without leaving partial state.
 

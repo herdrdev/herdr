@@ -131,7 +131,7 @@ impl ClientShellLocation {
 
 /// A connected client tracked by the server.
 pub(crate) struct ClientConnection {
-    /// Whether this connection owns the Herdr shell or one direct terminal stream.
+    /// Whether this connection owns the Shepherd shell or one direct terminal stream.
     pub(crate) mode: ClientConnectionMode,
     /// The client's terminal size after clamping.
     pub(crate) terminal_size: (u16, u16),

@@ -98,7 +98,7 @@ pub(crate) fn spawn_response_waiter(
     server_event_tx: tokio_mpsc::Sender<ServerEvent>,
 ) -> io::Result<()> {
     std::thread::Builder::new()
-        .name("herdr-client-endpoint-response".into())
+        .name("shepherd-client-endpoint-response".into())
         .spawn(move || {
             let response = response_rx.recv().unwrap_or_else(|_| {
                 error_response(

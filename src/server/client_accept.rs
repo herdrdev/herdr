@@ -31,7 +31,7 @@ pub(crate) fn accept_pending_client_connections(
 
                 let should_quit = should_quit.clone();
                 let server_event_tx = server_event_tx.clone();
-                let spawned = crate::thread_spawn::spawn_named("herdr-client-conn", move || {
+                let spawned = crate::thread_spawn::spawn_named("shepherd-client-conn", move || {
                     if let Err(err) = client_transport::handle_client_handshake(
                         stream,
                         client_id,

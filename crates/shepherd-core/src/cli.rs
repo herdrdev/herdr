@@ -1,4 +1,4 @@
-//! Reusable CLI entrypoint for Shepherd (`shepherd <subcommand>` and `herdr shepherd <subcommand>`).
+//! Reusable CLI entrypoint for Shepherd (`shepherd <subcommand>` and `shepherd shepherd <subcommand>`).
 
 use crate::{
     agents_json, archive_task,
@@ -11,7 +11,7 @@ use crate::{
     terminals::{connect_terminals, Terminals},
     touch_task, validate_plan, write_task_section, CreatedTask, NewTask,
 };
-use crate::herdr::{self, HerdrClient};
+use crate::shepherd::{self, ShepherdClient};
 use serde_json::Value;
 use std::{
     env,
@@ -29,7 +29,7 @@ where
     run_cli_with_terminals(args, None)
 }
 
-/// Execute Shepherd CLI arguments with an optional pre-connected `Terminals` adapter (such as `HerdrInProcess`).
+/// Execute Shepherd CLI arguments with an optional pre-connected `Terminals` adapter (such as `ShepherdInProcess`).
 pub fn run_cli_with_terminals<I, S>(
     args: I,
     terminals: Option<Arc<dyn Terminals>>,
@@ -55,12 +55,12 @@ where
     run_cli_in_root_with_client(root, args, terminals, None)
 }
 
-/// Execute Shepherd CLI arguments with an explicit or resolved `HerdrClient`.
+/// Execute Shepherd CLI arguments with an explicit or resolved `ShepherdClient`.
 pub fn run_cli_in_root_with_client<I, S>(
     root: PathBuf,
     args: I,
     terminals: Option<Arc<dyn Terminals>>,
-    client: Option<HerdrClient>,
+    client: Option<ShepherdClient>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     I: IntoIterator<Item = S>,
@@ -75,7 +75,7 @@ pub fn run_cli_in_root_with_output<I, S>(
     root: PathBuf,
     args: I,
     terminals: Option<Arc<dyn Terminals>>,
-    client: Option<HerdrClient>,
+    client: Option<ShepherdClient>,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
@@ -119,16 +119,16 @@ where
     }
 }
 
-fn resolve_reachable_client(_root: &Path) -> Option<HerdrClient> {
-    if let Some(path) = std::env::var_os("HERDR_SOCKET_PATH").filter(|v| !v.is_empty()) {
-        let client = HerdrClient::new(PathBuf::from(path));
+fn resolve_reachable_client(_root: &Path) -> Option<ShepherdClient> {
+    if let Some(path) = std::env::var_os("SHEPHERD_SOCKET_PATH").filter(|v| !v.is_empty()) {
+        let client = ShepherdClient::new(PathBuf::from(path));
         if client.is_reachable() {
             return Some(client);
         }
     }
-    if let Some(session) = std::env::var_os("HERDR_SESSION").filter(|v| !v.is_empty()) {
-        if let Ok(socket) = herdr::resolve_socket(session.to_str()) {
-            let client = HerdrClient::new(socket);
+    if let Some(session) = std::env::var_os("SHEPHERD_SESSION").filter(|v| !v.is_empty()) {
+        if let Ok(socket) = shepherd::resolve_socket(session.to_str()) {
+            let client = ShepherdClient::new(socket);
             if client.is_reachable() {
                 return Some(client);
             }
@@ -141,7 +141,7 @@ fn dispatch_cli(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -150,7 +150,7 @@ fn dispatch_cli(
         return usage();
     };
     if area == "attach" {
-        return attach_to_herdr(root, args_iter.collect(), terminals);
+        return attach_to_shepherd(root, args_iter.collect(), terminals);
     }
     if area == "agents" {
         return agents_command(root, server, json, writer);
@@ -227,7 +227,7 @@ fn dispatch_cli(
 
 fn agents_command(
     _root: PathBuf,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -306,7 +306,7 @@ fn spawn_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -392,7 +392,7 @@ fn print_human_spawn_from_value(
     let model = data.get("model").and_then(Value::as_str).unwrap_or("");
     let model = if model.is_empty() { "default" } else { model };
     let pane = data.get("pane").and_then(Value::as_str).unwrap_or("-");
-    writeln!(writer, "started {id} ({vendor}/{model}) in Herdr pane {pane}")?;
+    writeln!(writer, "started {id} ({vendor}/{model}) in Shepherd pane {pane}")?;
     let worktree = data.get("worktree").and_then(Value::as_str).unwrap_or("");
     let branch = data.get("branch").and_then(Value::as_str).unwrap_or("");
     if !worktree.is_empty() {
@@ -407,7 +407,7 @@ fn print_human_spawn(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     writeln!(
         writer,
-        "started {} ({}/{}) in Herdr pane {}",
+        "started {} ({}/{}) in Shepherd pane {}",
         agent.id,
         agent.vendor,
         if agent.model.is_empty() {
@@ -427,7 +427,7 @@ fn kill_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -469,7 +469,7 @@ fn clean_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -542,7 +542,7 @@ fn focus_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -558,7 +558,7 @@ fn focus_command(
             let fid = data.get("id").and_then(Value::as_str).unwrap_or(id.as_str());
             writeln!(
                 writer,
-                "focused agent {fid} in native herdr terminal"
+                "focused agent {fid} in native shepherd terminal"
             )?;
         }
         return Ok(());
@@ -579,7 +579,7 @@ fn focus_command(
     } else {
         writeln!(
             writer,
-            "focused agent {} in native herdr terminal",
+            "focused agent {} in native shepherd terminal",
             agent.id
         )?;
     }
@@ -591,7 +591,7 @@ fn run_command(
     reference: String,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -755,7 +755,7 @@ fn approve_command(
     root: PathBuf,
     task: &str,
     target: &str,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -823,7 +823,7 @@ fn approve_command(
 fn skills_list(
     root: PathBuf,
     _args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -888,7 +888,7 @@ fn print_human_skills_entries(
 fn runs_list(
     root: PathBuf,
     _args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -969,7 +969,7 @@ fn print_human_runs(
 fn git_command(
     root: PathBuf,
     _args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1179,7 +1179,7 @@ fn config_validate(
     Err("configuration validation failed".into())
 }
 
-fn attach_to_herdr(
+fn attach_to_shepherd(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
@@ -1188,7 +1188,7 @@ fn attach_to_herdr(
         [] => (None, false),
         [target] => (Some(target.as_str()), false),
         [target, flag] if flag == "--takeover" => (Some(target.as_str()), true),
-        _ => return Err("usage: shepherd attach [herdr-agent-name-or-pane-id] [--takeover]".into()),
+        _ => return Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover]".into()),
     };
     match terminals {
         Some(t) => t.attach(target, takeover)?,
@@ -1204,7 +1204,7 @@ fn attach_to_herdr(
 fn create_new_task(
     root: PathBuf,
     args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1281,7 +1281,7 @@ fn create_new_task(
 fn list_task_command(
     root: PathBuf,
     args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1549,7 +1549,7 @@ fn task_path_command(
 fn archive_task_command(
     root: PathBuf,
     args: Vec<String>,
-    server: Option<&HerdrClient>,
+    server: Option<&ShepherdClient>,
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -1600,13 +1600,13 @@ pub fn project_root(mut path: PathBuf) -> PathBuf {
 }
 
 fn usage<T>() -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    Err("usage: shepherd attach [herdr-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json]".into())
+    Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json]".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminals::{herdr_attach_args, InMemoryTerminals};
+    use crate::terminals::{shepherd_attach_args, InMemoryTerminals};
 
     static TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1655,20 +1655,20 @@ mod tests {
     }
 
     #[test]
-    fn attach_delegates_to_the_selected_herdr_session_and_agent() {
+    fn attach_delegates_to_the_selected_shepherd_session_and_agent() {
         assert_eq!(
-            herdr_attach_args("shepherd", Some("coder-1"), true),
+            shepherd_attach_args("shepherd", Some("coder-1"), true),
             ["--session", "shepherd", "agent", "attach", "coder-1", "--takeover"]
         );
         assert_eq!(
-            herdr_attach_args("-", Some("w1:p2"), false),
+            shepherd_attach_args("-", Some("w1:p2"), false),
             ["agent", "attach", "w1:p2"]
         );
         assert_eq!(
-            herdr_attach_args("shepherd", None, false),
+            shepherd_attach_args("shepherd", None, false),
             ["session", "attach", "shepherd"]
         );
-        assert!(herdr_attach_args("-", None, false).is_empty());
+        assert!(shepherd_attach_args("-", None, false).is_empty());
     }
 
     #[test]
@@ -1778,7 +1778,7 @@ mod tests {
         root: &Path,
         args: &[&str],
         terminals: Option<Arc<dyn Terminals>>,
-        client: Option<HerdrClient>,
+        client: Option<ShepherdClient>,
     ) -> Result<String, (String, Box<dyn std::error::Error + Send + Sync>)> {
         let mut buf = Vec::new();
         let string_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -1802,7 +1802,7 @@ mod tests {
         // 1. Mock server client that tracks whether it was invoked
         let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let invoked_clone = Arc::clone(&invoked);
-        let client = HerdrClient::in_process(move |method, params| {
+        let client = ShepherdClient::in_process(move |method, params| {
             assert_eq!(method, "shepherd.call");
             invoked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
             assert_eq!(params["op"], "agents");
@@ -1821,7 +1821,7 @@ mod tests {
         // 3. Execution with --no-server (placed anywhere) bypasses the server
         let invoked_no_srv = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let invoked_no_srv_clone = Arc::clone(&invoked_no_srv);
-        let client_no_srv = HerdrClient::in_process(move |_method, _params| {
+        let client_no_srv = ShepherdClient::in_process(move |_method, _params| {
             invoked_no_srv_clone.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(serde_json::json!({}))
         });
@@ -1851,7 +1851,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
 
         // Pass a client pointing to a nonexistent socket
-        let client = HerdrClient::new(PathBuf::from("/tmp/nonexistent-shepherd-socket-12345.sock"));
+        let client = ShepherdClient::new(PathBuf::from("/tmp/nonexistent-shepherd-socket-12345.sock"));
         let out = run_with_buf(&root, &["agents", "--json"], None, Some(client)).unwrap();
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert!(parsed.is_array());
@@ -2049,7 +2049,7 @@ mod tests {
         let ops_called = Arc::new(std::sync::Mutex::new(Vec::new()));
         let ops_clone = Arc::clone(&ops_called);
 
-        let client = HerdrClient::in_process(move |method, params| {
+        let client = ShepherdClient::in_process(move |method, params| {
             assert_eq!(method, "shepherd.call");
             let op = params["op"].as_str().unwrap().to_string();
             ops_clone.lock().unwrap().push((op.clone(), params["args"].clone()));
@@ -2133,7 +2133,7 @@ mod tests {
                         "error": null
                     }
                 })),
-                other => Err(crate::herdr::HerdrError::Api {
+                other => Err(crate::shepherd::ShepherdError::Api {
                     code: "unknown_op".into(),
                     message: format!("unknown op {other}"),
                 }),

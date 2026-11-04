@@ -722,7 +722,7 @@ pub struct ToastNotification {
     pub kind: ToastKind,
     pub title: String,
     pub context: String,
-    pub position: Option<crate::config::ToastHerdrPosition>,
+    pub position: Option<crate::config::ToastShepherdPosition>,
     pub target: Option<ToastTarget>,
 }
 
@@ -827,7 +827,7 @@ pub struct AppState {
     pub config_diagnostic: Option<String>,
     pub toast: Option<ToastNotification>,
     pub pending_agent_notifications: std::collections::HashMap<PaneId, PendingAgentNotification>,
-    /// Last reported focus state for the outer terminal hosting herdr.
+    /// Last reported focus state for the outer terminal hosting shepherd.
     /// None means unsupported or not yet reported, which preserves active-pane suppression.
     pub outer_terminal_focus: Option<bool>,
     // Config
@@ -880,7 +880,7 @@ pub struct AppState {
     pub agent_manifest_summaries: Vec<crate::detect::manifest::AgentManifestSummary>,
     /// Cached remote detection manifest update diagnostics for runtime/API status.
     pub agent_manifest_update_status: crate::detect::manifest_update::ManifestUpdateStatus,
-    /// Installed or linked plugins known to this running Herdr instance.
+    /// Installed or linked plugins known to this running Shepherd instance.
     pub(crate) installed_plugins: InstalledPluginRegistry,
     /// Pane ids opened through the plugin pane API.
     pub(crate) plugin_panes: std::collections::HashMap<PaneId, PluginPaneRecord>,
@@ -1057,7 +1057,7 @@ impl AppState {
             mode: Mode::Navigate,
             should_quit: false,
             request_client_config_reload: false,
-            worktree_directory: std::path::PathBuf::from("/tmp/herdr-worktrees"),
+            worktree_directory: std::path::PathBuf::from("/tmp/shepherd-worktrees"),
             latest_release_notes: None,
             product_announcement: None,
             shepherd_agents_panel: crate::shepherd::ShepherdAgentsPanelState::default(),
@@ -1070,7 +1070,7 @@ impl AppState {
                 pane_infos: Vec::new(),
             },
             update_available: None,
-            update_install_command: "herdr update".into(),
+            update_install_command: "shepherd update".into(),
             latest_release_notes_available: false,
             update_dismissed: false,
             config_diagnostic: None,

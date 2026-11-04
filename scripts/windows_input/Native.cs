@@ -8,7 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-namespace HerdrInputGauntlet {
+namespace ShepherdInputGauntlet {
     [ComImport, Guid("45BA127D-10A8-46EA-8AB7-56EA9078943C")]
     class ApplicationActivationManager { }
 

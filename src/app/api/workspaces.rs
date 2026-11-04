@@ -425,7 +425,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let focused_cwd = std::env::temp_dir().join(format!(
-            "herdr-ws-follow-{}-{}",
+            "shepherd-ws-follow-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -491,7 +491,7 @@ mod tests {
         shutdown_test_runtimes(&mut app);
 
         let source_cwd =
-            std::env::temp_dir().join(format!("herdr-ws-explicit-source-{}", std::process::id()));
+            std::env::temp_dir().join(format!("shepherd-ws-explicit-source-{}", std::process::id()));
         std::fs::create_dir_all(&source_cwd).unwrap();
         let pane_id = app.state.workspaces[1].focused_pane_id().unwrap();
         let terminal_id = app.state.workspaces[1]
@@ -569,9 +569,9 @@ mod tests {
         app.state.workspaces = vec![Workspace::test_new("issue")];
         app.state.workspaces[0].worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr-issue".into(),
+            label: "shepherd".into(),
+            repo_root: "/repo/shepherd".into(),
+            checkout_path: "/repo/shepherd-issue".into(),
             is_linked_worktree: true,
         });
         app
@@ -582,9 +582,9 @@ mod tests {
         let mut parent = Workspace::test_new("parent");
         parent.worktree_space = Some(crate::workspace::WorktreeSpaceMembership {
             key: "repo-key".into(),
-            label: "herdr".into(),
-            repo_root: "/repo/herdr".into(),
-            checkout_path: "/repo/herdr".into(),
+            label: "shepherd".into(),
+            repo_root: "/repo/shepherd".into(),
+            checkout_path: "/repo/shepherd".into(),
             is_linked_worktree: false,
         });
         app.state.workspaces.insert(0, parent);

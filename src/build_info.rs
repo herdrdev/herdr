@@ -3,11 +3,11 @@
 pub const BASE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub fn channel() -> &'static str {
-    non_empty(option_env!("HERDR_BUILD_CHANNEL")).unwrap_or("stable")
+    non_empty(option_env!("SHEPHERD_BUILD_CHANNEL")).unwrap_or("stable")
 }
 
 pub fn build_id() -> Option<&'static str> {
-    non_empty(option_env!("HERDR_BUILD_ID"))
+    non_empty(option_env!("SHEPHERD_BUILD_ID"))
 }
 
 pub fn version() -> String {

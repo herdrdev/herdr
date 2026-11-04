@@ -49,7 +49,7 @@ describe('preview documentation snapshots', () => {
 });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'herdr-preview-docs-'));
+  const root = await mkdtemp(join(tmpdir(), 'shepherd-preview-docs-'));
   temporaryDirectories.push(root);
   await write(root, 'docs/next/website/src/content/docs/index.mdx', 'selected preview\n');
   await write(root, 'docs/next/website/src/data/config-reference.json', '{"preview":true}\n');
@@ -92,7 +92,7 @@ function git(root: string, args: string[]) {
 function runScript(root: string, args: string[]) {
   execFileSync('node', [script, ...args], {
     cwd: root,
-    env: { ...process.env, HERDR_DOCS_REPO_ROOT: root },
+    env: { ...process.env, SHEPHERD_DOCS_REPO_ROOT: root },
     stdio: 'pipe',
   });
 }

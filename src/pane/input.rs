@@ -65,7 +65,7 @@ pub(super) fn ghostty_key_event_from_terminal_key(
                 }
                 // Legacy Alt prefixes the produced text, but libghostty on macOS
                 // prefixes the unshifted codepoint for non-ASCII text (it
-                // assumes Option translated it). Herdr already decoded Alt, so
+                // assumes Option translated it). Shepherd already decoded Alt, so
                 // the text is the key's real output: Alt+Shift+ö is ESC Ö.
                 if legacy_pane
                     && key.modifiers.contains(KeyModifiers::ALT)
@@ -91,7 +91,7 @@ pub(super) fn ghostty_key_event_from_terminal_key(
     Some(event)
 }
 
-/// Configure `encoder` for a pane's live terminal modes. Herdr has already
+/// Configure `encoder` for a pane's live terminal modes. Shepherd has already
 /// decoded Alt from the host, so macOS Option must keep its Alt meaning (ESC
 /// prefix) instead of being treated as a text modifier.
 pub(super) fn configure_key_encoder(

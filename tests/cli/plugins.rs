@@ -13,9 +13,9 @@ fn named_sessions_share_live_plugin_registry() {
     ] {
         fs::create_dir_all(dir).unwrap();
         fs::write(
-            dir.join("herdr-plugin.toml"),
+            dir.join("shepherd-plugin.toml"),
             format!(
-                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n\n[[actions]]\nid = \"run\"\ntitle = \"Run\"\ncommand = [\"sh\", \"-c\", \"echo run\"]\n"
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_shepherd_version = \"0.6.10\"\n\n[[actions]]\nid = \"run\"\ntitle = \"Run\"\ncommand = [\"sh\", \"-c\", \"echo run\"]\n"
             ),
         )
         .unwrap();
@@ -120,12 +120,12 @@ fn plugin_link_works_offline_and_is_global() {
     let plugin_dir = base.join("plugins").join("offline");
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.offline"
 name = "Offline Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
     )
@@ -179,17 +179,17 @@ fn plugin_install_through_named_server_is_global() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.global-plugin"
 name = "Global Plugin"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "global-plugin/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "global-plugin/shepherd-plugin.toml"]);
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
     let git_config = base.join("gitconfig");
@@ -261,9 +261,9 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
         let plugin_dir = source_repo.join(subdir);
         fs::create_dir_all(&plugin_dir).unwrap();
         fs::write(
-            plugin_dir.join("herdr-plugin.toml"),
+            plugin_dir.join("shepherd-plugin.toml"),
             format!(
-                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n"
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.1.0\"\nmin_shepherd_version = \"0.6.10\"\n"
             ),
         )
         .unwrap();
@@ -365,7 +365,7 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
             .unwrap(),
     );
     assert_ne!(first_installation, second_installation);
-    assert!(first_installation.join("herdr-plugin.toml").exists());
+    assert!(first_installation.join("shepherd-plugin.toml").exists());
     let malformed = run_named_cli(
         &config_home,
         &runtime_dir,
@@ -383,9 +383,9 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
 
     for (subdir, id) in [("first", "example.first"), ("second", "example.second")] {
         fs::write(
-            source_repo.join(subdir).join("herdr-plugin.toml"),
+            source_repo.join(subdir).join("shepherd-plugin.toml"),
             format!(
-                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.2.0\"\nmin_herdr_version = \"0.6.10\"\n"
+                "id = \"{id}\"\nname = \"{id}\"\nversion = \"0.2.0\"\nmin_shepherd_version = \"0.6.10\"\n"
             ),
         )
         .unwrap();
@@ -421,8 +421,8 @@ fn plugin_update_refreshes_selected_then_all_github_plugins() {
     let local_dir = base.join("local-plugin");
     fs::create_dir_all(&local_dir).unwrap();
     fs::write(
-        local_dir.join("herdr-plugin.toml"),
-        "id = \"example.local\"\nname = \"Local\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n",
+        local_dir.join("shepherd-plugin.toml"),
+        "id = \"example.local\"\nname = \"Local\"\nversion = \"0.1.0\"\nmin_shepherd_version = \"0.6.10\"\n",
     )
     .unwrap();
     let linked = run_named_cli(
@@ -495,8 +495,8 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     create_committed_repo(&source_repo);
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
-        "id = \"example.race\"\nname = \"Race\"\nversion = \"0.1.0\"\nmin_herdr_version = \"0.6.10\"\n",
+        plugin_dir.join("shepherd-plugin.toml"),
+        "id = \"example.race\"\nname = \"Race\"\nversion = \"0.1.0\"\nmin_shepherd_version = \"0.6.10\"\n",
     )
     .unwrap();
     run_git(&source_repo, &["add", "."]);
@@ -543,9 +543,9 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     );
 
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         format!(
-            "id = \"example.race\"\nname = \"Race\"\nversion = \"0.2.0\"\nmin_herdr_version = \"0.6.10\"\n\n[[build]]\ncommand = [\"sh\", \"-c\", \"touch {}; while [ ! -e {} ]; do sleep 0.05; done\"]\n",
+            "id = \"example.race\"\nname = \"Race\"\nversion = \"0.2.0\"\nmin_shepherd_version = \"0.6.10\"\n\n[[build]]\ncommand = [\"sh\", \"-c\", \"touch {}; while [ ! -e {} ]; do sleep 0.05; done\"]\n",
             build_started.display(),
             release_build.display()
         ),
@@ -554,7 +554,7 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     run_git(&source_repo, &["add", "."]);
     run_git(&source_repo, &["commit", "--quiet", "-m", "update plugin"]);
 
-    let mut update = Command::new(env!("CARGO_BIN_EXE_herdr"));
+    let mut update = Command::new(env!("CARGO_BIN_EXE_shepherd"));
     update
         .args([
             "--session",
@@ -567,9 +567,9 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
         .env("XDG_CONFIG_HOME", &config_home)
         .env("XDG_RUNTIME_DIR", &runtime_dir)
         .env("GIT_CONFIG_GLOBAL", &git_config)
-        .env_remove("HERDR_SOCKET_PATH")
-        .env_remove("HERDR_CLIENT_SOCKET_PATH")
-        .env_remove("HERDR_ENV")
+        .env_remove("SHEPHERD_SOCKET_PATH")
+        .env_remove("SHEPHERD_CLIENT_SOCKET_PATH")
+        .env_remove("SHEPHERD_ENV")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let child = update.spawn().unwrap();
@@ -605,7 +605,7 @@ fn plugin_update_does_not_resurrect_a_plugin_unlinked_during_build() {
     );
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
     assert!(
-        fs::read_to_string(managed_path.join("plugin/herdr-plugin.toml"))
+        fs::read_to_string(managed_path.join("plugin/shepherd-plugin.toml"))
             .unwrap()
             .contains("version = \"0.1.0\"")
     );
@@ -626,7 +626,7 @@ fn plugin_updates_preserve_running_consumers_and_failed_activation() {
 id = "example.live"
 name = "Live"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 [[actions]]
 id = "read"
 title = "Read"
@@ -637,14 +637,14 @@ title = "Read"
 placement = "tab"
 command = ["sh", "./read.sh", "pane"]
 "#;
-    fs::write(source_repo.join("herdr-plugin.toml"), manifest).unwrap();
+    fs::write(source_repo.join("shepherd-plugin.toml"), manifest).unwrap();
     fs::write(source_repo.join("version"), "old").unwrap();
     fs::write(source_repo.join("read.sh"), r#"
 kind="$1"
-touch "$HERDR_PLUGIN_ROOT/ready-$kind"
-while [ ! -e "$HERDR_PLUGIN_ROOT/release" ]; do sleep 0.05; done
-printf '%s:%s' "$(cat version)" "$(cat "$HERDR_PLUGIN_ROOT/version")" > "$HERDR_PLUGIN_ROOT/result-$kind.tmp"
-mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
+touch "$SHEPHERD_PLUGIN_ROOT/ready-$kind"
+while [ ! -e "$SHEPHERD_PLUGIN_ROOT/release" ]; do sleep 0.05; done
+printf '%s:%s' "$(cat version)" "$(cat "$SHEPHERD_PLUGIN_ROOT/version")" > "$SHEPHERD_PLUGIN_ROOT/result-$kind.tmp"
+mv "$SHEPHERD_PLUGIN_ROOT/result-$kind.tmp" "$SHEPHERD_PLUGIN_ROOT/result-$kind"
 "#).unwrap();
     run_git(&source_repo, &["add", "."]);
     run_git(&source_repo, &["commit", "--quiet", "-m", "old plugin"]);
@@ -670,7 +670,7 @@ mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
     );
 
     // Model an existing installation from before generation directories.
-    let registry = config_home.join("herdr-dev/plugins.json");
+    let registry = config_home.join("shepherd-dev/plugins.json");
     let mut entries: serde_json::Value =
         serde_json::from_slice(&fs::read(&registry).unwrap()).unwrap();
     let installed_root = PathBuf::from(entries[0]["plugin_root"].as_str().unwrap());
@@ -681,11 +681,11 @@ mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
         .unwrap()
         .file_name()
         .unwrap();
-    let legacy_root = config_home.join("herdr-dev/plugins/github").join(component);
+    let legacy_root = config_home.join("shepherd-dev/plugins/github").join(component);
     fs::create_dir_all(legacy_root.parent().unwrap()).unwrap();
     fs::rename(&installed_root, &legacy_root).unwrap();
     entries[0]["plugin_root"] = serde_json::json!(legacy_root);
-    entries[0]["manifest_path"] = serde_json::json!(legacy_root.join("herdr-plugin.toml"));
+    entries[0]["manifest_path"] = serde_json::json!(legacy_root.join("shepherd-plugin.toml"));
     entries[0]["source"]["managed_path"] = serde_json::json!(legacy_root);
     fs::write(&registry, serde_json::to_vec(&entries).unwrap()).unwrap();
 
@@ -798,11 +798,11 @@ mv "$HERDR_PLUGIN_ROOT/result-$kind.tmp" "$HERDR_PLUGIN_ROOT/result-$kind"
 
     // Fail registry activation after the build, preserving the working version
     // and both running consumers' directories without a restore operation.
-    let registry = config_home.join("herdr-dev/plugins.json");
+    let registry = config_home.join("shepherd-dev/plugins.json");
     let original_registry = fs::read(&registry).unwrap();
     let block_write = format!("mkdir '{}'", registry.with_extension("json.tmp").display());
     fs::write(
-        source_repo.join("herdr-plugin.toml"),
+        source_repo.join("shepherd-plugin.toml"),
         format!(
             "{manifest}\n[[build]]\ncommand = {}\n",
             serde_json::to_string(&["sh", "-c", block_write.as_str()]).unwrap()
@@ -838,17 +838,17 @@ fn plugin_link_list_unlink_cli_smoke_test() {
     let base = unique_test_dir();
     let config_home = base.join("config");
     let runtime_dir = base.join("runtime");
-    let socket_path = runtime_dir.join("herdr.sock");
+    let socket_path = runtime_dir.join("shepherd.sock");
     let plugin_dir = base.join("plugins").join("layout");
     fs::create_dir_all(&plugin_dir).unwrap();
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.layout"
 name = "Layout"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
-description = "Apply a preferred Herdr layout"
+min_shepherd_version = "0.6.10"
+description = "Apply a preferred Shepherd layout"
 
 [[actions]]
 id = "apply"
@@ -869,7 +869,7 @@ command = ["sh", "-c", "sleep 5"]
     )
     .unwrap();
 
-    let herdr = spawn_herdr(&config_home, &runtime_dir, &socket_path);
+    let shepherd = spawn_shepherd(&config_home, &runtime_dir, &socket_path);
     wait_for_socket(&socket_path, Duration::from_secs(5));
     let workspace = run_cli_json(
         &socket_path,
@@ -944,7 +944,7 @@ command = ["sh", "-c", "sleep 5"]
             "--entrypoint",
             "board",
             "--env",
-            "HERDR_ROLE=board",
+            "SHEPHERD_ROLE=board",
             "--no-focus",
         ],
     );
@@ -970,7 +970,7 @@ command = ["sh", "-c", "sleep 5"]
     let listed = run_cli_json(&socket_path, &["plugin", "list", "--json"]);
     assert!(listed["result"]["plugins"].as_array().unwrap().is_empty());
 
-    cleanup_spawned_herdr(herdr, base);
+    cleanup_spawned_shepherd(shepherd, base);
 }
 
 #[test]
@@ -993,10 +993,10 @@ fn plugin_install_usage_errors_include_options_without_installing() {
         );
         assert_eq!(output.status.code(), Some(2), "{args:?}");
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("usage: herdr plugin install"), "{stderr}");
+        assert!(stderr.contains("usage: shepherd plugin install"), "{stderr}");
         assert!(stderr.contains("[--ref REF] [--yes|-y]"), "{stderr}");
-        assert!(!config_home.join("herdr-dev/plugins").exists());
-        assert!(!config_home.join("herdr-dev/plugins.json").exists());
+        assert!(!config_home.join("shepherd-dev/plugins").exists());
+        assert!(!config_home.join("shepherd-dev/plugins.json").exists());
         assert!(!state_home.exists());
     }
 
@@ -1013,16 +1013,16 @@ fn plugin_install_list_uninstall_offline_cli_smoke_test() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.worktree-bootstrap"
 name = "Worktree Bootstrap"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["sh", "-c", "echo built > built.txt; if [ -n \"$HERDR_SESSION\" ]; then echo \"$HERDR_SESSION\" > leaked-session.txt; fi"]
+command = ["sh", "-c", "echo built > built.txt; if [ -n \"$SHEPHERD_SESSION\" ]; then echo \"$SHEPHERD_SESSION\" > leaked-session.txt; fi"]
 
 [[actions]]
 id = "bootstrap"
@@ -1033,7 +1033,7 @@ command = ["sh", "-c", "echo bootstrap"]
     .unwrap();
     run_git(
         &source_repo,
-        &["add", "worktree-bootstrap/herdr-plugin.toml"],
+        &["add", "worktree-bootstrap/shepherd-plugin.toml"],
     );
     run_git(&source_repo, &["commit", "--quiet", "-m", "add plugin"]);
 
@@ -1066,7 +1066,7 @@ command = ["sh", "-c", "echo bootstrap"]
         &[
             ("GIT_CONFIG_GLOBAL", &git_config),
             ("XDG_STATE_HOME", &base.join("state")),
-            ("HERDR_SESSION", Path::new("leaked-session")),
+            ("SHEPHERD_SESSION", Path::new("leaked-session")),
         ],
     );
     assert!(
@@ -1085,7 +1085,7 @@ command = ["sh", "-c", "echo bootstrap"]
     assert_eq!(plugin["plugin_id"], "example.worktree-bootstrap");
     assert_eq!(plugin["source"]["kind"], "github");
     assert_eq!(plugin["source"]["owner"], "ogulcancelik");
-    assert_eq!(plugin["source"]["repo"], "herdr-plugin-examples");
+    assert_eq!(plugin["source"]["repo"], "shepherd-plugin-examples");
     assert_eq!(plugin["source"]["subdir"], "worktree-bootstrap");
     assert_eq!(plugin["source"]["requested_ref"], "v0.43.0");
     assert!(plugin["source"]["resolved_commit"].as_str().is_some());
@@ -1104,7 +1104,7 @@ command = ["sh", "-c", "echo bootstrap"]
             .join("worktree-bootstrap")
             .join("leaked-session.txt")
             .exists(),
-        "build command should not inherit HERDR_SESSION"
+        "build command should not inherit SHEPHERD_SESSION"
     );
 
     let uninstall = run_named_cli(
@@ -1149,12 +1149,12 @@ fn plugin_install_build_failure_does_not_register_or_create_checkout() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.build-fail"
 name = "Build Fail"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -1167,7 +1167,7 @@ command = ["sh", "-c", "echo should-not-install"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "build-fail/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "build-fail/shepherd-plugin.toml"]);
     run_git(
         &source_repo,
         &["commit", "--quiet", "-m", "add failing plugin"],
@@ -1245,16 +1245,16 @@ fn plugin_install_build_spawn_failure_prints_clean_error() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.missing-tool"
 name = "Missing Tool"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
-command = ["definitely-missing-herdr-build-tool-xyz"]
+command = ["definitely-missing-shepherd-build-tool-xyz"]
 
 [[actions]]
 id = "run"
@@ -1263,7 +1263,7 @@ command = ["sh", "-c", "echo should-not-install"]
 "#,
     )
     .unwrap();
-    run_git(&source_repo, &["add", "missing-tool/herdr-plugin.toml"]);
+    run_git(&source_repo, &["add", "missing-tool/shepherd-plugin.toml"]);
     run_git(
         &source_repo,
         &["commit", "--quiet", "-m", "add missing tool plugin"],
@@ -1307,7 +1307,7 @@ command = ["sh", "-c", "echo should-not-install"]
     );
     assert!(stderr.contains("  build: 1/1"), "{stderr}");
     assert!(
-        stderr.contains("  command: definitely-missing-herdr-build-tool-xyz"),
+        stderr.contains("  command: definitely-missing-shepherd-build-tool-xyz"),
         "{stderr}"
     );
     assert!(stderr.contains("  error: failed to start:"), "{stderr}");
@@ -1334,12 +1334,12 @@ fn plugin_install_rejects_manifest_changed_by_build() {
     fs::create_dir_all(&plugin_dir).unwrap();
     create_committed_repo(&source_repo);
     fs::write(
-        plugin_dir.join("herdr-plugin.toml"),
+        plugin_dir.join("shepherd-plugin.toml"),
         r#"
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
-min_herdr_version = "0.6.10"
+min_shepherd_version = "0.6.10"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -1354,11 +1354,11 @@ command = ["sh", "-c", "echo reviewed"]
     .unwrap();
     fs::write(
         plugin_dir.join("mutate.sh"),
-        r#"cat > herdr-plugin.toml <<'EOF'
+        r#"cat > shepherd-plugin.toml <<'EOF'
 id = "example.manifest-mutator"
 name = "Manifest Mutator"
 version = "0.1.0"
-min_herdr_version = "0.0.1"
+min_shepherd_version = "0.0.1"
 platforms = ["linux", "macos", "windows"]
 
 [[build]]
@@ -1409,7 +1409,7 @@ EOF
     );
     let stderr = String::from_utf8_lossy(&install.stderr);
     assert!(
-        stderr.contains("plugin build changed herdr-plugin.toml after install preview"),
+        stderr.contains("plugin build changed shepherd-plugin.toml after install preview"),
         "{stderr}"
     );
 

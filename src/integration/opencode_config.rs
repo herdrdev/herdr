@@ -256,7 +256,7 @@ mod tests {
 
     fn unique_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-opencode-config-{}-{}",
+            "shepherd-opencode-config-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -279,10 +279,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn failed_cli_registration_preserves_existing_config() {
-        const CHILD_CONFIG: &str = "HERDR_TEST_3970_CONFIG_DIR";
+        const CHILD_CONFIG: &str = "SHEPHERD_TEST_3970_CONFIG_DIR";
         if let Some(dir) = std::env::var_os(CHILD_CONFIG) {
             let dir = PathBuf::from(dir);
-            let result = add_cli_plugin(&dir, &dir.join("state"), "./herdr-opencode");
+            let result = add_cli_plugin(&dir, &dir.join("state"), "./shepherd-opencode");
             assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EFBIG));
             println!("registration reached the file-size limit");
             return;
@@ -295,7 +295,7 @@ mod tests {
         // Apply the limit only to a child, after seeding the existing preferences.
         // Ignoring SIGXFSZ makes the kernel return EFBIG instead of killing it.
         let output = std::process::Command::new("bash")
-            .args(["-c", "trap '' XFSZ; ulimit -f 0; exec \"$@\"", "herdr-test"])
+            .args(["-c", "trap '' XFSZ; ulimit -f 0; exec \"$@\"", "shepherd-test"])
             .arg(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -334,8 +334,8 @@ mod tests {
         )
         .unwrap();
 
-        add_tui_plugin(&dir, "./herdr-tui-state.js").unwrap();
-        add_tui_plugin(&dir, "./herdr-tui-state.js").unwrap();
+        add_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap();
+        add_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap();
         let installed_content = fs::read_to_string(&config_path).unwrap();
         assert!(installed_content.contains("// Keep this comment."));
         let installed = parse_config(&config_path);
@@ -345,12 +345,12 @@ mod tests {
             json!([
                 "example",
                 ["configured", {"enabled": true}],
-                "./herdr-tui-state.js"
+                "./shepherd-tui-state.js"
             ])
         );
 
         assert_eq!(
-            remove_tui_plugin(&dir, "./herdr-tui-state.js").unwrap(),
+            remove_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap(),
             vec![config_path.clone()]
         );
         let removed_content = fs::read_to_string(&config_path).unwrap();
@@ -372,7 +372,7 @@ mod tests {
         let legacy_config = "{\n  \"theme\": \"system\"\n}\n";
         fs::write(&legacy_config_path, legacy_config).unwrap();
 
-        let config_path = add_tui_plugin(&dir, "./herdr-tui-state.js").unwrap();
+        let config_path = add_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap();
 
         assert_eq!(config_path, dir.join("tui.jsonc"));
         assert!(!dir.join("tui.json").exists());
@@ -382,7 +382,7 @@ mod tests {
         );
         assert_eq!(
             parse_config(&config_path),
-            json!({ "plugin": ["./herdr-tui-state.js"] })
+            json!({ "plugin": ["./shepherd-tui-state.js"] })
         );
 
         fs::remove_dir_all(dir).unwrap();
@@ -391,10 +391,10 @@ mod tests {
     #[test]
     fn remove_tui_plugin_leaves_empty_managed_config() {
         let dir = unique_dir();
-        let config_path = add_tui_plugin(&dir, "./herdr-tui-state.js").unwrap();
+        let config_path = add_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap();
 
         assert_eq!(
-            remove_tui_plugin(&dir, "./herdr-tui-state.js").unwrap(),
+            remove_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap(),
             vec![config_path.clone()]
         );
         assert!(config_path.is_file());
@@ -408,11 +408,11 @@ mod tests {
         let dir = unique_dir();
         fs::write(
             dir.join("tui.json"),
-            r#"{"plugin":["./herdr-tui-session.js"]}"#,
+            r#"{"plugin":["./shepherd-tui-session.js"]}"#,
         )
         .unwrap();
 
-        let configured = tui_plugin_is_configured(&dir, "./herdr-tui-session.js");
+        let configured = tui_plugin_is_configured(&dir, "./shepherd-tui-session.js");
         fs::remove_dir_all(dir).unwrap();
         assert!(
             configured,
@@ -425,13 +425,13 @@ mod tests {
         let dir = unique_dir();
         fs::write(
             dir.join(TUI_CONFIG_NAME),
-            r#"{"plugin":[["./herdr-tui-state.js",{"enabled":true}]]}"#,
+            r#"{"plugin":[["./shepherd-tui-state.js",{"enabled":true}]]}"#,
         )
         .unwrap();
 
-        assert!(tui_plugin_is_configured(&dir, "./herdr-tui-state.js"));
+        assert!(tui_plugin_is_configured(&dir, "./shepherd-tui-state.js"));
         assert_eq!(
-            remove_tui_plugin(&dir, "./herdr-tui-state.js").unwrap(),
+            remove_tui_plugin(&dir, "./shepherd-tui-state.js").unwrap(),
             vec![dir.join(TUI_CONFIG_NAME)]
         );
 
@@ -443,19 +443,19 @@ mod tests {
         let dir = unique_dir();
         let state = unique_dir();
         let path = dir.join("cli.json");
-        fs::write(&path, r#"{"theme":{"name":"catppuccin"},"plugins":[{"package":"./herdr-opencode","options":{"custom":true}},"example"]}"#).unwrap();
-        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
-        assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
+        fs::write(&path, r#"{"theme":{"name":"catppuccin"},"plugins":[{"package":"./shepherd-opencode","options":{"custom":true}},"example"]}"#).unwrap();
+        add_cli_plugin(&dir, &state, "./shepherd-opencode").unwrap();
+        assert!(cli_plugin_is_configured(&dir, "./shepherd-opencode"));
         assert_eq!(parse_config(&path)["plugins"].as_array().unwrap().len(), 2);
         assert_eq!(parse_config(&path)["plugins"][0]["options"]["custom"], true);
-        assert!(remove_cli_plugin(&dir, "./herdr-opencode").unwrap());
+        assert!(remove_cli_plugin(&dir, "./shepherd-opencode").unwrap());
         assert_eq!(parse_config(&path)["plugins"], json!(["example"]));
         assert_eq!(parse_config(&path)["theme"]["name"], "catppuccin");
-        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
-        add_cli_plugin(&dir, &state, "./herdr-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./shepherd-opencode").unwrap();
+        add_cli_plugin(&dir, &state, "./shepherd-opencode").unwrap();
         assert_eq!(
             parse_config(&path)["plugins"],
-            json!(["example", "./herdr-opencode"])
+            json!(["example", "./shepherd-opencode"])
         );
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(state).unwrap();
@@ -465,15 +465,15 @@ mod tests {
     fn cli_registration_creates_missing_config_when_no_migration_pending() {
         let dir = unique_dir();
         let state = unique_dir();
-        let path = add_cli_plugin(&dir, &state, "./herdr-opencode")
+        let path = add_cli_plugin(&dir, &state, "./shepherd-opencode")
             .unwrap()
             .expect("cli.json should be created when OpenCode has nothing to migrate");
         assert_eq!(path, dir.join("cli.json"));
         assert_eq!(
             parse_config(&path),
-            json!({ "plugins": ["./herdr-opencode"] })
+            json!({ "plugins": ["./shepherd-opencode"] })
         );
-        assert!(cli_plugin_is_configured(&dir, "./herdr-opencode"));
+        assert!(cli_plugin_is_configured(&dir, "./shepherd-opencode"));
         fs::remove_dir_all(dir).unwrap();
         fs::remove_dir_all(state).unwrap();
     }
@@ -483,14 +483,14 @@ mod tests {
         let dir = unique_dir();
         let state = unique_dir();
         fs::write(dir.join("tui.json"), "{}").unwrap();
-        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+        assert!(add_cli_plugin(&dir, &state, "./shepherd-opencode")
             .unwrap()
             .is_none());
         assert!(!dir.join("cli.json").exists());
 
         fs::remove_file(dir.join("tui.json")).unwrap();
         fs::write(state.join("kv.json"), "{}").unwrap();
-        assert!(add_cli_plugin(&dir, &state, "./herdr-opencode")
+        assert!(add_cli_plugin(&dir, &state, "./shepherd-opencode")
             .unwrap()
             .is_none());
         assert!(!dir.join("cli.json").exists());

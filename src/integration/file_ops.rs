@@ -12,7 +12,7 @@ pub(crate) fn remove_file_if_exists(path: &Path) -> io::Result<bool> {
 
 #[cfg(windows)]
 pub(crate) fn legacy_bash_hook_path(hook_path: &Path) -> std::path::PathBuf {
-    hook_path.with_file_name("herdr-agent-state.sh")
+    hook_path.with_file_name("shepherd-agent-state.sh")
 }
 
 #[cfg(windows)]
@@ -24,7 +24,7 @@ pub(crate) fn remove_legacy_bash_hook_file(hook_path: &Path) -> io::Result<bool>
         Err(err) => return Err(err),
     };
 
-    if content.contains("HERDR_INTEGRATION_ID=") {
+    if content.contains("SHEPHERD_INTEGRATION_ID=") {
         fs::remove_file(legacy_path)?;
         return Ok(true);
     }

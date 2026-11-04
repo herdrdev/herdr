@@ -109,16 +109,16 @@ fn shell_new_controls_use_the_same_client_action_routes_as_keybinds() {
 #[test]
 fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
     let first = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
-        std::path::Path::new("/tmp/herdr-remote-100-dev-agents.sock"),
+        std::path::Path::new("/tmp/shepherd-remote-100-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
     let next = ClientShellConfig::from_config(&Config::default()).with_endpoint_preferences(
-        std::path::Path::new("/tmp/herdr-remote-200-dev-agents.sock"),
+        std::path::Path::new("/tmp/shepherd-remote-200-dev-agents.sock"),
         Some(r#"["dev", "agents"]"#),
     );
     assert_eq!(first.preferences_path, next.preferences_path);
     let root =
-        std::env::temp_dir().join(format!("herdr-remote-preferences-{}", std::process::id()));
+        std::env::temp_dir().join(format!("shepherd-remote-preferences-{}", std::process::id()));
     let first_path = root.join(
         first
             .preferences_path
@@ -159,7 +159,7 @@ fn remote_client_preferences_keep_the_same_identity_across_bridge_processes() {
 
 #[test]
 fn remote_client_preferences_process_child() {
-    if std::env::var("HERDR_TEST_PREFERENCES_CHILD").as_deref() != Ok("1") {
+    if std::env::var("SHEPHERD_TEST_PREFERENCES_CHILD").as_deref() != Ok("1") {
         return;
     }
     let expected_path = super::super::preferences::path_for_remote_endpoint("dev", "agents");
@@ -186,7 +186,7 @@ fn remote_client_preferences_process_child() {
 #[test]
 fn manual_client_chrome_preferences_round_trip_per_endpoint() {
     let path = std::env::temp_dir().join(format!(
-        "herdr-client-shell-prefs-{}.json",
+        "shepherd-client-shell-prefs-{}.json",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&path);

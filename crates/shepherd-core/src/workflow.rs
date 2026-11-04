@@ -1,4 +1,4 @@
-//! First executable workflow slice: schedule persisted subtasks, run coders through Herdr,
+//! First executable workflow slice: schedule persisted subtasks, run coders through Shepherd,
 //! receive MCP results, and checkpoint Go-compatible task status for review-stage continuation.
 
 use crate::{config::{self, available_vendors, load_config, resolve_role}, count_criteria, find_task, load_agent_registry, parse_plan, parse_review, save_agent_registry, save_task_status, schedule_subtasks, spawn::{self, SpawnOptions, SpawnRequest}, terminals::{connect_terminals, Terminals}, validate_plan};
@@ -595,7 +595,7 @@ mod tests {
             agent_id: "coder-1".into(),
             vendor_name: "codex".into(),
             command: "codex".into(),
-            herdr_agent: "codex".into(),
+            shepherd_agent: "codex".into(),
             args: Vec::new(),
             label: "coder".into(),
             env: HashMap::new(),

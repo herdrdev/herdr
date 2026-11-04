@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible bug in herdr.
+description: Report a reproducible bug in shepherd.
 body:
   - type: markdown
     attributes:
@@ -8,7 +8,7 @@ body:
 
         Issues are only for reproducible bugs and maintainer-created or maintainer-converted work items. Feature requests, ideas, questions, contribution proposals, and direction checks belong in [Discussions](https://github.com/herdrdev/herdr/discussions).
 
-        Herdr normally implements accepted reports through maintainer-controlled agents. Filing an issue does not reserve the work or authorize a pull request. Unsolicited implementation pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.
+        Shepherd normally implements accepted reports through maintainer-controlled agents. Filing an issue does not reserve the work or authorize a pull request. Unsolicited implementation pull requests from people who are not listed in `.github/APPROVED_CONTRIBUTORS` are closed automatically.
 
         Keep this short. If it does not fit on one screen, it is too long. Reports over 8,000 characters are closed automatically. Write in your own voice.
 
@@ -63,9 +63,9 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: Herdr version, update channel, operating system, and terminal are required. Shell and relevant config are optional.
+      description: Shepherd version, update channel, operating system, and terminal are required. Shell and relevant config are optional.
       value: |
-        - Herdr version:
+        - Shepherd version:
         - Update channel (stable or preview):
         - Operating system:
         - Terminal:

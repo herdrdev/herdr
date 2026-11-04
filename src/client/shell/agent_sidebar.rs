@@ -806,7 +806,7 @@ mod tests {
     #[test]
     fn test_non_shepherd_agent_blocked_without_marker() {
         let config = test_config(true);
-        // An external/normal agent detected as Blocked by Herdr, but NOT a Shepherd agent (shepherd: None)
+        // An external/normal agent detected as Blocked by Shepherd, but NOT a Shepherd agent (shepherd: None)
         let snapshot = test_snapshot_with_agent(None, crate::api::schema::AgentStatus::Blocked);
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
@@ -823,7 +823,7 @@ mod tests {
     }
 
     #[test]
-    fn test_characterization_normal_herdr_agent_renders_identically() {
+    fn test_characterization_normal_shepherd_agent_renders_identically() {
         let config_disabled = test_config(false);
         let config_enabled = test_config(true);
 
@@ -840,7 +840,7 @@ mod tests {
 
         assert_eq!(
             buf_disabled.content, buf_enabled.content,
-            "Normal Herdr agent must render 100% identically with shepherd_enabled true or false"
+            "Normal Shepherd agent must render 100% identically with shepherd_enabled true or false"
         );
     }
 

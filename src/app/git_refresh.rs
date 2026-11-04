@@ -72,7 +72,7 @@ impl App {
             let jobs = Arc::clone(&jobs);
             let next = Arc::clone(&next);
             let event_tx = self.event_tx.clone();
-            let spawned = crate::thread_spawn::spawn_named("herdr-worktree-check", move || {
+            let spawned = crate::thread_spawn::spawn_named("shepherd-worktree-check", move || {
                 while let Some((workspace_id, expected)) =
                     jobs.get(next.fetch_add(1, Ordering::Relaxed))
                 {
@@ -133,7 +133,7 @@ impl App {
         if self.git_identity_refresh_requested {
             demand.branch = true;
         }
-        let spawned = crate::thread_spawn::spawn_named("herdr-git-refresh", move || {
+        let spawned = crate::thread_spawn::spawn_named("shepherd-git-refresh", move || {
             let output =
                 refresh_workspace_git_statuses_with_cache_and_demand(workspaces, &cache, demand);
             let _ = event_tx.blocking_send(AppEvent::GitStatusRefreshed {
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn git_refresh_deduplicates_workspaces_with_same_cache_key() {
         let repo =
-            std::env::temp_dir().join(format!("herdr-git-refresh-dedupe-{}", std::process::id()));
+            std::env::temp_dir().join(format!("shepherd-git-refresh-dedupe-{}", std::process::id()));
         let nested = repo.join("nested");
         let other = repo.join("other");
         std::fs::create_dir_all(&nested).expect("create nested dir");
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn git_refresh_item_collection_does_not_discover_uncached_cwd() {
         let mut app = test_app(&crate::config::Config::default());
-        let cwd = std::env::temp_dir().join(format!("herdr-uncached-cwd-{}", std::process::id()));
+        let cwd = std::env::temp_dir().join(format!("shepherd-uncached-cwd-{}", std::process::id()));
         let mut ws = Workspace::test_new("test");
         ws.identity_cwd = cwd.clone();
         ws.tabs.clear();
@@ -530,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn restored_workspace_metadata_refresh_runs_once_without_sidebar_git_tokens() {
         let repo =
-            std::env::temp_dir().join(format!("herdr-restored-git-refresh-{}", std::process::id()));
+            std::env::temp_dir().join(format!("shepherd-restored-git-refresh-{}", std::process::id()));
         let nested = repo.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         std::fs::create_dir_all(repo.join(".git/objects")).unwrap();
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn explicit_git_refresh_invalidates_cached_non_git_results() {
         let mut app = test_app(&crate::config::Config::default());
-        let cwd = std::env::temp_dir().join(format!("herdr-git-miss-{}", std::process::id()));
+        let cwd = std::env::temp_dir().join(format!("shepherd-git-miss-{}", std::process::id()));
         std::fs::create_dir_all(&cwd).unwrap();
         let (_, entry) = crate::workspace::git_status_snapshot_for_cwd_with_demand(
             &cwd,

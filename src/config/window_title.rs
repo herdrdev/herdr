@@ -19,7 +19,7 @@ pub(crate) fn sanitize_window_title_text(value: &str) -> Option<String> {
 /// A value the server can substitute into `ui.window_title`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowTitleToken {
-    /// Host the Herdr server runs on.
+    /// Host the Shepherd server runs on.
     Hostname,
     /// Active workspace display name.
     Workspace,
@@ -178,8 +178,8 @@ mod tests {
     #[test]
     fn sanitizes_and_bounds_rendered_titles() {
         assert_eq!(
-            sanitize_window_title_text("  herdr\u{1b} api\u{7}\n  ").as_deref(),
-            Some("herdr api")
+            sanitize_window_title_text("  shepherd\u{1b} api\u{7}\n  ").as_deref(),
+            Some("shepherd api")
         );
         assert_eq!(sanitize_window_title_text("\u{7}\n"), None);
         assert_eq!(

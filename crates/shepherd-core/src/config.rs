@@ -11,8 +11,8 @@ pub struct Config {
     pub roles: HashMap<String, Role>,
     #[serde(default = "SkillsConfig::default")]
     pub skills: SkillsConfig,
-    #[serde(default = "HerdrConfig::default")]
-    pub herdr: HerdrConfig,
+    #[serde(default = "ShepherdConfig::default")]
+    pub shepherd: ShepherdConfig,
     #[serde(default = "WorkflowConfig::default")]
     pub workflow: WorkflowConfig,
     #[serde(default = "Limits::default")]
@@ -35,7 +35,7 @@ pub struct Vendor {
     pub print_args: Vec<String>,
     pub mcp: Mcp,
     pub skills: VendorSkills,
-    pub herdr_agent: String,
+    pub shepherd_agent: String,
     pub disabled: bool,
 }
 
@@ -63,7 +63,7 @@ pub struct SkillsConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
-pub struct HerdrConfig {
+pub struct ShepherdConfig {
     pub backend: String,
     pub session: String,
     pub autostart: bool,
@@ -132,7 +132,7 @@ impl Default for SkillsConfig {
     fn default() -> Self { Self { global: Vec::new(), disabled: Vec::new() } }
 }
 
-impl Default for HerdrConfig {
+impl Default for ShepherdConfig {
     fn default() -> Self { Self { backend: "socket".into(), session: "shepherd".into(), autostart: true } }
 }
 
@@ -145,15 +145,15 @@ impl Default for Config {
         let mut vendors = HashMap::new();
         vendors.insert("claude".into(), Vendor {
             command: "claude".into(), models: vec!["opus".into(), "sonnet".into(), "haiku".into()], default_model: "opus".into(), model_flag: "--model".into(), print_args: vec!["-p".into()],
-            mcp: Mcp { supported: true, style: "claude-config".into() }, skills: VendorSkills { mode: "native".into(), style: "claude-plugin".into(), file: String::new() }, herdr_agent: "claude".into(), ..Vendor::default()
+            mcp: Mcp { supported: true, style: "claude-config".into() }, skills: VendorSkills { mode: "native".into(), style: "claude-plugin".into(), file: String::new() }, shepherd_agent: "claude".into(), ..Vendor::default()
         });
         vendors.insert("codex".into(), Vendor {
             command: "codex".into(), model_flag: "-m".into(), print_args: vec!["exec".into()],
-            mcp: Mcp { supported: true, style: "codex-overrides".into() }, skills: VendorSkills { mode: "instructions".into(), style: "codex-developer".into(), file: String::new() }, herdr_agent: "codex".into(), ..Vendor::default()
+            mcp: Mcp { supported: true, style: "codex-overrides".into() }, skills: VendorSkills { mode: "instructions".into(), style: "codex-developer".into(), file: String::new() }, shepherd_agent: "codex".into(), ..Vendor::default()
         });
         vendors.insert("gemini".into(), Vendor {
             command: "agy".into(), model_flag: "--model".into(), print_args: vec!["-p".into()],
-            skills: VendorSkills { mode: "prompt".into(), ..VendorSkills::default() }, herdr_agent: "agy".into(), ..Vendor::default()
+            skills: VendorSkills { mode: "prompt".into(), ..VendorSkills::default() }, shepherd_agent: "agy".into(), ..Vendor::default()
         });
 
         let mut roles = HashMap::new();
@@ -163,7 +163,7 @@ impl Default for Config {
         roles.insert("docs".into(), Role { vendor: "gemini".into(), skills: words("shepherd-comms docs-lookup"), ..Role::default() });
         roles.insert("tester".into(), Role { vendor: "claude".into(), model: "sonnet".into(), skills: words("shepherd-comms write-tests debug"), ..Role::default() });
 
-        Self { vendors, roles, skills: SkillsConfig::default(), herdr: HerdrConfig::default(), workflow: WorkflowConfig::default(), limits: Limits::default(), general: General::default() }
+        Self { vendors, roles, skills: SkillsConfig::default(), shepherd: ShepherdConfig::default(), workflow: WorkflowConfig::default(), limits: Limits::default(), general: General::default() }
     }
 }
 
@@ -312,8 +312,8 @@ fn executable_on_path(command: &str) -> bool {
 
 pub fn validate(config: &Config) -> Vec<String> {
     let mut issues = Vec::new();
-    if !matches!(config.herdr.backend.as_str(), "" | "socket" | "hc") {
-        issues.push(format!("herdr.backend must be \"socket\" or \"hc\" (got {:?})", config.herdr.backend));
+    if !matches!(config.shepherd.backend.as_str(), "" | "socket" | "hc") {
+        issues.push(format!("shepherd.backend must be \"socket\" or \"hc\" (got {:?})", config.shepherd.backend));
     }
     if config.limits.max_concurrent_agents == 0 { issues.push("limits.max_concurrent_agents must be at least 1".into()); }
     for (name, role) in &config.roles {

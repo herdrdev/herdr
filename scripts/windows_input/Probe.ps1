@@ -5,14 +5,14 @@ $plan = Read-GauntletJson $PlanPath
 Add-Type -Path "$PSScriptRoot/Native.cs"
 $probe = $null
 try {
-    $probe = [HerdrInputGauntlet.ConsoleProbe]::new($plan.mode)
-    [HerdrInputGauntlet.ConsoleProbe]::Print("`r`nHerdr input gauntlet observer $($plan.nonce)`r`n")
+    $probe = [ShepherdInputGauntlet.ConsoleProbe]::new($plan.mode)
+    [ShepherdInputGauntlet.ConsoleProbe]::Print("`r`nShepherd input gauntlet observer $($plan.nonce)`r`n")
     if ($plan.mode -eq 'kitty') {
         $deadline = [DateTime]::UtcNow.AddSeconds(2)
         while (-not $probe.Hex().Contains('1b5b3f3175') -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
     }
     Write-GauntletJson (Join-Path $plan.work 'ready.json') @{
-        nonce = $plan.nonce; pid = $PID; mode = $plan.mode; geometry = [HerdrInputGauntlet.ConsoleProbe]::Geometry()
+        nonce = $plan.nonce; pid = $PID; mode = $plan.mode; geometry = [ShepherdInputGauntlet.ConsoleProbe]::Geometry()
         negotiation_hex = $probe.Hex(); kitty_acknowledged = $probe.Hex().Contains('1b5b3f3175')
     }
     # Negotiation replies are setup evidence, not input for the first case.
@@ -26,11 +26,11 @@ try {
             $last = $request.id
             $quietReached = $false
             if ($request.action -eq 'mouse-on') {
-                [HerdrInputGauntlet.ConsoleProbe]::Print("`e[?1003h`e[?1006h")
+                [ShepherdInputGauntlet.ConsoleProbe]::Print("`e[?1003h`e[?1006h")
                 Start-Sleep -Milliseconds 200
             }
             if ($request.action -eq 'mouse-off') {
-                [HerdrInputGauntlet.ConsoleProbe]::Print("`e[?1003l`e[?1006l")
+                [ShepherdInputGauntlet.ConsoleProbe]::Print("`e[?1003l`e[?1006l")
                 Start-Sleep -Milliseconds 100
             }
             if ($request.action -eq 'set-mode') {
@@ -54,7 +54,7 @@ try {
             Write-GauntletJson (Join-Path $plan.work 'reply.json') @{
                 id = $request.id; nonce = $plan.nonce; action = $request.action
                 hex = $probe.Hex(); records = @($probe.Records()); error = $probe.Error; quiet_reached = $quietReached
-                geometry = [HerdrInputGauntlet.ConsoleProbe]::Geometry()
+                geometry = [ShepherdInputGauntlet.ConsoleProbe]::Geometry()
             }
         }
         Start-Sleep -Milliseconds 25

@@ -1,7 +1,7 @@
 //! Outer terminal window title.
 //!
-//! Herdr is a terminal emulator, so `OSC 0`/`OSC 2` written by a pane stops at
-//! Herdr and never reaches the terminal Herdr itself runs in. Without this the
+//! Shepherd is a terminal emulator, so `OSC 0`/`OSC 2` written by a pane stops at
+//! Shepherd and never reaches the terminal Shepherd itself runs in. Without this the
 //! host window title keeps whatever the shell or `ssh` left behind, which is
 //! what window managers show in tab and group bars.
 //!
@@ -29,8 +29,8 @@ impl App {
                 });
     }
 
-    /// Whether `ui.window_title` asks Herdr to own the outer terminal title at
-    /// all. When it does not, Herdr leaves whatever the shell or `ssh` set.
+    /// Whether `ui.window_title` asks Shepherd to own the outer terminal title at
+    /// all. When it does not, Shepherd leaves whatever the shell or `ssh` set.
     pub(crate) fn window_title_configured(&self) -> bool {
         self.window_title_template.is_some()
     }

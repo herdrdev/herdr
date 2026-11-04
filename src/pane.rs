@@ -98,16 +98,16 @@ where
 }
 
 fn apply_pane_terminal_env(cmd: &mut CommandBuilder) {
-    // Each pane is rendered by herdr's own terminal layer, not the outer terminal
+    // Each pane is rendered by shepherd's own terminal layer, not the outer terminal
     // that launched the app. Advertising the inherited TERM leaks the host terminal
     // identity into shells and across SSH, which breaks redraw and cursor movement
     // when the remote side lacks matching terminfo entries.
     cmd.env("TERM", PANE_TERM);
     cmd.env("COLORTERM", PANE_COLORTERM);
-    cmd.env("TERM_PROGRAM", "herdr");
+    cmd.env("TERM_PROGRAM", "shepherd");
     cmd.env("TERM_PROGRAM_VERSION", crate::build_info::version());
     // fish only skips its own resize repaint for terminals it recognizes as
-    // reflowing. Herdr reflows too, and the competing repaint glues prompt copies.
+    // reflowing. Shepherd reflows too, and the competing repaint glues prompt copies.
     // Match the exact casing: Windows env keys are case-insensitive here, but
     // MSYS/Cygwin fish only reads the lowercase name.
     if !cmd
@@ -199,7 +199,7 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
     for (key, value) in &launch_env.extra {
         cmd.env(key, value);
     }
-    cmd.env(crate::HERDR_ENV_VAR, crate::HERDR_ENV_VALUE);
+    cmd.env(crate::SHEPHERD_ENV_VAR, crate::SHEPHERD_ENV_VALUE);
     crate::integration::apply_pane_base_env(cmd);
     crate::platform::apply_pane_runtime_marker(cmd);
     match &launch_env.identity {
@@ -209,12 +209,12 @@ fn apply_pane_launch_env(cmd: &mut CommandBuilder, launch_env: &PaneLaunchEnv) {
             tab_id,
             pane_id,
         } => {
-            cmd.env(crate::integration::HERDR_WORKSPACE_ID_ENV_VAR, workspace_id);
-            cmd.env(crate::integration::HERDR_TAB_ID_ENV_VAR, tab_id);
-            cmd.env(crate::integration::HERDR_PANE_ID_ENV_VAR, pane_id);
+            cmd.env(crate::integration::SHEPHERD_WORKSPACE_ID_ENV_VAR, workspace_id);
+            cmd.env(crate::integration::SHEPHERD_TAB_ID_ENV_VAR, tab_id);
+            cmd.env(crate::integration::SHEPHERD_PANE_ID_ENV_VAR, pane_id);
         }
         PaneLaunchIdentity::OmitPane => {
-            cmd.env_remove(crate::integration::HERDR_PANE_ID_ENV_VAR);
+            cmd.env_remove(crate::integration::SHEPHERD_PANE_ID_ENV_VAR);
         }
     }
 }
@@ -383,7 +383,7 @@ async fn apply_agent_detection_publish_update(
 const AGENT_MISS_CONFIRMATION_ATTEMPTS: u8 = 6;
 const SELF_REPORTED_AGENT_SHELL_RECHECK: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Herdr cannot identify a self-reported agent's process, so the pane's shell
+/// Shepherd cannot identify a self-reported agent's process, so the pane's shell
 /// returning to an idle prompt is the only sign that the agent exited.
 async fn report_self_reported_agent_shell_return(
     active: &AtomicBool,
@@ -1964,7 +1964,7 @@ fn is_windows_executable_file_for_host(path: &std::path::Path, native_machine: u
 /// Whether a Windows host can launch a given `IMAGE_FILE_MACHINE_*` image.
 /// A native host runs its own architecture; ARM64 Windows also runs x64 and
 /// x86 through emulation, and x64 Windows runs x86 through WOW64. An unknown
-/// host (detection failed) is treated as the x64 build Herdr ships.
+/// host (detection failed) is treated as the x64 build Shepherd ships.
 #[cfg(any(windows, test))]
 fn windows_executable_machine_is_compatible(machine: u16, native_machine: u16) -> bool {
     const MACHINE_I386: u16 = 0x014c;
@@ -2094,7 +2094,7 @@ fn resolve_shell_for_login_mode(shell: &str) -> io::Result<String> {
 /// The original prompt must be invoked before any other statement in the
 /// wrapper: anything that runs first resets `$?`, so a status-aware user
 /// prompt would show success after a failed command (verified on 5.1).
-pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__HerdrOriginalPrompt) { $global:__HerdrOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__HerdrOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
+pub(crate) const WINDOWS_POWERSHELL_SHELL_INTEGRATION_COMMAND: &str = r"if ($null -eq $global:__ShepherdOriginalPrompt) { $global:__ShepherdOriginalPrompt = $function:prompt; function global:prompt { $out = @(& $global:__ShepherdOriginalPrompt) -join ' '; $loc = $ExecutionContext.SessionState.Path.CurrentLocation; if ($loc.Provider.Name -eq 'FileSystem') { try { [Environment]::CurrentDirectory = $loc.ProviderPath } catch {}; $esc = [string][char]27; $out += $esc + ']9;9;' + $loc.ProviderPath + $esc + '\' }; $out } }";
 
 /// Login flags appended when launching POSIX-style shells on Windows.
 ///
@@ -4395,7 +4395,7 @@ mod tests {
         for key in keys {
             assert!(cmd.get_env(key).is_none(), "{key} must not leak into panes");
         }
-        assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("herdr")));
+        assert_eq!(cmd.get_env("TERM_PROGRAM"), Some(OsStr::new("shepherd")));
         assert_eq!(
             cmd.get_env("TERM_PROGRAM_VERSION"),
             Some(OsStr::new(&crate::build_info::version()))
@@ -4403,7 +4403,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_terminal_env_tells_fish_that_herdr_reflows() {
+    fn pane_terminal_env_tells_fish_that_shepherd_reflows() {
         let mut cmd = CommandBuilder::new("shell");
         cmd.env_remove(FISH_HANDLE_REFLOW_ENV_VAR);
         apply_pane_terminal_env(&mut cmd);
@@ -4475,7 +4475,7 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         let cwd = std::env::temp_dir().join(format!(
-            "herdr-reported-cwd-cache-{}-{stamp}",
+            "shepherd-reported-cwd-cache-{}-{stamp}",
             std::process::id()
         ));
         std::fs::create_dir(&cwd).expect("create reported cwd");
@@ -4504,7 +4504,7 @@ mod tests {
             .expect("clock should be after unix epoch")
             .as_nanos();
         let base = std::env::temp_dir().join(format!(
-            "herdr-process-cwd-no-stat-{}-{stamp}",
+            "shepherd-process-cwd-no-stat-{}-{stamp}",
             std::process::id()
         ));
         let private = base.join("private");
@@ -4580,7 +4580,7 @@ mod tests {
             })
             .unwrap();
         let output_path = std::env::temp_dir().join(format!(
-            "herdr-pane-term-test-{}-{}.txt",
+            "shepherd-pane-term-test-{}-{}.txt",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -4676,7 +4676,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_prefers_pwsh_on_path() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-pwsh-{}",
+            "shepherd-windows-default-shell-pwsh-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4695,7 +4695,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_falls_back_to_inbox_powershell() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-fallback-{}",
+            "shepherd-windows-default-shell-fallback-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4713,7 +4713,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_rejects_non_executable_pe_images() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-invalid-{}",
+            "shepherd-windows-default-shell-invalid-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4794,7 +4794,7 @@ mod tests {
     #[test]
     fn windows_executable_file_rejects_arm64_image_on_amd64_host() {
         let dir = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-arm64-{}",
+            "shepherd-windows-default-shell-arm64-{}",
             std::process::id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
@@ -4814,7 +4814,7 @@ mod tests {
     #[test]
     fn windows_default_pane_shell_skips_invalid_pwsh_candidates() {
         let base = std::env::temp_dir().join(format!(
-            "herdr-windows-default-shell-skip-{}",
+            "shepherd-windows-default-shell-skip-{}",
             std::process::id()
         ));
         let invalid_dir = base.join("invalid");
@@ -5049,11 +5049,11 @@ mod tests {
         let osc_report = script.find("]9;9;").expect("wrapper must emit OSC 9;9");
         assert!(cwd_sync < osc_report, "cwd sync must precede OSC report");
         assert!(
-            script.contains("$global:__HerdrOriginalPrompt = $function:prompt"),
+            script.contains("$global:__ShepherdOriginalPrompt = $function:prompt"),
             "must wrap the profile-defined prompt: {script}"
         );
         assert!(
-            script.contains("$null -eq $global:__HerdrOriginalPrompt"),
+            script.contains("$null -eq $global:__ShepherdOriginalPrompt"),
             "wrap must be idempotent for nested sessions: {script}"
         );
         assert!(
@@ -5065,7 +5065,7 @@ mod tests {
             "double quotes corrupt the powershell.exe command-line round-trip: {script}"
         );
         let invoke_original = script
-            .find("@(& $global:__HerdrOriginalPrompt)")
+            .find("@(& $global:__ShepherdOriginalPrompt)")
             .expect("wrapper must invoke the original prompt");
         let cwd_lookup = script
             .find("$loc =")
@@ -5132,7 +5132,7 @@ mod tests {
     fn login_shell_builder_rejects_missing_shell_instead_of_falling_back() {
         let err = pane_shell_command_builder_for_target(
             PaneShellConfig::new(
-                "/__herdr_missing_shell__",
+                "/__shepherd_missing_shell__",
                 crate::config::ShellModeConfig::Login,
             ),
             ShellLaunchTarget::OtherUnix,
@@ -5146,7 +5146,7 @@ mod tests {
     fn login_shell_builder_resolves_bare_shell_names_from_path() {
         let _lock = crate::integration::integration_env_lock();
         let base = std::env::temp_dir().join(format!(
-            "herdr-login-shell-path-{}-{}",
+            "shepherd-login-shell-path-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -6593,7 +6593,7 @@ mod tests {
     #[tokio::test]
     async fn spawned_pane_process_sees_fish_handle_reflow() {
         let output_dir = std::env::temp_dir().join(format!(
-            "herdr-fish-handle-reflow-test-{}-{}",
+            "shepherd-fish-handle-reflow-test-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -6687,7 +6687,7 @@ mod tests {
 
         tx.try_send(AppEvent::UpdateReady {
             version: "9.9.9".into(),
-            install_command: "herdr update".into(),
+            install_command: "shepherd update".into(),
         })
         .unwrap();
 

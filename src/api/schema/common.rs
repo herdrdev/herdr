@@ -127,7 +127,7 @@ crate::cli::projection::cli_params! {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub body: Option<String> => notification_cli::body(),
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub position: Option<crate::config::ToastHerdrPosition> => notification_cli::position(),
+        pub position: Option<crate::config::ToastShepherdPosition> => notification_cli::position(),
         #[serde(default, skip_serializing_if = "NotificationShowSound::is_none")]
         pub sound: NotificationShowSound => notification_cli::sound(),
     }
@@ -136,13 +136,13 @@ crate::cli::projection::cli_params! {
 mod notification_cli {
     use super::NotificationShowSound;
     use crate::cli::projection::{Field, Input, ParseError};
-    use crate::config::ToastHerdrPosition;
+    use crate::config::ToastShepherdPosition;
 
-    const POSITIONS: [(&str, ToastHerdrPosition); 4] = [
-        ("top-left", ToastHerdrPosition::TopLeft),
-        ("top-right", ToastHerdrPosition::TopRight),
-        ("bottom-left", ToastHerdrPosition::BottomLeft),
-        ("bottom-right", ToastHerdrPosition::BottomRight),
+    const POSITIONS: [(&str, ToastShepherdPosition); 4] = [
+        ("top-left", ToastShepherdPosition::TopLeft),
+        ("top-right", ToastShepherdPosition::TopRight),
+        ("bottom-left", ToastShepherdPosition::BottomLeft),
+        ("bottom-right", ToastShepherdPosition::BottomRight),
     ];
     const SOUNDS: [(&str, NotificationShowSound); 3] = [
         ("none", NotificationShowSound::None),
@@ -166,7 +166,7 @@ mod notification_cli {
             .input(crate::cli::workspace_bindings::optional_text("body", "TEXT").order(0))
     }
 
-    pub(super) fn position() -> Field<Option<ToastHerdrPosition>> {
+    pub(super) fn position() -> Field<Option<ToastShepherdPosition>> {
         Field::new(None).input(Input::value("position", "POSITION", |slot, value| {
             *slot = Some(POSITIONS.iter().find(|(name, _)| *name == value).map(|(_, value)| *value)
                 .ok_or_else(|| ParseError::Usage(format!("invalid position: {value} (expected top-left, top-right, bottom-left, or bottom-right)")))?);

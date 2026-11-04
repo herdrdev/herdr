@@ -25,10 +25,10 @@ jobs:
     steps:
       - name: Trigger Cloudflare Pages build
         env:
-          DEPLOY_HOOK: ${{ secrets.HERDR_WEBSITE_DEPLOY_HOOK }}
+          DEPLOY_HOOK: ${{ secrets.SHEPHERD_WEBSITE_DEPLOY_HOOK }}
         run: |
           if [ -z "$DEPLOY_HOOK" ]; then
-            echo "::error::HERDR_WEBSITE_DEPLOY_HOOK is not configured"
+            echo "::error::SHEPHERD_WEBSITE_DEPLOY_HOOK is not configured"
             exit 1
           fi
           curl -fsS -X POST "$DEPLOY_HOOK" > /dev/null
