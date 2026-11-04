@@ -1902,3 +1902,17 @@ Decisiones del dueño: alcance en **4 fases**; definiciones en **proyecto + glob
 | F8d | Ejecutor: lanza los agentes del patrón (por herdr), conecta sus tópicos, vista de eventos en vivo y control (pausa, reproducción) | F8b, F8c |
 
 Orden de trabajo: F6b → F7 → F8a → F8b → F8c → F8d. Cada fase con brief, agente `gemini-3.8-flash-high` (reutilizado con `/clear`), revisión y verificación aislada; la prueba con agentes reales de claude y codex al cerrar F8d.
+
+## Prueba real con claude + codex: F6, F6b y F7 juntos (2026-11-04)
+
+Sesión aislada (`SHF_HOME=$HOME` solo para credenciales), origen bare local `/tmp/shfiso/bare` y un `gh` falso en el `PATH` del servidor que solo registra argumentos. `brain` y `reviewer` en `claude haiku`, `coder` en `codex`. Tarea 1: «crear `hello.txt` con el texto exacto `hello from shepherd`». `shepherd run 1` devolvió `accepted` al instante (F6: el servicio ya no se cuelga).
+
+Resultado de punta a punta con agentes reales:
+- **F6b**: el plan del brain llevaba `- **Verify:** ...` en Markdown; esta vez el parser lo entendió y el run no se detuvo en `needs-human`.
+- `brain-1` (claude) planeó, `coder-1` (codex) implementó y commiteó tras el permiso humano de codex, `reviewer-1` (claude) aprobó, checks pasados.
+- **F6**: `runs list` mostró `pending_gate: {"kind":"push_pr","subtask":1}`; `shepherd approve 1 1 --json` empujó la rama `shep/2-implement-plan-subtask-1-create-hello-tx` al bare local (commit `chore: add hello file`, `hello.txt` de 19 bytes), llamó al `gh` falso con `pr create --base master --head … --draft` y el cuerpo del PR, y la subtarea pasó a `pr`; el run quedó `done [1,1]`. El overlay (Runs) mostró `[TERMINADO] subtareas:1/1` y la pestaña Git el worktree del coder limpio asociado a `coder-1`.
+- **F7**: primer prompt y reconciliación por eventos funcionaron con agentes reales (los tres arrancaron y avanzaron sin diálogos propios de Shepherd).
+
+No cubierto: la entrega de mensajes por `agent.prompt` a un agente **sin MCP** (todos los agentes de esta prueba tenían MCP); el rechazo (`reject`) con agentes reales (cubierto solo con el repo simulado de F6); la notificación nativa `notification.show`; la columna PR de la pestaña Git (el `gh` falso no devuelve JSON).
+
+Observaciones: los agentes reales llamaron a `gh auth token` y alcanzaron el `gh` falso (efecto de heredar el `PATH` del servidor; no afecta a un entorno normal). El plan del brain decía que `wc -c` debía dar 21 para un texto de 19 bytes: error del modelo, no de Shepherd. El worktree del coder se creó bajo `$HOME/.shepherd/worktrees/` y se eliminó a mano.
