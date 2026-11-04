@@ -690,3 +690,85 @@ Fallos observados:
 3. La llamada `spawn` tarda más de 20 s en responder (espera la verificación del primer prompt, que depende de que el humano acepte la confianza); el overlay la despacha en segundo plano, pero conviene que devuelva el agente enseguida y que el estado avance por el registro.
 
 Sin probar: lanzar el agente desde el formulario del TUI (solo por API), runs y gates reales, ratón en el overlay.
+
+## Estado F3f (2026-11-04)
+
+Corrección de la creación de worktrees con `base` vacío y visualización permanente del marcador de estado `[estado]` en la barra lateral con etiquetas largas, mediante TDD y verificación real con `./scripts/shepherd-iso.sh`.
+
+### Lo hecho
+
+1. **Creación de worktree con `base` omitido o vacío (`crates/shepherd-core` y `src/app/api/worktrees`)**:
+   - En `crates/shepherd-core/src/terminals.rs`, se cambió `WorktreeSpec.base` a `Option<String>`, adaptando `create_git_worktree` y `herdr_open_agent`.
+   - En `crates/shepherd-core/src/spawn.rs` (línea ~295) y `crates/shepherd-core/src/service.rs` (línea ~1053), cuando `workflow.base_branch` está vacío (o solo espacios), `base` se asigna como `None`. Si está configurado, se preserva como `Some(base_branch)`.
+   - En `crates/shepherd-core/src/herdr.rs`, `HerdrClient::create_worktree` acepta `base: Option<&str>` y omite la clave `"base"` del payload JSON cuando es `None` o una cadena vacía.
+   - En `src/app/api/worktrees/deferred.rs`, se protege la API de Herdr contra referencias vacías: `params.base.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "HEAD".into())`, garantizando que si un cliente envía `"base": ""` se use `HEAD` en vez de fallar con `worktree_create_failed: fatal: invalid reference:`.
+   - Tests añadidos en el crate:
+     - `herdr::tests::create_worktree_omits_base_when_empty_or_none`: comprueba que `create_worktree` no envía `"base"` cuando es `None`, `""` o espacios en blanco, y sí lo envía cuando es un nombre válido.
+     - `spawn::tests::spawn_uses_terminals_trait_and_enforces_can_spawn_and_depth_limits`: comprueba que el fake `InMemoryTerminals` recibe la petición con `base: None`.
+     - `spawn::tests::spawn_with_configured_base_branch_passes_base_to_terminals`: comprueba que cuando `base_branch` está configurado (`develop`), el fake recibe `base: Some("develop")`.
+     - `app::api::worktrees::tests::api_worktree_create_with_empty_base_defaults_to_head`: test asíncrono de API en Herdr que verifica que `worktree.create` con `base: ""` tiene éxito y ramifica desde `HEAD`.
+
+2. **Marcador `[estado]` visible con etiquetas largas (`src/client/shell/agent_sidebar.rs`)**:
+   - En `render_agent_row`, para la primera línea (`index == 0`), se pre-calcula la anchura necesaria para el marcador de estado de Shepherd (`shepherd_marker` y `marker_width` para `[working]`, `[NEEDS YOU]`, etc.).
+   - Se descuenta `marker_width` del ancho disponible para tokens (`max_token_width = (rect.width as usize).saturating_sub(indent).saturating_sub(marker_width)`).
+   - De este modo, `crate::ui::resolved_token_spans` trunca automáticamente las etiquetas largas con «…» dejando espacio exacto para que el marcador de estado quepa en la primera línea sin desbordar ni cortarse.
+   - Para agentes normales de Herdr (sin `shepherd` o con `shepherd.enabled = false`), `marker_width` es 0 y se preserva el comportamiento 100% idéntico al original celda a celda (test de caracterización en verde).
+   - Tests añadidos en `agent_sidebar.rs`:
+     - `test_shepherd_agent_with_long_label_keeps_marker_visible`: con etiqueta real `repo · coder·gemini·crea-un-archivo-` en sidebar de 25 columnas, comprueba que la etiqueta se trunca con `…` y `[working]` se dibuja completo.
+     - `test_shepherd_agent_with_long_label_blocked_keeps_needs_you_visible`: ídem para estado bloqueado, comprobando que `[NEEDS YOU]` permanece visible.
+
+### Comprobaciones reales con `./scripts/shepherd-iso.sh` (capturas de pantalla)
+
+#### 1. Creación de worktree real por API (`worktree.create`)
+En la sesión aislada sobre `/tmp/shfiso/repo`:
+- Llamada sin `base`:
+  `./scripts/shepherd-iso.sh call worktree.create '{"cwd":"/tmp/shfiso/repo","branch":"shep/1-f3f-verify","label":"f3f-verify","focus":false}'`
+  Respuesta: `{"type":"worktree_created", ... "worktree":{"branch":"shep/1-f3f-verify", ...}}` (éxito total).
+- Llamada con `base: ""`:
+  `./scripts/shepherd-iso.sh call worktree.create '{"cwd":"/tmp/shfiso/repo","branch":"shep/2-test-empty-base","base":"","label":"test-empty","focus":false}'`
+  Respuesta: `{"type":"worktree_created", ...}` (éxito total, usa `HEAD` sin error de referencia inválida).
+
+#### 2. Marcador `[estado]` visible con etiqueta larga en la barra lateral
+Sembrado un agente de Shepherd con estado `working` en `w1:p1` y renombrada la pestaña y el pane con la etiqueta real `coder·gemini·crea-un-archivo-`.
+Captura de pantalla (`./scripts/shepherd-iso.sh screen`):
+
+```text
+ spaces                     │  coder·gemini·crea-un-archivo-    +
+                            │apolo@apolo:/tmp/shfiso/repo$
+ ● repo                    ▾│
+   master                   │
+   └─ · f3f-verify          │
+                            │
+ new                    menu│
+────────────────────────────│
+ agents              grouped│
+                            │
+ ● repo · coder·g… [working]│
+   gemini                   │
+```
+
+El marcador `[working]` se muestra completo y visible a la derecha, mientras que la etiqueta larga se ajusta elegantemente con elipsis `repo · coder·g…` en el ancho estándar del sidebar (25 cols).
+
+### Archivos de herdr y shepherd-core tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/terminals.rs` | Modificación | `WorktreeSpec.base: Option<String>`; paso de `wt.base.as_deref()` en `herdr_open_agent`; filtro en `create_git_worktree`; actualización de fixtures en tests. |
+| `crates/shepherd-core/src/spawn.rs` | Modificación | Asignación de `base: None` cuando `base_branch` está vacío en `spawn_in_terminals`; tests unitarios con `InMemoryTerminals`. |
+| `crates/shepherd-core/src/service.rs` | Modificación | Asignación de `base: None` cuando `base_branch` está vacío en orquestación de agentes. |
+| `crates/shepherd-core/src/herdr.rs` | Modificación | `create_worktree` acepta `Option<&str>` y omite la clave `"base"` del JSON si está vacía; test `create_worktree_omits_base_when_empty_or_none`. |
+| `src/app/api/worktrees/deferred.rs` | Modificación | Fallback defensivo en `start_api_worktree_create`: `base.filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "HEAD".into())`. |
+| `src/app/api/worktrees.rs` | Modificación (test) | Test `api_worktree_create_with_empty_base_defaults_to_head`. |
+| `src/client/shell/agent_sidebar.rs` | Modificación | Reserva de espacio para `shepherd_marker` en `render_agent_row` permitiendo truncado de etiquetas largas con `…`; tests de render con etiqueta real para `[working]` y `[NEEDS YOU]`. |
+
+### Qué NO queda conectado (explícito)
+
+1. **Lanzamiento interactivo de agentes reales en este entorno**:
+   - No se lanzaron agentes reales (p. ej. `agy` con LLMs externos) por directiva del brief (no hay quién conteste diálogos interactivos de permisos); se probó a nivel de API, runtime de worktrees y TUI en sesión aislada.
+2. **Optimizaciones de latencia en la llamada `spawn`**:
+   - El fallo 3 observado en la prueba con agente real (spawn tarda >20 s si espera la aceptación interactiva del diálogo de permisos) sigue pendiente para la fase correspondiente (F3g / F4).
+
+
+### Nota del revisor (F3f)
+
+Repetido por el revisor: `worktree.create` con `base` omitido y con `base: ""` crea el worktree en la sesión aislada; tests en verde (`shepherd-core` 65, `client::shell` 391, `shepherd::` 47, `protocol::` 156, `server::` 318, `app::api::worktrees` 33). Cambio en herdr no previsto por el encargo: `src/app/api/worktrees/deferred.rs` trata `base` vacío como `HEAD` (endurecimiento de la API; anotado entre los archivos de herdr modificados).

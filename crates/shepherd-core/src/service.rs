@@ -1050,9 +1050,11 @@ impl OrchestrationService {
             } else {
                 format!("shep/{}-{suffix}", agent.seq)
             };
+            let base = (!project_cfg.workflow.base_branch.trim().is_empty())
+                .then(|| project_cfg.workflow.base_branch.clone());
             Some(WorktreeSpec {
                 branch,
-                base: project_cfg.workflow.base_branch.clone(),
+                base,
             })
         } else {
             None

@@ -177,8 +177,23 @@ impl HerdrClient {
         self.call("tab.create", serde_json::json!({"workspace_id":workspace_id,"cwd":cwd,"label":label,"focus":false,"env":env}))
     }
 
-    pub fn create_worktree(&self, cwd: &str, branch: &str, base: &str, label: &str) -> Result<Value, HerdrError> {
-        self.call("worktree.create", serde_json::json!({"cwd":cwd,"branch":branch,"base":base,"label":label,"focus":false}))
+    pub fn create_worktree(
+        &self,
+        cwd: &str,
+        branch: &str,
+        base: Option<&str>,
+        label: &str,
+    ) -> Result<Value, HerdrError> {
+        let mut params = serde_json::json!({
+            "cwd": cwd,
+            "branch": branch,
+            "label": label,
+            "focus": false,
+        });
+        if let Some(base) = base.filter(|s| !s.trim().is_empty()) {
+            params["base"] = serde_json::Value::String(base.to_owned());
+        }
+        self.call("worktree.create", params)
     }
 
     pub fn start_agent(&self, pane_id: &str, name: &str, kind: &str, args: &[String]) -> Result<Value, HerdrError> {
@@ -346,5 +361,29 @@ mod tests {
         assert_eq!(result["version"], "test");
         server.join().unwrap();
         let _ = std::fs::remove_file(socket);
+    }
+
+    #[test]
+    fn create_worktree_omits_base_when_empty_or_none() {
+        let client = HerdrClient::in_process(|method, params| {
+            assert_eq!(method, "worktree.create");
+            Ok(serde_json::json!({
+                "received_params": params,
+            }))
+        });
+        let res_none = client.create_worktree("/repo", "shep/1", None, "label").unwrap();
+        assert_eq!(res_none["received_params"].get("base"), None);
+        assert_eq!(res_none["received_params"]["branch"], "shep/1");
+        assert_eq!(res_none["received_params"]["cwd"], "/repo");
+        assert_eq!(res_none["received_params"]["label"], "label");
+
+        let res_empty = client.create_worktree("/repo", "shep/1", Some(""), "label").unwrap();
+        assert_eq!(res_empty["received_params"].get("base"), None);
+
+        let res_whitespace = client.create_worktree("/repo", "shep/1", Some("   "), "label").unwrap();
+        assert_eq!(res_whitespace["received_params"].get("base"), None);
+
+        let res_base = client.create_worktree("/repo", "shep/1", Some("develop"), "label").unwrap();
+        assert_eq!(res_base["received_params"]["base"], "develop");
     }
 }

@@ -292,9 +292,13 @@ fn spawn_in_terminals(
         }
         (wt_path, None, Some(wt.to_owned()))
     } else {
-        let wt = config.roles[&request.role].worktree.then(|| WorktreeSpec {
-            branch: format!("shep/{}-{}", agent.seq, task_slug(&request.task)),
-            base: config.workflow.base_branch.clone(),
+        let wt = config.roles[&request.role].worktree.then(|| {
+            let base = (!config.workflow.base_branch.trim().is_empty())
+                .then(|| config.workflow.base_branch.clone());
+            WorktreeSpec {
+                branch: format!("shep/{}-{}", agent.seq, task_slug(&request.task)),
+                base,
+            }
         });
         (request.root.clone(), wt, None)
     };
@@ -571,6 +575,18 @@ mod tests {
         assert_eq!(coder.agent.depth, 1);
         assert_eq!(coder.agent.branch, "shep/2-implement-feature");
 
+        // The fake Terminals receives the open agent request without an empty base (base is None)
+        let opened = terminals.opened();
+        assert_eq!(opened.len(), 2);
+        assert_eq!(opened[0].worktree, None);
+        assert_eq!(
+            opened[1].worktree,
+            Some(WorktreeSpec {
+                branch: "shep/2-implement-feature".into(),
+                base: None,
+            })
+        );
+
         // Coder role has can_spawn: false, so spawning a child from coder must fail
         let denied = spawn_with_options(
             SpawnRequest {
@@ -591,6 +607,55 @@ mod tests {
         );
         assert!(denied.is_err());
         assert!(denied.unwrap_err().to_string().contains("can_spawn: false"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn spawn_with_configured_base_branch_passes_base_to_terminals() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shepherd-spawn-base-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(root.join(".shepherd")).unwrap();
+        std::fs::write(
+            root.join(".shepherd/config.yaml"),
+            "workflow:\n  base_branch: develop\n",
+        )
+        .unwrap();
+        let registry_path = root.join("agents.json");
+        let terminals = InMemoryTerminals::new();
+        let active = vec!["claude".to_owned(), "codex".to_owned(), "gemini".to_owned()];
+
+        let coder = spawn_with_options(
+            SpawnRequest {
+                root: root.clone(),
+                role: "coder".into(),
+                task: "Feature on develop".into(),
+                task_id: None,
+                vendor: None,
+                model: None,
+                mcp_url: None,
+            },
+            SpawnOptions {
+                parent_id: None,
+                registry_path: Some(registry_path),
+                active_vendors: Some(active),
+                terminals: &terminals,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(coder.agent.id, "coder-1");
+        let opened = terminals.opened();
+        assert_eq!(
+            opened[0].worktree,
+            Some(WorktreeSpec {
+                branch: "shep/1-feature-on-develop".into(),
+                base: Some("develop".into()),
+            })
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -59,7 +59,7 @@ impl From<HerdrError> for TerminalError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorktreeSpec {
     pub branch: String,
-    pub base: String,
+    pub base: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -398,7 +398,7 @@ fn herdr_open_agent(
         let created = client.create_worktree(
             &request.root.display().to_string(),
             &wt.branch,
-            &wt.base,
+            wt.base.as_deref(),
             &request.label,
         )?;
         workspace_id = nested_string(&created, &["workspace", "workspace_id"])?;
@@ -721,8 +721,8 @@ fn create_git_worktree(root: &Path, spec: &WorktreeSpec) -> Result<PathBuf, Term
             spec.branch.clone(),
             path.display().to_string(),
         ];
-        if !spec.base.trim().is_empty() {
-            args.push(spec.base.clone());
+        if let Some(base) = spec.base.as_deref().filter(|s| !s.trim().is_empty()) {
+            args.push(base.to_owned());
         }
         let output = Command::new("git").args(&args).current_dir(root).output()?;
         if !output.status.success() {
@@ -1430,7 +1430,7 @@ mod tests {
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
                 worktree: Some(WorktreeSpec {
                     branch: "shep/1-task".into(),
-                    base: "main".into(),
+                    base: Some("main".into()),
                 }),
             })
             .unwrap();
@@ -1514,7 +1514,7 @@ mod tests {
                 env: HashMap::from([("SHEP_AGENT_ID".into(), "coder-1".into())]),
                 worktree: Some(WorktreeSpec {
                     branch: "shep/1-task".into(),
-                    base: "main".into(),
+                    base: Some("main".into()),
                 }),
             })
             .unwrap();

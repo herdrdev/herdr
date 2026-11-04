@@ -530,6 +530,31 @@ pub(super) fn render_agent_row(
     };
     for (index, tokens) in rows.iter().take(rect.height as usize).enumerate() {
         let indent = if index == 0 { 1 } else { 3 };
+        let shepherd_marker = if config.shepherd_enabled && index == 0 {
+            if row.needs_you {
+                Some((
+                    " [NEEDS YOU]".to_string(),
+                    Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
+                ))
+            } else if let Some(ref state) = row.shepherd_state {
+                Some((
+                    format!(" [{state}]"),
+                    status_style.add_modifier(Modifier::DIM),
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let marker_width = shepherd_marker
+            .as_ref()
+            .map(|(text, _)| unicode_width::UnicodeWidthStr::width(text.as_str()))
+            .unwrap_or(0);
+        let max_token_width = (rect.width as usize)
+            .saturating_sub(indent)
+            .saturating_sub(marker_width);
+
         let mut spans = vec![ratatui::text::Span::raw(" ".repeat(indent))];
         spans.extend(crate::ui::resolved_token_spans(
             tokens,
@@ -539,19 +564,11 @@ pub(super) fn render_agent_row(
             secondary,
             secondary,
             palette,
-            rect.width.saturating_sub(indent as u16) as usize,
+            max_token_width,
         ));
         if config.shepherd_enabled && index == 0 {
-            if row.needs_you {
-                spans.push(ratatui::text::Span::styled(
-                    " [NEEDS YOU]",
-                    Style::default().fg(palette.red).add_modifier(Modifier::BOLD),
-                ));
-            } else if let Some(ref state) = row.shepherd_state {
-                spans.push(ratatui::text::Span::styled(
-                    format!(" [{state}]"),
-                    status_style.add_modifier(Modifier::DIM),
-                ));
+            if let Some((marker_text, marker_style)) = shepherd_marker {
+                spans.push(ratatui::text::Span::styled(marker_text, marker_style));
             }
             if rect.height <= rows.len() as u16 {
                 if let Some(ref notice) = row.notice {
@@ -878,5 +895,70 @@ mod tests {
             let mut buffer = Buffer::empty(area);
             render_agent_row(&mut buffer, area, &row, &config);
         }
+    }
+
+    #[test]
+    fn test_shepherd_agent_with_long_label_keeps_marker_visible() {
+        let config = test_config(true);
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "working".into(),
+            notice: None,
+        };
+        let mut snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Working);
+        snapshot.workspaces[0].label = "repo".into();
+        snapshot.tabs[0].label = "coder·gemini·crea-un-archivo-".into();
+        snapshot.tabs[0].custom_label = true;
+
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        // Typical sidebar width: 25 columns
+        let area = Rect::new(0, 0, 25, 2);
+        let mut buffer = Buffer::empty(area);
+        render_agent_row(&mut buffer, area, &row, &config);
+
+        let text = buffer_text(&buffer, area);
+        let first_line = text.lines().next().unwrap_or("");
+        assert!(
+            first_line.contains("[working]"),
+            "Expected first line to contain '[working]', but got: '{first_line}'"
+        );
+        assert!(
+            first_line.contains('…'),
+            "Expected long label to be truncated with '…' to reserve space for marker, got: '{first_line}'"
+        );
+    }
+
+    #[test]
+    fn test_shepherd_agent_with_long_label_blocked_keeps_needs_you_visible() {
+        let config = test_config(true);
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "blocked".into(),
+            notice: None,
+        };
+        let mut snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        snapshot.workspaces[0].label = "repo".into();
+        snapshot.tabs[0].label = "coder·gemini·crea-un-archivo-".into();
+        snapshot.tabs[0].custom_label = true;
+
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        let area = Rect::new(0, 0, 25, 2);
+        let mut buffer = Buffer::empty(area);
+        render_agent_row(&mut buffer, area, &row, &config);
+
+        let text = buffer_text(&buffer, area);
+        let first_line = text.lines().next().unwrap_or("");
+        assert!(
+            first_line.contains("[NEEDS YOU]"),
+            "Expected first line to contain '[NEEDS YOU]', but got: '{first_line}'"
+        );
+        assert!(
+            first_line.contains('…'),
+            "Expected long label to be truncated with '…' to reserve space for marker, got: '{first_line}'"
+        );
     }
 }
