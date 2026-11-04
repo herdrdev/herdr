@@ -350,9 +350,9 @@ impl ClientShellState {
             .as_deref()
             .map(std::path::Path::new)
             .map(crate::workspace::derive_label_from_cwd)
-            .unwrap_or_else(|| "workspace".to_owned());
+            .unwrap_or_else(|| "espaço".to_owned());
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "new workspace",
+            title: "novo espaço",
             input: TextEditor::new(&suggested_name, true),
             target: ClientRenameTarget::NewWorkspace {
                 source_workspace_id,
@@ -377,7 +377,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename workspace",
+            title: "renomear espaço",
             input: TextEditor::new(&workspace.label, false),
             target: ClientRenameTarget::Workspace { workspace_id },
         }));
@@ -398,7 +398,7 @@ impl ClientShellState {
             + 1)
         .to_string();
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "new tab",
+            title: "nova aba",
             input: TextEditor::new(&default_name, true),
             target: ClientRenameTarget::NewTab {
                 workspace_id,
@@ -418,7 +418,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename tab",
+            title: "renomear aba",
             input: TextEditor::new(&tab.label, false),
             target: ClientRenameTarget::Tab {
                 tab_id: tab.tab_id.clone(),
@@ -439,7 +439,7 @@ impl ClientShellState {
             return;
         };
         self.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-            title: "rename pane",
+            title: "renomear painel",
             input: TextEditor::new(
                 pane.label.as_deref().unwrap_or_default(),
                 pane.label.is_none(),
@@ -457,6 +457,12 @@ impl ClientShellState {
         match self.overlay.as_mut() {
             Some(ClientShellOverlay::Rename(rename)) => {
                 rename.input.insert(text);
+                true
+            }
+            Some(ClientShellOverlay::Settings(settings))
+                if settings.section == ClientSettingsSection::Usuario =>
+            {
+                settings.nome.insert(text);
                 true
             }
             Some(ClientShellOverlay::Help(help)) if help.search_focused => {
@@ -1108,7 +1114,7 @@ impl ClientShellState {
                 })
             {
                 self.receive_endpoint_unavailable(
-                    "Close target changed; try closing it again".into(),
+                    "O item a fechar mudou; tente fechá-lo novamente".into(),
                 );
                 return;
             }
@@ -1200,12 +1206,12 @@ impl ClientShellState {
             })
             .sum::<usize>();
         let panes = if pane_count == 1 {
-            "1 pane".to_owned()
+            "1 painel".to_owned()
         } else {
-            format!("{pane_count} panes")
+            format!("{pane_count} painéis")
         };
         let scope = if closes_group {
-            format!("{} workspaces, {panes}", group.len())
+            format!("{} espaços, {panes}", group.len())
         } else {
             panes
         };
@@ -1215,9 +1221,9 @@ impl ClientShellState {
                 close_group: closes_group,
                 tab_target,
                 title: if closes_group {
-                    "Close worktree group?".to_owned()
+                    "Fechar grupo de cópias?".to_owned()
                 } else {
-                    "Close workspace?".to_owned()
+                    "Fechar espaço?".to_owned()
                 },
                 detail: format!("{} — {scope}", workspace.label),
             },

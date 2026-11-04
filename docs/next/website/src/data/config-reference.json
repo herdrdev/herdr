@@ -43,7 +43,7 @@
         {
           "key": "theme.name",
           "type": "string",
-          "default": "\"catppuccin\"",
+          "default": "\"pretorian\"",
           "description": "Built-in theme name."
         },
         {
@@ -405,6 +405,18 @@
           "type": "color",
           "default": "unset",
           "description": "Override the peach color token when auto_switch selects a dark appearance. Applied after theme.custom. Accepts hex, named colors, rgb(r,g,b), or reset aliases."
+        }
+      ]
+    },
+    {
+      "id": "pretorian",
+      "title": "Pretorian",
+      "keys": [
+        {
+          "key": "pretorian.nome",
+          "type": "string",
+          "default": "unset",
+          "description": "Nome mostrado no cabeçalho como \"Pretorian · Nome\". Vazio ou ausente mostra só \"Pretorian\". Um ui.tab_bar_right explícito substitui esse cabeçalho."
         }
       ]
     },
@@ -1037,7 +1049,7 @@
         {
           "key": "ui.window_title",
           "type": "string",
-          "default": "\"{hostname}: {workspace}\"",
+          "default": "\"Pretorian\"",
           "description": "Title Herdr writes to the terminal it runs in. Tokens: {hostname}, {workspace}, {tab}, {pane}, {terminal_title}. Empty leaves the outer title alone."
         },
         {

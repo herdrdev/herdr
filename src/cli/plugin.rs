@@ -19,7 +19,7 @@ pub(crate) fn command() -> clap::Command {
 
 const PLUGIN_BUILD_OUTPUT_MAX_BYTES: usize = 64 * 1024;
 const PLUGIN_INSTALL_USAGE: &str =
-    "usage: herdr plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
+    "Uso: herdr plugin install [--ref REF] [--yes|-y] <owner>/<repo>[/subdir...]";
 
 pub(super) fn run_plugin_command(args: &[String]) -> std::io::Result<i32> {
     match args.first().map(String::as_str) {
@@ -63,11 +63,11 @@ fn plugin_link(params: PluginLinkParams) -> std::io::Result<i32> {
 
 fn plugin_config_dir_command(args: &[String]) -> std::io::Result<i32> {
     let Some(plugin_id) = args.first() else {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("Uso: herdr plugin config-dir <plugin_id>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin config-dir <plugin_id>");
+        eprintln!("Uso: herdr plugin config-dir <plugin_id>");
         return Ok(2);
     }
     let path = crate::plugin_paths::plugin_config_dir(plugin_id);
@@ -106,7 +106,7 @@ fn parse_plugin_install_args(args: &[String]) -> Result<PluginInstallArgs, Strin
     while index < args.len() {
         match args[index].as_str() {
             "--ref" => {
-                let value = args.get(index + 1).ok_or("missing value for --ref")?;
+                let value = args.get(index + 1).ok_or("falta valor para --ref")?;
                 requested_ref = Some(value.clone());
                 index += 2;
             }
@@ -115,7 +115,7 @@ fn parse_plugin_install_args(args: &[String]) -> Result<PluginInstallArgs, Strin
                 index += 1;
             }
             other if other.starts_with('-') || source_arg.is_some() => {
-                return Err(format!("unknown option: {other}"));
+                return Err(format!("opção desconhecida: {other}"));
             }
             other => {
                 source_arg = Some(other);
@@ -145,7 +145,7 @@ fn plugin_install(args: &[String]) -> std::io::Result<i32> {
     };
 
     if !yes && !io::stdin().is_terminal() {
-        eprintln!("remote plugin install requires --yes when stdin is not interactive");
+        eprintln!("a instalação remota de plugin exige --yes quando a entrada não é interativa");
         return Ok(2);
     }
 
@@ -165,7 +165,7 @@ fn plugin_update(args: &[String]) -> std::io::Result<i32> {
         match arg.as_str() {
             "--yes" | "-y" => yes = true,
             other if other.starts_with('-') => {
-                eprintln!("unknown option: {other}");
+                eprintln!("opção desconhecida: {other}");
                 return Ok(2);
             }
             _ => targets.push(arg.as_str()),
@@ -200,11 +200,11 @@ fn plugin_update(args: &[String]) -> std::io::Result<i32> {
                 installed.iter().find(|plugin| plugin.plugin_id == target)
             };
             let Some(plugin) = plugin else {
-                eprintln!("plugin not installed: {target}");
+                eprintln!("plugin não instalado: {target}");
                 return Ok(1);
             };
             if plugin.source.kind != PluginSourceKind::Github {
-                eprintln!("plugin is locally linked and cannot be updated: {target}");
+                eprintln!("plugin vinculado localmente e não pode ser atualizado: {target}");
                 return Ok(1);
             }
             if !plugins
@@ -218,11 +218,11 @@ fn plugin_update(args: &[String]) -> std::io::Result<i32> {
     };
 
     if plugins.is_empty() {
-        println!("No GitHub-managed plugins installed.");
+        println!("Nenhum plugin gerenciado pelo GitHub instalado.");
         return Ok(0);
     }
     if !yes && !io::stdin().is_terminal() {
-        eprintln!("plugin update requires --yes when stdin is not interactive");
+        eprintln!("a atualização de plugin exige --yes quando a entrada não é interativa");
         return Ok(2);
     }
 
@@ -232,7 +232,7 @@ fn plugin_update(args: &[String]) -> std::io::Result<i32> {
         let source = match GithubPluginSource::from_installed(&plugin) {
             Ok(source) => source,
             Err(err) => {
-                eprintln!("error updating {plugin_id}: {err}");
+                eprintln!("erro ao atualizar {plugin_id}: {err}");
                 exit_code = 1;
                 continue;
             }
@@ -246,7 +246,7 @@ fn plugin_update(args: &[String]) -> std::io::Result<i32> {
         ) {
             Ok(code) => exit_code = exit_code.max(code),
             Err(err) => {
-                eprintln!("error updating {plugin_id}: {err}");
+                eprintln!("erro ao atualizar {plugin_id}: {err}");
                 exit_code = 1;
             }
         }
@@ -272,7 +272,7 @@ fn install_github_plugin(
         if let Some(plugin) = updating_plugin {
             if preview_plugin.plugin_id != plugin.plugin_id {
                 return Err(io::Error::other(format!(
-                    "update source now contains plugin {}, expected {}",
+                    "a origem da atualização agora contém o plugin {}, esperado {}",
                     preview_plugin.plugin_id, plugin.plugin_id
                 )));
             }
@@ -289,7 +289,7 @@ fn install_github_plugin(
                 .and_then(|plugin| plugin.source.resolved_commit.as_deref())
                 == Some(resolved_commit.as_str())
         {
-            println!("{} is already up to date.", preview_plugin.plugin_id);
+            println!("{} já está atualizado.", preview_plugin.plugin_id);
             return Ok(true);
         }
 
@@ -297,14 +297,18 @@ fn install_github_plugin(
             source.to_source_info(requested_ref, resolved_commit, None, current_unix_ms());
         print_install_preview(&preview_plugin, &source_info, existing.as_ref(), updating);
         let prompt = if updating {
-            "Update this plugin?"
+            "Atualizar este plugin?"
         } else {
-            "Install this plugin?"
+            "Instalar este plugin?"
         };
         if !yes && !confirm(prompt)? {
             eprintln!(
-                "plugin {} cancelled",
-                if updating { "update" } else { "install" }
+                "{} de plugin cancelada",
+                if updating {
+                    "atualização"
+                } else {
+                    "instalação"
+                }
             );
             return Ok(false);
         }
@@ -322,8 +326,8 @@ fn install_github_plugin(
             preview_plugin.plugin_root = relocated_plugin.plugin_root;
             run_plugin_build_commands(&preview_plugin, &final_manifest_root).map_err(|err| {
                 io::Error::other(format!(
-                    "{err}\n\nPlugin was not {}.",
-                    if updating { "updated" } else { "installed" }
+                    "{err}\n\nO plugin não foi {}.",
+                    if updating { "atualizado" } else { "instalado" }
                 ))
             })?;
             let mut plugin = load_cli_plugin_manifest(&final_manifest_root, enabled)?;
@@ -346,7 +350,7 @@ fn install_github_plugin(
                 // that a server or a plugin process could already be using.
                 if activation_attempted {
                     return Err(io::Error::other(format!(
-                        "{err}; plugin files retained at {}",
+                        "{err}; arquivos do plugin preservados em {}",
                         final_checkout.display()
                     )));
                 }
@@ -356,7 +360,7 @@ fn install_github_plugin(
                     })
                 {
                     return Err(io::Error::other(format!(
-                        "{err}; could not remove failed installation at {}: {cleanup_err}",
+                        "{err}; não foi possível remover a instalação malsucedida em {}: {cleanup_err}",
                         installation.display()
                     )));
                 }
@@ -364,8 +368,8 @@ fn install_github_plugin(
             }
         };
         println!(
-            "{} {} from {}.",
-            if updating { "Updated" } else { "Installed" },
+            "{} {} de {}.",
+            if updating { "Atualizado" } else { "Instalado" },
             plugin.plugin_id,
             source.display()
         );
@@ -379,7 +383,7 @@ fn install_github_plugin(
     install_result.map(|cleanup| {
         if cleanup {
             if let Err(err) = crate::plugin_installations::cleanup() {
-                eprintln!("Plugin cleanup deferred: {err}");
+                eprintln!("Limpeza do plugin adiada: {err}");
             }
         }
         0
@@ -388,11 +392,11 @@ fn install_github_plugin(
 
 fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
     let Some(target) = args.first() else {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("Uso: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     };
     if args.len() != 1 {
-        eprintln!("usage: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
+        eprintln!("Uso: herdr plugin uninstall <plugin_id|owner/repo[/subdir...]>");
         return Ok(2);
     }
 
@@ -400,7 +404,7 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
         Ok(source) => {
             let existing = installed_plugin_by_github_source(&source)?;
             let Some(existing) = existing else {
-                eprintln!("plugin not installed: {}", source.display());
+                eprintln!("plugin não instalado: {}", source.display());
                 return Ok(1);
             };
             (existing.plugin_id.clone(), Some(existing))
@@ -431,7 +435,7 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
                 return super::print_response(&response);
             }
             if response["result"]["removed"].as_bool() == Some(false) {
-                eprintln!("plugin not installed: {target}");
+                eprintln!("plugin não instalado: {target}");
                 return Ok(1);
             }
         }
@@ -442,14 +446,14 @@ fn plugin_uninstall(args: &[String]) -> std::io::Result<i32> {
                 before != plugins.len()
             })?;
             if !removed {
-                eprintln!("plugin not installed: {target}");
+                eprintln!("plugin não instalado: {target}");
                 return Ok(1);
             }
         }
         Err(err) => return Err(err),
     }
 
-    println!("Uninstalled {plugin_id}.");
+    println!("Plugin {plugin_id} desinstalado.");
     Ok(0)
 }
 
@@ -460,7 +464,7 @@ fn normalize_plugin_path_arg(value: &str) -> std::io::Result<String> {
         }
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            "remote plugin paths must be absolute",
+            "caminhos remotos de plugins devem ser absolutos",
         ));
     }
     let path = crate::worktree::expand_tilde_path(value);
@@ -486,7 +490,7 @@ impl GithubPluginSource {
             || value.starts_with("git@")
             || value.contains(':')
         {
-            return Err("plugin install v1 accepts only owner/repo[/subdir] shorthand".into());
+            return Err("plugin install v1 aceita apenas o formato owner/repo[/subdir]".into());
         }
         let parts = value.split('/').collect::<Vec<_>>();
         if parts.len() < 2 {
@@ -517,15 +521,12 @@ impl GithubPluginSource {
     }
 
     fn from_installed(plugin: &InstalledPluginInfo) -> std::io::Result<Self> {
-        let owner = plugin
-            .source
-            .owner
-            .clone()
-            .ok_or_else(|| io::Error::other("installed GitHub plugin has no source owner"))?;
-        let repo =
-            plugin.source.repo.clone().ok_or_else(|| {
-                io::Error::other("installed GitHub plugin has no source repository")
-            })?;
+        let owner = plugin.source.owner.clone().ok_or_else(|| {
+            io::Error::other("o plugin GitHub instalado não informa o proprietário da origem")
+        })?;
+        let repo = plugin.source.repo.clone().ok_or_else(|| {
+            io::Error::other("o plugin GitHub instalado não informa o repositório de origem")
+        })?;
         Ok(Self {
             owner,
             repo,
@@ -576,7 +577,7 @@ fn ensure_replacement_allowed(
     };
     if existing.source.kind != PluginSourceKind::Github {
         return Err(std::io::Error::other(format!(
-            "plugin {} is already linked from a local path; uninstall/unlink it before installing from GitHub",
+            "o plugin {} já está vinculado a um caminho local; desinstale ou desvincule antes de instalar do GitHub",
             plugin.plugin_id
         )));
     }
@@ -591,7 +592,7 @@ fn ensure_update_target_unchanged(
         return Ok(());
     }
     Err(io::Error::other(format!(
-        "plugin {} changed while its update was in progress; retry the update",
+        "o plugin {} mudou durante a atualização; tente atualizar novamente",
         expected.plugin_id
     )))
 }
@@ -602,17 +603,17 @@ fn same_update_target(expected: &InstalledPluginInfo, current: &InstalledPluginI
 
 fn validate_github_segment(label: &str, value: &str) -> Result<(), String> {
     if value.is_empty() {
-        return Err(format!("GitHub {label} must not be empty"));
+        return Err(format!("GitHub {label} não pode estar vazio"));
     }
     if value == "." || value == ".." {
-        return Err(format!("GitHub {label} is invalid: {value}"));
+        return Err(format!("GitHub {label} é inválido: {value}"));
     }
     if !value
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
     {
         return Err(format!(
-            "GitHub {label} contains invalid characters: {value}"
+            "GitHub {label} contém caracteres inválidos: {value}"
         ));
     }
     Ok(())
@@ -620,10 +621,14 @@ fn validate_github_segment(label: &str, value: &str) -> Result<(), String> {
 
 fn validate_subdir_segment(value: &str) -> Result<(), String> {
     if value.is_empty() || value == "." || value == ".." {
-        return Err(format!("invalid plugin subdir segment: {value}"));
+        return Err(format!(
+            "segmento de subdiretório do plugin inválido: {value}"
+        ));
     }
     if value.contains('\\') || value.contains('\0') {
-        return Err(format!("invalid plugin subdir segment: {value}"));
+        return Err(format!(
+            "segmento de subdiretório do plugin inválido: {value}"
+        ));
     }
     Ok(())
 }
@@ -687,9 +692,9 @@ fn git_output<const N: usize>(cwd: &Path, args: [&str; N]) -> std::io::Result<St
 fn command_failure_message(program: &str, output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if stderr.is_empty() {
-        format!("{program} failed with status {}", output.status)
+        format!("{program} falhou com estado {}", output.status)
     } else {
-        format!("{program} failed with status {}: {stderr}", output.status)
+        format!("{program} falhou com estado {}: {stderr}", output.status)
     }
 }
 
@@ -742,7 +747,7 @@ fn persist_updated_plugin(
         Ok(())
     } else {
         Err(io::Error::other(format!(
-            "plugin {} changed while its update was in progress; retry the update",
+            "o plugin {} mudou durante a atualização; tente atualizar novamente",
             expected.plugin_id
         )))
     }
@@ -818,7 +823,7 @@ fn plugin_list_from_response(
     let parsed: SuccessResponse =
         serde_json::from_value(response).map_err(std::io::Error::other)?;
     let ResponseResult::PluginList { mut plugins } = parsed.result else {
-        return Err(std::io::Error::other("expected plugin_list response"));
+        return Err(std::io::Error::other("resposta plugin_list esperada"));
     };
     plugins.sort_by(|a, b| a.plugin_id.cmp(&b.plugin_id));
     Ok(plugins)
@@ -890,24 +895,25 @@ fn print_plugin_list_human(response: &serde_json::Value) -> std::io::Result<i32>
         return super::print_response(response);
     };
     if plugins.is_empty() {
-        println!("No plugins installed.");
+        println!("Nenhum plugin instalado.");
         return Ok(0);
     }
     println!(
-        "{} plugin{} installed:",
+        "{} plugin{} instalado{}:",
         plugins.len(),
+        if plugins.len() == 1 { "" } else { "s" },
         if plugins.len() == 1 { "" } else { "s" }
     );
     for plugin in plugins {
         let enabled = if plugin.enabled {
-            "enabled"
+            "ativado"
         } else {
-            "disabled"
+            "desativado"
         };
         let warning = if plugin.warnings.is_empty() {
             String::new()
         } else {
-            format!("; {} warning(s)", plugin.warnings.len())
+            format!("; {} aviso(s)", plugin.warnings.len())
         };
         println!(
             "- {} ({}) {} [{}{}]",
@@ -918,11 +924,11 @@ fn print_plugin_list_human(response: &serde_json::Value) -> std::io::Result<i32>
             warning
         );
         println!(
-            "  config: {}",
+            "  configuração: {}",
             crate::plugin_paths::plugin_config_dir(&plugin.plugin_id).display()
         );
         for warning in plugin.warnings {
-            println!("  warning: {warning}");
+            println!("  aviso: {warning}");
         }
     }
     Ok(0)
@@ -958,19 +964,23 @@ fn print_install_preview(
     updating: bool,
 ) {
     eprintln!(
-        "Plugin {} preview:",
-        if updating { "update" } else { "install" }
+        "Prévia de {} do plugin:",
+        if updating {
+            "atualização"
+        } else {
+            "instalação"
+        }
     );
     eprintln!("  id: {}", plugin.plugin_id);
-    eprintln!("  name: {}", plugin.name);
-    eprintln!("  version: {}", plugin.version);
+    eprintln!("  nome: {}", plugin.name);
+    eprintln!("  versão: {}", plugin.version);
     if let (Some(owner), Some(repo)) = (&source.owner, &source.repo) {
         let subdir = source
             .subdir
             .as_deref()
             .map(|subdir| format!("/{subdir}"))
             .unwrap_or_default();
-        eprintln!("  source: {owner}/{repo}{subdir}");
+        eprintln!("  origem: {owner}/{repo}{subdir}");
     }
     if let Some(reference) = &source.requested_ref {
         eprintln!("  ref: {reference}");
@@ -978,41 +988,41 @@ fn print_install_preview(
     if let Some(commit) = &source.resolved_commit {
         eprintln!("  commit: {commit}");
     }
-    eprintln!("  actions: {}", plugin.actions.len());
-    eprintln!("  startup commands: {}", plugin.startup.len());
-    eprintln!("  events: {}", plugin.events.len());
-    eprintln!("  panes: {}", plugin.panes.len());
-    eprintln!("  link handlers: {}", plugin.link_handlers.len());
-    eprintln!("  build commands: {}", plugin.build.len());
+    eprintln!("  ações: {}", plugin.actions.len());
+    eprintln!("  comandos de inicialização: {}", plugin.startup.len());
+    eprintln!("  eventos: {}", plugin.events.len());
+    eprintln!("  painéis: {}", plugin.panes.len());
+    eprintln!("  manipuladores de links: {}", plugin.link_handlers.len());
+    eprintln!("  comandos de compilação: {}", plugin.build.len());
     for build in &plugin.build {
         let support = if build_platform_supported(&build.platforms, &plugin.platforms) {
             String::new()
         } else {
             format!(
-                " (skipped on {})",
+                " (ignorado em {})",
                 plugin_platform_name(current_plugin_platform())
             )
         };
-        eprintln!("    build{}: {}", support, build.command.join(" "));
+        eprintln!("    compilação{}: {}", support, build.command.join(" "));
     }
     for startup in &plugin.startup {
-        eprintln!("    startup: {}", startup.command.join(" "));
+        eprintln!("    inicialização: {}", startup.command.join(" "));
     }
     for action in &plugin.actions {
-        eprintln!("    action {}: {}", action.id, action.command.join(" "));
+        eprintln!("    ação {}: {}", action.id, action.command.join(" "));
     }
     for event in &plugin.events {
-        eprintln!("    event {}: {}", event.on, event.command.join(" "));
+        eprintln!("    evento {}: {}", event.on, event.command.join(" "));
     }
     for pane in &plugin.panes {
-        eprintln!("    pane {}: {}", pane.id, pane.command.join(" "));
+        eprintln!("    painel {}: {}", pane.id, pane.command.join(" "));
     }
     for warning in &plugin.warnings {
-        eprintln!("  warning: {warning}");
+        eprintln!("  aviso: {warning}");
     }
     if let Some(existing) = existing {
         eprintln!(
-            "  replaces: {} from {}",
+            "  substitui: {} de {}",
             existing.plugin_id,
             source_display(existing)
         );
@@ -1047,7 +1057,7 @@ fn ensure_manifest_unchanged_after_build(
         return Ok(());
     }
     Err(io::Error::other(
-        "plugin build changed herdr-plugin.toml after install preview; aborting install",
+        "a compilação do plugin alterou herdr-plugin.toml após a prévia; instalação cancelada",
     ))
 }
 
@@ -1065,7 +1075,7 @@ fn run_plugin_build_command(
             kind: PluginBuildFailureKind::Start {
                 error: io::Error::new(
                     io::ErrorKind::InvalidInput,
-                    "build command must not be empty",
+                    "o comando de compilação não pode estar vazio",
                 ),
             },
         }));
@@ -1174,14 +1184,14 @@ enum PluginBuildFailureKind {
 
 impl fmt::Display for PluginBuildFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "error: plugin build failed")?;
+        writeln!(f, "erro: falha na compilação do plugin")?;
         write_build_context(f, &self.context)?;
         match &self.kind {
             PluginBuildFailureKind::Start { error } => {
-                writeln!(f, "  error: failed to start: {error}")?;
+                writeln!(f, "  erro: falha ao iniciar: {error}")?;
             }
             PluginBuildFailureKind::Wait { error } => {
-                writeln!(f, "  error: failed to wait for command: {error}")?;
+                writeln!(f, "  erro: falha ao aguardar comando: {error}")?;
             }
             PluginBuildFailureKind::Exit {
                 status,
@@ -1201,11 +1211,11 @@ fn write_build_context(f: &mut fmt::Formatter<'_>, context: &PluginBuildContext)
     writeln!(f, "  plugin: {}", context.plugin_id)?;
     writeln!(
         f,
-        "  build: {}/{}",
+        "  compilação: {}/{}",
         context.build_index, context.build_total
     )?;
-    writeln!(f, "  cwd: {}", context.cwd)?;
-    writeln!(f, "  command: {}", context.command.join(" "))
+    writeln!(f, "  diretório: {}", context.cwd)?;
+    writeln!(f, "  comando: {}", context.command.join(" "))
 }
 
 fn write_output_section(
@@ -1221,7 +1231,7 @@ fn write_output_section(
     if output.truncated {
         writeln!(
             f,
-            "{label}: showing last {PLUGIN_BUILD_OUTPUT_MAX_BYTES} bytes; earlier output omitted"
+            "{label}: últimos {PLUGIN_BUILD_OUTPUT_MAX_BYTES} bytes; saída anterior omitida"
         )?;
     } else {
         writeln!(f, "{label}:")?;
@@ -1303,7 +1313,7 @@ fn plugin_platform_name(platform: PluginPlatform) -> &'static str {
 }
 
 fn confirm(prompt: &str) -> std::io::Result<bool> {
-    eprint!("{prompt} [y/N] ");
+    eprint!("{prompt} [y/N] (y para sim) ");
     io::stderr().flush()?;
     let mut line = String::new();
     io::stdin().read_line(&mut line)?;
@@ -1470,11 +1480,14 @@ mod tests {
         for (args, expected_error) in [
             (vec![], PLUGIN_INSTALL_USAGE),
             (vec!["--yes"], PLUGIN_INSTALL_USAGE),
-            (vec!["owner/repo", "--ref"], "missing value for --ref"),
-            (vec!["--unknown", "owner/repo"], "unknown option: --unknown"),
+            (vec!["owner/repo", "--ref"], "falta valor para --ref"),
+            (
+                vec!["--unknown", "owner/repo"],
+                "opção desconhecida: --unknown",
+            ),
             (
                 vec!["owner/repo", "extra/repo"],
-                "unknown option: extra/repo",
+                "opção desconhecida: extra/repo",
             ),
             (vec!["owner"], PLUGIN_INSTALL_USAGE),
         ] {

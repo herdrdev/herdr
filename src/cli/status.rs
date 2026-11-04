@@ -63,7 +63,7 @@ fn parse_status_scope_args(
         None => Some((scope, false)),
         Some("--json") if args.len() == 2 => Some((scope, true)),
         _ => {
-            eprintln!("usage: {usage}");
+            eprintln!("Uso: {usage}");
             None
         }
     }
@@ -91,25 +91,28 @@ fn print_full_status(json: bool) -> std::io::Result<i32> {
         return Ok(0);
     }
 
-    println!("client:");
-    println!("  version: {}", crate::build_info::version());
+    println!("cliente:");
+    println!("  versão: {}", crate::build_info::version());
     println!(
-        "  channel: {}",
+        "  canal: {}",
         crate::config::Config::load().config.update.channel.as_str()
     );
-    println!("  protocol: {}", crate::protocol::PROTOCOL_VERSION);
+    println!("  protocolo: {}", crate::protocol::PROTOCOL_VERSION);
     println!(
-        "  endpoint_protocol_generation: {}",
+        "  geração do protocolo do endpoint: {}",
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION
     );
     println!();
-    println!("server:");
+    println!("servidor:");
     print_server_status_body(&server, "  ");
     println!();
-    println!("update:");
-    println!("  restart_needed: {}", restart_needed_label(&server));
+    println!("atualização:");
     println!(
-        "  server_binary_stale: {}",
+        "  reinicialização necessária: {}",
+        restart_needed_label(&server)
+    );
+    println!(
+        "  binário do servidor desatualizado: {}",
         server_binary_stale_label(&server)
     );
 
@@ -132,17 +135,17 @@ fn print_client_status(json: bool) -> std::io::Result<()> {
         return Ok(());
     }
 
-    println!("version: {}", crate::build_info::version());
+    println!("versão: {}", crate::build_info::version());
     println!(
-        "channel: {}",
+        "canal: {}",
         crate::config::Config::load().config.update.channel.as_str()
     );
-    println!("protocol: {}", crate::protocol::PROTOCOL_VERSION);
+    println!("protocolo: {}", crate::protocol::PROTOCOL_VERSION);
     println!(
-        "endpoint_protocol_generation: {}",
+        "geração do protocolo do endpoint: {}",
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION
     );
-    println!("binary: {}", current_exe_label());
+    println!("binário: {}", current_exe_label());
     Ok(())
 }
 
@@ -153,21 +156,21 @@ fn print_server_status_body(server: &ServerRuntimeStatus, indent: &str) {
             protocol,
             capabilities,
         } => {
-            println!("{indent}status: running");
-            println!("{indent}version: {}", option_label(version.as_deref()));
+            println!("{indent}estado: em execução");
+            println!("{indent}versão: {}", option_label(version.as_deref()));
             println!(
-                "{indent}endpoint_compatible: {}",
+                "{indent}endpoint compatível: {}",
                 endpoint_compatibility_label(capabilities.as_ref())
             );
-            println!("{indent}private_protocol: {}", protocol_label(*protocol));
+            println!("{indent}protocolo privado: {}", protocol_label(*protocol));
             println!(
-                "{indent}private_protocol_compatible: {}",
+                "{indent}protocolo privado compatível: {}",
                 compatibility_label(*protocol)
             );
             println!("{indent}socket: {}", super::target::socket_label());
         }
         ServerRuntimeStatus::NotRunning => {
-            println!("{indent}status: not running");
+            println!("{indent}estado: não está em execução");
             println!("{indent}socket: {}", super::target::socket_label());
         }
     }
@@ -191,20 +194,20 @@ fn read_server_runtime_status() -> std::io::Result<ServerRuntimeStatus> {
 }
 
 fn option_label(value: Option<&str>) -> &str {
-    value.unwrap_or("unknown")
+    value.unwrap_or("desconhecido")
 }
 
 fn protocol_label(protocol: Option<u32>) -> String {
     protocol
         .map(|value| value.to_string())
-        .unwrap_or_else(|| "unknown".to_string())
+        .unwrap_or_else(|| "desconhecido".to_string())
 }
 
 fn compatibility_label(protocol: Option<u32>) -> &'static str {
     match protocol {
-        Some(protocol) if protocol == crate::protocol::PROTOCOL_VERSION => "yes",
-        Some(_) => "no",
-        None => "unknown",
+        Some(protocol) if protocol == crate::protocol::PROTOCOL_VERSION => "sim",
+        Some(_) => "não",
+        None => "desconhecido",
     }
 }
 
@@ -215,26 +218,26 @@ fn endpoint_compatibility_label(
         Some(generation)
             if generation == crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION =>
         {
-            "yes"
+            "sim"
         }
-        Some(_) => "no",
-        None => "unknown",
+        Some(_) => "não",
+        None => "desconhecido",
     }
 }
 
 fn restart_needed_label(server: &ServerRuntimeStatus) -> &'static str {
     match restart_needed_bool(server) {
-        Some(true) => "yes",
-        Some(false) => "no",
-        None => "unknown",
+        Some(true) => "sim",
+        Some(false) => "não",
+        None => "desconhecido",
     }
 }
 
 fn server_binary_stale_label(server: &ServerRuntimeStatus) -> &'static str {
     match server_binary_stale_bool(server) {
-        Some(true) => "yes",
-        Some(false) => "no",
-        None => "unknown",
+        Some(true) => "sim",
+        Some(false) => "não",
+        None => "desconhecido",
     }
 }
 
@@ -397,14 +400,16 @@ fn print_json(value: &impl Serialize) -> std::io::Result<()> {
 fn current_exe_label() -> String {
     std::env::current_exe()
         .map(|path| path.display().to_string())
-        .unwrap_or_else(|err| format!("unknown ({err})"))
+        .unwrap_or_else(|err| format!("desconhecido ({err})"))
 }
 
 fn print_status_help() {
-    eprintln!("herdr status commands:");
-    eprintln!("  herdr status [--json]         show local client and running server status");
-    eprintln!("  herdr status server [--json]  show running server status");
-    eprintln!("  herdr status client [--json]  show local client binary status");
+    eprintln!("Comandos de herdr status:");
+    eprintln!(
+        "  herdr status [--json]         mostrar estado do cliente local e do servidor ativo"
+    );
+    eprintln!("  herdr status server [--json]  mostrar estado do servidor ativo");
+    eprintln!("  herdr status client [--json]  mostrar estado do executável do cliente local");
 }
 
 #[cfg(test)]

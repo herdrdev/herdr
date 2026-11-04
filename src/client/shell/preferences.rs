@@ -61,31 +61,65 @@ pub(super) fn load(path: &Path) -> Option<ClientChromePreferences> {
 }
 
 pub(super) fn store(path: &Path, preferences: ClientChromePreferences) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("invalid client shell state path: {}", path.display()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("failed to create client shell state directory: {error}"))?;
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "caminho inválido do estado da interface: {}",
+            path.display()
+        )
+    })?;
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!("não foi possível criar o diretório do estado da interface: {error}")
+    })?;
     let content = serde_json::to_vec_pretty(&preferences)
-        .map_err(|error| format!("failed to encode client shell state: {error}"))?;
+        .map_err(|error| format!("não foi possível codificar o estado da interface: {error}"))?;
     let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
     let mut temp_name = path
         .file_name()
-        .ok_or_else(|| format!("invalid client shell state path: {}", path.display()))?
+        .ok_or_else(|| {
+            format!(
+                "caminho inválido do estado da interface: {}",
+                path.display()
+            )
+        })?
         .to_os_string();
     temp_name.push(format!(".tmp-{}-{sequence}", std::process::id()));
     let temp_path = parent.join(temp_name);
     std::fs::write(&temp_path, content)
-        .map_err(|error| format!("failed to write client shell state: {error}"))?;
+        .map_err(|error| format!("não foi possível gravar o estado da interface: {error}"))?;
     std::fs::rename(&temp_path, path).map_err(|error| {
         let _ = std::fs::remove_file(&temp_path);
-        format!("failed to replace client shell state: {error}")
+        format!("não foi possível substituir o estado da interface: {error}")
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erro_de_diretorio_preserva_detalhe_do_sistema() {
+        let caminho = std::env::temp_dir().join(format!(
+            "pretorian-preferencia-arquivo-{}",
+            std::process::id()
+        ));
+        let arquivo = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&caminho)
+            .expect("arquivo de teste");
+        let detalhe = std::fs::create_dir_all(&caminho).unwrap_err().to_string();
+        let erro = store(
+            &caminho.join("estado.json"),
+            ClientChromePreferences::default(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            erro,
+            format!("não foi possível criar o diretório do estado da interface: {detalhe}")
+        );
+        drop(arquivo);
+        std::fs::remove_file(caminho).expect("remover arquivo de teste");
+    }
 
     #[test]
     fn endpoint_paths_are_stable_and_distinct() {

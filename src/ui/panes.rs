@@ -17,6 +17,25 @@ use crate::layout::{PaneId, PaneInfo};
 use crate::popup_size::resolve_popup_geometry;
 use crate::terminal::{TerminalRuntime, TerminalRuntimeRegistry};
 
+fn present_restore_error(reason: &str) -> std::borrow::Cow<'_, str> {
+    const DIRECTORY: &str =
+        "Saved directory is unavailable. Restore the directory and restart this session.";
+    const PREFIX: &str = "Could not start the saved shell: ";
+    const SUFFIX: &str = ". Fix the shell configuration and restart this session.";
+    if reason == DIRECTORY {
+        return "A pasta salva está indisponível. Restaure a pasta e reinicie esta sessão.".into();
+    }
+    if let Some(detail) = reason
+        .strip_prefix(PREFIX)
+        .and_then(|text| text.strip_suffix(SUFFIX))
+    {
+        if !detail.is_empty() {
+            return format!("Não foi possível iniciar o terminal salvo: {detail}. Corrija a configuração do terminal e reinicie esta sessão.").into();
+        }
+    }
+    reason.into()
+}
+
 pub(crate) fn pane_is_scrolled_back(rt: &TerminalRuntime) -> bool {
     rt.scroll_metrics()
         .is_some_and(|metrics| metrics.offset_from_bottom > 0)
@@ -512,7 +531,7 @@ pub(super) fn render_panes(
             .and_then(|terminal| terminal.restore_error.as_deref())
         {
             frame.render_widget(
-                Paragraph::new(reason).wrap(Wrap { trim: false }),
+                Paragraph::new(present_restore_error(reason)).wrap(Wrap { trim: false }),
                 info.inner_rect,
             );
         }
@@ -964,8 +983,10 @@ mod tests {
         app.ensure_test_terminals();
         let pane_id = app.workspaces[0].tabs[0].root_pane;
         let terminal_id = app.workspaces[0].terminal_id(pane_id).unwrap().clone();
-        app.terminals.get_mut(&terminal_id).unwrap().restore_error =
-            Some("Saved directory is unavailable. Restart to retry.".into());
+        app.terminals.get_mut(&terminal_id).unwrap().restore_error = Some(
+            "Saved directory is unavailable. Restore the directory and restart this session."
+                .into(),
+        );
         let runtimes = TerminalRuntimeRegistry::new();
         let area = Rect::new(0, 0, 80, 24);
         let layout = crate::ui::compute_tab_surface_for(
@@ -982,8 +1003,33 @@ mod tests {
         let (buffer, cursor, _, _) =
             crate::server::render_stream::render_tab_surface_virtual(&app, &runtimes, layout, area);
         let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
-        assert!(text.contains("Saved directory is unavailable."));
+        assert!(text.contains("A pasta salva está indisponível."));
+        assert_eq!(
+            app.terminals[&terminal_id].restore_error.as_deref(),
+            Some("Saved directory is unavailable. Restore the directory and restart this session.")
+        );
         assert!(cursor.is_none_or(|cursor| !cursor.visible));
+    }
+
+    #[test]
+    fn restore_failure_presentation_preserves_detail_and_unmatched_text() {
+        assert_eq!(
+            present_restore_error(
+                "Saved directory is unavailable. Restore the directory and restart this session."
+            ),
+            "A pasta salva está indisponível. Restaure a pasta e reinicie esta sessão."
+        );
+        assert_eq!(
+            present_restore_error("Could not start the saved shell: permissão negada — 文件. Fix the shell configuration and restart this session."),
+            "Não foi possível iniciar o terminal salvo: permissão negada — 文件. Corrija a configuração do terminal e reinicie esta sessão."
+        );
+        for text in [
+            "mensagem própria / usuário",
+            "Saved directory is unavailable. Restart to retry.",
+            "Could not start the saved shell: no suffix",
+        ] {
+            assert_eq!(present_restore_error(text), text);
+        }
     }
 
     #[test]

@@ -32,6 +32,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) copy_on_select: bool,
     pub(super) clipboard_toast_enabled: bool,
     pub(super) clipboard_toast_position: crate::config::ToastClipboardPosition,
+    pub(super) nome_usuario: Option<String>,
     pub(super) theme_name: String,
     pub(super) theme_runtime: crate::app::state::ThemeRuntimeConfig,
     pub(super) palette: Palette,
@@ -383,6 +384,7 @@ pub(super) struct ClientGlobalMenuOverlay {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ClientSettingsSection {
+    Usuario,
     Theme,
     Indicators,
     Sound,
@@ -392,6 +394,7 @@ pub(super) enum ClientSettingsSection {
 
 impl ClientSettingsSection {
     pub(super) const ALL: &[Self] = &[
+        Self::Usuario,
         Self::Theme,
         Self::Indicators,
         Self::Sound,
@@ -401,11 +404,12 @@ impl ClientSettingsSection {
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Theme => "theme",
-            Self::Indicators => "indicators",
-            Self::Sound => "sound",
-            Self::Toast => "toasts",
-            Self::Integrations => "integrations",
+            Self::Usuario => "usuário",
+            Self::Theme => "tema",
+            Self::Indicators => "indicadores",
+            Self::Sound => "som",
+            Self::Toast => "avisos",
+            Self::Integrations => "integrações",
         }
     }
 }
@@ -414,6 +418,7 @@ impl ClientSettingsSection {
 pub(super) struct ClientSettingsOverlay {
     pub(super) section: ClientSettingsSection,
     pub(super) selected: usize,
+    pub(super) nome: TextEditor,
     pub(super) original_theme_name: String,
     pub(super) original_palette: Palette,
     pub(super) integrations: Vec<crate::api::schema::IntegrationInfo>,
@@ -455,15 +460,25 @@ impl ClientWorktreeOpenEntry {
         }
     }
 
+    pub(super) fn display_status_label(&self) -> &'static str {
+        match self.status_label() {
+            "open" => "aberta",
+            "root" => "principal",
+            "detached" => "desanexada",
+            status => status,
+        }
+    }
+
     pub(super) fn matches_query(&self, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         query.is_empty()
             || format!(
-                "{} {} {} {}",
+                "{} {} {} {} {}",
                 self.label,
                 self.branch.as_deref().unwrap_or_default(),
                 self.path,
-                self.status_label()
+                self.status_label(),
+                self.display_status_label()
             )
             .to_lowercase()
             .contains(&query)
@@ -1824,7 +1839,7 @@ impl ClientShellState {
             return false;
         }
         self.copy_feedback = Some(crate::app::state::CopyFeedback {
-            message: "copied to clipboard".to_owned(),
+            message: "copiado para a área de transferência".to_owned(),
         });
         self.copy_feedback_deadline = Some(now + std::time::Duration::from_secs(2));
         true

@@ -28,7 +28,7 @@ impl ClientShellState {
                     )
                 {
                     self.receive_endpoint_unavailable(
-                        "Select an available workspace and press Enter before renaming or closing it"
+                        "Selecione um espaço disponível e pressione Enter antes de renomeá-lo ou fechá-lo"
                             .into(),
                     );
                     outcome.repaint = true;
@@ -202,7 +202,7 @@ impl ClientShellState {
                 });
                 let Some(command_id) = command_id else {
                     self.set_endpoint_error(
-                        "custom command is not available on this endpoint; reload configuration",
+                        "o comando personalizado não está disponível nesta conexão; recarregue a configuração",
                     );
                     outcome.repaint = true;
                     return;
@@ -373,7 +373,8 @@ impl ClientShellState {
         }
         if !self.endpoint_is_online(&self.active_endpoint_id) {
             let label = self.active_endpoint_label().to_owned();
-            outcome.repaint |= self.receive_endpoint_unavailable(format!("{label} is not ready"));
+            outcome.repaint |=
+                self.receive_endpoint_unavailable(format!("{label} não está pronto"));
             return false;
         }
         let method_name = crate::api::api_method_name(&method).to_owned();
@@ -381,9 +382,9 @@ impl ClientShellState {
             outcome.repaint |= self.push_endpoint_notice(
                 ClientEndpointNoticeKind::Unsupported,
                 method_name.clone(),
-                "Action unavailable",
+                "Ação indisponível",
                 format!(
-                    "This server does not support {method_name} yet. Update and restart it to enable this action."
+                    "Este servidor ainda não oferece suporte a {method_name}. Atualize-o e reinicie-o para habilitar esta ação."
                 ),
             );
             return false;
@@ -431,7 +432,7 @@ impl ClientShellState {
         self.push_endpoint_notice(
             ClientEndpointNoticeKind::Rejected,
             "paste_rejected",
-            "Paste rejected",
+            "Colagem recusada",
             message,
         )
     }
@@ -440,7 +441,7 @@ impl ClientShellState {
         self.push_endpoint_notice(
             ClientEndpointNoticeKind::Unavailable,
             message.clone(),
-            "Endpoint unavailable",
+            "Conexão indisponível",
             message,
         )
     }
@@ -485,7 +486,7 @@ impl ClientShellState {
             request_id,
             Err(ClientShellEndpointError {
                 code: Some("endpoint_cancelled".into()),
-                message: "This server action was interrupted. Check its state before retrying."
+                message: "Esta ação do servidor foi interrompida. Confira seu estado antes de tentar novamente."
                     .into(),
             }),
         );
@@ -541,25 +542,25 @@ impl ClientShellState {
                     "endpoint_timeout" => (
                         ClientEndpointNoticeKind::Timeout,
                         pending.method_name.clone(),
-                        "Server timed out",
-                        format!("This server did not respond to {}.", pending.method_name),
+                        "O servidor não respondeu a tempo",
+                        format!("Este servidor não respondeu a {}.", pending.method_name),
                     ),
                     "endpoint_cancelled" => (
                         ClientEndpointNoticeKind::Unavailable,
                         "cancelled".to_owned(),
-                        "Action interrupted",
+                        "Ação interrompida",
                         error.message.clone(),
                     ),
                     "server_unavailable" => (
                         ClientEndpointNoticeKind::Unavailable,
                         "server".to_owned(),
-                        "Server unavailable",
+                        "Servidor indisponível",
                         error.message.clone(),
                     ),
                     _ => (
                         ClientEndpointNoticeKind::Rejected,
                         format!("{}:{code}", pending.method_name),
-                        "Action rejected",
+                        "Ação recusada",
                         error.message.clone(),
                     ),
                 };
@@ -647,7 +648,9 @@ impl ClientShellState {
                         (false, Vec::new())
                     }
                     Ok(_) => {
-                        self.set_endpoint_error("endpoint returned an unexpected selection result");
+                        self.set_endpoint_error(
+                            "a conexão retornou um resultado inesperado para a seleção",
+                        );
                         (true, Vec::new())
                     }
                     Err(_) => (true, Vec::new()),
@@ -706,7 +709,9 @@ impl ClientShellState {
                         (false, replay_action(replay))
                     }
                     Ok(_) => {
-                        self.set_endpoint_error("endpoint returned an unexpected link result");
+                        self.set_endpoint_error(
+                            "a conexão retornou um resultado inesperado para o link",
+                        );
                         (true, replay_action(replay))
                     }
                     Err(error) if error.code.as_deref() == Some("plugin_link_failed") => {
@@ -749,7 +754,7 @@ impl ClientShellState {
                     Ok(crate::api::schema::ResponseResult::PaneCopyMotion { .. }) => (false, false),
                     Ok(_) => {
                         self.set_endpoint_error(
-                            "endpoint returned an unexpected copy-motion result",
+                            "a conexão retornou um resultado inesperado para o movimento no modo de cópia",
                         );
                         (true, false)
                     }
@@ -805,7 +810,7 @@ impl ClientShellState {
                     Ok(_) => {
                         self.cancel_deferred_copy_after_search(generation);
                         self.set_endpoint_error(
-                            "endpoint returned an unexpected copy-search result",
+                            "a conexão retornou um resultado inesperado para a busca no modo de cópia",
                         );
                         (true, false)
                     }
@@ -822,7 +827,7 @@ impl ClientShellState {
                     Ok(crate::api::schema::ResponseResult::ConfigReload { .. }) => false,
                     Ok(_) => {
                         self.set_endpoint_error(
-                            "endpoint returned an unexpected config reload result",
+                            "a conexão retornou um resultado inesperado ao recarregar a configuração",
                         );
                         true
                     }

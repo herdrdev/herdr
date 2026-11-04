@@ -21,8 +21,8 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
             .map(|cell| cell.symbol.as_str())
             .collect::<String>()
     };
-    assert!(row_text(&bottom, 29).contains("update ready"));
-    assert!(!row_text(&bottom, 28).contains("update ready"));
+    assert!(row_text(&bottom, 29).contains("atualização pronta"));
+    assert!(!row_text(&bottom, 28).contains("atualização pronta"));
     assert!(state.hits.tabs.is_empty());
     assert!(state.hits.new_tab.is_empty());
     assert!(state.hits.tab_scroll_left.is_empty());
@@ -45,7 +45,7 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
         deadline: std::time::Instant::now(),
     });
     let top = state.compose(106, 30).expect("top-tab update shell");
-    assert!(row_text(&top, 29).contains("update ready"));
+    assert!(row_text(&top, 29).contains("atualização pronta"));
 
     let mobile = state.compose(44, 30).expect("mobile update shell");
     let mobile_text = mobile
@@ -53,7 +53,10 @@ fn navigate_update_status_uses_released_desktop_and_mobile_placement() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(mobile_text.contains("update ready"));
+    assert!(
+        mobile_text.contains("atualização pronta"),
+        "{mobile_text:?}"
+    );
 }
 
 #[test]
@@ -95,7 +98,7 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("machines"));
+    assert!(text.contains("máquinas"));
     assert!(text.contains("Build"));
     let machine = state
         .hits
@@ -158,7 +161,7 @@ fn mobile_switcher_can_activate_an_online_saved_machine() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(text.contains("reconnecting"), "frame: {text}");
+    assert!(text.contains("reconectando"), "frame: {text}");
     assert!(text.contains("network lost"), "frame: {text}");
 }
 
@@ -219,9 +222,9 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
     assert!(header_text.contains("client-shell"));
-    assert!(header_text.contains("tab 1"));
-    assert!(header_text.contains("blocked"));
-    assert!(header_text.contains("switch"));
+    assert!(header_text.contains("aba 1"));
+    assert!(header_text.contains("aguardando"));
+    assert!(header_text.contains("alternar"));
     assert_eq!(state.hits.mobile_switch, Rect::new(34, 0, 10, 2));
 
     let click = |rect: Rect| {
@@ -251,16 +254,16 @@ fn mobile_header_and_switcher_render_released_sections_and_stable_targets() {
         "switcher must clear the pane surface"
     );
     for expected in [
-        "switch",
-        "close",
-        "agents",
-        "spaces",
-        "+ new workspace",
-        "tabs",
-        "+ new tab",
+        "alternar",
+        "fechar",
+        "agentes",
+        "espaços",
+        "+ novo espaço",
+        "abas",
+        "+ nova aba",
         "menu",
-        "settings",
-        "detach",
+        "configurações",
+        "desconectar",
     ] {
         assert!(switcher_text.contains(expected), "missing {expected}");
     }
@@ -400,7 +403,7 @@ fn mobile_background_workspace_uses_its_own_active_tab_status() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("feature · tab two · 2/2"), "{text}");
+    assert!(text.contains("feature · aba two · 2/2"), "{text}");
     assert!(text.contains("2 · logs"), "{text}");
     assert!(!text.contains("7 · logs"), "{text}");
 }
@@ -671,4 +674,51 @@ fn mobile_switcher_scroll_close_and_width_transition_clear_mobile_hits() {
     assert_eq!(short.cells[0].symbol, "─");
     assert!(state.hits.mobile_close.is_empty());
     assert!(state.hits.mobile_targets.is_empty());
+}
+
+#[test]
+fn mobile_agent_defaults_are_localized_and_custom_labels_are_preserved() {
+    for (status, labels, nome, esperado) in [
+        (AgentStatus::Working, vec![], None, "trabalhando · agente"),
+        (AgentStatus::Blocked, vec![], None, "aguardando · agente"),
+        (AgentStatus::Done, vec![], None, "concluído · agente"),
+        (AgentStatus::Idle, vec![], None, "livre · agente"),
+        (AgentStatus::Unknown, vec![], None, "livre · agente"),
+        (
+            AgentStatus::Blocked,
+            vec![("blocked".into(), "waiting".into())],
+            Some("Nome externo"),
+            "waiting · Nome externo",
+        ),
+    ] {
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        let mut projected = snapshot();
+        projected.agents.push(ClientShellAgent {
+            pane_id: "pane_1".into(),
+            workspace_id: "ws_1".into(),
+            tab_id: "tab_1".into(),
+            name: nome.map(str::to_string),
+            display_agent: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: status,
+            state_change_seq: 1,
+            state_labels: labels,
+            tokens: Vec::new(),
+            focused: true,
+        });
+        state.set_snapshot(Box::new(projected));
+        for endpoint in &mut state.endpoints {
+            if let Some(snapshot) = endpoint.snapshot.as_mut() {
+                snapshot.agents[0].agent_status = status;
+            }
+        }
+        state.set_pane_surface(surface());
+        state.mode = ClientShellMode::Navigate;
+        let frame = state.compose(44, 30).expect("mobile switcher");
+        let text = frame_rows(&frame).join("\n");
+        assert!(text.contains(esperado), "{text}");
+    }
 }

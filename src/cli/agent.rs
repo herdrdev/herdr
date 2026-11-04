@@ -75,11 +75,11 @@ fn agent_explain(params: bindings::Explain) -> std::io::Result<i32> {
 
     let explain = if let Some(path) = file {
         if target.is_some() {
-            eprintln!("usage: herdr agent explain --file PATH --agent LABEL [--json]");
+            eprintln!("Uso: herdr agent explain --file PATH --agent LABEL [--json]");
             return Ok(2);
         }
         let Some(agent_label) = agent else {
-            eprintln!("herdr agent explain --file requires --agent LABEL");
+            eprintln!("herdr agent explain --file exige --agent LABEL");
             return Ok(2);
         };
         let content = match std::fs::read_to_string(&path) {
@@ -89,7 +89,9 @@ fn agent_explain(params: bindings::Explain) -> std::io::Result<i32> {
                     id: "cli:agent:explain".into(),
                     error: ErrorBody {
                         code: "agent_explain_file_read_failed".into(),
-                        message: format!("failed to read agent explain file {path}: {err}"),
+                        message: format!(
+                            "não foi possível ler o arquivo de diagnóstico do agente {path}: {err}"
+                        ),
                     },
                 };
                 let response = serde_json::to_string(&response).map_err(std::io::Error::other)?;
@@ -103,12 +105,12 @@ fn agent_explain(params: bindings::Explain) -> std::io::Result<i32> {
         ))
     } else {
         let Some(target) = target else {
-            eprintln!("usage: herdr agent explain <target> [--json]");
-            eprintln!("usage: herdr agent explain --file PATH --agent LABEL [--json]");
+            eprintln!("Uso: herdr agent explain <target> [--json]");
+            eprintln!("Uso: herdr agent explain --file PATH --agent LABEL [--json]");
             return Ok(2);
         };
         if agent.is_some() {
-            eprintln!("--agent is only valid with --file");
+            eprintln!("--agent só é válido com --file");
             return Ok(2);
         }
 
@@ -134,12 +136,20 @@ fn agent_explain(params: bindings::Explain) -> std::io::Result<i32> {
 }
 
 fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
-    println!("agent: {}", explain["agent"].as_str().unwrap_or("unknown"));
-    println!("state: {}", explain["state"].as_str().unwrap_or("unknown"));
     println!(
-        "manifest: {} {}",
-        explain["manifest_source"].as_str().unwrap_or("none"),
-        explain["manifest_version"].as_str().unwrap_or("unknown")
+        "agente: {}",
+        explain["agent"].as_str().unwrap_or("desconhecido")
+    );
+    println!(
+        "estado: {}",
+        explain["state"].as_str().unwrap_or("desconhecido")
+    );
+    println!(
+        "manifesto: {} {}",
+        explain["manifest_source"].as_str().unwrap_or("nenhum"),
+        explain["manifest_version"]
+            .as_str()
+            .unwrap_or("desconhecido")
     );
     if let Some(rule) = explain["matched_rule"].as_object() {
         let rule_id = rule
@@ -147,7 +157,7 @@ fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
             .and_then(|value| value.as_str())
             .unwrap_or("-");
         println!(
-            "rule: {} (region={} priority={})",
+            "regra: {} (região={} prioridade={})",
             rule_id,
             rule.get("region")
                 .and_then(|value| value.as_str())
@@ -157,22 +167,22 @@ fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
                 .unwrap_or(0),
         );
         if let Some(preview) = matched_rule_region_preview(explain, rule_id) {
-            println!("evidence: {preview:?}");
+            println!("evidência: {preview:?}");
         }
     } else {
-        println!("rule: none");
+        println!("regra: nenhuma");
     }
     if let Some(reason) = explain["fallback_reason"].as_str() {
-        println!("fallback_reason: {reason}");
+        println!("motivo da alternativa: {reason}");
     }
     if let Some(reason) = explain["screen_detection_skip_reason"].as_str() {
-        println!("screen_detection_skip_reason: {reason}");
+        println!("motivo de ignorar a detecção na tela: {reason}");
     }
     if let Some(reason) = explain["skipped_update_reason"].as_str() {
-        println!("skipped_update_reason: {reason}");
+        println!("motivo de ignorar a atualização: {reason}");
     }
     if let Some(warning) = explain["warning"].as_str() {
-        println!("warning: {warning}");
+        println!("aviso: {warning}");
     }
 
     if !verbose {
@@ -180,35 +190,37 @@ fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
     }
 
     println!(
-        "visible: idle={} blocker={} working={}",
+        "visível: inativo={} bloqueio={} trabalhando={}",
         explain["visible_idle"].as_bool().unwrap_or(false),
         explain["visible_blocker"].as_bool().unwrap_or(false),
         explain["visible_working"].as_bool().unwrap_or(false)
     );
     println!(
-        "cached_remote_version: {}",
-        explain["cached_remote_version"].as_str().unwrap_or("none")
+        "versão remota em cache: {}",
+        explain["cached_remote_version"]
+            .as_str()
+            .unwrap_or("nenhum")
     );
     println!(
-        "local_override_shadowing_remote: {}",
+        "ajuste local tem prioridade sobre remoto: {}",
         explain["local_override_shadowing_remote"]
             .as_bool()
             .unwrap_or(false)
     );
     if let Some(status) = explain["remote_update_status"].as_str() {
-        println!("remote_update_status: {status}");
+        println!("estado da atualização remota: {status}");
     }
     if let Some(error) = explain["remote_update_error"].as_str() {
-        println!("remote_update_error: {error}");
+        println!("erro da atualização remota: {error}");
     }
     if let Some(evaluated_rules) = explain["evaluated_rules"]
         .as_array()
         .filter(|rules| !rules.is_empty())
     {
-        println!("evaluated_rules:");
+        println!("regras avaliadas:");
         for rule in evaluated_rules {
             println!(
-                "  {} {} priority={} region={} state={}",
+                "  {} {} prioridade={} região={} estado={}",
                 if rule["matched"].as_bool().unwrap_or(false) {
                     "✓"
                 } else {
@@ -217,11 +229,11 @@ fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
                 rule["id"].as_str().unwrap_or("-"),
                 rule["priority"].as_i64().unwrap_or(0),
                 rule["region"].as_str().unwrap_or("-"),
-                rule["state"].as_str().unwrap_or("unknown")
+                rule["state"].as_str().unwrap_or("desconhecido")
             );
             let evidence = &rule["evidence"];
             println!(
-                "    matchers: contains={:?} regex={:?} line_regex={:?} all={} any={} not={}",
+                "    verificadores: contém={:?} regex={:?} regex de linha={:?} todos={} algum={} nenhum={}",
                 evidence["contains"],
                 evidence["regex"],
                 evidence["line_regex"],
@@ -230,7 +242,7 @@ fn print_agent_explain_text(explain: &serde_json::Value, verbose: bool) {
                 evidence["not_count"].as_u64().unwrap_or(0)
             );
             println!(
-                "    region: bytes={} preview={:?}",
+                "    região: bytes={} prévia={:?}",
                 evidence["region_bytes"].as_u64().unwrap_or(0),
                 evidence["region_preview"].as_str().unwrap_or("")
             );
@@ -259,7 +271,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
         timeout_ms,
     } = params;
     let Some(expected_kind) = crate::detect::parse_agent_label(&kind) else {
-        eprintln!("unsupported interactive agent kind: {kind}");
+        eprintln!("tipo de agente interativo não suportado: {kind}");
         return Ok(2);
     };
     let expected_kind = crate::detect::agent_label(expected_kind).to_string();
@@ -318,7 +330,7 @@ fn agent_start(params: AgentStartParams) -> std::io::Result<i32> {
         return super::print_response(&cli_agent_error(
             "cli:agent:start",
             "agent_start_failed",
-            "agent start response did not include terminal_id",
+            "a resposta de início do agente não incluiu terminal_id",
         ));
     };
     if pinned_terminal_id
@@ -376,7 +388,7 @@ fn agent_attach(params: bindings::Attach) -> std::io::Result<i32> {
         return Ok(1);
     }
     let Some(terminal_id) = response["result"]["agent"]["terminal_id"].as_str() else {
-        eprintln!("agent attach failed: response did not include terminal_id");
+        eprintln!("falha ao conectar ao agente: a resposta não incluiu terminal_id");
         return Ok(1);
     };
     crate::client::run_terminal_attach(terminal_id.to_owned(), takeover)?;
@@ -430,7 +442,7 @@ fn wait_for_named_agent(
             Some(Err(cli_agent_error(
                 "cli:agent:start",
                 "agent_kind_mismatch",
-                format!("expected {expected_kind}, detected {actual}"),
+                format!("esperado {expected_kind}, detectado {actual}"),
             )))
         } else if agent["name"].as_str() != Some(name) {
             Some(Err(agent_name_lost_error("cli:agent:start", name)))
@@ -439,7 +451,7 @@ fn wait_for_named_agent(
                 Some("blocked") => Some(Err(cli_agent_error(
                     "cli:agent:start",
                     "agent_not_ready",
-                    format!("agent {name} is blocked during startup and is not ready for prompts"),
+                    format!("o agente {name} está bloqueado durante a inicialização e não está pronto para receber instruções"),
                 ))),
                 Some("unknown")
                     if expected_kind == "codex"
@@ -455,7 +467,7 @@ fn wait_for_named_agent(
                     Some(Err(cli_agent_error(
                         "cli:agent:start",
                         "agent_start_failed",
-                        "agent process exited before becoming interactive",
+                        "o processo do agente terminou antes de ficar interativo",
                     )))
                 }
                 _ => None,
@@ -528,7 +540,7 @@ fn agent_name_lost_error(request_id: &str, expected_name: &str) -> serde_json::V
     cli_agent_error(
         request_id,
         "agent_name_not_found",
-        format!("named agent {expected_name} no longer owns the target terminal"),
+        format!("o agente {expected_name} não controla mais o terminal de destino"),
     )
 }
 
@@ -554,7 +566,7 @@ fn agent_wait_timeout() -> serde_json::Value {
     cli_agent_error(
         "cli:agent:start",
         "timeout",
-        "timed out waiting for agent startup",
+        "o prazo para iniciar o agente expirou",
     )
 }
 

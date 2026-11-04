@@ -234,11 +234,11 @@ fn client_owned_sidebar_dividers_resize_live() {
         .map(|cell| cell.symbol.as_str())
         .collect();
     assert!(
-        waiting_text.contains(" spaces"),
+        waiting_text.contains(" espaços"),
         "local sidebar must keep spaces while resizing: {waiting_text}"
     );
-    assert!(!waiting_text.contains(" machines"));
-    assert!(!waiting_text.contains("Select a connected machine"));
+    assert!(!waiting_text.contains(" máquinas"));
+    assert!(!waiting_text.contains("Selecione uma máquina conectada"));
     assert!(!waiting_text.contains("LIVE"));
     assert!(waiting_frame.cursor.is_none());
     assert!(state.pane_surface.is_none());
@@ -273,7 +273,7 @@ fn client_owned_sidebar_dividers_resize_live() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect();
-    assert!(recovered_text.contains(" spaces"));
+    assert!(recovered_text.contains(" espaços"));
     assert!(recovered_text.contains("LIVE"));
     assert!(!state.hits.panes.is_empty());
     let section_divider = state.hits.sidebar_section_divider;
@@ -404,10 +404,10 @@ fn global_menu_opens_from_sidebar_and_routes_client_actions() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("settings"));
-    assert!(text.contains("keybinds"));
-    assert!(text.contains("reload config"));
-    assert!(text.contains("detach"));
+    assert!(text.contains("configurações"));
+    assert!(text.contains("atalhos"));
+    assert!(text.contains("recarregar configuração"));
+    assert!(text.contains("desconectar"));
 
     let keybinds = state.hits.global_menu_rows[1].0;
     let help = state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -449,8 +449,8 @@ fn new_tab_overlay_owns_text_cursor_and_submits_public_api_request() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("new tab"));
-    assert!(text.contains("save"));
+    assert!(text.contains("nova aba"));
+    assert!(text.contains("salvar"));
     let restored = frame.to_ratatui_buffer().expect("overlay frame");
     assert!(!restored
         .cell((26, 7))
@@ -514,8 +514,8 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_workspace_cl
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("Close workspace?"));
-    assert!(text.contains("1 pane"));
+    assert!(text.contains("Fechar espaço?"));
+    assert!(text.contains("1 painel"));
 
     let confirm = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &confirm.actions[..] else {

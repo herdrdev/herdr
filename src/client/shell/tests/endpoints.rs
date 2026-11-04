@@ -17,6 +17,31 @@ fn remote_profile() -> SavedSshEndpoint {
     }
 }
 
+#[test]
+fn filtered_combined_sidebar_shows_empty_message_in_portuguese() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_endpoint_catalog(&[remote_profile()]);
+    let mut projected = snapshot();
+    projected.agent_view_label = Some("Equipe".into());
+    projected.agents.clear();
+    projected.agent_order.clear();
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+    let frame = state.compose(106, 30).expect("barra de agentes");
+    let text = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Equipe"), "{text}");
+    assert!(text.contains("nenhum agente encontrado"), "{text}");
+}
+
 fn agent(
     name: &str,
     status: crate::api::schema::AgentStatus,
@@ -144,7 +169,7 @@ fn workspace_navigation_waits_for_the_target_presentation_fence() {
             assert!(state
                 .visible_endpoint_notice
                 .as_ref()
-                .is_some_and(|notice| notice.title == "Action interrupted"));
+                .is_some_and(|notice| notice.title == "Ação interrompida"));
             assert!(commands.disconnect(&remote).is_empty());
             assert!(sent.lock().unwrap().is_empty());
             continue;
@@ -488,7 +513,7 @@ fn selecting_a_reconnecting_machine_retries_it() {
             assert!(state
                 .visible_endpoint_notice
                 .as_ref()
-                .is_some_and(|notice| notice.body == "Build is not ready"));
+                .is_some_and(|notice| notice.body == "Build não está pronto"));
         }
     }
 }
@@ -1478,7 +1503,7 @@ fn aggregate_agents_use_configured_rows_machine_token_and_status_colors() {
         .join("\n");
     assert!(text.contains("○ Local · local agent"), "frame: {text}");
     assert!(text.contains("× Build · remote agent"), "frame: {text}");
-    assert!(text.contains("grouped"), "frame: {text}");
+    assert!(text.contains("agrupados"), "frame: {text}");
     let toggle = state.hits.agent_sort_toggle;
     assert!(!toggle.is_empty());
     let click = state.handle_raw_events(vec![RawInputEvent::Mouse(MouseEvent {
@@ -1689,7 +1714,7 @@ fn selected_default_view_ignores_inactive_endpoint_projection() {
         .join("\n");
     assert!(text.contains("Local · local agent"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
-    assert!(text.contains("grouped"), "frame: {text}");
+    assert!(text.contains("agrupados"), "frame: {text}");
 }
 
 #[test]
@@ -2419,7 +2444,7 @@ fn disconnected_active_endpoint_freezes_surface_and_marks_cached_ui_stale() {
         state.endpoint_status(&endpoint_id),
         Some(ClientEndpointStatus::Reconnecting)
     );
-    assert!(text.contains("◐ reconnecting"), "frame: {text}");
+    assert!(text.contains("◐ reconectando"), "frame: {text}");
     assert!(text.contains("Build · remote agent"), "frame: {text}");
     assert!(
         text.contains("LIVE"),
@@ -3019,4 +3044,13 @@ fn navigator_foreign_workspace_heading_keeps_the_workspace_target() {
             target: Some(ClientEndpointFocusTarget::Workspace(workspace_id)),
         }] if activated == &endpoint_id && workspace_id == "ws_1"
     ));
+}
+
+#[test]
+fn endpoint_sidebar_new_workspace_label_is_localized() {
+    let (mut state, _) = state_with_remote();
+    state.config.mouse_capture = true;
+    let frame = state.compose(106, 30).expect("sidebar");
+    let text = frame_rows(&frame).join("\n");
+    assert!(text.contains("novo ·"), "{text}");
 }

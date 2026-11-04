@@ -106,7 +106,7 @@ impl ClientShellState {
                 .unwrap_or(ClientEndpointStatus::Connecting);
             let (_, label, _) = endpoint_status_presentation(status, &self.config.palette);
             format!(
-                "{}: {label}. Select a connected machine.",
+                "{}: {label}. Selecione uma máquina conectada.",
                 self.active_endpoint_label()
             )
         });

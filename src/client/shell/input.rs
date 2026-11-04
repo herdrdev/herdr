@@ -567,6 +567,10 @@ impl ClientShellState {
         matches!(
             self.overlay.as_ref(),
             Some(ClientShellOverlay::Rename(_))
+                | Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                    section: ClientSettingsSection::Usuario,
+                    ..
+                }))
                 | Some(ClientShellOverlay::WorktreeCreate(
                     ClientWorktreeCreateOverlay {
                         creating: false,
@@ -801,8 +805,8 @@ impl ClientShellState {
             self.push_endpoint_notice(
                 ClientEndpointNoticeKind::Rejected,
                 "navigate_endpoint_inactive",
-                "Confirm workspace first",
-                "Select an available workspace and press Enter before using workspace or pane actions",
+                "Confirme o espaço primeiro",
+                "Selecione um espaço disponível e pressione Enter antes de usar ações do espaço ou do painel",
             );
             outcome.repaint = true;
             return;

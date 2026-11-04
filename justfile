@@ -5,7 +5,7 @@ python := if os() == "windows" { "python" } else { "python3" }
 
 # Run tests
 test:
-    cargo nextest run --locked --status-level fail --final-status-level fail --failure-output final --success-output never
+    cargo nextest run --locked --no-fail-fast --status-level leak --final-status-level fail --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test
@@ -13,7 +13,7 @@ test:
 
 # Run repository maintenance contract tests
 maintenance-test:
-    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_preview scripts.test_release scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross scripts.test_windows_input
+    {{python}} -m unittest scripts.test_agent_detection_manifest_check scripts.test_changelog scripts.test_config_reference_check scripts.test_docs_translation_parity scripts.test_hermes_integration_asset scripts.test_package_windows_conpty scripts.test_package_rust_licenses scripts.test_package_toolchain_licenses scripts.test_package_pretorian_candidate scripts.test_pretorian_bootstrap_arch scripts.test_preview scripts.test_release scripts.test_unix_installer scripts.test_vendor_libghostty_vt scripts.test_vendor_portable_pty scripts.test_windows_cross scripts.test_windows_input
     bun test scripts/release-workflows.test.ts
 
 # Local interactive Windows Terminal input qualification (never runs in normal CI).
@@ -46,7 +46,7 @@ ci filter='all()': lint
 
 # Keep the test build independently configurable from clippy in CI.
 ci-tests filter='all()':
-    cargo nextest run --locked -E "{{filter}}" --status-level fail --final-status-level slow --failure-output final --success-output never
+    cargo nextest run --locked --no-fail-fast -E "{{filter}}" --status-level leak --final-status-level slow --failure-output final --success-output never
     just maintenance-test
     just ui-hot-path-architecture-test
     just integration-assets-test
@@ -87,6 +87,14 @@ build:
 [windows]
 build:
     python scripts/package_windows_conpty.py build-local
+
+# Compila em release e instala como ~/.local/bin/pretorian, sem substituir um herdr pessoal
+[unix]
+instalar destino=(env_var('HOME') / '.local/bin'):
+    cargo build --release --locked
+    mkdir -p "{{destino}}"
+    install -m 755 "${CARGO_TARGET_DIR:-target}/release/herdr" "{{destino}}/pretorian"
+    @echo "instalado em {{destino}}/pretorian"
 
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:

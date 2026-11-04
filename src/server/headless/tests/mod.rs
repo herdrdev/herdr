@@ -3909,13 +3909,13 @@ fn retained_test_server_with_control(
 #[test]
 fn server_keybinding_filter_keeps_whole_config_failures() {
     assert!(!config::is_keybinding_config_diagnostic(
-        "config parse error: invalid value at `keys.new_tab = @`; using defaults"
+        "erro de leitura da configuração TOML: invalid value at `keys.new_tab = @`; usando padrões"
     ));
     assert!(!config::is_keybinding_config_diagnostic(
-        "config read error: permission denied at keys.toml; using defaults"
+        "erro ao ler a configuração: permission denied at keys.toml; usando padrões"
     ));
     assert!(config::is_keybinding_config_diagnostic(
-        "unsafe direct keybinding: keys.close_pane would intercept typing"
+        "atalho direto inseguro: keys.close_pane interceptaria a digitação"
     ));
 }
 
@@ -4184,7 +4184,7 @@ fn terminal_attach_rejects_missing_terminal_and_removes_client() {
     let reason = read_server_shutdown_reason(control_rx.recv().expect("shutdown message"));
     assert_eq!(
         reason,
-        Some("terminal attach failed: terminal term_missing not found".to_owned())
+        Some("falha ao anexar terminal: terminal term_missing não encontrado".to_owned())
     );
 }
 
@@ -4678,7 +4678,7 @@ fn terminal_control_rejects_attach_during_alt_screen_read() {
         assert_eq!(
                 reason,
                 Some(format!(
-                    "terminal attach failed: terminal {terminal_id_string} has a read in progress; retry"
+                    "falha ao anexar terminal: o terminal {terminal_id_string} tem uma leitura em andamento; tente novamente"
                 ))
             );
     });
@@ -7480,7 +7480,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 5000012 bytes; Herdr's limit is 1048576 bytes"
+            "Colagem recusada: a mensagem de entrada tem 5000012 bytes; o limite do Pretorian é 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7510,7 +7510,7 @@ fn oversized_paste_rejection_notifies_only_the_sending_client() {
     ) {
         ServerMessage::ClientShellError { message } => assert_eq!(
             message,
-            "Paste rejected: Input message is 7000000 bytes; Herdr's limit is 1048576 bytes"
+            "Colagem recusada: a mensagem de entrada tem 7000000 bytes; o limite do Pretorian é 1048576 bytes"
         ),
         other => panic!("expected client shell paste error, got {other:?}"),
     }
@@ -7599,7 +7599,7 @@ fn update_notification_is_semantic_for_system_delivery() {
             assert_eq!(notification.title, "Herdr v9.9.9 available");
             assert_eq!(
                 notification.body.as_deref(),
-                Some("detach, run `herdr update`, then run Herdr again to reconnect")
+                Some("Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil.")
             );
         }
         other => panic!("expected semantic update notification, got {other:?}"),

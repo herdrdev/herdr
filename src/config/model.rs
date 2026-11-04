@@ -4,9 +4,9 @@ use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
 
 use super::{
-    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, SidebarConfig,
-    SoundConfig, TabBarRightEntryConfig, ThemeConfig, DEFAULT_MOBILE_WIDTH_THRESHOLD,
-    DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
+    ActionKeybinds, BindingConfig, CommandKeybindConfig, IndexedKeybind, Keybinds, PretorianConfig,
+    SidebarConfig, SoundConfig, TabBarRightEntryConfig, ThemeConfig,
+    DEFAULT_MOBILE_WIDTH_THRESHOLD, DEFAULT_MOUSE_SCROLL_LINES, DEFAULT_SCROLLBACK_LIMIT_BYTES,
 };
 
 pub const MAX_TOAST_DELAY_SECONDS: u64 = 3600;
@@ -161,7 +161,7 @@ impl<'de> Deserialize<'de> for RightClickPassthroughModifierConfig {
             .map(Self)
             .ok_or_else(|| {
                 de::Error::custom(
-                    "right_click_passthrough_modifier must be empty, off, none, disabled, ctrl/control, alt/option, cmd/command/super, meta, hyper, or a + separated combination without shift",
+                    "right_click_passthrough_modifier deve ser vazio, off, none, disabled, ctrl/control, alt/option, cmd/command/super, meta, hyper ou uma combinação separada por + sem shift",
                 )
             })
     }
@@ -323,6 +323,7 @@ pub struct Config {
     pub advanced: AdvancedConfig,
     pub experimental: ExperimentalConfig,
     pub remote: RemoteConfig,
+    pub pretorian: PretorianConfig,
 }
 
 #[derive(Debug)]
@@ -909,7 +910,7 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
             type Value = PaneBordersConfig;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("\"auto\", \"always\", \"off\", or a legacy boolean")
+                formatter.write_str("\"auto\", \"always\", \"off\" ou um booleano antigo")
             }
 
             fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
@@ -989,7 +990,7 @@ pub struct UiConfig {
     /// Text inserted between visible right-side tab bar entries. Default: one space.
     pub tab_bar_right_separator: String,
     /// Format for the outer terminal window title. Empty leaves the title alone.
-    /// Default: "{hostname}: {workspace}".
+    /// Default: "Pretorian".
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
@@ -1299,7 +1300,7 @@ impl<'de> Deserialize<'de> for ToastConfig {
         let delay_seconds = raw.delay_seconds.unwrap_or(default.delay_seconds);
         if delay_seconds > MAX_TOAST_DELAY_SECONDS {
             return Err(de::Error::custom(format!(
-                "ui.toast.delay_seconds must be between 0 and {MAX_TOAST_DELAY_SECONDS}"
+                "ui.toast.delay_seconds deve ficar entre 0 e {MAX_TOAST_DELAY_SECONDS}"
             )));
         }
         Ok(Self {
@@ -1509,12 +1510,12 @@ status_indicators = "symbols"
         let unknown = toml::from_str::<Config>("[ui]\npane_borders = \"framed\"")
             .unwrap_err()
             .to_string();
-        assert!(unknown.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+        assert!(unknown.contains("\"auto\", \"always\", \"off\" ou um booleano antigo"));
 
         let wrong_type = toml::from_str::<Config>("[ui]\npane_borders = 3")
             .unwrap_err()
             .to_string();
-        assert!(wrong_type.contains("\"auto\", \"always\", \"off\", or a legacy boolean"));
+        assert!(wrong_type.contains("\"auto\", \"always\", \"off\" ou um booleano antigo"));
     }
 
     #[test]
@@ -1964,7 +1965,7 @@ delay_seconds = {}
 
         let error = toml::from_str::<Config>(&toml).unwrap_err().to_string();
 
-        assert!(error.contains("ui.toast.delay_seconds must be between 0 and 3600"));
+        assert!(error.contains("ui.toast.delay_seconds deve ficar entre 0 e 3600"));
     }
 
     #[test]

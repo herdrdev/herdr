@@ -653,7 +653,7 @@ impl HeadlessServer {
                     ) => {
                         if let Ok(message) =
                             Self::frame_server_message(&ServerMessage::ServerShutdown {
-                                reason: Some("server is shutting down".to_owned()),
+                                reason: Some("servidor encerrando".to_owned()),
                             })
                         {
                             let _ = writer.control.send(message);
@@ -1083,7 +1083,7 @@ impl HeadlessServer {
             | ServerEvent::ClientShellConnected { writer, .. } = event
             {
                 if let Ok(message) = Self::frame_server_message(&ServerMessage::ServerShutdown {
-                    reason: Some("server is shutting down".to_owned()),
+                    reason: Some("servidor encerrando".to_owned()),
                 }) {
                     let _ = writer.control.send(message);
                 }
@@ -1276,7 +1276,7 @@ impl HeadlessServer {
                 ServerMessage::ServerShutdown {
                     reason: Some(
                         format!(
-                            "terminal session {action} failed: connection is not pending terminal session"
+                            "falha na sessão de terminal {action}: a conexão não aguarda sessão de terminal"
                         ),
                     ),
                 },
@@ -1290,7 +1290,7 @@ impl HeadlessServer {
                 client_id,
                 ServerMessage::ServerShutdown {
                     reason: Some(format!(
-                        "terminal session {action} failed: terminal target {target} not found"
+                        "falha na sessão de terminal {action}: alvo de terminal {target} não encontrado"
                     )),
                 },
             );
@@ -1720,7 +1720,8 @@ impl HeadlessServer {
                 client_id,
                 ServerMessage::ServerShutdown {
                     reason: Some(
-                        "live update in progress; reconnect after handoff completes".to_owned(),
+                        "atualização ao vivo em andamento; reconecte após a transferência"
+                            .to_owned(),
                     ),
                 },
             );
@@ -1745,7 +1746,7 @@ impl HeadlessServer {
                 client_id,
                 ServerMessage::ServerShutdown {
                     reason: Some(
-                        "terminal attach failed: connection is not pending terminal attach"
+                        "falha ao anexar terminal: a conexão não aguarda anexação de terminal"
                             .to_owned(),
                     ),
                 },
@@ -1759,7 +1760,7 @@ impl HeadlessServer {
                 client_id,
                 ServerMessage::ServerShutdown {
                     reason: Some(format!(
-                        "terminal attach failed: terminal {terminal_id} not found"
+                        "falha ao anexar terminal: terminal {terminal_id} não encontrado"
                     )),
                 },
             );
@@ -1776,7 +1777,7 @@ impl HeadlessServer {
                 client_id,
                 ServerMessage::ServerShutdown {
                     reason: Some(format!(
-                        "terminal attach failed: terminal {terminal_id} has a read in progress; retry"
+                        "falha ao anexar terminal: o terminal {terminal_id} tem uma leitura em andamento; tente novamente"
                     )),
                 },
             );
@@ -1790,7 +1791,7 @@ impl HeadlessServer {
                     client_id,
                     ServerMessage::ServerShutdown {
                         reason: Some(format!(
-                            "terminal attach failed: terminal {terminal_id} already has an attached client; retry with --takeover"
+                            "falha ao anexar terminal: o terminal {terminal_id} já tem um cliente anexado; tente novamente com --takeover"
                         )),
                     },
                 );
@@ -1865,7 +1866,7 @@ impl HeadlessServer {
                     if let Ok(message) =
                         Self::frame_server_message(&ServerMessage::ServerShutdown {
                             reason: Some(
-                                "live update in progress; reconnect after handoff completes"
+                                "atualização ao vivo em andamento; reconecte após a transferência"
                                     .to_owned(),
                             ),
                         })
@@ -1916,7 +1917,7 @@ impl HeadlessServer {
                     if let Ok(message) =
                         Self::frame_server_message(&ServerMessage::ServerShutdown {
                             reason: Some(
-                                "live update in progress; reconnect after handoff completes"
+                                "atualização ao vivo em andamento; reconecte após a transferência"
                                     .to_owned(),
                             ),
                         })
@@ -2109,18 +2110,20 @@ impl HeadlessServer {
                 size,
                 max,
             } => {
-                let detail = format!("Input message is {size} bytes; Herdr's limit is {max} bytes");
+                let detail = format!(
+                    "a mensagem de entrada tem {size} bytes; o limite do Pretorian é {max} bytes"
+                );
                 let message = if matches!(
                     self.clients.get(&client_id).map(|client| &client.mode),
                     Some(ClientConnectionMode::ClientShell)
                 ) {
                     ServerMessage::ClientShellError {
-                        message: format!("Paste rejected: {detail}"),
+                        message: format!("Colagem recusada: {detail}"),
                     }
                 } else {
                     ServerMessage::Notify {
                         kind: protocol::NotifyKind::Toast,
-                        message: "Paste rejected".to_owned(),
+                        message: "Colagem recusada".to_owned(),
                         body: Some(detail),
                     }
                 };
@@ -2896,11 +2899,11 @@ impl HeadlessServer {
             id: msg.request.id,
             error: api::schema::ErrorBody {
                 code: "server_unavailable".into(),
-                message: "server is shutting down".into(),
+                message: "servidor encerrando".into(),
             },
         })
         .unwrap_or_else(|_| {
-            r#"{"id":"","error":{"code":"server_unavailable","message":"server is shutting down"}}"#
+            r#"{"id":"","error":{"code":"server_unavailable","message":"servidor encerrando"}}"#
                 .to_string()
         });
         let _ = msg.respond_to.send(response);

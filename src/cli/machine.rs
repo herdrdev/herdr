@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::client::endpoint::{EndpointCatalog, ProfileId, MAX_LABEL_BYTES};
 
-const HELP: &str = "Usage:
+const HELP: &str = "Uso:
   herdr machine list [--json]
   herdr machine status [<label-or-id>] [--json]
   herdr machine reconnect <label-or-id>
@@ -17,12 +17,12 @@ const HELP: &str = "Usage:
   herdr machine enable <profile-id>
   herdr machine disable <profile-id>
 
-Add prepares the remote Herdr installation and starts its server before saving.
-Missing or incompatible installations require approval in an interactive terminal.
-Changes apply automatically to open local Herdr clients.
-Removing or disabling a machine leaves its remote sessions running.
-Saved machines contain only a label, SSH target, explicit Herdr session, and enabled state.
-SSH credentials and key material remain owned by OpenSSH.";
+A adição prepara a instalação remota do Herdr e inicia o servidor antes de salvar.
+Instalações ausentes ou incompatíveis exigem aprovação em um terminal interativo.
+As alterações são aplicadas automaticamente aos clientes Herdr locais abertos.
+Remover ou desativar uma máquina mantém suas sessões remotas em execução.
+As máquinas salvas contêm apenas nome, destino SSH, sessão Herdr e estado de ativação.
+As credenciais e chaves SSH continuam sob responsabilidade do OpenSSH.";
 
 #[derive(Serialize)]
 struct MachineListRow<'a> {
@@ -60,7 +60,7 @@ fn list(args: &[String]) -> std::io::Result<i32> {
         [] => false,
         [flag] if flag == "--json" => true,
         _ => {
-            eprintln!("usage: herdr machine list [--json]");
+            eprintln!("Uso: herdr machine list [--json]");
             return Ok(2);
         }
     };
@@ -85,11 +85,11 @@ fn list(args: &[String]) -> std::io::Result<i32> {
         return Ok(0);
     }
     if rows.is_empty() {
-        println!("No saved SSH machines.");
+        println!("Nenhuma máquina SSH salva.");
         return Ok(0);
     }
     for row in rows {
-        let state = if row.enabled { "enabled" } else { "disabled" };
+        let state = if row.enabled { "ativada" } else { "desativada" };
         println!(
             "{}\t{}\t{}\t{}\t{}",
             row.id, row.label, row.target, row.session, state
@@ -115,7 +115,7 @@ fn status(args: &[String]) -> std::io::Result<i32> {
         } else if !arg.starts_with('-') && selector.is_none() {
             selector = Some(arg.as_str());
         } else {
-            eprintln!("usage: herdr machine status [<label-or-id>] [--json]");
+            eprintln!("Uso: herdr machine status [<label-or-id>] [--json]");
             return Ok(2);
         }
     }
@@ -164,13 +164,20 @@ fn status(args: &[String]) -> std::io::Result<i32> {
         );
     } else {
         for row in &rows {
-            println!("{}\t{}\t{}", row.id, row.label, row.status);
+            let estado = match row.status {
+                "disabled" => "desativada",
+                "reachable" => "acessível",
+                "auth required" => "autenticação necessária",
+                "error" => "erro",
+                _ => row.status,
+            };
+            println!("{}\t{}\t{}", row.id, row.label, estado);
             if let Some(error) = &row.error {
                 println!("  {}", error.escape_debug());
             }
         }
         if rows.is_empty() {
-            println!("No saved SSH machines.");
+            println!("Nenhuma máquina SSH salva.");
         }
     }
     Ok(i32::from(rows.iter().any(|row| row.error.is_some())))
@@ -179,7 +186,7 @@ fn status(args: &[String]) -> std::io::Result<i32> {
 fn reconnect(args: &[String]) -> std::io::Result<i32> {
     use std::io::IsTerminal;
     let [selector] = args else {
-        eprintln!("usage: herdr machine reconnect <label-or-id>");
+        eprintln!("Uso: herdr machine reconnect <label-or-id>");
         return Ok(2);
     };
     let catalog = load_catalog()?;
@@ -191,17 +198,17 @@ fn reconnect(args: &[String]) -> std::io::Result<i32> {
         }
     };
     if !std::io::stdin().is_terminal() {
-        eprintln!("reconnect requires an interactive terminal; use herdr machine status for noninteractive checks");
+        eprintln!("a reconexão exige terminal interativo; use herdr machine status para consulta sem interação");
         return Ok(2);
     }
     let mut authentication = crate::remote::ssh_authentication_command(&profile.target)?;
     if !authentication.command.status()?.success() {
-        eprintln!("SSH authentication failed; the saved machine was not changed.");
+        eprintln!("A autenticação SSH falhou; a máquina salva não foi alterada.");
         return Ok(1);
     }
     crate::remote::check_saved_ssh(&profile.target, &profile.session)?;
     println!(
-        "Machine {} is reachable. Open Herdr clients retry within 30 seconds.",
+        "A máquina {} está acessível. Clientes Herdr abertos tentarão novamente em até 30 segundos.",
         profile.id
     );
     Ok(0)
@@ -224,7 +231,7 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
         let (name, value) = match args[index].as_str() {
             "--label" | "--remote-session" => {
                 let Some(value) = args.get(index + 1) else {
-                    return Err(format!("missing value for {}", args[index]));
+                    return Err(format!("falta valor para {}", args[index]));
                 };
                 index += 2;
                 (args[index - 2].as_str(), value.clone())
@@ -235,24 +242,25 @@ fn parse_add_args(args: &[String]) -> Result<AddArgs, String> {
                 continue;
             }
             unknown => {
-                return Err(format!("unknown machine add option: {unknown}"));
+                return Err(format!(
+                    "opção desconhecida para adicionar máquina: {unknown}"
+                ));
             }
         };
         match name {
             "--label" if label.is_none() => label = Some(value),
             "--remote-session" if session.is_none() => session = Some(value),
             "--remote-session" => {
-                return Err("--remote-session can only be specified once".into());
+                return Err("--remote-session só pode ser informado uma vez".into());
             }
             "--label" => {
-                return Err("--label can only be specified once".into());
+                return Err("--label só pode ser informado uma vez".into());
             }
             _ => unreachable!("validated machine add option"),
         }
     }
     let target = target.ok_or_else(|| {
-        "usage: herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]"
-            .to_owned()
+        "Uso: herdr machine add <ssh-target> [--label <label>] [--remote-session <name>]".to_owned()
     })?;
     Ok(AddArgs {
         target,
@@ -285,12 +293,12 @@ fn default_label(target: &str, session: &str) -> String {
 fn check_default_label(catalog: &EndpointCatalog, label: &str) -> Result<(), String> {
     if label.len() > MAX_LABEL_BYTES {
         return Err(format!(
-            "default machine name '{label}' is longer than {MAX_LABEL_BYTES} bytes; pass --label to choose a name"
+            "o nome padrão da máquina '{label}' excede {MAX_LABEL_BYTES} bytes; use --label para escolher outro nome"
         ));
     }
     if catalog.ssh.iter().any(|profile| profile.label == label) {
         return Err(format!(
-            "a machine named '{label}' already exists; pass --label to choose another name"
+            "já existe uma máquina chamada '{label}'; use --label para escolher outro nome"
         ));
     }
     Ok(())
@@ -321,7 +329,7 @@ fn add(args: &[String]) -> std::io::Result<i32> {
             match discovered {
                 Ok(session) => session,
                 Err(error) => {
-                    eprintln!("error: {error}; machine was not saved");
+                    eprintln!("erro: {error}; a máquina não foi salva");
                     crate::remote::print_saved_ssh_error_hint(&error, &target);
                     return Ok(1);
                 }
@@ -334,14 +342,14 @@ fn add(args: &[String]) -> std::io::Result<i32> {
     let mut catalog = load_catalog()?;
     if label_is_default {
         if let Err(error) = check_default_label(&catalog, &label) {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             return Ok(2);
         }
     }
     match catalog.add_ssh(label.clone(), &target, session.clone()) {
         Ok(_) => {}
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             return Ok(2);
         }
     }
@@ -352,7 +360,7 @@ fn add(args: &[String]) -> std::io::Result<i32> {
     {
         Ok(metadata) => metadata,
         Err(error) => {
-            eprintln!("error: {error}; machine was not saved");
+            eprintln!("erro: {error}; a máquina não foi salva");
             crate::remote::print_saved_ssh_error_hint(&error, &target);
             return Ok(1);
         }
@@ -360,33 +368,33 @@ fn add(args: &[String]) -> std::io::Result<i32> {
     // Setup can wait for human approval. Do not overwrite catalog edits made meanwhile.
     let mut catalog = load_catalog().map_err(|error| {
         std::io::Error::other(format!(
-            "remote prepared, but machine was not saved: {error}"
+            "o ambiente remoto foi preparado, mas a máquina não foi salva: {error}"
         ))
     })?;
     if label_is_default {
         if let Err(error) = check_default_label(&catalog, &label) {
-            eprintln!("error: {error}; machine was not saved");
+            eprintln!("erro: {error}; a máquina não foi salva");
             return Ok(2);
         }
     }
     let id = match catalog.add_ssh(label, &target, &session) {
         Ok(id) => id,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             return Ok(2);
         }
     };
     store_catalog(&catalog).map_err(|error| {
         std::io::Error::other(format!(
-            "remote prepared, but machine was not saved: {error}"
+            "o ambiente remoto foi preparado, mas a máquina não foi salva: {error}"
         ))
     })?;
     if let Some(metadata) = metadata {
         crate::client::endpoint::SshMetadataCache::new(id.as_str(), &target, &session)?
             .store(&metadata);
     }
-    println!("Saved SSH machine {id}. Remote server is ready.");
-    println!("Open Herdr clients connect automatically.");
+    println!("Máquina SSH {id} salva. O servidor remoto está pronto.");
+    println!("Clientes Herdr abertos conectam automaticamente.");
     Ok(0)
 }
 
@@ -420,7 +428,7 @@ fn select_remote_session(sessions: &[String], target: &str) -> std::io::Result<S
     }
     Err(std::io::Error::new(
         std::io::ErrorKind::Interrupted,
-        "remote session selection cancelled",
+        "seleção da sessão remota cancelada",
     ))
 }
 
@@ -450,7 +458,7 @@ fn render_remote_session_picker(
         execute!(output, cursor::MoveUp((sessions.len() + 2) as u16))?;
     }
     execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
-    write!(output, "Running sessions on {target}:\r\n")?;
+    write!(output, "Sessões em execução em {target}:\r\n")?;
     for (index, session) in sessions.iter().enumerate() {
         execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
         if index == selected {
@@ -463,24 +471,27 @@ fn render_remote_session_picker(
         }
     }
     execute!(output, terminal::Clear(terminal::ClearType::CurrentLine))?;
-    write!(output, "↑/↓ select · Enter confirm · Esc cancel\r\n")?;
+    write!(
+        output,
+        "↑/↓ selecionar · Enter confirmar · Esc cancelar\r\n"
+    )?;
     output.flush()
 }
 
 fn rename(args: &[String]) -> std::io::Result<i32> {
     let args = super::expand_equals_args(args, &["--label"]);
     let [raw_id, flag, label] = args.as_slice() else {
-        eprintln!("usage: herdr machine rename <profile-id> --label <label>");
+        eprintln!("Uso: herdr machine rename <profile-id> --label <label>");
         return Ok(2);
     };
     if flag != "--label" {
-        eprintln!("usage: herdr machine rename <profile-id> --label <label>");
+        eprintln!("Uso: herdr machine rename <profile-id> --label <label>");
         return Ok(2);
     }
     let id = match ProfileId::parse(raw_id.clone()) {
         Ok(id) => id,
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             return Ok(2);
         }
     };
@@ -488,21 +499,21 @@ fn rename(args: &[String]) -> std::io::Result<i32> {
     match catalog.rename_ssh(&id, label) {
         Ok(true) => {}
         Ok(false) => {
-            eprintln!("machine profile {id} was not found");
+            eprintln!("perfil da máquina {id} não encontrado");
             return Ok(1);
         }
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             return Ok(2);
         }
     }
     store_catalog(&catalog)?;
-    println!("Renamed SSH machine {id}.");
+    println!("Máquina SSH {id} renomeada.");
     Ok(0)
 }
 
 fn remove(args: &[String]) -> std::io::Result<i32> {
-    let Some(id) = one_profile_id(args, "usage: herdr machine remove <profile-id>")? else {
+    let Some(id) = one_profile_id(args, "Uso: herdr machine remove <profile-id>")? else {
         return Ok(2);
     };
     let mut catalog = load_catalog()?;
@@ -520,7 +531,7 @@ fn remove(args: &[String]) -> std::io::Result<i32> {
         })
         .transpose()?;
     if !catalog.remove_ssh(&id) {
-        eprintln!("machine profile {id} was not found");
+        eprintln!("perfil da máquina {id} não encontrado");
         return Ok(1);
     }
     store_catalog(&catalog)?;
@@ -530,20 +541,20 @@ fn remove(args: &[String]) -> std::io::Result<i32> {
     if catalog.selected_profile != previous_selection {
         catalog.store_selection().map_err(std::io::Error::other)?;
     }
-    println!("Removed SSH machine {id}.");
+    println!("Máquina SSH {id} removida.");
     Ok(0)
 }
 
 fn set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
     let action = if enabled { "enable" } else { "disable" };
-    let usage = format!("usage: herdr machine {action} <profile-id>");
+    let usage = format!("Uso: herdr machine {action} <profile-id>");
     let Some(id) = one_profile_id(args, &usage)? else {
         return Ok(2);
     };
     let mut catalog = load_catalog()?;
     let previous_selection = catalog.selected_profile.clone();
     if !catalog.set_enabled(&id, enabled) {
-        eprintln!("machine profile {id} was not found");
+        eprintln!("perfil da máquina {id} não encontrado");
         return Ok(1);
     }
     store_catalog(&catalog)?;
@@ -551,8 +562,8 @@ fn set_enabled(args: &[String], enabled: bool) -> std::io::Result<i32> {
         catalog.store_selection().map_err(std::io::Error::other)?;
     }
     println!(
-        "{} SSH machine {id}.",
-        if enabled { "Enabled" } else { "Disabled" }
+        "Máquina SSH {id} {}.",
+        if enabled { "ativada" } else { "desativada" }
     );
     Ok(0)
 }
@@ -565,7 +576,7 @@ fn one_profile_id(args: &[String], usage: &str) -> std::io::Result<Option<Profil
     match ProfileId::parse(raw.clone()) {
         Ok(id) => Ok(Some(id)),
         Err(error) => {
-            eprintln!("error: {error}");
+            eprintln!("erro: {error}");
             Ok(None)
         }
     }

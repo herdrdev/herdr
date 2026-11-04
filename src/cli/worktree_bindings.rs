@@ -19,14 +19,14 @@ pub(crate) fn path(name: &'static str) -> Input<Option<String>> {
 const LEAVES: [Leaf; 4] = [
     Leaf {
         name: "list",
-        about: "List worktree workspaces",
+        about: "Listar espaços de cópias de trabalho",
         id: "cli:worktree:list",
         arguments: WorktreeListProjection::arguments,
         method: |matches| WorktreeListProjection::from_matches(matches).map(Method::WorktreeList),
     },
     Leaf {
         name: "create",
-        about: "Create and open a Git worktree",
+        about: "Criar e abrir uma cópia de trabalho Git",
         id: "cli:worktree:create",
         arguments: WorktreeCreateProjection::arguments,
         method: |matches| {
@@ -35,14 +35,14 @@ const LEAVES: [Leaf; 4] = [
     },
     Leaf {
         name: "open",
-        about: "Open an existing Git worktree",
+        about: "Abrir uma cópia de trabalho Git existente",
         id: "cli:worktree:open",
         arguments: WorktreeOpenProjection::arguments,
         method: |matches| WorktreeOpenProjection::from_matches(matches).map(Method::WorktreeOpen),
     },
     Leaf {
         name: "remove",
-        about: "Remove a worktree checkout",
+        about: "Remover uma cópia de trabalho",
         id: "cli:worktree:remove",
         arguments: WorktreeRemoveProjection::arguments,
         method: |matches| {
@@ -53,7 +53,7 @@ const LEAVES: [Leaf; 4] = [
 
 pub(crate) fn command() -> Command {
     Command::new("worktree")
-        .about("Manage Git worktree-backed workspaces")
+        .about("Gerenciar espaços vinculados a cópias de trabalho Git")
         .subcommand_required(true)
         .subcommands(LEAVES.iter().map(Leaf::command))
         .mut_subcommand("open", |open| {
@@ -166,7 +166,7 @@ mod tests {
                 })
             );
             assert!(
-                matches!(parse(&["open", "--path", "relative"]), Err(ParseError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput && error.to_string() == "remote worktree paths must be absolute or start with ~/")
+                matches!(parse(&["open", "--path", "relative"]), Err(ParseError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput && error.to_string() == "caminhos de worktree remoto devem ser absolutos ou começar com ~/")
             );
         });
     }

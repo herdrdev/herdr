@@ -378,8 +378,8 @@ pub(crate) fn integration_update_instructions(
 
     match commands.as_slice() {
         [] => String::new(),
-        [command] => format!("run {command}"),
-        [rest @ .., last] => format!("run {} and {last}", rest.join(", ")),
+        [command] => format!("execute {command}"),
+        [rest @ .., last] => format!("execute {} e {last}", rest.join(", ")),
     }
 }
 
@@ -394,7 +394,7 @@ pub(crate) fn print_outdated_update_notice() -> bool {
         .map(|integration| integration.target)
         .collect::<Vec<_>>();
     eprintln!(
-        "installed herdr integrations need updating; {}.",
+        "integrações instaladas do Herdr precisam ser atualizadas; {}.",
         integration_update_instructions(&targets).replace('`', "")
     );
     true

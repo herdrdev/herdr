@@ -31,9 +31,9 @@ impl SessionConfig {
 
     fn session_dir(&self, name: &str) -> PathBuf {
         let app_dir = if cfg!(debug_assertions) {
-            "herdr-dev"
+            "pretorian-dev"
         } else {
-            "herdr"
+            "pretorian"
         };
         self.root.join(app_dir).join("sessions").join(name)
     }
@@ -95,7 +95,7 @@ fn delete_session_preserves_differently_cased_name() {
         assert!(error["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("exact"));
+            .contains("exato"));
     } else {
         assert_success(&output);
     }
@@ -158,7 +158,7 @@ fn delete_session_preserves_running_session() {
     assert!(error["error"]["message"]
         .as_str()
         .unwrap()
-        .contains("running"));
+        .contains("execução"));
     assert_eq!(
         fs::read(dir.join("session.json")).unwrap(),
         b"saved session"

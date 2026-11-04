@@ -48,8 +48,8 @@ pub fn run_server() -> io::Result<()> {
     ) {
         Ok(server) => server,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            eprintln!("error: herdr server is already running");
-            eprintln!("api socket: {}", api::socket_path().display());
+            eprintln!("erro: o servidor Pretorian já está em execução");
+            eprintln!("socket da API: {}", api::socket_path().display());
             std::process::exit(1);
         }
         Err(err) => return Err(err),
@@ -81,8 +81,8 @@ pub fn run_server() -> io::Result<()> {
         ) {
             Ok(server) => server,
             Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-                eprintln!("error: herdr server is already running");
-                eprintln!("client socket: {}", client_socket_path().display());
+                eprintln!("erro: o servidor Pretorian já está em execução");
+                eprintln!("socket do cliente: {}", client_socket_path().display());
                 std::process::exit(1);
             }
             Err(err) => return Err(err),

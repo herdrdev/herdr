@@ -22,16 +22,16 @@ impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ClientError::ConnectionFailed(err) => {
-                write!(f, "failed to connect to server: {err}")?;
+                write!(f, "não foi possível conectar ao servidor: {err}")?;
                 let path = client_socket_path();
-                write!(
-                    f,
-                    "\nIs herdr server running? Start it with `herdr server`."
-                )?;
-                write!(f, "\nSocket path: {}", path.display())
+                write!(f, "\nAbra novamente o Pretorian para iniciar o servidor.")?;
+                write!(f, "\nCaminho do socket: {}", path.display())
             }
             ClientError::HandshakeRejected { version, error } => {
-                write!(f, "server rejected handshake (version {version}): {error}")
+                write!(
+                    f,
+                    "o servidor recusou a conexão inicial (versão {version}): {error}"
+                )
             }
             ClientError::ServerShutdown { reason } => {
                 match reason.as_deref() {
@@ -39,19 +39,15 @@ impl std::fmt::Display for ClientError {
                         if let Ok(reattach_command) =
                             std::env::var(crate::remote::REATTACH_COMMAND_ENV_VAR)
                         {
-                            write!(f, "detached from remote server")?;
-                            write!(f, "\nRun `{reattach_command}` to reattach")?;
+                            write!(f, "desconectado do servidor remoto")?;
+                            write!(f, "\nExecute `{reattach_command}` para reconectar")?;
                         } else {
-                            write!(f, "detached from server")?;
-                            write!(
-                                f,
-                                "\nRun `{}` to reattach",
-                                crate::session::local_attach_command()
-                            )?;
+                            write!(f, "desconectado do servidor")?;
+                            write!(f, "\nAbra novamente o Pretorian para reconectar")?;
                         }
                     }
                     _ => {
-                        write!(f, "server shut down")?;
+                        write!(f, "o servidor foi encerrado")?;
                         if let Some(reason) = reason {
                             write!(f, ": {reason}")?;
                         }
@@ -62,14 +58,14 @@ impl std::fmt::Display for ClientError {
             ClientError::ConnectionLost(err) => {
                 if let Ok(reattach_command) = std::env::var(crate::remote::REATTACH_COMMAND_ENV_VAR)
                 {
-                    write!(f, "lost connection to remote Herdr: {err}")?;
-                    write!(f, "\nIf the remote server survived the SSH or network drop, its panes may still be running.")?;
-                    write!(f, "\nRun `{reattach_command}` to reattach")
+                    write!(f, "a conexão com o servidor remoto foi perdida: {err}")?;
+                    write!(f, "\nSe o servidor remoto permaneceu ativo após a queda de SSH ou da rede, seus painéis podem continuar em execução.")?;
+                    write!(f, "\nExecute `{reattach_command}` para reconectar")
                 } else {
-                    write!(f, "lost connection to server: {err}")
+                    write!(f, "a conexão com o servidor foi perdida: {err}")
                 }
             }
-            ClientError::Protocol(err) => write!(f, "protocol error: {err}"),
+            ClientError::Protocol(err) => write!(f, "erro de protocolo: {err}"),
         }
     }
 }
@@ -90,7 +86,7 @@ impl From<protocol::FramingError> for ClientError {
         match err {
             protocol::FramingError::UnexpectedEof => ClientError::ConnectionLost(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "server closed connection",
+                "o servidor encerrou a conexão",
             )),
             protocol::FramingError::Io(err) => ClientError::ConnectionLost(err),
             err => ClientError::Protocol(err),

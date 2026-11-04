@@ -233,6 +233,9 @@ pub(crate) struct ManifestUpdateOutput {
 }
 
 pub(crate) fn check_and_update() -> Result<ManifestUpdateOutput, String> {
+    if !crate::update::upstream_updates_allowed() {
+        return Err("Atualize as regras pelo instalador Pretorian aprovado.".into());
+    }
     check_and_update_from_url(&catalog_url())
 }
 
@@ -674,7 +677,26 @@ contains = ["{contains}"]
     }
 
     #[test]
-    fn auto_update_reloads_manifest_cache_after_remote_commit() {
+    fn pretorian_recusa_atualizacao_remota_e_preserva_cache_anterior() {
+        with_state_dir("pretorian-recusa-remoto", || {
+            let content = remote_manifest("9999.01.01.1", "ready");
+            process_agent_manifest(Agent::Codex, &content, 1).unwrap();
+            let path = remote_manifest_path(Agent::Codex);
+            assert!(check_and_update()
+                .unwrap_err()
+                .contains("instalador Pretorian"));
+            crate::detect::manifest::reload_manifests();
+            let explain = crate::detect::manifest::explain(Agent::Codex, "ready");
+            assert!(matches!(
+                explain.source,
+                Some(crate::detect::manifest::ManifestSource::Bundled)
+            ));
+            assert_eq!(fs::read_to_string(path).unwrap(), content);
+        });
+    }
+
+    #[test]
+    fn auto_update_nao_baixa_nem_ativa_manifesto() {
         with_state_dir("auto-update-reloads-cache", || {
             let old_catalog_url = std::env::var_os(CATALOG_URL_ENV);
             let web_dir = std::env::temp_dir()
@@ -713,23 +735,20 @@ path = "codex.toml"
             auto_update(tx);
 
             let event = rx.try_recv().expect("manifest update event");
-            let crate::events::AppEvent::AgentDetectionManifestsUpdated { updated, .. } = event
+            let crate::events::AppEvent::AgentDetectionManifestsUpdated {
+                updated, activated, ..
+            } = event
             else {
-                panic!("unexpected event");
+                panic!("unexpected event")
             };
-            assert_eq!(updated.len(), 1);
-            assert_eq!(updated[0].agent, Agent::Codex);
-
+            assert!(updated.is_empty());
+            assert!(activated.is_empty());
+            assert!(!remote_manifest_path(Agent::Codex).exists());
             let explain = crate::detect::manifest::explain(Agent::Codex, "auto-update-ready");
-            assert_eq!(explain.state, crate::detect::AgentState::Idle);
             assert!(matches!(
                 explain.source,
-                Some(crate::detect::manifest::ManifestSource::Remote { .. })
+                Some(crate::detect::manifest::ManifestSource::Bundled)
             ));
-            assert_eq!(
-                explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-                Some("idle")
-            );
 
             match old_catalog_url {
                 Some(value) => std::env::set_var(CATALOG_URL_ENV, value),
@@ -740,7 +759,7 @@ path = "codex.toml"
     }
 
     #[test]
-    fn auto_update_reloads_manifest_cache_when_remote_is_already_current() {
+    fn auto_update_preserva_cache_existente_sem_ativar() {
         with_state_dir("auto-update-reloads-current-cache", || {
             let initial = remote_manifest("9999.01.01.1", "initial-ready");
             process_agent_manifest(Agent::Codex, &initial, 1).unwrap();
@@ -783,19 +802,23 @@ path = "codex.toml"
             auto_update(tx);
 
             let event = rx.try_recv().expect("manifest update event");
-            let crate::events::AppEvent::AgentDetectionManifestsUpdated { updated, .. } = event
+            let crate::events::AppEvent::AgentDetectionManifestsUpdated {
+                updated, activated, ..
+            } = event
             else {
-                panic!("unexpected event");
+                panic!("unexpected event")
             };
             assert!(updated.is_empty());
-
-            let explain = crate::detect::manifest::explain(Agent::Codex, "current-ready");
-            assert_eq!(explain.state, crate::detect::AgentState::Idle);
-            assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.2"));
+            assert!(activated.is_empty());
             assert_eq!(
-                explain.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-                Some("idle")
+                fs::read_to_string(remote_manifest_path(Agent::Codex)).unwrap(),
+                remote_manifest("9999.01.01.2", "current-ready")
             );
+            let explain = crate::detect::manifest::explain(Agent::Codex, "current-ready");
+            assert!(matches!(
+                explain.source,
+                Some(crate::detect::manifest::ManifestSource::Bundled)
+            ));
 
             match old_catalog_url {
                 Some(value) => std::env::set_var(CATALOG_URL_ENV, value),
@@ -806,7 +829,7 @@ path = "codex.toml"
     }
 
     #[test]
-    fn auto_update_does_not_reload_agents_whose_check_failed() {
+    fn auto_update_preserva_cache_parcial_sem_ativar() {
         with_state_dir("auto-update-skips-failed-agent", || {
             let initial_codex = remote_manifest("9999.01.01.1", "codex-initial-ready");
             process_agent_manifest(Agent::Codex, &initial_codex, 1).unwrap();
@@ -865,23 +888,25 @@ path = "missing-cursor.toml"
                 updated, activated, ..
             } = event
             else {
-                panic!("unexpected event");
+                panic!("unexpected event")
             };
             assert!(updated.is_empty());
-            assert_eq!(activated, vec![Agent::Codex]);
-
-            let codex = crate::detect::manifest::explain(Agent::Codex, "codex-current-ready");
-            assert_eq!(codex.manifest_version.as_deref(), Some("9999.01.01.2"));
+            assert!(activated.is_empty());
             assert_eq!(
-                codex.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-                Some("idle")
+                fs::read_to_string(remote_manifest_path(Agent::Codex)).unwrap(),
+                remote_manifest("9999.01.01.2", "codex-current-ready")
             );
-            let cursor = crate::detect::manifest::explain(Agent::Cursor, "cursor-initial-ready");
-            assert_eq!(cursor.manifest_version.as_deref(), Some("9999.01.01.1"));
             assert_eq!(
-                cursor.matched_rule.as_ref().map(|rule| rule.id.as_str()),
-                Some("idle")
+                fs::read_to_string(remote_manifest_path(Agent::Cursor)).unwrap(),
+                remote_manifest_for("cursor", "9999.01.01.2", "cursor-current-ready")
             );
+            for agent in [Agent::Codex, Agent::Cursor] {
+                let explain = crate::detect::manifest::explain(agent, "current-ready");
+                assert!(matches!(
+                    explain.source,
+                    Some(crate::detect::manifest::ManifestSource::Bundled)
+                ));
+            }
 
             match old_catalog_url {
                 Some(value) => std::env::set_var(CATALOG_URL_ENV, value),

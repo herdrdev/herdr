@@ -75,8 +75,8 @@ fn write_remote_codex(content: &str) {
     reload_manifests();
 }
 
-fn write_remote_codex_without_reload(content: &str) {
-    let path = crate::detect::manifest_update::remote_manifest_path(Agent::Codex);
+fn write_local_codex_without_reload(content: &str) {
+    let path = override_path(Agent::Codex).unwrap();
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, content).unwrap();
 }
@@ -282,133 +282,104 @@ any = [
 }
 
 #[test]
-fn remote_manifest_loads_between_local_override_and_bundled() {
+fn cached_remote_manifest_is_preserved_but_bundled_is_used() {
     with_manifest_dirs("remote-source", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-
+        let content = remote_manifest("9999.01.01.1", "blocked", "remote-ready");
+        write_remote_codex(&content);
         let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Blocked);
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
+        assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
+        assert!(explain.cached_remote_version.is_none());
         assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
+            std::fs::read_to_string(crate::detect::manifest_update::remote_manifest_path(
+                Agent::Codex
+            ))
+            .unwrap(),
+            content
         );
     });
 }
 
 #[test]
-fn fallback_explain_preserves_active_manifest_version() {
+fn fallback_explain_preserves_bundled_manifest_version() {
     with_manifest_dirs("fallback-version", || {
         write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
-
         let explain = explain(Agent::Codex, "ordinary prompt text");
-
         assert_eq!(explain.state, AgentState::Idle);
         assert_eq!(
             explain.fallback_reason.as_deref(),
             Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
         );
-        assert_eq!(explain.manifest_version.as_deref(), Some("9999.01.01.1"));
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
-    });
-}
-
-#[test]
-fn older_cached_remote_manifest_does_not_shadow_newer_bundled_manifest() {
-    with_manifest_dirs("older-remote-bundled-fallback", || {
-        write_remote_codex(&remote_manifest("2026.06.10.0", "blocked", "remote-ready"));
-
-        let explain = explain(Agent::Codex, "remote-ready");
-
         assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
         assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("2026.06.10.0")
+            explain.manifest_version,
+            bundled_manifest(Agent::Codex)
+                .unwrap()
+                .version
+                .map(|version| version.to_string())
         );
-        assert!(explain
-            .warning
-            .as_deref()
-            .is_some_and(|warning| warning.contains("older than bundled")));
     });
 }
 
 #[test]
-fn local_override_shadows_cached_remote_manifest() {
+fn older_cached_remote_manifest_does_not_shadow_bundled_manifest() {
+    with_manifest_dirs("older-remote-bundled-fallback", || {
+        write_remote_codex(&remote_manifest("2026.06.10.0", "blocked", "remote-ready"));
+        let explain = explain(Agent::Codex, "remote-ready");
+        assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
+        assert!(explain.cached_remote_version.is_none());
+        assert!(explain.warning.is_none());
+    });
+}
+
+#[test]
+fn local_override_remains_available_with_cached_remote_manifest() {
     with_manifest_dirs("local-shadows-remote", || {
         write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
         write_local_codex(&local_manifest("idle", "local-ready"));
-
         let explain = explain(Agent::Codex, "local-ready");
-
         assert_eq!(explain.state, AgentState::Idle);
         assert!(matches!(explain.source, Some(ManifestSource::Override(_))));
-        assert!(explain.local_override_shadowing_remote);
-        assert_eq!(
-            explain.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
+        assert!(!explain.local_override_shadowing_remote);
+        assert!(explain.cached_remote_version.is_none());
     });
 }
 
 #[test]
-fn invalid_local_override_falls_back_to_cached_remote_manifest() {
+fn invalid_local_override_falls_back_to_bundled_manifest() {
     with_manifest_dirs("invalid-local-remote-fallback", || {
         write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "remote-ready"));
         write_local_codex("id = ");
-
         let explain = explain(Agent::Codex, "remote-ready");
-
-        assert_eq!(explain.state, AgentState::Blocked);
-        assert!(matches!(
-            explain.source,
-            Some(ManifestSource::Remote { .. })
-        ));
+        assert!(matches!(explain.source, Some(ManifestSource::Bundled)));
         assert!(explain.warning.is_some());
     });
 }
 
 #[test]
-fn detection_uses_cached_manifest_until_explicit_reload() {
+fn detection_uses_cached_local_manifest_until_explicit_reload() {
     with_manifest_dirs("cache-boundary", || {
-        write_remote_codex(&remote_manifest("9999.01.01.1", "blocked", "cached-ready"));
-
+        write_local_codex(&local_manifest("blocked", "cached-ready"));
         let cached = explain(Agent::Codex, "cached-ready");
         assert_eq!(cached.state, AgentState::Blocked);
-        assert!(matches!(cached.source, Some(ManifestSource::Remote { .. })));
+        assert!(matches!(cached.source, Some(ManifestSource::Override(_))));
         assert_eq!(
             cached.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("test")
         );
-
-        write_remote_codex_without_reload(&remote_manifest("9999.01.01.2", "working", "new-ready"));
-
+        std::fs::write(
+            override_path(Agent::Codex).unwrap(),
+            local_manifest("working", "new-ready"),
+        )
+        .unwrap();
         let unchanged = explain(Agent::Codex, "new-ready");
         assert_eq!(unchanged.state, AgentState::Idle);
         assert_eq!(
             unchanged.fallback_reason.as_deref(),
             Some(DEFAULT_KNOWN_AGENT_IDLE_FALLBACK)
         );
-        assert_eq!(
-            unchanged.cached_remote_version.as_deref(),
-            Some("9999.01.01.1")
-        );
-
         reload_manifests();
-
         let reloaded = explain(Agent::Codex, "new-ready");
         assert_eq!(reloaded.state, AgentState::Working);
-        assert_eq!(
-            reloaded.cached_remote_version.as_deref(),
-            Some("9999.01.01.2")
-        );
         assert_eq!(
             reloaded.matched_rule.as_ref().map(|rule| rule.id.as_str()),
             Some("test")
@@ -419,9 +390,9 @@ fn detection_uses_cached_manifest_until_explicit_reload() {
 #[test]
 fn compiled_rules_are_shared_until_manifest_reload() {
     with_manifest_dirs("shared-compiled-rules", || {
-        write_remote_codex(&format!(
+        write_local_codex(&format!(
             "{}\nregex = ['^cached-[a-z]+$']\n",
-            remote_manifest("9999.01.01.1", "blocked", "cached-ready")
+            local_manifest("blocked", "cached-ready")
         ));
         let first = load_manifest(Agent::Codex).unwrap();
         let second = load_manifest(Agent::Codex).unwrap();
@@ -432,9 +403,9 @@ fn compiled_rules_are_shared_until_manifest_reload() {
             "cached loads must retain the same compiled rules and regex search caches"
         );
 
-        write_remote_codex_without_reload(&format!(
+        write_local_codex_without_reload(&format!(
             "{}\nregex = ['^new-[a-z]+$']\n",
-            remote_manifest("9999.01.01.2", "working", "new-ready")
+            local_manifest("working", "new-ready")
         ));
         let unchanged = load_manifest(Agent::Codex).unwrap();
         assert_eq!(

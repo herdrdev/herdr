@@ -36,6 +36,7 @@ impl ClientShellState {
         self.overlay = Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
             section: ClientSettingsSection::Theme,
             selected: theme_index(&self.config.theme_name),
+            nome: TextEditor::new(self.config.nome_usuario.as_deref().unwrap_or(""), false),
             original_theme_name: self.config.theme_name.clone(),
             original_palette: self.config.palette.clone(),
             integrations: Vec::new(),
@@ -47,6 +48,7 @@ impl ClientShellState {
 
     fn selected_index_for_settings_section(&self, section: ClientSettingsSection) -> usize {
         match section {
+            ClientSettingsSection::Usuario => 0,
             ClientSettingsSection::Theme => theme_index(&self.config.theme_name),
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
@@ -96,6 +98,7 @@ impl ClientShellState {
     fn settings_choice_count(&self) -> usize {
         match self.overlay.as_ref() {
             Some(ClientShellOverlay::Settings(settings)) => match settings.section {
+                ClientSettingsSection::Usuario => 0,
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
@@ -188,6 +191,11 @@ impl ClientShellState {
         let section = settings.section;
         let selected = settings.selected;
         match section {
+            ClientSettingsSection::Usuario => {
+                let nome =
+                    crate::config::sanitizar_nome(settings.nome.as_str()).unwrap_or_default();
+                self.save_settings_edit(crate::config::ConfigEdit::Nome(&nome), outcome);
+            }
             ClientSettingsSection::Theme => {
                 let Some(name) = crate::config::THEME_NAMES.get(selected).copied() else {
                     return;
@@ -304,7 +312,7 @@ impl ClientShellState {
                         }
                         Ok(_) => {
                             self.set_endpoint_error(
-                                "endpoint returned an unexpected integration list result",
+                                "a conexão retornou um resultado inesperado para a lista de integrações",
                             );
                         }
                         Err(_) => {}
@@ -324,9 +332,9 @@ impl ClientShellState {
                             details,
                             ..
                         }) => settings.integration_messages.extend(details.messages),
-                        Ok(_) => settings
-                            .integration_messages
-                            .push("endpoint returned an unexpected integration result".into()),
+                        Ok(_) => settings.integration_messages.push(
+                            "a conexão retornou um resultado inesperado para a integração".into(),
+                        ),
                         Err(error) => settings.integration_messages.push(error.message),
                     }
                     settings.installing_integrations = self.pending_integration_installs > 0;
@@ -369,6 +377,9 @@ impl ClientShellState {
             }
             return true;
         }
+        if self.route_settings_nome_key(key, code, modifiers, outcome) {
+            return true;
+        }
         if matches!(code, KeyCode::Tab | KeyCode::Right | KeyCode::Char('l'))
             && modifiers.is_empty()
         {
@@ -394,6 +405,43 @@ impl ClientShellState {
         if matches!(code, KeyCode::Enter | KeyCode::Char(' ')) && modifiers.is_empty() {
             self.apply_settings_choice(outcome);
             return true;
+        }
+        true
+    }
+
+    /// Na seção "usuário" o campo de texto recebe as teclas; só tab muda de seção e enter aplica.
+    fn route_settings_nome_key(
+        &mut self,
+        key: &crate::input::TerminalKey,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() else {
+            return false;
+        };
+        if settings.section != ClientSettingsSection::Usuario {
+            return false;
+        }
+        if code == KeyCode::Tab && modifiers.is_empty() {
+            self.move_settings_section(1, outcome);
+            return true;
+        }
+        if code == KeyCode::BackTab && modifiers.difference(KeyModifiers::SHIFT).is_empty() {
+            self.move_settings_section(-1, outcome);
+            return true;
+        }
+        if code == KeyCode::Enter && modifiers.is_empty() {
+            self.apply_settings_choice(outcome);
+            return true;
+        }
+        if code == KeyCode::Char('c') && modifiers == KeyModifiers::CONTROL {
+            settings.nome.clear();
+            outcome.repaint = true;
+            return true;
+        }
+        if settings.nome.handle_key(key).is_some() {
+            outcome.repaint = true;
         }
         true
     }

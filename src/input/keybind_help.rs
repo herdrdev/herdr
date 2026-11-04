@@ -39,12 +39,14 @@ fn entry(key: impl Into<String>, label: &'static str) -> KeybindHelpEntry {
 }
 
 fn binding_label(bindings: &ActionKeybinds) -> String {
-    bindings.label().unwrap_or_else(|| "unset".to_owned())
+    bindings
+        .label()
+        .unwrap_or_else(|| "não definido".to_owned())
 }
 
 fn indexed_label(bindings: &[IndexedKeybind]) -> String {
     if bindings.is_empty() {
-        return "unset".to_owned();
+        return "não definido".to_owned();
     }
     let mut parts = Vec::new();
     let mut index = 0;
@@ -80,28 +82,34 @@ pub(crate) fn keybind_help_groups(
         (
             "global",
             vec![
-                entry(crate::config::format_prefix_combos(prefixes), "prefix mode"),
-                entry(binding_label(&keybinds.help), "keybinds"),
-                entry(binding_label(&keybinds.settings), "settings"),
-                entry(binding_label(&keybinds.detach), "detach"),
-                entry(binding_label(&keybinds.reload_config), "reload config"),
+                entry(
+                    crate::config::format_prefix_combos(prefixes),
+                    "modo de prefixo",
+                ),
+                entry(binding_label(&keybinds.help), "atalhos"),
+                entry(binding_label(&keybinds.settings), "configurações"),
+                entry(binding_label(&keybinds.detach), "desanexar"),
+                entry(
+                    binding_label(&keybinds.reload_config),
+                    "recarregar configuração",
+                ),
                 entry(
                     binding_label(&keybinds.open_notification_target),
-                    "open notification target",
+                    "abrir destino da notificação",
                 ),
             ],
         ),
         (
-            "navigation",
+            "navegação",
             vec![
-                entry("esc", "back"),
+                entry("esc", "voltar"),
                 entry(
                     format!(
                         "{} / {}",
                         binding_label(&keybinds.navigate.workspace_up),
                         binding_label(&keybinds.navigate.workspace_down)
                     ),
-                    "workspace list",
+                    "lista de espaços",
                 ),
                 entry(
                     format!(
@@ -111,104 +119,128 @@ pub(crate) fn keybind_help_groups(
                         binding_label(&keybinds.navigate.pane_up),
                         binding_label(&keybinds.navigate.pane_right)
                     ),
-                    "move focus",
+                    "mover foco",
                 ),
-                entry("tab / shift+tab", "cycle pane"),
-                entry("enter", "open workspace"),
-                entry("1..9", "switch workspace"),
+                entry("tab / shift+tab", "alternar painel"),
+                entry("enter", "abrir espaço"),
+                entry("1..9", "trocar espaço"),
             ],
         ),
         (
-            "workspaces / tabs",
+            "espaços / abas",
             vec![
+                entry(binding_label(&keybinds.workspace_picker), "navegar espaços"),
+                entry(binding_label(&keybinds.goto), "navegar sessões"),
+                entry(binding_label(&keybinds.new_workspace), "novo espaço"),
                 entry(
-                    binding_label(&keybinds.workspace_picker),
-                    "workspace navigation",
+                    binding_label(&keybinds.new_worktree),
+                    "nova cópia de trabalho",
                 ),
-                entry(binding_label(&keybinds.goto), "session navigator"),
-                entry(binding_label(&keybinds.new_workspace), "new workspace"),
-                entry(binding_label(&keybinds.new_worktree), "new worktree"),
-                entry(binding_label(&keybinds.open_worktree), "open worktree"),
+                entry(
+                    binding_label(&keybinds.open_worktree),
+                    "abrir cópia de trabalho",
+                ),
                 entry(
                     binding_label(&keybinds.remove_worktree),
-                    "delete worktree checkout",
+                    "excluir cópia de trabalho",
                 ),
-                entry(
-                    binding_label(&keybinds.rename_workspace),
-                    "rename workspace",
-                ),
-                entry(binding_label(&keybinds.close_workspace), "close workspace"),
+                entry(binding_label(&keybinds.rename_workspace), "renomear espaço"),
+                entry(binding_label(&keybinds.close_workspace), "fechar espaço"),
                 entry(
                     binding_label(&keybinds.previous_workspace),
-                    "previous workspace",
+                    "espaço anterior",
                 ),
-                entry(binding_label(&keybinds.next_workspace), "next workspace"),
+                entry(binding_label(&keybinds.next_workspace), "próximo espaço"),
                 entry(
                     indexed_label(&keybinds.switch_workspace),
-                    "switch workspace 1-9",
+                    "trocar espaço 1-9",
                 ),
-                entry(binding_label(&keybinds.previous_agent), "previous agent"),
-                entry(binding_label(&keybinds.next_agent), "next agent"),
-                entry(indexed_label(&keybinds.focus_agent), "focus agent 1-9"),
-                entry(binding_label(&keybinds.new_tab), "new tab"),
-                entry(binding_label(&keybinds.rename_tab), "rename tab"),
-                entry(binding_label(&keybinds.previous_tab), "previous tab"),
-                entry(binding_label(&keybinds.next_tab), "next tab"),
-                entry(binding_label(&keybinds.move_tab_previous), "move tab left"),
-                entry(binding_label(&keybinds.move_tab_next), "move tab right"),
-                entry(indexed_label(&keybinds.switch_tab), "switch tab 1-9"),
-                entry(binding_label(&keybinds.close_tab), "close tab"),
+                entry(binding_label(&keybinds.previous_agent), "agente anterior"),
+                entry(binding_label(&keybinds.next_agent), "próximo agente"),
+                entry(indexed_label(&keybinds.focus_agent), "focar agente 1-9"),
+                entry(binding_label(&keybinds.new_tab), "nova aba"),
+                entry(binding_label(&keybinds.rename_tab), "renomear aba"),
+                entry(binding_label(&keybinds.previous_tab), "aba anterior"),
+                entry(binding_label(&keybinds.next_tab), "próxima aba"),
+                entry(
+                    binding_label(&keybinds.move_tab_previous),
+                    "mover aba à esquerda",
+                ),
+                entry(
+                    binding_label(&keybinds.move_tab_next),
+                    "mover aba à direita",
+                ),
+                entry(indexed_label(&keybinds.switch_tab), "trocar aba 1-9"),
+                entry(binding_label(&keybinds.close_tab), "fechar aba"),
             ],
         ),
         (
-            "panes",
+            "painéis",
             vec![
-                entry(binding_label(&keybinds.split_vertical), "split vertical"),
+                entry(
+                    binding_label(&keybinds.split_vertical),
+                    "dividir na vertical",
+                ),
                 entry(
                     binding_label(&keybinds.split_horizontal),
-                    "split horizontal",
+                    "dividir na horizontal",
                 ),
-                entry(binding_label(&keybinds.close_pane), "close pane"),
-                entry(binding_label(&keybinds.rename_pane), "rename pane"),
-                entry(binding_label(&keybinds.edit_scrollback), "edit scrollback"),
-                entry(binding_label(&keybinds.clear_pane), "clear pane"),
-                entry(binding_label(&keybinds.copy_mode), "copy mode"),
-                entry(binding_label(&keybinds.zoom), "zoom pane"),
-                entry(binding_label(&keybinds.resize_mode), "resize mode"),
+                entry(binding_label(&keybinds.close_pane), "fechar painel"),
+                entry(binding_label(&keybinds.rename_pane), "renomear painel"),
+                entry(binding_label(&keybinds.edit_scrollback), "editar histórico"),
+                entry(binding_label(&keybinds.clear_pane), "limpar painel"),
+                entry(binding_label(&keybinds.copy_mode), "modo de cópia"),
+                entry(binding_label(&keybinds.zoom), "ampliar painel"),
+                entry(
+                    binding_label(&keybinds.resize_mode),
+                    "modo de redimensionamento",
+                ),
                 entry(
                     binding_label(&keybinds.resize_pane_left),
-                    "resize pane left",
+                    "redimensionar painel à esquerda",
                 ),
                 entry(
                     binding_label(&keybinds.resize_pane_down),
-                    "resize pane down",
+                    "redimensionar painel para baixo",
                 ),
-                entry(binding_label(&keybinds.resize_pane_up), "resize pane up"),
+                entry(
+                    binding_label(&keybinds.resize_pane_up),
+                    "redimensionar painel para cima",
+                ),
                 entry(
                     binding_label(&keybinds.resize_pane_right),
-                    "resize pane right",
+                    "redimensionar painel à direita",
                 ),
-                entry(binding_label(&keybinds.toggle_sidebar), "toggle sidebar"),
-                entry(binding_label(&keybinds.focus_pane_left), "focus pane left"),
-                entry(binding_label(&keybinds.focus_pane_down), "focus pane down"),
-                entry(binding_label(&keybinds.focus_pane_up), "focus pane up"),
+                entry(
+                    binding_label(&keybinds.toggle_sidebar),
+                    "alternar barra lateral",
+                ),
+                entry(
+                    binding_label(&keybinds.focus_pane_left),
+                    "focar painel à esquerda",
+                ),
+                entry(
+                    binding_label(&keybinds.focus_pane_down),
+                    "focar painel abaixo",
+                ),
+                entry(binding_label(&keybinds.focus_pane_up), "focar painel acima"),
                 entry(
                     binding_label(&keybinds.focus_pane_right),
-                    "focus pane right",
+                    "focar painel à direita",
                 ),
-                entry(binding_label(&keybinds.cycle_pane_next), "cycle pane next"),
+                entry(binding_label(&keybinds.cycle_pane_next), "próximo painel"),
                 entry(
                     binding_label(&keybinds.cycle_pane_previous),
-                    "cycle pane previous",
+                    "painel anterior",
                 ),
-                entry(binding_label(&keybinds.last_pane), "last pane"),
+                entry(binding_label(&keybinds.last_pane), "último painel"),
             ],
         ),
     ];
 
     if !keybinds.custom_commands.is_empty() {
         groups.push((
-            "custom",
+            "personalizados",
             keybinds
                 .custom_commands
                 .iter()
@@ -219,7 +251,7 @@ pub(crate) fn keybind_help_groups(
                             .description
                             .clone()
                             .map(Cow::Owned)
-                            .unwrap_or(Cow::Borrowed("custom command")),
+                            .unwrap_or(Cow::Borrowed("comando personalizado")),
                     )
                 })
                 .collect(),
@@ -257,12 +289,15 @@ mod tests {
     fn groups() -> Vec<KeybindHelpGroup> {
         vec![
             (
-                "workspaces / tabs",
-                vec![entry("w", "workspace navigation"), entry("c", "new tab")],
+                "espaços / abas",
+                vec![entry("w", "navegar espaços"), entry("c", "nova aba")],
             ),
             (
-                "panes",
-                vec![entry("v", "split vertical"), entry("x", "close pane")],
+                "painéis",
+                vec![
+                    entry("v", "dividir na vertical"),
+                    entry("x", "fechar painel"),
+                ],
             ),
         ]
     }
@@ -291,14 +326,48 @@ mod tests {
 
     #[test]
     fn filter_matches_labels_and_shortcuts_case_insensitively() {
-        let filtered = filter_keybind_help_groups(groups(), "WoRk");
+        let filtered = filter_keybind_help_groups(groups(), "EsPaÇ");
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].1[0].1, "workspace navigation");
+        assert_eq!(filtered[0].1[0].1, "navegar espaços");
 
         let filtered = filter_keybind_help_groups(groups(), "x");
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].1[0].1, "close pane");
-        assert!(filter_keybind_help_groups(groups(), "panes").is_empty());
+        assert_eq!(filtered[0].1[0].1, "fechar painel");
+        assert!(filter_keybind_help_groups(groups(), "painéis").is_empty());
+    }
+
+    #[test]
+    fn busca_portuguesa_encontra_atalho_real_de_fechar() {
+        let grupos = keybind_help_groups(&Keybinds::default(), &[]);
+        let encontrados = filter_keybind_help_groups(grupos, "fechar painel");
+        assert_eq!(encontrados.len(), 1);
+        assert_eq!(encontrados[0].0, "painéis");
+        assert_eq!(encontrados[0].1[0].1, "fechar painel");
+        assert_eq!(
+            encontrados[0].1[0].0,
+            binding_label(&Keybinds::default().close_pane)
+        );
+    }
+
+    #[test]
+    fn descricao_personalizada_e_tecla_permanecem_intactas() {
+        let mut keybinds = Keybinds::default();
+        keybinds
+            .custom_commands
+            .push(crate::config::CustomCommandKeybind {
+                bindings: keybinds.help.clone(),
+                label: "ctrl+x".into(),
+                command: "printf example".into(),
+                action: crate::config::CustomCommandAction::Shell,
+                description: Some("Custom: ação própria 😀".into()),
+                width: None,
+                height: None,
+            });
+        let grupos = keybind_help_groups(&keybinds, &[]);
+        let resultado = filter_keybind_help_groups(grupos, "ação própria");
+        assert_eq!(resultado.len(), 1);
+        assert_eq!(resultado[0].1[0].0, "ctrl+x");
+        assert_eq!(resultado[0].1[0].1, "Custom: ação própria 😀");
     }
 
     #[test]
@@ -312,6 +381,6 @@ mod tests {
         );
         let global = &groups[0].1;
         assert_eq!(global[0].0, "ctrl+space / ctrl+s");
-        assert_eq!(global[0].1, "prefix mode");
+        assert_eq!(global[0].1, "modo de prefixo");
     }
 }

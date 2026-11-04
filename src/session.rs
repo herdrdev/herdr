@@ -44,10 +44,10 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
             return Ok(args.to_vec());
         }
         let Some(name) = args.get(3) else {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("uso: herdr session attach <nome>".to_string());
         };
         if args.len() != 4 {
-            return Err("usage: herdr session attach <name>".to_string());
+            return Err("uso: herdr session attach <nome>".to_string());
         }
         apply_explicit_name(name)?;
         return Ok(cleaned);
@@ -63,7 +63,7 @@ pub fn configure_from_args(args: &[String]) -> Result<Vec<String>, String> {
         }
         if arg == "--session" {
             let Some(value) = args.get(index + 1) else {
-                return Err("missing value for --session".to_string());
+                return Err("falta o valor de --session".to_string());
             };
             requested_session = Some(value.clone());
             index += 2;
@@ -109,10 +109,12 @@ pub fn local_attach_command() -> String {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub fn local_stop_command() -> String {
     stop_command_for(active_name().as_deref())
 }
 
+#[cfg(any(not(windows), test))]
 pub fn stop_command_for(name: Option<&str>) -> String {
     match name {
         Some(name) => format!("herdr session stop {name}"),
@@ -120,31 +122,26 @@ pub fn stop_command_for(name: Option<&str>) -> String {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub fn restart_after_update_guidance(stop_command: &str, attach_command: Option<&str>) -> String {
     let restart = match attach_command {
-        Some(command) => format!("Run `{stop_command}`, then run `{command}` again."),
-        None => format!("Run `{stop_command}`, then restart Herdr with the same socket override."),
+        Some(command) => format!("Execute `{stop_command}` e depois `{command}` novamente."),
+        None => format!(
+            "Execute `{stop_command}` e reinicie o Pretorian com o mesmo caminho de socket."
+        ),
     };
     format!(
-        "Stop the old server to use the new version.\nStopping exits pane processes.\n{restart}"
+        "Encerre o servidor anterior para usar a nova versão.\nIsso encerra os processos dos painéis.\n{restart}"
     )
 }
 
 pub fn active_restart_after_update_guidance() -> String {
-    if !explicit_session_requested() {
-        if let Ok(socket_path) = std::env::var(crate::api::SOCKET_PATH_ENV_VAR) {
-            return restart_after_update_guidance(
-                &format!(
-                    "{}={} herdr server stop",
-                    crate::api::SOCKET_PATH_ENV_VAR,
-                    socket_path
-                ),
-                None,
-            );
-        }
-    }
-
-    restart_after_update_guidance(&local_stop_command(), Some(&local_attach_command()))
+    format!(
+        "Encerre somente o servidor associado à sessão Pretorian abaixo.\nIsso encerra os processos dos painéis; salve o trabalho antes.\nSessão: {}\nSocket da API: {}\nDiretório da sessão: {}\nSe não conseguir identificar o processo correto, peça apoio ao responsável pela instalação.\nDepois do encerramento, reabra o perfil Pretorian.",
+        active_name().unwrap_or_else(|| DEFAULT_SESSION_NAME.to_string()),
+        active_api_socket_path().display(),
+        data_dir().display()
+    )
 }
 
 pub fn explicit_session_requested() -> bool {
@@ -168,8 +165,19 @@ pub fn data_dir_for(name: Option<&str>) -> PathBuf {
     }
 }
 
+fn socket_dir_with_override(name: Option<&str>, root: Option<std::ffi::OsString>) -> PathBuf {
+    match root {
+        Some(dir) => PathBuf::from(dir).join(name.unwrap_or("default")),
+        None => data_dir_for(name),
+    }
+}
+
+fn socket_dir_for(name: Option<&str>) -> PathBuf {
+    socket_dir_with_override(name, std::env::var_os("PRETORIAN_HERDR_SOCKET_DIR"))
+}
+
 pub fn api_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr.sock")
+    socket_dir_for(name).join("herdr.sock")
 }
 
 pub fn active_api_socket_path() -> PathBuf {
@@ -183,7 +191,7 @@ pub fn active_api_socket_path() -> PathBuf {
 }
 
 pub fn client_socket_path_for(name: Option<&str>) -> PathBuf {
-    data_dir_for(name).join("herdr-client.sock")
+    socket_dir_for(name).join("herdr-client.sock")
 }
 
 pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
@@ -256,7 +264,7 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
     let socket_path = api_socket_path_for(name);
     let client_socket_path = client_socket_path_for(name);
-    let label = format!("session {}", name.unwrap_or(DEFAULT_SESSION_NAME));
+    let label = format!("a sessão {}", name.unwrap_or(DEFAULT_SESSION_NAME));
     stop_socket_with_timeout(
         socket_path.clone(),
         vec![socket_path, client_socket_path],
@@ -280,7 +288,7 @@ fn stop_socket_with_timeout(
     });
     let stream = crate::ipc::connect_local_stream(&socket_path).map_err(|err| {
         format!(
-            "{label} is not running or cannot be reached at {}: {err}",
+            "{label} não está em execução ou não pôde ser alcançada em {}: {err}",
             socket_path.display()
         )
     })?;
@@ -293,7 +301,7 @@ fn stop_socket_with_timeout(
     if !wait_until_stopped_until(&stopped_socket_paths, deadline) {
         let reachable = reachable_socket_paths(&stopped_socket_paths);
         return Err(format!(
-            "{label} did not stop within {}ms; sockets are still reachable at {}",
+            "{label} não parou em {}ms; sockets ainda acessíveis em {}",
             timeout.as_millis(),
             reachable
                 .iter()
@@ -307,16 +315,17 @@ fn stop_socket_with_timeout(
 
 pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
     if name == DEFAULT_SESSION_NAME {
-        return Err("deleting the default session is not supported".to_string());
+        return Err("não é possível excluir a sessão padrão".to_string());
     }
     validate_name(name)?;
     let Some(dir) = exact_session_dir_for_delete(name)? else {
         return Ok(session_info(Some(name)));
     };
-    let socket_path = dir.join("herdr.sock");
+    // O socket pode estar fora da pasta de dados (PRETORIAN_HERDR_SOCKET_DIR).
+    let socket_path = api_socket_path_for(Some(name));
     if is_running_at(&socket_path) {
         return Err(format!(
-            "session {name} is running; stop it before deleting"
+            "a sessão {name} está em execução; pare-a antes de excluir"
         ));
     }
     let info = session_info(Some(name));
@@ -345,7 +354,7 @@ fn exact_session_dir_for_delete(name: &str) -> Result<Option<PathBuf>, String> {
     // filesystems. Never probe its socket or delete it without an exact entry.
     match std::fs::symlink_metadata(sessions_dir.join(name)) {
         Ok(_) => Err(format!(
-            "session {name} does not match an exact session name; use the spelling shown by `herdr session list`"
+            "a sessão {name} não corresponde a um nome exato; use a grafia mostrada por `herdr session list`"
         )),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err.to_string()),
@@ -460,22 +469,22 @@ fn socket_timeout_from_remaining(remaining: Duration) -> Option<Duration> {
 
 pub fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
-        return Err("session name cannot be empty".to_string());
+        return Err("o nome da sessão não pode ser vazio".to_string());
     }
     if name.len() > MAX_SESSION_NAME_LEN {
         return Err(format!(
-            "session name cannot be longer than {MAX_SESSION_NAME_LEN} bytes"
+            "o nome da sessão não pode ter mais de {MAX_SESSION_NAME_LEN} bytes"
         ));
     }
     if name == "." || name == ".." {
-        return Err("session name cannot be . or ..".to_string());
+        return Err("o nome da sessão não pode ser . ou ..".to_string());
     }
     if !name
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
     {
         return Err(
-            "session name may only contain ASCII letters, numbers, '.', '_' and '-'".to_string(),
+            "o nome da sessão só pode conter letras ASCII, números, '.', '_' e '-'".to_string(),
         );
     }
     Ok(())
@@ -502,6 +511,18 @@ fn normalize_name(name: &str) -> Result<Option<String>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pretorian_sockets_use_private_short_root_per_session() {
+        let root = Some(std::ffi::OsString::from("/tmp/pretorianteste"));
+        let codex = super::socket_dir_with_override(Some("pretorian-codex"), root.clone());
+        let claude = super::socket_dir_with_override(Some("pretorian-claude"), root);
+        assert_eq!(
+            codex,
+            std::path::PathBuf::from("/tmp/pretorianteste/pretorian-codex")
+        );
+        assert_ne!(codex, claude);
+    }
+
     use super::*;
     #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
@@ -712,7 +733,7 @@ mod tests {
         let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
             .expect_err("silent session should fail after timeout");
 
-        assert!(err.contains("did not stop"), "{err}");
+        assert!(err.contains("não parou"), "{err}");
         keep_running.store(false, Ordering::Relaxed);
         handle.join().unwrap();
         let _ = std::fs::remove_dir_all(&config_home);
@@ -978,7 +999,7 @@ mod tests {
                 "herdr session stop work",
                 Some("herdr session attach work")
             ),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `herdr session stop work`, then run `herdr session attach work` again."
+            "Encerre o servidor anterior para usar a nova versão.\nIsso encerra os processos dos painéis.\nExecute `herdr session stop work` e depois `herdr session attach work` novamente."
         );
     }
 
@@ -989,10 +1010,11 @@ mod tests {
         std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
 
-        assert_eq!(
-            active_restart_after_update_guidance(),
-            "Stop the old server to use the new version.\nStopping exits pane processes.\nRun `HERDR_SOCKET_PATH=/tmp/custom-herdr.sock herdr server stop`, then restart Herdr with the same socket override."
-        );
+        let guidance = active_restart_after_update_guidance();
+        assert!(guidance.contains("/tmp/custom-herdr.sock"));
+        assert!(guidance.contains("Isso encerra os processos dos painéis"));
+        assert!(guidance.contains("reabra o perfil Pretorian"));
+        assert!(!guidance.contains("herdr server stop"));
 
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
     }
@@ -1105,7 +1127,7 @@ mod tests {
         let err = stop_session_with_timeout(Some(session_name), Duration::from_millis(75))
             .expect_err("still-running session should fail");
 
-        assert!(err.contains("did not stop"), "{err}");
+        assert!(err.contains("não parou"), "{err}");
         assert!(
             err.contains(socket_path.to_string_lossy().as_ref()),
             "{err}"

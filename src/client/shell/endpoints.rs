@@ -463,7 +463,7 @@ impl ClientShellState {
         self.endpoints
             .iter()
             .find(|endpoint| &endpoint.endpoint_id == endpoint_id)
-            .map_or("Unknown endpoint", |endpoint| endpoint.label.as_str())
+            .map_or("Conexão desconhecida", |endpoint| endpoint.label.as_str())
     }
 
     pub(crate) fn active_endpoint_label(&self) -> &str {
@@ -721,11 +721,11 @@ pub(super) fn endpoint_status_presentation(
     palette: &Palette,
 ) -> (&'static str, &'static str, ratatui::style::Color) {
     match status {
-        ClientEndpointStatus::Connecting => ("◐", "connecting", palette.yellow),
+        ClientEndpointStatus::Connecting => ("◐", "conectando", palette.yellow),
         ClientEndpointStatus::Online => ("●", "online", palette.green),
-        ClientEndpointStatus::Reconnecting => ("◐", "reconnecting", palette.yellow),
-        ClientEndpointStatus::Attention => ("!", "attention", palette.red),
-        ClientEndpointStatus::Disabled => ("·", "disabled", palette.overlay0),
+        ClientEndpointStatus::Reconnecting => ("◐", "reconectando", palette.yellow),
+        ClientEndpointStatus::Attention => ("!", "atenção", palette.red),
+        ClientEndpointStatus::Disabled => ("·", "desativado", palette.overlay0),
     }
 }
 

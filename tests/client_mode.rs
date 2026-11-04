@@ -248,9 +248,9 @@ fn first_pane_id_in_workspace(socket_path: &PathBuf, workspace_id: &str) -> Stri
 
 fn app_dir_name() -> &'static str {
     if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     }
 }
 
@@ -414,9 +414,9 @@ fn client_sees_headless_startup_config_diagnostic() {
     let client_socket = runtime_dir.join("herdr-client.sock");
 
     let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     fs::create_dir_all(config_home.join(app_dir)).unwrap();
     fs::write(
@@ -468,8 +468,13 @@ fn client_sees_headless_startup_config_diagnostic() {
     );
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            let output = read_output(&output);
-            output.contains("config.toml") && output.contains("herdr config check")
+            let bytes = output
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .bytes
+                .clone();
+            let tela = terminal_screen::text(&bytes, 80, 24);
+            tela.contains("config.toml") && tela.contains("revise a configuração")
         }),
         "client shell should render startup config diagnostic; output: {:?}",
         read_output(&output)
@@ -489,11 +494,11 @@ fn server_unreachable_shows_clear_error() {
     let runtime_dir = base.join("runtime");
     let api_socket = runtime_dir.join("herdr.sock");
 
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
     register_runtime_dir(&runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("pretorian/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -516,15 +521,15 @@ fn server_unreachable_shows_clear_error() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("failed to connect to server"),
+        stderr.contains("não foi possível conectar ao servidor"),
         "stderr should mention connection failure: {stderr}"
     );
     assert!(
-        stderr.contains("Is herdr server running?"),
+        stderr.contains("Abra novamente o Pretorian para iniciar o servidor"),
         "stderr should include actionable guidance: {stderr}"
     );
     assert!(
-        stderr.contains("Socket path:"),
+        stderr.contains("Caminho do socket:"),
         "stderr should include attempted socket path: {stderr}"
     );
 
@@ -599,7 +604,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     spawned.close_master();
 
     // Client should exit non-zero after connection loss.
-    let mut crash_output = String::new();
+    let mut crash_output = Vec::new();
     let exited = {
         let deadline = Instant::now() + Duration::from_secs(12);
         let mut exited = false;
@@ -612,7 +617,7 @@ fn server_crash_after_attach_causes_lost_connection_error() {
             let mut buf = [0u8; 1024];
             if let Ok(n) = thin_reader.read(&mut buf) {
                 if n > 0 {
-                    crash_output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    crash_output.extend_from_slice(&buf[..n]);
                 }
             }
             thread::sleep(Duration::from_millis(20));
@@ -632,16 +637,17 @@ fn server_crash_after_attach_causes_lost_connection_error() {
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
         match thin_reader.read(&mut buf) {
-            Ok(n) if n > 0 => crash_output.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Ok(n) if n > 0 => crash_output.extend_from_slice(&buf[..n]),
             Ok(_) => break,
             Err(_) => break,
         }
         thread::sleep(Duration::from_millis(30));
     }
 
+    let crash_output = String::from_utf8_lossy(&crash_output);
     let crash_output_lc = crash_output.to_lowercase();
     assert!(
-        crash_output_lc.contains("lost connection to server"),
+        crash_output_lc.contains("a conexão com o servidor foi perdida"),
         "thin client must emit explicit lost-connection message after server crash; output: {crash_output:?}"
     );
 
@@ -669,8 +675,6 @@ fn output_has_mouse_teardown(output: &str) -> bool {
 #[derive(Default)]
 struct PtyOutput {
     bytes: Vec<u8>,
-    // Keep legacy raw-string watermarks stable even across split UTF-8 reads.
-    text: String,
 }
 
 type SharedOutput = std::sync::Arc<Mutex<PtyOutput>>;
@@ -686,7 +690,6 @@ fn spawn_pty_drain(mut reader: Box<dyn Read + Send>) -> SharedOutput {
                 Ok(n) => {
                     let mut captured = thread_output.lock().unwrap_or_else(|p| p.into_inner());
                     captured.bytes.extend_from_slice(&buf[..n]);
-                    captured.text.push_str(&String::from_utf8_lossy(&buf[..n]));
                 }
                 Err(_) => break,
             }
@@ -704,17 +707,20 @@ fn screen_capture_preserves_split_utf8_bytes() {
         Duration::from_millis(10),
         || {
             let bytes = output.lock().unwrap().bytes.clone();
-            bytes == "café".as_bytes() && terminal_screen::text(&bytes, 80, 24).contains("café")
+            bytes == "café".as_bytes()
+                && terminal_screen::text(&bytes, 80, 24).contains("café")
+                && read_output(&output) == "café"
         }
     ));
 }
 
 fn read_output(output: &SharedOutput) -> String {
-    output
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .text
-        .clone()
+    read_output_since(output, 0)
+}
+
+fn read_output_since(output: &SharedOutput, since: usize) -> String {
+    let captured = output.lock().unwrap_or_else(|p| p.into_inner());
+    String::from_utf8_lossy(captured.bytes.get(since..).unwrap_or_default()).into_owned()
 }
 
 #[test]
@@ -767,8 +773,7 @@ fn sigwinch_refreshes_host_palette_without_resizing() {
         );
         assert!(
             wait_until(Duration::from_secs(5), Duration::from_millis(25), || {
-                let captured = read_output(&output);
-                let refreshed = &captured[watermark..];
+                let refreshed = read_output_since(&output, watermark);
                 refreshed.contains(queries) && refreshed.contains("\x1b]4;15;?\x1b\\")
             }),
             "SIGWINCH should query default colors and the ANSI palette without changing PTY size"
@@ -788,7 +793,7 @@ fn sigwinch_refreshes_host_palette_without_resizing() {
 /// the output emitted *after* a trigger. The teardown markers also appear in
 /// normal attach-phase output, so matching the whole buffer is meaningless.
 fn output_len(output: &SharedOutput) -> usize {
-    output.lock().unwrap_or_else(|p| p.into_inner()).text.len()
+    output.lock().unwrap_or_else(|p| p.into_inner()).bytes.len()
 }
 
 fn sidebar_row_click(screen: &str, label: &str) -> Vec<u8> {
@@ -971,8 +976,8 @@ fn federated_launch_opens_local_directly_while_saved_ssh_is_unavailable() {
                 false
             }), "Local must accept input without waiting for SSH (remote selected: {select_remote}): {}", read_output(&output));
             let text = read_output(&output);
-            assert!(!text.contains("Local: connecting"), "{text}");
-            assert!(!text.contains("Local: reconnecting"), "{text}");
+            assert!(!text.contains("Local: conectando"), "{text}");
+            assert!(!text.contains("Local: reconectando"), "{text}");
             drop(input);
             drop(client);
         }
@@ -1238,7 +1243,7 @@ fn federated_client_starts_without_local_and_survives_its_restart() {
     support::stop_spawned_herdr(&mut *remote_server.child);
     assert!(
         wait_until(Duration::from_secs(10), Duration::from_millis(20), || {
-            read_output(&output)[watermark..].contains("reconnecting")
+            read_output_since(&output, watermark).contains("reconectando")
         }),
         "the selected remote must be marked disconnected"
     );
@@ -1392,7 +1397,7 @@ fn client_shell_detaches_restores_and_freshly_reattaches_to_current_state() {
     assert!(
         disconnect_output
             .to_lowercase()
-            .contains("lost connection to server"),
+            .contains("a conexão com o servidor foi perdida"),
         "client shell should explain endpoint loss; output: {disconnect_output:?}"
     );
 
@@ -1601,7 +1606,7 @@ fn drain_until_client_exits(
     thread::sleep(Duration::from_millis(100));
     let full = read_output(output);
     assert!(exited, "thin client should exit; output: {full:?}");
-    full.get(since..).unwrap_or_default().to_string()
+    read_output_since(output, since)
 }
 
 /// Attaches a thin client, runs `trigger` to force an exit, and asserts the
@@ -1945,8 +1950,9 @@ fn unavailable_restored_pane_keeps_saved_cwd_in_server() {
     );
     assert!(
         wait_until(Duration::from_secs(8), Duration::from_millis(20), || {
-            let screen = read_output(&output);
-            screen.contains("missing-cwd") && screen.contains("unavailable")
+            let bytes = output.lock().unwrap().bytes.clone();
+            let screen = terminal_screen::text(&bytes, 80, 24);
+            screen.contains("missing-cwd") && screen.contains("indisponível")
         }),
         "client shell should render the unavailable pane; output: {:?}",
         read_output(&output)

@@ -189,7 +189,7 @@ impl EndpointCommands {
                     request_id: command.request_id,
                     result: Err(ClientShellEndpointError {
                         code: Some("endpoint_timeout".into()),
-                        message: "this server did not respond to the action".into(),
+                        message: "este servidor não respondeu à ação".into(),
                     }),
                 })
             })
@@ -265,7 +265,7 @@ pub(super) fn parse_response(
 ) -> Result<ResponseResult, ClientShellEndpointError> {
     let value = serde_json::from_slice(response).map_err(|error| ClientShellEndpointError {
         code: None,
-        message: format!("invalid endpoint response: {error}"),
+        message: format!("resposta inválida da conexão: {error}"),
     })?;
     match crate::api::client::parse_response_value(value) {
         Ok(response) if response.id == expected_id => Ok(response.result),

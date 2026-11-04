@@ -61,7 +61,7 @@ pub(crate) fn limit() -> Input<Option<usize>> {
         *slot = Some(
             value
                 .parse()
-                .map_err(|_| ParseError::Usage(format!("invalid --limit value: {value}")))?,
+                .map_err(|_| ParseError::Usage(format!("valor inválido para --limit: {value}")))?,
         );
         Ok(())
     })
@@ -88,7 +88,7 @@ pub(crate) fn placement() -> Input<Option<PluginPanePlacement>> {
                 .iter()
                 .find(|(name, _, _)| *name == value)
                 .map(|(_, placement, _)| *placement)
-                .ok_or_else(|| ParseError::Usage(format!("invalid pane placement: {value}")))?,
+                .ok_or_else(|| ParseError::Usage(format!("posição de painel inválida: {value}")))?,
         );
         Ok(())
     })
@@ -108,7 +108,9 @@ pub(crate) fn direction() -> Input<Option<SplitDirection>> {
                 .iter()
                 .find(|(name, _)| *name == value)
                 .map(|(_, direction)| direction.clone())
-                .ok_or_else(|| ParseError::Usage(format!("invalid split direction: {value}")))?,
+                .ok_or_else(|| {
+                    ParseError::Usage(format!("direção da divisão inválida: {value}"))
+                })?,
         );
         Ok(())
     })
@@ -182,35 +184,35 @@ impl Leaf {
 const DIRECT: &[Leaf] = &[
     Leaf {
         name: "link",
-        about: "Link a local plugin",
+        about: "Vincular plugin local",
         arguments: PluginLinkProjection::arguments,
         method: |m| PluginLinkProjection::from_matches(m).map(Method::PluginLink),
         json: false,
     },
     Leaf {
         name: "unlink",
-        about: "Unlink a local plugin",
+        about: "Desvincular plugin local",
         arguments: PluginUnlinkProjection::arguments,
         method: |m| PluginUnlinkProjection::from_matches(m).map(Method::PluginUnlink),
         json: false,
     },
     Leaf {
         name: "enable",
-        about: "Enable a plugin",
+        about: "Ativar plugin",
         arguments: PluginSetEnabledProjection::arguments,
         method: |m| PluginSetEnabledProjection::from_matches(m).map(Method::PluginEnable),
         json: false,
     },
     Leaf {
         name: "disable",
-        about: "Disable a plugin",
+        about: "Desativar plugin",
         arguments: PluginSetEnabledProjection::arguments,
         method: |m| PluginSetEnabledProjection::from_matches(m).map(Method::PluginDisable),
         json: false,
     },
     Leaf {
         name: "list",
-        about: "List installed plugins",
+        about: "Listar plugins instalados",
         arguments: PluginListProjection::arguments,
         method: |m| PluginListProjection::from_matches(m).map(Method::PluginList),
         json: true,
@@ -220,14 +222,14 @@ const DIRECT: &[Leaf] = &[
 const ACTION: &[Leaf] = &[
     Leaf {
         name: "list",
-        about: "List plugin actions",
+        about: "Listar ações de plugin",
         arguments: PluginActionListProjection::arguments,
         method: |m| PluginActionListProjection::from_matches(m).map(Method::PluginActionList),
         json: false,
     },
     Leaf {
         name: "invoke",
-        about: "Invoke a plugin action",
+        about: "Executar ação de plugin",
         arguments: PluginActionInvokeProjection::arguments,
         method: |m| PluginActionInvokeProjection::from_matches(m).map(Method::PluginActionInvoke),
         json: false,
@@ -237,21 +239,21 @@ const ACTION: &[Leaf] = &[
 const PANE: &[Leaf] = &[
     Leaf {
         name: "open",
-        about: "Open a plugin pane",
+        about: "Abrir painel de plugin",
         arguments: PluginPaneOpenProjection::arguments,
         method: |m| PluginPaneOpenProjection::from_matches(m).map(Method::PluginPaneOpen),
         json: false,
     },
     Leaf {
         name: "focus",
-        about: "Focus a plugin pane",
+        about: "Focar painel de plugin",
         arguments: PluginPaneFocusProjection::arguments,
         method: |m| PluginPaneFocusProjection::from_matches(m).map(Method::PluginPaneFocus),
         json: false,
     },
     Leaf {
         name: "close",
-        about: "Close a plugin pane",
+        about: "Fechar painel de plugin",
         arguments: PluginPaneCloseProjection::arguments,
         method: |m| PluginPaneCloseProjection::from_matches(m).map(Method::PluginPaneClose),
         json: false,
@@ -260,7 +262,7 @@ const PANE: &[Leaf] = &[
 
 const LOG: Leaf = Leaf {
     name: "list",
-    about: "List plugin command logs",
+    about: "Listar registros de comandos de plugin",
     arguments: PluginLogListProjection::arguments,
     method: |m| PluginLogListProjection::from_matches(m).map(Method::PluginLogList),
     json: false,
@@ -275,11 +277,11 @@ fn group(name: &'static str, about: &'static str, leaves: &[Leaf]) -> Command {
 
 pub(crate) fn command() -> Command {
     Command::new("plugin")
-        .about("Install and run workflow plugins")
+        .about("Instalar e executar plugins de fluxo de trabalho")
         .subcommand_required(true)
         .subcommand(
             Command::new("install")
-                .about("Install a plugin from GitHub")
+                .about("Instalar plugin do GitHub")
                 .arg(
                     Arg::new("source")
                         .value_name("OWNER/REPO[/SUBDIR]")
@@ -295,12 +297,12 @@ pub(crate) fn command() -> Command {
         )
         .subcommand(
             Command::new("uninstall")
-                .about("Uninstall a plugin")
+                .about("Desinstalar plugin")
                 .arg(Arg::new("plugin").value_name("PLUGIN").required(true)),
         )
         .subcommand(
             Command::new("update")
-                .about("Update GitHub-installed plugins")
+                .about("Atualizar plugins instalados pelo GitHub")
                 .arg(Arg::new("plugins").value_name("PLUGIN").num_args(0..))
                 .arg(
                     Arg::new("yes")
@@ -312,28 +314,32 @@ pub(crate) fn command() -> Command {
         .subcommands(DIRECT.iter().map(Leaf::command))
         .subcommand(
             Command::new("config-dir")
-                .about("Print a plugin config directory")
+                .about("Mostrar diretório de configuração do plugin")
                 .arg(Arg::new("plugin_id").value_name("PLUGIN_ID").required(true)),
         )
-        .subcommand(group("action", "List or invoke plugin actions", ACTION))
+        .subcommand(group(
+            "action",
+            "Listar ou executar ações de plugin",
+            ACTION,
+        ))
         .subcommand(
             projection::command("log", (LOG.arguments)())
-                .about("Inspect plugin command logs")
+                .about("Consultar registros de comandos de plugin")
                 .visible_alias("logs")
                 .args_conflicts_with_subcommands(true)
                 .subcommand(LOG.command()),
         )
-        .subcommand(group("pane", "Manage plugin-owned panes", PANE))
+        .subcommand(group("pane", "Gerenciar painéis de plugin", PANE))
 }
 
 fn leaf_matches(leaves: &[Leaf], matches: &ArgMatches) -> Result<(Method, bool), ParseError> {
     let (name, matches) = matches
         .subcommand()
-        .ok_or_else(|| ParseError::Usage("missing plugin command".into()))?;
+        .ok_or_else(|| ParseError::Usage("falta o comando plugin".into()))?;
     leaves
         .iter()
         .find(|leaf| leaf.name == name)
-        .ok_or_else(|| ParseError::Usage(format!("unknown plugin command: {name}")))?
+        .ok_or_else(|| ParseError::Usage(format!("comando plugin desconhecido: {name}")))?
         .method(matches)
 }
 

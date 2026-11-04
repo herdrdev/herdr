@@ -88,9 +88,9 @@ impl Harness {
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
         let app = if cfg!(debug_assertions) {
-            "herdr-dev"
+            "pretorian-dev"
         } else {
-            "herdr"
+            "pretorian"
         };
         let state = root.join("state").join(app).join("client");
         let session = root.join("config").join(app).join("sessions/fleet");
@@ -777,7 +777,7 @@ fn machine_api_protocol_mismatch_never_sends_the_mutation() {
     assert_eq!(server.join().unwrap()["method"], "ping");
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(error.contains("protocol_mismatch"), "{error}");
-    assert!(error.contains("machine 'mac'"), "{error}");
+    assert!(error.contains("máquina 'mac'"), "{error}");
     assert!(!error.contains("HERDR_SOCKET_PATH="), "{error}");
     harness.assert_local_untouched();
 }

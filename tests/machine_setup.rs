@@ -137,9 +137,9 @@ fn setup_options(
             .as_nanos()
     ));
     let app = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     fs::create_dir_all(root.join("bin")).unwrap();
     fs::create_dir_all(root.join("config").join(app)).unwrap();
@@ -234,14 +234,15 @@ fn setup_options(
             }
         }
     });
-    let mut output = String::new();
+    let mut output_bytes = Vec::new();
     let mut prompts = 0;
     let mut timed_out = false;
     let mut picked = false;
     loop {
         match rx.recv_timeout(Duration::from_secs(20)) {
             Ok(bytes) => {
-                output.push_str(&String::from_utf8_lossy(&bytes));
+                output_bytes.extend_from_slice(&bytes);
+                let output = String::from_utf8_lossy(&output_bytes);
                 if !picked && output.contains("Esc cancel") {
                     writer.write_all(options.selection).unwrap();
                     writer.flush().unwrap();
@@ -268,6 +269,7 @@ fn setup_options(
             }
         }
     }
+    let output = String::from_utf8_lossy(&output_bytes).into_owned();
     let status = child.wait().unwrap();
     drop(writer);
     drop(pair.master);
@@ -311,9 +313,9 @@ fn machine_add_accepts_help_argument_order() {
     ));
     fs::create_dir(&root).unwrap();
     let app = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     fs::create_dir_all(root.join("config").join(app)).unwrap();
     fs::write(
@@ -348,7 +350,7 @@ fn machine_add_accepts_help_argument_order() {
     fs::remove_dir_all(root).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{stderr}");
-    assert!(stderr.contains("machine was not saved"), "{stderr}");
+    assert!(stderr.contains("a máquina não foi salva"), "{stderr}");
     assert!(!saved, "failed preparation must not save a machine");
 }
 
@@ -358,7 +360,9 @@ fn machine_add_fresh_host_offers_installation_and_cancellation_saves_nothing() {
     assert_eq!(result.probes, "platform\ncandidates\n", "{}", result.output);
     assert_eq!(result.prompts, 1, "{}", result.output);
     assert!(
-        result.output.contains("installation cancelled"),
+        result
+            .output
+            .contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
@@ -383,7 +387,9 @@ fn machine_setup_accepts_a_native_windows_probe_without_a_posix_probe() {
     assert_eq!(order.first().copied(), Some("windows"), "{}", result.output);
     assert!(!order.contains(&"posix-probe"), "{}", result.output);
     assert!(
-        result.output.contains("installation cancelled"),
+        result
+            .output
+            .contains("instalação remota do Herdr cancelada"),
         "{}",
         result.output
     );
@@ -460,7 +466,7 @@ fn machine_add_discovers_sessions_once_and_prepares_the_selected_session() {
         if !selection.is_empty() {
             let picker = result
                 .output
-                .split("Running sessions on fake-host:")
+                .split("Sessões em execução em fake-host:")
                 .nth(1)
                 .unwrap();
             assert!(
@@ -486,7 +492,7 @@ fn machine_add_failed_discovery_and_cancel_never_prepare_or_save() {
         (
             r#"{"sessions":[{"name":"default","running":true},{"name":"agents","running":true}]}"#,
             &b"\x1b"[..],
-            "selection cancelled",
+            "seleção da sessão remota cancelada",
         ),
     ] {
         let result = setup_options(
@@ -504,7 +510,7 @@ fn machine_add_failed_discovery_and_cancel_never_prepare_or_save() {
         assert!(result.actions.is_empty(), "{}", result.output);
         assert!(result.output.contains(expected), "{}", result.output);
         assert!(
-            result.output.contains("machine was not saved"),
+            result.output.contains("a máquina não foi salva"),
             "{}",
             result.output
         );
@@ -562,12 +568,14 @@ fn machine_add_reports_strict_host_key_failure() {
     assert!(
         result
             .output
-            .contains("saved machines use strict host-key checking"),
+            .contains("máquinas salvas usam verificação estrita da chave do host"),
         "{}",
         result.output
     );
     assert!(
-        !result.output.contains("lost connection to server"),
+        !result
+            .output
+            .contains("a conexão com o servidor foi perdida"),
         "{}",
         result.output
     );
@@ -580,7 +588,7 @@ fn machine_setup_old_install_requires_one_explicit_stop_approval() {
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );
@@ -596,7 +604,7 @@ fn machine_setup_old_install_enter_cancels_without_remote_changes() {
     let result = setup("old", "\n", false);
     assert!(result.actions.is_empty(), "{}", result.output);
     assert!(
-        result.output.contains("machine was not saved"),
+        result.output.contains("a máquina não foi salva"),
         "{}",
         result.output
     );
@@ -609,7 +617,7 @@ fn machine_setup_new_install_old_server_enter_does_not_stop_or_handoff() {
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );
@@ -629,7 +637,7 @@ fn machine_setup_explicit_remote_handoff_remains_available_but_restart_fallback_
     assert!(
         result
             .output
-            .contains("This stops active remote pane processes"),
+            .contains("Isso encerra os processos ativos nos painéis remotos"),
         "{}",
         result.output
     );

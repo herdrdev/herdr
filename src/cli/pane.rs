@@ -83,7 +83,7 @@ fn caller_target(
     if current.is_some() && current > explicit {
         let caller = caller.map(super::normalize_pane_id);
         if require_current_caller && caller.is_none() {
-            return Err(ParseError::Usage("--current requires HERDR_PANE_ID".into()));
+            return Err(ParseError::Usage("--current exige HERDR_PANE_ID".into()));
         }
         return Ok(caller);
     }
@@ -94,7 +94,7 @@ fn caller_target(
 }
 
 fn direction(value: &str) -> Result<PaneDirection, ParseError> {
-    bindings::parse_choice(bindings::DIRECTIONS, "pane direction", value)
+    bindings::parse_choice(bindings::DIRECTIONS, "direção do painel", value)
 }
 
 fn finite(name: &str, value: &str) -> Result<f32, ParseError> {
@@ -102,13 +102,15 @@ fn finite(name: &str, value: &str) -> Result<f32, ParseError> {
         .parse::<f32>()
         .ok()
         .filter(|value| value.is_finite())
-        .ok_or_else(|| ParseError::Usage(format!("invalid {name}: {value}")))
+        .ok_or_else(|| ParseError::Usage(format!("{name} inválido: {value}")))
 }
 
 fn source(value: String) -> Result<String, ParseError> {
     let value = value.trim().to_owned();
     if value.is_empty() {
-        return Err(ParseError::Usage("missing required --source".into()));
+        return Err(ParseError::Usage(
+            "falta a opção obrigatória --source".into(),
+        ));
     }
     Ok(value)
 }
@@ -125,7 +127,7 @@ fn swap(matches: &ArgMatches) -> Result<Method, ParseError> {
             && params.target_pane_id.is_some()))
     {
         return Err(ParseError::Usage(
-            "provide a direction or both source and target panes".into(),
+            "informe uma direção ou os painéis de origem e destino".into(),
         ));
     }
     params.source_pane_id = params
@@ -149,12 +151,12 @@ fn move_pane(matches: &ArgMatches) -> Result<Method, ParseError> {
         .map(|value| finite("ratio", &value))
         .transpose()?;
     params.destination = if let Some(tab) = text("tab") {
-        let split =
-            text("split").ok_or_else(|| ParseError::Usage("missing required --split".into()))?;
+        let split = text("split")
+            .ok_or_else(|| ParseError::Usage("falta a opção obrigatória --split".into()))?;
         PaneMoveDestination::Tab {
             tab_id: super::normalize_tab_id(&tab),
             target_pane_id: text("target-pane").map(|value| super::normalize_pane_id(&value)),
-            split: bindings::parse_choice(bindings::SPLITS, "split direction", &split)?,
+            split: bindings::parse_choice(bindings::SPLITS, "direção da divisão", &split)?,
             ratio,
         }
     } else if matches.get_flag("new-tab") {
@@ -180,7 +182,7 @@ fn metadata(matches: &ArgMatches) -> Result<Method, ParseError> {
         .is_some_and(|value| value.trim().is_empty())
     {
         return Err(ParseError::Usage(
-            "missing value for --applies-to-source".into(),
+            "falta valor para --applies-to-source".into(),
         ));
     }
     if params.title.is_none()
@@ -192,7 +194,7 @@ fn metadata(matches: &ArgMatches) -> Result<Method, ParseError> {
         && !params.clear_state_labels
     {
         return Err(ParseError::Usage(
-            "missing metadata field to set or clear".into(),
+            "falta o campo de metadados para definir ou limpar".into(),
         ));
     }
     Ok(Method::PaneReportMetadata(params))
@@ -669,6 +671,16 @@ mod tests {
         assert_eq!(params.direction, SplitDirection::Down);
         assert!(params.focus);
         assert_eq!(params.env.get("A").map(String::as_str), Some("last"));
+    }
+
+    #[test]
+    fn pane_erros_em_portugues_preservam_valor() {
+        assert!(
+            matches!(direction("invalida"), Err(ParseError::Usage(message)) if message == "valor inválido para direção do painel: invalida")
+        );
+        assert!(
+            matches!(request("swap", &[]), Err(ParseError::Usage(message)) if message == "informe uma direção ou os painéis de origem e destino")
+        );
     }
 
     #[test]

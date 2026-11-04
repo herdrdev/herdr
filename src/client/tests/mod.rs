@@ -607,11 +607,11 @@ fn client_error_display_connection_failed() {
     ));
     let msg = err.to_string();
     assert!(
-        msg.contains("failed to connect to server"),
+        msg.contains("não foi possível conectar ao servidor"),
         "should mention connection failure: {msg}"
     );
     assert!(
-        msg.contains("herdr server"),
+        msg.contains("Abra novamente o Pretorian para iniciar o servidor"),
         "should suggest starting server: {msg}"
     );
 }
@@ -624,7 +624,7 @@ fn client_error_display_handshake_rejected() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("rejected handshake"),
+        msg.contains("recusou a conexão inicial"),
         "should mention rejection: {msg}"
     );
     assert!(msg.contains("incompatible"), "should include error: {msg}");
@@ -637,7 +637,7 @@ fn client_error_display_server_shutdown() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("server shut down"),
+        msg.contains("o servidor foi encerrado"),
         "should mention shutdown: {msg}"
     );
     assert!(msg.contains("maintenance"), "should include reason: {msg}");
@@ -648,7 +648,7 @@ fn client_error_display_server_shutdown_no_reason() {
     let err = ClientError::ServerShutdown { reason: None };
     let msg = err.to_string();
     assert!(
-        msg.contains("server shut down"),
+        msg.contains("o servidor foi encerrado"),
         "should mention shutdown: {msg}"
     );
 }
@@ -665,7 +665,7 @@ fn client_error_display_detached_default_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr` to reattach"),
+        msg.contains("Abra novamente o Pretorian para reconectar"),
         "should suggest default reattach command: {msg}"
     );
 }
@@ -680,7 +680,7 @@ fn client_error_display_detached_named_session_reattach_hint() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr session attach work` to reattach"),
+        msg.contains("Abra novamente o Pretorian para reconectar"),
         "should suggest named session reattach command: {msg}"
     );
 }
@@ -698,7 +698,7 @@ fn client_error_display_detached_remote_reattach_hint_takes_precedence() {
     };
     let msg = err.to_string();
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Execute `herdr --remote host --session work` para reconectar"),
         "should prefer remote reattach command: {msg}"
     );
 }
@@ -710,7 +710,7 @@ fn client_error_display_connection_lost() {
     let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
     let msg = err.to_string();
     assert!(
-        msg.contains("lost connection to server"),
+        msg.contains("a conexão com o servidor foi perdida"),
         "should mention lost connection: {msg}"
     );
 }
@@ -725,15 +725,15 @@ fn client_error_display_remote_connection_lost_has_reattach_hint() {
     let err = ClientError::ConnectionLost(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
     let msg = err.to_string();
     assert!(
-        msg.contains("lost connection to remote Herdr"),
+        msg.contains("a conexão com o servidor remoto foi perdida"),
         "should mention remote connection loss: {msg}"
     );
     assert!(
-        msg.contains("panes may still be running"),
+        msg.contains("painéis podem continuar em execução"),
         "should explain possible persistence: {msg}"
     );
     assert!(
-        msg.contains("Run `herdr --remote host --session work` to reattach"),
+        msg.contains("Execute `herdr --remote host --session work` para reconectar"),
         "should show remote reattach command: {msg}"
     );
 }

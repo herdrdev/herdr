@@ -354,9 +354,9 @@ fn render_release_notes_overlay(
         subtitle_area.y,
         subtitle_area.width,
         if notes.preview {
-            "update ready"
+            "atualização pronta"
         } else {
-            "what's new in this release"
+            "novidades desta versão"
         },
         base.fg(p.overlay1),
     );
@@ -369,7 +369,7 @@ fn render_release_notes_overlay(
     button(
         b,
         close,
-        " esc close ",
+        " esc fechar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -398,10 +398,10 @@ fn render_release_notes_overlay(
 
     if let Some(footer_area) = stack.footer {
         let footer_line = ratatui::text::Line::from(vec![
-            ratatui::text::Span::styled(" scroll ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("wheel ↑↓", base.fg(p.text)),
+            ratatui::text::Span::styled(" rolar ", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("roda ↑↓", base.fg(p.text)),
             ratatui::text::Span::styled("  ·  ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("close", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("fechar", base.fg(p.overlay0)),
             ratatui::text::Span::styled(" esc / enter ", base.fg(p.text)),
         ]);
         ratatui::widgets::Widget::render(
@@ -464,9 +464,9 @@ fn render_product_announcement_overlay(
         base.fg(p.text).add_modifier(Modifier::BOLD),
     );
     let subtitle = if announcement.preview {
-        "product announcement preview"
+        "prévia de novidades"
     } else {
-        "product announcement"
+        "novidades"
     };
     put_text(
         b,
@@ -485,7 +485,7 @@ fn render_product_announcement_overlay(
     button(
         b,
         close,
-        " esc close ",
+        " esc fechar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -514,10 +514,10 @@ fn render_product_announcement_overlay(
 
     if let Some(footer_area) = stack.footer {
         let footer_line = ratatui::text::Line::from(vec![
-            ratatui::text::Span::styled(" scroll ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("wheel ↑↓", base.fg(p.text)),
+            ratatui::text::Span::styled(" rolar ", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("roda ↑↓", base.fg(p.text)),
             ratatui::text::Span::styled("  ·  ", base.fg(p.overlay0)),
-            ratatui::text::Span::styled("close", base.fg(p.overlay0)),
+            ratatui::text::Span::styled("fechar", base.fg(p.overlay0)),
             ratatui::text::Span::styled(" esc / enter ", base.fg(p.text)),
         ]);
         ratatui::widgets::Widget::render(
@@ -627,7 +627,7 @@ fn render_onboarding_overlay(
     button(
         b,
         primary,
-        " ↵ continue ",
+        " ↵ continuar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -667,14 +667,14 @@ fn render_rename_overlay(
         &v.input,
         Style::default().fg(p.text).bg(p.surface0),
     );
-    let rs = row(i, &[8, 10, 12], 2, 3);
+    let rs = row(i, &[10, 12, 14], 2, 3);
     let [save, clear, cancel] = rs.as_slice() else {
         return None;
     };
     button(
         b,
         *save,
-        " ↵ save ",
+        " ↵ salvar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -684,8 +684,8 @@ fn render_rename_overlay(
         .fg(p.text)
         .bg(p.surface0)
         .add_modifier(Modifier::BOLD);
-    button(b, *clear, " ^c clear ", n);
-    button(b, *cancel, " esc cancel ", n);
+    button(b, *clear, " ^c limpar ", n);
+    button(b, *cancel, " esc cancelar ", n);
     Some(OverlayRender {
         area: q,
         primary: *save,
@@ -727,7 +727,7 @@ fn render_navigator_overlay(
         q.x + 2,
         q.y,
         q.width.saturating_sub(4),
-        " Go to ",
+        " Navegar ",
         Style::default().fg(p.accent).bg(p.panel_bg),
     );
     let rows = super::aggregate_navigation::navigator_rows(endpoints, active_endpoint_id, n);
@@ -737,14 +737,14 @@ fn render_navigator_overlay(
         format!(
             " / {}",
             match f {
-                ClientNavigatorFilter::Blocked => "blocked",
-                ClientNavigatorFilter::Working => "working",
-                ClientNavigatorFilter::Idle => "idle",
-                ClientNavigatorFilter::Done => "done",
+                ClientNavigatorFilter::Blocked => "aguardando",
+                ClientNavigatorFilter::Working => "trabalhando",
+                ClientNavigatorFilter::Idle => "livre",
+                ClientNavigatorFilter::Done => "pronto",
             }
         )
     } else if n.query.is_empty() {
-        " / search agents and terminals".to_owned()
+        " / buscar agentes e terminais".to_owned()
     } else {
         format!(" / {}", n.query)
     };
@@ -757,7 +757,7 @@ fn render_navigator_overlay(
         if terminal_count == 1 {
             "terminal"
         } else {
-            "terminals"
+            "terminais"
         }
     );
     put_text(
@@ -823,7 +823,7 @@ fn render_navigator_overlay(
             body.x,
             body.y,
             body.width,
-            " No matching agents or terminals",
+            " Nenhum agente ou terminal encontrado",
             Style::default().fg(p.overlay0).bg(p.panel_bg),
         );
     }
@@ -1027,9 +1027,9 @@ fn render_navigator_overlay(
         i.bottom() - 1,
         i.width,
         if n.search_focused {
-            " search type · move ↑↓/ctrl+n/p · open enter · back esc"
+            " digite para buscar · mover ↑↓/ctrl+n/p · abrir enter · voltar esc"
         } else {
-            " ↑↓/j/k rows · ←→ workspace · / search · a/b/w/i/d filter · enter open · esc close"
+            " ↑↓/j/k linhas · ←→ espaço · / buscar · a/b/w/i/d filtro · enter abrir · esc fechar"
         },
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
@@ -1067,7 +1067,7 @@ fn help_lines(
         .max()
         .unwrap_or(8);
     if groups.is_empty() {
-        let message = " no matching keybinds";
+        let message = " nenhum atalho encontrado";
         return vec![(
             message.chars().count(),
             Line::from(Span::styled(
@@ -1080,7 +1080,7 @@ fn help_lines(
     let mut lines = Vec::new();
     for (group, entries) in groups {
         lines.push((
-            group.len() + 1,
+            usize::from(display_width(group)) + 1,
             Line::from(Span::styled(
                 format!(" {group}"),
                 Style::default()
@@ -1132,7 +1132,7 @@ fn render_help_overlay(
         i.x,
         i.y,
         i.width,
-        "keybinds",
+        "atalhos",
         Style::default()
             .fg(p.text)
             .bg(p.panel_bg)
@@ -1143,9 +1143,9 @@ fn render_help_overlay(
         b,
         close,
         if h.search_focused {
-            " esc back "
+            " esc voltar "
         } else {
-            " esc close "
+            " esc fechar "
         },
         Style::default()
             .fg(contrast(p))
@@ -1161,7 +1161,7 @@ fn render_help_overlay(
         &if h.search_focused {
             " / ".to_owned()
         } else {
-            " / press / to filter by command or shortcut".to_owned()
+            " / pressione / para filtrar por comando ou atalho".to_owned()
         },
         Style::default()
             .fg(if h.search_focused { p.text } else { p.overlay0 })
@@ -1236,9 +1236,9 @@ fn render_help_overlay(
         i.bottom() - 1,
         i.width,
         if h.search_focused {
-            " edit ←→/home/end · kill ^u/^k · yank ^y · scroll ↑↓ · back esc"
+            " editar ←→/home/end · cortar ^u/^k · colar ^y · rolar ↑↓ · voltar esc"
         } else {
-            " search / · scroll j/k/↑↓/pgup/pgdn · close esc/enter"
+            " buscar / · rolar j/k/↑↓/pgup/pgdn · fechar esc/enter"
         },
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
@@ -1286,7 +1286,7 @@ fn render_confirm_close_overlay(
     button(
         b,
         *ok,
-        " ↵ confirm ",
+        " ↵ confirmar ",
         Style::default()
             .fg(contrast(p))
             .bg(p.red)
@@ -1295,7 +1295,7 @@ fn render_confirm_close_overlay(
     button(
         b,
         *cancel,
-        " esc cancel ",
+        " esc cancelar ",
         Style::default()
             .fg(p.text)
             .bg(p.surface0)

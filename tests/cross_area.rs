@@ -99,11 +99,11 @@ fn spawn_server_with_path(
     api_socket_path: &Path,
     path_override: Option<&Path>,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("pretorian/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -842,7 +842,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
     );
     drop(server);
 
-    let mut crash_output = String::new();
+    let mut crash_output = Vec::new();
     let thin_exited = {
         let deadline = Instant::now() + Duration::from_secs(12);
         let mut exited = false;
@@ -854,7 +854,7 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
             }
             if let Ok(n) = thin_reader.read(&mut buf) {
                 if n > 0 {
-                    crash_output.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    crash_output.extend_from_slice(&buf[..n]);
                 }
             }
             thread::sleep(Duration::from_millis(50));
@@ -877,16 +877,17 @@ fn cross_area_server_kill_then_restart_and_reconnect() {
     let mut buf = [0u8; 2048];
     while Instant::now() < deadline {
         match thin_reader.read(&mut buf) {
-            Ok(n) if n > 0 => crash_output.push_str(&String::from_utf8_lossy(&buf[..n])),
+            Ok(n) if n > 0 => crash_output.extend_from_slice(&buf[..n]),
             Ok(_) => break,
             Err(_) => break,
         }
         thread::sleep(Duration::from_millis(30));
     }
 
+    let crash_output = String::from_utf8_lossy(&crash_output);
     let crash_output_lc = crash_output.to_lowercase();
     assert!(
-        crash_output_lc.contains("lost connection to server"),
+        crash_output_lc.contains("a conexão com o servidor foi perdida"),
         "thin client output must include explicit lost-connection message after server kill; output: {crash_output:?}"
     );
 

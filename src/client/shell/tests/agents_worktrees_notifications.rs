@@ -257,7 +257,7 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
             let Some(ClientShellOverlay::ContextMenu(menu)) = state.overlay.as_ref() else {
                 panic!("repository workspace context menu");
             };
-            assert_eq!(menu.items()[1].label, "Close");
+            assert_eq!(menu.items()[1].label, "Fechar");
             assert_eq!(
                 menu.items()
                     .iter()
@@ -278,7 +278,7 @@ fn duplicate_repo_parents_remain_visible_and_focusable_when_collapsed() {
                 assert!(close.actions.is_empty());
                 assert!(matches!(state.overlay.as_ref(),
                     Some(ClientShellOverlay::ConfirmClose(confirm))
-                        if confirm.title == "Close workspace?" && !confirm.close_group));
+                        if confirm.title == "Fechar espaço?" && !confirm.close_group));
                 close = state.handle_input_bytes(b"\r");
             }
             assert!(matches!(close.actions.as_slice(),
@@ -1200,7 +1200,7 @@ fn navigate_mode_selects_workspace_locally_then_focuses_by_stable_id() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(text.contains("second"));
-    assert!(text.contains("NAVIGATE"));
+    assert!(text.contains("NAVEGAR"));
 
     let focus = state.handle_input_bytes(b"\r");
     let [ClientShellAction::Endpoint { request, .. }] = &focus.actions[..] else {
@@ -1249,8 +1249,8 @@ fn worktree_create_previews_the_endpoint_owned_checkout_path() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("new worktree"));
-    assert!(text.contains("create and open"));
+    assert!(text.contains("nova cópia de trabalho"));
+    assert!(text.contains("criar e abrir"));
     assert!(frame.cursor.as_ref().is_some_and(|cursor| cursor.visible));
 
     assert!(state
@@ -1318,7 +1318,7 @@ fn worktree_action_errors_expire_without_more_input() {
         crate::input::KeybindMatch::Action(crate::input::KeybindAction::RemoveWorktree),
         &mut guard,
     );
-    let message = "This workspace is not a Herdr-managed worktree checkout.";
+    let message = "Este espaço não é uma cópia de trabalho gerenciada pelo Pretorian.";
     assert_eq!(state.endpoint_error.as_deref(), Some(message));
 
     let deadline = state.endpoint_error_deadline.expect("deadline");
@@ -1493,8 +1493,8 @@ fn worktree_remove_escalates_recoverable_failure_to_force_confirmation() {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("delete anyway"));
-        assert!(text.contains("permanently deleted"));
+        assert!(text.contains("apagar mesmo assim"));
+        assert!(text.contains("serão apagados"));
         let force = state.handle_input_bytes(b"\r");
         let [ClientShellAction::Endpoint { request, .. }] = &force.actions[..] else {
             panic!("forced worktree remove should use endpoint API");
@@ -1587,7 +1587,7 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(rendered.contains("codex needs attention"));
+    assert!(rendered.contains("codex aguardando"));
     let hit = state.hits.notification_toast;
     let click = || {
         RawInputEvent::Mouse(crossterm::event::MouseEvent {
@@ -1681,4 +1681,64 @@ fn semantic_notifications_use_client_policy_and_stable_navigation_targets() {
     assert!(repaint);
     assert!(state.visible_notification.is_none());
     assert_eq!(state.pending_notifications.len(), 1);
+}
+
+#[test]
+fn empty_workspace_name_suggestion_is_localized() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.open_new_workspace_overlay();
+    assert!(
+        matches!(state.overlay.as_ref(), Some(ClientShellOverlay::Rename(ClientRenameOverlay {
+        input, target: ClientRenameTarget::NewWorkspace { cwd: None, suggested_name, .. }, ..
+    })) if input.as_str() == "espaço" && suggested_name == "espaço")
+    );
+}
+
+#[test]
+fn worktree_status_is_localized_without_changing_search() {
+    for (aberta, desanexada, busca, exibicao) in [
+        (true, false, "open", "aberta"),
+        (false, false, "root", "principal"),
+        (false, true, "detached", "desanexada"),
+    ] {
+        let entry = ClientWorktreeOpenEntry {
+            path: "/repo".into(),
+            branch: None,
+            is_linked_worktree: desanexada,
+            is_detached: desanexada,
+            open_workspace_id: aberta.then(|| "ws_1".to_owned()),
+            label: "repo".into(),
+        };
+        assert!(entry.matches_query(busca));
+        assert!(entry.matches_query(exibicao));
+        assert!(entry.matches_query("/repo"));
+        let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+        state.set_snapshot(Box::new(snapshot()));
+        state.set_pane_surface(surface());
+        state.overlay = Some(ClientShellOverlay::WorktreeOpen(
+            ClientWorktreeOpenOverlay {
+                source_workspace_id: "ws_1".into(),
+                entries: vec![entry],
+                selected: 0,
+                query: TextEditor::default(),
+                search_focused: false,
+                error: None,
+                opening: false,
+            },
+        ));
+        let frame = state.compose(106, 30).expect("worktree modal");
+        let text = frame_rows(&frame).join("\n");
+        assert!(text.contains(exibicao), "{text}");
+    }
+    let ramo = ClientWorktreeOpenEntry {
+        path: "/caminho/repositorio".into(),
+        branch: Some("feature/nova".into()),
+        is_linked_worktree: true,
+        is_detached: false,
+        open_workspace_id: None,
+        label: "projeto".into(),
+    };
+    assert!(ramo.matches_query("feature/nova"));
+    assert!(ramo.matches_query("/caminho/repositorio"));
+    assert!(!ramo.matches_query("ramo-ausente"));
 }

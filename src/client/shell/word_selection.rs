@@ -190,7 +190,7 @@ impl ClientShellState {
                 if matches!(other, Ok(value) if !matches!(value, crate::api::schema::ResponseResult::PaneSelection { .. }))
                 {
                     self.set_endpoint_error(
-                        "endpoint returned an unexpected word-selection result",
+                        "a conexão retornou um resultado inesperado para a seleção de palavra",
                     );
                 }
                 self.cancel_word_selection();

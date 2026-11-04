@@ -12,7 +12,7 @@ pub(super) fn render_worktree_create_overlay(
         inner.x,
         inner.y,
         inner.width,
-        "new worktree",
+        "nova cópia de trabalho",
         Style::default()
             .fg(p.text)
             .bg(p.panel_bg)
@@ -23,7 +23,7 @@ pub(super) fn render_worktree_create_overlay(
         inner.x,
         inner.y + 2,
         inner.width,
-        " branch",
+        " ramo",
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
     let input = Rect::new(inner.x, inner.y + 3, inner.width, 1);
@@ -39,7 +39,7 @@ pub(super) fn render_worktree_create_overlay(
         inner.x,
         inner.y + 5,
         inner.width,
-        " checkout",
+        " pasta",
         Style::default().fg(p.overlay0).bg(p.panel_bg),
     );
     put_text(
@@ -56,7 +56,7 @@ pub(super) fn render_worktree_create_overlay(
             inner.x,
             inner.y + 8,
             inner.width,
-            " creating…",
+            " criando…",
             Style::default().fg(p.accent).bg(p.panel_bg),
         );
     } else if let Some(error) = create.error.as_deref() {
@@ -76,7 +76,7 @@ pub(super) fn render_worktree_create_overlay(
     button(
         b,
         *primary,
-        " ↵ create and open ",
+        " ↵ criar e abrir ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -85,7 +85,7 @@ pub(super) fn render_worktree_create_overlay(
     button(
         b,
         *cancel,
-        " esc cancel ",
+        " esc cancelar ",
         Style::default()
             .fg(p.text)
             .bg(p.surface0)
@@ -119,7 +119,7 @@ pub(super) fn render_worktree_open_overlay(
         inner.x,
         inner.y,
         inner.width,
-        "open worktree",
+        "abrir cópia de trabalho",
         Style::default()
             .fg(p.text)
             .bg(p.panel_bg)
@@ -137,7 +137,7 @@ pub(super) fn render_worktree_open_overlay(
         } else if !open.query.is_empty() {
             format!(" / {}", open.query)
         } else {
-            " / filter worktrees".to_owned()
+            " / filtrar cópias de trabalho".to_owned()
         },
         Style::default()
             .fg(if open.search_focused {
@@ -148,9 +148,9 @@ pub(super) fn render_worktree_open_overlay(
             .bg(p.panel_bg),
     );
     let count = if filtered.len() == open.entries.len() {
-        format!("{} checkouts", open.entries.len())
+        format!("{} pastas", open.entries.len())
     } else {
-        format!("{}/{} checkouts", filtered.len(), open.entries.len())
+        format!("{}/{} pastas", filtered.len(), open.entries.len())
     };
     let cursor = if open.search_focused {
         text_editor::render(
@@ -222,7 +222,7 @@ pub(super) fn render_worktree_open_overlay(
             &format!(" {}", entry.label),
             style.add_modifier(Modifier::BOLD),
         );
-        let status = entry.status_label();
+        let status = entry.display_status_label();
         if !status.is_empty() {
             put_right_text(b, rect, rect.y, status, style);
         }
@@ -245,7 +245,7 @@ pub(super) fn render_worktree_open_overlay(
             body.x,
             body.y,
             body.width,
-            " no matching worktrees",
+            " nenhuma cópia encontrada",
             Style::default().fg(p.overlay0).bg(p.panel_bg),
         );
     }
@@ -255,7 +255,7 @@ pub(super) fn render_worktree_open_overlay(
             inner.x,
             inner.bottom() - 3,
             inner.width,
-            " opening…",
+            " abrindo…",
             Style::default().fg(p.accent).bg(p.panel_bg),
         );
     } else if let Some(error) = open.error.as_deref() {
@@ -275,7 +275,7 @@ pub(super) fn render_worktree_open_overlay(
     button(
         b,
         *primary,
-        " ↵ open ",
+        " ↵ abrir ",
         Style::default()
             .fg(contrast(p))
             .bg(p.accent)
@@ -284,7 +284,7 @@ pub(super) fn render_worktree_open_overlay(
     button(
         b,
         *cancel,
-        " esc cancel ",
+        " esc cancelar ",
         Style::default()
             .fg(p.text)
             .bg(p.surface0)
@@ -317,7 +317,7 @@ pub(super) fn render_worktree_remove_overlay(
         inner.x,
         inner.y,
         inner.width,
-        " delete worktree checkout?",
+        " remover cópia de trabalho?",
         Style::default()
             .fg(p.red)
             .bg(p.panel_bg)
@@ -328,7 +328,7 @@ pub(super) fn render_worktree_remove_overlay(
         inner.x,
         inner.y + 1,
         inner.width,
-        " This removes the checkout folder:",
+        " Isto remove a pasta da cópia:",
         Style::default().fg(p.text).bg(p.panel_bg),
     );
     put_text(
@@ -344,7 +344,7 @@ pub(super) fn render_worktree_remove_overlay(
         inner.x,
         inner.y + 3,
         inner.width,
-        " The branch is not deleted. The Herdr workspace will close.",
+        " O ramo será mantido. O espaço será fechado.",
         Style::default().fg(p.text).bg(p.panel_bg),
     );
     if remove.force_confirmation {
@@ -353,7 +353,7 @@ pub(super) fn render_worktree_remove_overlay(
             inner.x,
             inner.y + 4,
             inner.width,
-            " Dirty or untracked files will be permanently deleted.",
+            " Arquivos alterados ou não rastreados serão apagados.",
             Style::default().fg(p.red).bg(p.panel_bg),
         );
     }
@@ -363,7 +363,7 @@ pub(super) fn render_worktree_remove_overlay(
             inner.x,
             inner.y + 5,
             inner.width,
-            " removing…",
+            " removendo…",
             Style::default().fg(p.accent).bg(p.panel_bg),
         );
     } else if let Some(error) = remove.error.as_deref() {
@@ -376,7 +376,7 @@ pub(super) fn render_worktree_remove_overlay(
             Style::default().fg(p.red).bg(p.panel_bg),
         );
     }
-    let buttons = row(inner, &[18, 12], 2, 7);
+    let buttons = row(inner, &[24, 12], 2, 7);
     let [primary, cancel] = buttons.as_slice() else {
         return None;
     };
@@ -384,9 +384,9 @@ pub(super) fn render_worktree_remove_overlay(
         b,
         *primary,
         if remove.force_confirmation {
-            " ↵ delete anyway "
+            " ↵ apagar mesmo assim "
         } else {
-            " ↵ remove "
+            " ↵ remover "
         },
         Style::default()
             .fg(contrast(p))
@@ -396,7 +396,7 @@ pub(super) fn render_worktree_remove_overlay(
     button(
         b,
         *cancel,
-        " esc cancel ",
+        " esc cancelar ",
         Style::default()
             .fg(p.text)
             .bg(p.surface0)

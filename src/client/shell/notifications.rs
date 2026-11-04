@@ -72,20 +72,6 @@ pub(super) fn render_mobile_notification_banner(
     palette: &Palette,
 ) -> Rect {
     let event = &notification.event;
-    let title = match event.kind {
-        SemanticNotificationKind::NeedsAttention => event
-            .title
-            .strip_suffix(" needs attention")
-            .map(|agent| format!("{agent} waiting"))
-            .unwrap_or_else(|| event.title.clone()),
-        SemanticNotificationKind::Finished => event
-            .title
-            .strip_suffix(" finished")
-            .map(|agent| format!("{agent} done"))
-            .unwrap_or_else(|| event.title.clone()),
-        SemanticNotificationKind::UpdateInstalled => "update ready".to_owned(),
-        SemanticNotificationKind::Custom => event.title.clone(),
-    };
     let dot_color = match event.kind {
         SemanticNotificationKind::NeedsAttention => palette.red,
         SemanticNotificationKind::Finished => palette.blue,
@@ -96,7 +82,7 @@ pub(super) fn render_mobile_notification_banner(
     render_mobile_notice_banner(
         buffer,
         area,
-        &title,
+        &event.title,
         event.body.as_deref(),
         dot_color,
         offset_for_warning,
@@ -228,11 +214,81 @@ mod tests {
     }
 
     #[test]
+    fn generated_titles_are_translated_at_delivery_without_changing_custom_content() {
+        use crate::config::ToastDelivery;
+        for delivery in [
+            ToastDelivery::Herdr,
+            ToastDelivery::Terminal,
+            ToastDelivery::System,
+        ] {
+            for (kind, title, expected) in [
+                (
+                    SemanticNotificationKind::NeedsAttention,
+                    "Ana · Codex needs attention",
+                    "Ana · Codex aguardando",
+                ),
+                (
+                    SemanticNotificationKind::NeedsAttention,
+                    "Mensagem do agente",
+                    "Mensagem do agente",
+                ),
+                (
+                    SemanticNotificationKind::Custom,
+                    "Ana · Codex needs attention",
+                    "Ana · Codex needs attention",
+                ),
+                (
+                    SemanticNotificationKind::UpdateInstalled,
+                    "update ready",
+                    "atualização pronta",
+                ),
+            ] {
+                let mut config = ClientShellConfig::from_config(&Config::default());
+                config.toast_delivery = delivery;
+                config.toast_delay_seconds = 0;
+                let mut state = ClientShellState::new(config);
+                let mut event = notification().event;
+                event.kind = kind;
+                event.title = title.into();
+                event.body = Some("conteúdo personalizado · finished".into());
+                let (effects, _) = state.receive_notification(
+                    &ClientEndpointId::Local,
+                    event,
+                    std::time::Instant::now(),
+                );
+                let (actual_title, actual_body) = match delivery {
+                    ToastDelivery::Herdr => {
+                        let event = &state
+                            .visible_notification
+                            .as_ref()
+                            .expect("visible notice")
+                            .event;
+                        assert!(effects.is_empty());
+                        (&event.title, &event.body)
+                    }
+                    _ => match effects.as_slice() {
+                        [ClientShellNotificationEffect::Terminal { title, body }]
+                        | [ClientShellNotificationEffect::System { title, body, .. }] => {
+                            (title, body)
+                        }
+                        _ => panic!("expected one notification effect"),
+                    },
+                };
+                assert_eq!(actual_title, expected);
+                assert_eq!(
+                    actual_body.as_deref(),
+                    Some("conteúdo personalizado · finished")
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mobile_notification_is_a_bottom_banner_with_released_title() {
         let palette = crate::app::client_palette_from_config(&Config::default());
         let mut notification = notification();
         notification.event.kind = SemanticNotificationKind::NeedsAttention;
-        notification.event.title = "pi needs attention".into();
+        notification.event.title = "pi aguardando".into();
         notification.event.body = Some("workspace · tab 1".into());
         let area = Rect::new(0, 0, 44, 20);
         let mut buffer = Buffer::empty(area);
@@ -247,7 +303,7 @@ mod tests {
             .iter()
             .map(|cell| cell.symbol())
             .collect::<String>();
-        assert!(text.contains("pi waiting"));
+        assert!(text.contains("pi aguardando"));
         assert!(text.contains("workspace · tab 1"));
         assert!(buffer.content[18 * 44..19 * 44]
             .iter()
@@ -280,7 +336,7 @@ mod tests {
         assert!(state
             .visible_endpoint_notice
             .as_ref()
-            .is_some_and(|notice| notice.body.contains("Local is unavailable")));
+            .is_some_and(|notice| notice.body.contains("Local está indisponível")));
         assert!(outcome.repaint);
     }
 
@@ -378,7 +434,7 @@ mod tests {
         let (effects, _) = state.tick_notifications(now + COMPLETION_RECHECK_INTERVAL);
         assert!(matches!(
             effects.as_slice(),
-            [ClientShellNotificationEffect::Terminal { title, .. }] if title == "agent finished"
+            [ClientShellNotificationEffect::Terminal { title, .. }] if title == "agent concluiu"
         ));
         assert!(state.pending_notifications.is_empty());
     }

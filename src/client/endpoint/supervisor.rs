@@ -245,7 +245,7 @@ impl EndpointSupervisors {
                         endpoint_id: task_endpoint_id,
                         generation,
                         status: ClientEndpointStatus::Reconnecting,
-                        message: format!("endpoint connection task stopped unexpectedly: {error}"),
+                        message: format!("a tarefa de conexão parou inesperadamente: {error}"),
                     },
                 };
                 if !shutdown.load(Ordering::Acquire) {
@@ -450,7 +450,7 @@ fn connect_once(
     if cancelled.load(Ordering::Acquire) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
-            "connection attempt cancelled",
+            "tentativa de conexão cancelada",
         ));
     }
     let (mut stream, lifetime): (_, Box<dyn Send>) = match target {
@@ -465,7 +465,7 @@ fn connect_once(
                 if error.kind() == std::io::ErrorKind::NotFound {
                     std::io::Error::new(
                         std::io::ErrorKind::ConnectionRefused,
-                        "Local is unavailable; start its server to reconnect",
+                        "O servidor local está indisponível; inicie-o para reconectar",
                     )
                 } else {
                     error
@@ -504,13 +504,13 @@ fn connect_once(
     if cancelled.load(Ordering::Acquire) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
-            "connection attempt cancelled",
+            "tentativa de conexão cancelada",
         ));
     }
     if handshake.encoding != RenderEncoding::SemanticFrame {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            "endpoint did not negotiate the semantic client shell",
+            "a conexão não negociou a interface necessária",
         ));
     }
     let negotiation = EndpointNegotiation::new(
@@ -522,7 +522,7 @@ fn connect_once(
     {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "this machine needs a server update before it can participate in multi-machine viewing",
+            "atualize o servidor desta máquina para visualizá-la junto com outras máquinas",
         ));
     }
     let reader = stream.try_clone()?;
@@ -555,7 +555,7 @@ fn handshake_error(error: crate::client::ClientError) -> std::io::Error {
         }
         ClientError::ServerShutdown { reason } => std::io::Error::new(
             std::io::ErrorKind::ConnectionAborted,
-            reason.unwrap_or_else(|| "server shut down during handshake".into()),
+            reason.unwrap_or_else(|| "o servidor foi encerrado durante a conexão inicial".into()),
         ),
     }
 }

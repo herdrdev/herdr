@@ -155,7 +155,7 @@ fn client_protocol_accepts_hello(socket_path: &Path) -> io::Result<bool> {
 fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<()> {
     let Some(status) = read_server_status()? else {
         return Err(io::Error::other(format!(
-            "a herdr server is listening, but its status API is unavailable.\n\n{}\nIf that fails, stop the old server process manually.",
+            "Há um servidor Pretorian ativo, mas sua API de estado está indisponível.\n\n{}",
             crate::session::active_restart_after_update_guidance()
         )));
     };
@@ -171,16 +171,16 @@ fn validate_running_server_compatibility(saved_federation: bool) -> io::Result<(
     }
 
     let requirement = if saved_federation && !surface_interest {
-        "saved SSH machines require surface lifecycle support"
+        "as máquinas SSH salvas exigem suporte ao ciclo de vida das superfícies"
     } else {
-        "the stable endpoint generation is incompatible"
+        "a geração estável do protocolo de conexão é incompatível"
     };
     Err(io::Error::other(format!(
-        "This session needs one final server update before Herdr can attach ({requirement}).\n\nserver: v{} endpoint generation {}\nclient: v{} endpoint generation {}\n\n{}",
-        status.version.as_deref().unwrap_or("unknown"),
+        "Esta sessão precisa atualizar o servidor antes de conectar o Pretorian ({requirement}).\n\nservidor: v{} geração do protocolo {}\ncliente: v{} geração do protocolo {}\n\n{}",
+        status.version.as_deref().unwrap_or("desconhecida"),
         endpoint_generation
             .map(|value| value.to_string())
-            .unwrap_or_else(|| "unavailable".to_string()),
+            .unwrap_or_else(|| "indisponível".to_string()),
         crate::build_info::version(),
         crate::protocol::endpoint::ENDPOINT_PROTOCOL_GENERATION,
         crate::session::active_restart_after_update_guidance()
@@ -205,7 +205,7 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
     let exe = std::env::current_exe().map_err(|err| {
         io::Error::new(
             err.kind(),
-            format!("failed to determine herdr executable path: {err}"),
+            format!("não foi possível localizar o executável do Pretorian: {err}"),
         )
     })?;
 
@@ -215,7 +215,10 @@ pub fn spawn_server_daemon() -> io::Result<u32> {
 
     let pid =
         crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
-            io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
+            io::Error::new(
+                err.kind(),
+                format!("não foi possível iniciar o servidor Pretorian: {err}"),
+            )
         })?;
     info!(pid, "server daemon spawned");
 
@@ -280,7 +283,7 @@ pub fn wait_for_server_socket(socket_path: &Path, timeout: Duration) -> io::Resu
     Err(io::Error::new(
         io::ErrorKind::TimedOut,
         format!(
-            "server did not become ready within {}s (socket: {}). The background server may still be starting; try `herdr` again, or check {}",
+            "o servidor não ficou pronto em {}s (socket: {}). Ele pode ainda estar iniciando; abra novamente o perfil Pretorian ou consulte {}",
             timeout.as_secs(),
             socket_path.display(),
             crate::session::data_dir().join("herdr-server.log").display()
@@ -308,7 +311,7 @@ pub fn auto_detect_launch(saved_federation: bool) -> io::Result<()> {
     crate::platform::terminal_grid_size().map_err(|err| {
         io::Error::new(
             err.kind(),
-            format!("cannot attach without a usable terminal: {err}; run inside a terminal"),
+            format!("não foi possível conectar sem um terminal utilizável: {err}; execute dentro de um terminal"),
         )
     })?;
     let socket_path = client_socket_path();
@@ -626,7 +629,7 @@ test "$sid" = "$$"
         let err = validate_running_server_compatibility(false).unwrap_err();
 
         assert!(
-            err.to_string().contains("status API is unavailable"),
+            err.to_string().contains("API de estado está indisponível"),
             "unexpected error: {err}"
         );
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
@@ -634,7 +637,7 @@ test "$sid" = "$$"
     }
 
     #[test]
-    fn validate_running_server_compatibility_names_session_commands_for_protocol_mismatch() {
+    fn validate_running_server_compatibility_identifies_session_for_protocol_mismatch() {
         let _guard = env_lock().lock().unwrap();
         let dir = unique_test_dir("named-protocol");
         std::env::set_var("XDG_CONFIG_HOME", &dir);
@@ -664,15 +667,15 @@ test "$sid" = "$$"
 
         let _ = handle.join();
         assert!(
-            message.contains("Stop the old server to use the new version"),
+            message.contains("Encerre somente o servidor associado à sessão Pretorian"),
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("Run `herdr session stop work`"),
+            message.contains("Sessão: work"),
             "unexpected error: {message}"
         );
         assert!(
-            message.contains("then run `herdr session attach work` again"),
+            message.contains(&path.display().to_string()),
             "unexpected error: {message}"
         );
         std::env::remove_var("XDG_CONFIG_HOME");

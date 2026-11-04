@@ -371,7 +371,7 @@ detach = "prefix+x"
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("PREFIX"), "frame: {text:?}");
+    assert!(text.contains("ATALHOS"), "frame: {text:?}");
     assert!(text.contains("ctrl+a"), "frame: {text:?}");
 
     let detach = state.handle_input_bytes(b"x");
@@ -654,7 +654,7 @@ fn unavailable_endpoint_method_is_disabled_without_disconnect() {
         .expect("unsupported action notice");
     assert_eq!(notice.key.kind, ClientEndpointNoticeKind::Unsupported);
     assert_eq!(notice.key.code, "workspace.focus");
-    assert!(notice.body.contains("This server"));
+    assert!(notice.body.contains("Este servidor"));
     assert!(state.endpoint_error.is_none());
 
     let mut repeated = ClientShellInput::default();
@@ -830,7 +830,7 @@ fn custom_binding_missing_from_endpoint_manifest_is_not_forwarded() {
     assert!(state
         .endpoint_error
         .as_deref()
-        .is_some_and(|error| error.contains("not available")));
+        .is_some_and(|error| error.contains("não está disponível")));
 }
 
 #[test]
@@ -881,7 +881,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("custom"));
+    assert!(text.contains("personalizados"));
     assert!(text.contains("run plugin action"));
     state.handle_input_bytes(b"\x1b");
 
@@ -898,7 +898,7 @@ fn help_overlay_restores_released_search_scroll_and_custom_binding_behavior() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("no matching keybinds"));
+    assert!(text.contains("nenhum atalho encontrado"));
 
     state.handle_input_bytes(b"\x1b");
     assert!(matches!(
@@ -964,4 +964,102 @@ fn resize_mode_reuses_endpoint_resize_and_stays_active_until_done() {
 
     assert!(state.handle_input_bytes(b"\r").actions.is_empty());
     assert_eq!(state.mode, ClientShellMode::Terminal);
+}
+
+fn texto_do_quadro(state: &mut ClientShellState) -> String {
+    let frame = state.compose(106, 30).expect("quadro das configurações");
+    frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn secao_usuario_recebe_texto_e_mostra_previa() {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    state.handle_input_bytes(b"\x1b[Z");
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            section: ClientSettingsSection::Usuario,
+            ..
+        }))
+    ));
+
+    state.handle_input_bytes(b"Ana jk");
+    assert!(state.insert_overlay_text(" Zé"));
+    let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
+        panic!("configurações abertas");
+    };
+    assert_eq!(settings.nome.as_str(), "Ana jk Zé");
+    assert_eq!(settings.section, ClientSettingsSection::Usuario);
+
+    let texto = texto_do_quadro(&mut state);
+    assert!(texto.contains("prévia: Pretorian · Ana jk Zé"), "{texto}");
+    assert!(state.hits.settings_choices.is_empty());
+
+    state.handle_input_bytes(b"\t");
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            section: ClientSettingsSection::Theme,
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn secao_usuario_grava_nome_e_pede_recarga() {
+    let dir = std::env::temp_dir().join(format!(
+        "pretorian-nome-usuario-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let caminho = dir.join("config.toml");
+    std::env::set_var(crate::config::CONFIG_PATH_ENV_VAR, &caminho);
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    state.handle_input_bytes(b"\x1b[Z");
+    state.handle_input_bytes(b" Ana ");
+    let aplicado = state.handle_input_bytes(b"\r");
+
+    let gravado = std::fs::read_to_string(&caminho).expect("config gravado");
+    std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(gravado.contains("[pretorian]"), "{gravado}");
+    assert!(gravado.contains("nome = \"Ana\""), "{gravado}");
+    assert!(
+        aplicado.actions.iter().any(|action| matches!(
+            action,
+            ClientShellAction::Endpoint { request, .. }
+                if matches!(request.method, crate::api::schema::Method::ServerReloadConfig(_))
+        )),
+        "{:?}",
+        aplicado.actions
+    );
+    assert_eq!(state.config.nome_usuario.as_deref(), Some("Ana"));
+    assert!(matches!(
+        state.overlay,
+        Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+            section: ClientSettingsSection::Usuario,
+            ..
+        }))
+    ));
 }

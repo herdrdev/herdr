@@ -77,8 +77,12 @@ try {
     $deadline = (Get-Date).AddSeconds(10)
     do {
         Start-Sleep -Milliseconds 250
-        $status = & $exe status server 2>&1
-        if ($LASTEXITCODE -eq 0 -and (($status -join "`n") -match "status: running")) {
+        $status = & $exe status server --json 2>&1
+        $serverReady = $false
+        if ($LASTEXITCODE -eq 0) {
+            try { $serverReady = (($status -join "`n") | ConvertFrom-Json -ErrorAction Stop).status -ceq 'running' } catch {}
+        }
+        if ($serverReady) {
             break
         }
     } while ((Get-Date) -lt $deadline)

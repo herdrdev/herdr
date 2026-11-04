@@ -3,12 +3,12 @@ use std::io;
 pub(crate) const HERDR_ENV_VAR: &str = "HERDR_ENV";
 pub(crate) const HERDR_ENV_VALUE: &str = "1";
 const NESTED_HERDR_MESSAGES: [&str; 6] = [
-    "inception detected. we need to go deeper... said no one ever.",
-    "recursion is a pathway to many abilities some consider to be... unnatural.",
-    "you were so preoccupied with whether you could, you didn't stop to think if you should. — dr. malcolm",
-    "recursive herdring is disabled. somewhere, a call stack breathes a sigh of relief.",
-    "recursive descent denied. there is, in fact, such a thing as too much herdr.",
-    "recursion detected. base case not found. aborting.",
+    "origem detectada. precisamos ir mais fundo... disse ninguém, nunca.",
+    "a recursão leva a muitas habilidades que alguns consideram... antinaturais.",
+    "você estava tão preocupado em saber se podia que não parou para pensar se devia. — dr. malcolm",
+    "o Pretorian recursivo está desativado. em algum lugar, uma pilha de chamadas suspira aliviada.",
+    "descida recursiva negada. sim, é possível ter Pretorian demais.",
+    "recursão detectada. caso base não encontrado. interrompendo.",
 ];
 
 mod agent_resume;
@@ -65,17 +65,17 @@ mod workspace;
 mod worktree;
 
 const DEFAULT_CONFIG: &str = r##"# herdr configuration
-# Place this file at ~/.config/herdr/config.toml
+# Place this file at ~/.config/pretorian/config.toml
 
 # Show first-run notification setup on startup.
 # Missing also shows onboarding; set false after you've chosen.
 # onboarding = true
 
 [theme]
-# Built-in themes: catppuccin, terminal, tokyo-night, dracula, nord,
-#                  gruvbox, one-dark, solarized, kanagawa, rose-pine,
+# Built-in themes: pretorian, catppuccin, terminal, tokyo-night, dracula,
+#                  nord, gruvbox, one-dark, solarized, kanagawa, rose-pine,
 #                  vesper
-# name = "catppuccin"
+# name = "pretorian"
 
 # Follow host terminal light/dark appearance and switch Herdr UI themes.
 # Existing manual behavior is unchanged unless this is true.
@@ -98,6 +98,12 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # [theme.custom.light]
 # panel_bg = "#eff1f5"
 # text = "#4c4f69"
+
+# Seção própria do Pretorian. O nome aparece no cabeçalho como "Pretorian · Nome";
+# também pode ser definido em configurações > usuário. Um ui.tab_bar_right explícito
+# substitui esse cabeçalho.
+# [pretorian]
+# nome = ""
 #
 # [theme.custom.dark]
 # panel_bg = "#1e1e2e"
@@ -330,7 +336,7 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # The title renders on the Herdr server, so {hostname} names the host the panes
 # run on even when attaching from a remote client.
 # Set to "" to leave the outer terminal title alone.
-# window_title = "{hostname}: {workspace}"
+# window_title = "Pretorian"
 
 # Agent panel ordering: "spaces" (grouped by space) or "priority" (attention queue).
 # "workspaces" is accepted as an alias for "spaces".
@@ -470,8 +476,10 @@ fn random_nested_message() -> &'static str {
 
 fn exit_if_nested_disabled(config: &config::Config) {
     if should_block_nested(config) {
-        eprintln!("\x1b[1merror:\x1b[0m nested herdr is disabled by default.");
-        eprintln!("see configuration if you want to enable it.");
+        eprintln!(
+            "\x1b[1merro:\x1b[0m abrir o Pretorian dentro de outra sessão está desativado por padrão."
+        );
+        eprintln!("consulte a configuração se quiser ativar essa opção.");
         eprintln!();
         eprintln!("\x1b[2m\"{}\"\x1b[0m", random_nested_message());
         std::process::exit(1);
@@ -486,7 +494,7 @@ where
         .enumerate()
         .map(|(index, arg)| {
             arg.into_string()
-                .map_err(|_| format!("argument {index} is not valid UTF-8"))
+                .map_err(|_| format!("argumento {index} não é UTF-8 válido"))
         })
         .collect()
 }
@@ -512,8 +520,8 @@ fn main() -> io::Result<()> {
     let raw_args: Vec<String> = match args_as_utf8(std::env::args_os()) {
         Ok(args) => args,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
@@ -527,16 +535,16 @@ fn main() -> io::Result<()> {
     let args = match session::configure_from_args(&raw_args) {
         Ok(args) => args,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
     let (args, remote_launch) = match remote::extract_remote_args(&args) {
         Ok(parsed) => parsed,
         Err(err) => {
-            eprintln!("error: {err}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("erro: {err}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     };
@@ -550,8 +558,8 @@ fn main() -> io::Result<()> {
             )
         })
     {
-        eprintln!("error: --remote can only be used with the default launch command");
-        eprintln!("run 'herdr --help' for usage");
+        eprintln!("erro: --remote só pode ser usado com o comando de abertura padrão");
+        eprintln!("use 'herdr --help' para consultar a ajuda");
         std::process::exit(2);
     }
 
@@ -586,17 +594,17 @@ fn main() -> io::Result<()> {
             }
             Err(err) => {
                 eprintln!("{err}");
-                eprintln!("usage: herdr update [--handoff]");
+                eprintln!("Uso: herdr update [--handoff]");
                 std::process::exit(2);
             }
         };
         match update::self_update(options) {
             Ok(_) => return Ok(()),
             Err(e) => {
-                if e.starts_with("self-update is disabled") {
+                if e.starts_with("Atualize o Pretorian") {
                     eprintln!("{e}");
                 } else {
-                    eprintln!("update failed: {e}");
+                    eprintln!("falha na atualização: {e}");
                 }
                 std::process::exit(1);
             }
@@ -605,9 +613,9 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        println!("Pretorian — ambiente de terminal para agentes de IA");
         println!();
-        println!("Usage: herdr [options]");
+        println!("Uso: herdr [options]");
         println!("       herdr --session <name> [options]");
         println!("       herdr --machine <label-or-id> <command>");
         println!("       herdr --remote <ssh-target> [--session <name>]");
@@ -631,92 +639,109 @@ fn main() -> io::Result<()> {
         println!("       herdr session <subcommand> ...");
         println!("       herdr integration <subcommand> ...");
         println!();
-        println!("Common commands:");
+        println!("Comandos comuns:");
         for (command, description) in [
-            ("herdr", "Launch or attach to the persistent session"),
+            ("herdr", "Abrir ou conectar à sessão persistente"),
             (
                 "herdr status [server|client]",
-                "Show local client and running server status",
+                "Mostrar o estado do cliente local e do servidor ativo",
             ),
-            ("herdr update", "Download and install the latest version"),
-            ("herdr completion zsh", "Generate shell completions for zsh"),
+            (
+                "herdr update",
+                "Indisponível neste fork; atualize pelo instalador do Pretorian",
+            ),
+            (
+                "herdr completion zsh",
+                "Gerar sugestões de comandos para zsh",
+            ),
             (
                 "herdr server stop",
-                "Stop the running server via the API socket",
+                "Encerrar o servidor ativo pelo socket da API",
             ),
             (
                 "herdr channel set <stable|preview>",
-                "Choose the stable or preview update channel",
+                "Alteração de canal indisponível neste fork",
             ),
             (
                 "herdr server reload-config",
-                "Reload config.toml in the running server",
+                "Recarregar config.toml no servidor ativo",
             ),
             (
                 "herdr config reset-keys",
-                "Back up config.toml and remove custom keybindings",
+                "Salvar uma cópia de config.toml e remover atalhos personalizados",
             ),
             (
                 "herdr channel <subcommand>",
-                "Manage the stable or preview update channel",
+                "Consultar o canal; alteração indisponível neste fork",
             ),
-            ("herdr machine <subcommand>", "Manage saved SSH machines"),
+            (
+                "herdr machine <subcommand>",
+                "Gerenciar máquinas SSH salvas",
+            ),
             (
                 "herdr api <subcommand>",
-                "Inspect socket API metadata and live runtime state",
+                "Consultar metadados da API de socket e o estado atual",
             ),
             (
                 "herdr workspace <subcommand>",
-                "Workspace helpers over the socket API",
+                "Gerenciar espaços de trabalho pela API de socket",
             ),
             (
                 "herdr worktree <subcommand>",
-                "Git worktree helpers over the socket API",
+                "Gerenciar cópias de trabalho Git pela API de socket",
             ),
-            ("herdr tab <subcommand>", "Tab helpers over the socket API"),
+            (
+                "herdr tab <subcommand>",
+                "Gerenciar abas pela API de socket",
+            ),
             (
                 "herdr notification <subcommand>",
-                "Notification helpers over the socket API",
+                "Gerenciar notificações pela API de socket",
             ),
             (
                 "herdr agent <subcommand>",
-                "Agent/terminal helpers over the socket API",
+                "Gerenciar agentes e terminais pela API de socket",
             ),
             (
                 "herdr pane <subcommand>",
-                "Pane control helpers over the socket API",
+                "Controlar painéis pela API de socket",
             ),
             (
                 "herdr session <subcommand>",
-                "Manage named persistent sessions",
+                "Gerenciar sessões persistentes nomeadas",
             ),
             (
                 "herdr integration <subcommand>",
-                "Manage built-in agent integrations",
+                "Gerenciar integrações de agentes incluídas",
             ),
         ] {
             println!("  {command:<32} {description}");
         }
         println!();
-        println!("Advanced commands:");
-        println!("  {:<32} Run as headless server", "herdr server");
+        println!("Comandos avançados:");
+        println!(
+            "  {:<32} Executar como servidor sem interface",
+            "herdr server"
+        );
         println!();
-        println!("Options:");
-        println!("  --session <name>    Use or create a named persistent session");
-        println!("  --machine <label-or-id>  Run an API command on a saved SSH machine");
-        println!("  --remote <target>   Attach through SSH to a remote Herdr server");
+        println!("Opções:");
+        println!("  --session <name>    Usar ou criar uma sessão persistente nomeada");
+        println!("  --machine <label-or-id>  Executar um comando da API em uma máquina SSH salva");
+        println!("  --remote <target>   Conectar por SSH a um servidor remoto");
         println!("  --remote-keybindings <local|server>");
-        println!("                      Keybindings for --remote app attach (default: local)");
-        println!("  --handoff           Opt into live handoff for update or remote attach");
-        println!("  --default-config    Print default configuration and exit");
-        println!("  --skill             Print the agent skill file and exit");
-        println!("  --version, -V       Print version and exit");
-        println!("  --help, -h          Show this help");
+        println!("                      Atalhos ao conectar por --remote (padrão: local)");
+        println!(
+            "  --handoff           Permitir transferência da sessão na atualização ou conexão remota"
+        );
+        println!("  --default-config    Exibir a configuração padrão e sair");
+        println!("  --skill             Exibir o arquivo de instruções do agente e sair");
+        println!("  --version, -V       Exibir a versão e sair");
+        println!("  --help, -h          Exibir esta ajuda");
         println!();
-        println!("Config: {}", config::config_path().display());
-        println!("Logs:   {}", logging::help_log_paths_summary());
-        println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
+        println!("Configuração: {}", config::config_path().display());
+        println!("Registros:   {}", logging::help_log_paths_summary());
+        println!("Ambiente: HERDR_CONFIG_PATH define o caminho do arquivo de configuração");
+        println!("Projeto: https://github.com/lamarck-nemesis/herdr-pretorian");
         println!();
         println!("{}", cli::AGENT_HELP_FOOTER);
         return Ok(());
@@ -756,8 +781,8 @@ fn main() -> io::Result<()> {
     for arg in &args[1..] {
         let arg_name = arg.split_once('=').map(|(name, _)| name).unwrap_or(arg);
         if arg.starts_with('-') && !known_flags.contains(&arg_name) {
-            eprintln!("unknown option: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("opção desconhecida: {arg}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
         if !arg.starts_with('-')
@@ -778,8 +803,8 @@ fn main() -> io::Result<()> {
             ]
             .contains(&arg.as_str())
         {
-            eprintln!("unknown command: {arg}");
-            eprintln!("run 'herdr --help' for usage");
+            eprintln!("comando desconhecido: {arg}");
+            eprintln!("use 'herdr --help' para consultar a ajuda");
             std::process::exit(2);
         }
     }
@@ -787,7 +812,7 @@ fn main() -> io::Result<()> {
     if let Some(remote_launch) = remote_launch {
         let remote_target = remote_launch.target.clone();
         if let Err(err) = remote::run_remote(remote_launch) {
-            eprintln!("error: {err}");
+            eprintln!("erro: {err}");
             remote::print_remote_error_hint(&err, &remote_target);
             std::process::exit(1);
         }
@@ -883,7 +908,7 @@ mod tests {
         ];
         assert_eq!(
             args_as_utf8(args).unwrap_err(),
-            "argument 2 is not valid UTF-8"
+            "argumento 2 não é UTF-8 válido"
         );
     }
 }

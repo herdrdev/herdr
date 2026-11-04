@@ -43,13 +43,13 @@ pub(crate) fn parse_tab_bar_datetime_format(
     value: &str,
 ) -> Result<time::format_description::OwnedFormatItem, String> {
     if value.is_empty() {
-        return Err("datetime format is empty".into());
+        return Err("formato de data e hora vazio".into());
     }
     let format = time::format_description::parse_strftime_owned(value)
-        .map_err(|err| format!("invalid datetime format: {err}"))?;
+        .map_err(|err| format!("formato de data e hora inválido: {err}"))?;
     time::PrimitiveDateTime::MIN
         .format(&format)
-        .map_err(|err| format!("unsupported datetime format: {err}"))?;
+        .map_err(|err| format!("formato de data e hora não suportado: {err}"))?;
     Ok(format)
 }
 
@@ -57,7 +57,7 @@ pub(crate) fn tab_bar_right_diagnostics(entries: &[TabBarRightEntryConfig]) -> V
     let mut diagnostics = Vec::new();
     if entries.len() > MAX_TAB_BAR_RIGHT_ENTRIES {
         diagnostics.push(format!(
-            "ui.tab_bar_right may contain at most {MAX_TAB_BAR_RIGHT_ENTRIES} entries; ignoring extras"
+            "ui.tab_bar_right pode conter no máximo {MAX_TAB_BAR_RIGHT_ENTRIES} entradas; ignorando excedentes"
         ));
     }
 
@@ -66,10 +66,12 @@ pub(crate) fn tab_bar_right_diagnostics(entries: &[TabBarRightEntryConfig]) -> V
             TabBarRightEntryConfig::Datetime { format } => {
                 if format.is_empty() {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] datetime format is empty; hiding entry"
+                        "ui.tab_bar_right[{index}] formato de data e hora vazio; ocultando entrada"
                     ));
                 } else if let Err(err) = parse_tab_bar_datetime_format(format) {
-                    diagnostics.push(format!("ui.tab_bar_right[{index}] has {err}; hiding entry"));
+                    diagnostics.push(format!(
+                        "ui.tab_bar_right[{index}] tem {err}; ocultando entrada"
+                    ));
                 }
             }
             TabBarRightEntryConfig::Command {
@@ -79,27 +81,27 @@ pub(crate) fn tab_bar_right_diagnostics(entries: &[TabBarRightEntryConfig]) -> V
             } => {
                 if command.trim().is_empty() {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] command is empty; hiding entry"
+                        "ui.tab_bar_right[{index}] comando vazio; ocultando entrada"
                     ));
                 }
                 if *interval_seconds == 0 {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] interval_seconds must be at least 1; hiding entry"
+                        "ui.tab_bar_right[{index}] interval_seconds deve ser pelo menos 1; ocultando entrada"
                     ));
                 }
                 if *interval_seconds > MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] interval_seconds may be at most {MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS}; hiding entry"
+                        "ui.tab_bar_right[{index}] interval_seconds pode ser no máximo {MAX_TAB_BAR_COMMAND_INTERVAL_SECONDS}; ocultando entrada"
                     ));
                 }
                 if *timeout_seconds == 0 {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] timeout_seconds must be at least 1; hiding entry"
+                        "ui.tab_bar_right[{index}] timeout_seconds deve ser pelo menos 1; ocultando entrada"
                     ));
                 }
                 if *timeout_seconds > MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS {
                     diagnostics.push(format!(
-                        "ui.tab_bar_right[{index}] timeout_seconds may be at most {MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS}; hiding entry"
+                        "ui.tab_bar_right[{index}] timeout_seconds pode ser no máximo {MAX_TAB_BAR_COMMAND_TIMEOUT_SECONDS}; ocultando entrada"
                     ));
                 }
             }
@@ -169,13 +171,13 @@ entries = [
         ];
 
         let diagnostics = tab_bar_right_diagnostics(&entries).join("\n");
-        assert!(diagnostics.contains("invalid datetime format"));
-        assert!(diagnostics.contains("unsupported datetime format"));
-        assert!(diagnostics.contains("command is empty"));
-        assert!(diagnostics.contains("interval_seconds must be at least 1"));
-        assert!(diagnostics.contains("interval_seconds may be at most"));
-        assert!(diagnostics.contains("timeout_seconds must be at least 1"));
-        assert!(diagnostics.contains("timeout_seconds may be at most"));
+        assert!(diagnostics.contains("formato de data e hora inválido"));
+        assert!(diagnostics.contains("formato de data e hora não suportado"));
+        assert!(diagnostics.contains("comando vazio"));
+        assert!(diagnostics.contains("interval_seconds deve ser pelo menos 1"));
+        assert!(diagnostics.contains("interval_seconds pode ser no máximo"));
+        assert!(diagnostics.contains("timeout_seconds deve ser pelo menos 1"));
+        assert!(diagnostics.contains("timeout_seconds pode ser no máximo"));
         assert!(parse_tab_bar_datetime_format("").is_err());
     }
 }

@@ -106,10 +106,10 @@ fn spawn_server_with_config(
     _client_socket_path: &PathBuf,
     config: &str,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
-    fs::write(config_home.join("herdr/config.toml"), config).unwrap();
+    fs::write(config_home.join("pretorian/config.toml"), config).unwrap();
 
     let pair = native_pty_system()
         .openpty(PtySize {
@@ -127,7 +127,10 @@ fn spawn_server_with_config(
     cmd.env("XDG_RUNTIME_DIR", runtime_dir);
     cmd.env("HERDR_SOCKET_PATH", api_socket_path);
     cmd.env_remove("HERDR_CLIENT_SOCKET_PATH");
-    cmd.env("HERDR_CONFIG_PATH", config_home.join("herdr/config.toml"));
+    cmd.env(
+        "HERDR_CONFIG_PATH",
+        config_home.join("pretorian/config.toml"),
+    );
     cmd.env("SHELL", "/bin/sh");
     cmd.env_remove("HERDR_ENV");
 

@@ -121,7 +121,7 @@ async fn host_shutdown_saves_layout_before_releasing_delay_lock() {
     let mut bus = private_bus(&address);
     let peer = Arc::new(Mutex::new(None));
     let mut service = login_service(&address, peer.clone()).await;
-    let socket = base.join("herdr-dev/sessions/shutdown/herdr.sock");
+    let socket = base.join("pretorian-dev/sessions/shutdown/herdr.sock");
     let config = base.join("config.toml");
     std::fs::write(&config, "onboarding = false\n[experimental]\nallow_nested = true\n[terminal]\ndefault_shell = \"/bin/sh\"\n").unwrap();
     let mut server = ChildGuard(
@@ -204,7 +204,7 @@ async fn host_shutdown_saves_layout_before_releasing_delay_lock() {
     })
     .await
     .unwrap();
-    let saved = base.join("herdr-dev/sessions/shutdown/session.json");
+    let saved = base.join("pretorian-dev/sessions/shutdown/session.json");
     let layout: serde_json::Value = serde_json::from_slice(&std::fs::read(saved).unwrap()).unwrap();
     assert_eq!(layout["workspaces"].as_array().unwrap().len(), 3);
     assert_eq!(layout["workspaces"][2]["custom_name"], "three");

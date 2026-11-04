@@ -279,11 +279,11 @@ fn workspace_legacy_rejections_do_not_connect() {
         ),
         (
             vec!["workspace", "create", "--env", "=value"],
-            "env key must not be empty\n",
+            "o nome da variável de ambiente não pode estar vazio\n",
         ),
         (
             vec!["workspace", "create", "--env", "KEY"],
-            "env must use KEY=VALUE\n",
+            "a variável de ambiente deve usar KEY=VALUE\n",
         ),
         (
             vec!["workspace", "create", "--focus=true"],
@@ -299,7 +299,7 @@ fn workspace_legacy_rejections_do_not_connect() {
         ),
         (
             vec!["workspace", "report-metadata", "w1", "--source", "user"],
-            "missing token to set or clear\n",
+            "falta o token para definir ou limpar\n",
         ),
         (
             vec!["workspace", "report-metadata", "w1", "--token", "key=value"],
@@ -315,7 +315,7 @@ fn workspace_legacy_rejections_do_not_connect() {
                 "--token",
                 "=value",
             ],
-            "token name must not be empty\n",
+            "nome do token não pode estar vazio\n",
         ),
         (
             vec![
@@ -327,7 +327,7 @@ fn workspace_legacy_rejections_do_not_connect() {
                 "--token",
                 "key",
             ],
-            "token must use NAME=VALUE\n",
+            "token deve usar NAME=VALUE\n",
         ),
         (
             vec![

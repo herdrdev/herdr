@@ -46,7 +46,7 @@ impl PendingEndpointActivation {
     ) -> Result<Self, ActivationBeginError> {
         resize_geometry(&resize).ok_or_else(|| {
             ActivationBeginError::Preflight(
-                "endpoint activation did not include a surface resize".to_owned(),
+                "a ativação da conexão não incluiu o redimensionamento da tela".to_owned(),
             )
         })?;
         let source_id = endpoints.active_id().clone();
@@ -73,7 +73,7 @@ impl PendingEndpointActivation {
             .is_some_and(|connection| connection.negotiation.supports_surface_interest());
         if !source_compatible || !target_compatible {
             return Err(ActivationBeginError::Preflight(
-                "endpoint must be updated before it can join the selected surface".into(),
+                "atualize o servidor desta conexão antes de usá-la na tela selecionada".into(),
             ));
         }
 
@@ -154,7 +154,7 @@ impl PendingEndpointActivation {
             &crate::protocol::ClientMessage::ClientShellFocus { focused: false },
         ) != EndpointSendOutcome::Sent
         {
-            return Err("source endpoint focus revoke could not be sent".into());
+            return Err("não foi possível enviar a retirada de foco da conexão de origem".into());
         }
         let request = surface_interest_request(
             &self.source.boot_id,
@@ -163,7 +163,7 @@ impl PendingEndpointActivation {
         )
         .map_err(|error| error.to_string())?;
         if endpoints.send_to(&self.source.endpoint_id, &request) != EndpointSendOutcome::Sent {
-            return Err("source endpoint release could not be sent".into());
+            return Err("não foi possível enviar a liberação da conexão de origem".into());
         }
         endpoints.set_surface_active(&self.source.endpoint_id, false);
         Ok(())
@@ -257,7 +257,7 @@ impl PendingEndpointActivation {
         }
         self.rollback(
             endpoints,
-            "endpoint handoff superseded by a newer selection".into(),
+            "a troca de conexão foi substituída por uma seleção mais recente".into(),
             false,
         )
     }
@@ -416,7 +416,7 @@ impl PendingEndpointActivation {
                 };
                 if !focus_result_matches(Some(&requested), &result) {
                     return SurfaceActivationProgress::Rejected {
-                        message: "endpoint focus returned an unexpected result".into(),
+                        message: "a conexão retornou um resultado inesperado para o foco".into(),
                         source_release_rejected: false,
                     };
                 }
@@ -445,9 +445,10 @@ impl PendingEndpointActivation {
                 endpoints.set_surface_active(&self.target.endpoint_id, false);
                 if !self.source_available {
                     return SurfaceActivationProgress::Rejected {
-                        message: self.rollback_error.clone().unwrap_or_else(|| {
-                            "the previous endpoint is no longer connected".into()
-                        }),
+                        message: self
+                            .rollback_error
+                            .clone()
+                            .unwrap_or_else(|| "a conexão anterior não está mais ativa".into()),
                         source_release_rejected: false,
                     };
                 }
@@ -617,8 +618,9 @@ impl PendingEndpointActivation {
         resize: crate::protocol::ClientMessage,
         endpoints: &mut EndpointRegistry,
     ) -> Result<(), String> {
-        resize_geometry(&resize)
-            .ok_or_else(|| "endpoint activation did not include a surface resize".to_owned())?;
+        resize_geometry(&resize).ok_or_else(|| {
+            "a ativação da conexão não incluiu o redimensionamento da tela".to_owned()
+        })?;
         self.resize = resize.clone();
         let restart_effects_fence = match &self.phase {
             ActivationPhase::AwaitingPresentationEffects {
@@ -628,7 +630,9 @@ impl PendingEndpointActivation {
         };
         if let Some((lease, completion)) = restart_effects_fence {
             if endpoints.send_to(&lease.endpoint_id, &resize) != EndpointSendOutcome::Sent {
-                return Err("pending endpoint resize could not be sent".into());
+                return Err(
+                    "não foi possível enviar o redimensionamento pendente à conexão".into(),
+                );
             }
             return self.start_presentation_sync(endpoints, lease, completion);
         }
@@ -648,7 +652,9 @@ impl PendingEndpointActivation {
         };
         if let Some(destination) = destination {
             if endpoints.send_to(destination, &resize) != EndpointSendOutcome::Sent {
-                return Err("pending endpoint resize could not be sent".into());
+                return Err(
+                    "não foi possível enviar o redimensionamento pendente à conexão".into(),
+                );
             }
         }
         Ok(())
@@ -676,7 +682,7 @@ impl PendingEndpointActivation {
                 &crate::protocol::ClientMessage::ClientShellFocus { focused },
             ) != EndpointSendOutcome::Sent
             {
-                return Err("pending endpoint focus baseline could not be sent".into());
+                return Err("não foi possível enviar o estado inicial de foco à conexão".into());
             }
         }
         if let Some((lease, completion)) = restart {
@@ -705,7 +711,7 @@ impl PendingEndpointActivation {
         if let Some(destination) = destination {
             let message = crate::protocol::ClientMessage::ClientShellHostTheme { update };
             if endpoints.send_to(destination, &message) != EndpointSendOutcome::Sent {
-                return Err("pending endpoint host theme could not be sent".into());
+                return Err("não foi possível enviar o tema do terminal à conexão".into());
             }
         }
         if let Some((lease, completion)) = restart {
@@ -751,7 +757,7 @@ impl PendingEndpointActivation {
                 _ => match self.start_source_restore(endpoints, self.resize.clone()) {
                     Ok(()) => ActivationRollback::Pending,
                     Err(restore_error) => ActivationRollback::Unavailable(format!(
-                        "{error}; source endpoint could not be restored safely: {restore_error}"
+                        "{error}; não foi possível restaurar a conexão de origem com segurança: {restore_error}"
                     )),
                 },
             };
@@ -784,7 +790,7 @@ impl PendingEndpointActivation {
                 match self.start_target_release(endpoints) {
                     Ok(()) => ActivationRollback::Pending,
                     Err(release_error) => ActivationRollback::Unavailable(format!(
-                        "{error}; target endpoint could not be released safely: {release_error}"
+                        "{error}; não foi possível liberar a conexão de destino com segurança: {release_error}"
                     )),
                 }
             }
@@ -796,7 +802,7 @@ impl PendingEndpointActivation {
                     match self.start_target_release(endpoints) {
                         Ok(()) => ActivationRollback::Pending,
                         Err(release_error) => ActivationRollback::Unavailable(format!(
-                            "{error}; target endpoint could not be released safely: {release_error}"
+                            "{error}; não foi possível liberar a conexão de destino com segurança: {release_error}"
                         )),
                     }
                 } else {
@@ -821,7 +827,7 @@ impl PendingEndpointActivation {
             return match self.start_source_restore(endpoints, self.resize.clone()) {
                 Ok(()) => ActivationRollback::Pending,
                 Err(restore_error) => ActivationRollback::Unavailable(format!(
-                    "{error}; source endpoint could not resume: {restore_error}"
+                    "{error}; não foi possível retomar a conexão de origem: {restore_error}"
                 )),
             };
         }
@@ -830,7 +836,7 @@ impl PendingEndpointActivation {
                 if self.source_available {
                     self.start_source_restore(endpoints, self.resize.clone())
                 } else {
-                    Err("the previous endpoint is no longer connected".into())
+                    Err("a conexão anterior não está mais ativa".into())
                 }
             }
             ActivationPhase::ActivatingTarget { .. } => self.start_target_release(endpoints),
@@ -841,19 +847,19 @@ impl PendingEndpointActivation {
                     &self.target.endpoint_id,
                     std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
-                        "endpoint did not acknowledge surface revocation",
+                        "a conexão não confirmou a retirada da tela",
                     ),
                 );
                 if !self.source_available {
                     return ActivationRollback::Unavailable(format!(
-                        "{error}; the target connection was closed because no presentation owner could be proven"
+                        "{error}; a conexão de destino foi fechada porque não foi possível confirmar quem controla a tela"
                     ));
                 }
                 self.start_source_restore(endpoints, self.resize.clone())
             }
             ActivationPhase::RestoringSource { .. } => {
                 return ActivationRollback::Unavailable(format!(
-                    "{error}; source endpoint could not be restored"
+                    "{error}; não foi possível restaurar a conexão de origem"
                 ));
             }
             ActivationPhase::SynchronizingPresentation { ref lease, .. }
@@ -862,7 +868,7 @@ impl PendingEndpointActivation {
                     self.start_target_release(endpoints)
                 } else {
                     return ActivationRollback::Unavailable(format!(
-                        "{error}; source endpoint presentation could not be synchronized"
+                        "{error}; não foi possível sincronizar a tela da conexão de origem"
                     ));
                 }
             }
@@ -870,7 +876,7 @@ impl PendingEndpointActivation {
         match result {
             Ok(()) => ActivationRollback::Pending,
             Err(rollback_error) => ActivationRollback::Unavailable(format!(
-                "{error}; source endpoint could not be restored safely: {rollback_error}"
+                "{error}; não foi possível restaurar a conexão de origem com segurança: {rollback_error}"
             )),
         }
     }
@@ -901,9 +907,7 @@ impl PendingEndpointActivation {
                 || !shell.endpoint_projection_available(&lease.endpoint_id)
                 || !shell.activate_endpoint_projection(&lease.endpoint_id)
             {
-                return Err(
-                    "endpoint became unavailable during presentation synchronization".into(),
-                );
+                return Err("a conexão ficou indisponível durante a sincronização da tela".into());
             }
             shell.set_pane_surface(surface);
             self.start_presentation_effects_fence(endpoints, lease, completion)?;
@@ -941,7 +945,7 @@ impl PendingEndpointActivation {
                     error: self
                         .rollback_error
                         .clone()
-                        .unwrap_or_else(|| "endpoint handoff was rolled back".into()),
+                        .unwrap_or_else(|| "a troca de conexão foi desfeita".into()),
                     successor: self.successor.clone(),
                 };
                 (
@@ -951,7 +955,7 @@ impl PendingEndpointActivation {
                     completion,
                 )
             }
-            _ => return Err("endpoint activation completed in an invalid phase".into()),
+            _ => return Err("a ativação da conexão terminou em uma etapa inválida".into()),
         };
         let surface = coherent_completion_surface(
             shell,
@@ -965,7 +969,7 @@ impl PendingEndpointActivation {
         if !shell.endpoint_projection_available(&lease.endpoint_id)
             || !endpoints.set_active(&lease.endpoint_id)
         {
-            return Err("endpoint became unavailable during activation".into());
+            return Err("a conexão ficou indisponível durante a ativação".into());
         }
         let activated = shell.activate_endpoint_projection(&lease.endpoint_id);
         debug_assert!(activated, "preflighted endpoint projection must activate");
@@ -1027,7 +1031,7 @@ impl PendingEndpointActivation {
         };
         self.deadline = Instant::now() + ACTIVATION_TIMEOUT;
         if endpoints.send_to(&lease.endpoint_id, &request) != EndpointSendOutcome::Sent {
-            return Err("endpoint presentation synchronization could not be sent".into());
+            return Err("não foi possível enviar a sincronização da tela à conexão".into());
         }
         Ok(())
     }
@@ -1051,7 +1055,9 @@ impl PendingEndpointActivation {
             data: token,
         };
         if endpoints.send_to(&lease.endpoint_id, &message) != EndpointSendOutcome::Sent {
-            return Err("endpoint presentation effects fence could not be sent".into());
+            return Err(
+                "não foi possível enviar a confirmação dos efeitos da tela à conexão".into(),
+            );
         }
         Ok(())
     }
@@ -1064,7 +1070,7 @@ impl PendingEndpointActivation {
         self.phase = ActivationPhase::ReleasingTargetForRollback { request_id };
         self.deadline = Instant::now() + ACTIVATION_TIMEOUT;
         if endpoints.send_to(&self.target.endpoint_id, &request) != EndpointSendOutcome::Sent {
-            return Err("target endpoint release could not be sent".into());
+            return Err("não foi possível enviar a liberação da conexão de destino".into());
         }
         Ok(())
     }
@@ -1132,7 +1138,7 @@ impl PendingEndpointActivation {
         let request = focus_request(&self.target.boot_id, request_id, &desired)
             .map_err(|error| error.to_string())?;
         if endpoints.send_to(&self.target.endpoint_id, &request) != EndpointSendOutcome::Sent {
-            return Err("endpoint focus could not be sent".into());
+            return Err("não foi possível enviar o foco à conexão".into());
         }
         Ok(())
     }

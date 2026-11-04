@@ -98,6 +98,12 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Package original Rust and toolchain license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked --features cli
+          python scripts/package_rust_licenses.py --target ${{ matrix.target }} --output RUST-LICENSES.zip
+          python scripts/package_toolchain_licenses.py --target ${{ matrix.target }} --output TOOLCHAIN-LICENSES.zip
+
       - name: Package artifact
         run: |
           cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
@@ -116,6 +122,13 @@ jobs:
           } >> BUILD_INFO.txt
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
+      - name: Record notices integrity
+        run: python -c "import hashlib, pathlib; f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.writelines('sha256=' + hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in ('RUST-LICENSES.zip', 'TOOLCHAIN-LICENSES.zip')); f.close()"
+
+      - name: Package Pretorian candidate
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: python scripts/package_pretorian_candidate.py --platform linux-x64 --source ${{ matrix.name }} --rust-notices RUST-LICENSES.zip --toolchain-notices TOOLCHAIN-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -123,6 +136,13 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            RUST-LICENSES.zip
+            TOOLCHAIN-LICENSES.zip
+            pretorian-candidato/
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/
           retention-days: 7
 
   build-macos:
@@ -167,6 +187,12 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target ${{ matrix.target }}
 
+      - name: Package original Rust and toolchain license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked --features cli
+          python scripts/package_rust_licenses.py --target ${{ matrix.target }} --output RUST-LICENSES.zip
+          python scripts/package_toolchain_licenses.py --target ${{ matrix.target }} --output TOOLCHAIN-LICENSES.zip
+
       - name: Package artifact
         run: |
           cp target/${{ matrix.target }}/release/herdr ${{ matrix.name }}
@@ -179,6 +205,13 @@ jobs:
           } >> BUILD_INFO.txt
           python3 -c "import hashlib, pathlib; artifact = pathlib.Path('${{ matrix.name }}'); print(f'sha256={hashlib.sha256(artifact.read_bytes()).hexdigest()}  {artifact.name}')" >> BUILD_INFO.txt
 
+      - name: Record notices integrity
+        run: python -c "import hashlib, pathlib; f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.writelines('sha256=' + hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in ('RUST-LICENSES.zip', 'TOOLCHAIN-LICENSES.zip')); f.close()"
+
+      - name: Package Pretorian candidate
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: python scripts/package_pretorian_candidate.py --platform macos-arm64 --source ${{ matrix.name }} --rust-notices RUST-LICENSES.zip --toolchain-notices TOOLCHAIN-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -186,6 +219,13 @@ jobs:
           path: |
             ${{ matrix.name }}
             BUILD_INFO.txt
+            RUST-LICENSES.zip
+            TOOLCHAIN-LICENSES.zip
+            pretorian-candidato/
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/
           retention-days: 7
 
   build-windows:
@@ -221,6 +261,14 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target x86_64-pc-windows-msvc
 
+      - name: Package original Rust and toolchain license notices
+        run: |
+          cargo install cargo-about --version 0.9.3 --locked --features cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/package_rust_licenses.py --target x86_64-pc-windows-msvc --output RUST-LICENSES.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/package_toolchain_licenses.py --target x86_64-pc-windows-msvc --output TOOLCHAIN-LICENSES.zip
+
       - name: Package artifact
         shell: pwsh
         run: |
@@ -238,6 +286,19 @@ jobs:
           "libghostty_vt_simd=$env:LIBGHOSTTY_VT_SIMD" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
           $hash = (Get-FileHash -Algorithm SHA256 herdr-windows-x86_64.zip).Hash.ToLowerInvariant()
           "sha256=$hash  herdr-windows-x86_64.zip" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          Get-ChildItem -Path $stage -File -Recurse | Sort-Object FullName | ForEach-Object {
+            $relative = [IO.Path]::GetRelativePath($stage, $_.FullName).Replace('\', '/')
+            $fileHash = (Get-FileHash -Algorithm SHA256 $_.FullName).Hash.ToLowerInvariant()
+            "sha256=$fileHash  $relative" | Out-File -Encoding utf8 -Append BUILD_INFO.txt
+          }
+
+      - name: Record notices integrity
+        run: python -c "import hashlib, pathlib; f = pathlib.Path('BUILD_INFO.txt').open('a', encoding='utf-8'); f.writelines('sha256=' + hashlib.sha256(pathlib.Path(n).read_bytes()).hexdigest() + '  ' + n + '\n' for n in ('RUST-LICENSES.zip', 'TOOLCHAIN-LICENSES.zip')); f.close()"
+
+      - name: Package Pretorian candidate
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP "herdr-windows-x86_64"
+          python scripts/package_pretorian_candidate.py --platform windows-x64 --source "$stage" --rust-notices RUST-LICENSES.zip --toolchain-notices TOOLCHAIN-LICENSES.zip --build-info BUILD_INFO.txt --output pretorian-candidato
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -246,4 +307,11 @@ jobs:
           path: |
             herdr-windows-x86_64.zip
             BUILD_INFO.txt
+            RUST-LICENSES.zip
+            TOOLCHAIN-LICENSES.zip
+            pretorian-candidato/
+            LICENSE
+            vendor/libghostty-vt/LICENSE
+            vendor/portable-pty/LICENSE.md
+            packaging/licenses/
           retention-days: 7

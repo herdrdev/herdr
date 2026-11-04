@@ -258,7 +258,7 @@ pub(super) fn render_expanded(
         workspace_area.x,
         workspace_area.y,
         workspace_area.width,
-        " machines",
+        " máquinas",
         Style::default()
             .fg(palette.overlay0)
             .add_modifier(Modifier::BOLD),
@@ -518,7 +518,7 @@ pub(super) fn render_expanded(
 
     let footer_y = workspace_area.bottom().saturating_sub(1);
     if config.mouse_capture {
-        let label = format!(" new · {}", active_endpoint_label(state));
+        let label = format!(" novo · {}", active_endpoint_label(state));
         hits.new_workspace = Rect::new(
             workspace_area.x,
             footer_y,
@@ -608,7 +608,7 @@ fn render_endpoint_row(
     let signal = if auth.required_for(endpoint) {
         "! auth".to_owned()
     } else if endpoint.status == ClientEndpointStatus::Attention {
-        "! error".to_owned()
+        "! erro".to_owned()
     } else if endpoint.endpoint_id.is_local() {
         String::new()
     } else if state.is_empty() {

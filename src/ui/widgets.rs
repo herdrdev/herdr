@@ -94,8 +94,11 @@ fn action_button_width(hint: Option<&str>, label: &str) -> u16 {
     }
 }
 
+pub(crate) const CLOSE_BUTTON_LABEL: &str = "fechar";
+pub(crate) const CONTINUE_BUTTON_LABEL: &str = "continuar";
+
 pub(crate) fn close_button_rect(area: Rect) -> Rect {
-    let width = action_button_width(Some("esc"), "close");
+    let width = action_button_width(Some("esc"), CLOSE_BUTTON_LABEL);
     Rect::new(area.x + area.width.saturating_sub(width), area.y, width, 1)
 }
 
@@ -103,7 +106,25 @@ pub(crate) fn continue_button_rect(area: Rect) -> Rect {
     Rect::new(
         area.x,
         area.y,
-        action_button_width(Some("↵"), "continue"),
+        action_button_width(Some("↵"), CONTINUE_BUTTON_LABEL),
         1,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn botoes_medem_rotulos_traduzidos() {
+        let area = Rect::new(0, 0, 40, 1);
+        assert_eq!(
+            usize::from(close_button_rect(area).width),
+            " esc fechar ".chars().count()
+        );
+        assert_eq!(
+            usize::from(continue_button_rect(area).width),
+            " ↵ continuar ".chars().count()
+        );
+    }
 }

@@ -196,7 +196,7 @@ impl ClientShellState {
         let kind = match action {
             KeybindAction::NewWorktree | KeybindAction::OpenWorktree if linked => {
                 self.set_endpoint_error(
-                    "New and open worktree actions start from the repo parent workspace.",
+                    "Para criar ou abrir uma cópia de trabalho, use o espaço principal do repositório.",
                 );
                 outcome.repaint = true;
                 return;
@@ -208,7 +208,9 @@ impl ClientShellState {
                 workspace_id: workspace_id.clone(),
             },
             KeybindAction::RemoveWorktree if !linked => {
-                self.set_endpoint_error("This workspace is not a Herdr-managed worktree checkout.");
+                self.set_endpoint_error(
+                    "Este espaço não é uma cópia de trabalho gerenciada pelo Pretorian.",
+                );
                 outcome.repaint = true;
                 return;
             }
@@ -252,7 +254,7 @@ impl ClientShellState {
         }
         let branch = create.branch.trim().to_owned();
         if branch.is_empty() {
-            create.error = Some("branch is required".to_owned());
+            create.error = Some("informe o ramo".to_owned());
             outcome.repaint = true;
             return;
         }
@@ -420,7 +422,9 @@ impl ClientShellState {
                     })
                     .collect::<Vec<_>>();
                 if entries.is_empty() {
-                    self.set_endpoint_error("No Git worktrees found for this repo.");
+                    self.set_endpoint_error(
+                        "Nenhuma cópia de trabalho Git encontrada neste repositório.",
+                    );
                 } else {
                     self.overlay = Some(ClientShellOverlay::WorktreeOpen(
                         ClientWorktreeOpenOverlay {
@@ -456,7 +460,7 @@ impl ClientShellState {
                     ));
                 } else {
                     self.set_endpoint_error(
-                        "This workspace is not a Herdr-managed worktree checkout.",
+                        "Este espaço não é uma cópia de trabalho gerenciada pelo Pretorian.",
                     );
                 }
                 true
@@ -522,7 +526,9 @@ impl ClientShellState {
                 Err(_),
             ) => true,
             (_, Ok(_)) => {
-                self.set_endpoint_error("endpoint returned an unexpected worktree result");
+                self.set_endpoint_error(
+                    "a conexão retornou um resultado inesperado para a cópia de trabalho",
+                );
                 true
             }
             (

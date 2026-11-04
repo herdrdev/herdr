@@ -6,9 +6,9 @@ pub(super) fn merged_config_diagnostic(
 ) -> Option<String> {
     match (local, endpoint) {
         (Some(local), Some(endpoint)) if local == endpoint => {
-            Some(format!("client + endpoint: {local}"))
+            Some(format!("cliente + conexão: {local}"))
         }
-        (Some(local), Some(endpoint)) => Some(format!("client: {local}\nendpoint: {endpoint}")),
+        (Some(local), Some(endpoint)) => Some(format!("cliente: {local}\nconexão: {endpoint}")),
         (Some(local), None) => Some(local.to_owned()),
         (None, Some(endpoint)) => Some(endpoint.to_owned()),
         (None, None) => None,
@@ -132,6 +132,11 @@ impl ClientShellConfig {
             copy_on_select: config.ui.copy_on_select,
             clipboard_toast_enabled: config.ui.toast.clipboard.enabled,
             clipboard_toast_position: config.ui.toast.clipboard.position,
+            nome_usuario: config
+                .pretorian
+                .nome
+                .as_deref()
+                .and_then(crate::config::sanitizar_nome),
             theme_name: theme_runtime.manual_name.clone(),
             theme_runtime,
             palette: crate::app::client_palette_from_config(config),
@@ -330,14 +335,16 @@ impl ClientShellConfig {
                 Err(keybind_diagnostics) => diagnostics.extend(
                     keybind_diagnostics
                         .into_iter()
-                        .map(|diagnostic| format!("{diagnostic}; kept current keybinds")),
+                        .map(|diagnostic| format!("{diagnostic}; mantendo atalhos atuais")),
                 ),
             }
         }
 
         if !invalid_section("ui") {
             if let Some(diagnostic) = config.invalid_sidebar_bounds_diagnostic() {
-                diagnostics.push(format!("{diagnostic}; keeping previous [ui] settings"));
+                diagnostics.push(format!(
+                    "{diagnostic}; mantendo a configuração anterior de [ui]"
+                ));
             } else {
                 let ui = &config.ui;
                 diagnostics.extend(ui.sound.diagnostics());
@@ -377,6 +384,13 @@ impl ClientShellConfig {
         if !invalid_section("experimental") {
             self.switch_ascii_input_source_in_prefix =
                 config.experimental.switch_ascii_input_source_in_prefix;
+        }
+        if !invalid_section("pretorian") {
+            self.nome_usuario = config
+                .pretorian
+                .nome
+                .as_deref()
+                .and_then(crate::config::sanitizar_nome);
         }
 
         diagnostics
@@ -485,10 +499,12 @@ mod tests {
         next.ui.status_indicators = crate::config::StatusIndicatorStyle::Symbols;
         next.ui.sidebar.agents = toml::from_str("rows = [[{ token = 'machine', rules = [{ equals = 'Local', bold = true }] }]]\nrow_gap = 2").unwrap();
         next.keys.prefix = crate::config::BindingConfig::one("ctrl+a");
+        next.pretorian.nome = Some(" Ana ".into());
 
         let diagnostics = shell.apply_live_config(&next, &[], &[]);
 
         assert!(diagnostics.is_empty());
+        assert_eq!(shell.nome_usuario.as_deref(), Some("Ana"));
         assert_eq!(shell.sidebar_width, 31);
         assert_eq!(shell.tab_bar_position, TabBarPositionConfig::Bottom);
         assert_eq!(

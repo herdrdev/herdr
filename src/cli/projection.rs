@@ -40,6 +40,7 @@ pub(crate) fn parse<T>(
     from_matches: impl FnOnce(&ArgMatches) -> Result<T, ParseError>,
 ) -> Result<T, ParseError> {
     let args = protect_verbatim_slots(&command, args);
+    let command = super::spec::configure_help(command, 2);
     let matches = command.no_binary_name(true).try_get_matches_from(args)?;
     from_matches(&matches)
 }
@@ -148,7 +149,7 @@ fn push_synopses(path: &str, command: &Command, lines: &mut Vec<String>) {
 /// The command list a bare group prints, derived from the group's declarations.
 pub(crate) fn group_commands(group: &Command) -> String {
     let path = format!("herdr {}", group.get_name());
-    let mut lines = vec![format!("{path} commands:")];
+    let mut lines = vec![format!("Comandos de {path}:")];
     let mut synopses = Vec::new();
     push_synopses(&path, group, &mut synopses);
     lines.extend(synopses.into_iter().map(|line| format!("  {line}")));
@@ -168,12 +169,12 @@ pub(crate) fn group_request(
         |matches| {
             let (name, matches) = matches
                 .subcommand()
-                .ok_or_else(|| ParseError::Usage(format!("missing {group_name} command")))?;
+                .ok_or_else(|| ParseError::Usage(format!("falta o comando {group_name}")))?;
             let leaf = leaves
                 .iter()
                 .find(|leaf| leaf.name == name)
                 .ok_or_else(|| {
-                    ParseError::Usage(format!("unknown {group_name} command: {name}"))
+                    ParseError::Usage(format!("comando {group_name} desconhecido: {name}"))
                 })?;
             Ok(Request {
                 id: leaf.id.into(),
@@ -471,7 +472,7 @@ pub(crate) fn parse_choice<T: Clone>(
         .iter()
         .find(|choice| choice.name == value)
         .map(|choice| choice.value.clone())
-        .ok_or_else(|| ParseError::Usage(format!("invalid {label}: {value}")))
+        .ok_or_else(|| ParseError::Usage(format!("valor inválido para {label}: {value}")))
 }
 
 /// Fails when an API enum gains a value the CLI table cannot spell.
@@ -589,7 +590,7 @@ impl<T> Field<T> {
                     if input.once && indices.len() > 1 {
                         return Err(ParseError::Clap(clap::Error::raw(
                             clap::error::ErrorKind::ArgumentConflict,
-                            format!("the argument '--{id}' cannot be used multiple times\n"),
+                            format!("o argumento '--{id}' não pode ser usado várias vezes\n"),
                         )));
                     }
                     for (index, value) in indices.zip(string_values(matches, &input.argument)) {
@@ -804,6 +805,7 @@ mod tests {
         for (values, text, wait) in [
             (&["leaf", "t", "--wait"][..], "--wait", false),
             (&["leaf", "t", "-h", "--wait"][..], "-h", true),
+            (&["leaf", "t", "--help"][..], "--help", false),
             (&["leaf", "t", "--", "--wait"][..], "--", true),
             (&["leaf", "t", "\u{1}x"][..], "\u{1}x", false),
             (&["leaf", "--wait", "t", "plain"][..], "plain", true),
@@ -825,6 +827,25 @@ mod tests {
     }
 
     #[test]
+    fn ajuda_apos_alvo_mantem_opcoes_e_prosa_em_portugues() {
+        let command = super::super::agent::command().bin_name("herdr agent");
+        let result = parse(command, &args(&["wait", "alvo", "--help"]), |_| Ok(()));
+        let Err(ParseError::Clap(error)) = result else {
+            panic!("ajuda não foi apresentada")
+        };
+        let ajuda = error.to_string();
+        assert!(ajuda.contains("Uso: herdr agent wait"), "{ajuda}");
+        assert!(
+            ajuda.contains("Valores possíveis: idle, working, blocked, done, unknown"),
+            "{ajuda}"
+        );
+        assert!(
+            ajuda.contains("--until") && ajuda.contains("--timeout"),
+            "{ajuda}"
+        );
+    }
+
+    #[test]
     fn group_commands_are_derived_from_declarations() {
         let group = Command::new("group")
             .subcommand(command("label", LabelProjection::arguments()))
@@ -841,7 +862,7 @@ mod tests {
             );
         assert_eq!(
             group_commands(&group),
-            "herdr group commands:\n  herdr group label <id> [<LABEL>...] [--clear]\n  herdr group nested numbers [--seq N] [--pattern TEXT]\n  herdr group pick (--seq N | --pattern TEXT)"
+            "Comandos de herdr group:\n  herdr group label <id> [<LABEL>...] [--clear]\n  herdr group nested numbers [--seq N] [--pattern TEXT]\n  herdr group pick (--seq N | --pattern TEXT)"
         );
     }
 

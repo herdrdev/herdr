@@ -94,7 +94,7 @@ impl SoundConfig {
                 .is_none_or(|ext: &str| !ext.eq_ignore_ascii_case("mp3"))
             {
                 diagnostics.push(format!(
-                    "unsupported sound file format: {field} = {} resolves to {}; expected an mp3 file; using default sound",
+                    "formato de arquivo de som não suportado: {field} = {} resolve para {}; esperado arquivo mp3; usando som padrão",
                     path.display(),
                     resolved.display()
                 ));
@@ -103,13 +103,13 @@ impl SoundConfig {
 
             if !resolved.exists() {
                 diagnostics.push(format!(
-                    "missing sound file: {field} = {} resolves to {}; using default sound",
+                    "arquivo de som ausente: {field} = {} resolve para {}; usando som padrão",
                     path.display(),
                     resolved.display()
                 ));
             } else if !resolved.is_file() {
                 diagnostics.push(format!(
-                    "invalid sound file: {field} = {} resolves to {}; using default sound",
+                    "arquivo de som inválido: {field} = {} resolve para {}; usando som padrão",
                     path.display(),
                     resolved.display()
                 ));
@@ -272,9 +272,9 @@ done_path = "sounds/missing.mp3"
         .unwrap();
 
         let diagnostics = config.collect_diagnostics();
-        assert!(diagnostics.iter().any(
-            |diag| diag.contains("ui.sound.done_path") && diag.contains("using default sound")
-        ));
+        assert!(diagnostics
+            .iter()
+            .any(|diag| diag.contains("ui.sound.done_path") && diag.contains("usando som padrão")));
     }
 
     #[test]
@@ -289,7 +289,7 @@ path = "sounds/notification.wav"
 
         let diagnostics = config.collect_diagnostics();
         assert!(diagnostics.iter().any(|diag| {
-            diag.contains("ui.sound.path") && diag.contains("expected an mp3 file")
+            diag.contains("ui.sound.path") && diag.contains("esperado arquivo mp3")
         }));
     }
 }

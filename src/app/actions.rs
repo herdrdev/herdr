@@ -4302,7 +4302,7 @@ mod tests {
         assert_eq!(toast.title, "v0.5.0 available");
         assert_eq!(
             toast.context,
-            "detach, run `herdr update`, then run Herdr again to reconnect"
+            "Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil."
         );
     }
 
@@ -4323,7 +4323,7 @@ mod tests {
         let toast = state.toast.as_ref().expect("update toast");
         assert_eq!(
             toast.context,
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
+            "Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil."
         );
     }
 

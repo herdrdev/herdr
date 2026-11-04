@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 mod io;
 mod keybinds;
 mod model;
+mod pretorian;
 mod sidebar;
 mod sound;
 mod tab_bar;
@@ -28,6 +29,7 @@ pub use self::{
         ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
         UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
+    pretorian::{cabecalho, sanitizar_nome, PretorianConfig},
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, SidebarConfig, SidebarTokenStyle,
         SpaceSidebarToken, SpacesSidebarConfig,
@@ -56,11 +58,12 @@ pub(crate) use self::{keybinds::CommandKeybindType, model::KeysConfig};
 pub const CONFIG_PATH_ENV_VAR: &str = "HERDR_CONFIG_PATH";
 
 pub(crate) fn is_keybinding_config_diagnostic(diagnostic: &str) -> bool {
-    if diagnostic.starts_with("config parse error:") || diagnostic.starts_with("config read error:")
+    if diagnostic.starts_with("erro de leitura da configuração TOML:")
+        || diagnostic.starts_with("erro ao ler a configuração:")
     {
         return false;
     }
-    diagnostic.contains("keybinding") || diagnostic.contains("keys.")
+    diagnostic.contains("atalho") || diagnostic.contains("keys.")
 }
 
 pub(crate) fn config_diagnostic_summary_without_keybindings(
@@ -137,7 +140,7 @@ impl Config {
     pub(crate) fn invalid_headless_size_diagnostic(&self) -> Option<String> {
         (self.server.headless_cols == 0 || self.server.headless_rows == 0).then(|| {
             format!(
-                "server.headless_cols and server.headless_rows must be greater than zero (got {}x{})",
+                "server.headless_cols e server.headless_rows devem ser maiores que zero (recebido {}x{})",
                 self.server.headless_cols, self.server.headless_rows
             )
         })
@@ -148,7 +151,7 @@ impl Config {
             .is_none()
             .then(|| {
                 format!(
-                    "ui.sidebar_min_width ({}) is greater than sidebar_max_width ({})",
+                    "ui.sidebar_min_width ({}) é maior que sidebar_max_width ({})",
                     self.ui.sidebar_min_width, self.ui.sidebar_max_width
                 )
             })
@@ -160,7 +163,7 @@ impl Config {
             return Ok(None);
         }
         parse_key_combo(raw).map(Some).ok_or_else(|| {
-            format!("invalid keybinding: keys.remote_image_paste = {raw:?}; disabling binding")
+            format!("atalho inválido: keys.remote_image_paste = {raw:?}; desativando atalho")
         })
     }
 
@@ -189,7 +192,7 @@ impl Config {
 
 pub(crate) fn keybindings_from_profile_toml(profile: &str) -> Result<LiveKeybindConfig, String> {
     let config = toml::from_str::<Config>(profile)
-        .map_err(|err| format!("invalid keybinding profile: {err}"))?;
+        .map_err(|err| format!("perfil de atalhos inválido: {err}"))?;
     config
         .live_keybinds_with_diagnostics()
         .map(|(keybinds, _diagnostics)| keybinds)

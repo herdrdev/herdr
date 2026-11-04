@@ -87,11 +87,11 @@ fn spawn_server(
     api_socket_path: &Path,
     _client_socket_path: &Path,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("pretorian/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -132,11 +132,11 @@ fn spawn_herdr_auto(
     api_socket_path: &Path,
     _client_socket_path: &Path,
 ) -> SpawnedHerdr {
-    fs::create_dir_all(config_home.join("herdr")).unwrap();
+    fs::create_dir_all(config_home.join("pretorian")).unwrap();
     fs::create_dir_all(runtime_dir).unwrap();
     register_runtime_dir(runtime_dir);
     fs::write(
-        config_home.join("herdr/config.toml"),
+        config_home.join("pretorian/config.toml"),
         "onboarding = false\n",
     )
     .unwrap();
@@ -251,9 +251,9 @@ fn session_attach_without_terminal_leaves_no_session() {
     register_runtime_dir(&runtime_dir);
     let name = "no-tty";
     let app_dir = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     let session_dir = config_home.join(app_dir).join("sessions").join(name);
     let run = |args: &[&str]| {
@@ -296,7 +296,10 @@ fn session_attach_without_terminal_leaves_no_session() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("terminal"), "stderr={stderr}");
-    assert!(stderr.contains("run inside a terminal"), "stderr={stderr}");
+    assert!(
+        stderr.contains("execute dentro de um terminal"),
+        "stderr={stderr}"
+    );
     assert!(
         output.stdout.is_empty(),
         "failed attach emitted terminal output"
@@ -575,9 +578,9 @@ fn auto_detect_default_socket_path_from_config_dir() {
     // Don't set HERDR_SOCKET_PATH or HERDR_CLIENT_SOCKET_PATH.
     // The default paths should come from the app config directory, not XDG_RUNTIME_DIR.
     let app_dir_name = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     let api_socket = config_home.join(app_dir_name).join("herdr.sock");
     let client_socket = config_home.join(app_dir_name).join("herdr-client.sock");
@@ -655,9 +658,9 @@ fn auto_detect_writes_client_and_server_logs_to_separate_files() {
     wait_for_socket(&client_socket, Duration::from_secs(10));
 
     let app_dir_name = if cfg!(debug_assertions) {
-        "herdr-dev"
+        "pretorian-dev"
     } else {
-        "herdr"
+        "pretorian"
     };
     let log_dir = config_home.join(app_dir_name);
     let client_log = log_dir.join("herdr-client.log");
@@ -726,7 +729,7 @@ fn auto_detect_respects_nested_guard_before_auto_attach() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("nested herdr is disabled by default"),
+        stderr.contains("abrir o Pretorian dentro de outra sessão está desativado por padrão"),
         "stderr should mention nested-launch guard: {stderr}"
     );
 

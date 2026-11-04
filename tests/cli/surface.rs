@@ -210,7 +210,7 @@ fn pane_report_metadata_rejects_blank_source_before_socket_request() {
 
     assert_eq!(run.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("missing required --source"),
+        String::from_utf8_lossy(&run.stderr).contains("falta a opção obrigatória --source"),
         "stderr: {}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -241,7 +241,7 @@ fn pane_report_metadata_rejects_blank_applies_to_source_before_socket_request() 
 
     assert_eq!(run.status.code(), Some(2));
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("missing value for --applies-to-source"),
+        String::from_utf8_lossy(&run.stderr).contains("falta valor para --applies-to-source"),
         "stderr: {}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -286,7 +286,7 @@ fn root_and_command_group_help_point_agents_to_plain_text_docs() {
         assert!(output.status.success(), "herdr {} failed", args.join(" "));
         let stdout = String::from_utf8_lossy(&output.stdout);
         for expected in [
-            "Are you an AI? Use these resources ONLY IF your task specifically asks you to:",
+            "Você é uma IA? Use estes recursos SOMENTE SE sua tarefa pedir especificamente:",
             "herdr --skill",
             "https://github.com/herdrdev/herdr",
         ] {
@@ -302,24 +302,18 @@ fn root_and_command_group_help_point_agents_to_plain_text_docs() {
 #[test]
 fn subcommand_help_explains_automation_semantics_without_a_server() {
     let cases: &[(&[&str], &str)] = &[
-        (&["agent", "wait", "--help"], "Without --until"),
+        (&["agent", "wait", "--help"], "Sem --until"),
         (
             &["agent", "prompt", "--help"],
-            "first matching state observed after submission",
+            "primeiro estado correspondente observado após o envio",
         ),
-        (&["agent", "start", "--help"], "ready for input"),
-        (
-            &["agent", "send-keys", "--help"],
-            "canonical Escape key name",
-        ),
+        (&["agent", "start", "--help"], "pronto para receber entrada"),
+        (&["agent", "send-keys", "--help"], "nome da tecla Escape"),
         (
             &["pane", "wait-output", "--help"],
-            "including existing output",
+            "inclusive a saída existente",
         ),
-        (
-            &["pane", "send-keys", "--help"],
-            "canonical Escape key name",
-        ),
+        (&["pane", "send-keys", "--help"], "nome da tecla Escape"),
     ];
 
     for (args, expected) in cases {
@@ -354,7 +348,7 @@ fn removed_wait_and_agent_send_commands_are_rejected() {
         .output()
         .unwrap();
     assert_eq!(wait.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&wait.stderr).contains("unknown command: wait"));
+    assert!(String::from_utf8_lossy(&wait.stderr).contains("comando desconhecido: wait"));
     let help = Command::new(env!("CARGO_BIN_EXE_herdr"))
         .arg("--help")
         .output()
@@ -489,7 +483,7 @@ fn api_schema_default_output_is_a_short_summary() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Herdr API schema"), "stdout: {stdout}");
+    assert!(stdout.contains("Esquema da API Herdr"), "stdout: {stdout}");
     assert!(
         stdout.contains("Use `herdr api schema --json`"),
         "stdout: {stdout}"
@@ -571,7 +565,7 @@ fn api_schema_output_writes_bundled_schema_to_file() {
 
     assert!(output.status.success());
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("wrote API schema"),
+        String::from_utf8_lossy(&output.stdout).contains("esquema da API gravado"),
         "stdout: {}",
         String::from_utf8_lossy(&output.stdout)
     );
@@ -603,7 +597,7 @@ fn explicit_client_command_respects_nested_guard() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("nested herdr is disabled by default"),
+        stderr.contains("abrir o Pretorian dentro de outra sessão está desativado por padrão"),
         "client should fail at the nested guard before connecting: {stderr}"
     );
 }
@@ -619,7 +613,7 @@ fn removed_show_changelog_flag_fails_before_nested_guard() {
     assert_eq!(output.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("unknown option: --show-changelog"),
+        stderr.contains("opção desconhecida: --show-changelog"),
         "stderr: {stderr}"
     );
     assert!(

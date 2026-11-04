@@ -1161,9 +1161,9 @@ pub(crate) fn parse_self_update_args(args: &[String]) -> Result<SelfUpdateOption
         match arg.as_str() {
             "--handoff" => options.live_handoff = true,
             "--help" | "-h" => {
-                return Err("usage: herdr update [--handoff]".to_string());
+                return Err("uso: herdr update [--handoff]".to_string());
             }
-            _ => return Err(format!("unknown update option: {arg}")),
+            _ => return Err(format!("opção de atualização desconhecida: {arg}")),
         }
     }
     Ok(options)
@@ -1940,23 +1940,8 @@ pub(crate) fn update_install_command() -> &'static str {
     }
 }
 
-pub(crate) fn update_install_instruction(install_command: &str) -> String {
-    match install_command {
-        HERDR_UPDATE_COMMAND => {
-            "detach, run `herdr update`, then run Herdr again to reconnect".to_string()
-        }
-        HOMEBREW_UPDATE_COMMAND => {
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
-                .to_string()
-        }
-        MISE_UPDATE_COMMAND => {
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect".to_string()
-        }
-        NIX_UPDATE_COMMAND => {
-            "detach, update through Nix, then run Herdr again to reconnect".to_string()
-        }
-        command => format!("detach, run `{command}`, then run Herdr again to reconnect"),
-    }
+pub(crate) fn update_install_instruction(_install_command: &str) -> String {
+    "Para atualizar, use o instalador do Pretorian. Depois, abra novamente o perfil.".to_string()
 }
 
 fn is_homebrew_managed_install() -> bool {
@@ -2179,8 +2164,15 @@ fn preserve_preview_channel_for_install(
     Ok(())
 }
 
+pub(crate) fn upstream_updates_allowed() -> bool {
+    false
+}
+
 /// Manual self-update command (`herdr update`).
 pub fn self_update(options: SelfUpdateOptions) -> Result<Version, String> {
+    if !upstream_updates_allowed() {
+        return Err("Atualize o Pretorian usando o instalador aprovado.".into());
+    }
     let channel = UpdateChannel::configured();
 
     if is_homebrew_managed_install() {
@@ -2425,6 +2417,9 @@ fn print_outdated_integration_notice_with_updated_binary(updated_exe: &Path) {
 /// Background update check: only surface availability and release notes.
 /// Runs in a background thread at startup.
 pub fn auto_update(events: tokio::sync::mpsc::Sender<crate::events::AppEvent>) {
+    if !upstream_updates_allowed() {
+        return;
+    }
     crate::logging::update_check_started();
     if let Ok(version) = env::var(FAKE_UPDATE_VERSION_ENV) {
         let version = version.trim();
@@ -3244,19 +3239,19 @@ mod tests {
     }
 
     #[test]
-    fn update_install_instruction_distinguishes_install_from_restart() {
-        assert_eq!(
-            update_install_instruction(HERDR_UPDATE_COMMAND),
-            "detach, run `herdr update`, then run Herdr again to reconnect"
-        );
-        assert_eq!(
-            update_install_instruction(HOMEBREW_UPDATE_COMMAND),
-            "detach, run `brew update && brew upgrade herdr`, then run Herdr again to reconnect"
-        );
-        assert_eq!(
-            update_install_instruction(MISE_UPDATE_COMMAND),
-            "detach, run `mise upgrade herdr`, then run Herdr again to reconnect"
-        );
+    fn update_install_instruction_uses_only_pretorian_distribution() {
+        for command in [
+            HERDR_UPDATE_COMMAND,
+            HOMEBREW_UPDATE_COMMAND,
+            MISE_UPDATE_COMMAND,
+            NIX_UPDATE_COMMAND,
+            "custom update",
+        ] {
+            let instruction = update_install_instruction(command);
+            assert!(instruction.contains("instalador do Pretorian"));
+            assert!(!instruction.contains(command));
+            assert!(!instruction.contains("herdr update"));
+        }
     }
 
     #[test]
@@ -3290,6 +3285,13 @@ mod tests {
     }
 
     #[test]
+    fn pretorian_recusa_atualizacao_antes_de_buscar_versao() {
+        assert!(!upstream_updates_allowed());
+        let error = self_update(SelfUpdateOptions::default()).unwrap_err();
+        assert!(error.contains("instalador aprovado"));
+    }
+
+    #[test]
     fn self_update_args_gate_live_handoff() {
         assert_eq!(
             parse_self_update_args(&[]).unwrap(),
@@ -3303,7 +3305,7 @@ mod tests {
         );
         assert_eq!(
             parse_self_update_args(&["--unknown".to_string()]).unwrap_err(),
-            "unknown update option: --unknown"
+            "opção de atualização desconhecida: --unknown"
         );
     }
 

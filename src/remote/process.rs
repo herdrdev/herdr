@@ -10,7 +10,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 pub(super) fn cancelled() -> io::Error {
     io::Error::new(
         io::ErrorKind::ConnectionAborted,
-        "SSH connection attempt cancelled",
+        "tentativa de conexão SSH cancelada",
     )
 }
 
@@ -151,20 +151,16 @@ fn wait_with_output(
 ) -> io::Result<Output> {
     let mut child = OwnedSshChild(child);
     let control = PipeControl::new(cancelled);
-    let stdout = crate::platform::ChildPipe::new_reader(
-        child
-            .0
-            .stdout
-            .take()
-            .ok_or_else(|| io::Error::other("SSH command stdout was not captured"))?,
-    )?;
-    let stderr = crate::platform::ChildPipe::new_reader(
-        child
-            .0
-            .stderr
-            .take()
-            .ok_or_else(|| io::Error::other("SSH command stderr was not captured"))?,
-    )?;
+    let stdout =
+        crate::platform::ChildPipe::new_reader(
+            child.0.stdout.take().ok_or_else(|| {
+                io::Error::other("a saída padrão do comando SSH não foi capturada")
+            })?,
+        )?;
+    let stderr =
+        crate::platform::ChildPipe::new_reader(child.0.stderr.take().ok_or_else(|| {
+            io::Error::other("a saída de erro do comando SSH não foi capturada")
+        })?)?;
     let stdin = child
         .0
         .stdin
@@ -179,7 +175,9 @@ fn wait_with_output(
         let stderr = scope.spawn(move || read_output(stderr, limit));
         let stdin = scope.spawn(move || match (stdin, input) {
             (Some(mut stdin), Some(input)) => stdin.write_all(&input),
-            (None, Some(_)) => Err(io::Error::other("ssh bootstrap stdin missing")),
+            (None, Some(_)) => Err(io::Error::other(
+                "falta a entrada padrão da inicialização SSH",
+            )),
             _ => Ok(()),
         });
         let deadline = Instant::now() + timeout;
@@ -206,7 +204,7 @@ fn wait_with_output(
             if Instant::now() >= deadline {
                 break Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "noninteractive SSH command timed out",
+                    "o comando SSH não interativo excedeu o prazo",
                 ));
             }
             thread::sleep(POLL_INTERVAL);
@@ -217,13 +215,13 @@ fn wait_with_output(
         drop(child);
         let stdout = stdout
             .join()
-            .map_err(|_| io::Error::other("SSH stdout reader panicked"));
+            .map_err(|_| io::Error::other("falha na leitura da saída padrão do SSH"));
         let stderr = stderr
             .join()
-            .map_err(|_| io::Error::other("SSH stderr reader panicked"));
+            .map_err(|_| io::Error::other("falha na leitura da saída de erro do SSH"));
         let stdin = stdin
             .join()
-            .map_err(|_| io::Error::other("SSH stdin writer panicked"));
+            .map_err(|_| io::Error::other("falha na escrita da entrada padrão do SSH"));
         let status = result?;
         let stdout = stdout??;
         let stderr = stderr??;

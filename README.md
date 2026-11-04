@@ -39,6 +39,53 @@ https://github.com/user-attachments/assets/043ec09f-4bdd-41d5-aee0-8fda6b83e267
 
 ---
 
+## Pretorian (fork)
+
+Este repositório é o fork do Herdr usado pelo Pretorian CLI: a interface própria está em português, o tema claro `pretorian`, o título `Pretorian` e o cabeçalho `Pretorian · Nome` já vêm embutidos. Comandos, opções, protocolos e a saída dos agentes (Codex, Claude, SSH, sistema) não são traduzidos. Origem: [herdrdev/herdr](https://github.com/herdrdev/herdr) 0.9.5, licença Apache-2.0 preservada em [LICENSE](LICENSE).
+
+### Instalação a partir do clone
+
+Pré-requisitos (uma vez por máquina):
+
+- [rustup](https://rustup.rs) — a versão do Rust vem de `rust-toolchain.toml` e é instalada automaticamente no primeiro build.
+- [Zig 0.16.0](https://ziglang.org/download/) no `PATH` (ou aponte `ZIG=/caminho/para/zig`): compila o `libghostty-vt` vendorizado.
+- [just](https://github.com/casey/just) (opcional; os comandos crus estão abaixo).
+
+macOS e Linux:
+
+```bash
+git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
+cd herdr-pretorian
+just instalar          # ou: cargo build --release --locked && install -m 755 target/release/herdr ~/.local/bin/pretorian
+pretorian
+```
+
+Até a proposta ser incorporada em `master`, acrescente `-b trabalho/interface-pretorian` ao `git clone`. `just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
+
+Windows x64 (PowerShell, com rustup, Zig e Python 3 instalados; o script baixa o ConPTY da Microsoft):
+
+```powershell
+git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
+cd herdr-pretorian
+just build             # ou: python scripts/package_windows_conpty.py build-local
+.\target\release\herdr.exe
+```
+
+No Windows o executável precisa ficar ao lado da pasta `conpty` gerada em `target\release`; copie a pasta inteira se quiser movê-lo.
+
+### Nome no cabeçalho
+
+Abra as configurações (`ctrl+b s` ou menu › configurações), seção **usuário**, digite o nome e confirme com `enter`. O cabeçalho passa a `Pretorian · Nome` na hora. O valor fica em `[pretorian] nome` no `config.toml`.
+
+### Configuração e estado
+
+- Configuração: `~/.config/pretorian/config.toml` (Windows: `%APPDATA%\pretorian\config.toml`). `pretorian --default-config` imprime o modelo comentado.
+- Estado e sessões: `~/.local/state/pretorian`.
+- O lançador do Pretorian continua funcionando: `PRETORIAN_HERDR_CONFIG_DIR`, `PRETORIAN_HERDR_STATE_DIR`, `HERDR_CONFIG_PATH` e um `config.toml` explícito (tema, `ui.window_title`, `ui.tab_bar_right`) prevalecem sobre o padrão embutido.
+- Limites conhecidos: mensagens de erro vindas da API de socket, das integrações de agentes e dos plugins ainda aparecem em inglês; a atualização automática do Herdr original está desativada neste fork.
+
+---
+
 ## install
 
 ```bash

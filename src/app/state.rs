@@ -124,6 +124,31 @@ impl Palette {
         }
     }
 
+    /// Pretorian — tema claro padrão deste fork, com os tokens de `tokens.css` do Pretorian.
+    pub fn pretorian() -> Self {
+        Self {
+            accent: Color::Rgb(70, 76, 101),
+            panel_bg: Color::Rgb(255, 255, 255),
+            sidebar_bg: Color::Rgb(246, 247, 249),
+            active_row_bg: Color::Rgb(241, 243, 245),
+            selection_bg: Color::Rgb(224, 228, 235),
+            surface0: Color::Rgb(241, 243, 245),
+            surface1: Color::Rgb(224, 228, 235),
+            surface_dim: Color::Rgb(246, 247, 249),
+            overlay0: Color::Rgb(104, 108, 117),
+            overlay1: Color::Rgb(104, 108, 117),
+            text: Color::Rgb(47, 51, 68),
+            subtext0: Color::Rgb(104, 108, 117),
+            mauve: Color::Rgb(70, 76, 101),
+            green: Color::Rgb(104, 108, 117),
+            yellow: Color::Rgb(104, 108, 117),
+            red: Color::Rgb(161, 81, 76),
+            blue: Color::Rgb(70, 76, 101),
+            teal: Color::Rgb(104, 108, 117),
+            peach: Color::Rgb(104, 108, 117),
+        }
+    }
+
     /// Terminal 16-color theme.
     pub fn terminal() -> Self {
         Self {
@@ -527,6 +552,7 @@ impl Palette {
     /// Resolve a theme by name. Returns None for unknown names.
     pub fn from_name(name: &str) -> Option<Self> {
         match crate::config::canonical_theme_name(name)? {
+            "pretorian" => Some(Self::pretorian()),
             "catppuccin" => Some(Self::catppuccin()),
             "catppuccin-latte" => Some(Self::catppuccin_latte()),
             "terminal" => Some(Self::terminal()),
@@ -1326,6 +1352,39 @@ mod tests {
     use crossterm::event::KeyEvent;
 
     #[test]
+    fn paleta_pretorian_equivale_ao_latte_com_overrides_do_lancador() {
+        let cinza = Some("#686c75".to_string());
+        let primaria = Some("#464c65".to_string());
+        let custom = crate::config::CustomThemeColors {
+            accent: primaria.clone(),
+            panel_bg: Some("#ffffff".to_string()),
+            sidebar_bg: Some("#f6f7f9".to_string()),
+            active_row_bg: Some("#f1f3f5".to_string()),
+            selection_bg: Some("#e0e4eb".to_string()),
+            surface0: Some("#f1f3f5".to_string()),
+            surface1: Some("#e0e4eb".to_string()),
+            surface_dim: Some("#f6f7f9".to_string()),
+            overlay0: cinza.clone(),
+            overlay1: cinza.clone(),
+            text: Some("#2f3344".to_string()),
+            subtext0: cinza.clone(),
+            mauve: primaria.clone(),
+            green: cinza.clone(),
+            yellow: cinza.clone(),
+            red: Some("#a1514c".to_string()),
+            blue: primaria,
+            teal: cinza.clone(),
+            peach: cinza,
+            ..Default::default()
+        };
+        assert_eq!(
+            Palette::catppuccin_latte().with_overrides(&custom),
+            Palette::pretorian()
+        );
+        assert_eq!(Palette::from_name("pretorian"), Some(Palette::pretorian()));
+    }
+
+    #[test]
     fn new_pane_size_uses_headless_size_before_first_view() {
         let mut state = AppState::test_new();
         state.headless_size = (132, 41);
@@ -1458,7 +1517,13 @@ mod tests {
 
     #[test]
     fn built_in_themes_leave_sidebar_background_unset() {
-        for name in crate::config::THEME_NAMES {
+        // O tema Pretorian fixa o fundo da barra lateral de propósito para não depender do
+        // fundo do terminal hospedeiro.
+        for name in crate::config::THEME_NAMES
+            .iter()
+            .copied()
+            .filter(|name| *name != "pretorian")
+        {
             let palette = Palette::from_name(name).unwrap();
             assert_eq!(
                 palette.sidebar_bg,

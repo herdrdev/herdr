@@ -4,15 +4,17 @@ pub(crate) enum ConfigEdit<'a> {
     StatusIndicators(super::StatusIndicatorStyle),
     Sound(bool),
     ToastDelivery(super::ToastDelivery),
+    Nome(&'a str),
 }
 
 impl ConfigEdit<'_> {
     pub(crate) fn description(self) -> &'static str {
         match self {
-            Self::Theme(_) => "theme",
-            Self::StatusIndicators(_) => "status indicators",
-            Self::Sound(_) => "sound setting",
-            Self::ToastDelivery(_) => "toast setting",
+            Self::Theme(_) => "tema",
+            Self::StatusIndicators(_) => "indicadores de estado",
+            Self::Sound(_) => "configuração de som",
+            Self::ToastDelivery(_) => "configuração de avisos",
+            Self::Nome(_) => "nome do usuário",
         }
     }
 
@@ -42,6 +44,12 @@ impl ConfigEdit<'_> {
                 let content = super::upsert_section_value(content, "ui.toast", "delivery", value);
                 super::remove_section_key(&content, "ui.toast", "enabled")
             }
+            Self::Nome(nome) => super::upsert_section_value(
+                content,
+                "pretorian",
+                "nome",
+                &toml::Value::String(nome.to_owned()).to_string(),
+            ),
         }
     }
 }
@@ -52,20 +60,22 @@ pub(crate) fn update_file_at(
     update: impl FnOnce(&str) -> Result<String, String>,
 ) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create config directory: {error}"))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!("não foi possível criar o diretório de configuração: {error}")
+        })?;
     }
     let content = match super::io::read_optional_config(path) {
         Ok(Some(content)) => content,
         Ok(None) => String::new(),
         Err(error) => {
             return Err(format!(
-                "failed to read config before saving {description}: {error}"
+                "não foi possível ler a configuração antes de salvar {description}: {error}"
             ));
         }
     };
     let updated = update(&content)?;
-    std::fs::write(path, updated).map_err(|error| format!("failed to save {description}: {error}"))
+    std::fs::write(path, updated)
+        .map_err(|error| format!("não foi possível salvar {description}: {error}"))
 }
 
 pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
@@ -77,6 +87,24 @@ pub(crate) fn write_edit(edit: ConfigEdit<'_>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nome_edit_escapa_string_toml() {
+        let nome = "Ana \"Zé\" \\ Souza";
+        let escrito = ConfigEdit::Nome(nome).apply("");
+        let lido: toml::Value = toml::from_str(&escrito).expect("TOML válido");
+        assert_eq!(lido["pretorian"]["nome"].as_str(), Some(nome));
+    }
+
+    #[test]
+    fn nome_edit_substitui_valor_existente_sem_tocar_outras_secoes() {
+        let original = "[theme]\nname = \"pretorian\"\n\n[pretorian]\nnome = \"Ana\"\n";
+        let escrito = ConfigEdit::Nome("Bia").apply(original);
+        let lido: toml::Value = toml::from_str(&escrito).expect("TOML válido");
+        assert_eq!(lido["pretorian"]["nome"].as_str(), Some("Bia"));
+        assert_eq!(lido["theme"]["name"].as_str(), Some("pretorian"));
+        assert_eq!(escrito.matches("nome = ").count(), 1);
+    }
 
     #[test]
     fn update_file_at_does_not_move_a_leading_bom_into_the_file() {

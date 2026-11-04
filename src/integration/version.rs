@@ -54,7 +54,7 @@ pub(crate) fn enforce_agent_version(
         Ok(output) if output.status.success() => output,
         _ => {
             return Ok(Some(format!(
-                "{} could not run `{probe}` to verify the installed version; hooks require {} {} or newer",
+                "{} não foi possível executar `{probe}` para verificar a versão instalada; os ganchos exigem {} {} ou mais recente",
                 super::INSTALL_WARNING_PREFIX,
                 requirement.label,
                 requirement.min_version
@@ -65,7 +65,7 @@ pub(crate) fn enforce_agent_version(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let Some(found) = extract_version_triple(&stdout) else {
         return Ok(Some(format!(
-            "{} could not parse the {} version from `{probe}` output; hooks require {} {} or newer",
+            "{} não foi possível interpretar a versão de {} na saída de `{probe}`; os ganchos exigem {} {} ou mais recente",
             super::INSTALL_WARNING_PREFIX,
             requirement.label,
             requirement.label,
@@ -77,7 +77,7 @@ pub(crate) fn enforce_agent_version(
 
     if found < required {
         return Err(io::Error::other(format!(
-            "{label} {}.{}.{} is too old: herdr hooks require {label} {min} or newer. upgrade {label}, then re-run install",
+            "{label} {}.{}.{} é antigo demais: os ganchos do Herdr exigem {label} {min} ou mais recente. Atualize {label} e execute a instalação novamente",
             found.0,
             found.1,
             found.2,

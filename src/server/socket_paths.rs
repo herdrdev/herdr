@@ -63,7 +63,7 @@ pub(crate) fn derive_client_socket_from_api_socket(api_socket_path: &Path) -> Pa
 pub(crate) fn prepare_socket_path(path: &Path) -> io::Result<()> {
     crate::ipc::prepare_socket_path(path, |path| {
         format!(
-            "herdr server is already running (socket busy at {})",
+            "o servidor Pretorian já está em execução (socket ocupado em {})",
             path.display()
         )
     })

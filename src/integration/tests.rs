@@ -94,7 +94,24 @@ fn enforce_agent_version_warns_when_binary_missing() {
     let warning = enforce_agent_version(&requirement)
         .expect("missing binary must not fail the install")
         .expect("missing binary must produce a warning");
-    assert!(warning.contains("could not run"));
+    assert!(warning.starts_with("aviso:"));
+    assert!(warning.contains("não foi possível executar"));
+    assert!(warning.contains("0.14.0"));
+}
+
+#[cfg(unix)]
+#[test]
+fn enforce_agent_version_avisa_quando_saida_nao_tem_versao() {
+    let requirement = AgentVersionRequirement {
+        label: "kimi code",
+        binary: "echo",
+        args: &["texto-sem-versao"],
+        min_version: "0.14.0",
+    };
+    let warning = enforce_agent_version(&requirement).unwrap().unwrap();
+    assert!(warning.starts_with("aviso:"));
+    assert!(warning.contains("não foi possível interpretar"));
+    assert!(warning.contains("`echo texto-sem-versao`"));
     assert!(warning.contains("0.14.0"));
 }
 
@@ -111,7 +128,7 @@ fn enforce_agent_version_rejects_old_version() {
     let message = err.to_string();
     assert!(message.contains("0.12.1"));
     assert!(message.contains("0.14.0"));
-    assert!(message.contains("upgrade"));
+    assert!(message.contains("Atualize"));
 }
 
 #[cfg(unix)]
@@ -534,6 +551,50 @@ fn integration_recommendation_installs_available_or_outdated_targets() {
     recommendation.available = true;
     recommendation.state = IntegrationStatusKind::Current;
     assert!(!recommendation.needs_install());
+}
+
+#[test]
+fn orientacao_de_atualizacao_preserva_comandos() {
+    use crate::api::schema::IntegrationTarget;
+    assert_eq!(integration_update_instructions(&[]), "");
+    assert_eq!(
+        integration_update_instructions(&[IntegrationTarget::Pi]),
+        "execute `herdr integration install pi`"
+    );
+    assert_eq!(
+        integration_update_instructions(&[IntegrationTarget::Pi, IntegrationTarget::Codex]),
+        "execute `herdr integration install pi` e `herdr integration install codex`"
+    );
+}
+
+#[test]
+fn mensagens_pi_em_portugues_preservam_caminho_real() {
+    let _lock = integration_env_lock();
+    let base = unique_base();
+    let home = base.join("home");
+    let ext_dir = home.join(".pi").join("agent").join("extensions");
+    fs::create_dir_all(&ext_dir).unwrap();
+    std::env::set_var("HOME", &home);
+    let target = crate::api::schema::IntegrationTarget::Pi;
+    let instalado = install_target(target).unwrap();
+    let caminho = ext_dir.join(PI_EXTENSION_INSTALL_NAME);
+    assert_eq!(
+        instalado,
+        vec![format!(
+            "Instalado: integração do Pi em {}",
+            caminho.display()
+        )]
+    );
+    let removido = uninstall_target(target).unwrap();
+    assert_eq!(
+        removido,
+        vec![format!(
+            "Removido: extensão de integração do Pi em {}",
+            caminho.display()
+        )]
+    );
+    std::env::remove_var("HOME");
+    let _ = fs::remove_dir_all(base);
 }
 
 #[test]

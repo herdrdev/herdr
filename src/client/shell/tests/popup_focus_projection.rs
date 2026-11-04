@@ -36,7 +36,7 @@ fn modal_paste_target_requires_a_focused_editable_client_field() {
     assert!(!state.modal_paste_target_active());
 
     state.overlay = Some(ClientShellOverlay::Rename(ClientRenameOverlay {
-        title: "rename pane",
+        title: "renomear painel",
         input: TextEditor::default(),
         target: ClientRenameTarget::Pane {
             pane_id: "pane_1".into(),
@@ -165,7 +165,7 @@ fn desktop_composition_keeps_shell_outside_origin_relative_surface() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("spaces"));
+    assert!(text.contains("espaços"));
     assert!(text.contains("client-shell"));
     assert!(text.contains("main"));
     assert!(text.contains("LIVE"));

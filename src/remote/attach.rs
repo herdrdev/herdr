@@ -134,7 +134,7 @@ pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
                 Ok(())
             }
             _ => Err(io::Error::other(format!(
-                "remote Herdr server is stopped or incompatible; run `{}`",
+                "o servidor remoto Herdr está parado ou incompatível; execute `{}`",
                 super::saved_ssh_bootstrap_command(target, session),
             ))),
         }
@@ -186,10 +186,11 @@ impl SavedSshSetup {
                 &candidate.executable.command(&["session", "list", "--json"]),
             )?;
             if output.status.code() == Some(255) {
-                return Err(command_failed("remote SSH connection failed", &output));
+                return Err(command_failed("falha na conexão SSH remota", &output));
             }
             if !output.status.success() {
-                failure = command_failed("remote session query failed", &output).to_string();
+                failure =
+                    command_failed("falha na consulta das sessões remotas", &output).to_string();
                 continue;
             }
             match serde_json::from_slice::<RemoteSessionListJson>(&output.stdout) {
@@ -203,11 +204,11 @@ impl SavedSshSetup {
                         .map(|session| session.name)
                         .collect())
                 }
-                Err(error) => failure = format!("invalid remote session list: {error}"),
+                Err(error) => failure = format!("lista de sessões remotas inválida: {error}"),
             }
         }
         Err(io::Error::other(format!(
-            "could not discover remote Herdr sessions: {failure}; specify --remote-session to continue"
+            "não foi possível descobrir as sessões remotas do Herdr: {failure}; informe --remote-session para continuar"
         )))
     }
 
@@ -241,7 +242,10 @@ impl SavedSshSetup {
             .saved_bridge_command(session_name);
         let output = ssh.shell_output(&prepared.remote_herdr.platform, &command)?;
         if !output.status.success() {
-            return Err(command_failed("remote server startup failed", &output));
+            return Err(command_failed(
+                "falha ao iniciar o servidor remoto",
+                &output,
+            ));
         }
         match remote_server_status(&ssh, &prepared.remote_herdr, true)? {
             RemoteServerStatus::Running {
@@ -268,7 +272,7 @@ impl SavedSshSetup {
                 }))
             }
             _ => Err(io::Error::other(
-                "remote server is not ready for saved machines",
+                "o servidor remoto ainda não está pronto para máquinas salvas",
             )),
         }
     }
@@ -294,7 +298,7 @@ struct DetectedRemotePlatform {
 impl DetectedRemotePlatform {
     fn into_setup_platform(self) -> RemotePlatform {
         if let Some(note) = self.setup_note {
-            eprintln!("note: {note}");
+            eprintln!("aviso: {note}");
         }
         self.platform
     }
@@ -770,11 +774,11 @@ pub(crate) fn ssh_authentication_command(target: &str) -> io::Result<SshAuthenti
     if target.is_empty() || target.starts_with('-') || target.chars().any(char::is_control) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "invalid SSH target",
+            "destino SSH inválido",
         ));
     }
     if !crate::platform::remote_ssh_config_paths().multiplexing {
-        return Err(io::Error::new(io::ErrorKind::Unsupported, "interactive SSH recovery requires Unix OpenSSH multiplexing; authenticate outside Herdr on this platform"));
+        return Err(io::Error::new(io::ErrorKind::Unsupported, "a recuperação interativa SSH requer multiplexação OpenSSH Unix; autentique-se fora do Herdr nesta plataforma"));
     }
     if !crate::config::Config::load()
         .config
@@ -783,7 +787,7 @@ pub(crate) fn ssh_authentication_command(target: &str) -> io::Result<SshAuthenti
     {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
-            "interactive SSH recovery requires remote.manage_ssh_config=true",
+            "a recuperação interativa SSH requer remote.manage_ssh_config=true",
         ));
     }
     let config = write_managed_ssh_config(target)?;
@@ -887,12 +891,12 @@ impl RemoteSsh {
         if output.stdout.len() > SSH_DIAGNOSTIC_OUTPUT_LIMIT {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "SSH configuration output is too large",
+                "a saída da configuração SSH é grande demais",
             ));
         }
         if !output.status.success() {
             return Err(command_failed(
-                "could not resolve managed SSH configuration",
+                "não foi possível resolver a configuração SSH gerenciada",
                 &output,
             ));
         }
@@ -930,7 +934,7 @@ impl RemoteSsh {
             if output.status.success() {
                 Ok(())
             } else {
-                Err(command_failed("remote SSH connection failed", &output))
+                Err(command_failed("falha na conexão SSH remota", &output))
             }
         };
         if probe(&pinned.alias, true).is_ok() {
@@ -963,7 +967,7 @@ impl RemoteSsh {
         let output = output?;
         if !output.status.success() {
             return Err(command_failed(
-                "could not retire stale managed SSH transport",
+                "não foi possível encerrar o transporte SSH gerenciado antigo",
                 &output,
             ));
         }
@@ -1098,7 +1102,10 @@ impl RemoteSsh {
     fn install_herdr(&self, remote_herdr: &RemoteHerdr, source_path: &Path) -> io::Result<()> {
         let output = self.sh_output(&remote_install_prepare_script(remote_herdr))?;
         if !output.status.success() {
-            return Err(command_failed("remote install preparation failed", &output));
+            return Err(command_failed(
+                "falha na preparação da instalação remota",
+                &output,
+            ));
         }
         let (tmp_path, dest_path) = parse_remote_install_paths(&output.stdout)?;
 
@@ -1110,7 +1117,10 @@ impl RemoteSsh {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|err| {
-                io::Error::new(err.kind(), format!("failed to start ssh install: {err}"))
+                io::Error::new(
+                    err.kind(),
+                    format!("falha ao iniciar a instalação via SSH: {err}"),
+                )
             })?;
 
         let mut source = File::open(source_path)?;
@@ -1119,7 +1129,7 @@ impl RemoteSsh {
         } else {
             Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "ssh install stdin missing",
+                "entrada padrão da instalação via SSH indisponível",
             ))
         };
         let status = child.wait()?;
@@ -1130,11 +1140,14 @@ impl RemoteSsh {
             if output.status.success() {
                 Ok(())
             } else {
-                Err(command_failed("remote install commit failed", &output))
+                Err(command_failed(
+                    "falha ao concluir a instalação remota",
+                    &output,
+                ))
             }
         } else {
             Err(io::Error::other(format!(
-                "remote install exited with {status}"
+                "instalação remota encerrada com {status}"
             )))
         }
     }
@@ -1145,11 +1158,11 @@ impl RemoteSsh {
             .arg(source_path)
             .arg(windows_scp_target(&self.target, remote_path))
             .status()
-            .map_err(|err| io::Error::new(err.kind(), format!("failed to start scp: {err}")))?;
+            .map_err(|err| io::Error::new(err.kind(), format!("falha ao iniciar scp: {err}")))?;
         if status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!("scp exited with {status}")))
+            Err(io::Error::other(format!("scp encerrou com {status}")))
         }
     }
 
@@ -1170,7 +1183,10 @@ impl RemoteSsh {
         let result = (|| {
             let output = self.framed_user_shell_output(&windows_remote_install_prepare_command())?;
             if !output.status.success() {
-                return Err(command_failed("remote install preparation failed", &output));
+                return Err(command_failed(
+                    "falha na preparação da instalação remota",
+                    &output,
+                ));
             }
             let remote_dir = parse_windows_remote_path(
                 &String::from_utf8_lossy(&output.stdout),
@@ -1192,7 +1208,10 @@ impl RemoteSsh {
                     sha256,
                 ))?;
                 if !output.status.success() {
-                    return Err(command_failed("remote Windows install failed", &output));
+                    return Err(command_failed(
+                        "falha na instalação remota do Windows",
+                        &output,
+                    ));
                 }
                 parse_windows_remote_path(
                     &String::from_utf8_lossy(&output.stdout),
@@ -1210,7 +1229,10 @@ impl RemoteSsh {
                     if output.status.success() {
                         Ok(installed)
                     } else {
-                        Err(command_failed("remote install cleanup failed", &output))
+                        Err(command_failed(
+                            "falha na limpeza da instalação remota",
+                            &output,
+                        ))
                     }
                 }
             }
@@ -1223,10 +1245,12 @@ impl RemoteSsh {
 // Only interactive setup uses this relay. Background probes retain their
 // capture-only timeout path so SSH diagnostics cannot overwrite the active TUI.
 fn output_with_forwarded_stderr(mut child: Child, stdin: Option<&[u8]>) -> io::Result<Output> {
-    let mut child_stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::BrokenPipe, "ssh command stderr missing"))?;
+    let mut child_stderr = child.stderr.take().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "saída de erro do comando SSH indisponível",
+        )
+    })?;
     let stderr_relay = thread::spawn(move || -> io::Result<Vec<u8>> {
         let mut captured = Vec::new();
         let mut buffer = [0_u8; 8 * 1024];
@@ -1252,7 +1276,7 @@ fn output_with_forwarded_stderr(mut child: Child, stdin: Option<&[u8]>) -> io::R
         } else {
             Err(io::Error::new(
                 io::ErrorKind::BrokenPipe,
-                "ssh bootstrap stdin missing",
+                "entrada padrão da inicialização SSH indisponível",
             ))
         }
     } else {
@@ -1261,7 +1285,7 @@ fn output_with_forwarded_stderr(mut child: Child, stdin: Option<&[u8]>) -> io::R
     let output_result = child.wait_with_output();
     let stderr_result = stderr_relay
         .join()
-        .map_err(|_| io::Error::other("ssh stderr relay panicked"))?;
+        .map_err(|_| io::Error::other("falha no encaminhamento da saída de erro SSH"))?;
 
     let mut output = output_result?;
     write_result?;
@@ -1306,17 +1330,17 @@ fn parse_remote_install_paths(stdout: &[u8]) -> io::Result<(String, String)> {
     let dest_path = parts.next().unwrap_or_default();
     if tmp_path.is_empty() || dest_path.is_empty() {
         return Err(io::Error::other(
-            "remote install preparation did not return destination paths",
+            "a preparação da instalação remota não retornou os caminhos de destino",
         ));
     }
     let tmp_path = String::from_utf8(tmp_path.to_vec()).map_err(|err| {
         io::Error::other(format!(
-            "remote install temporary path is not valid UTF-8: {err}"
+            "o caminho temporário da instalação remota não é UTF-8 válido: {err}"
         ))
     })?;
     let dest_path = String::from_utf8(dest_path.to_vec()).map_err(|err| {
         io::Error::other(format!(
-            "remote install destination path is not valid UTF-8: {err}"
+            "o caminho de destino da instalação remota não é UTF-8 válido: {err}"
         ))
     })?;
     Ok((tmp_path, dest_path))
@@ -1382,7 +1406,7 @@ fn parse_windows_remote_path(stdout: &str, marker: &str) -> io::Result<String> {
         .lines()
         .rev()
         .find_map(|line| line.trim().strip_prefix(marker))
-        .ok_or_else(|| io::Error::other(format!("remote command did not return {marker}")))?;
+        .ok_or_else(|| io::Error::other(format!("o comando remoto não retornou {marker}")))?;
     decode_windows_remote_path(encoded)
 }
 
@@ -1390,12 +1414,17 @@ fn decode_windows_remote_path(encoded: &str) -> io::Result<String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|err| {
-            io::Error::other(format!("remote path result is not valid base64: {err}"))
+            io::Error::other(format!(
+                "o caminho remoto retornado não é base64 válido: {err}"
+            ))
         })?;
-    let path = String::from_utf8(bytes)
-        .map_err(|err| io::Error::other(format!("remote path result is not valid UTF-8: {err}")))?;
+    let path = String::from_utf8(bytes).map_err(|err| {
+        io::Error::other(format!(
+            "o caminho remoto retornado não é UTF-8 válido: {err}"
+        ))
+    })?;
     if path.is_empty() {
-        return Err(io::Error::other("remote path result is empty"));
+        return Err(io::Error::other("o caminho remoto retornado está vazio"));
     }
     Ok(path)
 }
@@ -1568,7 +1597,7 @@ fn prepare_discovered_remote_herdr(
 
     if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it does not support saved SSH endpoint federation",
+            "Herdr remoto instalado em {}, mas sem suporte à federação de conexões SSH salvas",
             remote_herdr.executable.display()
         )));
     }
@@ -1595,7 +1624,7 @@ pub(super) fn find_installed_remote_herdr(ssh: &RemoteSsh) -> io::Result<RemoteH
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         format!(
-            "matching Herdr is not ready on {}; run `herdr --remote {}` interactively to install or update it",
+            "Herdr compatível ainda não está pronto em {}; execute `herdr --remote {}` em um terminal interativo para instalar ou atualizar",
             ssh.target(),
             ssh.target()
         ),
@@ -1661,7 +1690,7 @@ fn prepare_windows_remote_herdr(
     let remote_herdr = install_result?;
     if !remote_binary_supports_endpoint_requirement(ssh, &remote_herdr, require_surface_interest)? {
         return Err(io::Error::other(format!(
-            "installed remote herdr at {}, but it does not support the required remote hosting capabilities",
+            "Herdr remoto instalado em {}, mas sem os recursos necessários para hospedagem remota",
             remote_herdr.executable.display()
         )));
     }
@@ -1684,7 +1713,10 @@ pub(super) fn discover_remote_api_metadata(
         // re-expanded, so a WSL-backed Windows host is discovered correctly.
         let output = ssh.sh_output(&posix_remote_api_discovery_script(&platform, session))?;
         if !output.status.success() {
-            return Err(command_failed("remote binary discovery failed", &output));
+            return Err(command_failed(
+                "falha na busca do executável remoto",
+                &output,
+            ));
         }
         let metadata = crate::client::endpoint::SshMachineMetadata {
             os: platform.os.to_owned(),
@@ -1693,7 +1725,7 @@ pub(super) fn discover_remote_api_metadata(
         if !metadata.is_valid() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "invalid remote Herdr executable path",
+                "caminho do executável remoto Herdr inválido",
             ));
         }
         return Ok(metadata);
@@ -1704,7 +1736,7 @@ pub(super) fn discover_remote_api_metadata(
         let probe =
             ssh.framed_user_shell_output(&remote_api_bridge_command(&candidate, session, true))?;
         if probe.status.code() == Some(255) {
-            return Err(command_failed("remote SSH connection failed", &probe));
+            return Err(command_failed("falha na conexão SSH remota", &probe));
         }
         if probe.status.success()
             && String::from_utf8_lossy(&probe.stdout).trim() == "herdr-api-bridge-v1"
@@ -1717,7 +1749,7 @@ pub(super) fn discover_remote_api_metadata(
     }
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
-        "remote Herdr does not support machine API forwarding; update Herdr on this machine",
+        "o Herdr remoto não oferece encaminhamento da API de máquina; atualize o Herdr nessa máquina",
     ))
 }
 
@@ -1749,12 +1781,12 @@ fn detect_remote_platform(ssh: &RemoteSsh) -> io::Result<DetectedRemotePlatform>
         }
         windows_uname_hint = looks_like_windows_uname(os);
         io::Error::other(format!(
-            "unsupported remote platform: {} {}",
+            "plataforma remota não suportada: {} {}",
             os.trim(),
             arch.trim()
         ))
     } else {
-        command_failed("remote platform detection failed", &output)
+        command_failed("falha ao detectar a plataforma remota", &output)
     };
 
     // A POSIX-compatible shell on Windows (MINGW/MSYS/Cygwin) reports a Windows
@@ -1785,7 +1817,10 @@ fn detect_windows_remote_platform(
     // an authentication failure. An ordinary command failure means "not Windows".
     let output = ssh.framed_user_shell_output(&command)?;
     if output.status.code() == Some(255) {
-        return Err(command_failed("remote platform detection failed", &output));
+        return Err(command_failed(
+            "falha ao detectar a plataforma remota",
+            &output,
+        ));
     }
     if !output.status.success() {
         return Ok(None);
@@ -1834,9 +1869,9 @@ fn parse_windows_platform_probe(stdout: &str) -> Result<Option<DetectedRemotePla
     let setup_note = match arch.trim().to_ascii_uppercase().as_str() {
         "AMD64" | "X86_64" => None,
         "ARM64" => Some(
-            "Windows ARM64 support is best-effort and uses x64 emulation; bugs and issues are expected.",
+            "O suporte a Windows ARM64 é experimental e usa emulação x64; podem ocorrer problemas.",
         ),
-        arch => return Err(format!("unsupported remote platform: Windows {arch}")),
+        arch => return Err(format!("plataforma remota não suportada: Windows {arch}")),
     };
     Ok(Some(DetectedRemotePlatform {
         platform: RemotePlatform {
@@ -1854,7 +1889,10 @@ fn remote_binary_candidates(
     if remote_herdr.platform.is_windows() {
         let output = ssh.framed_user_shell_output(&windows_remote_binary_candidate_command())?;
         if !output.status.success() {
-            return Err(command_failed("remote binary discovery failed", &output));
+            return Err(command_failed(
+                "falha na busca do executável remoto",
+                &output,
+            ));
         }
         return Ok(windows_remote_binary_candidates(
             remote_herdr,
@@ -1872,7 +1910,10 @@ fn remote_binary_candidates(
         &remote_herdr.platform,
     ))?;
     if !output.status.success() {
-        return Err(command_failed("remote binary discovery failed", &output));
+        return Err(command_failed(
+            "falha na busca do executável remoto",
+            &output,
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     for candidate in remote_herdrs_from_path_discovery(remote_herdr, &stdout) {
@@ -2024,7 +2065,7 @@ fn remote_client_status(
     let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
         if output.status.code() == Some(255) {
-            return Err(command_failed("remote SSH connection failed", &output));
+            return Err(command_failed("falha na conexão SSH remota", &output));
         }
         return Ok(None);
     }
@@ -2060,7 +2101,7 @@ fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
     if value.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("{REMOTE_BINARY_ENV_VAR} must not be empty"),
+            format!("{REMOTE_BINARY_ENV_VAR} não pode estar vazio"),
         ));
     }
 
@@ -2069,7 +2110,7 @@ fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
         io::Error::new(
             err.kind(),
             format!(
-                "failed to inspect {REMOTE_BINARY_ENV_VAR} path {}: {err}",
+                "falha ao verificar o caminho de {REMOTE_BINARY_ENV_VAR} {}: {err}",
                 path.display()
             ),
         )
@@ -2078,7 +2119,7 @@ fn remote_binary_override_path() -> io::Result<Option<PathBuf>> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "{REMOTE_BINARY_ENV_VAR} path is not a file: {}",
+                "o caminho de {REMOTE_BINARY_ENV_VAR} não é um arquivo: {}",
                 path.display()
             ),
         ));
@@ -2105,10 +2146,10 @@ fn install_source_description_for(
     }
 
     if local_binary_can_seed_remote {
-        "the current local herdr binary".to_string()
+        "o executável Herdr local atual".to_string()
     } else {
         format!(
-            "the {} {} asset for {}",
+            "o artefato {} {} para {}",
             current_version(),
             current_channel(),
             platform.asset_key()
@@ -2217,8 +2258,8 @@ fn ensure_remote_server_ready(
         match live_handoff_remote_server(ssh, remote_herdr) {
             Ok(()) => return Ok(()),
             Err(err) => {
-                eprintln!("remote live handoff failed: {err}");
-                eprintln!("falling back to remote server restart.");
+                eprintln!("falha na transferência em execução do servidor remoto: {err}");
+                eprintln!("Será necessário reiniciar o servidor remoto.");
             }
         }
     }
@@ -2246,13 +2287,13 @@ fn confirm_remote_install_with_running_server(
         Err(err) => {
             if !io::stdin().is_terminal() {
                 return Err(io::Error::other(format!(
-                    "could not inspect the running remote herdr server on {target} before installing: {err}; run from an interactive terminal to approve updating the remote binary"
+                    "não foi possível verificar o servidor Herdr remoto em execução em {target} antes da instalação: {err}; use um terminal interativo para autorizar a atualização do executável remoto"
                 )));
             }
             eprintln!(
-                "could not inspect the running remote herdr server on {target} before installing: {err}"
+                "não foi possível verificar o servidor Herdr remoto em execução em {target} antes da instalação: {err}"
             );
-            eprint!("continue installing the remote herdr binary? [y/N] ");
+            eprint!("Continuar a instalação do executável Herdr remoto? [y/N] (y para sim) ");
             io::stderr().flush()?;
 
             let mut answer = String::new();
@@ -2261,7 +2302,7 @@ fn confirm_remote_install_with_running_server(
             if answer != "y" && answer != "yes" {
                 return Err(io::Error::new(
                     io::ErrorKind::Interrupted,
-                    "remote herdr install cancelled",
+                    "instalação remota do Herdr cancelada",
                 ));
             }
             return Ok(false);
@@ -2290,10 +2331,10 @@ fn confirm_remote_install_with_running_server(
 
     if plan == RemoteInstallRunningServerPlan::KeepRunning {
         if io::stdin().is_terminal() {
-            eprintln!("remote herdr server on {target} is already compatible:");
-            eprintln!("  server: v{}", version_label(version.as_deref()));
+            eprintln!("O servidor Herdr remoto em {target} já é compatível:");
+            eprintln!("  servidor: v{}", version_label(version.as_deref()));
             eprintln!(
-                "Herdr will install {} without stopping the running remote server.",
+                "O Herdr instalará {} sem parar o servidor remoto em execução.",
                 current_version()
             );
         }
@@ -2305,7 +2346,7 @@ fn confirm_remote_install_with_running_server(
             RemoteInstallRunningServerPlan::LiveHandoff => return Ok(false),
             RemoteInstallRunningServerPlan::StopRequired(_) => {
                 return Err(io::Error::other(format!(
-                    "remote herdr server on {target} is running v{}; run from an interactive terminal to approve stopping it for the update",
+                    "o servidor Herdr remoto em {target} está executando a versão v{}; use um terminal interativo para autorizar sua parada para a atualização",
                     version_label(version.as_deref())
                 )));
             }
@@ -2314,24 +2355,24 @@ fn confirm_remote_install_with_running_server(
     }
 
     if plan == RemoteInstallRunningServerPlan::LiveHandoff {
-        eprintln!("remote herdr server on {target} is currently running:");
-        eprintln!("  server: v{}", version_label(version.as_deref()));
+        eprintln!("O servidor Herdr remoto em {target} está em execução:");
+        eprintln!("  servidor: v{}", version_label(version.as_deref()));
         eprintln!(
-            "Herdr will install {} and hand off live pane processes to the prepared server.",
+            "O Herdr instalará {} e transferirá os processos ativos dos painéis para o servidor preparado.",
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
-    eprintln!("  server: v{}", version_label(version.as_deref()));
+    eprintln!("O servidor Herdr remoto em {target} está em execução:");
+    eprintln!("  servidor: v{}", version_label(version.as_deref()));
     eprintln!(
-        "To complete the remote update, Herdr must stop the running remote server after installing."
+        "Para concluir a atualização remota, o Herdr precisa parar o servidor remoto após a instalação."
     );
-    eprintln!("This stops active remote pane processes, including shells, agents, dev servers, and tests.");
+    eprintln!("Isso encerra os processos ativos nos painéis remotos, incluindo shells, agentes, servidores de desenvolvimento e testes.");
     eprintln!();
     eprint!(
-        "Install {} and stop the remote server now? [y/N] ",
+        "Instalar {} e parar o servidor remoto agora? [y/N] (y para sim) ",
         current_version()
     );
     io::stderr().flush()?;
@@ -2342,7 +2383,7 @@ fn confirm_remote_install_with_running_server(
     if answer != "y" && answer != "yes" {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr install cancelled",
+            "instalação remota do Herdr cancelada",
         ));
     }
 
@@ -2359,7 +2400,10 @@ fn remote_server_status(
         .session_command(&ssh.session_name, &["status", "server", "--json"]);
     let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
-        return Err(command_failed("remote server status failed", &output));
+        return Err(command_failed(
+            "falha ao consultar o estado do servidor remoto",
+            &output,
+        ));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -2485,7 +2529,7 @@ fn parse_client_status_json(status: &str) -> Option<RemoteClientStatusJson> {
 fn parse_remote_server_status_json(status: &str) -> io::Result<RemoteServerStatus> {
     let parsed: RemoteServerStatusJson = serde_json::from_str(status).map_err(|err| {
         io::Error::other(format!(
-            "could not parse remote server status JSON from `{status}`: {err}"
+            "não foi possível interpretar o estado JSON do servidor remoto em `{status}`: {err}"
         ))
     })?;
     if !parsed.running {
@@ -2528,49 +2572,49 @@ fn confirm_remote_server_stop(
     if !io::stdin().is_terminal() {
         if required_upgrade {
             return Err(io::Error::other(format!(
-                "remote herdr server on {target} needs one final update before this client can attach; run from an interactive terminal to approve updating it"
+                "o servidor Herdr remoto em {target} precisa de uma última atualização para este cliente conectar; use um terminal interativo para autorizá-la"
             )));
         }
 
         eprintln!(
-            "remote herdr server on {target} is still running v{}; it will use {} after it restarts.",
+            "O servidor Herdr remoto em {target} continua na versão v{}; usará {} após reiniciar.",
             version_label(version),
             current_version()
         );
         return Ok(false);
     }
 
-    eprintln!("remote herdr server on {target} is currently running:");
-    eprintln!("  server: v{}", version_label(version));
-    eprintln!("  prepared binary: {}", current_version());
+    eprintln!("O servidor Herdr remoto em {target} está em execução:");
+    eprintln!("  servidor: v{}", version_label(version));
+    eprintln!("  executável preparado: {}", current_version());
     eprintln!();
 
     match reason {
         RemoteServerRestartReason::EndpointProtocol => {
             eprintln!(
-                "the remote server predates Herdr's stable endpoint protocol and must update before this client can attach."
+                "O servidor remoto é anterior ao protocolo estável de conexão do Herdr e precisa ser atualizado para este cliente conectar."
             );
         }
         RemoteServerRestartReason::SurfaceInterest => {
             eprintln!(
-                "the remote server must restart before it can join saved SSH endpoint federation."
+                "O servidor remoto precisa reiniciar para participar da federação de conexões SSH salvas."
             );
         }
         RemoteServerRestartReason::HealthCheck => {
-            eprintln!("the remote server must restart to enable saved SSH endpoint health checks.");
+            eprintln!("O servidor remoto precisa reiniciar para habilitar a verificação das conexões SSH salvas.");
         }
         RemoteServerRestartReason::DaemonDetach => {
             eprintln!(
-                "the remote server was started by a herdr build that may not survive SSH connection loss. restart it so network drops disconnect only this client."
+                "O servidor remoto foi iniciado por uma versão do Herdr que pode não sobreviver à perda da conexão SSH. Reinicie-o para que quedas de rede desconectem apenas este cliente."
             );
         }
     }
 
-    eprintln!("This stops active remote pane processes, including shells, agents, dev servers, and tests.");
+    eprintln!("Isso encerra os processos ativos nos painéis remotos, incluindo shells, agentes, servidores de desenvolvimento e testes.");
     let prompt = if required_upgrade {
-        "stop and update the remote server, then continue attaching? [y/N] "
+        "Parar e atualizar o servidor remoto e continuar a conexão? [y/N] (y para sim) "
     } else {
-        "restart the remote server now? [y/N] "
+        "Reiniciar o servidor remoto agora? [y/N] (y para sim) "
     };
     eprint!("{prompt}");
     io::stderr().flush()?;
@@ -2581,7 +2625,7 @@ fn confirm_remote_server_stop(
     if required_upgrade {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr server stop cancelled",
+            "parada do servidor Herdr remoto cancelada",
         ));
     }
 
@@ -2590,26 +2634,29 @@ fn confirm_remote_server_stop(
 
 fn live_handoff_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result<()> {
     let status = remote_client_status(ssh, remote_herdr)?.ok_or_else(|| {
-        io::Error::other("could not inspect the prepared remote herdr binary before live handoff")
+        io::Error::other("não foi possível verificar o executável Herdr remoto preparado antes da transferência em execução")
     })?;
     let protocol = status.protocol.ok_or_else(|| {
-        io::Error::other("prepared remote herdr did not report its private protocol")
+        io::Error::other("o Herdr remoto preparado não informou seu protocolo privado")
     })?;
     let version = status
         .version
         .filter(|version| !version.is_empty())
-        .ok_or_else(|| io::Error::other("prepared remote herdr did not report its version"))?;
+        .ok_or_else(|| io::Error::other("o Herdr remoto preparado não informou sua versão"))?;
     let command =
         remote_herdr
             .executable
             .live_handoff_command(&ssh.session_name, protocol, &version);
     let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
-        return Err(command_failed("remote server live handoff failed", &output));
+        return Err(command_failed(
+            "falha na transferência em execução do servidor remoto",
+            &output,
+        ));
     }
 
     eprintln!(
-        "handed off the remote herdr server on {}; reconnecting to the prepared server.",
+        "Servidor Herdr remoto em {} transferido; reconectando ao servidor preparado.",
         ssh.target()
     );
     Ok(())
@@ -2621,12 +2668,12 @@ fn stop_remote_server(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) -> io::Result
         .session_command(&ssh.session_name, &["server", "stop"]);
     let output = ssh.shell_output(&remote_herdr.platform, &command)?;
     if !output.status.success() {
-        return Err(command_failed("remote server stop failed", &output));
+        return Err(command_failed("falha ao parar o servidor remoto", &output));
     }
 
     wait_for_remote_server_shutdown(ssh, remote_herdr)?;
     eprintln!(
-        "stopped the remote herdr server on {}; it will restart when the remote client bridge attaches.",
+        "Servidor Herdr remoto em {} parado; ele reiniciará quando a ponte do cliente remoto conectar.",
         ssh.target()
     );
     Ok(())
@@ -2642,7 +2689,7 @@ fn wait_for_remote_server_shutdown(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) 
             return Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!(
-                    "shutdown was requested, but the old remote herdr server on {target} is still responding after {} seconds",
+                    "a parada foi solicitada, mas o servidor Herdr remoto anterior em {target} ainda responde após {} segundos",
                     REMOTE_SERVER_SHUTDOWN_CONFIRM_TIMEOUT.as_secs(),
                     target = ssh.target()
                 ),
@@ -2653,7 +2700,7 @@ fn wait_for_remote_server_shutdown(ssh: &RemoteSsh, remote_herdr: &RemoteHerdr) 
 }
 
 fn version_label(version: Option<&str>) -> &str {
-    version.unwrap_or("unknown")
+    version.unwrap_or("desconhecida")
 }
 
 fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
@@ -2665,7 +2712,7 @@ fn warn_if_remote_bin_not_on_path(ssh: &RemoteSsh) -> io::Result<()> {
     }
 
     eprintln!(
-        "herdr: installed remote binary to ~/.local/bin/herdr, but the remote shell does not resolve `herdr` to that path"
+        "herdr: o executável remoto foi instalado em ~/.local/bin/herdr, mas o shell remoto não encontra `herdr` nesse caminho"
     );
     Ok(())
 }
@@ -2689,17 +2736,17 @@ fn download_release_asset(platform: &RemotePlatform) -> io::Result<InstallSource
         .arg(&path)
         .arg(&asset.url)
         .status()
-        .map_err(|err| io::Error::new(err.kind(), format!("download failed: {err}")))?;
+        .map_err(|err| io::Error::new(err.kind(), format!("falha no download: {err}")))?;
     if !status.success() {
         let _ = fs::remove_dir_all(&dir);
-        return Err(io::Error::other("download failed"));
+        return Err(io::Error::other("falha no download"));
     }
     if let Some(expected) = &asset.sha256 {
         if let Err(err) = crate::checksum::verify_sha256(&path, expected) {
             let _ = fs::remove_dir_all(&dir);
             return Err(io::Error::new(
                 err.kind(),
-                format!("downloaded remote asset checksum verification failed: {err}"),
+                format!("falha na verificação do hash do artefato remoto baixado: {err}"),
             ));
         }
     }
@@ -2720,9 +2767,12 @@ fn fetch_remote_manifest(url: &str) -> io::Result<Vec<u8>> {
             url,
         ])
         .output()
-        .map_err(|err| io::Error::new(err.kind(), format!("curl failed: {err}")))?;
+        .map_err(|err| io::Error::new(err.kind(), format!("falha no curl: {err}")))?;
     if !output.status.success() {
-        return Err(command_failed("failed to fetch update manifest", &output));
+        return Err(command_failed(
+            "falha ao obter o manifesto de atualização",
+            &output,
+        ));
     }
     Ok(output.stdout)
 }
@@ -2743,7 +2793,7 @@ fn preview_assets_for_build<'a>(
     }
     let build = manifest.builds.get(build_id).ok_or_else(|| {
         io::Error::other(format!(
-            "preview manifest no longer includes build {build_id}; run `herdr update` locally or set {REMOTE_BINARY_ENV_VAR}=target/release/herdr"
+            "o manifesto de prévia não inclui mais a compilação {build_id}; execute `herdr update` localmente ou defina {REMOTE_BINARY_ENV_VAR}=target/release/herdr"
         ))
     })?;
     Ok((build.protocol, &build.assets))
@@ -2752,46 +2802,52 @@ fn preview_assets_for_build<'a>(
 fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
     if crate::build_info::is_preview() {
         let build_id = crate::build_info::build_id().ok_or_else(|| {
-            io::Error::other("preview client has no build id; set HERDR_REMOTE_BINARY or install Herdr on the remote manually")
+            io::Error::other("o cliente de prévia não informa a compilação; defina HERDR_REMOTE_BINARY ou instale o Herdr manualmente na máquina remota")
         })?;
         let manifest_bytes = fetch_remote_manifest(PREVIEW_UPDATE_MANIFEST_URL)?;
         let manifest: RemotePreviewManifest =
             serde_json::from_slice(&manifest_bytes).map_err(|err| {
-                io::Error::other(format!("failed to parse preview manifest JSON: {err}"))
+                io::Error::other(format!(
+                    "falha ao interpretar o manifesto JSON de prévia: {err}"
+                ))
             })?;
         let (protocol, assets) = preview_assets_for_build(&manifest, build_id)?;
         if protocol != CURRENT_PROTOCOL {
             return Err(io::Error::other(format!(
-                "preview manifest has build {build_id} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching Herdr on the remote host manually"
+                "o manifesto de prévia informa protocolo {protocol} para a compilação {build_id}, mas este cliente precisa do protocolo {CURRENT_PROTOCOL}; defina {REMOTE_BINARY_ENV_VAR}=target/release/herdr ou instale manualmente um Herdr compatível na máquina remota"
             )));
         }
         return assets.get(asset_key).map(remote_asset_info).ok_or_else(|| {
             io::Error::other(format!(
-                "no {asset_key} binary in the preview manifest for build {build_id}"
+                "o manifesto de prévia não inclui o executável {asset_key} para a compilação {build_id}"
             ))
         });
     }
 
     let current_version = current_version();
     let manifest_bytes = fetch_remote_manifest(STABLE_UPDATE_MANIFEST_URL)?;
-    let manifest: RemoteUpdateManifest = serde_json::from_slice(&manifest_bytes)
-        .map_err(|err| io::Error::other(format!("failed to parse update manifest JSON: {err}")))?;
+    let manifest: RemoteUpdateManifest =
+        serde_json::from_slice(&manifest_bytes).map_err(|err| {
+            io::Error::other(format!(
+                "falha ao interpretar o manifesto JSON de atualização: {err}"
+            ))
+        })?;
     let release = manifest.release_for_version(&current_version).ok_or_else(|| {
         io::Error::other(format!(
-            "release manifest does not include herdr {current_version}; build herdr for {} or install it there manually",
+            "o manifesto de lançamento não inclui herdr {current_version}; compile o herdr para {} ou instale-o manualmente nessa máquina",
             asset_key
         ))
     })?;
     if let Some(protocol) = release.protocol {
         if protocol != CURRENT_PROTOCOL {
             return Err(io::Error::other(format!(
-                "release manifest has herdr {current_version} protocol {protocol}, but this client needs protocol {CURRENT_PROTOCOL}; set {REMOTE_BINARY_ENV_VAR}=target/release/herdr or install a matching herdr on the remote host manually"
+                "o manifesto de lançamento informa protocolo {protocol} para herdr {current_version}, mas este cliente precisa do protocolo {CURRENT_PROTOCOL}; defina {REMOTE_BINARY_ENV_VAR}=target/release/herdr ou instale manualmente um herdr compatível na máquina remota"
             )));
         }
     }
     let asset = release.assets.get(asset_key).ok_or_else(|| {
         io::Error::other(format!(
-            "no {asset_key} binary in the release manifest for herdr {current_version}"
+            "o manifesto de lançamento não inclui o executável {asset_key} para herdr {current_version}"
         ))
     })?;
     let mut asset = remote_asset_info(asset);
@@ -2800,7 +2856,7 @@ fn remote_release_asset(asset_key: &str) -> io::Result<RemoteReleaseAsset> {
         .or_else(|| release.sha256.get(asset_key).cloned());
     if asset.sha256.is_none() {
         return Err(io::Error::other(format!(
-            "release manifest asset {asset_key} is missing a SHA-256 checksum"
+            "o artefato {asset_key} no manifesto de lançamento não informa o hash SHA-256"
         )));
     }
     Ok(asset)
@@ -2824,7 +2880,7 @@ fn private_download_dir(asset_key: &str) -> io::Result<PathBuf> {
 
     Err(io::Error::new(
         io::ErrorKind::AlreadyExists,
-        "failed to create private herdr remote download directory",
+        "falha ao criar diretório privado para download remoto do Herdr",
     ))
 }
 
@@ -2833,7 +2889,7 @@ fn read_remote_confirmation(reader: &mut impl io::BufRead, default: bool) -> io:
     if reader.read_line(&mut answer)? == 0 {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote setup cancelled",
+            "configuração remota cancelada",
         ));
     }
     match answer.trim().to_ascii_lowercase().as_str() {
@@ -2842,7 +2898,7 @@ fn read_remote_confirmation(reader: &mut impl io::BufRead, default: bool) -> io:
         "" => Ok(default),
         _ => Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote setup cancelled: expected yes or no",
+            "configuração remota cancelada: responda y ou n",
         )),
     }
 }
@@ -2854,19 +2910,19 @@ fn confirm_remote_install(
 ) -> io::Result<()> {
     if !io::stdin().is_terminal() {
         return Err(io::Error::other(format!(
-            "matching remote herdr {} is not installed at {}; run from an interactive terminal to approve installation",
+            "o Herdr remoto compatível {} não está instalado em {}; use um terminal interativo para autorizar a instalação",
             current_version(),
             remote_herdr.executable.display()
         )));
     }
 
     eprintln!(
-        "matching herdr {} is not installed on {target} for {}.",
+        "O Herdr compatível {} não está instalado em {target} para {}.",
         current_version(),
         remote_herdr.platform.asset_key()
     );
     eprint!(
-        "Install {} to {}? [Y/n] ",
+        "Instalar {} em {}? [Y/n] (y para sim) ",
         source_description,
         remote_herdr.executable.display()
     );
@@ -2875,7 +2931,7 @@ fn confirm_remote_install(
     if !read_remote_confirmation(&mut io::stdin().lock(), true)? {
         return Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            "remote herdr installation cancelled",
+            "instalação remota do Herdr cancelada",
         ));
     }
 
@@ -3036,7 +3092,10 @@ impl SshStdioBridge {
         should_stop: Arc<AtomicBool>,
     ) -> io::Result<Self> {
         crate::ipc::prepare_socket_path(&local_socket, |path| {
-            format!("remote bridge is already listening at {}", path.display())
+            format!(
+                "a ponte remota já está aguardando conexões em {}",
+                path.display()
+            )
         })?;
         let listener = crate::ipc::bind_private_local_listener(&local_socket)?;
         let socket_identity = crate::ipc::socket_file_identity(&local_socket)?;
@@ -3071,7 +3130,7 @@ impl SshStdioBridge {
                             if noninteractive {
                                 tracing::warn!(error = %err, "saved SSH endpoint bridge failed");
                             } else {
-                                eprintln!("herdr: remote bridge failed: {err}");
+                                eprintln!("herdr: falha na ponte remota: {err}");
                             }
                         }
                     }
@@ -3082,7 +3141,7 @@ impl SshStdioBridge {
                         if noninteractive {
                             tracing::warn!(error = %err, "saved SSH endpoint listener failed");
                         } else {
-                            eprintln!("herdr: remote bridge listener failed: {err}");
+                            eprintln!("herdr: falha ao receber conexões na ponte remota: {err}");
                         }
                         break;
                     }
@@ -3291,21 +3350,20 @@ fn bridge_child(
 ) -> io::Result<()> {
     let upload_stop = Arc::new(BridgeUploadStop::new()?);
 
-    let mut child =
-        OwnedSshChild(command.spawn().map_err(|err| {
-            io::Error::new(err.kind(), format!("failed to start ssh bridge: {err}"))
-        })?);
+    let mut child = OwnedSshChild(command.spawn().map_err(|err| {
+        io::Error::new(err.kind(), format!("falha ao iniciar a ponte SSH: {err}"))
+    })?);
     let pipe_control = PipeControl::new(Arc::clone(bridge_stop));
     let stdin = child
         .0
         .stdin
         .take()
-        .ok_or_else(|| io::Error::other("ssh bridge stdin missing"))?;
+        .ok_or_else(|| io::Error::other("entrada padrão da ponte SSH indisponível"))?;
     let stdout = child
         .0
         .stdout
         .take()
-        .ok_or_else(|| io::Error::other("ssh bridge stdout missing"))?;
+        .ok_or_else(|| io::Error::other("saída padrão da ponte SSH indisponível"))?;
     let mut child_stdin = CancellablePipe::new(
         crate::platform::ChildPipe::new_writer(stdin)?,
         &pipe_control,
@@ -3399,14 +3457,14 @@ fn bridge_child(
     }
     let upload_result = upload
         .join()
-        .map_err(|_| io::Error::other("remote bridge upload worker panicked"))?;
+        .map_err(|_| io::Error::other("falha no processo de envio da ponte remota"))?;
     let download_result = download
         .join()
-        .map_err(|_| io::Error::other("remote bridge download worker panicked"))?;
+        .map_err(|_| io::Error::other("falha no processo de recebimento da ponte remota"))?;
     let stderr = match stderr_reader {
         Some(reader) => reader
             .join()
-            .map_err(|_| io::Error::other("SSH stderr reader panicked"))??,
+            .map_err(|_| io::Error::other("falha na leitura da saída de erro SSH"))??,
         None => Vec::new(),
     };
     let status = status_result?;
@@ -3418,10 +3476,16 @@ fn bridge_child(
     }
     if !stopping && !client_closed {
         upload_result.map_err(|err| {
-            io::Error::new(err.kind(), format!("remote bridge upload failed: {err}"))
+            io::Error::new(
+                err.kind(),
+                format!("falha no envio pela ponte remota: {err}"),
+            )
         })?;
         download_result.map_err(|err| {
-            io::Error::new(err.kind(), format!("remote bridge download failed: {err}"))
+            io::Error::new(
+                err.kind(),
+                format!("falha no recebimento pela ponte remota: {err}"),
+            )
         })?;
     }
 
@@ -3436,9 +3500,9 @@ fn ssh_bridge_exit_error(status: std::process::ExitStatus, stderr: &[u8]) -> io:
     let stderr = String::from_utf8_lossy(stderr);
     let stderr = stderr.trim();
     let message = if stderr.is_empty() {
-        format!("ssh bridge exited with {status}")
+        format!("a ponte SSH encerrou com {status}")
     } else {
-        format!("remote SSH connection failed: {stderr}")
+        format!("falha na conexão SSH remota: {stderr}")
     };
     io::Error::new(io::ErrorKind::ConnectionAborted, message)
 }
@@ -3469,7 +3533,7 @@ fn discard_remote_output_preamble(reader: &mut impl io::BufRead) -> io::Result<(
                 }
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
-                    "remote command exited before producing its output marker",
+                    "o comando remoto encerrou antes de produzir seu marcador de saída",
                 ));
             }
 
@@ -3603,7 +3667,7 @@ fn run_client_process(
     } else {
         Err(io::Error::new(
             io::ErrorKind::Interrupted,
-            format!("remote client exited with {status}"),
+            format!("o cliente remoto encerrou com {status}"),
         ))
     }
 }
@@ -4757,7 +4821,7 @@ mod tests {
     fn extract_remote_args_rejects_remote_keybindings_without_remote() {
         let args = vec!["herdr".into(), "--remote-keybindings=server".into()];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "--remote-keybindings requires --remote");
+        assert_eq!(err, "--remote-keybindings exige --remote");
     }
 
     #[test]
@@ -4769,21 +4833,21 @@ mod tests {
             "--remote-keybindings=server".into(),
         ];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "--remote-keybindings can only be specified once");
+        assert_eq!(err, "--remote-keybindings só pode ser informado uma vez");
     }
 
     #[test]
     fn extract_remote_args_requires_value() {
         let args = vec!["herdr".into(), "--remote".into()];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "missing value for --remote");
+        assert_eq!(err, "falta o valor de --remote");
     }
 
     #[test]
     fn extract_remote_args_rejects_empty_value() {
         let args = vec!["herdr".into(), "--remote=".into()];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "missing value for --remote");
+        assert_eq!(err, "falta o valor de --remote");
     }
 
     #[test]
@@ -4794,14 +4858,14 @@ mod tests {
             "--remote=prod".into(),
         ];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "--remote can only be specified once");
+        assert_eq!(err, "--remote só pode ser informado uma vez");
     }
 
     #[test]
     fn extract_remote_args_rejects_option_like_target() {
         let args = vec!["herdr".into(), "--remote".into(), "-oProxyCommand=x".into()];
         let err = extract_remote_args(&args).unwrap_err();
-        assert_eq!(err, "--remote target must not start with '-'");
+        assert_eq!(err, "o destino de --remote não pode começar com '-'");
     }
 
     #[test]
@@ -4844,7 +4908,7 @@ mod tests {
         assert_eq!(parse_windows_platform_probe("other output").unwrap(), None);
         assert_eq!(
             parse_windows_platform_probe("herdr-windows:x86").unwrap_err(),
-            "unsupported remote platform: Windows X86"
+            "plataforma remota não suportada: Windows X86"
         );
     }
 
@@ -4857,9 +4921,9 @@ mod tests {
         let note = platform
             .setup_note
             .expect("ARM64 setup must warn about emulation");
-        assert!(note.contains("best-effort"));
-        assert!(note.contains("x64 emulation"));
-        assert!(note.contains("bugs and issues are expected"));
+        assert!(note.contains("experimental"));
+        assert!(note.contains("emulação x64"));
+        assert!(note.contains("podem ocorrer problemas"));
     }
 
     #[test]
@@ -6093,7 +6157,7 @@ function Get-Process {
 
         assert_eq!(
             install_source_description_for(&platform, None, true),
-            "the current local herdr binary"
+            "o executável Herdr local atual"
         );
     }
 
@@ -6104,7 +6168,7 @@ function Get-Process {
         assert_eq!(
             install_source_description_for(&platform, None, false),
             format!(
-                "the {} {} asset for {}",
+                "o artefato {} {} para {}",
                 current_version(),
                 current_channel(),
                 platform.asset_key()

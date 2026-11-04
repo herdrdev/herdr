@@ -22,7 +22,7 @@ pub(crate) fn copy_feedback_rect(
         return Rect::default();
     }
 
-    let content_width = feedback.message.len() as u16 + 4;
+    let content_width = super::text::display_width(&feedback.message) as u16 + 4;
     let width = content_width.min(area.width);
     let height = 3u16.min(area.height);
     let x = match position {
@@ -107,7 +107,7 @@ pub(crate) fn render_config_diagnostic_buffer(
         .enumerate()
     {
         let text = format!(" {line} ");
-        let width = (text.len() as u16).min(area.width);
+        let width = (super::text::display_width(&text) as u16).min(area.width);
         let diagnostic_area = Rect::new(
             area.x + area.width.saturating_sub(width),
             area.y + row as u16,
@@ -145,5 +145,16 @@ mod tests {
             bottom.x,
             area.x + area.width.saturating_sub(bottom.width) / 2
         );
+    }
+
+    #[test]
+    fn copy_feedback_rect_mede_colunas_e_nao_bytes() {
+        let area = Rect::new(0, 0, 100, 40);
+        let mensagem = "copiado para a área de transferência";
+        let feedback = CopyFeedback {
+            message: mensagem.to_owned(),
+        };
+        let rect = copy_feedback_rect(area, &feedback, 0, ToastClipboardPosition::TopLeft);
+        assert_eq!(usize::from(rect.width), mensagem.chars().count() + 4);
     }
 }

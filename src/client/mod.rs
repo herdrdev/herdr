@@ -266,7 +266,7 @@ fn run_client_with_mode(
         setup_terminal(mouse_capture)
     }
     .map_err(|err| {
-        eprintln!("herdr: failed to set up terminal: {err}");
+        eprintln!("Pretorian: não foi possível preparar o terminal: {err}");
         err
     })?;
     loop_config.host_escape_disambiguation_active =
@@ -703,7 +703,7 @@ async fn run_client_loop(
                             {
                                 if let Some(shell) = state.shell.as_mut() {
                                     shell.receive_endpoint_unavailable(
-                                        "Update the Local server before switching between machines"
+                                        "Atualize o servidor local antes de alternar entre máquinas"
                                             .into(),
                                     );
                                 }
@@ -741,7 +741,7 @@ async fn run_client_loop(
                             } else {
                                 present_handoff_unavailable(
                                     &mut state,
-                                    "Local is unavailable; reconnecting".into(),
+                                    "O servidor local está indisponível; reconectando".into(),
                                     None,
                                 );
                             }
@@ -751,7 +751,7 @@ async fn run_client_loop(
                         warn!(%error, "saved machines could not be reloaded; keeping current connections");
                         if let Some(shell) = state.shell.as_mut() {
                             shell.receive_endpoint_unavailable(format!(
-                                "Saved machines could not be reloaded; keeping current connections: {error}"
+                                "Não foi possível recarregar as máquinas salvas; as conexões atuais foram mantidas: {error}"
                             ));
                         }
                     }
@@ -1808,7 +1808,7 @@ async fn run_client_loop(
                             &endpoint_id,
                             io::Error::new(
                                 io::ErrorKind::ConnectionAborted,
-                                reason.unwrap_or_else(|| "server stopped".into()),
+                                reason.unwrap_or_else(|| "servidor parado".into()),
                             ),
                         );
                     }
@@ -2290,7 +2290,7 @@ async fn run_client_loop(
                         &failure.endpoint_id,
                         failure.generation,
                         now,
-                        &format!("{}; reconnecting", failure.message),
+                        &format!("{}; reconectando", failure.message),
                     ) {
                         clear_endpoint_host_effects(
                             &mut state,
