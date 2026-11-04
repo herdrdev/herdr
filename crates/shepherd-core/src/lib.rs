@@ -8,11 +8,17 @@ pub mod terminals;
 pub mod bus;
 pub mod cli;
 pub mod config;
+pub mod git;
 pub mod service;
 pub mod skills;
 pub mod spawn;
 pub mod mcp;
 pub mod workflow;
+
+pub use git::{
+    collect_git_status, GitPrSummary, GitRepoStatus, GitWorktreeInfo, ParsedGitStatus, ParsedPr,
+    ParsedWorktree,
+};
 
 pub use cli::{
     run_cli, run_cli_in_root, run_cli_in_root_with_client, run_cli_in_root_with_output,

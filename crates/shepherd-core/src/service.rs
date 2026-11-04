@@ -1646,6 +1646,17 @@ impl OrchestrationService {
                     .collect();
                 Ok(serde_json::json!(runs))
             }
+            "git_status" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let registry = self.load_registry().unwrap_or_default();
+                let status = crate::git::collect_git_status(&root, &registry.agents)
+                    .map_err(|e| e.to_string())?;
+                serde_json::to_value(status).map_err(|e| e.to_string())
+            }
             other => {
                 let msg = format!("unknown shepherd operation {other:?}");
                 self.record_failure(other, &msg);
@@ -2659,6 +2670,21 @@ mod tests {
         });
         let archived = service.handle_call("task_archive", archive_args).unwrap();
         assert_eq!(archived["archived"], true);
+
+        // 6. Git status
+        let _ = std::process::Command::new("git")
+            .args(["init", "-b", "master"])
+            .current_dir(tmp.path())
+            .output();
+        let git_status = service
+            .handle_call(
+                "git_status",
+                serde_json::json!({
+                    "root": tmp.path().to_str().unwrap()
+                }),
+            )
+            .unwrap();
+        assert!(git_status["worktrees"].is_array());
     }
 
     #[test]

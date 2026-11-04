@@ -524,6 +524,7 @@ impl App {
             shepherd_tasks_panel: crate::shepherd::ShepherdTasksState::default(),
             shepherd_runs_panel: crate::shepherd::ShepherdRunsState::default(),
             shepherd_skills_panel: crate::shepherd::ShepherdSkillsState::default(),
+            shepherd_git_panel: crate::shepherd::ShepherdGitState::default(),
             view: state::ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

@@ -1082,3 +1082,163 @@ Si el comando falla, el código de salida no será cero y el motivo aparecerá e
 | `crates/shepherd-core/src/main.rs` | Modificación | Supresión de texto plano en `stderr` ante errores cuando se solicita `--json`. |
 | `src/shepherd/mod.rs` | Modificación | Conexión del CLI integrado con el socket de sesión activa a través de `run_cli_in_root_with_client`, y supresión de `stderr` con `--json`. |
 | `SHEPHERD.md` | Documentación | Registro de Estado F4a, tabla de auditoría de los 20 subcomandos, verificación con sesión aislada y notas de uso en scripts. |
+
+
+## Estado F4b (2026-11-04) — Pestaña «Git» del overlay (solo lectura)
+
+Se implementó la cuarta pestaña **Git** en el overlay de Shepherd (junto a Tareas, Runs y Skills), permitiendo inspeccionar en **modo solo lectura** el estado git del repositorio y de los agentes de Shepherd:
+
+### 1. Modelo puro y parseadores de Git (`crates/shepherd-core/src/git.rs` y `src/shepherd/git.rs`)
+- **Estructuras de estado puras**: `ShepherdGitState`, `ShepherdGitRow`, `ShepherdGitAction` y `ShepherdGitRender`, separadas de cualquier acceso a I/O, PTY o async.
+- **Parseadores puros probados con fixtures de texto**:
+  - `parse_git_worktree_porcelain`: parsea la salida de `git worktree list --porcelain`, extrayendo rutas, commits HEAD, ramas (`refs/heads/*`), flags de detached, bare y locked.
+  - `parse_git_status_porcelain`: parsea la salida de `git status --porcelain=v1 -b`, identificando rama actual, upstream configurado, ahead/behind y conteo de ficheros modificados/sin seguimiento (`is_dirty`, `dirty_count`).
+  - `parse_gh_pr_list_json`: parsea de forma segura el JSON devuelto por `gh pr list --json ...`, extrayendo número, título, rama origen, estado (OPEN/MERGED/CLOSED) y URL.
+  - `parse_rev_list_left_right`: procesa las salidas tabulares de `git rev-list --left-right --count` para ramas locales sin upstream configurado.
+- **Asociación de agentes**: cruza cada worktree/rama contra el registro de agentes persistido (`agents.json`), vinculando automáticamente los worktrees de trabajo o ramas `shep/...` con su identificador de agente (p. ej., `coder-1`).
+
+### 2. Recolección fuera del render y comando CLI
+- **Operación `git_status` en el servicio**:
+  - Implementada en `handle_call` (`crates/shepherd-core/src/service.rs`). Ejecuta las consultas git con timeouts breves (3s) usando un ejecutor acotado que no bloquea el ciclo de render ni el tick del servidor.
+  - Manejo seguro de `gh`: si `gh` no está instalado, autenticado o no hay conexión de red, la columna de PR muestra `—` y se incluye la nota informativa `gh no disponible`, sin arrojar errores ni bloquear la presentación.
+- **Subcomando CLI `herdr shepherd git [--json]`**:
+  - Con `--json`, devuelve la salida completa de `GitRepoStatus` en formato JSON uniforme.
+  - En modo texto plano, presenta una tabla formateada con columnas: `BRANCH`, `STATUS`, `SYNC`, `AGENT`, `PR` y `PATH`.
+- **Corrección de fuga de salida estándar en `default_base` (`crates/shepherd-core/src/mcp.rs`)**:
+  - `default_base` invocaba `git rev-parse ... .status()`, heredando la salida estándar y filtrando los hashes SHA de los commits a `stdout`. Se corrigió para usar `.output()`, garantizando que la salida de `herdr shepherd git --json` sea estrictamente JSON limpio sin bytes parásitos.
+
+### 3. Integración en el overlay TUI (`src/shepherd/overlay.rs` y `src/client/shell/shepherd.rs`)
+- **Pestaña en el overlay**: `ShepherdTab::Git` incorporada como cuarta opción en `ShepherdTab::ALL` con navegación completa bidireccional (Tab / BackTab / flechas izquierda/derecha y clics de ratón en las cabeceras).
+- **Carga perezosa**: la petición `git_status` se despacha exclusivamente al abrir la pestaña Git o al pulsar la tecla `r` (`ShepherdGitAction::Refresh`), sin sondeo continuo innecesario.
+- **Atajos de teclado y ratón**:
+  - `r`: refresca el estado git del repositorio y worktrees.
+  - `c` / `y` / `Enter`: copia o muestra la ruta del worktree seleccionado en el pie del overlay (`Worktree: <path>`).
+  - `j` / `Down` y `k` / `Up`: navegación por las filas de worktrees.
+  - Clic de ratón: soporte para selección directa de fila, botón de refresco y botón de copia.
+
+### Comprobaciones reales con `./scripts/shepherd-iso.sh` (sesión aislada)
+
+Se utilizó `./scripts/shepherd-iso.sh` en un entorno aislado sin agentes reales:
+1. En `/tmp/shfiso/repo` se creó un worktree secundario `/tmp/shfiso/repo/wt-coder` en la rama `shep/1-coder`.
+2. Se sembró `agents.json` con el agente `coder-1` asignado a dicho worktree y rama.
+3. Se inició el servidor aislado (`./scripts/shepherd-iso.sh start`) y se abrió el overlay (`C-b` luego `a`).
+4. Se navegó a la pestaña **Git** (BackTab) y se comprobó que listaba ambos worktrees con su estado limpio/sucio, ramas y agente asociado.
+5. Se ensució el worktree secundario creando `/tmp/shfiso/repo/wt-coder/dirty_file.txt` y se pulsó `r`: la vista se actualizó inmediatamente a `sucio (1)`.
+6. Se seleccionó la segunda fila (`j`) y se pulsó `c`: la barra de estado inferior mostró la ruta del worktree.
+
+#### Captura 1: Vista inicial de la pestaña Git (rama de agente en estado `limpio`)
+```text
+                         │                          ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+                         │                          │ Shepherd                                                                                  [x]│
+                         │                          │ Tareas   Runs   Skills   Git                                                                 │
+                         │                          │──────────────────────────────────────────────────────────────────────────────────────────────│
+                         │                          │ ↻ Refrescar (r)   📋 Copiar ruta (c)                                                         │
+                         │                          │ 2 worktree(s) · gh no disponible · solo lectura                                              │
+                         │                          │                                                                                              │
+                         │                          │  RAMA                  ESTADO        SYNC      AGENTE      PR            RUTA                │
+                         │                          │ ●master [main]         sucio (1)     —         —           —             /tmp/shfiso/repo    │
+                         │                          │ ·shep/1-coder          limpio        —         coder-1     —             /tmp/shfiso/repo/wt-│
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+ new                 menu│                          │                                                                                              │
+─────────────────────────│                          │                                                                                              │
+ agents           grouped│                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │ r refrescar  ·   c copiar/mostrar ruta  ·   Tab cambiar pestaña  ·   Esc cerrar              │
+                         │                          │                                                                                              │
+                         │                          └──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Captura 2: Actualización tras ensuciar el worktree y pulsar `r` (`sucio (1)`)
+```text
+                         │                          ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+                         │                          │ Shepherd                                                                                  [x]│
+                         │                          │ Tareas   Runs   Skills   Git                                                                 │
+                         │                          │──────────────────────────────────────────────────────────────────────────────────────────────│
+                         │                          │ ↻ Refrescar (r)   📋 Copiar ruta (c)                                                         │
+                         │                          │ 2 worktree(s) · gh no disponible · solo lectura                                              │
+                         │                          │                                                                                              │
+                         │                          │  RAMA                  ESTADO        SYNC      AGENTE      PR            RUTA                │
+                         │                          │ ●master [main]         sucio (1)     —         —           —             /tmp/shfiso/repo    │
+                         │                          │ ·shep/1-coder          sucio (1)     —         coder-1     —             /tmp/shfiso/repo/wt-│
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+ new                 menu│                          │                                                                                              │
+─────────────────────────│                          │                                                                                              │
+ agents           grouped│                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │ r refrescar  ·   c copiar/mostrar ruta  ·   Tab cambiar pestaña  ·   Esc cerrar              │
+                         │                          │                                                                                              │
+                         │                          └──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Captura 3: Selección de fila con `j` y copia de ruta con `c` (mensaje en pie de marco)
+```text
+                         │                          ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+                         │                          │ Shepherd                                                                                  [x]│
+                         │                          │ Tareas   Runs   Skills   Git                                                                 │
+                         │                          │──────────────────────────────────────────────────────────────────────────────────────────────│
+                         │                          │ ↻ Refrescar (r)   📋 Copiar ruta (c)                                                         │
+                         │                          │ 2 worktree(s) · gh no disponible · solo lectura                                              │
+                         │                          │                                                                                              │
+                         │                          │  RAMA                  ESTADO        SYNC      AGENTE      PR            RUTA                │
+                         │                          │ ·master [main]         sucio (1)     —         —           —             /tmp/shfiso/repo    │
+                         │                          │ ●shep/1-coder          sucio (1)     —         coder-1     —             /tmp/shfiso/repo/wt-│
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+ new                 menu│                          │                                                                                              │
+─────────────────────────│                          │                                                                                              │
+ agents           grouped│                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │                                                                                              │
+                         │                          │ r refrescar  ·   c copiar/mostrar ruta  ·   Tab cambiar pestaña  ·   Esc cerrar              │
+                         │                          │                                                                                              │
+                         │                          └ Worktree: /tmp/shfiso/repo/wt-coder ─────────────────────────────────────────────────────────┘
+```
+
+### Qué NO queda conectado (explícito)
+1. **Operaciones de escritura sobre ramas y PRs**: En F4b la pestaña es estrictamente de solo lectura. No se permiten operaciones de push, merge, delete de worktree ni checkout desde esta vista.
+2. **Creación o interacción con PRs**: Si `gh` está disponible solo se lee el listado; la gestión automatizada de pull requests y gates de publicación pertenece a la fase de integración F5.
+
+### Archivos tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/git.rs` | Nuevo | Modelo puro, estructuras de datos (`GitRepoStatus`, `GitWorktreeInfo`, etc.), parseadores de `git worktree list --porcelain`, `git status --porcelain=v1 -b`, `gh pr list --json` y recolección fuera de render con timeouts seguros y tests con fixtures. |
+| `crates/shepherd-core/src/lib.rs` | Modificación | Exportación pública del módulo `git` y tipos asociados. |
+| `crates/shepherd-core/src/mcp.rs` | Modificación | Supresión de fuga de hashes SHA a stdout en `default_base` mediante el uso de `.output()`. |
+| `crates/shepherd-core/src/service.rs` | Modificación | Despacho de la operación `git_status` en `handle_call`. |
+| `crates/shepherd-core/src/cli.rs` | Modificación | Soporte del subcomando `herdr shepherd git [--json]` tanto vía servidor como en modo local/in-process. |
+| `src/shepherd/git.rs` | Nuevo | Estado puro de TUI (`ShepherdGitState`), filas (`ShepherdGitRow`), acciones (`ShepherdGitAction`) y render puro (`render_shepherd_git_panel`) con tests unitarios. |
+| `src/shepherd/mod.rs` | Modificación | Exposición del módulo `git` en `src/shepherd`. |
+| `src/shepherd/overlay.rs` | Modificación | Incorporación de la pestaña `ShepherdTab::Git` en `ALL`, ciclo de pestañas, atajos de teclado y gestión de eventos de ratón. |
+| `src/app/mod.rs` | Modificación | Inicialización del campo `shepherd_git_panel` en `App`. |
+| `src/app/state.rs` | Modificación | Campo `shepherd_git_panel: ShepherdGitState` en `AppState`. |
+| `src/client/shell/shepherd.rs` | Modificación | Despacho de `git_status` al cambiar a la pestaña Git y actualización del estado del overlay al recibir la respuesta. |
+| `SHEPHERD.md` | Documentación | Registro de Estado F4b con verificación en sesión aislada, capturas y alcance completado. |

@@ -29,6 +29,10 @@ use serde_json::{json, Value};
 
 use crate::app::state::Palette;
 use super::{
+    git::{
+        render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender,
+        ShepherdGitState,
+    },
     panel::{contains_point, AgentsSubModal, ShepherdAgentsAction},
     runs::{
         render_shepherd_runs_panel, GateKind, RunsSubModal, ShepherdRunsAction, ShepherdRunsRender,
@@ -46,19 +50,21 @@ use super::{
 
 pub const SHEPHERD_OVERLAY_MODAL_SIZE: (u16, u16) = (96, 28);
 
-/// Tabs available in the Shepherd overlay (Tareas / Runs / Skills).
+/// Tabs available in the Shepherd overlay (Tareas / Runs / Skills / Git).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShepherdTab {
     Tasks,
     Runs,
     Skills,
+    Git,
 }
 
 impl ShepherdTab {
-    pub const ALL: [ShepherdTab; 3] = [
+    pub const ALL: [ShepherdTab; 4] = [
         ShepherdTab::Tasks,
         ShepherdTab::Runs,
         ShepherdTab::Skills,
+        ShepherdTab::Git,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -66,6 +72,7 @@ impl ShepherdTab {
             ShepherdTab::Tasks => "Tareas",
             ShepherdTab::Runs => "Runs",
             ShepherdTab::Skills => "Skills",
+            ShepherdTab::Git => "Git",
         }
     }
 
@@ -74,25 +81,28 @@ impl ShepherdTab {
             ShepherdTab::Tasks => 0,
             ShepherdTab::Runs => 1,
             ShepherdTab::Skills => 2,
+            ShepherdTab::Git => 3,
         }
     }
 
     pub fn from_index(index: usize) -> Self {
-        match index % 3 {
+        match index % 4 {
             0 => ShepherdTab::Tasks,
             1 => ShepherdTab::Runs,
-            _ => ShepherdTab::Skills,
+            2 => ShepherdTab::Skills,
+            _ => ShepherdTab::Git,
         }
     }
 }
 
-/// Pure presentation state of the Shepherd overlay (Tareas / Runs / Skills).
+/// Pure presentation state of the Shepherd overlay (Tareas / Runs / Skills / Git).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientShepherdOverlay {
     pub active_tab: ShepherdTab,
     pub tasks: ShepherdTasksState,
     pub runs: ShepherdRunsState,
     pub skills: ShepherdSkillsState,
+    pub git: ShepherdGitState,
     pub status_message: Option<String>,
     pub loading: bool,
     pub last_dispatched: Option<String>,
@@ -107,6 +117,7 @@ impl Default for ClientShepherdOverlay {
             tasks,
             runs: ShepherdRunsState::default(),
             skills: ShepherdSkillsState::default(),
+            git: ShepherdGitState::default(),
             status_message: None,
             loading: false,
             last_dispatched: None,
@@ -124,15 +135,16 @@ impl ClientShepherdOverlay {
         self.tasks.open = tab == ShepherdTab::Tasks;
         self.runs.open = tab == ShepherdTab::Runs;
         self.skills.open = tab == ShepherdTab::Skills;
+        self.git.open = tab == ShepherdTab::Git;
     }
 
     pub fn next_tab(&mut self) {
-        let next = (self.active_tab.index() + 1) % 3;
+        let next = (self.active_tab.index() + 1) % 4;
         self.select_tab(ShepherdTab::from_index(next));
     }
 
     pub fn prev_tab(&mut self) {
-        let prev = (self.active_tab.index() + 2) % 3;
+        let prev = (self.active_tab.index() + 3) % 4;
         self.select_tab(ShepherdTab::from_index(prev));
     }
 
@@ -141,6 +153,7 @@ impl ClientShepherdOverlay {
             ShepherdTab::Tasks => self.tasks.sub_modal != TasksSubModal::None,
             ShepherdTab::Runs => self.runs.sub_modal != RunsSubModal::None,
             ShepherdTab::Skills => self.skills.sub_modal != SkillsSubModal::None,
+            ShepherdTab::Git => false,
         }
     }
 
@@ -170,6 +183,7 @@ impl ClientShepherdOverlay {
                     false
                 }
             }
+            ShepherdTab::Git => false,
         }
     }
 }
@@ -198,6 +212,7 @@ pub enum ActivePanelRender {
     Tasks(ShepherdTasksRender),
     Runs(ShepherdRunsRender),
     Skills(ShepherdSkillsRender),
+    Git(ShepherdGitRender),
 }
 
 /// Geometry and hit-test targets returned by `render_shepherd_overlay`.
@@ -396,6 +411,8 @@ pub fn render_shepherd_overlay(
             .map(ActivePanelRender::Runs),
         ShepherdTab::Skills => render_shepherd_skills_panel(buffer, content_area, &overlay.skills, palette)
             .map(ActivePanelRender::Skills),
+        ShepherdTab::Git => render_shepherd_git_panel(buffer, content_area, &overlay.git, palette)
+            .map(ActivePanelRender::Git),
     };
 
     // Optional status message at the very bottom line of popup
@@ -449,13 +466,18 @@ pub fn route_shepherd_key(
         ),
         ShepherdTab::Runs => false,
         ShepherdTab::Skills => matches!(overlay.skills.sub_modal, SkillsSubModal::Create(_)),
+        ShepherdTab::Git => false,
     };
 
     if !is_text_input {
+        let prev_tab = overlay.active_tab;
         if (code == KeyCode::Tab && modifiers.is_empty())
             || (code == KeyCode::Right && modifiers.is_empty())
         {
             overlay.next_tab();
+            if overlay.active_tab == ShepherdTab::Git && prev_tab != ShepherdTab::Git {
+                dispatcher.dispatch_call("git_status", json!({}));
+            }
             return ShepherdKeyOutcome::Handled;
         }
         if (code == KeyCode::BackTab)
@@ -463,6 +485,9 @@ pub fn route_shepherd_key(
             || (code == KeyCode::Left && modifiers.is_empty())
         {
             overlay.prev_tab();
+            if overlay.active_tab == ShepherdTab::Git && prev_tab != ShepherdTab::Git {
+                dispatcher.dispatch_call("git_status", json!({}));
+            }
             return ShepherdKeyOutcome::Handled;
         }
     }
@@ -605,6 +630,22 @@ pub fn route_shepherd_key(
             }
             ShepherdKeyOutcome::Handled
         }
+
+        ShepherdTab::Git => {
+            let action = overlay.git.handle_key(key_event);
+            if let Some(action) = action.or_else(|| overlay.git.last_action.take()) {
+                match action {
+                    ShepherdGitAction::Refresh => {
+                        overlay.last_dispatched = Some("git_status".into());
+                        dispatcher.dispatch_call("git_status", json!({}));
+                    }
+                    ShepherdGitAction::CopyOrShowPath { path } => {
+                        overlay.status_message = Some(format!("Worktree: {}", path.display()));
+                    }
+                }
+            }
+            ShepherdKeyOutcome::Handled
+        }
     }
 }
 
@@ -698,7 +739,11 @@ pub fn handle_shepherd_mouse_click(
     // Click on any tab header: switches active tab
     for (tab_rect, tab) in &hits.tabs {
         if contains_point(*tab_rect, point.0, point.1) {
+            let prev_tab = overlay.active_tab;
             overlay.select_tab(*tab);
+            if *tab == ShepherdTab::Git && prev_tab != ShepherdTab::Git {
+                dispatcher.dispatch_call("git_status", json!({}));
+            }
             return ShepherdClickOutcome::Handled;
         }
     }
@@ -721,6 +766,20 @@ pub fn handle_shepherd_mouse_click(
             }
             (ShepherdTab::Skills, Some(ActivePanelRender::Skills(rendered))) => {
                 overlay.skills.handle_click(point.0, point.1, rendered);
+                return ShepherdClickOutcome::Handled;
+            }
+            (ShepherdTab::Git, Some(ActivePanelRender::Git(rendered))) => {
+                if let Some(action) = overlay.git.handle_click(point.0, point.1, rendered) {
+                    match action {
+                        ShepherdGitAction::Refresh => {
+                            overlay.last_dispatched = Some("git_status".into());
+                            dispatcher.dispatch_call("git_status", json!({}));
+                        }
+                        ShepherdGitAction::CopyOrShowPath { path } => {
+                            overlay.status_message = Some(format!("Worktree: {}", path.display()));
+                        }
+                    }
+                }
                 return ShepherdClickOutcome::Handled;
             }
             _ => {}
@@ -783,13 +842,18 @@ mod tests {
         route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
         assert_eq!(overlay.active_tab, ShepherdTab::Skills);
 
+        // Tab -> Git (dispatches git_status)
+        route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
+        assert_eq!(overlay.active_tab, ShepherdTab::Git);
+        assert!(dispatcher.calls.iter().any(|(op, _)| op == "git_status"));
+
         // Tab wraps -> Tareas
         route_shepherd_key(&mut overlay, KeyCode::Tab, KeyModifiers::empty(), &mut dispatcher);
         assert_eq!(overlay.active_tab, ShepherdTab::Tasks);
 
-        // BackTab wraps -> Skills
+        // BackTab wraps -> Git
         route_shepherd_key(&mut overlay, KeyCode::BackTab, KeyModifiers::empty(), &mut dispatcher);
-        assert_eq!(overlay.active_tab, ShepherdTab::Skills);
+        assert_eq!(overlay.active_tab, ShepherdTab::Git);
 
         // Mouse click on tab
         let mut buf = Buffer::empty(Rect::new(0, 0, 96, 28));
@@ -800,6 +864,13 @@ mod tests {
         let click_outcome = handle_shepherd_mouse_click(&mut overlay, click_point, &hits, &mut dispatcher);
         assert_eq!(click_outcome, ShepherdClickOutcome::Handled);
         assert_eq!(overlay.active_tab, ShepherdTab::Runs);
+
+        // Mouse click on Git tab
+        let (git_rect, _) = hits.tabs.iter().find(|(_, t)| *t == ShepherdTab::Git).unwrap();
+        let click_git_point = (git_rect.x, git_rect.y);
+        let click_git_outcome = handle_shepherd_mouse_click(&mut overlay, click_git_point, &hits, &mut dispatcher);
+        assert_eq!(click_git_outcome, ShepherdClickOutcome::Handled);
+        assert_eq!(overlay.active_tab, ShepherdTab::Git);
     }
 
     #[test]
@@ -824,6 +895,7 @@ mod tests {
         assert!(text.contains(" Tareas "));
         assert!(text.contains(" Runs "));
         assert!(text.contains(" Skills "));
+        assert!(text.contains(" Git "));
 
         // Single frame: the redundant inner title and "esc close" button must NOT be present
         assert!(!text.contains("Shepherd Tareas"));

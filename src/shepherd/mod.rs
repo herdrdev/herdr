@@ -11,6 +11,7 @@
 // and wired into the runtime orchestration and interactive client loop in F2/F3.
 #![allow(dead_code)]
 
+pub mod git;
 pub mod overlay;
 pub mod panel;
 pub mod runs;
@@ -18,6 +19,11 @@ pub mod service;
 pub mod skills;
 pub mod tasks;
 
+#[allow(unused_imports)]
+pub use git::{
+    render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender, ShepherdGitRow,
+    ShepherdGitState,
+};
 #[allow(unused_imports)]
 pub use overlay::{
     handle_shepherd_mouse_click, render_shepherd_overlay, route_agent_modal_key,

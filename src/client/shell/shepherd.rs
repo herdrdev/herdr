@@ -170,6 +170,21 @@ impl ClientShellState {
             },
             outcome,
         );
+        // Fetch git status if on Git tab
+        if let Some(ClientShellOverlay::Shepherd(ref overlay)) = self.overlay {
+            if overlay.active_tab == crate::shepherd::ShepherdTab::Git {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdCall(crate::api::schema::ShepherdCallParams {
+                        op: "git_status".to_string(),
+                        args: serde_json::json!({}),
+                    }),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "git_status".to_string(),
+                    },
+                    outcome,
+                );
+            }
+        }
     }
 
     pub(super) fn route_shepherd_overlay_key(
@@ -384,6 +399,12 @@ impl ClientShellState {
                         // If skills JSON is returned, update skills view
                         if let Ok(skills) = serde_json::from_value::<Vec<shepherd_core::skills::Skill>>(data.clone()) {
                             overlay.skills.catalog_skills = skills.iter().map(crate::shepherd::skills::CatalogSkillItem::from).collect();
+                        }
+                        overlay.status_message = None;
+                    }
+                    "git_status" => {
+                        if let Ok(status) = serde_json::from_value::<shepherd_core::git::GitRepoStatus>(data.clone()) {
+                            overlay.git.update_from_status(&status);
                         }
                         overlay.status_message = None;
                     }

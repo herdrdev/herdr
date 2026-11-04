@@ -815,6 +815,8 @@ pub struct AppState {
     pub shepherd_runs_panel: crate::shepherd::ShepherdRunsState,
     #[allow(dead_code)]
     pub shepherd_skills_panel: crate::shepherd::ShepherdSkillsState,
+    #[allow(dead_code)]
+    pub shepherd_git_panel: crate::shepherd::ShepherdGitState,
     // Geometry of the most recently computed server pane surface.
     pub view: ViewState,
     // Notifications
@@ -1062,6 +1064,7 @@ impl AppState {
             shepherd_tasks_panel: crate::shepherd::ShepherdTasksState::default(),
             shepherd_runs_panel: crate::shepherd::ShepherdRunsState::default(),
             shepherd_skills_panel: crate::shepherd::ShepherdSkillsState::default(),
+            shepherd_git_panel: crate::shepherd::ShepherdGitState::default(),
             view: ViewState {
                 terminal_area: Rect::default(),
                 pane_infos: Vec::new(),

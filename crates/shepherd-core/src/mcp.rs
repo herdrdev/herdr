@@ -1000,8 +1000,8 @@ pub(crate) fn default_base(root: &str, configured: &str) -> String {
         if std::process::Command::new("git")
             .args(["rev-parse", "--verify", "--quiet", branch])
             .current_dir(root)
-            .status()
-            .is_ok_and(|status| status.success())
+            .output()
+            .is_ok_and(|output| output.status.success())
         {
             return branch.into();
         }

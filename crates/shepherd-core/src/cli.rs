@@ -167,6 +167,9 @@ fn dispatch_cli(
     if area == "focus" {
         return focus_command(root, args_iter.collect(), terminals, server, json, writer);
     }
+    if area == "git" {
+        return git_command(root, args_iter.collect(), server, json, writer);
+    }
     if area == "messages" || area == "msg" {
         return Err("operation not available (service does not support msg/messages)".into());
     }
@@ -959,6 +962,88 @@ fn print_human_runs(
             .unwrap_or_else(|| "-".into());
         let title = r.get("task_title").and_then(Value::as_str).unwrap_or("-");
         writeln!(writer, "{task_id}\t{status}\t{gate}\t{agents}\t{title}")?;
+    }
+    Ok(())
+}
+
+fn git_command(
+    root: PathBuf,
+    _args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "git_status",
+            serde_json::json!({
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_git_status(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let registry = load_agent_registry(config::state_dir().join("agents.json")).unwrap_or_default();
+    let status = crate::git::collect_git_status(&root, &registry.agents)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&status)?)?;
+    } else {
+        let val = serde_json::to_value(&status)?;
+        print_human_git_status(writer, &val)?;
+    }
+    Ok(())
+}
+
+fn print_human_git_status(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let worktrees = data
+        .get("worktrees")
+        .and_then(Value::as_array);
+    let list = match worktrees {
+        Some(arr) => arr,
+        None => return Ok(()),
+    };
+    if list.is_empty() {
+        writeln!(writer, "no worktrees found")?;
+        return Ok(());
+    }
+    writeln!(writer, "BRANCH\tSTATUS\tSYNC\tAGENT\tPR\tPATH")?;
+    for wt in list {
+        let branch = wt.get("branch").and_then(Value::as_str).unwrap_or("-");
+        let is_clean = wt.get("is_clean").and_then(Value::as_bool).unwrap_or(true);
+        let dirty_count = wt.get("dirty_count").and_then(Value::as_u64).unwrap_or(0);
+        let status = if is_clean {
+            "clean".to_string()
+        } else {
+            format!("dirty ({dirty_count})")
+        };
+        let ahead = wt.get("ahead").and_then(Value::as_u64).unwrap_or(0);
+        let behind = wt.get("behind").and_then(Value::as_u64).unwrap_or(0);
+        let sync = if ahead == 0 && behind == 0 {
+            "up to date".to_string()
+        } else {
+            format!("+{ahead}/-{behind}")
+        };
+        let agent = wt.get("agent_id").and_then(Value::as_str).unwrap_or("-");
+        let pr = wt
+            .get("pr")
+            .and_then(|p| {
+                let num = p.get("number")?.as_u64()?;
+                let state = p.get("state")?.as_str()?;
+                Some(format!("#{num} {state}"))
+            })
+            .unwrap_or_else(|| "—".to_string());
+        let path = wt.get("path").and_then(Value::as_str).unwrap_or("-");
+        writeln!(writer, "{branch}\t{status}\t{sync}\t{agent}\t{pr}\t{path}")?;
+    }
+    if let Some(note) = data.get("gh_note").and_then(Value::as_str) {
+        writeln!(writer, "\nNote: {note}")?;
     }
     Ok(())
 }
@@ -1941,6 +2026,12 @@ mod tests {
         assert_eq!(v["archived"], true);
         assert!(v.get("path").is_some());
 
+        // 18. git --json
+        let _ = std::process::Command::new("git").args(["init", "-b", "master"]).current_dir(&root).output();
+        let out = run_with_buf(&root, &["git", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("worktrees").is_some());
+
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2019,6 +2110,29 @@ mod tests {
                     "type": "shepherd_call",
                     "data": { "task": "1", "approved": "plan" }
                 })),
+                "git_status" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": {
+                        "root": "/tmp/repo",
+                        "worktrees": [
+                            {
+                                "path": "/tmp/repo",
+                                "branch": "master",
+                                "is_main": true,
+                                "is_clean": true,
+                                "dirty_count": 0,
+                                "ahead": 0,
+                                "behind": 0,
+                                "upstream": null,
+                                "agent_id": null,
+                                "pr": null
+                            }
+                        ],
+                        "gh_available": false,
+                        "gh_note": "gh no disponible",
+                        "error": null
+                    }
+                })),
                 other => Err(crate::herdr::HerdrError::Api {
                     code: "unknown_op".into(),
                     message: format!("unknown op {other}"),
@@ -2089,7 +2203,12 @@ mod tests {
         let parsed: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed["approved"], "plan");
 
-        // Verify that all 12 alive-state ops were dispatched to shepherd.call!
+        // 13. git in server mode
+        let out = run_with_buf(&root, &["git", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.get("worktrees").is_some());
+
+        // Verify that all 13 alive-state ops were dispatched to shepherd.call!
         let calls = ops_called.lock().unwrap();
         let dispatched_ops: Vec<String> = calls.iter().map(|(op, _)| op.clone()).collect();
         assert!(dispatched_ops.contains(&"agents".to_string()));
@@ -2104,6 +2223,7 @@ mod tests {
         assert!(dispatched_ops.contains(&"task_archive".to_string()));
         assert!(dispatched_ops.contains(&"run".to_string()));
         assert!(dispatched_ops.contains(&"approve".to_string()));
+        assert!(dispatched_ops.contains(&"git_status".to_string()));
 
         std::fs::remove_dir_all(root).unwrap();
     }
