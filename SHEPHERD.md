@@ -1470,3 +1470,17 @@ README, NOTICE con crédito a herdr, documentación y rutina de sincronización 
 4. **Instalación y empaquetado**: ¿Interesa publicar una fórmula propia de Homebrew (`brew tap`) y un script `install.sh` propio de Shepherd?
 5. **Documentación multi-idioma**: ¿Se mantendrán traducciones como `README.zh-CN.md` (con aviso de posible desactualización) o se prefiere retirarlas para mantener únicamente la versión en inglés?
 
+
+## Prueba con agentes reales tras el renombre: workflow `run` completo (2026-11-04)
+
+Sesión aislada con el binario `shepherd` (F5b), `SHF_HOME=$HOME` solo para las credenciales de los vendors. Config de proyecto: `brain` y `reviewer` en `claude haiku`, `coder` en `codex` (worktree). Tarea 1: «crear `hello.txt` con el texto exacto `hello from shepherd`». Comando: `shepherd run 1`.
+
+Funcionó de punta a punta con agentes reales: `brain-1` (claude) guardó el plan (1 subtarea) y entregó resultado; `coder-1` (codex) leyó el contexto vía MCP, creó `hello.txt` (19 bytes, sin salto de línea), lo verificó y, tras el permiso humano de codex para escribir en `.git` del worktree, hizo el commit `feat: add hello file` en la rama `shep/2-implement-plan-subtask-1-create-hello-tx`; `reviewer-1` (claude) aprobó y los checks pasaron. El run quedó en `current_stage: pr`, subtarea `awaiting-approval`. La pestaña Git (`shepherd git --json`) vio el worktree del coder limpio y asociado a `coder-1`.
+
+Hallazgos:
+1. **Los gates humanos no están portados al servicio Rust.** La nota del run dice «human approval and push/PR creation are not ported yet»; `runs` devuelve `pending_gate: null`. Aprobar/rechazar gates desde el overlay o `shepherd approve` no se puede ejercitar aún con un run real. Es el hueco funcional principal que queda del plan.
+2. **`shepherd run` bloquea y el CLI agota el tiempo.** Con el coder esperando el primer prompt/permisos, el servicio quedó ocupado y `shepherd run 1` falló con `Resource temporarily unavailable (os error 11)` mientras el run seguía; otras llamadas a `shepherd.call` también esperaron. Mismo origen que el spawn bloqueante ya anotado.
+3. **`shepherd agents --json` devolvió `[]` mientras el servicio estaba ocupado** (había 2 agentes en el registro del servidor); minutos después devolvió los 3 correctos. Probable caída silenciosa al modo en proceso al agotarse el tiempo del servidor; debería avisar o fallar en vez de mostrar lista vacía.
+4. **Pestaña Git: asignación de agente dudosa.** La rama `shep/1-coder` (un worktree viejo de pruebas anteriores) se asoció a `brain-1`; parece coincidir por número en vez de por agente real.
+5. Los worktrees del coder se crean bajo `$HOME/.shepherd/worktrees/` (el HOME real por `SHF_HOME`); el de esta prueba se eliminó a mano.
+6. Codex pide permiso humano para escribir en el `.git` del worktree al hacer commit (sandbox); es un diálogo que Shepherd no debe contestar.
