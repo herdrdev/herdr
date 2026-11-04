@@ -499,6 +499,17 @@ impl OrchestrationService {
                             agent.notice = BLOCKED_HUMAN_NOTICE.into();
                             agent.updated = self.clock.now_rfc3339();
                             self.save_registry(&registry)?;
+                            let newly_announced = self
+                                .blocked_announced
+                                .lock()
+                                .unwrap()
+                                .insert(agent_id.to_string());
+                            if newly_announced {
+                                let _ = self.terminals.notify(
+                                    &format!("Shepherd: agente {} requiere intervención", agent_id),
+                                    Some(BLOCKED_HUMAN_NOTICE),
+                                );
+                            }
                         }
                     }
                     _ => {
@@ -572,40 +583,13 @@ impl OrchestrationService {
                 (p_target, status_query_target(agent), is_raw)
             };
 
-            let send_outcome = if is_raw_pane {
-                self.terminals
-                    .send_text(&prompt_target, prompt)
-                    .map(|()| PromptOutcome::Delivered)
-            } else {
-                self.terminals.prompt(&prompt_target, prompt)
-            };
-
-            match send_outcome {
-                Ok(PromptOutcome::Blocked) => {
-                    // Terminal became blocked while sending; wait until ready or timeout.
-                    let wait_res = self.wait_until_unblocked(agent_id, start_ms, ready_timeout_ms, notice_after_ms);
-                    if let Err(err) = wait_res {
-                        return Err(err);
-                    }
-                    continue;
-                }
-                Ok(PromptOutcome::Delivered) => {}
-                Err(err) => {
-                    if attempt + 1 == total_sends {
-                        self.mark_prompt_failed(
-                            agent_id,
-                            &format!("no se pudo enviar el primer prompt tras {} reenvíos: {err}", self.service_config.max_prompt_resends),
-                        )?;
-                        return Err(format!("no se pudo enviar el primer prompt: {err}"));
-                    }
-                }
-            }
-
-            // Poll for reaction (status == "working" or seq > baseline_seq).
-            let check_start_ms = self.clock.now_ms();
-            loop {
-                if let Ok(st) = self.terminals.agent_status(&status_target) {
-                    if st.state != "finished" && (st.status == "working" || st.seq > baseline_seq) {
+            if !is_raw_pane {
+                let wait_opts = crate::shepherd::PromptWaitOptions {
+                    until: vec!["working".into(), "idle".into()],
+                    timeout: Some(self.service_config.reaction_timeout),
+                };
+                match self.terminals.prompt(&prompt_target, prompt, Some(wait_opts)) {
+                    Ok(PromptOutcome::Delivered) => {
                         let mut registry = self.load_registry()?;
                         if let Some(agent) = registry.agents.iter_mut().find(|a| a.id == agent_id) {
                             if !agent.gone() && agent.state != "done" {
@@ -618,11 +602,78 @@ impl OrchestrationService {
                         }
                         return Ok(());
                     }
+                    Ok(PromptOutcome::Blocked) => {
+                        let wait_res = self.wait_until_unblocked(agent_id, start_ms, ready_timeout_ms, notice_after_ms);
+                        if let Err(err) = wait_res {
+                            return Err(err);
+                        }
+                        continue;
+                    }
+                    Err(err) => {
+                        if attempt + 1 == total_sends {
+                            let msg = format!(
+                                "el agente {agent_id} no reaccionó al primer prompt tras {} reenvíos: {err}",
+                                self.service_config.max_prompt_resends
+                            );
+                            self.mark_prompt_failed(agent_id, &msg)?;
+                            return Err(format!(
+                                "el agente {agent_id} no reaccionó al primer prompt tras {} reenvíos",
+                                self.service_config.max_prompt_resends
+                            ));
+                        }
+                        self.clock.sleep(self.service_config.ready_poll_interval);
+                        continue;
+                    }
                 }
-                if self.clock.now_ms().saturating_sub(check_start_ms) >= reaction_timeout_ms {
-                    break;
+            } else {
+                let send_outcome = self
+                    .terminals
+                    .send_text(&prompt_target, prompt)
+                    .map(|()| PromptOutcome::Delivered);
+
+                match send_outcome {
+                    Ok(PromptOutcome::Blocked) => {
+                        let wait_res = self.wait_until_unblocked(agent_id, start_ms, ready_timeout_ms, notice_after_ms);
+                        if let Err(err) = wait_res {
+                            return Err(err);
+                        }
+                        continue;
+                    }
+                    Ok(PromptOutcome::Delivered) => {}
+                    Err(err) => {
+                        if attempt + 1 == total_sends {
+                            self.mark_prompt_failed(
+                                agent_id,
+                                &format!("no se pudo enviar el primer prompt tras {} reenvíos: {err}", self.service_config.max_prompt_resends),
+                            )?;
+                            return Err(format!("no se pudo enviar el primer prompt: {err}"));
+                        }
+                    }
                 }
-                self.clock.sleep(self.service_config.reaction_poll_interval);
+
+                // Poll for reaction (status == "working" or seq > baseline_seq).
+                let check_start_ms = self.clock.now_ms();
+                loop {
+                    if let Ok(st) = self.terminals.agent_status(&status_target) {
+                        if st.state != "finished" && (st.status == "working" || st.seq > baseline_seq) {
+                            let mut registry = self.load_registry()?;
+                            if let Some(agent) = registry.agents.iter_mut().find(|a| a.id == agent_id) {
+                                if !agent.gone() && agent.state != "done" {
+                                    agent.state = "working".into();
+                                }
+                                agent.notice.clear();
+                                agent.error.clear();
+                                agent.updated = self.clock.now_rfc3339();
+                                self.save_registry(&registry)?;
+                            }
+                            return Ok(());
+                        }
+                    }
+                    if self.clock.now_ms().saturating_sub(check_start_ms) >= reaction_timeout_ms {
+                        break;
+                    }
+                    self.clock.sleep(self.service_config.reaction_poll_interval);
+                }
             }
         }
 
@@ -662,6 +713,17 @@ impl OrchestrationService {
                 agent.notice = BLOCKED_HUMAN_NOTICE.into();
                 agent.updated = self.clock.now_rfc3339();
                 dirty = true;
+                let newly_announced = self
+                    .blocked_announced
+                    .lock()
+                    .unwrap()
+                    .insert(agent_id.to_string());
+                if newly_announced {
+                    let _ = self.terminals.notify(
+                        &format!("Shepherd: agente {} requiere intervención", agent_id),
+                        Some(BLOCKED_HUMAN_NOTICE),
+                    );
+                }
             }
             if let Ok(st) = self.terminals.agent_status(&target) {
                 if matches!(st.status.as_str(), "idle" | "done" | "working") {
@@ -772,6 +834,10 @@ impl OrchestrationService {
                             .unwrap()
                             .insert(agent.id.clone());
                         if newly_blocked {
+                            let _ = self.terminals.notify(
+                                &format!("Shepherd: agente {} requiere intervención", agent.id),
+                                Some(BLOCKED_HUMAN_NOTICE),
+                            );
                             let _ = bus.send(Message {
                                 id: 0,
                                 ts: String::new(),
@@ -1761,7 +1827,8 @@ impl OrchestrationService {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
                 let registry = self.load_registry().unwrap_or_default();
-                let status = crate::git::collect_git_status(&root, &registry.agents)
+                let base_worktrees = self.terminals.list_worktrees(&root).ok();
+                let status = crate::git::collect_git_status_with_base(&root, &registry.agents, base_worktrees)
                     .map_err(|e| e.to_string())?;
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
@@ -1925,6 +1992,42 @@ impl OrchestrationService {
     }
 
     fn deliver_single_message_with_retries(
+        &self,
+        agent: &Agent,
+        target: &str,
+        msg_id: i64,
+        line: &str,
+    ) -> bool {
+        // F7 Item 1: Deliver via `agent.prompt` without typing with send_text or scraping screen.
+        // The host runtime handles vendor-specific input encoding, Enter keystroke delays, focus, and paste boundaries.
+        let prompt_result = self.terminals.prompt(target, line, None);
+        match prompt_result {
+            Ok(PromptOutcome::Delivered) => true,
+            Ok(PromptOutcome::Blocked) => {
+                // Agent is blocked; cannot receive prompt now, do not advance cursor.
+                false
+            }
+            Err(crate::terminals::TerminalError::Api { ref code, .. })
+                if code == "agent_not_ready" || code == "agent_not_found" || code == "not_found" =>
+            {
+                // Fallback: The pane has no agent detected by runtime (e.g. raw shell).
+                // Falls back to typing with `send_text` and screen verification.
+                self.deliver_message_via_raw_pane_fallback(agent, target, msg_id, line)
+            }
+            Err(err) => {
+                self.record_failure(
+                    "deliver_bus_messages",
+                    &format!(
+                        "agent.prompt for agent {} in {target} (msg {msg_id}) failed: {err}",
+                        agent.id
+                    ),
+                );
+                false
+            }
+        }
+    }
+
+    fn deliver_message_via_raw_pane_fallback(
         &self,
         agent: &Agent,
         target: &str,
@@ -2460,6 +2563,9 @@ mod tests {
             1,
             "blocked state must be announced only once per episode on the bus"
         );
+        let notices = terminals.notifications();
+        assert_eq!(notices.len(), 1, "notification must be emitted only once per blocked episode");
+        assert!(notices[0].0.contains(&mcp_agent.id));
 
         // MCP agent becomes "idle" -> stays "idle" (not "done", because MCP agents finish via submit_result)
         terminals.set_status(
@@ -3138,8 +3244,12 @@ mod tests {
         let reg = service.reconcile_once().unwrap();
 
         // 1. Check delivery to non-MCP agent: exact format, newlines as spaces, order
-        let sent = terminals.sent_text();
-        let non_mcp_sent: Vec<_> = sent
+        let bus_prompts: Vec<_> = terminals
+            .prompts()
+            .into_iter()
+            .filter(|(_, text)| text.starts_with("[shep]"))
+            .collect();
+        let non_mcp_sent: Vec<_> = bus_prompts
             .iter()
             .filter(|(target, _)| target == &non_mcp.pane || target == &non_mcp.id)
             .map(|(_, text)| text.as_str())
@@ -3153,14 +3263,14 @@ mod tests {
             ]
         );
 
-        // 2. Neither MCP agent nor user received typed messages
+        // 2. Neither MCP agent nor user received prompts
         assert!(
-            !sent.iter().any(|(t, _)| t == &mcp.pane || t == &mcp.id),
-            "MCP agents must NOT receive typed messages in terminal"
+            !bus_prompts.iter().any(|(t, _)| t == &mcp.pane || t == &mcp.id),
+            "MCP agents must NOT receive prompts in terminal"
         );
         assert!(
-            !sent.iter().any(|(t, _)| t == "user"),
-            "user messages must NOT be typed"
+            !bus_prompts.iter().any(|(t, _)| t == "user"),
+            "user messages must NOT be prompted"
         );
 
         // 3. Cursor advanced to m2.id
@@ -3168,11 +3278,20 @@ mod tests {
         assert_eq!(updated_non_mcp.delivery_cursor, m2.id);
 
         // 4. Second reconcile tick does not re-deliver
-        let sent_len_before = terminals.sent_text().len();
+        let bus_prompts_len_before = terminals
+            .prompts()
+            .into_iter()
+            .filter(|(_, text)| text.starts_with("[shep]"))
+            .count();
         service.reconcile_once().unwrap();
+        let bus_prompts_len_after = terminals
+            .prompts()
+            .into_iter()
+            .filter(|(_, text)| text.starts_with("[shep]"))
+            .count();
         assert_eq!(
-            terminals.sent_text().len(),
-            sent_len_before,
+            bus_prompts_len_after,
+            bus_prompts_len_before,
             "messages must be delivered only once"
         );
 
@@ -3193,7 +3312,7 @@ mod tests {
 
         service2.reconcile_once().unwrap();
         assert!(
-            terminals2.sent_text().is_empty(),
+            terminals2.prompts().is_empty(),
             "cursor must persist across service restart"
         );
 
@@ -3212,7 +3331,7 @@ mod tests {
             .unwrap();
 
         let reg2 = service2.reconcile_once().unwrap();
-        let sent2 = terminals2.sent_text();
+        let sent2 = terminals2.prompts();
         assert_eq!(sent2.len(), 1);
         assert_eq!(sent2[0].1, "[shep] from coder#1: third instruction");
         assert_eq!(reg2.result(&non_mcp.id).unwrap().delivery_cursor, m5.id);
@@ -3245,6 +3364,8 @@ mod tests {
             })
             .unwrap();
 
+        let initial_prompts_len = terminals.prompts().len();
+
         // 1. Working: pane is busy -> no delivery
         terminals.set_status(
             &non_mcp.id,
@@ -3258,7 +3379,7 @@ mod tests {
             },
         );
         let reg = service.reconcile_once().unwrap();
-        assert!(terminals.sent_text().is_empty());
+        assert_eq!(terminals.prompts().len(), initial_prompts_len);
         assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, 0);
 
         // 2. Blocked: trust dialog -> no delivery
@@ -3274,7 +3395,7 @@ mod tests {
             },
         );
         let reg = service.reconcile_once().unwrap();
-        assert!(terminals.sent_text().is_empty());
+        assert_eq!(terminals.prompts().len(), initial_prompts_len);
         assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, 0);
 
         // 3. Released to idle -> delivery succeeds!
@@ -3290,7 +3411,7 @@ mod tests {
             },
         );
         let reg = service.reconcile_once().unwrap();
-        assert_eq!(terminals.sent_text().len(), 1);
+        assert_eq!(terminals.prompts().len(), initial_prompts_len + 1);
         assert_eq!(reg.result(&non_mcp.id).unwrap().delivery_cursor, m1.id);
 
         // 4. Agent transitions to "done" -> further messages are NOT delivered
@@ -3309,10 +3430,10 @@ mod tests {
             })
             .unwrap();
 
-        let sent_before = terminals.sent_text().len();
+        let sent_before = terminals.prompts().len();
         service.reconcile_once().unwrap();
         assert_eq!(
-            terminals.sent_text().len(),
+            terminals.prompts().len(),
             sent_before,
             "done agents must NOT receive messages"
         );
@@ -3335,7 +3456,7 @@ mod tests {
 
         service.reconcile_once().unwrap();
         assert_eq!(
-            terminals.sent_text().len(),
+            terminals.prompts().len(),
             sent_before,
             "gone agents must NOT receive messages"
         );
@@ -3378,6 +3499,10 @@ mod tests {
                 content: "needs verification".into(),
             })
             .unwrap();
+
+        // Force agent.prompt to report agent_not_ready so it falls back to raw pane typing + screen verification
+        terminals.set_prompt_error(&non_mcp.pane, "agent_not_ready", "agent not ready");
+        terminals.set_prompt_error(&non_mcp.id, "agent_not_ready", "agent not ready");
 
         // Disable echo on send_text so verification fails
         terminals.set_echo_on_send_text(false);

@@ -97,12 +97,55 @@ pub fn in_process_from_app_channel(
 ) -> ShepherdInProcess {
     let seq = AtomicU64::new(1);
     let session_name = session.unwrap_or("shepherd").to_owned();
+
+    let event_hub_for_events = event_hub.clone();
+    let last_event_seq = std::sync::atomic::AtomicU64::new(event_hub_for_events.current_sequence());
+    let event_waiter = move |timeout: Duration| -> Result<bool, TerminalError> {
+        let deadline = Instant::now() + timeout;
+        let poll_interval = Duration::from_millis(50);
+        while Instant::now() < deadline {
+            let events = event_hub_for_events.events_after(last_event_seq.load(Ordering::SeqCst));
+            for (seq, env) in events {
+                last_event_seq.store(seq, Ordering::SeqCst);
+                match env.event {
+                    EventKind::PaneAgentStatusChanged
+                    | EventKind::PaneAgentDetected
+                    | EventKind::PaneClosed
+                    | EventKind::PaneExited => return Ok(true),
+                    _ => {}
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            std::thread::sleep(remaining.min(poll_interval));
+        }
+        Ok(false)
+    };
+
+    let event_hub_for_handler = event_hub;
     ShepherdInProcess::new(session_name, move |method, params| {
         let id = format!("shepherd-inproc-{}", seq.fetch_add(1, Ordering::Relaxed));
         let request = decode_schema_request(&id, method, params.clone())?;
         match request.method {
             Method::AgentWait(wait_params) => {
-                wait_for_agent_in_process(&id, wait_params, &api_tx, &event_hub)
+                wait_for_agent_in_process(&id, wait_params, &api_tx, &event_hub_for_handler)
+            }
+            Method::AgentPrompt(ref prompt_params) if prompt_params.wait.is_some() => {
+                let wait_opts = prompt_params.wait.clone().unwrap();
+                let target = prompt_params.target.clone();
+                let prompt_timeout = extract_timeout(&params).unwrap_or(DEFAULT_IN_PROCESS_TIMEOUT);
+                let prompt_res = dispatch_request_over_channel(request, &api_tx, prompt_timeout)?;
+                if !wait_opts.until.is_empty() {
+                    let wait_params = crate::api::schema::AgentWaitParams {
+                        target,
+                        until: wait_opts.until,
+                        timeout_ms: wait_opts.timeout_ms,
+                    };
+                    wait_for_agent_in_process(&id, wait_params, &api_tx, &event_hub_for_handler)?;
+                }
+                Ok(prompt_res)
             }
             _ => {
                 let timeout = extract_timeout(&params).unwrap_or(DEFAULT_IN_PROCESS_TIMEOUT);
@@ -110,6 +153,7 @@ pub fn in_process_from_app_channel(
             }
         }
     })
+    .with_event_waiter(event_waiter)
 }
 
 /// Construct a `ShepherdInProcess` adapter backed by Shepherd's internal `ApiClient` (`src/api/client.rs`).
@@ -295,7 +339,15 @@ fn decode_schema_request(
 }
 
 fn extract_timeout(params: &Value) -> Option<Duration> {
-    let ms = params.get("timeout_ms").and_then(Value::as_u64)?;
+    let ms = params
+        .get("timeout_ms")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            params
+                .get("wait")
+                .and_then(|w| w.get("timeout_ms"))
+                .and_then(Value::as_u64)
+        })?;
     Some(Duration::from_millis(ms).saturating_add(Duration::from_secs(5)))
 }
 

@@ -16,8 +16,8 @@ pub mod mcp;
 pub mod workflow;
 
 pub use git::{
-    collect_git_status, GitPrSummary, GitRepoStatus, GitWorktreeInfo, ParsedGitStatus, ParsedPr,
-    ParsedWorktree,
+    collect_git_status, collect_git_status_with_base, GitPrSummary, GitRepoStatus, GitWorktreeInfo,
+    ParsedGitStatus, ParsedPr, ParsedWorktree,
 };
 
 pub use cli::{

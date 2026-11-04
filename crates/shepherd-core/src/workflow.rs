@@ -392,7 +392,7 @@ fn revise_agent(registry_path: &Path, agent_id: &str, prompt: &str, terminals: &
     let mut registry = load_agent_registry(registry_path)?;
     registry.clear_result(agent_id, &super::now_rfc3339())?;
     save_agent_registry(registry_path, &registry)?;
-    terminals.prompt(agent_id, prompt)?;
+    terminals.prompt_text(agent_id, prompt)?;
     Ok(())
 }
 

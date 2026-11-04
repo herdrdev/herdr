@@ -364,7 +364,7 @@ fn spawn_in_terminals(
         terminals.send_text(&opened.pane, &prompt)?;
         ("starting".to_owned(), String::new())
     } else {
-        match terminals.prompt(&agent.id, &prompt)? {
+        match terminals.prompt_text(&agent.id, &prompt)? {
             PromptOutcome::Delivered => ("starting".to_owned(), String::new()),
             PromptOutcome::Blocked => (
                 "blocked".to_owned(),

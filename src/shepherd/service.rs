@@ -149,21 +149,28 @@ impl ShepherdRuntimeService {
             let reg_for_rec = Arc::clone(&latest_registry);
             let stop_for_rec = Arc::clone(&stop_flag);
             let resume_done_rec = Arc::clone(&resume_done);
-            let interval = core.service_config().reconcile_interval;
+            // Backup polling interval increased; events wake up immediately.
+            let backup_interval = std::time::Duration::from_secs(10);
             Some(
                 std::thread::Builder::new()
                     .name("shepherd-reconcile-worker".into())
                     .spawn(move || {
-                        let (lock, cvar) = &*stop_for_rec;
+                        let (lock, _cvar) = &*stop_for_rec;
                         loop {
-                            let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-                            let (guard, _) = cvar
-                                .wait_timeout(guard, interval)
-                                .unwrap_or_else(|e| e.into_inner());
-                            if *guard {
-                                break;
+                            if let Ok(guard) = lock.lock() {
+                                if *guard {
+                                    break;
+                                }
                             }
-                            drop(guard);
+                            // Event-driven wait: returns Ok(true) immediately on agent status change,
+                            // or Ok(false) on backup timeout (10s)
+                            let _ = core_for_rec.terminals().wait_agent_event(backup_interval);
+
+                            if let Ok(guard) = lock.lock() {
+                                if *guard {
+                                    break;
+                                }
+                            }
                             if resume_done_rec.load(Ordering::SeqCst) {
                                 if let Ok(reg) = core_for_rec.reconcile_once() {
                                     if let Ok(mut latest) = reg_for_rec.lock() {

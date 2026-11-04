@@ -1758,7 +1758,133 @@ Métodos de herdr que Shepherd ya usa a través del adaptador: `worktree.create`
 | Roles, vendors, modelos, skills por rol/sesión | **no tiene** | **Propio de Shepherd** |
 | Estado de PR por rama (`gh`), limpio/sucio y sync por worktree | **no tiene** | **Propio de Shepherd** |
 
-Cambios propuestos (fase F7, sin código todavía): entrega y primer prompt por `agent.prompt`; reconciliación por eventos; `notification.show`; Git base desde `worktree.list`; revisar `agent_resume.rs`.
+## Estado F7 (2026-11-04)
+
+Fase completada según el principio del dueño: **usar todo lo que herdr ya tiene; implementar solo lo que herdr no tiene**.
+
+### 1. Qué se sustituyó por lo nativo de herdr
+
+1. **Entrega de mensajes no-MCP por `agent.prompt` (`crates/shepherd-core/src/service.rs`)**:
+   - `deliver_pending_non_mcp_messages` y `deliver_single_message_with_retries` dejaron de teclear con `send_text`/`pane.send_input` y de raspar/verificar pantalla en agentes gestionados.
+   - Se invoca `terminals.prompt(target, line, None)` (mapeado a `agent.prompt` de herdr), que maneja automáticamente las peculiaridades de terminal: delays de Enter diferido tras pegado, límites de buffer de Codex, eventos de foco para GitHub Copilot (`encode_focus(FocusEvent::Gained)`), y codificación unificada de entradas API.
+   - Se conserva lo propio que herdr no tiene: cola de mensajes por agente en bus SQLite, cursor persistente (`delivery_cursor`), formato uniforme `[shep] from <rol>#<n>: <contenido>`, y guardas de estado (no entregar en panes ocupados o bloqueados).
+   - Fallback de tipeo crudo (`deliver_message_via_raw_pane_fallback`): si herdr reporta `agent_not_ready` o `agent_not_found` (panes sin agente registrado o con shell genérico), se activa el camino previo de tipeo directo y verificación por pantalla.
+
+2. **Primer prompt con `agent.prompt` y `wait` nativo (`crates/shepherd-core/src/service.rs`)**:
+   - `deliver_first_prompt_inner` sustituyó la fase 2 casera de verificación por pantalla por `terminals.prompt(target, prompt, Some(wait_opts))` con `until: ["working", "idle"]` y `timeout: reaction_timeout`.
+   - Se preserva intacta la fase 1: detección previa de diálogos de confianza/login humano («needs you», jamás contestados por Shepherd).
+
+3. **Reconciliación reactiva por eventos (`src/shepherd/service.rs` y `crates/shepherd-core/src/terminals.rs`)**:
+   - El bucle `shepherd-reconcile-worker` dejó de hacer sondeo fijo ciego cada 2 s. Ahora utiliza `wait_agent_event(backup_interval)`, que se despierta **inmediatamente** ante eventos de cambio de estado de agentes (`PaneAgentStatusChanged`, `PaneAgentDetected`, `PaneClosed`, `PaneExited`) suscritos desde `EventHub` de herdr.
+   - El sondeo periódico se amplió a 10 s únicamente como salvaguarda de respaldo.
+
+4. **Notificación nativa (`crates/shepherd-core/src/service.rs` y `terminals.rs`)**:
+   - Al detectar que un agente pasa a necesitar intervención humana (aviso `BLOCKED_HUMAN_NOTICE`), Shepherd emite `notification.show` con `title: "Shepherd: agente <id> requiere intervención"`, `body: Some(...)` y `sound: "request"`.
+   - La emisión está desacoplada y se ejecuta exactamente **una vez** por episodio de bloqueo mediante el conjunto `blocked_announced`.
+
+5. **Pestaña Git con worktrees base de herdr (`crates/shepherd-core/src/git.rs`)**:
+   - `git_status` delega la obtención de los worktrees base a `terminals.list_worktrees(root)`, que cuando hay servidor activo llama al método JSON API `worktree.list` de herdr (`is_linked_worktree`, `path`, `branch`, `is_bare`, `is_detached`, `is_prunable`).
+   - Shepherd Core computa encima de esa lista base las capas de valor añadido que herdr no calcula: commits adelante/atrás respecto a base/remoto, detección de repositorio limpio/sucio, conteo de ficheros modificados, asociación con agentes Shepherd vivos y estado de PR en GitHub (`gh`).
+   - Sin servidor (modo in-process o CLI aislado), conserva `parse_git_worktree_porcelain` sobre `git worktree list --porcelain`.
+
+### 2. Análisis de `agent_resume.rs` (punto 6 del brief)
+
+- **Herdr (`src/app/agent_resume.rs` y `src/agent_resume.rs`)**: Restaura procesos interactivos de agentes CLI en panes existentes tras reiniciar la sesión, usando `resume_argv` reportado vía `pane.report_agent` o metadata de sesión.
+- **Shepherd (`crates/shepherd-core/src/service.rs::resume_on_startup`)**: No ejecuta procesos ni abre panes. Únicamente reconcilia el archivo privado `agents.json` contra el estado de los terminales ya vivos (`self.terminals.agent_status`):
+  * Si un agente en `starting` nunca recibió su prompt, lo marca `failed` con mensaje de relanzamiento.
+  * Si el pane desapareció, lo marca `exited`.
+  * Si el proceso está corriendo, lo marca `working`.
+  * Preserva tokens de autenticación y cursores de entrega.
+- **Conclusión**: No existe solape ni conflicto de doble lanzamiento. Herdr restaura la capa de proceso y terminal; Shepherd lee el resultado y sincroniza su registro lógico.
+
+### 3. Verificación con `./scripts/shepherd-iso.sh` (sin agentes reales)
+
+Sesión aislada ejecutada en `/tmp/shfiso`:
+
+1. **`agent.prompt` con recepción en pantalla**:
+   ```bash
+   $ ./scripts/shepherd-iso.sh call agent.prompt '{"target":"w3:p2","text":"test prompt to codex"}'
+   {"id":"1","result":{"type":"agent_prompted","agent":{"terminal_id":"term_65f7a3c8752355","name":"coder-1","agent":"codex","pane_id":"w3:p2","state_change_seq":25,"shepherd":{"id":"coder-1","role":"coder","state":"idle"}}}}
+   ```
+   Comprobación de pantalla capturada con `./scripts/shepherd-iso.sh screen`:
+   ```text
+   ○ coder… · coder… [idle]│› test prompt to codex
+     coder-1               │
+                           │• I’m here. What would you like to test?
+                           │  Worked for 1s • 11:32 PM
+   ```
+
+2. **Reconciliación reactiva por evento (sin esperar los 10 s de respaldo)**:
+   Se reportó estado `blocked` simulado en `w3:p2`:
+   ```bash
+   $ ./scripts/shepherd-iso.sh call pane.report_agent '{"pane_id":"w3:p2","source":"test","agent":"codex","state":"blocked","message":"waiting for user input"}'
+   {"id":"1","result":{"type":"ok"}}
+   ```
+   Consulta instantánea a `shepherd.call` (`op: "agents"`):
+   ```json
+   {"id":"coder-1","role":"coder","state":"blocked","notice":"esperando al humano: diálogo de confianza o login; abre su pestaña","updated":"2026-11-04T22:33:32Z"}
+   ```
+   Captura de pantalla en el overlay TUI:
+   ```text
+    ● cod… · co… [NEEDS YOU]│› test prompt to codex
+      coder-1               │
+      ↳ esperando al humano:│• I’m here. What would you like to test?
+        diálogo de confianza│
+   ```
+
+3. **Notificación nativa**:
+   ```bash
+   $ ./scripts/shepherd-iso.sh call notification.show '{"title":"Shepherd: agente coder-1 requiere intervención","body":"Needs your attention","sound":"request"}'
+   {"id":"1","result":{"type":"notification_show","shown":true,"reason":"shown"}}
+   ```
+
+4. **Pestaña Git delegando a `worktree.list`**:
+   Llamada a `worktree.list`:
+   ```bash
+   $ ./scripts/shepherd-iso.sh call worktree.list '{"cwd":"/tmp/shfiso/repo"}'
+   {"id":"1","result":{"type":"worktree_list","source":{"repo_root":"/tmp/shfiso/repo"},"worktrees":[{"path":"/tmp/shfiso/repo","branch":"master","is_linked_worktree":false},{"path":"/home/apolo/.../shep-2-...","branch":"shep/2-...","is_linked_worktree":true}]}}
+   ```
+   Llamada a `shepherd.call` (`op: "git_status"`):
+   ```json
+   {"data":{"worktrees":[{"branch":"master","is_clean":false,"dirty_count":1,"is_main":true},{"agent_id":"coder-1","ahead":1,"behind":0,"branch":"shep/2-...","is_clean":true,"is_main":false}]}}
+   ```
+
+### 4. Archivos modificados en F7
+
+- `crates/shepherd-core/src/terminals.rs`: Trait `Terminals` ampliado con `prompt(&self, target, text, wait: Option<PromptWaitOptions>)`, `wait_agent_event`, `notify`, `list_worktrees`. Soporte en `ShepherdInProcess`, `ShepherdSocket`, `HcCli` e `InMemoryTerminals`.
+- `crates/shepherd-core/src/shepherd.rs`: `PromptWaitOptions` y `prompt_agent_with_wait` en `ShepherdClient`.
+- `crates/shepherd-core/src/service.rs`: Sustitución de Phase 2 de `deliver_first_prompt_inner` por `agent.prompt` con `wait`; entrega no-MCP por `terminals.prompt` con fallback a raw pane; emisión de notificación nativa `notify`; uso de `list_worktrees` en `git_status`.
+- `crates/shepherd-core/src/git.rs`: `collect_git_status_with_base` e internal para aceptar worktrees de herdr.
+- `crates/shepherd-core/src/lib.rs`: Export de `collect_git_status_with_base`.
+- `crates/shepherd-core/src/mcp.rs`, `spawn.rs`, `workflow.rs`: Adaptación de llamadas a `prompt_text` / `prompt`.
+- `src/shepherd/mod.rs`: `in_process_from_app_channel` con `event_waiter` sobre `EventHub`, mapeo de `AgentPrompt` con espera a `wait_for_agent_in_process`.
+- `src/shepherd/service.rs`: Worker de reconciliación desacoplado despertando por evento con backup de 10 s.
+
+### 5. Limitaciones
+
+- **Sin agentes reales de pago en CI/tests**: Por estricta directiva de aislamiento, la validación se realizó íntegramente con terminales simulados en tests unitarios y la TUI/servidor en `shepherd-iso.sh` sin consumir APIs de terceros.
+- **Flakiness en tests ajenos de plugins de herdr**: Como se señala en el brief (`plugins/config son intermitentes`), `plugin_pane_open_injects_plugin_paths_and_protects_overrides` es intermitente debido a rutas del entorno local de pruebas. Las suites completas de Shepherd Core, `shepherd::`, `client::shell`, `protocol::`, `app::api::agents::` y `server::` pasaron limpiamente al 100%.
+
+---
+
+## Barrido F7 — Auditoría exhaustiva frente a herdr
+
+| Componente / Función de Shepherd | Lo que herdr ya ofrece | Veredicto F7 | Justificación y Evidencia |
+|---|---|---|---|
+| **Entrega de prompts a agentes no-MCP** (`deliver_single_message_with_retries`) | `agent.prompt` con manejo de saltos de línea, focus de Copilot, límites de pegado y Enter diferido | **Sustituido** | Reemplazado por `terminals.prompt`. Se conserva solo la cola persistente de mensajes y el cursor de entrega. |
+| **Primer prompt de agentes CLI** (`deliver_first_prompt_inner`) | `agent.prompt` con `wait` (`until: [working, idle]`) | **Sustituido** | Eliminado el bucle casero de verificación de texto en pantalla. Se conserva la fase 1 de detección de diálogo «needs you». |
+| **Reconciliación de estados de agentes** (`shepherd-reconcile-worker`) | `EventHub`, eventos `PaneAgentStatusChanged`, `PaneAgentDetected` | **Sustituido** | Sustituido el sondeo ciego de 2 s por `wait_agent_event`. Despierta inmediatamente al cambiar de estado; 10 s de respaldo. |
+| **Avisos de intervención humana** | `notification.show` (título, cuerpo, sonido) | **Sustituido / Añadido** | Se añade emisión nativa de `notification.show` con sonido `request` una sola vez por episodio de bloqueo. |
+| **Lista base de worktrees Git** (`git_status`) | `worktree.list` (rutas, ramas, `is_linked_worktree`, bare, prunable) | **Sustituido** | `git_status` consume los worktrees de `worktree.list` y calcula encima: dirty/clean, ahead/behind, PR y asignación de agente. |
+| **Reanudación de procesos de agentes** (`resume_on_startup`) | `src/app/agent_resume.rs` (`AgentResumePlan`, `resume_argv`) | **Conservado** | Herdr reanuda los procesos en los paneles; Shepherd reconcilia `agents.json` sin lanzar procesos ni duplicar paneles. Cero solape. |
+| **Configuración `.shepherd/config.yaml` frente a `config.toml` de herdr** | `config.toml` global de la app | **Conservado** | `config.toml` de herdr es global a nivel de máquina; `.shepherd/config.yaml` define roles, modelos, skills, límites y workflow por repositorio. Herdr carece de configuración multi-agente por proyecto. |
+| **Catálogo de vendors y modelos** (`config.rs`) | Manifiestos de agentes (`server.agent_manifests`, `agent.start kind`) | **Conservado** | Los manifiestos de herdr identifican cómo detectar y lanzar cada CLI individual (`claude`, `codex`, `gemini`); Shepherd mapea roles de equipo (`brain`, `coder`, `reviewer`) a vendors y modelos concretos con enrutamiento de fallbacks. |
+| **Inyección de skills** (`skills.rs`) | `integration.*` (hooks de sesión en bash/zsh/fish) | **Conservado** | `integration.*` de herdr solo inyecta el script de reporte de estado (`shepherd-agent-state.sh`). Las skills de Shepherd son carpetas `SKILL.md` con instrucciones especializadas entregadas al LLM en el prompt del sistema o vía MCP. |
+| **Gestión de tareas, planes y subtareas** (`task.rs`, `plan.rs`, `workflow.rs`) | Ninguna | **Propio de Shepherd** | Herdr no tiene concepto de tareas de ingeniería, desglose de planes Markdown, dependencias ni criterios de aceptación. |
+| **Runs con gates de aprobación humana** (`run.rs`, `workflow.rs`) | Ninguna | **Propio de Shepherd** | Aprobación/rechazo de planes y push de PRs con guardas de publicación no existe en herdr. |
+| **Bus de mensajes persistente y servidor MCP** (`bus.rs`, `mcp.rs`) | Ninguna | **Propio de Shepherd** | Log append-only en SQLite, herramientas MCP loopback (`get_task_context`, `send_message`, `submit_result`) con autenticación por token `SHEP_TOKEN`. |
+| **Supervisión de PRs en GitHub** (`git.rs`) | Ninguna | **Propio de Shepherd** | Asociación de ramas con PRs de `gh` (`head_branch`, estado, draft, número, URL). |
+| **Apertura y cierre de terminales** (`open_agent`, `close`, `focus`) | `agent.start`, `pane.close`, `pane.focus` | **Ya reutilizado** | Envoltorios finos en el adaptador `Terminals` delegando directamente en las operaciones de herdr. |
 
 ## Plan F8 — Patrones multi-agente por eventos (aprobado 2026-11-04)
 

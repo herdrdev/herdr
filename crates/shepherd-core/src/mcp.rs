@@ -72,8 +72,9 @@ impl Terminals for SharedTerminals {
         &self,
         agent_or_pane: &str,
         text: &str,
+        wait: Option<crate::shepherd::PromptWaitOptions>,
     ) -> Result<crate::terminals::PromptOutcome, crate::terminals::TerminalError> {
-        self.0.prompt(agent_or_pane, text)
+        self.0.prompt(agent_or_pane, text, wait)
     }
     fn send_text(
         &self,
@@ -754,7 +755,7 @@ fn call_tool(state: &State, agent: &crate::Agent, params: &Value) -> Result<Valu
                     content: prompt_msg.clone(),
                 })
                 .map_err(|e| e.to_string())?;
-            let _ = terminals.prompt(&docs_id, &prompt_msg);
+            let _ = terminals.prompt_text(&docs_id, &prompt_msg);
 
             let deadline = Instant::now() + Duration::from_secs(timeout_secs);
             loop {

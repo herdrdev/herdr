@@ -348,10 +348,33 @@ pub fn collect_git_status(root: &Path, agents: &[Agent]) -> Result<GitRepoStatus
     collect_git_status_internal(root, agents, run_cmd_with_timeout)
 }
 
+/// Collects repository worktrees and git status with an optional base worktrees list
+/// (for example, provided by Shepherd's `worktree.list` API) using the default command runner.
+pub fn collect_git_status_with_base(
+    root: &Path,
+    agents: &[Agent],
+    base_worktrees: Option<Vec<ParsedWorktree>>,
+) -> Result<GitRepoStatus, String> {
+    collect_git_status_with_base_internal(root, agents, base_worktrees, run_cmd_with_timeout)
+}
+
 /// Collects repository worktrees and git status using an injectable command runner.
 pub fn collect_git_status_internal<F>(
     root: &Path,
     agents: &[Agent],
+    runner: F,
+) -> Result<GitRepoStatus, String>
+where
+    F: FnMut(&str, &[&str], &Path, Duration) -> Result<std::process::Output, String>,
+{
+    collect_git_status_with_base_internal(root, agents, None, runner)
+}
+
+/// Collects repository worktrees and git status with optional base worktrees using an injectable runner.
+pub fn collect_git_status_with_base_internal<F>(
+    root: &Path,
+    agents: &[Agent],
+    base_worktrees: Option<Vec<ParsedWorktree>>,
     mut runner: F,
 ) -> Result<GitRepoStatus, String>
 where
@@ -359,30 +382,34 @@ where
 {
     let cmd_timeout = Duration::from_secs(3);
 
-    let wt_output = match runner("git", &["worktree", "list", "--porcelain"], root, cmd_timeout) {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
-        Ok(out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            return Ok(GitRepoStatus {
-                root: root.display().to_string(),
-                worktrees: Vec::new(),
-                gh_available: false,
-                gh_note: None,
-                error: Some(format!("git worktree list failed: {}", stderr.trim())),
-            });
-        }
-        Err(e) => {
-            return Ok(GitRepoStatus {
-                root: root.display().to_string(),
-                worktrees: Vec::new(),
-                gh_available: false,
-                gh_note: None,
-                error: Some(format!("cannot execute git: {e}")),
-            });
+    let parsed_wts = match base_worktrees {
+        Some(wts) => wts,
+        None => {
+            let wt_output = match runner("git", &["worktree", "list", "--porcelain"], root, cmd_timeout) {
+                Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    return Ok(GitRepoStatus {
+                        root: root.display().to_string(),
+                        worktrees: Vec::new(),
+                        gh_available: false,
+                        gh_note: None,
+                        error: Some(format!("git worktree list failed: {}", stderr.trim())),
+                    });
+                }
+                Err(e) => {
+                    return Ok(GitRepoStatus {
+                        root: root.display().to_string(),
+                        worktrees: Vec::new(),
+                        gh_available: false,
+                        gh_note: None,
+                        error: Some(format!("cannot execute git: {e}")),
+                    });
+                }
+            };
+            parse_git_worktree_porcelain(&wt_output)
         }
     };
-
-    let parsed_wts = parse_git_worktree_porcelain(&wt_output);
     if parsed_wts.is_empty() {
         return Ok(GitRepoStatus {
             root: root.display().to_string(),
@@ -843,5 +870,77 @@ branch refs/heads/shep/1-coder
         let _ = git(&["worktree", "remove", "--force", wt_path.to_str().unwrap()]);
         let _ = std::fs::remove_dir_all(&wt_path);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_collect_git_status_with_base_synthetic() {
+        let root = Path::new("/mock/repo");
+        let base_worktrees = vec![
+            ParsedWorktree {
+                path: PathBuf::from("/mock/repo"),
+                head: "commit1".into(),
+                branch: Some("master".into()),
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+                prunable: false,
+            },
+            ParsedWorktree {
+                path: PathBuf::from("/mock/repo/.worktrees/shep-1"),
+                head: "commit2".into(),
+                branch: Some("shep/1-task".into()),
+                is_bare: false,
+                is_detached: false,
+                is_locked: false,
+                prunable: false,
+            },
+        ];
+        let agents = vec![Agent {
+            id: "coder-1".into(),
+            worktree: "/mock/repo/.worktrees/shep-1".into(),
+            branch: "shep/1-task".into(),
+            ..Agent::default()
+        }];
+        let runner = |_cmd: &str, args: &[&str], cwd: &Path, _timeout: Duration| -> Result<std::process::Output, String> {
+            #[cfg(unix)]
+            use std::os::unix::process::ExitStatusExt;
+            if args.contains(&"status") {
+                let stdout = if cwd == Path::new("/mock/repo") {
+                    b"## master...origin/master\n".to_vec()
+                } else {
+                    b"## shep/1-task\n M file.rs\n".to_vec()
+                };
+                return Ok(std::process::Output {
+                    #[cfg(unix)]
+                    status: std::process::ExitStatus::from_raw(0),
+                    #[cfg(not(unix))]
+                    status: std::process::Command::new("true").status().unwrap(),
+                    stdout,
+                    stderr: Vec::new(),
+                });
+            }
+            if args.contains(&"rev-list") {
+                return Ok(std::process::Output {
+                    #[cfg(unix)]
+                    status: std::process::ExitStatus::from_raw(0),
+                    #[cfg(not(unix))]
+                    status: std::process::Command::new("true").status().unwrap(),
+                    stdout: b"0\t1\n".to_vec(),
+                    stderr: Vec::new(),
+                });
+            }
+            Err("failed".into())
+        };
+
+        let res = collect_git_status_with_base_internal(root, &agents, Some(base_worktrees), runner).unwrap();
+        assert_eq!(res.worktrees.len(), 2);
+        assert_eq!(res.worktrees[0].branch, "master");
+        assert!(res.worktrees[0].is_main);
+        assert!(res.worktrees[0].is_clean);
+
+        assert_eq!(res.worktrees[1].branch, "shep/1-task");
+        assert!(!res.worktrees[1].is_main);
+        assert!(!res.worktrees[1].is_clean);
+        assert_eq!(res.worktrees[1].agent_id.as_deref(), Some("coder-1"));
     }
 }

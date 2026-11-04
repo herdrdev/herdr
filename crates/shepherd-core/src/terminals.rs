@@ -2,7 +2,11 @@
 //!
 //! Shepherd's core workflow, spawner, and MCP server depend only on `Terminals`.
 
-use crate::{config::Config, shepherd::{ShepherdClient, ShepherdError}};
+use crate::{
+    config::Config,
+    git::ParsedWorktree,
+    shepherd::{PromptWaitOptions, ShepherdClient, ShepherdError},
+};
 use serde_json::Value;
 use std::{
     collections::HashMap,
@@ -110,13 +114,45 @@ pub struct TerminalAgentStatus {
 
 pub trait Terminals: Send + Sync {
     fn open_agent(&self, request: &OpenAgentRequest) -> Result<OpenedAgent, TerminalError>;
-    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError>;
+    fn prompt(
+        &self,
+        target: &str,
+        text: &str,
+        wait: Option<PromptWaitOptions>,
+    ) -> Result<PromptOutcome, TerminalError>;
+    fn prompt_text(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
+        self.prompt(target, text, None)
+    }
     fn send_text(&self, target: &str, text: &str) -> Result<(), TerminalError>;
     fn send_keys(&self, target: &str, keys: &[String]) -> Result<(), TerminalError>;
     fn read_screen(&self, target: &str, lines: u32) -> Result<String, TerminalError>;
     fn wait(&self, target: &str, timeout: Duration) -> Result<TerminalWaitResult, TerminalError>;
+    fn wait_agent_event(&self, timeout: Duration) -> Result<bool, TerminalError> {
+        std::thread::sleep(timeout);
+        Ok(false)
+    }
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError>;
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError>;
+    fn notify(&self, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+        let _ = (title, body);
+        Ok(())
+    }
+    fn list_worktrees(&self, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+        let output = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(root)
+            .output()?;
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            Ok(crate::git::parse_git_worktree_porcelain(&text))
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(TerminalError::Api {
+                code: "git_failed".into(),
+                message: stderr.trim().to_string(),
+            })
+        }
+    }
     fn close(&self, target: &str) -> Result<(), TerminalError>;
     fn attach(&self, target: Option<&str>, takeover: bool) -> Result<(), TerminalError>;
     fn focus(&self, target: &str) -> Result<(), TerminalError> {
@@ -195,6 +231,7 @@ pub struct ShepherdInProcess {
     client: ShepherdClient,
     session: String,
     attach_handler: Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
+    event_waiter: Option<Arc<dyn Fn(Duration) -> Result<bool, TerminalError> + Send + Sync>>,
 }
 
 impl ShepherdInProcess {
@@ -206,6 +243,7 @@ impl ShepherdInProcess {
             client: ShepherdClient::in_process(handler),
             session: session.into(),
             attach_handler: None,
+            event_waiter: None,
         }
     }
 
@@ -214,6 +252,7 @@ impl ShepherdInProcess {
             client,
             session: session.into(),
             attach_handler: None,
+            event_waiter: None,
         }
     }
 
@@ -222,6 +261,14 @@ impl ShepherdInProcess {
         handler: impl Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync + 'static,
     ) -> Self {
         self.attach_handler = Some(Arc::new(handler));
+        self
+    }
+
+    pub fn with_event_waiter(
+        mut self,
+        waiter: impl Fn(Duration) -> Result<bool, TerminalError> + Send + Sync + 'static,
+    ) -> Self {
+        self.event_waiter = Some(Arc::new(waiter));
         self
     }
 
@@ -238,18 +285,27 @@ impl ShepherdInProcess {
 pub struct ShepherdSocket {
     client: ShepherdClient,
     session: String,
+    event_rx: Option<Arc<Mutex<std::sync::mpsc::Receiver<()>>>>,
 }
 
 impl ShepherdSocket {
     pub fn new(client: ShepherdClient, session: impl Into<String>) -> Self {
-        Self { client, session: session.into() }
+        let event_rx = start_socket_event_subscription(client.socket());
+        Self {
+            client,
+            session: session.into(),
+            event_rx: event_rx.map(|rx| Arc::new(Mutex::new(rx))),
+        }
     }
 
     pub fn connect(session: Option<&str>, autostart: bool) -> Result<Self, TerminalError> {
         let client = ShepherdClient::ensure_session(session, autostart)?;
+        let session_name = session.unwrap_or("shepherd").to_owned();
+        let event_rx = start_socket_event_subscription(client.socket());
         Ok(Self {
             client,
-            session: session.unwrap_or("shepherd").to_owned(),
+            session: session_name,
+            event_rx: event_rx.map(|rx| Arc::new(Mutex::new(rx))),
         })
     }
 
@@ -279,8 +335,13 @@ impl Terminals for ShepherdInProcess {
         shepherd_open_agent(&self.client, request)
     }
 
-    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
-        deliver_prompt(&self.client, target, text)
+    fn prompt(
+        &self,
+        target: &str,
+        text: &str,
+        wait: Option<PromptWaitOptions>,
+    ) -> Result<PromptOutcome, TerminalError> {
+        deliver_prompt(&self.client, target, text, wait)
     }
 
     fn send_text(&self, target: &str, text: &str) -> Result<(), TerminalError> {
@@ -301,12 +362,28 @@ impl Terminals for ShepherdInProcess {
         shepherd_wait(&self.client, target, timeout)
     }
 
+    fn wait_agent_event(&self, timeout: Duration) -> Result<bool, TerminalError> {
+        if let Some(waiter) = &self.event_waiter {
+            return waiter(timeout);
+        }
+        std::thread::sleep(timeout);
+        Ok(false)
+    }
+
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
         shepherd_agent_status(&self.client, target)
     }
 
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
         shepherd_label(&self.client, target, labels)
+    }
+
+    fn notify(&self, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+        shepherd_notify(&self.client, title, body)
+    }
+
+    fn list_worktrees(&self, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+        shepherd_list_worktrees(&self.client, root)
     }
 
     fn close(&self, target: &str) -> Result<(), TerminalError> {
@@ -331,8 +408,13 @@ impl Terminals for ShepherdSocket {
         shepherd_open_agent(&self.client, request)
     }
 
-    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
-        deliver_prompt(&self.client, target, text)
+    fn prompt(
+        &self,
+        target: &str,
+        text: &str,
+        wait: Option<PromptWaitOptions>,
+    ) -> Result<PromptOutcome, TerminalError> {
+        deliver_prompt(&self.client, target, text, wait)
     }
 
     fn send_text(&self, target: &str, text: &str) -> Result<(), TerminalError> {
@@ -353,12 +435,34 @@ impl Terminals for ShepherdSocket {
         shepherd_wait(&self.client, target, timeout)
     }
 
+    fn wait_agent_event(&self, timeout: Duration) -> Result<bool, TerminalError> {
+        if let Some(rx) = &self.event_rx {
+            if let Ok(rx_guard) = rx.lock() {
+                match rx_guard.recv_timeout(timeout) {
+                    Ok(()) => return Ok(true),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(false),
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {}
+                }
+            }
+        }
+        std::thread::sleep(timeout);
+        Ok(false)
+    }
+
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
         shepherd_agent_status(&self.client, target)
     }
 
     fn label(&self, target: &str, labels: &HashMap<String, String>) -> Result<(), TerminalError> {
         shepherd_label(&self.client, target, labels)
+    }
+
+    fn notify(&self, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+        shepherd_notify(&self.client, title, body)
+    }
+
+    fn list_worktrees(&self, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+        shepherd_list_worktrees(&self.client, root)
     }
 
     fn close(&self, target: &str) -> Result<(), TerminalError> {
@@ -584,10 +688,15 @@ fn start_shepherd_agent(
     }
 }
 
-fn deliver_prompt(client: &ShepherdClient, target: &str, prompt: &str) -> Result<PromptOutcome, TerminalError> {
+fn deliver_prompt(
+    client: &ShepherdClient,
+    target: &str,
+    prompt: &str,
+    wait: Option<PromptWaitOptions>,
+) -> Result<PromptOutcome, TerminalError> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        match client.prompt_agent(target, prompt) {
+        match client.prompt_agent_with_wait(target, prompt, wait.as_ref()) {
             Ok(_) => return Ok(PromptOutcome::Delivered),
             Err(ShepherdError::Api { code, .. }) if code == "agent_blocked" => {
                 return Ok(PromptOutcome::Blocked);
@@ -602,6 +711,92 @@ fn deliver_prompt(client: &ShepherdClient, target: &str, prompt: &str) -> Result
             }
             Err(error) => return Err(error.into()),
         }
+    }
+}
+
+fn shepherd_notify(client: &ShepherdClient, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+    let mut params = serde_json::json!({
+        "title": title,
+        "sound": "request",
+    });
+    if let Some(b) = body {
+        params["body"] = serde_json::json!(b);
+    }
+    let _ = client.call("notification.show", params);
+    Ok(())
+}
+
+fn shepherd_list_worktrees(client: &ShepherdClient, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+    let params = serde_json::json!({
+        "cwd": root.display().to_string(),
+    });
+    let result = client.call("worktree.list", params)?;
+    let worktrees = result
+        .get("worktrees")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            TerminalError::Protocol("missing worktrees array in worktree.list response".into())
+        })?;
+    let parsed = worktrees
+        .iter()
+        .map(|wt| {
+            let path = PathBuf::from(wt.get("path").and_then(Value::as_str).unwrap_or_default());
+            let branch = wt.get("branch").and_then(Value::as_str).map(str::to_owned);
+            let is_detached = wt.get("is_detached").and_then(Value::as_bool).unwrap_or(false);
+            let is_bare = wt.get("is_bare").and_then(Value::as_bool).unwrap_or(false);
+            let is_prunable = wt.get("is_prunable").and_then(Value::as_bool).unwrap_or(false);
+            ParsedWorktree {
+                path,
+                head: String::new(),
+                branch,
+                is_detached,
+                is_bare,
+                is_locked: false,
+                prunable: is_prunable,
+            }
+        })
+        .collect();
+    Ok(parsed)
+}
+
+fn start_socket_event_subscription(socket_path: &Path) -> Option<std::sync::mpsc::Receiver<()>> {
+    #[cfg(unix)]
+    {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+        let stream = UnixStream::connect(socket_path).ok()?;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = std::thread::Builder::new()
+            .name("shepherd-socket-events".into())
+            .spawn(move || {
+                let mut stream = stream;
+                let sub_req = r#"{"id":"shepherd-events-sub","method":"events.subscribe","params":{"subscriptions":[{"type":"pane.agent_status_changed"},{"type":"pane.agent_detected"},{"type":"pane.closed"},{"type":"pane.exited"}]}}"#;
+                if stream.write_all(sub_req.as_bytes()).is_err() || stream.write_all(b"\n").is_err() {
+                    return;
+                }
+                let mut reader = BufReader::new(stream);
+                let mut line = String::new();
+                while let Ok(n) = reader.read_line(&mut line) {
+                    if n == 0 {
+                        break;
+                    }
+                    if line.contains("pane.agent_status_changed")
+                        || line.contains("pane.agent_detected")
+                        || line.contains("pane.closed")
+                        || line.contains("pane.exited")
+                        || line.contains("PaneAgentStatusChanged")
+                    {
+                        let _ = tx.send(());
+                    }
+                    line.clear();
+                }
+            });
+        Some(rx)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = socket_path;
+        None
     }
 }
 
@@ -823,7 +1018,12 @@ impl Terminals for HcCli {
         })
     }
 
-    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
+    fn prompt(
+        &self,
+        target: &str,
+        text: &str,
+        _wait: Option<PromptWaitOptions>,
+    ) -> Result<PromptOutcome, TerminalError> {
         let args = vec![
             "send".to_owned(),
             "--json".to_owned(),
@@ -1004,9 +1204,19 @@ impl Terminals for HcCli {
 }
 
 /// In-memory fake implementation of `Terminals` for unit and integration tests.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct InMemoryTerminals {
     inner: Arc<Mutex<InMemoryState>>,
+    condvar: Arc<std::sync::Condvar>,
+}
+
+impl Default for InMemoryTerminals {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InMemoryState::default())),
+            condvar: Arc::new(std::sync::Condvar::new()),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -1020,6 +1230,7 @@ struct InMemoryState {
     pub screens: HashMap<String, String>,
     pub statuses: HashMap<String, TerminalAgentStatus>,
     pub prompt_outcomes: HashMap<String, PromptOutcome>,
+    pub prompt_errors: HashMap<String, (String, String)>,
     pub closed: Vec<String>,
     pub attached: Vec<(Option<String>, bool)>,
     pub focused: Vec<String>,
@@ -1027,6 +1238,9 @@ struct InMemoryState {
     pub disable_auto_react: bool,
     pub disable_echo_on_send_text: bool,
     pub on_prompt: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+    pub notifications: Vec<(String, Option<String>)>,
+    pub worktrees: Option<Vec<ParsedWorktree>>,
+    pub event_signaled: bool,
 }
 
 impl InMemoryTerminals {
@@ -1056,6 +1270,19 @@ impl InMemoryTerminals {
         self.inner.lock().unwrap().prompt_outcomes.insert(target.into(), outcome);
     }
 
+    pub fn set_prompt_error(
+        &self,
+        target: impl Into<String>,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.inner
+            .lock()
+            .unwrap()
+            .prompt_errors
+            .insert(target.into(), (code.into(), message.into()));
+    }
+
     pub fn set_screen(&self, target: impl Into<String>, screen: impl Into<String>) {
         self.inner.lock().unwrap().screens.insert(target.into(), screen.into());
     }
@@ -1067,6 +1294,8 @@ impl InMemoryTerminals {
             state.statuses.insert(status.pane.clone(), status.clone());
         }
         state.statuses.insert(target_str, status);
+        state.event_signaled = true;
+        self.condvar.notify_all();
     }
 
     pub fn remove_status(&self, target: &str) {
@@ -1076,6 +1305,20 @@ impl InMemoryTerminals {
                 state.statuses.remove(&removed.pane);
             }
         }
+    }
+
+    pub fn trigger_agent_event(&self) {
+        let mut state = self.inner.lock().unwrap();
+        state.event_signaled = true;
+        self.condvar.notify_all();
+    }
+
+    pub fn notifications(&self) -> Vec<(String, Option<String>)> {
+        self.inner.lock().unwrap().notifications.clone()
+    }
+
+    pub fn set_worktrees(&self, worktrees: Vec<ParsedWorktree>) {
+        self.inner.lock().unwrap().worktrees = Some(worktrees);
     }
 
     pub fn put_open_pane(
@@ -1183,16 +1426,28 @@ impl Terminals for InMemoryTerminals {
         Ok(OpenedAgent { workspace, tab, pane, worktree, branch })
     }
 
-    fn prompt(&self, target: &str, text: &str) -> Result<PromptOutcome, TerminalError> {
-        let callback = {
+    fn prompt(
+        &self,
+        target: &str,
+        text: &str,
+        wait: Option<PromptWaitOptions>,
+    ) -> Result<PromptOutcome, TerminalError> {
+        let (initial_seq, callback) = {
             let mut state = self.inner.lock().unwrap();
             state.prompts.push((target.to_owned(), text.to_owned()));
+            if let Some((code, message)) = state.prompt_errors.get(target) {
+                return Err(TerminalError::Api {
+                    code: code.clone(),
+                    message: message.clone(),
+                });
+            }
             if let Some(outcome) = state.prompt_outcomes.get(target).copied() {
                 if outcome == PromptOutcome::Blocked {
                     return Ok(PromptOutcome::Blocked);
                 }
             }
-            if !state.disable_auto_react {
+            let initial_seq = state.statuses.get(target).map(|s| s.seq).unwrap_or(0);
+            if !state.disable_auto_react && wait.is_some() {
                 let mut pane_to_update = None;
                 if let Some(status) = state.statuses.get_mut(target) {
                     status.status = "working".into();
@@ -1206,10 +1461,25 @@ impl Terminals for InMemoryTerminals {
                     }
                 }
             }
-            state.on_prompt.clone()
+            (initial_seq, state.on_prompt.clone())
         };
         if let Some(cb) = callback {
             cb(target, text);
+        }
+        if let Some(w) = &wait {
+            let state = self.inner.lock().unwrap();
+            let current = state.statuses.get(target);
+            let current_seq = current.map(|s| s.seq).unwrap_or(0);
+            let current_status = current.map(|s| s.status.as_str()).unwrap_or("");
+            let reacted = current_status == "working"
+                || current_status == "blocked"
+                || current_seq > initial_seq;
+            if !reacted && state.disable_auto_react {
+                return Err(TerminalError::Api {
+                    code: "agent_prompt_stalled".into(),
+                    message: format!("no reaction within {:?}", w.timeout),
+                });
+            }
         }
         Ok(PromptOutcome::Delivered)
     }
@@ -1287,6 +1557,53 @@ impl Terminals for InMemoryTerminals {
             status,
             reason: "status".into(),
         })
+    }
+
+    fn wait_agent_event(&self, timeout: Duration) -> Result<bool, TerminalError> {
+        let state = self.inner.lock().unwrap();
+        if state.event_signaled {
+            drop(state);
+            let mut state = self.inner.lock().unwrap();
+            state.event_signaled = false;
+            return Ok(true);
+        }
+        let (mut guard, _) = self
+            .condvar
+            .wait_timeout_while(state, timeout, |st| !st.event_signaled)
+            .unwrap();
+        if guard.event_signaled {
+            guard.event_signaled = false;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn notify(&self, title: &str, body: Option<&str>) -> Result<(), TerminalError> {
+        let mut state = self.inner.lock().unwrap();
+        state.notifications.push((title.to_owned(), body.map(str::to_owned)));
+        Ok(())
+    }
+
+    fn list_worktrees(&self, root: &Path) -> Result<Vec<ParsedWorktree>, TerminalError> {
+        let state = self.inner.lock().unwrap();
+        if let Some(wts) = &state.worktrees {
+            return Ok(wts.clone());
+        }
+        let output = std::process::Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(root)
+            .output()?;
+        if output.status.success() {
+            let text = String::from_utf8_lossy(&output.stdout);
+            Ok(crate::git::parse_git_worktree_porcelain(&text))
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(TerminalError::Api {
+                code: "git_failed".into(),
+                message: stderr.trim().to_string(),
+            })
+        }
     }
 
     fn agent_status(&self, target: &str) -> Result<TerminalAgentStatus, TerminalError> {
@@ -1486,11 +1803,11 @@ mod tests {
         assert_eq!(opened.branch, "shep/1-task");
 
         assert_eq!(
-            adapter.prompt("coder-1", "implement F1").unwrap(),
+            adapter.prompt_text("coder-1", "implement F1").unwrap(),
             PromptOutcome::Delivered
         );
         assert_eq!(
-            adapter.prompt("coder-1", "BLOCK_ME").unwrap(),
+            adapter.prompt_text("coder-1", "BLOCK_ME").unwrap(),
             PromptOutcome::Blocked
         );
         adapter.send_text("w1:p1", "cargo test").unwrap();
@@ -1566,12 +1883,12 @@ mod tests {
         assert_eq!(opened.pane, "pane-1");
         assert_eq!(opened.branch, "shep/1-task");
         assert_eq!(
-            fake.prompt("coder-1", "implement feature").unwrap(),
+            fake.prompt_text("coder-1", "implement feature").unwrap(),
             PromptOutcome::Delivered
         );
         fake.set_prompt_outcome("coder-1", PromptOutcome::Blocked);
         assert_eq!(
-            fake.prompt("coder-1", "blocked prompt").unwrap(),
+            fake.prompt_text("coder-1", "blocked prompt").unwrap(),
             PromptOutcome::Blocked
         );
         fake.send_text(&opened.pane, "echo hi").unwrap();
@@ -1673,8 +1990,8 @@ esac
         assert_eq!(opened.pane, "t7");
         assert_eq!(opened.tab, "t7");
 
-        assert_eq!(hc.prompt("t7", "do work").unwrap(), PromptOutcome::Delivered);
-        assert_eq!(hc.prompt("t7", "BLOCK_ME").unwrap(), PromptOutcome::Blocked);
+        assert_eq!(hc.prompt_text("t7", "do work").unwrap(), PromptOutcome::Delivered);
+        assert_eq!(hc.prompt_text("t7", "BLOCK_ME").unwrap(), PromptOutcome::Blocked);
         hc.send_text("t7", "hello world").unwrap();
         hc.send_keys("t7", &["down".into(), "enter".into()]).unwrap();
         assert_eq!(hc.read_screen("t7", 50).unwrap(), "screen line 1\nscreen line 2");

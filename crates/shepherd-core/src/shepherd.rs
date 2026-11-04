@@ -81,6 +81,14 @@ fn parse_socket_path(output: &str) -> Option<&str> {
     output.lines().find_map(|line| line.trim().strip_prefix("socket:").map(str::trim).filter(|value| !value.is_empty()))
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PromptWaitOptions {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub until: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<Duration>,
+}
+
 pub struct ShepherdClient {
     socket: PathBuf,
     in_process: Option<Arc<InProcessRpcHandler>>,
@@ -277,7 +285,30 @@ impl ShepherdClient {
     }
 
     pub fn prompt_agent(&self, target: &str, text: &str) -> Result<Value, ShepherdError> {
-        self.call("agent.prompt", serde_json::json!({"target":target,"text":text}))
+        self.prompt_agent_with_wait(target, text, None)
+    }
+
+    pub fn prompt_agent_with_wait(
+        &self,
+        target: &str,
+        text: &str,
+        wait: Option<&PromptWaitOptions>,
+    ) -> Result<Value, ShepherdError> {
+        let mut params = serde_json::json!({"target": target, "text": text});
+        if let Some(w) = wait {
+            let mut wait_map = serde_json::Map::new();
+            if !w.until.is_empty() {
+                wait_map.insert("until".into(), serde_json::json!(w.until));
+            }
+            if let Some(timeout) = w.timeout {
+                wait_map.insert(
+                    "timeout_ms".into(),
+                    serde_json::json!(timeout.as_millis() as u64),
+                );
+            }
+            params["wait"] = Value::Object(wait_map);
+        }
+        self.call("agent.prompt", params)
     }
 
     pub fn send_input(&self, pane_id: &str, text: &str) -> Result<Value, ShepherdError> {
