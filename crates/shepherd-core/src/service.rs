@@ -1770,6 +1770,110 @@ impl OrchestrationService {
                 let all = cat.all();
                 serde_json::to_value(all).map_err(|e| e.to_string())
             }
+            "patterns" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let list = crate::patterns::list_patterns(&root, None).map_err(|e| e.to_string())?;
+                serde_json::to_value(list).map_err(|e| e.to_string())
+            }
+            "pattern_get" => {
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'name' for pattern_get".to_owned())?;
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let (pattern, source, path) =
+                    crate::patterns::load_pattern(name, &root, None).map_err(|e| e.to_string())?;
+                let config = load_config(&root).unwrap_or_default();
+                let problems = crate::patterns::validate(&pattern, &config);
+                let detail = crate::patterns::PatternDetail {
+                    pattern,
+                    source,
+                    path: path.map(|p| p.display().to_string()),
+                    problems,
+                };
+                serde_json::to_value(detail).map_err(|e| e.to_string())
+            }
+            "pattern_save" => {
+                let pattern_val = args
+                    .get("pattern")
+                    .ok_or_else(|| "missing 'pattern' for pattern_save".to_owned())?;
+                let pattern: crate::patterns::Pattern = serde_json::from_value(pattern_val.clone())
+                    .map_err(|e| format!("invalid pattern json: {e}"))?;
+                let is_global = args.get("global").and_then(Value::as_bool).unwrap_or(false);
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&root).unwrap_or_default();
+                let problems = crate::patterns::validate(&pattern, &config);
+                let has_errors = problems.iter().any(|p| p.severity == crate::patterns::Severity::Error);
+                if has_errors {
+                    return Err(format!(
+                        "pattern validation failed: {}",
+                        serde_json::to_string(&problems).unwrap_or_default()
+                    ));
+                }
+                let path = crate::patterns::save_pattern(&pattern, is_global, &root, None)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "name": pattern.name,
+                    "path": path.display().to_string(),
+                    "source": if is_global { "global" } else { "project" },
+                    "problems": problems,
+                }))
+            }
+            "pattern_delete" => {
+                let name = args
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing 'name' for pattern_delete".to_owned())?;
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let source =
+                    crate::patterns::delete_pattern(name, &root, None).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "name": name,
+                    "deleted_source": source.as_str(),
+                }))
+            }
+            "pattern_validate" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let config = load_config(&root).unwrap_or_default();
+                let pattern = if let Some(pat_val) = args.get("pattern") {
+                    serde_json::from_value::<crate::patterns::Pattern>(pat_val.clone())
+                        .map_err(|e| format!("invalid pattern json: {e}"))?
+                } else if let Some(name) = args.get("name").and_then(Value::as_str) {
+                    let (pat, _, _) =
+                        crate::patterns::load_pattern(name, &root, None).map_err(|e| e.to_string())?;
+                    pat
+                } else {
+                    return Err("missing 'pattern' or 'name' for pattern_validate".to_owned());
+                };
+                let problems = crate::patterns::validate(&pattern, &config);
+                let valid = !problems.iter().any(|p| p.severity == crate::patterns::Severity::Error);
+                Ok(serde_json::json!({
+                    "valid": valid,
+                    "problems": problems,
+                }))
+            }
             "runs" => {
                 let root = args
                     .get("root")
@@ -3528,5 +3632,97 @@ mod tests {
             m1.id,
             "cursor must advance when verification succeeds"
         );
+    }
+
+    #[test]
+    fn test_handle_call_pattern_operations() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shepherd-test-pat-svc-{}-{nonce}", std::process::id()));
+        let state_dir = root.join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::create_dir_all(root.join(".shepherd")).unwrap();
+
+        let terminals = InMemoryTerminals::new();
+        let clock = ManualClock::new();
+        let svc_cfg = ServiceConfig::for_state_dir(&state_dir);
+        let shep_cfg = Config::default();
+        let service = OrchestrationService::new(
+            svc_cfg,
+            shep_cfg,
+            Arc::new(terminals),
+            Arc::new(clock),
+        );
+
+        let root_str = root.display().to_string();
+
+        // 1. List patterns
+        let list_val = service
+            .handle_call("patterns", serde_json::json!({ "root": root_str }))
+            .unwrap();
+        let list = list_val.as_array().expect("array of patterns");
+        assert_eq!(list.len(), 4);
+
+        // 2. Pattern get
+        let get_val = service
+            .handle_call(
+                "pattern_get",
+                serde_json::json!({ "name": "orchestrator-worker", "root": root_str }),
+            )
+            .unwrap();
+        assert_eq!(get_val["name"], "orchestrator-worker");
+        assert_eq!(get_val["source"], "builtin");
+        assert!(get_val["problems"].as_array().unwrap().is_empty());
+
+        // 3. Pattern validate on object
+        let valid_val = service
+            .handle_call(
+                "pattern_validate",
+                serde_json::json!({ "name": "orchestrator-worker", "root": root_str }),
+            )
+            .unwrap();
+        assert_eq!(valid_val["valid"], true);
+
+        // 4. Pattern save (project)
+        let mut custom_pat = get_val.clone();
+        custom_pat["name"] = serde_json::json!("custom-test-orch");
+        let save_val = service
+            .handle_call(
+                "pattern_save",
+                serde_json::json!({ "pattern": custom_pat, "root": root_str }),
+            )
+            .unwrap();
+        assert_eq!(save_val["ok"], true);
+        assert_eq!(save_val["name"], "custom-test-orch");
+        assert_eq!(save_val["source"], "project");
+
+        // Now list should have 5 patterns
+        let list_val2 = service
+            .handle_call("patterns", serde_json::json!({ "root": root_str }))
+            .unwrap();
+        assert_eq!(list_val2.as_array().unwrap().len(), 5);
+
+        // 5. Pattern delete
+        let del_val = service
+            .handle_call(
+                "pattern_delete",
+                serde_json::json!({ "name": "custom-test-orch", "root": root_str }),
+            )
+            .unwrap();
+        assert_eq!(del_val["ok"], true);
+        assert_eq!(del_val["deleted_source"], "project");
+
+        // 6. Delete builtin should fail
+        let del_builtin_err = service
+            .handle_call(
+                "pattern_delete",
+                serde_json::json!({ "name": "orchestrator-worker", "root": root_str }),
+            )
+            .unwrap_err();
+        assert!(del_builtin_err.contains("cannot delete built-in"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -1916,3 +1916,194 @@ Resultado de punta a punta con agentes reales:
 No cubierto: la entrega de mensajes por `agent.prompt` a un agente **sin MCP** (todos los agentes de esta prueba tenían MCP); el rechazo (`reject`) con agentes reales (cubierto solo con el repo simulado de F6); la notificación nativa `notification.show`; la columna PR de la pestaña Git (el `gh` falso no devuelve JSON).
 
 Observaciones: los agentes reales llamaron a `gh auth token` y alcanzaron el `gh` falso (efecto de heredar el `PATH` del servidor; no afecta a un entorno normal). El plan del brain decía que `wc -c` debía dar 21 para un texto de 19 bytes: error del modelo, no de Shepherd. El worktree del coder se creó bajo `$HOME/.shepherd/worktrees/` y se eliminó a mano.
+
+## Estado F8a — Modelo, almacenamiento, validación y plantillas de patrones multi-agente (2026-11-05)
+
+Completada la fase **F8a** según la especificación de `SHEPHERD-F8A-BRIEF.md` y el plan F8 de `SHEPHERD.md` (capítulo III de «A Guide to Event-Driven Design for Agents and Multi-Agent Systems», Confluent).
+
+### 1. Qué se implementó
+1. **Modelo en `crates/shepherd-core/src/patterns.rs`**:
+   - Estructuras serializables Serde en YAML (`Pattern`, `Topic`, `PatternAgent`).
+   - `PatternKind` (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`).
+   - `Topic { name, partitions (def 1), key?, filter? }`.
+   - `PatternAgent { id, role, vendor?, model?, prompt?, count (def 1), level?, publishes[], consumes[], group? }`.
+   - Los campos `vendor`, `model` y `prompt` sobrescriben la configuración del rol en `.shepherd/config.yaml` permitiendo agentes 100% personalizados con personas en lenguaje natural (hasta 16.384 caracteres).
+2. **Plantillas integradas en el crate (`crates/shepherd-core/assets/patterns/*.yaml`)**:
+   - `orchestrator-worker.yaml`: 1 orquestador (`brain`) + pool de workers (`coder`, count 3, group `worker-pool`), tópicos `orders` (particiones 4, clave `task_id`) y `results`.
+   - `hierarchical.yaml`: Director level 0 (`brain`) → Managers level 1 (`reviewer`, count 2, group `managers`) → Specialists level 2 (`coder`, count 4, group `specialists`), tópicos en cascada `root-orders`, `root-results`, `team-orders`, `team-results`.
+   - `blackboard.yaml`: 3 agentes concurrentes (`researcher`/`brain`, `analyst`/`tester`, `synthesizer`/`docs`) interactuando sobre un tópico compartido `blackboard` con filtro `hypothesis`.
+   - `market.yaml`: 1 `market-maker` (`brain`) emparejando ofertas y peticiones, 2 requesters (`docs`) publicando en `ask`, y 3 solvers (`coder`, group `solvers`) ofertando en `bid` y ejecutando transacciones en `transaction`.
+   - Todas las plantillas embebidas con `include_str!` y válidas contra `Config::default()` con prompts de persona concisos en inglés.
+3. **Validación semántica y de límites (`validate(&Pattern, &Config) -> Vec<Problem>`)**:
+   - Diagnósticos tipados con severidad (`error`, `warning`), ruta de campo (`agents[0].role`, `topics[1].partitions`) y mensaje explicativo para consumo en vivo por la pestaña F8c.
+   - Verificaciones: identificadores únicos y válidos, límites (máximo 64 agentes, count $\le 32$, particiones $\le 256$, prompt $\le 16.384$ caracteres).
+   - Tópicos existentes, detección de tópicos huérfanos (`warning`).
+   - Roles conocidos en `Config::roles` (`error`), disponibilidad del vendor en `$PATH` con `available_vendors` (`warning` si no está instalado), modelos conocidos en el catálogo del vendor.
+   - Reglas topológicas por patrón:
+     * *Orchestrator-Worker*: exactamente 1 orquestador, $\ge 1$ worker con grupo de consumidores (`group`), tópico de respuesta consumido por orquestador y publicado por workers.
+     * *Hierarchical*: árbol dirigido sin ciclos, exactamente 1 nodo raíz en level 0, niveles contiguos sin huecos, cada nivel no hoja orquesta hacia su subnivel.
+     * *Blackboard*: $\ge 2$ agentes y $\ge 1$ tópico compartido que todos consumen o publican.
+     * *Market*: exactamente 1 market-maker + $\ge 2$ solvers + tópicos obligatorios `bid`, `ask` y `transaction`.
+4. **Almacenamiento por capas (Proyecto > Global > Builtin)**:
+   - Proyecto: `.shepherd/patterns/<nombre>.yaml` (gana sobre global y plantillas).
+   - Global: `$XDG_CONFIG_HOME/shepherd/patterns/<nombre>.yaml` (o `~/.config/shepherd/patterns/<nombre>.yaml`).
+   - Plantillas integradas: capa base inmutable (se pueden consultar y copiar con `duplicate_pattern` o `new --from`, protegidas contra borrado en sitio).
+   - Detección de sombreado (`shadowed: bool`).
+   - Escritura atómica mediante `.tmp` y rename con permisos `0o600`.
+   - Rutas desacopladas que aceptan overrides para pruebas aisladas con tempdirs.
+5. **CLI y API JSON (`shepherd pattern ...` y `handle_call`)**:
+   - Subcomandos directos: `shepherd pattern list [--json]`, `show <name> [--json]`, `new <name> --from <template|name> [--global] [--json]`, `validate <name|--file path> [--json]`, `delete <name> [--json]`, `edit <name>` (abre `$EDITOR`, imprime ruta si no es terminal).
+   - Salida uniforme `--json` y formateo legible por humanos en tablas con tabs.
+   - Operaciones de servicio en `service.rs`: `patterns`, `pattern_get`, `pattern_save` (con validación previa bloqueante si hay errores), `pattern_delete`, `pattern_validate`.
+   - Enrutado directo añadido en `src/cli.rs` (`pattern` y `patterns` delegados a `crate::shepherd::run_cli`).
+6. **Documentación**:
+   - Especificación completa, ejemplos YAML de los cuatro patrones y reglas en `crates/shepherd-core/docs/patterns.md`.
+
+### 2. Esquema final (YAML)
+
+```yaml
+name: <slug-id>
+kind: orchestrator-worker | hierarchical | blackboard | market
+description: <texto descriptivo>
+topics:
+  - name: <id-topico>
+    partitions: <u32, por defecto 1>
+    key: <campo-clave-opcional>
+    filter: <filtro-opcional>
+agents:
+  - id: <id-agente>
+    role: brain | coder | reviewer | tester | docs | <rol-personalizado>
+    vendor: <claude | codex | gemini | opcional>
+    model: <modelo-opcional>
+    prompt: <persona-del-agente-texto-libre>
+    count: <u32, por defecto 1>
+    level: <u32, solo jerárquico>
+    publishes: [<topico>, ...]
+    consumes: [<topico>, ...]
+    group: <consumer-group-opcional>
+```
+
+### 3. Qué se reutilizó frente a qué es nuevo
+- **Reutilizado**:
+  - `config.rs`: catálogo de vendors, roles, modelos, fallbacks y resolución con `available_vendors(&config)`.
+  - Serializador/deserializador YAML `serde_yaml_ng` usado en toda la configuración de Shepherd.
+  - Mecanismo de guardado atómico seguro (`.tmp` + rename con permisos `0o600`) del registro de agentes.
+  - Infraestructura de CLI de Shepherd (`run_cli_in_root_with_client`, despacho `--json`, manejo uniforme de errores `{"error": ...}`, fallback en proceso ante ausencia de servidor).
+  - Patrón de despacho `shepherd.call` en `service.rs` (`handle_call`).
+  - Patrón de subcomandos directos en `src/cli.rs` (`SHEPHERD_DIRECT_COMMANDS`).
+- **Nuevo**:
+  - Módulo `crates/shepherd-core/src/patterns.rs` con el dominio completo de patrones multi-agente por eventos.
+  - Validación topológica por reglas de cada uno de los 4 patrones de diseño.
+  - Activos embebidos en `crates/shepherd-core/assets/patterns/*.yaml`.
+  - Sistema de capas de almacenamiento con precedencia Project > Global > Builtin y marcado de sombreado.
+  - Ops de servicio `patterns`, `pattern_get`, `pattern_save`, `pattern_delete`, `pattern_validate`.
+  - Subcomandos de CLI `shepherd pattern ...` y `shepherd patterns`.
+  - Documentación técnica en `crates/shepherd-core/docs/patterns.md`.
+
+### 4. Verificación real aislada (`./scripts/shepherd-iso.sh`)
+Verificación ejecutada en sesión aislada `iso` en `/tmp/shfiso` sin tocar HOME ni estado real del usuario, sin lanzar agentes reales:
+
+```bash
+# 1. Listado JSON inicial (4 plantillas integradas)
+$ shepherd --session iso pattern list --json
+[
+  { "agents_count": 3, "description": "Shared knowledge base...", "kind": "blackboard", "name": "blackboard", "shadowed": false, "source": "builtin", "topics_count": 1 },
+  { "agents_count": 7, "description": "Multi-tier command hierarchy...", "kind": "hierarchical", "name": "hierarchical", "shadowed": false, "source": "builtin", "topics_count": 4 },
+  { "agents_count": 6, "description": "Competitive market...", "kind": "market", "name": "market", "shadowed": false, "source": "builtin", "topics_count": 3 },
+  { "agents_count": 4, "description": "Central orchestrator dispatches...", "kind": "orchestrator-worker", "name": "orchestrator-worker", "shadowed": false, "source": "builtin", "topics_count": 2 }
+]
+
+# 2. Creación de nuevo patrón 'demo' a partir de plantilla
+$ shepherd --session iso pattern new demo --from orchestrator-worker
+created pattern 'demo' at /tmp/shfiso/repo/.shepherd/patterns/demo.yaml
+
+# 3. Validación de patrón válido
+$ shepherd --session iso pattern validate demo
+OK: pattern 'demo' is valid (0 errors, 0 warnings)
+
+# 4. Inspección del detalle del patrón
+$ shepherd --session iso pattern show demo
+Pattern: demo (orchestrator-worker)
+Source:  project (/tmp/shfiso/repo/.shepherd/patterns/demo.yaml)
+Purpose: Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results.
+Topics (2):
+  • orders               (partitions: 4, key: task_id)
+  • results              (partitions: 1)
+Agents (2):
+  • orchestrator         [role: brain | count: 1]
+      publishes -> orders
+      consumes  <- results
+      persona: "You are the lead orchestrator..."
+  • worker               [role: coder | count: 3 | group: worker-pool]
+      publishes -> results
+      consumes  <- orders
+      persona: "You are an autonomous task worker..."
+
+# 5. Modificación manual para romper el YAML y comprobación de explicabilidad en validate
+$ sed -i 's/- orders/- broken_order_topic/' /tmp/shfiso/repo/.shepherd/patterns/demo.yaml
+$ shepherd --session iso pattern validate demo
+FAILED: pattern 'demo' has validation errors:
+  [error] agents[0].publishes[0]: agent 'orchestrator' publishes to unknown topic 'broken_order_topic'
+  [error] agents[1].consumes[0]: agent 'worker' consumes unknown topic 'broken_order_topic'
+  [warning] topics[0].name: topic 'orders' is declared but neither published nor consumed by any agent
+shepherd: pattern validation failed
+
+# 6. Mismo diagnóstico vía --json
+$ shepherd --session iso pattern validate demo --json
+{
+  "problems": [
+    { "message": "agent 'orchestrator' publishes to unknown topic 'broken_order_topic'", "path": "agents[0].publishes[0]", "severity": "error" },
+    { "message": "agent 'worker' consumes unknown topic 'broken_order_topic'", "path": "agents[1].consumes[0]", "severity": "error" },
+    { "message": "topic 'orders' is declared but neither published nor consumed by any agent", "path": "topics[0].name", "severity": "warning" }
+  ],
+  "valid": false
+}
+
+# 7. Borrado del patrón
+$ shepherd --session iso pattern delete demo
+deleted pattern 'demo' from project
+
+# 8. Verificación vía llamada socket shepherd.call:
+# - patterns: lista los 4 patrones
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"patterns","args":{"root":"/tmp/shfiso/repo"}}'
+{"id":"1","result":{"data":[... 4 patrones builtin ...],"type":"shepherd_call"}}
+
+# - pattern_get:
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_get","args":{"name":"orchestrator-worker","root":"/tmp/shfiso/repo"}}'
+{"id":"1","result":{"data":{"name":"orchestrator-worker","kind":"orchestrator-worker","problems":[],"source":"builtin",...},"type":"shepherd_call"}}
+
+# - pattern_validate:
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_validate","args":{"name":"orchestrator-worker","root":"/tmp/shfiso/repo"}}'
+{"id":"1","result":{"data":{"problems":[],"valid":true},"type":"shepherd_call"}}
+
+# - pattern_save con patrón nuevo 'demo-api':
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_save","args":{"root":"/tmp/shfiso/repo","global":false,"pattern":{"name":"demo-api","kind":"orchestrator-worker","description":"Test API","topics":[{"name":"orders","partitions":2,"key":"task_id"},{"name":"results","partitions":1}],"agents":[{"id":"orchestrator","role":"brain","publishes":["orders"],"consumes":["results"]},{"id":"worker","role":"coder","count":2,"group":"wpool","consumes":["orders"],"publishes":["results"]}]}}}'
+{"id":"1","result":{"data":{"name":"demo-api","ok":true,"path":"/tmp/shfiso/repo/.shepherd/patterns/demo-api.yaml","problems":[],"source":"project"},"type":"shepherd_call"}}
+
+# - pattern_save con patrón inválido (rechazado por validación previa):
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_save","args":{"root":"/tmp/shfiso/repo","global":false,"pattern":{"name":"broken-pat","kind":"orchestrator-worker","description":"Broken","topics":[],"agents":[{"id":"orchestrator","role":"brain","publishes":["broken-topic"],"consumes":[]}]}}}'
+{"error":{"code":"shepherd_error","message":"pattern validation failed: [{\"severity\":\"error\",\"path\":\"agents[0].publishes[0]\",\"message\":\"agent 'orchestrator' publishes to unknown topic 'broken-topic'\"},{\"severity\":\"error\",\"path\":\"agents\",\"message\":\"orchestrator-worker pattern requires at least 1 worker agent with a consumer group\"},{\"severity\":\"error\",\"path\":\"topics\",\"message\":\"orchestrator-worker pattern requires a response topic consumed by orchestrator and published by workers\"}]"},"id":"1"}
+
+# - pattern_delete:
+$ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"pattern_delete","args":{"name":"demo-api","root":"/tmp/shfiso/repo"}}'
+{"id":"1","result":{"data":{"deleted_source":"project","name":"demo-api","ok":true},"type":"shepherd_call"}}
+```
+
+### 5. Archivos modificados y creados
+- `crates/shepherd-core/src/patterns.rs`: nuevo módulo con modelos, validación topológica, capas de almacenamiento y 11 tests unitarios.
+- `crates/shepherd-core/assets/patterns/orchestrator-worker.yaml`: plantilla integrada orchestrator-worker.
+- `crates/shepherd-core/assets/patterns/hierarchical.yaml`: plantilla integrada hierarchical.
+- `crates/shepherd-core/assets/patterns/blackboard.yaml`: plantilla integrada blackboard.
+- `crates/shepherd-core/assets/patterns/market.yaml`: plantilla integrada market.
+- `crates/shepherd-core/docs/patterns.md`: documentación de especificación técnica y arquitectura.
+- `crates/shepherd-core/src/lib.rs`: exposición de `pub mod patterns` y re-exportación de tipos principales.
+- `crates/shepherd-core/src/service.rs`: ops de `handle_call` (`patterns`, `pattern_get`, `pattern_save`, `pattern_delete`, `pattern_validate`) y test unitario.
+- `crates/shepherd-core/src/cli.rs`: subcomandos de CLI `shepherd pattern list|show|new|validate|delete|edit`, `usage` y test de ciclo de vida completo.
+- `src/cli.rs`: registro de `"pattern"` y `"patterns"` en `SHEPHERD_DIRECT_COMMANDS`.
+- `SHEPHERD.md`: registro del estado de la fase F8a.
+
+### 6. Qué NO queda cubierto en F8a (siguientes fases)
+- **F8b**: Tópicos reales en el bus persistente SQLite (particiones reales, persistencia de mensajes con clave de hash, offsets de consumo por consumer-group, reproducción/replay de eventos y herramientas MCP `publish`, `subscribe`, `replay`).
+- **F8c**: Pestaña **Patrones** en el overlay TUI de Shepherd (galería visual de plantillas, diagramas de topología, formularios de edición en vivo de agentes/vendors/modelos/prompts/tópicos y validación reactiva).
+- **F8d**: Ejecutor de patrones (lanzamiento de los paneles y procesos de agentes asociados por herdr, suscripción a sus tópicos, control de pausa/reanudación y telemetría en vivo).
+

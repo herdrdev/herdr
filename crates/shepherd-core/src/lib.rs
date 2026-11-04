@@ -13,6 +13,7 @@ pub mod service;
 pub mod skills;
 pub mod spawn;
 pub mod mcp;
+pub mod patterns;
 pub mod workflow;
 
 pub use git::{
@@ -23,6 +24,11 @@ pub use git::{
 pub use cli::{
     run_cli, run_cli_in_root, run_cli_in_root_with_client, run_cli_in_root_with_output,
     run_cli_with_terminals,
+};
+
+pub use patterns::{
+    Pattern, PatternAgent, PatternDetail, PatternError, PatternKind, PatternSource, PatternSummary,
+    Problem, Severity, Topic,
 };
 
 use std::collections::{HashMap, HashSet};

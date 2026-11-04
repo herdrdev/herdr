@@ -1,0 +1,32 @@
+name: blackboard
+kind: blackboard
+description: Shared knowledge base where specialist agents read hypotheses and post discoveries.
+topics:
+  - name: blackboard
+    partitions: 1
+    filter: hypothesis
+agents:
+  - id: researcher
+    role: brain
+    count: 1
+    prompt: You formulate problem hypotheses and read updates from specialist agents on the blackboard.
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard
+  - id: analyst
+    role: tester
+    count: 1
+    prompt: You inspect blackboard assertions for logical flaws, test edge cases, and post validation reports.
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard
+  - id: synthesizer
+    role: docs
+    count: 1
+    prompt: You synthesize verified facts on the blackboard into cohesive technical documentation.
+    publishes:
+      - blackboard
+    consumes:
+      - blackboard

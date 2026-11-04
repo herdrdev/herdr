@@ -178,11 +178,28 @@ fn dispatch_cli(
         if area == "tasks" {
             return list_task_command(root, Vec::new(), server, json, writer);
         }
+        if area == "patterns" || area == "pattern" {
+            return patterns_list_command(root, Vec::new(), server, json, writer);
+        }
         return usage();
     };
     let rest: Vec<String> = args_iter.collect();
 
     match area.as_str() {
+        "pattern" => match command.as_str() {
+            "list" => patterns_list_command(root, rest, server, json, writer),
+            "show" => pattern_show_command(root, rest, server, json, writer),
+            "new" => pattern_new_command(root, rest, server, json, writer),
+            "validate" => pattern_validate_command(root, rest, server, json, writer),
+            "delete" => pattern_delete_command(root, rest, server, json, writer),
+            "edit" => pattern_edit_command(root, rest, writer),
+            _ => usage(),
+        },
+        "patterns" => {
+            let mut list_args = vec![command];
+            list_args.extend(rest);
+            patterns_list_command(root, list_args, server, json, writer)
+        }
         "task" => match command.as_str() {
             "new" => create_new_task(root, rest, server, json, writer),
             "list" => list_task_command(root, rest, server, json, writer),
@@ -1780,6 +1797,497 @@ fn archive_task_command(
     Ok(())
 }
 
+fn patterns_list_command(
+    root: PathBuf,
+    _args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "patterns",
+            serde_json::json!({
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_patterns_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let list = crate::patterns::list_patterns(&root, None)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&list)?)?;
+    } else {
+        print_human_patterns_list(writer, &list)?;
+    }
+    Ok(())
+}
+
+fn print_human_patterns_list(
+    writer: &mut dyn std::io::Write,
+    list: &[crate::patterns::PatternSummary],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if list.is_empty() {
+        writeln!(writer, "no patterns found")?;
+        return Ok(());
+    }
+    writeln!(
+        writer,
+        "NAME\tKIND\tSOURCE\tSHADOWED\tAGENTS\tTOPICS\tDESCRIPTION"
+    )?;
+    for p in list {
+        let shadowed_str = if p.shadowed { "yes" } else { "no" };
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            p.name,
+            p.kind,
+            p.source,
+            shadowed_str,
+            p.agents_count,
+            p.topics_count,
+            p.description
+        )?;
+    }
+    Ok(())
+}
+
+fn print_human_patterns_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let patterns = data.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    if patterns.is_empty() {
+        writeln!(writer, "no patterns found")?;
+        return Ok(());
+    }
+    writeln!(
+        writer,
+        "NAME\tKIND\tSOURCE\tSHADOWED\tAGENTS\tTOPICS\tDESCRIPTION"
+    )?;
+    for p in patterns {
+        let name = p.get("name").and_then(Value::as_str).unwrap_or("-");
+        let kind = p.get("kind").and_then(Value::as_str).unwrap_or("-");
+        let source = p.get("source").and_then(Value::as_str).unwrap_or("-");
+        let shadowed = p
+            .get("shadowed")
+            .and_then(Value::as_bool)
+            .map(|b| if b { "yes" } else { "no" })
+            .unwrap_or("no");
+        let agents = p.get("agents_count").and_then(Value::as_u64).unwrap_or(0);
+        let topics = p.get("topics_count").and_then(Value::as_u64).unwrap_or(0);
+        let desc = p.get("description").and_then(Value::as_str).unwrap_or("");
+        writeln!(
+            writer,
+            "{name}\t{kind}\t{source}\t{shadowed}\t{agents}\t{topics}\t{desc}"
+        )?;
+    }
+    Ok(())
+}
+
+fn pattern_show_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let name = args.first().ok_or("missing pattern name for 'show'")?;
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "pattern_get",
+            serde_json::json!({
+                "name": name,
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_pattern_detail(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let (pattern, source, path) = crate::patterns::load_pattern(name, &root, None)?;
+    let config = load_config(&root).unwrap_or_default();
+    let problems = crate::patterns::validate(&pattern, &config);
+    let detail = crate::patterns::PatternDetail {
+        pattern,
+        source,
+        path: path.map(|p| p.display().to_string()),
+        problems,
+    };
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&detail)?)?;
+    } else {
+        let val = serde_json::to_value(&detail)?;
+        print_human_pattern_detail(writer, &val)?;
+    }
+    Ok(())
+}
+
+fn print_human_pattern_detail(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let name = data.get("name").and_then(Value::as_str).unwrap_or("-");
+    let kind = data.get("kind").and_then(Value::as_str).unwrap_or("-");
+    let source = data.get("source").and_then(Value::as_str).unwrap_or("-");
+    let path = data
+        .get("path")
+        .and_then(Value::as_str)
+        .unwrap_or("(built-in template)");
+    let desc = data.get("description").and_then(Value::as_str).unwrap_or("");
+
+    writeln!(writer, "Pattern: {name} ({kind})")?;
+    writeln!(writer, "Source:  {source} ({path})")?;
+    writeln!(writer, "Purpose: {desc}")?;
+    writeln!(writer)?;
+
+    if let Some(topics) = data.get("topics").and_then(Value::as_array) {
+        writeln!(writer, "Topics ({}):", topics.len())?;
+        for t in topics {
+            let tname = t.get("name").and_then(Value::as_str).unwrap_or("-");
+            let partitions = t.get("partitions").and_then(Value::as_u64).unwrap_or(1);
+            let mut meta = vec![format!("partitions: {partitions}")];
+            if let Some(k) = t.get("key").and_then(Value::as_str) {
+                meta.push(format!("key: {k}"));
+            }
+            if let Some(f) = t.get("filter").and_then(Value::as_str) {
+                meta.push(format!("filter: {f}"));
+            }
+            writeln!(writer, "  • {tname:<20} ({})", meta.join(", "))?;
+        }
+        writeln!(writer)?;
+    }
+
+    if let Some(agents) = data.get("agents").and_then(Value::as_array) {
+        writeln!(writer, "Agents ({}):", agents.len())?;
+        for a in agents {
+            let aid = a.get("id").and_then(Value::as_str).unwrap_or("-");
+            let role = a.get("role").and_then(Value::as_str).unwrap_or("-");
+            let count = a.get("count").and_then(Value::as_u64).unwrap_or(1);
+            let mut badges = vec![format!("role: {role}"), format!("count: {count}")];
+            if let Some(grp) = a.get("group").and_then(Value::as_str) {
+                badges.push(format!("group: {grp}"));
+            }
+            if let Some(lvl) = a.get("level").and_then(Value::as_u64) {
+                badges.push(format!("level: {lvl}"));
+            }
+            if let Some(vendor) = a.get("vendor").and_then(Value::as_str) {
+                badges.push(format!("vendor: {vendor}"));
+            }
+            if let Some(model) = a.get("model").and_then(Value::as_str) {
+                badges.push(format!("model: {model}"));
+            }
+            writeln!(writer, "  • {aid:<20} [{}]", badges.join(" | "))?;
+
+            let pub_list: Vec<&str> = a
+                .get("publishes")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let con_list: Vec<&str> = a
+                .get("consumes")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+
+            if !pub_list.is_empty() {
+                writeln!(writer, "      publishes -> {}", pub_list.join(", "))?;
+            }
+            if !con_list.is_empty() {
+                writeln!(writer, "      consumes  <- {}", con_list.join(", "))?;
+            }
+            if let Some(prompt) = a.get("prompt").and_then(Value::as_str) {
+                let preview = if prompt.len() > 120 {
+                    format!("{}...", &prompt[..117])
+                } else {
+                    prompt.to_string()
+                };
+                writeln!(writer, "      persona: \"{preview}\"")?;
+            }
+        }
+        writeln!(writer)?;
+    }
+
+    if let Some(problems) = data.get("problems").and_then(Value::as_array) {
+        if !problems.is_empty() {
+            writeln!(writer, "Validation Diagnostics:")?;
+            for prob in problems {
+                let sev = prob.get("severity").and_then(Value::as_str).unwrap_or("warning");
+                let path = prob.get("path").and_then(Value::as_str).unwrap_or("-");
+                let msg = prob.get("message").and_then(Value::as_str).unwrap_or("");
+                writeln!(writer, "  [{sev}] {path}: {msg}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn pattern_new_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut name = None;
+    let mut from = None;
+    let mut is_global = false;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from" | "-f" => {
+                i += 1;
+                if i < args.len() {
+                    from = Some(&args[i]);
+                }
+            }
+            "--global" | "-g" => {
+                is_global = true;
+            }
+            other if !other.starts_with('-') && name.is_none() => {
+                name = Some(other);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let name = name.ok_or("missing pattern name for 'new'")?;
+    let from = from.ok_or("missing '--from <template|name>' for 'new'")?;
+
+    if let Some(client) = server {
+        let get_data = client.shepherd_call(
+            "pattern_get",
+            serde_json::json!({
+                "name": from,
+                "root": root.display().to_string(),
+            }),
+        )?;
+        let mut pattern_val = get_data;
+        pattern_val["name"] = serde_json::json!(name);
+        let save_res = client.shepherd_call(
+            "pattern_save",
+            serde_json::json!({
+                "pattern": pattern_val,
+                "global": is_global,
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&save_res)?)?;
+        } else {
+            let path_str = save_res.get("path").and_then(Value::as_str).unwrap_or("");
+            writeln!(writer, "created pattern '{name}' at {path_str}")?;
+        }
+        return Ok(());
+    }
+
+    let (pattern, path) = crate::patterns::duplicate_pattern(name, from, is_global, &root, None)?;
+    let config = load_config(&root).unwrap_or_default();
+    let problems = crate::patterns::validate(&pattern, &config);
+    if json {
+        let out = serde_json::json!({
+            "ok": true,
+            "name": name,
+            "path": path.display().to_string(),
+            "source": if is_global { "global" } else { "project" },
+            "problems": problems,
+        });
+        writeln!(writer, "{}", serde_json::to_string_pretty(&out)?)?;
+    } else {
+        writeln!(writer, "created pattern '{name}' at {}", path.display())?;
+    }
+    Ok(())
+}
+
+fn pattern_validate_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut file_path = None;
+    let mut name = None;
+
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--file" | "-f" => {
+                i += 1;
+                if i < args.len() {
+                    file_path = Some(PathBuf::from(&args[i]));
+                }
+            }
+            other if !other.starts_with('-') && name.is_none() => {
+                name = Some(other);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if file_path.is_none() && name.is_none() {
+        return Err("missing pattern name or '--file <path>' to validate".into());
+    }
+
+    let (pattern, pattern_label) = if let Some(path) = file_path {
+        let pat = crate::patterns::load_pattern_from_file(&path)?;
+        let label = path.display().to_string();
+        (pat, label)
+    } else {
+        let n = name.unwrap();
+        if let Some(client) = server {
+            let res = client.shepherd_call(
+                "pattern_validate",
+                serde_json::json!({
+                    "name": n,
+                    "root": root.display().to_string(),
+                }),
+            )?;
+            if json {
+                writeln!(writer, "{}", serde_json::to_string_pretty(&res)?)?;
+                return Ok(());
+            }
+            let valid = res.get("valid").and_then(Value::as_bool).unwrap_or(false);
+            print_human_validation_problems(writer, n, &res)?;
+            if !valid {
+                return Err("pattern validation failed".into());
+            }
+            return Ok(());
+        }
+        let (pat, _, _) = crate::patterns::load_pattern(n, &root, None)?;
+        (pat, n.to_string())
+    };
+
+    let config = load_config(&root).unwrap_or_default();
+    let problems = crate::patterns::validate(&pattern, &config);
+    let valid = !problems
+        .iter()
+        .any(|p| p.severity == crate::patterns::Severity::Error);
+
+    if json {
+        let out = serde_json::json!({
+            "valid": valid,
+            "problems": problems,
+        });
+        writeln!(writer, "{}", serde_json::to_string_pretty(&out)?)?;
+        return Ok(());
+    }
+
+    let val = serde_json::json!({ "valid": valid, "problems": problems });
+    print_human_validation_problems(writer, &pattern_label, &val)?;
+
+    if !valid {
+        return Err("pattern validation failed".into());
+    }
+    Ok(())
+}
+
+fn print_human_validation_problems(
+    writer: &mut dyn std::io::Write,
+    label: &str,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let valid = data.get("valid").and_then(Value::as_bool).unwrap_or(false);
+    let problems = data.get("problems").and_then(Value::as_array).map(|a| a.as_slice()).unwrap_or(&[]);
+
+    if valid && problems.is_empty() {
+        writeln!(writer, "OK: pattern '{label}' is valid (0 errors, 0 warnings)")?;
+        return Ok(());
+    }
+
+    if valid {
+        writeln!(writer, "OK: pattern '{label}' is valid (with warnings):")?;
+    } else {
+        writeln!(writer, "FAILED: pattern '{label}' has validation errors:")?;
+    }
+
+    for p in problems {
+        let sev = p.get("severity").and_then(Value::as_str).unwrap_or("warning");
+        let path = p.get("path").and_then(Value::as_str).unwrap_or("-");
+        let msg = p.get("message").and_then(Value::as_str).unwrap_or("");
+        writeln!(writer, "  [{sev}] {path}: {msg}")?;
+    }
+    Ok(())
+}
+
+fn pattern_delete_command(
+    root: PathBuf,
+    args: Vec<String>,
+    server: Option<&ShepherdClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let name = args.first().ok_or("missing pattern name for 'delete'")?;
+
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "pattern_delete",
+            serde_json::json!({
+                "name": name,
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let src = data
+                .get("deleted_source")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            writeln!(writer, "deleted pattern '{name}' from {src}")?;
+        }
+        return Ok(());
+    }
+
+    let source = crate::patterns::delete_pattern(name, &root, None)?;
+    if json {
+        let out = serde_json::json!({
+            "ok": true,
+            "name": name,
+            "deleted_source": source.as_str(),
+        });
+        writeln!(writer, "{}", serde_json::to_string_pretty(&out)?)?;
+    } else {
+        writeln!(writer, "deleted pattern '{name}' from {source}")?;
+    }
+    Ok(())
+}
+
+fn pattern_edit_command(
+    root: PathBuf,
+    args: Vec<String>,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let name = args.first().ok_or("missing pattern name for 'edit'")?;
+    let (_, _source, path) = crate::patterns::load_pattern(name, &root, None)?;
+    let Some(path) = path else {
+        return Err(format!(
+            "cannot edit built-in pattern template '{name}' in place; duplicate it first with `shepherd pattern new <name> --from {name}`"
+        )
+        .into());
+    };
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        writeln!(writer, "{}", path.display())?;
+        return Ok(());
+    }
+    let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".into());
+    let status = std::process::Command::new(editor).arg(&path).status()?;
+    if !status.success() {
+        return Err(format!("editor exited with {status}").into());
+    }
+    Ok(())
+}
+
 pub fn project_root(mut path: PathBuf) -> PathBuf {
     loop {
         if path.join(".git").exists() || path.join(".shepherd").exists() {
@@ -1792,7 +2300,7 @@ pub fn project_root(mut path: PathBuf) -> PathBuf {
 }
 
 fn usage<T>() -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json]".into())
+    Err("usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name>".into())
 }
 
 #[cfg(test)]
@@ -1805,7 +2313,9 @@ mod tests {
     struct TestEnvGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         orig_xdg: Option<std::ffi::OsString>,
+        orig_xdg_config: Option<std::ffi::OsString>,
         orig_home: Option<std::ffi::OsString>,
+        orig_editor: Option<std::ffi::OsString>,
         dir: PathBuf,
     }
 
@@ -1813,7 +2323,9 @@ mod tests {
         fn new() -> Self {
             let lock = TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
             let orig_xdg = std::env::var_os("XDG_STATE_HOME");
+            let orig_xdg_config = std::env::var_os("XDG_CONFIG_HOME");
             let orig_home = std::env::var_os("HOME");
+            let orig_editor = std::env::var_os("EDITOR");
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -1822,11 +2334,15 @@ mod tests {
                 .join(format!("shepherd-test-env-{}-{nonce}", std::process::id()));
             std::fs::create_dir_all(dir.join("shepherd")).unwrap();
             std::env::set_var("XDG_STATE_HOME", &dir);
+            std::env::set_var("XDG_CONFIG_HOME", dir.join("cfg"));
             std::env::set_var("HOME", &dir);
+            std::env::set_var("EDITOR", "true");
             Self {
                 _lock: lock,
                 orig_xdg,
+                orig_xdg_config,
                 orig_home,
+                orig_editor,
                 dir,
             }
         }
@@ -1838,9 +2354,17 @@ mod tests {
                 Some(v) => std::env::set_var("XDG_STATE_HOME", v),
                 None => std::env::remove_var("XDG_STATE_HOME"),
             }
+            match &self.orig_xdg_config {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
             match &self.orig_home {
                 Some(v) => std::env::set_var("HOME", v),
                 None => std::env::remove_var("HOME"),
+            }
+            match &self.orig_editor {
+                Some(v) => std::env::set_var("EDITOR", v),
+                None => std::env::remove_var("EDITOR"),
             }
             let _ = std::fs::remove_dir_all(&self.dir);
         }
@@ -2526,5 +3050,166 @@ mod tests {
         assert_eq!(parsed_no_server, serde_json::json!([]));
 
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_pattern_cli_lifecycle_and_json() {
+        let _guard = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("shepherd-test-cli-pat-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(root.join(".shepherd")).unwrap();
+
+        // 1. pattern list --json
+        let out_list = run_with_buf(&root, &["pattern", "list", "--json"], None, None).unwrap();
+        let list_json: Value = serde_json::from_str(&out_list).expect("valid json list");
+        let list_arr = list_json.as_array().expect("array of patterns");
+        assert_eq!(list_arr.len(), 4);
+
+        // Human list format check
+        let out_human_list = run_with_buf(&root, &["pattern", "list"], None, None).unwrap();
+        assert!(out_human_list.contains("orchestrator-worker"));
+        assert!(out_human_list.contains("hierarchical"));
+        assert!(out_human_list.contains("blackboard"));
+        assert!(out_human_list.contains("market"));
+
+        // 2. pattern show orchestrator-worker --json
+        let out_show = run_with_buf(
+            &root,
+            &["pattern", "show", "orchestrator-worker", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let show_json: Value = serde_json::from_str(&out_show).expect("valid json show");
+        assert_eq!(show_json["name"], "orchestrator-worker");
+        assert_eq!(show_json["kind"], "orchestrator-worker");
+
+        // Human show format check
+        let out_human_show = run_with_buf(
+            &root,
+            &["pattern", "show", "orchestrator-worker"],
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(out_human_show.contains("Pattern: orchestrator-worker"));
+        assert!(out_human_show.contains("orchestrator"));
+
+        // 3. pattern new demo --from orchestrator-worker --json
+        let out_new = run_with_buf(
+            &root,
+            &["pattern", "new", "demo", "--from", "orchestrator-worker", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let new_json: Value = serde_json::from_str(&out_new).expect("valid json new");
+        assert_eq!(new_json["ok"], true);
+        assert_eq!(new_json["name"], "demo");
+
+        let demo_path = root.join(".shepherd/patterns/demo.yaml");
+        assert!(demo_path.exists());
+
+        // 4. pattern validate demo --json
+        let out_valid = run_with_buf(
+            &root,
+            &["pattern", "validate", "demo", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let valid_json: Value = serde_json::from_str(&out_valid).expect("valid json validate");
+        assert_eq!(valid_json["valid"], true);
+
+        // 5. pattern validate --file <path> --json
+        let out_valid_file = run_with_buf(
+            &root,
+            &["pattern", "validate", "--file", demo_path.to_str().unwrap(), "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let valid_file_json: Value = serde_json::from_str(&out_valid_file).expect("valid json validate file");
+        assert_eq!(valid_file_json["valid"], true);
+
+        // 6. Break demo.yaml and verify validate catches and explains it
+        let mut broken_content = std::fs::read_to_string(&demo_path).unwrap();
+        broken_content = broken_content.replace("- orders", "- broken-unknown-orders-topic");
+        std::fs::write(&demo_path, broken_content).unwrap();
+
+        // 6a. --json returns valid: false with explanation
+        let out_broken = run_with_buf(
+            &root,
+            &["pattern", "validate", "demo", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let broken_json: Value = serde_json::from_str(&out_broken).expect("valid json explanation");
+        assert_eq!(broken_json["valid"], false);
+        let problems = broken_json["problems"].as_array().unwrap();
+        assert!(problems.iter().any(|p| p["message"]
+            .as_str()
+            .map_or(false, |m| m.contains("broken-unknown-orders-topic"))));
+
+        // 6b. human output returns Err and prints diagnostic
+        let (_, human_err) = run_with_buf(
+            &root,
+            &["pattern", "validate", "demo"],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(human_err.to_string().contains("pattern validation failed"));
+
+        // 7. pattern delete demo --json
+        let out_del = run_with_buf(
+            &root,
+            &["pattern", "delete", "demo", "--json"],
+            None,
+            None,
+        )
+        .unwrap();
+        let del_json: Value = serde_json::from_str(&out_del).expect("valid json delete");
+        assert_eq!(del_json["ok"], true);
+        assert_eq!(del_json["deleted_source"], "project");
+        assert!(!demo_path.exists());
+
+        // 8. Delete builtin template fails and outputs json error
+        let (out_del_err, err_del) = run_with_buf(
+            &root,
+            &["pattern", "delete", "orchestrator-worker", "--json"],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_del.to_string().contains("cannot delete built-in"));
+        let del_err_json: Value = serde_json::from_str(&out_del_err).expect("valid error json");
+        assert!(del_err_json["error"].as_str().unwrap().contains("cannot delete built-in"));
+
+        // 9. Pattern edit on project file succeeds (with EDITOR=true)
+        let _ = run_with_buf(
+            &root,
+            &["pattern", "new", "editdemo", "--from", "blackboard"],
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(run_with_buf(&root, &["pattern", "edit", "editdemo"], None, None).is_ok());
+
+        // 10. Pattern edit on builtin template fails with actionable instruction
+        let (_, err_edit_builtin) = run_with_buf(
+            &root,
+            &["pattern", "edit", "orchestrator-worker"],
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(err_edit_builtin.to_string().contains("cannot edit built-in"));
+
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }

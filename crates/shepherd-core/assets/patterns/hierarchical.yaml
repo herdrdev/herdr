@@ -1,0 +1,46 @@
+name: hierarchical
+kind: hierarchical
+description: Multi-tier command hierarchy where managers supervise specialized worker teams.
+topics:
+  - name: root-orders
+    partitions: 2
+    key: epic_id
+  - name: root-results
+    partitions: 1
+  - name: team-orders
+    partitions: 4
+    key: subtask_id
+  - name: team-results
+    partitions: 2
+agents:
+  - id: director
+    role: brain
+    level: 0
+    count: 1
+    prompt: You are the director. Decompose system epics into milestone directives and review synthesized outcomes from engineering managers.
+    publishes:
+      - root-orders
+    consumes:
+      - root-results
+  - id: manager
+    role: reviewer
+    level: 1
+    count: 2
+    group: managers
+    prompt: You are an engineering manager. Convert directives into team assignments, guide specialist workers, and report completed milestones upward.
+    consumes:
+      - root-orders
+      - team-results
+    publishes:
+      - root-results
+      - team-orders
+  - id: specialist
+    role: coder
+    level: 2
+    count: 4
+    group: specialists
+    prompt: You are a specialist engineer. Implement assigned technical tasks thoroughly and publish results to the team results topic.
+    consumes:
+      - team-orders
+    publishes:
+      - team-results

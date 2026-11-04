@@ -1,0 +1,39 @@
+name: market
+kind: market
+description: Competitive market where solvers bid on asks coordinated by a market-maker.
+topics:
+  - name: bid
+    partitions: 2
+  - name: ask
+    partitions: 2
+  - name: transaction
+    partitions: 1
+agents:
+  - id: market-maker
+    role: brain
+    count: 1
+    prompt: You match task asks with solver bids fairly and emit binding transaction events to settle assignments.
+    consumes:
+      - bid
+      - ask
+    publishes:
+      - transaction
+  - id: requester
+    role: docs
+    count: 2
+    group: requesters
+    prompt: You post requests as asks on the market topic and listen for confirmed transactions to receive work.
+    publishes:
+      - ask
+    consumes:
+      - transaction
+  - id: solver
+    role: coder
+    count: 3
+    group: solvers
+    prompt: You inspect asks on the market, submit competitive bids with cost and latency estimates, and execute winning work.
+    publishes:
+      - bid
+    consumes:
+      - ask
+      - transaction
