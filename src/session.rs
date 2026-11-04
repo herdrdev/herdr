@@ -321,7 +321,8 @@ pub fn delete_session(name: &str) -> Result<SessionInfo, String> {
     let Some(dir) = exact_session_dir_for_delete(name)? else {
         return Ok(session_info(Some(name)));
     };
-    let socket_path = dir.join("herdr.sock");
+    // O socket pode estar fora da pasta de dados (PRETORIAN_HERDR_SOCKET_DIR).
+    let socket_path = api_socket_path_for(Some(name));
     if is_running_at(&socket_path) {
         return Err(format!(
             "a sessão {name} está em execução; pare-a antes de excluir"

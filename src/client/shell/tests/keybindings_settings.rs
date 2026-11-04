@@ -996,14 +996,15 @@ fn secao_usuario_recebe_texto_e_mostra_previa() {
     ));
 
     state.handle_input_bytes(b"Ana jk");
+    assert!(state.insert_overlay_text(" Zé"));
     let Some(ClientShellOverlay::Settings(settings)) = state.overlay.as_ref() else {
         panic!("configurações abertas");
     };
-    assert_eq!(settings.nome.as_str(), "Ana jk");
+    assert_eq!(settings.nome.as_str(), "Ana jk Zé");
     assert_eq!(settings.section, ClientSettingsSection::Usuario);
 
     let texto = texto_do_quadro(&mut state);
-    assert!(texto.contains("prévia: Pretorian · Ana jk"), "{texto}");
+    assert!(texto.contains("prévia: Pretorian · Ana jk Zé"), "{texto}");
     assert!(state.hits.settings_choices.is_empty());
 
     state.handle_input_bytes(b"\t");

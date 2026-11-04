@@ -459,6 +459,12 @@ impl ClientShellState {
                 rename.input.insert(text);
                 true
             }
+            Some(ClientShellOverlay::Settings(settings))
+                if settings.section == ClientSettingsSection::Usuario =>
+            {
+                settings.nome.insert(text);
+                true
+            }
             Some(ClientShellOverlay::Help(help)) if help.search_focused => {
                 if help.query.insert(text) {
                     help.scroll = 0;
