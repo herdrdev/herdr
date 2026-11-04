@@ -1713,3 +1713,28 @@ Cuando una llamada al servidor falla o da error, no se emite un `[]` silencioso;
    - La actualización del estado de un run en el overlay se realiza tras cada acción humana o apertura del modal; no existe suscripción push websocket/evento en tiempo real para el progreso de subhilos de un run en curso.
 3. **Múltiples aprobadores o políticas avanzadas de gates**:
    - La aprobación de gate es actualmente 1:1 por subtarea o plan. Políticas multi-firma o aprobaciones escalonadas quedan para fases posteriores.
+
+## Auditoría de solapes con herdr (2026-11-04)
+
+Criterio del dueño: **usar lo que herdr ya tiene; implementar solo lo que no tiene.** Auditoría de solo lectura (API de herdr: `src/api/schema.rs`, `src/app/api/*`; uso desde `crates/shepherd-core/src/{shepherd,terminals,service,git,workflow}.rs`).
+
+Métodos de herdr que Shepherd ya usa a través del adaptador: `worktree.create`, `agent.start`, `agent.prompt`, `agent.wait`, `agent.get`, `agent.focus`, `pane.read`, `pane.send_input`, `pane.rename`, `pane.report_metadata`, `tab.create/close/focus`, `workspace.create`, `pane.focus`.
+
+| Función de Shepherd | Lo que herdr ya tiene | Veredicto |
+|---|---|---|
+| Panes, terminales, barra lateral, estado working/idle/blocked | todo | **Ya reutilizado** |
+| Crear worktrees del agente | `worktree.create` (el adaptador ya lo usa; `create_git_worktree` solo es el respaldo del backend sin herdr) | Reutilizado; mantener el respaldo solo fuera de herdr |
+| **Entrega de mensajes a agentes sin MCP (F3g)** | `agent.prompt`: escribe y envía Enter con las rarezas por vendor (foco de Copilot, límite de pegado de Codex, `encode_api_submission_parts`) y puede esperar un estado | **Solape real**: F3g teclea con `pane.send_input` y verifica por pantalla. Debe usar `agent.prompt` (con `wait`) y quedarse solo con el cursor persistente y la cola |
+| Primer prompt con verificación y reenvío (hasta 3) | `agent.prompt` + `agent.wait` | **Solape probable**: comprobar si la verificación propia sigue haciendo falta; conservar solo el aviso «needs you» ante diálogos de confianza |
+| Reconciliación por sondeo cada 2 s | `events.subscribe`, `events.wait`, `agent.wait`, `pane.wait_for_output` | **Mejora**: pasar a eventos; el sondeo queda como respaldo |
+| «NEEDS YOU» | `notification.show` (no se usa) | **Añadir**: emitir también una notificación nativa |
+| Pestaña Git: lista de worktrees | `worktree.list` (path, rama, `is_linked_worktree`, workspace abierto, etiqueta) | **Solape parcial**: la lista base debe venir de `worktree.list`; lo propio es limpio/sucio, adelante/atrás, agente y PR |
+| `spawn`, `kill`, `focus`, `attach` | `agent.start/prompt/focus/rename`, `pane.close` | Envoltorios finos: valen por rol, skills y registro; no reimplementar la parte de terminal |
+| Reanudar tras reinicio | `agent_resume.rs` (sesiones de agentes en panes restaurados) | **Distinto**: herdr restaura el proceso; Shepherd reconcilia su registro. Comprobar que no se pisan |
+| Skill de control de panes (`skills/herdr`) | enseña a un agente a usar la CLI/API de herdr | Complementaria a `shepherd-comms` (bus y MCP), no sustituta |
+| Tareas, spec/criterios, planes, runs con gates humanos, push/PR | **no tiene** | **Propio de Shepherd** |
+| Bus de mensajes persistente, servidor MCP, tokens por agente | **no tiene** | **Propio de Shepherd** |
+| Roles, vendors, modelos, skills por rol/sesión | **no tiene** | **Propio de Shepherd** |
+| Estado de PR por rama (`gh`), limpio/sucio y sync por worktree | **no tiene** | **Propio de Shepherd** |
+
+Cambios propuestos (fase F7, sin código todavía): entrega y primer prompt por `agent.prompt`; reconciliación por eventos; `notification.show`; Git base desde `worktree.list`; revisar `agent_resume.rs`.
