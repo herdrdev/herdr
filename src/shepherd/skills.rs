@@ -36,7 +36,7 @@ pub enum SkillsViewMode {
 
 impl Default for SkillsViewMode {
     fn default() -> Self {
-        Self::AgentView
+        Self::CatalogView
     }
 }
 
@@ -61,6 +61,19 @@ pub struct CatalogSkillItem {
     pub is_global: bool,
     pub enabled: bool,
     pub problems: Vec<String>,
+}
+
+impl From<&shepherd_core::skills::Skill> for CatalogSkillItem {
+    fn from(s: &shepherd_core::skills::Skill) -> Self {
+        Self {
+            name: s.name.clone(),
+            description: s.description.clone(),
+            scope: s.scope,
+            is_global: s.global,
+            enabled: s.ok(),
+            problems: s.problems.clone(),
+        }
+    }
 }
 
 /// Form state for creating a new catalog skill.
@@ -176,9 +189,14 @@ impl ShepherdSkillsState {
         agent_skills: Vec<AgentSkillItem>,
         catalog_skills: Vec<CatalogSkillItem>,
     ) -> Self {
+        let mode = if agent_id.trim().is_empty() {
+            SkillsViewMode::CatalogView
+        } else {
+            SkillsViewMode::AgentView
+        };
         Self {
             open: false,
-            mode: SkillsViewMode::AgentView,
+            mode,
             selected_agent_id: agent_id.to_string(),
             agent_role: agent_role.to_string(),
             selected: 0,
@@ -209,6 +227,10 @@ impl ShepherdSkillsState {
     }
 
     pub fn switch_mode(&mut self) {
+        if self.selected_agent_id.trim().is_empty() {
+            self.mode = SkillsViewMode::CatalogView;
+            return;
+        }
         self.mode = match self.mode {
             SkillsViewMode::AgentView => SkillsViewMode::CatalogView,
             SkillsViewMode::CatalogView => SkillsViewMode::AgentView,
@@ -432,7 +454,7 @@ impl ShepherdSkillsState {
                     self.open_create_skill_modal();
                     None
                 }
-                KeyCode::Char('d') => {
+                KeyCode::Char('d') | KeyCode::Char('D') => {
                     if self.mode == SkillsViewMode::CatalogView {
                         self.open_delete_catalog_confirm();
                     }
@@ -563,26 +585,38 @@ pub fn render_shepherd_skills_panel(
     let mut btn_x = button_bar_area.x;
     let mode_label = match state.mode {
         SkillsViewMode::AgentView => "Ver Catálogo (v)",
-        SkillsViewMode::CatalogView => "Ver Agente (v)",
+        SkillsViewMode::CatalogView => {
+            if state.selected_agent_id.trim().is_empty() {
+                "Catálogo (v)"
+            } else {
+                "Ver Agente (v)"
+            }
+        }
     };
-    let toggle_mode_btn = Rect::new(btn_x, button_bar_area.y, 18, 1);
+    let toggle_mode_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
     render_skills_btn(buffer, toggle_mode_btn, mode_label, palette.blue, palette);
-    btn_x = btn_x.saturating_add(20);
-
-    let new_skill_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
-    render_skills_btn(buffer, new_skill_btn, "+ Nueva skill (n)", palette.accent, palette);
     btn_x = btn_x.saturating_add(18);
+
+    let new_skill_btn = Rect::new(btn_x, button_bar_area.y, 18, 1);
+    render_skills_btn(buffer, new_skill_btn, "+ Nueva skill (n)", palette.accent, palette);
+    btn_x = btn_x.saturating_add(20);
 
     let restore_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
     render_skills_btn(buffer, restore_btn, "↺ Restaurar (r)", palette.teal, palette);
     btn_x = btn_x.saturating_add(18);
 
-    let delete_btn = Rect::new(btn_x, button_bar_area.y, 16, 1);
-    render_skills_btn(buffer, delete_btn, "🗑 Borrar (D)", palette.red, palette);
+    let delete_btn = Rect::new(btn_x, button_bar_area.y, 14, 1);
+    render_skills_btn(buffer, delete_btn, "🗑 Borrar (d)", palette.red, palette);
 
     // Context / Mode on row 1
     let mode_text = match state.mode {
-        SkillsViewMode::AgentView => format!("Agente '{}' (rol: {})", state.selected_agent_id, state.agent_role),
+        SkillsViewMode::AgentView => {
+            if state.selected_agent_id.trim().is_empty() {
+                "Catálogo Completo (Repo > User > Default)".to_string()
+            } else {
+                format!("Agente '{}' (rol: {})", state.selected_agent_id, state.agent_role)
+            }
+        }
         SkillsViewMode::CatalogView => "Catálogo Completo (Repo > User > Default)".to_string(),
     };
     buffer.set_stringn(
@@ -608,10 +642,6 @@ pub fn render_shepherd_skills_panel(
         usize::from(stack.header.width.saturating_sub(2)),
         base.fg(palette.teal),
     );
-    btn_x = btn_x.saturating_add(18);
-
-    let delete_btn = Rect::new(btn_x, button_bar_area.y, 14, 1);
-    render_skills_btn(buffer, delete_btn, "🗑 Borrar (d)", palette.red, palette);
 
     // Body content
     let body = stack.content;
@@ -1165,5 +1195,68 @@ mod tests {
             })
         );
         assert_eq!(state.sub_modal, SkillsSubModal::None);
+    }
+
+    #[test]
+    fn test_skills_view_without_agent_shows_catalog_and_single_delete_button() {
+        let catalog = vec![
+            CatalogSkillItem {
+                name: "git-review".into(),
+                description: "Review pull requests".into(),
+                scope: Scope::Default,
+                is_global: false,
+                enabled: true,
+                problems: Vec::new(),
+            },
+        ];
+        let state = ShepherdSkillsState::new("", "", Vec::new(), catalog);
+        assert_eq!(state.mode, SkillsViewMode::CatalogView);
+
+        let area = Rect::new(0, 0, 92, 26);
+        let mut buffer = Buffer::empty(area);
+        let palette = Palette::catppuccin();
+
+        let rendered = render_shepherd_skills_panel(&mut buffer, area, &state, &palette)
+            .expect("should render skills panel");
+
+        let text = buffer
+            .content
+            .chunks(usize::from(area.width))
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Catálogo Completo"), "Must show catalog header without agent");
+        assert!(!text.contains("Agente ''"), "Must NOT show Agente ''");
+        assert!(text.contains("git-review"), "Must show catalog skills");
+
+        // "Borrar (d)" must appear exactly once in the action bar, and "Borrar (D)" must not appear
+        let count_d = text.matches("Borrar (d)").count();
+        let count_capital_d = text.matches("Borrar (D)").count();
+        assert_eq!(count_d, 1, "Borrar (d) must appear exactly once in action bar");
+        assert_eq!(count_capital_d, 0, "Borrar (D) must NOT appear");
+
+        // Action bar must fit within the area without being cut off
+        assert!(rendered.delete_skill_button.right() <= area.width, "Action bar must fit without cutoff");
+    }
+
+    #[test]
+    fn test_delete_shortcut_accepts_both_lower_and_upper_case() {
+        let catalog = vec![
+            CatalogSkillItem {
+                name: "custom".into(),
+                description: "User skill".into(),
+                scope: Scope::User,
+                is_global: false,
+                enabled: true,
+                problems: Vec::new(),
+            },
+        ];
+        let mut state = ShepherdSkillsState::new("", "", Vec::new(), catalog);
+        state.open = true;
+
+        // Press 'D' (uppercase)
+        state.handle_key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::empty()));
+        assert!(matches!(state.sub_modal, SkillsSubModal::ConfirmDelete { .. }), "Uppercase 'D' must trigger delete confirm");
     }
 }

@@ -82,7 +82,7 @@ pub(super) fn render_agent_panel(
         config,
         agent_scroll,
         hits,
-        |row| agent_row_line_count(row, config),
+        |row| agent_row_line_count(row, config, area.width),
         |buffer, rect, row, hits| {
             hits.agents.push((rect, row.pane_id.clone()));
             render_agent_row(buffer, rect, row, config);
@@ -90,10 +90,158 @@ pub(super) fn render_agent_panel(
     );
 }
 
-pub(super) fn agent_row_line_count(row: &AgentRow, config: &ClientShellConfig) -> usize {
+pub(super) const MAX_NOTICE_LINES: usize = 4;
+pub(super) const NOTICE_INDENT_WIDTH: usize = 5;
+
+pub(super) fn wrap_notice(notice: &str, total_width: usize, max_lines: usize) -> Vec<String> {
+    let trimmed = notice.trim();
+    if trimmed.is_empty() || total_width == 0 || max_lines == 0 {
+        return Vec::new();
+    }
+    let text_width = if total_width > NOTICE_INDENT_WIDTH {
+        total_width - NOTICE_INDENT_WIDTH
+    } else {
+        total_width
+    };
+    if text_width == 0 {
+        return Vec::new();
+    }
+
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+    if words.is_empty() {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut has_overflow = false;
+
+    for (w_idx, &word) in words.iter().enumerate() {
+        let word_w = unicode_width::UnicodeWidthStr::width(word);
+        if current.is_empty() {
+            if word_w <= text_width {
+                current.push_str(word);
+            } else {
+                let mut rem = word;
+                while !rem.is_empty() {
+                    let mut chunk = String::new();
+                    for ch in rem.chars() {
+                        let next_chunk = format!("{chunk}{ch}");
+                        if unicode_width::UnicodeWidthStr::width(next_chunk.as_str()) <= text_width {
+                            chunk.push(ch);
+                        } else {
+                            break;
+                        }
+                    }
+                    if chunk.is_empty() {
+                        if let Some(ch) = rem.chars().next() {
+                            chunk.push(ch);
+                        }
+                    }
+                    let chunk_len = chunk.len();
+                    rem = &rem[chunk_len..];
+                    if rem.is_empty() {
+                        current = chunk;
+                    } else {
+                        lines.push(chunk);
+                        if lines.len() == max_lines {
+                            has_overflow = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            let current_w = unicode_width::UnicodeWidthStr::width(current.as_str());
+            if current_w + 1 + word_w <= text_width {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(current);
+                current = String::new();
+                if lines.len() == max_lines {
+                    has_overflow = true;
+                    break;
+                }
+                if word_w <= text_width {
+                    current.push_str(word);
+                } else {
+                    let mut rem = word;
+                    while !rem.is_empty() {
+                        let mut chunk = String::new();
+                        for ch in rem.chars() {
+                            let next_chunk = format!("{chunk}{ch}");
+                            if unicode_width::UnicodeWidthStr::width(next_chunk.as_str()) <= text_width {
+                                chunk.push(ch);
+                            } else {
+                                break;
+                            }
+                        }
+                        if chunk.is_empty() {
+                            if let Some(ch) = rem.chars().next() {
+                                chunk.push(ch);
+                            }
+                        }
+                        let chunk_len = chunk.len();
+                        rem = &rem[chunk_len..];
+                        if rem.is_empty() {
+                            current = chunk;
+                        } else {
+                            lines.push(chunk);
+                            if lines.len() == max_lines {
+                                has_overflow = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if lines.len() == max_lines {
+            if w_idx + 1 < words.len() || !current.is_empty() {
+                has_overflow = true;
+            }
+            break;
+        }
+    }
+
+    if lines.len() < max_lines && !current.is_empty() {
+        lines.push(current);
+    } else if !current.is_empty() {
+        has_overflow = true;
+    }
+
+    if has_overflow && !lines.is_empty() {
+        let last_idx = lines.len() - 1;
+        truncate_with_ellipsis(&mut lines[last_idx], text_width);
+    }
+
+    lines
+}
+
+fn truncate_with_ellipsis(line: &mut String, max_w: usize) {
+    if line.ends_with('…') {
+        return;
+    }
+    if max_w == 0 {
+        line.clear();
+        return;
+    }
+    let target_w = max_w.saturating_sub(1);
+    while !line.is_empty() && unicode_width::UnicodeWidthStr::width(line.as_str()) > target_w {
+        line.pop();
+    }
+    line.push('…');
+}
+
+pub(super) fn agent_row_line_count(row: &AgentRow, config: &ClientShellConfig, width: u16) -> usize {
     let mut count = row.rows.len().max(1);
-    if config.shepherd_enabled && row.notice.is_some() {
-        count += 1;
+    if config.shepherd_enabled {
+        if let Some(ref notice) = row.notice {
+            let w = if width > 0 { usize::from(width) } else { 25 };
+            let lines = wrap_notice(notice, w, MAX_NOTICE_LINES);
+            count += lines.len().max(1);
+        }
     }
     count
 }
@@ -421,18 +569,36 @@ pub(super) fn render_agent_row(
     }
     if config.shepherd_enabled && rect.height > rows.len() as u16 {
         if let Some(ref notice) = row.notice {
-            let notice_y = rect.y + rows.len() as u16;
-            let spans = vec![
-                ratatui::text::Span::raw("   ↳ "),
-                ratatui::text::Span::styled(
-                    notice.as_str(),
-                    Style::default().fg(palette.yellow),
-                ),
-            ];
-            Paragraph::new(Line::from(spans)).style(row_style).render(
-                Rect::new(rect.x, notice_y, rect.width, 1),
-                buffer,
+            let available_height = usize::from(rect.height.saturating_sub(rows.len() as u16));
+            let notice_lines = wrap_notice(
+                notice,
+                usize::from(rect.width),
+                available_height.min(MAX_NOTICE_LINES),
             );
+            for (line_idx, line_text) in notice_lines.iter().enumerate() {
+                let notice_y = rect.y + rows.len() as u16 + line_idx as u16;
+                let spans = if line_idx == 0 {
+                    vec![
+                        ratatui::text::Span::raw("   ↳ "),
+                        ratatui::text::Span::styled(
+                            line_text.as_str(),
+                            Style::default().fg(palette.yellow),
+                        ),
+                    ]
+                } else {
+                    vec![
+                        ratatui::text::Span::raw("     "),
+                        ratatui::text::Span::styled(
+                            line_text.as_str(),
+                            Style::default().fg(palette.yellow),
+                        ),
+                    ]
+                };
+                Paragraph::new(Line::from(spans)).style(row_style).render(
+                    Rect::new(rect.x, notice_y, rect.width, 1),
+                    buffer,
+                );
+            }
         }
     }
 }
@@ -558,8 +724,8 @@ mod tests {
         let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
         let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
 
-        // Check row line count calculation
-        let total_lines = agent_row_line_count(&row, &config);
+        // Check row line count calculation with wide width
+        let total_lines = agent_row_line_count(&row, &config, 80);
         assert_eq!(total_lines, row.rows.len() + 1);
 
         // 1. Extra line available when total_lines allocated (dedicated extra line for notice)
@@ -580,6 +746,44 @@ mod tests {
 
         assert!(text_inline.contains("[NEEDS YOU]"), "Constrained height should show [NEEDS YOU]");
         assert!(text_inline.contains(notice_text), "Constrained height should contain notice text");
+    }
+
+    #[test]
+    fn test_shepherd_agent_with_long_notice_wrapped_in_narrow_sidebar() {
+        let config = test_config(true);
+        let notice_text = "trust dialog: open tab and accept this permission dialog";
+        let shepherd_info = crate::api::schema::AgentShepherdInfo {
+            id: "coder-1".into(),
+            role: "coder".into(),
+            state: "blocked".into(),
+            notice: Some(notice_text.into()),
+        };
+        let snapshot = test_snapshot_with_agent(Some(shepherd_info), crate::api::schema::AgentStatus::Blocked);
+        let row = agent_row(&snapshot, "pane_1", &config, None).expect("agent row should exist");
+
+        // Width 25 (typical sidebar width): text width is 25 - 5 = 20.
+        // "trust dialog: open" (18 <= 20)
+        // "tab and accept" (14 <= 20)
+        // "this permission" (15 <= 20)
+        // "dialog" (6 <= 20)
+        let lines_count = agent_row_line_count(&row, &config, 25);
+        assert!(lines_count >= row.rows.len() + 2, "Long notice must wrap to multiple lines");
+
+        let area = Rect::new(0, 0, 25, lines_count as u16);
+        let mut buffer = Buffer::empty(area);
+        render_agent_row(&mut buffer, area, &row, &config);
+        let text = buffer_text(&buffer, area);
+
+        assert!(text.contains("[NEEDS YOU]"));
+        assert!(text.contains("↳"));
+        assert!(text.contains("trust dialog: open"));
+        assert!(text.contains("tab and accept"));
+
+        // Test very long notice capping at MAX_NOTICE_LINES with ellipsis '…'
+        let very_long = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty";
+        let wrapped = wrap_notice(very_long, 25, MAX_NOTICE_LINES);
+        assert_eq!(wrapped.len(), MAX_NOTICE_LINES);
+        assert!(wrapped[MAX_NOTICE_LINES - 1].ends_with('…'), "Last line must end with ellipsis when exceeding max lines");
     }
 
     #[test]

@@ -547,3 +547,133 @@ Fallos que quedan (candidatos F3e):
 2. **Aviso truncado** en la barra lateral (`↳ trust dialog: open t`): el brief pedía leerlo entero (ajustar a varias líneas o mostrarlo completo en el menú contextual).
 3. **Pestaña Skills**: «Agente '' (rol: )» sin agente seleccionado, aparece vacía en vez del catálogo, y «Borrar» está duplicado (`D` y `d`).
 4. Sigue sin probarse: lanzar un agente real desde el TUI, aprobar un gate, el ratón en el overlay.
+
+## Estado F3e (2026-11-04)
+
+Corrección de los tres fallos detectados por el revisor en la fase F3d mediante TDD y verificación real con `./scripts/shepherd-iso.sh`.
+
+### Lo hecho
+
+1. **Vista previa de tarea real y parseo de criterios (`src/shepherd/tasks.rs`)**:
+   - `ShepherdTaskRow::from_created_task` lee el contenido de `issue.md` y extrae título y descripción real de la tarea (en lugar de cargar la plantilla fija de `spec.md`).
+   - `spec.md` se analiza con `is_spec_template`: si contiene únicamente la plantilla por defecto (`# Spec\n\nDesign decisions, constraints, interfaces...`), se omite para no duplicar ni ensuciar la vista. Si tiene contenido real y personalizado, se muestra en su propia sección `## Especificación`.
+   - Criterios de aceptación: se leen de `acceptance.md` (con fallback a `criteria.md`), filtrando el marcador de posición por defecto `(add checkable criteria; ...)`. Los criterios se renderizan en formato `- [ ] criterio` (con marca amarilla) y `- [x] criterio` (con marca verde).
+   - Test unitario con ficheros reales creados por `shepherd_core::create_task`: `test_from_created_task_with_real_files_renders_preview_correctly`.
+
+2. **Aviso completo y multilínea en la barra lateral (`src/client/shell/agent_sidebar.rs`)**:
+   - Algoritmo de ajuste de palabras `wrap_notice(notice, width, max_lines)` que formatea el aviso dentro del ancho disponible en la barra lateral (respetando la indentación de 5 caracteres: `↳ ` en la primera línea y `     ` en las siguientes).
+   - Límite máximo razonable de líneas (`MAX_NOTICE_LINES = 4`) con truncado elegante `…` únicamente si el texto es excesivamente largo.
+   - `agent_row_line_count` calcula la altura de la fila de forma coherente con el ancho y el render multilínea.
+   - En paneles con altura de 1 línea, el aviso se sigue mostrando inline entre paréntesis `(aviso)`.
+   - Los agentes sin aviso o ajenos a Shepherd se siguen dibujando exactamente como antes (test de caracterización idéntica en verde).
+   - Test unitario con aviso largo envuelto en barra lateral de 25 caracteres: `test_shepherd_agent_with_long_notice_wrapped_in_narrow_sidebar`.
+
+3. **Pestaña Skills con catálogo por defecto y botón único (`src/shepherd/skills.rs`, `src/client/shell/shepherd.rs`)**:
+   - Sin agente seleccionado (`selected_agent_id` vacío), la vista se abre por defecto en modo `SkillsViewMode::CatalogView` y muestra el encabezado `Catálogo Completo (Repo > User > Default)` en vez de `Agente '' (rol: )`. Con agente seleccionado, muestra sus tres niveles (`AgentView`).
+   - `src/client/shell/shepherd.rs` procesa la respuesta JSON de la op `"skills"` del servicio y puebla `overlay.skills.catalog_skills` mediante `CatalogSkillItem::from(&Skill)`.
+   - Eliminado el botón duplicado `🗑 Borrar (D)`. La barra de acciones conserva únicamente `🗑 Borrar (d)`, encajando con holgura sin cortarse.
+   - El atajo de borrado en modo catálogo responde tanto a `d` como a `D`, manteniendo la protección de skills predeterminadas (`Scope::Default`) y la confirmación destructiva antes de eliminar skills de usuario o repositorio.
+   - Test unitario de vista catálogo sin agente y botón único: `test_skills_view_without_agent_shows_catalog_and_single_delete_button` y `test_delete_shortcut_accepts_both_lower_and_upper_case`.
+
+### Comprobaciones reales con `./scripts/shepherd-iso.sh` (capturas de pantalla)
+
+#### 1. Aviso largo multilínea en la barra lateral
+Sembrado con un aviso de 67 caracteres (`"trust dialog: open tab and accept this permission dialog to continue"`). El aviso se ajusta a 4 líneas completas dentro del ancho del sidebar (25 cols) sin cortarse horizontalmente:
+
+```text
+ agents           grouped│
+                         │
+ ● repo [NEEDS YOU]      │
+   agy                   │
+   ↳ trust dialog: open  │
+     tab and accept this │
+     permission dialog to│
+     continue            │
+```
+
+#### 2. Vista previa con descripción real y criterios de aceptación
+Se creó la tarea con título `"Tarea F3e Real"`, descripción `"Esta es la descripcion real de la tarea en F3e"` y criterio `"Verificar vista previa y aviso"`. La vista previa muestra la descripción de `issue.md`, no incluye la plantilla de `spec.md`, y formatea el criterio como `- [ ]`:
+
+```text
+│ · #1  Tarea F3e Real                 │ # Tarea #1: Tarea F3e Real                            │
+│                                      │ Estado: new  ·  Directorio: /tmp/shfiso/repo/.shepher │
+│                                      │                                                       │
+│                                      │ ## Descripción                                        │
+│                                      │ Esta es la descripcion real de la tarea en F3e        │
+│                                      │                                                       │
+│                                      │ ## Criterios de Aceptación                            │
+│                                      │   - [ ] Verificar vista previa y aviso                │
+```
+
+Al añadir contenido personalizado a `spec.md` y marcar el criterio con `[x]` en `acceptance.md`:
+
+```text
+│ · #1  Tarea F3e Real                 │ # Tarea #1: Tarea F3e Real                            │
+│                                      │ Estado: new  ·  Directorio: /tmp/shfiso/repo/.shepher │
+│                                      │                                                       │
+│                                      │ ## Descripción                                        │
+│                                      │ Esta es la descripcion real de la tarea en F3e        │
+│                                      │                                                       │
+│                                      │ ## Especificación                                     │
+│                                      │ # Spec Arquitectura                                   │
+│                                      │ Detalles tecnicos de la implementacion.               │
+│                                      │                                                       │
+│                                      │ ## Criterios de Aceptación                            │
+│                                      │   - [x] Verificar vista previa y aviso                │
+```
+
+#### 3. Pestaña Skills mostrando el catálogo completo del servicio
+Sin agente seleccionado, la pestaña muestra el catálogo del servicio (`code-review`, `conventional-commits`, `debug`, etc.), el encabezado `Catálogo Completo`, una única acción `🗑 Borrar (d)` y la barra cabe entera:
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Shepherd                                                                                  [x]│
+│ Tareas   Runs   Skills                                                                       │
+│──────────────────────────────────────────────────────────────────────────────────────────────│
+│ Catálogo (v)      + Nueva skill (n)   ↺ Restaurar (r)   🗑 Borrar (d)                         │
+│ Catálogo Completo (Repo > User > Default)                                                    │
+│ Nota: Añadir o quitar skills a este agente se aplicará al REINICIAR el agente.               │
+│ Modificar el texto de una skill sí llega en vivo.                                            │
+│                                                                                              │
+│          code-review           origen:default  Use when reviewing a change as the reviewer r │
+│          conventional-commits  origen:default  Use when writing commit messages - Convention │
+│          debug                 origen:default  Use when something fails or behaves unexpecte │
+│          docs-lookup           origen:default  Use before assuming how a library, API, CLI f │
+│          implement-task        origen:default  Use when implementing a coding task in your w │
+│          lang-go               origen:default  Use when working in a Go repository - error h │
+│          lang-python           origen:default  Use when working in a Python repository - typ │
+│          lang-ts               origen:default  Use when working in a TypeScript or JavaScrip │
+│          plan-tasks            origen:default  Use when you must turn a task or issue into a │
+│          pr-workflow           origen:default  Use when taking work from branch to pull requ │
+│          security-review       origen:default  Use when reviewing a change for security - se │
+│          shepherd-comms        origen:default  Use when you are an agent running under sheph │
+│          write-tests           origen:default  Use when writing or fixing tests - table-driv │
+│                                                                                              │
+│ Space alternar/activar  ·   v cambiar vista  ·   r restaurar editada  ·   d borrar de catálog│
+└──────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+Al pulsar `d` sobre `code-review` (default), muestra el error de protección en el pie: `No se pueden borrar las skills predeterminadas del sistema (solo usuario/repo)`.
+
+### Qué NO queda conectado
+
+1. **Invocación interactiva de borrado/edición sobre agentes vivos desde la TUI**:
+   - Las operaciones sobre el catálogo y agentes funcionan a través de `shepherd.call`; la reactividad en caliente del texto de una skill editada en agentes vivos corre por el protocolo de MCP/disco pero no hay un editor TUI embebido para el fichero de skill dentro del overlay (se abre con `$EDITOR` externo o CLI).
+2. **Streaming en tiempo real de cambios en el catálogo de skills sin refresco**:
+   - El catálogo se consulta al abrir el overlay o tras una acción de modificación/borrado; no existe sondeo continuo por inotify.
+
+### Archivos de herdr tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `src/shepherd/tasks.rs` | Modificación | `from_created_task` lee título y descripción de `issue.md`, filtra plantilla de `spec.md`, parsea criterios de `acceptance.md` con formato `- [ ]` / `- [x]`; renderizado puro de preview con `## Descripción`, `## Especificación` opcional y checklist con marcas; tests unitarios con ficheros reales. |
+| `src/client/shell/agent_sidebar.rs` | Modificación | Constantes `MAX_NOTICE_LINES`, `NOTICE_INDENT_WIDTH`, función `wrap_notice`, cálculo de líneas con ancho en `agent_row_line_count`, renderizado multilínea con `↳` y sangría; tests unitarios de envoltura y aviso largo. |
+| `src/client/shell/endpoint_agents.rs` | Modificación | Paso de `area.width` a `agent_row_line_count` en la barra lateral agregada de endpoints. |
+| `src/shepherd/skills.rs` | Modificación | Modo por defecto `SkillsViewMode::CatalogView` si no hay agente seleccionado; eliminación del botón duplicado `🗑 Borrar (D)`; soporte para teclas `d`/`D`; conversión `CatalogSkillItem::from(&Skill)`; tests unitarios de vista catálogo sin agente y botón único. |
+| `src/shepherd/overlay.rs` | Modificación (tests) | Actualización de fixtures de prueba para incluir el nuevo campo `spec` en `ShepherdTaskRow` y modo `AgentView` en prueba de restauración. |
+| `src/client/shell/shepherd.rs` | Modificación | Deserialización de la respuesta JSON del método `"skills"` para poblar `overlay.skills.catalog_skills`. |
+
+
+### Nota del revisor (F3e)
+
+Repetido por el revisor con `scripts/shepherd-iso.sh` y capturas: vista previa de tarea con descripción y criterios `- [ ]`; aviso de `[NEEDS YOU]` en varias líneas con «…» solo si no cabe; pestaña Skills sin agente muestra el catálogo y «Borrar» una sola vez. Tests en verde por áreas. Pequeño resto cosmético: en la vista de catálogo aparece la nota «Añadir o quitar skills a este agente…», que ahí no aplica. Sigue sin probarse: lanzar un agente real desde el TUI, aprobar un gate, ratón en el overlay.

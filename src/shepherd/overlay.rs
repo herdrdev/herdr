@@ -865,6 +865,7 @@ mod tests {
             issue_markdown: String::new(),
             criteria: Vec::new(),
             description: "Done".into(),
+            spec: String::new(),
             attachments: Vec::new(),
             directory: PathBuf::from("/tmp/t101"),
         }];
@@ -1003,6 +1004,8 @@ mod tests {
         let mut dispatcher = FakeShepherdDispatcher::default();
         overlay.select_tab(ShepherdTab::Skills);
 
+        overlay.skills.selected_agent_id = "coder-1".into();
+        overlay.skills.mode = crate::shepherd::skills::SkillsViewMode::AgentView;
         overlay.skills.agent_skills = vec![AgentSkillItem {
             name: "git-review".into(),
             description: "review".into(),
@@ -1041,6 +1044,7 @@ mod tests {
             issue_markdown: String::new(),
             criteria: Vec::new(),
             description: "Some spec".into(),
+            spec: String::new(),
             attachments: Vec::new(),
             directory: PathBuf::from("/tmp"),
         }];

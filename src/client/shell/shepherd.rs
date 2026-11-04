@@ -382,6 +382,9 @@ impl ClientShellState {
                     }
                     "skills" => {
                         // If skills JSON is returned, update skills view
+                        if let Ok(skills) = serde_json::from_value::<Vec<shepherd_core::skills::Skill>>(data.clone()) {
+                            overlay.skills.catalog_skills = skills.iter().map(crate::shepherd::skills::CatalogSkillItem::from).collect();
+                        }
                         overlay.status_message = None;
                     }
                     "archive_task" | "create_task" | "import_task" | "task_create" | "task_archive" => {

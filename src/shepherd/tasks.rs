@@ -176,8 +176,36 @@ pub struct ShepherdTaskRow {
     pub issue_markdown: String,
     pub criteria: Vec<String>,
     pub description: String,
+    pub spec: String,
     pub attachments: Vec<String>,
     pub directory: PathBuf,
+}
+
+pub fn parse_issue_markdown(content: &str) -> (Option<String>, String) {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return (None, String::new());
+    }
+    let mut lines = trimmed.lines();
+    if let Some(first) = lines.next() {
+        if let Some(title) = first.strip_prefix("# ") {
+            let rest: String = lines.collect::<Vec<_>>().join("\n");
+            return (Some(title.trim().to_string()), rest.trim().to_string());
+        }
+    }
+    (None, trimmed.to_string())
+}
+
+pub fn is_spec_template(content: &str) -> bool {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let template_text = "Design decisions, constraints, interfaces. Agents read this before coding.";
+    trimmed == "# Spec\n\nDesign decisions, constraints, interfaces. Agents read this before coding."
+        || trimmed == "# Spec\nDesign decisions, constraints, interfaces. Agents read this before coding."
+        || trimmed == template_text
+        || (trimmed.starts_with("# Spec") && trimmed.contains(template_text) && trimmed.len() <= template_text.len() + 20)
 }
 
 impl ShepherdTaskRow {
@@ -185,25 +213,51 @@ impl ShepherdTaskRow {
         let issue_url = task.status.issue.as_ref().map(|i| i.url.clone());
         let spec_file = task.directory.join("spec.md");
         let issue_file = task.directory.join("issue.md");
-        let criteria_file = task.directory.join("criteria.md");
-
-        let description = std::fs::read_to_string(&spec_file)
-            .or_else(|_| std::fs::read_to_string(&issue_file))
-            .unwrap_or_default();
+        let acceptance_file = if task.directory.join("acceptance.md").exists() {
+            task.directory.join("acceptance.md")
+        } else {
+            task.directory.join("criteria.md")
+        };
 
         let issue_markdown = std::fs::read_to_string(&issue_file).unwrap_or_default();
+        let (extracted_title, description) = parse_issue_markdown(&issue_markdown);
 
-        let criteria: Vec<String> = std::fs::read_to_string(&criteria_file)
+        let title = if !task.status.title.trim().is_empty() {
+            task.status.title.clone()
+        } else if let Some(t) = extracted_title {
+            t
+        } else {
+            String::new()
+        };
+
+        let spec_raw = std::fs::read_to_string(&spec_file).unwrap_or_default();
+        let spec = if is_spec_template(&spec_raw) {
+            String::new()
+        } else {
+            spec_raw.trim().to_string()
+        };
+
+        let criteria: Vec<String> = std::fs::read_to_string(&acceptance_file)
             .unwrap_or_default()
             .lines()
             .map(str::trim)
-            .filter(|l| !l.is_empty() && (l.starts_with("- [") || l.starts_with("- ") || l.starts_with("* ")))
+            .filter(|l| {
+                !l.is_empty()
+                    && (l.starts_with("- [ ]")
+                        || l.starts_with("- [x]")
+                        || l.starts_with("- [X]")
+                        || l.starts_with("- ")
+                        || l.starts_with("* "))
+                    && !l.contains("(add checkable criteria; the reviewer verifies each one)")
+                    && !l.starts_with("# ")
+                    && !l.starts_with("## ")
+            })
             .map(str::to_string)
             .collect();
 
         Self {
             id: task.status.id,
-            title: task.status.title.clone(),
+            title,
             state: task.status.state.clone(),
             branch: task.status.branch.clone(),
             pr: task.status.pr,
@@ -211,6 +265,7 @@ impl ShepherdTaskRow {
             issue_markdown,
             criteria,
             description,
+            spec,
             attachments: Vec::new(),
             directory: task.directory.clone(),
         }
@@ -771,25 +826,51 @@ fn render_task_preview(
     }
     lines.push(Line::from(""));
 
-    // Description / Spec markdown preview
+    // Description / Issue markdown preview
     lines.push(Line::from(vec![
-        Span::styled("## Especificación / Descripción", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
+        Span::styled("## Descripción", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
     ]));
-    for l in task.description.lines() {
-        if l.starts_with("# ") {
-            lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
-        } else if l.starts_with("## ") {
-            lines.push(Line::from(vec![Span::styled(l, base.fg(palette.mauve).add_modifier(Modifier::BOLD))]));
-        } else if l.starts_with("- ") || l.starts_with("* ") {
-            lines.push(Line::from(vec![
-                Span::styled("  • ", base.fg(palette.accent)),
-                Span::styled(&l[2..], base.fg(palette.text)),
-            ]));
-        } else {
-            lines.push(Line::from(vec![Span::styled(l, base.fg(palette.text))]));
+    if task.description.trim().is_empty() {
+        lines.push(Line::from(vec![Span::styled("  (Sin descripción)", base.fg(palette.overlay0))]));
+    } else {
+        for l in task.description.lines() {
+            if l.starts_with("# ") {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+            } else if l.starts_with("## ") {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.mauve).add_modifier(Modifier::BOLD))]));
+            } else if l.starts_with("- ") || l.starts_with("* ") {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", base.fg(palette.accent)),
+                    Span::styled(&l[2..], base.fg(palette.text)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.text))]));
+            }
         }
     }
     lines.push(Line::from(""));
+
+    // Spec only if present and not template
+    if !task.spec.trim().is_empty() {
+        lines.push(Line::from(vec![
+            Span::styled("## Especificación", base.fg(palette.mauve).add_modifier(Modifier::BOLD)),
+        ]));
+        for l in task.spec.lines() {
+            if l.starts_with("# ") {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+            } else if l.starts_with("## ") {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.accent).add_modifier(Modifier::BOLD))]));
+            } else if l.starts_with("- ") || l.starts_with("* ") {
+                lines.push(Line::from(vec![
+                    Span::styled("  • ", base.fg(palette.accent)),
+                    Span::styled(&l[2..], base.fg(palette.text)),
+                ]));
+            } else {
+                lines.push(Line::from(vec![Span::styled(l, base.fg(palette.text))]));
+            }
+        }
+        lines.push(Line::from(""));
+    }
 
     // Criteria checklist
     lines.push(Line::from(vec![
@@ -799,14 +880,25 @@ fn render_task_preview(
         lines.push(Line::from(vec![Span::styled("  (Sin criterios definidos)", base.fg(palette.overlay0))]));
     } else {
         for crit in &task.criteria {
-            let (icon, color) = if crit.contains("[x]") || crit.contains("[X]") {
-                ("[✓]", palette.green)
+            let is_checked = crit.starts_with("- [x]") || crit.starts_with("- [X]");
+            let (mark, mark_color) = if is_checked {
+                ("- [x] ", palette.green)
             } else {
-                ("[ ]", palette.yellow)
+                ("- [ ] ", palette.yellow)
             };
+            let text = crit
+                .trim_start_matches("- [x] ")
+                .trim_start_matches("- [X] ")
+                .trim_start_matches("- [ ] ")
+                .trim_start_matches("- [x]")
+                .trim_start_matches("- [X]")
+                .trim_start_matches("- [ ]")
+                .trim_start_matches("- ")
+                .trim_start_matches("* ")
+                .trim();
             lines.push(Line::from(vec![
-                Span::styled(format!("  {icon} "), base.fg(color).add_modifier(Modifier::BOLD)),
-                Span::styled(crit.trim_start_matches("- [ ] ").trim_start_matches("- [x] ").trim_start_matches("- "), base.fg(palette.text)),
+                Span::styled(format!("  {mark}"), base.fg(mark_color).add_modifier(Modifier::BOLD)),
+                Span::styled(text, base.fg(palette.text)),
             ]));
         }
     }
@@ -1287,7 +1379,8 @@ mod tests {
             id: 1,
             title: "Render Test".into(),
             state: "open".into(),
-            description: "# Heading\nSpec body line".into(),
+            description: "Description body line".into(),
+            spec: "Spec body line".into(),
             criteria: vec!["- [ ] First check".into()],
             directory: PathBuf::from("/tmp/tasks/1"),
             ..Default::default()
@@ -1311,7 +1404,89 @@ mod tests {
 
         assert!(text.contains("tarea(s)"));
         assert!(text.contains("Render Test"));
+        assert!(text.contains("Descripción"));
         assert!(text.contains("Especificación"));
         assert!(text.contains("Criterios de Aceptación"));
+        assert!(text.contains("- [ ] First check"));
+    }
+
+    #[test]
+    fn test_from_created_task_with_real_files_renders_preview_correctly() {
+        let temp_root = std::env::temp_dir().join(format!(
+            "shep_task_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::create_dir_all(&temp_root);
+
+        let new_task = shepherd_core::NewTask {
+            id: 0,
+            title: "Tarea Real F3e".into(),
+            description: "Esta es la descripcion real de la tarea".into(),
+            criteria: vec!["Criterio uno".into(), "Criterio dos".into()],
+            issue: None,
+            issue_markdown: None,
+            links: Vec::new(),
+        };
+
+        let created = shepherd_core::create_task(&temp_root, new_task).expect("create_task should succeed");
+        let row = ShepherdTaskRow::from_created_task(&created);
+
+        assert_eq!(row.title, "Tarea Real F3e");
+        assert_eq!(row.description, "Esta es la descripcion real de la tarea");
+        assert!(row.spec.is_empty(), "Spec should be empty when it only has the template");
+        assert_eq!(row.criteria, vec!["- [ ] Criterio uno", "- [ ] Criterio dos"]);
+
+        let state = ShepherdTasksState::new(vec![row]);
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let palette = Palette::catppuccin();
+
+        render_shepherd_tasks_panel(&mut buffer, area, &state, &palette)
+            .expect("should render tasks panel");
+
+        let text = buffer
+            .content
+            .chunks(usize::from(area.width))
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text.contains("Tarea Real F3e"));
+        assert!(text.contains("Esta es la descripcion real de la tarea"));
+        assert!(text.contains("- [ ] Criterio uno"));
+        assert!(text.contains("- [ ] Criterio dos"));
+        assert!(!text.contains("Design decisions, constraints, interfaces"));
+        assert!(!text.contains("## Especificación"));
+
+        // Now modify spec.md with custom content and check acceptance criteria
+        let custom_spec = "# Spec Custom\n\nDetalles tecnicos de arquitectura.";
+        std::fs::write(created.directory.join("spec.md"), custom_spec).unwrap();
+        let updated_acceptance = "# Acceptance criteria\n\n- [x] Criterio uno\n- [ ] Criterio dos\n";
+        std::fs::write(created.directory.join("acceptance.md"), updated_acceptance).unwrap();
+
+        let updated_row = ShepherdTaskRow::from_created_task(&created);
+        assert_eq!(updated_row.spec, custom_spec);
+        assert_eq!(updated_row.criteria, vec!["- [x] Criterio uno", "- [ ] Criterio dos"]);
+
+        let updated_state = ShepherdTasksState::new(vec![updated_row]);
+        let mut buffer2 = Buffer::empty(area);
+        render_shepherd_tasks_panel(&mut buffer2, area, &updated_state, &palette).unwrap();
+
+        let text2 = buffer2
+            .content
+            .chunks(usize::from(area.width))
+            .map(|r| r.iter().map(|c| c.symbol()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(text2.contains("## Especificación"));
+        assert!(text2.contains("Detalles tecnicos de arquitectura"));
+        assert!(text2.contains("- [x] Criterio uno"));
+        assert!(text2.contains("- [ ] Criterio dos"));
+
+        let _ = std::fs::remove_dir_all(&temp_root);
     }
 }
