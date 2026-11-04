@@ -2143,3 +2143,17 @@ Reglas de interfaz (valen para F10 y para toda UI nueva de Shepherd):
 | F10d | Pulido de usabilidad: recorrido completo con ratón y teclado en sesión aislada, capturas, tamaños pequeños de terminal, accesibilidad del foco; prueba con agentes reales | bajo |
 
 Orden de trabajo actualizado: F8b (en curso) → **F10a → F10b → F10c** → F8c (la pestaña **Patrones** se construye ya sobre el nuevo armazón, sin modal) → F8d (incluye la pestaña **Eventos**) → F10d → F9. Si F10a concluye que el armazón exige otra estructura, se ajusta F8c antes de lanzarla.
+
+## Regla de estilo herdr y reordenación (2026-11-05)
+
+Requisito del dueño: **el código de Shepherd debe seguir el estilo de herdr**, porque al ser un fork se actualizará muchas veces con lo que publique herdr; todo lo que se aparte de sus convenciones encarece cada fusión con upstream.
+
+Evidencia medida hoy: `cargo fmt --all -- --check` reporta **814 diferencias** y todas están en código de Shepherd (`crates/shepherd-core/src/{cli,lib,service,workflow,terminals}.rs`, `src/shepherd/{skills,tasks,overlay}.rs`, …); herdr está limpio. Además: API genérica `shepherd.call`, CLI a mano y módulos de miles de líneas (ver «Plan F9»). Y el renombre total (F5a) hace que cada fusión toque casi todo el árbol; lo mitiga `scripts/rename-from-herdr.sh` + `scripts/upstream-sync.sh`, pero obliga a que el código propio quede **aislado**.
+
+Reglas para TODO el código nuevo y migrado (puerta de revisión en cada brief):
+1. `cargo fmt` con la configuración del repo y `clippy` sin avisos nuevos en lo que se toque; la revisión comprueba `./cargo-fork.sh fmt --all -- --check` sobre los archivos de la fase.
+2. **Aislamiento**: código propio solo en `crates/shepherd-core/` y `src/shepherd/` (más lo imprescindible en `src/client/shell/shepherd.rs`); en archivos de herdr solo puntos de enganche mínimos, y cada archivo de herdr tocado se lista en «Archivos de herdr modificados» con el motivo. Cuantos menos y más pequeños, mejor.
+3. Mismas convenciones de herdr: métodos de API tipados en el esquema, CLI declarada con `cli_params!`/bindings, estado puro + render puro, módulos pequeños con una responsabilidad, tests al estilo de `AGENTS.md`, sin dependencias nuevas sin justificarlo.
+4. Métrica de coste de fusión por fase: nº de archivos de herdr tocados y líneas, y una ejecución en seco de `scripts/upstream-sync.sh --dry-run` contra un upstream simulado, anotadas en el «Estado» de la fase.
+
+Orden de trabajo actualizado (el estilo y la API tipada van antes de seguir añadiendo funcionalidad, para no multiplicar la deuda): F8b (en curso, ya en vuelo) → **F9a → F9b → F9c → F9d → F9e** → F10a → F10b → F10c → F8c → F8d → F10d. F9e incluye pasar `cargo fmt` a todo el crate (las 814 diferencias) como primer paso mecánico, antes de partir módulos, para que los diffs posteriores sean legibles.
