@@ -1738,3 +1738,20 @@ Métodos de herdr que Shepherd ya usa a través del adaptador: `worktree.create`
 | Estado de PR por rama (`gh`), limpio/sucio y sync por worktree | **no tiene** | **Propio de Shepherd** |
 
 Cambios propuestos (fase F7, sin código todavía): entrega y primer prompt por `agent.prompt`; reconciliación por eventos; `notification.show`; Git base desde `worktree.list`; revisar `agent_resume.rs`.
+
+## Plan F8 — Patrones multi-agente por eventos (aprobado 2026-11-04)
+
+Fuente: «A Guide to Event-Driven Design for Agents and Multi-Agent Systems» (Confluent, 2025), capítulo III. Pedido del dueño: una pestaña **Patrones** dentro del overlay de Shepherd (en la TUI de herdr) para implementar los cuatro patrones, con cada agente definible (nombre, rol, **vendor**, modelo, **prompt**/persona) y todo personalizable, interactiva e intuitiva.
+
+Patrones: **Orquestador-Worker** (tópico de órdenes con claves de partición, workers como grupo de consumidores, tópico de respuestas), **Jerárquico** (el mismo esquema aplicado recursivamente: cada nodo no hoja orquesta su subárbol), **Blackboard** (tópico compartido; los agentes publican conocimiento y se suscriben a lo relevante), **Basado en mercado** (tópicos bid/ask/transacción y un market-maker que empareja). Idea común: log de eventos persistente y reproducible (tópicos, grupos de consumidores, offsets), no llamadas directas.
+
+Decisiones del dueño: alcance en **4 fases**; definiciones en **proyecto + global** (`.shepherd/patterns/*.yaml` en el repo y plantillas globales en la config de shepherd; gana el proyecto). Regla vigente: usar lo que herdr ya ofrece (ver «Auditoría de solapes») e implementar solo lo que no tiene; el bus persistente actual (ids + cursor por agente) es la base del log.
+
+| Fase | Contenido | Depende de |
+|---|---|---|
+| F8a | Modelo de patrón (agentes, roles, vendor, modelo, prompt, tópicos que publica/consume), validación, almacenamiento proyecto+global, plantillas de los 4 patrones, CLI `shepherd pattern list/show/new/edit/validate --json` | F7 |
+| F8b | Capa de eventos en el bus: tópicos nombrados, suscripciones, grupos de consumidores con clave de partición, offsets y reproducción, herramientas MCP `publish`/`subscribe`/`replay` | F8a |
+| F8c | Pestaña **Patrones** del overlay: galería de plantillas, diagrama, editor interactivo de agentes (formularios para vendor/modelo/prompt/tópicos), validación en vivo, ratón y teclado | F8a (F8b para vista de eventos) |
+| F8d | Ejecutor: lanza los agentes del patrón (por herdr), conecta sus tópicos, vista de eventos en vivo y control (pausa, reproducción) | F8b, F8c |
+
+Orden de trabajo: F6b → F7 → F8a → F8b → F8c → F8d. Cada fase con brief, agente `gemini-3.8-flash-high` (reutilizado con `/clear`), revisión y verificación aislada; la prueba con agentes reales de claude y codex al cerrar F8d.
