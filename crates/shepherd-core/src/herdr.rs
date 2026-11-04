@@ -87,6 +87,16 @@ pub struct HerdrClient {
     sequence: AtomicU64,
 }
 
+impl Clone for HerdrClient {
+    fn clone(&self) -> Self {
+        Self {
+            socket: self.socket.clone(),
+            in_process: self.in_process.clone(),
+            sequence: AtomicU64::new(self.sequence.load(Ordering::Relaxed)),
+        }
+    }
+}
+
 impl HerdrClient {
     pub fn new(socket: impl Into<PathBuf>) -> Self {
         Self {
@@ -109,6 +119,68 @@ impl HerdrClient {
 
     pub fn is_in_process(&self) -> bool {
         self.in_process.is_some()
+    }
+
+    /// Check whether the Herdr server is reachable.
+    pub fn is_reachable(&self) -> bool {
+        if self.in_process.is_some() {
+            return true;
+        }
+        #[cfg(unix)]
+        {
+            if self.socket.as_os_str().is_empty() || !self.socket.exists() {
+                return false;
+            }
+            use std::{io::{BufRead, BufReader, Write}, os::unix::net::UnixStream};
+            let stream = match UnixStream::connect(&self.socket) {
+                Ok(s) => s,
+                Err(_) => return false,
+            };
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let req = Request {
+                id: "probe-shepherd".into(),
+                method: "shepherd.call",
+                params: serde_json::json!({ "op": "skills", "args": {} }),
+            };
+            if let Ok(mut bytes) = serde_json::to_vec(&req) {
+                bytes.push(b'\n');
+                let mut writer = &stream;
+                if writer.write_all(&bytes).is_ok() && writer.flush().is_ok() {
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_ok() && !line.trim().is_empty() {
+                        if let Ok(resp) = serde_json::from_str::<Value>(&line) {
+                            if let Some(err) = resp.get("error") {
+                                let code = err.get("code").and_then(Value::as_str).unwrap_or("");
+                                if code == "invalid_request" || code == "shepherd_not_running" {
+                                    return false;
+                                }
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+        #[cfg(not(unix))]
+        {
+            false
+        }
+    }
+
+    /// Generic caller for `shepherd.call` operations.
+    pub fn shepherd_call(&self, op: &str, args: Value) -> Result<Value, HerdrError> {
+        let result = self.call("shepherd.call", serde_json::json!({
+            "op": op,
+            "args": args,
+        }))?;
+        if let Some(data) = result.get("data") {
+            Ok(data.clone())
+        } else {
+            Ok(result)
+        }
     }
 
     pub fn from_session(session: Option<&str>) -> Result<Self, HerdrError> {
@@ -385,5 +457,28 @@ mod tests {
 
         let res_base = client.create_worktree("/repo", "shep/1", Some("develop"), "label").unwrap();
         assert_eq!(res_base["received_params"]["base"], "develop");
+    }
+
+    #[test]
+    fn shepherd_call_and_is_reachable() {
+        let client = HerdrClient::in_process(|method, params| {
+            assert_eq!(method, "shepherd.call");
+            assert_eq!(params["op"], "agents");
+            Ok(serde_json::json!({
+                "type": "shepherd_call",
+                "data": [
+                    { "id": "coder-1", "role": "coder" }
+                ]
+            }))
+        });
+        assert!(client.is_reachable());
+        let res = client.shepherd_call("agents", serde_json::json!({})).unwrap();
+        assert_eq!(res[0]["id"], "coder-1");
+    }
+
+    #[test]
+    fn socket_client_unreachable_when_file_missing() {
+        let client = HerdrClient::new(PathBuf::from("/tmp/nonexistent-shepherd-test-12345.sock"));
+        assert!(!client.is_reachable());
     }
 }

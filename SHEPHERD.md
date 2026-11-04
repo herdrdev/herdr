@@ -918,3 +918,167 @@ El mensaje `[shep] from brain#1: hola coder-1 desde brain` fue tecleado limpiame
 2. **Skill `shepherd-comms`**:
    - El texto existente en `crates/shepherd-core/assets/skills/shepherd-comms/SKILL.md` bajo «Without MCP» promete exactamente el comportamiento implementado (`[shep] from <role>#<n>: ...`), por lo que no requirió modificaciones adicionales.
 
+
+
+## Estado F4a (2026-11-04)
+
+CLI `herdr shepherd` con JSON uniforme y estable contra el servidor en marcha mediante `shepherd.call`, fallback a in-process y flag explícito `--no-server`, auditado con TDD y verificado de verdad con `./scripts/shepherd-iso.sh` sin agentes reales.
+
+### Tabla de Auditoría de Subcomandos CLI (20 subcomandos)
+
+| # | Subcomando | Acepta `--json` | Op `shepherd.call` equivalente | Funciona contra servidor activo | Comportamiento / Modo |
+|---|---|---|---|---|---|
+| 1 | `agents` (o `agent list`) | Sí | `"agents"` | Sí | Servidor delega en `shepherd.call`; in-process lee `agents.json`. |
+| 2 | `spawn` | Sí | `"spawn"` | Sí | Servidor delega en `shepherd.call`; in-process orquesta localmente. |
+| 3 | `kill` | Sí | `"kill"` | Sí | Servidor delega en `shepherd.call`; in-process orquesta localmente. |
+| 4 | `clean` | Sí | `"clean"` | Sí | Servidor delega en `shepherd.call`; in-process orquesta localmente. |
+| 5 | `focus` | Sí | `"focus"` | Sí | Servidor delega en `shepherd.call`; in-process enfoca vía terminal. |
+| 6 | `run` | Sí | `"run"` | Sí | Servidor delega en `shepherd.call`; in-process orquesta localmente. |
+| 7 | `approve` | Sí | `"approve"` | Sí | Servidor delega en `shepherd.call`; in-process avanza gate/plan. |
+| 8 | `skills list` (o `skills`) | Sí | `"skills"` | Sí | Servidor delega en `shepherd.call`; in-process lista catálogo de skills. |
+| 9 | `runs list` (o `runs`) | Sí | `"runs"` | Sí | Servidor delega en `shepherd.call`; in-process computa runs desde tareas. |
+| 10 | `tasks` (alias de `task list`) | Sí | `"tasks"` | Sí | Servidor delega en `shepherd.call`; in-process lista tareas activas. |
+| 11 | `task list` | Sí | `"tasks"` | Sí | Servidor delega en `shepherd.call`; in-process lista tareas activas. |
+| 12 | `task list --archived` | Sí | `"tasks"` (`archived: true`) | Sí | Servidor delega en `shepherd.call`; in-process lista archivadas. |
+| 13 | `task new` | Sí | `"task_create"` | Sí | Servidor delega en `shepherd.call`; in-process crea tarea en disco. |
+| 14 | `task archive` | Sí | `"task_archive"` | Sí | Servidor delega en `shepherd.call`; in-process archiva tarea en disco. |
+| 15 | `task show <id>` | Sí | N/A | In-process | Operación sobre sistema de archivos; lee estructura de tarea local. |
+| 16 | `task show <id> <sec>` | Sí | N/A | In-process | Operación sobre sistema de archivos; lee sección Markdown de tarea. |
+| 17 | `task plan <id>` | Sí | N/A | In-process | Valida y guarda sub-tareas del plan en `status.json` local. |
+| 18 | `roles list` (o `roles`) | Sí | N/A | In-process | Inspecciona configuración local y ejecutables de vendors activos. |
+| 19 | `vendors list` (o `vendors`) | Sí | N/A | In-process | Inspecciona configuración de vendors y disponibilidad en PATH. |
+| 20 | `msg` / `messages` | Sí | No disponible | Error JSON | El servicio no expone operación de mensajería (no inventada según brief; emite `{"error":"..."}` y exit ≠ 0). |
+| * | `attach` | N/A | N/A | Interactivo | Comando TUI interactivo para adjuntar terminal; no emite JSON. |
+
+### Lo hecho
+
+1. **Protocolo y cliente IPC (`crates/shepherd-core/src/herdr.rs`)**:
+   - Se añadió método `shepherd_call(&self, op: &str, args: Value) -> Result<Value, HerdrError>` que empaqueta las peticiones JSON-RPC hacia el método `"shepherd.call"` y extrae el payload `"data"`.
+   - Se implementó `is_reachable(&self) -> bool` que verifica mediante sonda que el socket UNIX responda y reconozca la variante `"shepherd.call"` con el servicio de Shepherd activo. Si el socket pertenece a un Herdr sin Shepherd o con el servicio apagado (`unknown variant shepherd.call` o `shepherd_not_running`), devuelve `false`, evitando contaminar sesiones del usuario o causar errores de protocolo.
+   - `HerdrClient` implementa `Clone` para facilitar su compartición e inyección en los despachadores de CLI y tests.
+
+2. **Flag `--no-server` y resolución limpia de servidor (`crates/shepherd-core/src/cli.rs`)**:
+   - Flag explícito `--no-server`: cuando está presente, omite la conexión al socket de sesión e invoca la orquestación directamente en el proceso local.
+   - Si no se pasa `--no-server`, `run_cli_in_root_with_output` detecta automáticamente si hay un socket de sesión activo (`HERDR_SOCKET_PATH` o `HERDR_SESSION`) con soporte de Shepherd. Si no hay servidor o no responde, cae limpiamente al modo in-process sin interrupción.
+   - Los subcomandos de estado vivo (`agents`, `spawn`, `kill`, `clean`, `focus`, `run`, `approve`, `skills`, `runs`, `tasks`, `task new`, `task archive`) delegan transparentemente en el servidor mediante `shepherd.call`.
+
+3. **Salida `--json` uniforme y manejo estricto de errores**:
+   - Todos los subcomandos que devuelven datos aceptan `--json` en cualquier posición de sus argumentos.
+   - Con `--json`, la salida estándar (`stdout`) es estrictamente JSON válido (comprobable con `jq` o `python3 -m json.tool`).
+   - Cuando ocurre un error en modo `--json`, el proceso finaliza con código de salida ≠ 0 (código 1) y escribe un objeto JSON en `stdout`: `{"error":"<mensaje>"}`.
+   - En `src/shepherd/mod.rs` y `crates/shepherd-core/src/main.rs`, se silencia el formateo a texto plano de `eprintln!` en `stderr` cuando se solicitó `--json`, manteniendo los flujos limpios para consumo programático por scripts.
+
+4. **Incorporación de subcomandos faltantes y auditoría de mensajería**:
+   - Añadidos `skills list` (y alias `skills`) para listar el catálogo de habilidades en texto o JSON.
+   - Añadidos `runs list` (y alias `runs`) para listar las ejecuciones y estados de pipelines en texto o JSON.
+   - Alias `tasks` para listar tareas de forma equivalente a `task list`.
+   - Respecto a `msg` / `messages`: se auditó `crates/shepherd-core/src/service.rs` y se constató que no existe operación en `handle_call` para mensajería directa por socket. Siguiendo rigurosamente la regla del brief («si el servicio ya tiene la operación; si no, no la inventes: anótalo»), no se inventó la operación en el servicio; el CLI devuelve error informativo en JSON con código de salida 1.
+
+5. **Pruebas unitarias completas (TDD)**:
+   - `test_all_subcommands_json_output`: prueba uno a uno los subcomandos con `--json`, verificando que la salida es JSON válido y que respeta el esquema esperado.
+   - `test_server_mode_delegation_via_in_process_client`: comprueba la delegación exacta de todas las operaciones hacia `shepherd.call` mediante un cliente in-process mock.
+   - `test_fallback_to_in_process_when_no_server`: comprueba que ante la ausencia de servidor o socket inexistente, el CLI conmuta a in-process sin fallar.
+   - `test_json_error_output`: comprueba que ante errores de validación o argumentos con `--json`, se emite `{"error":"..."}` en stdout y código de error.
+   - `test_flag_parsing_no_server_and_json_position`: comprueba que `--json` y `--no-server` se aceptan en cualquier posición sin desplazar parámetros posicionales.
+
+### Comprobaciones reales con `./scripts/shepherd-iso.sh` (sesión aislada)
+
+Se utilizó `./scripts/shepherd-iso.sh` sin agentes reales para verificar la interacción contra el servidor real en marcha:
+
+1. **Arranque y verificación del método `shepherd.call`**:
+   - `call shepherd.call '{"op":"agents","args":{}}'` devolvió `{"id":"1","result":{"data":[],"type":"shepherd_call"}}`.
+
+2. **Creación de tarea vía CLI contra el servidor en marcha**:
+   ```bash
+   env HERDR_SOCKET_PATH=/tmp/shfiso/cfg/herdr-dev/sessions/iso/herdr.sock \
+     ./target/debug/herdr shepherd task new "Iso Task" --description "Desc" --criteria "- [ ] Done" --json
+   ```
+   Salida JSON validada con `python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"]["title"])'`:
+   `Iso Task` (código de salida 0).
+
+3. **Verificación cruzada en el socket del servidor**:
+   - Invocando directamente `./scripts/shepherd-iso.sh call shepherd.call '{"op":"tasks","args":{}}'`, el servidor devolvió:
+     ```json
+     {"id":"1","result":{"data":[{"directory":"/tmp/shfiso/repo/.shepherd/tasks/1-iso-task","status":{"created":"2026-11-04T15:30:02Z","id":1,"slug":"iso-task","state":"new","title":"Iso Task","updated":"2026-11-04T15:30:02Z"}}],"type":"shepherd_call"}}
+     ```
+     demostrando que la tarea fue creada y persistida en el servidor Herdr en ejecución.
+
+4. **Listado de tareas, skills y runs con `--json`**:
+   - `shepherd task list --json`: devolvió lista de tareas con longitud 1 y título `Iso Task`.
+   - `shepherd skills list --json`: devolvió array con 13 skills del catálogo.
+   - `shepherd runs list --json`: devolvió la ejecución asociada a la tarea (`task_id: 1, status: "new"`).
+   - `shepherd agents --json`: devolvió array vacío `[]`.
+
+5. **Visualización en el overlay TUI de Herdr (captura de pantalla)**:
+   Al enviar la secuencia de apertura de overlay `prefix + a` (`C-b` luego `a`), la tarea creada a través del CLI apareció inmediatamente en el TUI:
+
+   ```text
+                            ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+                            │ Shepherd                                                                                  [x]│
+                            │ Tareas   Runs   Skills                                                                       │
+                            │──────────────────────────────────────────────────────────────────────────────────────────────│
+                            │ + Nueva (n)       ↓ GitHub issue (i)  ✎ $EDITOR (e)     📦 Archivar (a)                      │
+                            │ 1 tarea(s) · vista previa y edición en $EDITOR                                               │
+                            │                                                                                              │
+                            │ · #1  Iso Task                       │ # Tarea #1: Iso Task                                  │
+                            │                                      │ Estado: new  ·  Directorio: /tmp/shfiso/repo/.shepher │
+                            │                                      │                                                       │
+                            │                                      │ ## Descripción                                        │
+                            │                                      │ Desc                                                  │
+                            │                                      │                                                       │
+                            │                                      │ ## Criterios de Aceptación                            │
+                            │                                      │   - [ ] Done                                          │
+                            │                                      │                                                       │
+                            │ n crear  ·   i importar gh  ·   e editar en $EDITOR  ·   a archivar  ·   Esc cerrar          │
+                            └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   ```
+
+6. **Error uniforme con `messages --json`**:
+   - Al ejecutar `shepherd messages --json`, el comando terminó con código de salida 1 y emitió estrictamente:
+     `{"error":"operation not available (service does not support msg/messages)"}`.
+
+7. **Forzado in-process con `--no-server`**:
+   - `shepherd task list --no-server --json` ejecutó en modo local sin contactar con el socket, devolviendo igualmente los datos en formato JSON estable.
+
+8. **Parada limpia**:
+   - `./scripts/shepherd-iso.sh stop` finalizó correctamente el servidor y la sesión de tmux aislada.
+
+### Nota de uso para scripting
+
+Todos los subcomandos de `herdr shepherd` que devuelven información admiten la bandera `--json`, lo que permite integrarlos directamente en scripts de automatización con herramientas estándar:
+
+```bash
+# Obtener IDs de agentes activos
+herdr shepherd agents --json | jq -r '.[].id'
+
+# Crear una nueva tarea y capturar su ID
+TASK_ID=$(herdr shepherd task new "Refactor auth" --description "Migrate to JWT" --criteria "- [ ] Tests pass" --json | jq -r '.status.id')
+
+# Listar skills disponibles en el catálogo
+herdr shepherd skills list --json | jq -r '.[].name'
+
+# Forzar ejecución in-process si no se desea interactuar con el socket del servidor
+herdr shepherd task list --no-server --json
+```
+
+Si el comando falla, el código de salida no será cero y el motivo aparecerá en el campo `.error` del JSON emitido.
+
+### Qué NO queda conectado (explícito)
+
+1. **Vistas TUI de integración Git/PR (Fase F4b)**:
+   - El árbol visual de ramas de agentes, PRs y comparativas de git diff queda para la siguiente fase F4b.
+2. **Streaming continuo de eventos de Shepherd a clientes externos**:
+   - El CLI opera mediante peticiones puntuales síncronas (`request / response`); el streaming bidireccional por socket queda para las herramientas integradas.
+3. **Operaciones de mensajería interactiva por CLI (`msg`/`messages`)**:
+   - No se alteró el despachador `handle_call` del servidor para añadir operaciones inexistentes de mensajería; los agentes se comunican por el protocolo MCP en loopback y entrega a terminal.
+
+### Archivos tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/herdr.rs` | Modificación | Implementación de `shepherd_call`, detección robusta de servidor con soporte de Shepherd en `is_reachable`, `Clone` para `HerdrClient`, tests de socket y despacho in-process. |
+| `crates/shepherd-core/src/lib.rs` | Modificación | Exportación pública de funciones de invocación con cliente: `run_cli_in_root_with_client` y `run_cli_in_root_with_output`. |
+| `crates/shepherd-core/src/cli.rs` | Modificación | Soporte de flag `--no-server`, detección de cliente socket, delegación en `shepherd.call` para operaciones de estado vivo, salida `--json` uniforme con formato de error estricto, adición de `skills list` y `runs list`, alias `tasks`, y suite completa de tests unitarios TDD. |
+| `crates/shepherd-core/src/main.rs` | Modificación | Supresión de texto plano en `stderr` ante errores cuando se solicita `--json`. |
+| `src/shepherd/mod.rs` | Modificación | Conexión del CLI integrado con el socket de sesión activa a través de `run_cli_in_root_with_client`, y supresión de `stderr` con `--json`. |
+| `SHEPHERD.md` | Documentación | Registro de Estado F4a, tabla de auditoría de los 20 subcomandos, verificación con sesión aislada y notas de uso en scripts. |

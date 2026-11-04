@@ -9,9 +9,16 @@ use crate::{
     spawn::{self, SpawnRequest},
     task_context, task_list_json, task_section_path, task_show_json,
     terminals::{connect_terminals, Terminals},
-    touch_task, validate_plan, write_task_section, NewTask,
+    touch_task, validate_plan, write_task_section, CreatedTask, NewTask,
 };
-use std::{env, io::IsTerminal, path::PathBuf, sync::Arc};
+use crate::herdr::{self, HerdrClient};
+use serde_json::Value;
+use std::{
+    env,
+    io::IsTerminal,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 /// Execute Shepherd CLI arguments using the current working directory and configured `Terminals` backend.
 pub fn run_cli<I, S>(args: I) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -45,53 +52,160 @@ where
     I: IntoIterator<Item = S>,
     S: Into<String>,
 {
-    let mut args = args.into_iter().map(Into::into);
-    let Some(area) = args.next() else {
+    run_cli_in_root_with_client(root, args, terminals, None)
+}
+
+/// Execute Shepherd CLI arguments with an explicit or resolved `HerdrClient`.
+pub fn run_cli_in_root_with_client<I, S>(
+    root: PathBuf,
+    args: I,
+    terminals: Option<Arc<dyn Terminals>>,
+    client: Option<HerdrClient>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut stdout = std::io::stdout();
+    run_cli_in_root_with_output(root, args, terminals, client, &mut stdout)
+}
+
+/// Execute Shepherd CLI arguments directing output to `writer`.
+pub fn run_cli_in_root_with_output<I, S>(
+    root: PathBuf,
+    args: I,
+    terminals: Option<Arc<dyn Terminals>>,
+    client: Option<HerdrClient>,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let raw_args: Vec<String> = args.into_iter().map(Into::into).collect();
+    let no_server = raw_args.iter().any(|a| a == "--no-server");
+    let json = raw_args.iter().any(|a| a == "--json");
+    let clean_args: Vec<String> = raw_args
+        .into_iter()
+        .filter(|a| a != "--no-server" && a != "--json")
+        .collect();
+
+    let server_client = if !no_server {
+        if let Some(c) = client {
+            if c.is_reachable() {
+                Some(c)
+            } else {
+                None
+            }
+        } else {
+            resolve_reachable_client(&root)
+        }
+    } else {
+        None
+    };
+
+    match dispatch_cli(root, clean_args, terminals, server_client.as_ref(), json, writer) {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if json {
+                let _ = writeln!(
+                    writer,
+                    "{}",
+                    serde_json::json!({ "error": err.to_string() })
+                );
+            }
+            Err(err)
+        }
+    }
+}
+
+fn resolve_reachable_client(_root: &Path) -> Option<HerdrClient> {
+    if let Some(path) = std::env::var_os("HERDR_SOCKET_PATH").filter(|v| !v.is_empty()) {
+        let client = HerdrClient::new(PathBuf::from(path));
+        if client.is_reachable() {
+            return Some(client);
+        }
+    }
+    if let Some(session) = std::env::var_os("HERDR_SESSION").filter(|v| !v.is_empty()) {
+        if let Ok(socket) = herdr::resolve_socket(session.to_str()) {
+            let client = HerdrClient::new(socket);
+            if client.is_reachable() {
+                return Some(client);
+            }
+        }
+    }
+    None
+}
+
+fn dispatch_cli(
+    root: PathBuf,
+    args: Vec<String>,
+    terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut args_iter = args.into_iter();
+    let Some(area) = args_iter.next() else {
         return usage();
     };
     if area == "attach" {
-        return attach_to_herdr(root, args.collect(), terminals);
+        return attach_to_herdr(root, args_iter.collect(), terminals);
     }
     if area == "agents" {
-        return agents_list(args.collect());
+        return agents_command(root, server, json, writer);
     }
     if area == "spawn" {
-        return spawn_command(root, args.collect(), terminals);
+        return spawn_command(root, args_iter.collect(), terminals, server, json, writer);
     }
     if area == "kill" {
-        return kill_command(root, args.collect(), terminals);
+        return kill_command(root, args_iter.collect(), terminals, server, json, writer);
     }
     if area == "clean" {
-        return clean_command(root, args.collect(), terminals);
+        return clean_command(root, args_iter.collect(), terminals, server, json, writer);
     }
     if area == "focus" {
-        return focus_command(root, args.collect(), terminals);
+        return focus_command(root, args_iter.collect(), terminals, server, json, writer);
     }
-    let Some(command) = args.next() else {
+    if area == "messages" || area == "msg" {
+        return Err("operation not available (service does not support msg/messages)".into());
+    }
+    let Some(command) = args_iter.next() else {
+        if area == "tasks" {
+            return list_task_command(root, Vec::new(), server, json, writer);
+        }
         return usage();
     };
-    let rest: Vec<String> = args.collect();
+    let rest: Vec<String> = args_iter.collect();
 
     match area.as_str() {
         "task" => match command.as_str() {
-            "new" => create_new_task(root, rest),
-            "list" => list_task_command(root, rest),
-            "show" => show_task_command(root, rest),
-            "plan" => plan_task_command(root, rest),
-            "edit" => edit_task_command(root, rest),
-            "path" => task_path_command(root, rest),
-            "archive" => archive_task_command(root, rest),
+            "new" => create_new_task(root, rest, server, json, writer),
+            "list" => list_task_command(root, rest, server, json, writer),
+            "show" => show_task_command(root, rest, json, writer),
+            "plan" => plan_task_command(root, rest, json, writer),
+            "edit" => edit_task_command(root, rest, writer),
+            "path" => task_path_command(root, rest, json, writer),
+            "archive" => archive_task_command(root, rest, server, json, writer),
             _ => usage(),
         },
-        "roles" if command == "list" => roles_list(root, rest),
-        "vendors" if command == "list" && rest.is_empty() => vendors_list(root),
-        "run" => run_command(root, command, rest, terminals),
-        "approve" if rest.len() == 1 && rest[0] == "plan" => {
-            crate::workflow::approve_plan(root, &command)?;
-            println!("approved plan for task {command}; rerun shepherd run to start coders");
-            Ok(())
+        "tasks" => {
+            let mut list_args = vec![command];
+            list_args.extend(rest);
+            list_task_command(root, list_args, server, json, writer)
         }
-        "approve" if rest.len() == 1 => approve_command(root, &command, &rest[0]),
+        "skills" if command == "list" && rest.is_empty() => {
+            skills_list(root, rest, server, json, writer)
+        }
+        "runs" if command == "list" && rest.is_empty() => {
+            runs_list(root, rest, server, json, writer)
+        }
+        "roles" if command == "list" => roles_list(root, rest, json, writer),
+        "vendors" if command == "list" && rest.is_empty() => vendors_list(root, json, writer),
+        "run" => run_command(root, command, rest, terminals, server, json, writer),
+        "approve" if rest.len() == 1 => {
+            approve_command(root, &command, &rest[0], server, json, writer)
+        }
         "mcp" if command == "serve" && rest.len() <= 1 => {
             let port = rest
                 .first()
@@ -100,30 +214,75 @@ where
                 .parse::<u16>()?;
             crate::mcp::serve_with_terminals(port, terminals)
         }
-        "config" if command == "path" && rest.is_empty() => config_paths(root),
-        "config" if command == "validate" && rest.is_empty() => config_validate(root),
+        "config" if command == "path" && rest.is_empty() => config_paths(root, json, writer),
+        "config" if command == "validate" && rest.is_empty() => {
+            config_validate(root, json, writer)
+        }
         _ => usage(),
     }
 }
 
-fn agents_list(args: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let json = match args.as_slice() {
-        [] => false,
-        [flag] if flag == "--json" => true,
-        _ => return usage(),
-    };
+fn agents_command(
+    _root: PathBuf,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call("agents", serde_json::json!({}))?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_agents_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
     let registry = load_agent_registry(config::state_dir().join("agents.json"))?;
     if json {
-        println!("{}", agents_json(&registry)?);
+        writeln!(writer, "{}", agents_json(&registry)?)?;
         return Ok(());
     }
-    if registry.agents.is_empty() {
-        println!("no agents");
+    print_human_agents(writer, &registry.agents)
+}
+
+fn print_human_agents_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let list = match data.as_array() {
+        Some(arr) => arr,
+        None => return Ok(()),
+    };
+    if list.is_empty() {
+        writeln!(writer, "no agents")?;
         return Ok(());
     }
-    println!("ID\tSTATE\tROLE\tVENDOR\tMODEL\tTASK");
-    for agent in registry.agents {
-        println!(
+    writeln!(writer, "ID\tSTATE\tROLE\tVENDOR\tMODEL\tTASK")?;
+    for agent in list {
+        let id = agent.get("id").and_then(Value::as_str).unwrap_or("-");
+        let state = agent.get("state").and_then(Value::as_str).unwrap_or("-");
+        let role = agent.get("role").and_then(Value::as_str).unwrap_or("-");
+        let vendor = agent.get("vendor").and_then(Value::as_str).unwrap_or("-");
+        let model = agent.get("model").and_then(Value::as_str).unwrap_or("");
+        let model = if model.is_empty() { "-" } else { model };
+        let task = agent.get("task_text").and_then(Value::as_str).unwrap_or("");
+        writeln!(writer, "{id}\t{state}\t{role}\t{vendor}\t{model}\t{task}")?;
+    }
+    Ok(())
+}
+
+fn print_human_agents(
+    writer: &mut dyn std::io::Write,
+    agents: &[crate::Agent],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if agents.is_empty() {
+        writeln!(writer, "no agents")?;
+        return Ok(());
+    }
+    writeln!(writer, "ID\tSTATE\tROLE\tVENDOR\tMODEL\tTASK")?;
+    for agent in agents {
+        writeln!(
+            writer,
             "{}\t{}\t{}\t{}\t{}\t{}",
             agent.id,
             agent.state,
@@ -135,7 +294,7 @@ fn agents_list(args: Vec<String>) -> Result<(), Box<dyn std::error::Error + Send
                 &agent.model
             },
             agent.task_text
-        );
+        )?;
     }
     Ok(())
 }
@@ -144,6 +303,9 @@ fn spawn_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(role) = args.first() else {
         return usage();
@@ -176,6 +338,23 @@ fn spawn_command(
             task.push(value);
         }
     }
+    if let Some(client) = server {
+        let spawn_req = serde_json::json!({
+            "root": root.display().to_string(),
+            "role": role,
+            "task": task.join(" "),
+            "task_id": task_id,
+            "vendor": vendor,
+            "model": model,
+        });
+        let data = client.shepherd_call("spawn", spawn_req)?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_spawn_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
     let req = SpawnRequest {
         root,
         role: role.clone(),
@@ -189,22 +368,54 @@ fn spawn_command(
         Some(t) => spawn::spawn_with_terminals(req, t.as_ref())?,
         None => spawn::spawn(req)?,
     };
-    println!(
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&spawned.agent.public())?
+        )?;
+    } else {
+        print_human_spawn(writer, &spawned.agent)?;
+    }
+    Ok(())
+}
+
+fn print_human_spawn_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let id = data.get("id").and_then(Value::as_str).unwrap_or("-");
+    let vendor = data.get("vendor").and_then(Value::as_str).unwrap_or("-");
+    let model = data.get("model").and_then(Value::as_str).unwrap_or("");
+    let model = if model.is_empty() { "default" } else { model };
+    let pane = data.get("pane").and_then(Value::as_str).unwrap_or("-");
+    writeln!(writer, "started {id} ({vendor}/{model}) in Herdr pane {pane}")?;
+    let worktree = data.get("worktree").and_then(Value::as_str).unwrap_or("");
+    let branch = data.get("branch").and_then(Value::as_str).unwrap_or("");
+    if !worktree.is_empty() {
+        writeln!(writer, "worktree {worktree} ({branch})")?;
+    }
+    Ok(())
+}
+
+fn print_human_spawn(
+    writer: &mut dyn std::io::Write,
+    agent: &crate::Agent,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    writeln!(
+        writer,
         "started {} ({}/{}) in Herdr pane {}",
-        spawned.agent.id,
-        spawned.agent.vendor,
-        if spawned.agent.model.is_empty() {
+        agent.id,
+        agent.vendor,
+        if agent.model.is_empty() {
             "default"
         } else {
-            &spawned.agent.model
+            &agent.model
         },
-        spawned.agent.pane
-    );
-    if !spawned.agent.worktree.is_empty() {
-        println!(
-            "worktree {} ({})",
-            spawned.agent.worktree, spawned.agent.branch
-        );
+        agent.pane
+    )?;
+    if !agent.worktree.is_empty() {
+        writeln!(writer, "worktree {} ({})", agent.worktree, agent.branch)?;
     }
     Ok(())
 }
@@ -213,19 +424,25 @@ fn kill_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut id = None;
-    let mut json = false;
-    for arg in args {
-        if arg == "--json" {
-            json = true;
-        } else if !arg.starts_with('-') && id.is_none() {
-            id = Some(arg);
-        }
-    }
+    let id = args.into_iter().find(|arg| !arg.starts_with('-'));
     let Some(id) = id else {
         return Err("usage: shepherd kill <id> [--json]".into());
     };
+    if let Some(client) = server {
+        let data = client.shepherd_call("kill", serde_json::json!({ "id": id }))?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let kid = data.get("id").and_then(Value::as_str).unwrap_or(id.as_str());
+            let state = data.get("state").and_then(Value::as_str).unwrap_or("killed");
+            writeln!(writer, "killed agent {kid} ({state})")?;
+        }
+        return Ok(());
+    }
     let terminals = match terminals {
         Some(t) => t,
         None => Arc::from(connect_terminals(&load_config(&root).unwrap_or_default())?),
@@ -238,9 +455,9 @@ fn kill_command(
     );
     let agent = svc.kill(&id)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&agent.public())?);
+        writeln!(writer, "{}", serde_json::to_string_pretty(&agent.public())?)?;
     } else {
-        println!("killed agent {} ({})", agent.id, agent.state);
+        writeln!(writer, "killed agent {} ({})", agent.id, agent.state)?;
     }
     Ok(())
 }
@@ -249,22 +466,46 @@ fn clean_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut ids = Vec::new();
     let mut workspace = None;
-    let mut json = false;
     let mut i = 0;
     while i < args.len() {
         let arg = &args[i];
-        if arg == "--json" {
-            json = true;
-        } else if arg == "--workspace" {
+        if arg == "--workspace" {
             i += 1;
             workspace = args.get(i).cloned();
         } else if !arg.starts_with('-') {
             ids.push(arg.clone());
         }
         i += 1;
+    }
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "clean",
+            serde_json::json!({
+                "ids": ids,
+                "workspace": workspace,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let cleaned: Vec<String> = data
+                .get("cleaned")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            writeln!(
+                writer,
+                "cleaned {} agent(s): {}",
+                cleaned.len(),
+                cleaned.join(", ")
+            )?;
+        }
+        return Ok(());
     }
     let terminals = match terminals {
         Some(t) => t,
@@ -278,9 +519,18 @@ fn clean_command(
     );
     let cleaned = svc.clean(&ids, workspace.as_deref())?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&serde_json::json!({ "cleaned": cleaned }))?);
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({ "cleaned": cleaned }))?
+        )?;
     } else {
-        println!("cleaned {} agent(s): {}", cleaned.len(), cleaned.join(", "));
+        writeln!(
+            writer,
+            "cleaned {} agent(s): {}",
+            cleaned.len(),
+            cleaned.join(", ")
+        )?;
     }
     Ok(())
 }
@@ -289,19 +539,27 @@ fn focus_command(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut id = None;
-    let mut json = false;
-    for arg in args {
-        if arg == "--json" {
-            json = true;
-        } else if !arg.starts_with('-') && id.is_none() {
-            id = Some(arg);
-        }
-    }
+    let id = args.into_iter().find(|arg| !arg.starts_with('-'));
     let Some(id) = id else {
         return Err("usage: shepherd focus <id> [--json]".into());
     };
+    if let Some(client) = server {
+        let data = client.shepherd_call("focus", serde_json::json!({ "id": id }))?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let fid = data.get("id").and_then(Value::as_str).unwrap_or(id.as_str());
+            writeln!(
+                writer,
+                "focused agent {fid} in native herdr terminal"
+            )?;
+        }
+        return Ok(());
+    }
     let terminals = match terminals {
         Some(t) => t,
         None => Arc::from(connect_terminals(&load_config(&root).unwrap_or_default())?),
@@ -314,9 +572,13 @@ fn focus_command(
     );
     let agent = svc.focus(&id)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&agent.public())?);
+        writeln!(writer, "{}", serde_json::to_string_pretty(&agent.public())?)?;
     } else {
-        println!("focused agent {} in native herdr terminal", agent.id);
+        writeln!(
+            writer,
+            "focused agent {} in native herdr terminal",
+            agent.id
+        )?;
     }
     Ok(())
 }
@@ -326,20 +588,44 @@ fn run_command(
     reference: String,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut mcp_url = None;
+    let mut auto_push = false;
     let mut i = 0;
     while i < args.len() {
         let option = &args[i];
         i += 1;
-        if option != "--mcp-url" {
+        if option == "--mcp-url" {
+            let Some(value) = args.get(i) else {
+                return Err("--mcp-url needs a value".into());
+            };
+            mcp_url = Some(value.clone());
+            i += 1;
+        } else if option == "--auto-push" {
+            auto_push = true;
+        } else {
             return Err(format!("unknown option {option}").into());
         }
-        let Some(value) = args.get(i) else {
-            return Err("--mcp-url needs a value".into());
-        };
-        mcp_url = Some(value.clone());
-        i += 1;
+    }
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "run",
+            serde_json::json!({
+                "root": root.display().to_string(),
+                "task": reference,
+                "mcp_url": mcp_url,
+                "auto_push": auto_push,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_run(writer, &data)?;
+        }
+        return Ok(());
     }
     let mcp_url =
         mcp_url.ok_or("run requires --mcp-url while the Rust MCP server is started separately")?;
@@ -352,29 +638,102 @@ fn run_command(
         Some(t) => crate::workflow::run_coders_with_terminals(req, t.as_ref(), None, None)?,
         None => crate::workflow::run_coders(req)?,
     };
-    if report.plan_waiting {
-        println!("plan is saved and waiting for human approval; inspect plan.md, run shepherd approve <task> plan, then rerun shepherd run");
+    if json {
+        let rep_json = serde_json::json!({
+            "started": report.started,
+            "completed_coding": report.completed_coding,
+            "waiting_for_human": report.waiting_for_human,
+            "failed": report.failed,
+            "plan_waiting": report.plan_waiting,
+            "auto_push": false,
+            "pushed_prs": [],
+        });
+        writeln!(writer, "{}", serde_json::to_string_pretty(&rep_json)?)?;
         return Ok(());
     }
-    println!(
+    if report.plan_waiting {
+        writeln!(writer, "plan is saved and waiting for human approval; inspect plan.md, run shepherd approve <task> plan, then rerun shepherd run")?;
+        return Ok(());
+    }
+    writeln!(
+        writer,
         "started coders: {}",
         if report.started.is_empty() {
             "none".into()
         } else {
             report.started.join(", ")
         }
-    );
-    println!(
+    )?;
+    writeln!(
+        writer,
         "results received for subtasks: {}",
         ids(&report.completed_coding)
-    );
-    println!("failed subtasks: {}", ids(&report.failed));
-    println!(
+    )?;
+    writeln!(writer, "failed subtasks: {}", ids(&report.failed))?;
+    writeln!(
+        writer,
         "needs human/review stage: {}",
         ids(&report.waiting_for_human)
-    );
-    println!("Rust run currently stops before human approval, push, and PR creation.");
+    )?;
+    writeln!(
+        writer,
+        "Rust run currently stops before human approval, push, and PR creation."
+    )?;
     Ok(())
+}
+
+fn print_human_run(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if data
+        .get("plan_waiting")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        writeln!(writer, "plan is saved and waiting for human approval; inspect plan.md, run shepherd approve <task> plan, then rerun shepherd run")?;
+        return Ok(());
+    }
+    let started = data
+        .get("started")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_else(|| "none".into());
+    writeln!(
+        writer,
+        "started coders: {}",
+        if started.is_empty() { "none" } else { &started }
+    )?;
+    let completed = format_json_u32_array(data.get("completed_coding"));
+    writeln!(writer, "results received for subtasks: {completed}")?;
+    let failed = format_json_u32_array(data.get("failed"));
+    writeln!(writer, "failed subtasks: {failed}")?;
+    let waiting = format_json_u32_array(data.get("waiting_for_human"));
+    writeln!(writer, "needs human/review stage: {waiting}")?;
+    writeln!(
+        writer,
+        "Rust run currently stops before human approval, push, and PR creation."
+    )?;
+    Ok(())
+}
+
+fn format_json_u32_array(val: Option<&Value>) -> String {
+    let Some(arr) = val.and_then(Value::as_array) else {
+        return "none".into();
+    };
+    if arr.is_empty() {
+        return "none".into();
+    }
+    arr.iter()
+        .filter_map(Value::as_u64)
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn ids(numbers: &[u32]) -> String {
@@ -392,34 +751,237 @@ fn ids(numbers: &[u32]) -> String {
 fn approve_command(
     root: PathBuf,
     task: &str,
-    subtask: &str,
+    target: &str,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let number = subtask
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "approve",
+            serde_json::json!({
+                "root": root.display().to_string(),
+                "task": task,
+                "target": target,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else if target == "plan" {
+            writeln!(
+                writer,
+                "approved plan for task {task}; rerun shepherd run to start coders"
+            )?;
+        } else {
+            let pr = data.get("pr").and_then(Value::as_str).unwrap_or("");
+            writeln!(writer, "created pull request: {pr}")?;
+        }
+        return Ok(());
+    }
+    if target == "plan" {
+        crate::workflow::approve_plan(root, task)?;
+        if json {
+            writeln!(
+                writer,
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "task": task,
+                    "approved": "plan",
+                }))?
+            )?;
+        } else {
+            writeln!(
+                writer,
+                "approved plan for task {task}; rerun shepherd run to start coders"
+            )?;
+        }
+        return Ok(());
+    }
+    let number = target
         .parse::<u32>()
         .map_err(|_| "subtask number must be an integer")?;
     let url = crate::workflow::approve_subtask(root, task, number)?;
-    println!("created pull request: {url}");
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "task": task,
+                "approved": number,
+                "pr": url,
+            }))?
+        )?;
+    } else {
+        writeln!(writer, "created pull request: {url}")?;
+    }
+    Ok(())
+}
+
+fn skills_list(
+    root: PathBuf,
+    _args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "skills",
+            serde_json::json!({
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_skills_from_value(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let cat = crate::skills::Catalog::load(Some(&root), None);
+    let all = cat.all();
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&all)?)?;
+    } else {
+        print_human_skills_entries(writer, &all)?;
+    }
+    Ok(())
+}
+
+fn print_human_skills_from_value(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let skills = data.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    if skills.is_empty() {
+        writeln!(writer, "no skills")?;
+        return Ok(());
+    }
+    writeln!(writer, "NAME\tTIER\tDESCRIPTION")?;
+    for s in skills {
+        let name = s.get("name").and_then(Value::as_str).unwrap_or("-");
+        let tier = s.get("tier").and_then(Value::as_str).unwrap_or("-");
+        let desc = s.get("description").and_then(Value::as_str).unwrap_or("");
+        writeln!(writer, "{name}\t{tier}\t{desc}")?;
+    }
+    Ok(())
+}
+
+fn print_human_skills_entries(
+    writer: &mut dyn std::io::Write,
+    skills: &[crate::skills::Skill],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if skills.is_empty() {
+        writeln!(writer, "no skills")?;
+        return Ok(());
+    }
+    writeln!(writer, "NAME\tTIER\tDESCRIPTION")?;
+    for s in skills {
+        writeln!(writer, "{}\t{}\t{}", s.name, s.scope, s.description)?;
+    }
+    Ok(())
+}
+
+fn runs_list(
+    root: PathBuf,
+    _args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "runs",
+            serde_json::json!({
+                "root": root.display().to_string(),
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_runs(writer, &data)?;
+        }
+        return Ok(());
+    }
+    let tasks = list_tasks(&root, false).unwrap_or_default();
+    let runs: Vec<serde_json::Value> = tasks
+        .into_iter()
+        .map(|t| {
+            let has_plan = t.directory.join("plan.md").is_file();
+            let pending_gate = if t.status.state == "awaiting-approval" {
+                Some("approve_plan")
+            } else {
+                None
+            };
+            serde_json::json!({
+                "task_id": t.status.id,
+                "task_title": t.status.title,
+                "status": t.status.state,
+                "current_stage": t.status.state,
+                "has_saved_plan": has_plan,
+                "pending_gate": pending_gate,
+                "active_agents": t.status.agents,
+                "subtasks_progress": [0, 0]
+            })
+        })
+        .collect();
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&runs)?)?;
+    } else {
+        print_human_runs(writer, &serde_json::json!(runs))?;
+    }
+    Ok(())
+}
+
+fn print_human_runs(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let runs = data.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    if runs.is_empty() {
+        writeln!(writer, "no runs")?;
+        return Ok(());
+    }
+    writeln!(writer, "TASK\tSTATUS\tGATE\tAGENTS\tTITLE")?;
+    for r in runs {
+        let task_id = r.get("task_id").and_then(Value::as_u64).unwrap_or(0);
+        let status = r.get("status").and_then(Value::as_str).unwrap_or("-");
+        let gate = r.get("pending_gate").and_then(Value::as_str).unwrap_or("-");
+        let agents = r
+            .get("active_agents")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_else(|| "-".into());
+        let title = r.get("task_title").and_then(Value::as_str).unwrap_or("-");
+        writeln!(writer, "{task_id}\t{status}\t{gate}\t{agents}\t{title}")?;
+    }
     Ok(())
 }
 
 fn roles_list(
     root: PathBuf,
     args: Vec<String>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let json = match args.as_slice() {
-        [] => false,
-        [flag] if flag == "--json" => true,
-        _ => return usage(),
-    };
-    let config = load_config(root)?;
+    if !args.is_empty() {
+        return usage();
+    }
+    let config = load_config(&root)?;
     let active = available_vendors(&config);
     if json {
-        println!("{}", roles_list_json(&config, &active)?);
+        writeln!(writer, "{}", roles_list_json(&config, &active)?)?;
         return Ok(());
     }
     for assignment in resolve_all(&config, &active) {
         match assignment {
-            Ok(role) => println!(
+            Ok(role) => writeln!(
+                writer,
                 "{}\t{}/{}{}",
                 role.role,
                 role.vendor,
@@ -429,18 +991,44 @@ fn roles_list(
                     &role.model
                 },
                 if role.fallback { " (fallback)" } else { "" }
-            ),
-            Err(error) => println!("unavailable\t{error}"),
+            )?,
+            Err(error) => writeln!(writer, "unavailable\t{error}")?,
         }
     }
     Ok(())
 }
 
-fn vendors_list(root: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = load_config(root)?;
+fn vendors_list(
+    root: PathBuf,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = load_config(&root)?;
     let active = available_vendors(&config);
     let mut names: Vec<_> = config.vendors.keys().collect();
     names.sort();
+    if json {
+        let vendors_json: Vec<_> = names
+            .iter()
+            .map(|name| {
+                let vendor = &config.vendors[*name];
+                let state = if vendor.disabled {
+                    "disabled"
+                } else if active.contains(*name) {
+                    "available"
+                } else {
+                    "not installed"
+                };
+                serde_json::json!({
+                    "name": name,
+                    "command": vendor.command,
+                    "state": state,
+                })
+            })
+            .collect();
+        writeln!(writer, "{}", serde_json::to_string_pretty(&vendors_json)?)?;
+        return Ok(());
+    }
     for name in names {
         let vendor = &config.vendors[name];
         let state = if vendor.disabled {
@@ -450,23 +1038,54 @@ fn vendors_list(root: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + 
         } else {
             "not installed"
         };
-        println!("{name}\t{}\t{state}", vendor.command);
+        writeln!(writer, "{name}\t{}\t{state}", vendor.command)?;
     }
     Ok(())
 }
 
-fn config_paths(root: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    println!("global\t{}", config::global_config_path().display());
-    println!("project\t{}", config::project_config_path(&root).display());
-    println!("state\t{}", config::state_dir().display());
+fn config_paths(
+    root: PathBuf,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "global": config::global_config_path().display().to_string(),
+                "project": config::project_config_path(&root).display().to_string(),
+                "state": config::state_dir().display().to_string(),
+            }))?
+        )?;
+        return Ok(());
+    }
+    writeln!(writer, "global\t{}", config::global_config_path().display())?;
+    writeln!(writer, "project\t{}", config::project_config_path(&root).display())?;
+    writeln!(writer, "state\t{}", config::state_dir().display())?;
     Ok(())
 }
 
-fn config_validate(root: PathBuf) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = load_config(root)?;
+fn config_validate(
+    root: PathBuf,
+    json: bool,
+    writer: &mut dyn std::io::Write,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let config = load_config(&root)?;
     let issues = validate(&config);
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "valid": issues.is_empty(),
+                "issues": issues,
+            }))?
+        )?;
+        return Ok(());
+    }
     if issues.is_empty() {
-        println!("configuration is valid");
+        writeln!(writer, "configuration is valid")?;
         return Ok(());
     }
     for issue in issues {
@@ -500,6 +1119,9 @@ fn attach_to_herdr(
 fn create_new_task(
     root: PathBuf,
     args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(title) = args.first() else {
         return usage();
@@ -528,39 +1150,102 @@ fn create_new_task(
             _ => return Err(format!("unknown option {option}").into()),
         }
     }
-    let task = create_task(root, input)?;
-    println!("created task {}-{}", task.status.id, task.status.slug);
-    println!("{}", task.directory.display());
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "task_create",
+            serde_json::json!({
+                "root": root.display().to_string(),
+                "title": input.title,
+                "description": input.description,
+                "criteria": input.criteria,
+                "attachments": input.links,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let id = data
+                .get("status")
+                .and_then(|s| s.get("id"))
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let slug = data
+                .get("status")
+                .and_then(|s| s.get("slug"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let dir = data
+                .get("directory")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            writeln!(writer, "created task {id}-{slug}")?;
+            writeln!(writer, "{dir}")?;
+        }
+        return Ok(());
+    }
+    let task = create_task(&root, input)?;
+    if json {
+        writeln!(writer, "{}", serde_json::to_string_pretty(&task)?)?;
+    } else {
+        writeln!(writer, "created task {}-{}", task.status.id, task.status.slug)?;
+        writeln!(writer, "{}", task.directory.display())?;
+    }
     Ok(())
 }
 
 fn list_task_command(
     root: PathBuf,
     args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut archived = false;
-    let mut json = false;
     for arg in &args {
-        match arg.as_str() {
-            "--archived" => archived = true,
-            "--json" => json = true,
-            _ => return usage(),
+        if arg == "--archived" {
+            archived = true;
+        } else {
+            return usage();
         }
     }
-    let tasks = list_tasks(root, archived)?;
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "tasks",
+            serde_json::json!({
+                "root": root.display().to_string(),
+                "archived": archived,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            print_human_tasks_from_json(writer, &data, archived)?;
+        }
+        return Ok(());
+    }
+    let tasks = list_tasks(&root, archived)?;
     if json {
-        println!("{}", task_list_json(&tasks)?);
+        writeln!(writer, "{}", task_list_json(&tasks)?)?;
         return Ok(());
     }
+    print_human_tasks(writer, &tasks, archived)
+}
+
+fn print_human_tasks(
+    writer: &mut dyn std::io::Write,
+    tasks: &[CreatedTask],
+    archived: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if tasks.is_empty() {
-        println!("no {}tasks", if archived { "archived " } else { "" });
+        writeln!(writer, "no {}tasks", if archived { "archived " } else { "" })?;
         return Ok(());
     }
-    println!("ID\tSTATE\tTITLE\tISSUE\tPR");
+    writeln!(writer, "ID\tSTATE\tTITLE\tISSUE\tPR")?;
     for task in tasks {
         let issue = task
             .status
             .issue
+            .as_ref()
             .map(|i| format!("#{}", i.number))
             .unwrap_or_else(|| "-".into());
         let pr = if task.status.pr == 0 {
@@ -568,10 +1253,53 @@ fn list_task_command(
         } else {
             format!("#{}", task.status.pr)
         };
-        println!(
+        writeln!(
+            writer,
             "{}\t{}\t{}\t{}\t{}",
             task.status.id, task.status.state, task.status.title, issue, pr
-        );
+        )?;
+    }
+    Ok(())
+}
+
+fn print_human_tasks_from_json(
+    writer: &mut dyn std::io::Write,
+    data: &Value,
+    archived: bool,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let arr = data.as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    if arr.is_empty() {
+        writeln!(writer, "no {}tasks", if archived { "archived " } else { "" })?;
+        return Ok(());
+    }
+    writeln!(writer, "ID\tSTATE\tTITLE\tISSUE\tPR")?;
+    for item in arr {
+        let status = item.get("status");
+        let id = status
+            .and_then(|s| s.get("id"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let state = status
+            .and_then(|s| s.get("state"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let title = status
+            .and_then(|s| s.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("-");
+        let issue = status
+            .and_then(|s| s.get("issue"))
+            .and_then(|i| i.get("number"))
+            .and_then(Value::as_u64)
+            .map(|n| format!("#{n}"))
+            .unwrap_or_else(|| "-".into());
+        let pr = status
+            .and_then(|s| s.get("pr"))
+            .and_then(Value::as_u64)
+            .filter(|&n| n != 0)
+            .map(|n| format!("#{n}"))
+            .unwrap_or_else(|| "-".into());
+        writeln!(writer, "{id}\t{state}\t{title}\t{issue}\t{pr}")?;
     }
     Ok(())
 }
@@ -579,34 +1307,26 @@ fn list_task_command(
 fn show_task_command(
     root: PathBuf,
     args: Vec<String>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut json = false;
-    let mut positional = Vec::new();
-    for arg in args {
-        if arg == "--json" {
-            json = true;
-        } else if arg.starts_with('-') {
-            return usage();
-        } else {
-            positional.push(arg);
-        }
-    }
-    if !(1..=2).contains(&positional.len()) {
+    if !(1..=2).contains(&args.len()) {
         return usage();
     }
-    let reference = &positional[0];
-    let task = find_task(root, reference)?;
+    let reference = &args[0];
+    let task = find_task(&root, reference)?;
     if json {
-        println!(
+        writeln!(
+            writer,
             "{}",
-            task_show_json(&task, positional.get(1).map(String::as_str))?
-        );
+            task_show_json(&task, args.get(1).map(String::as_str))?
+        )?;
         return Ok(());
     }
-    if let Some(section) = positional.get(1) {
-        print!("{}", read_task_section(&task, section)?);
+    if let Some(section) = args.get(1) {
+        write!(writer, "{}", read_task_section(&task, section)?)?;
     } else {
-        print!("{}", task_context(&task, 0));
+        write!(writer, "{}", task_context(&task, 0))?;
     }
     Ok(())
 }
@@ -614,13 +1334,15 @@ fn show_task_command(
 fn plan_task_command(
     root: PathBuf,
     args: Vec<String>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (reference, save) = match args.as_slice() {
         [reference] => (reference.as_str(), false),
         [reference, flag] if flag == "--save" => (reference.as_str(), true),
         _ => return usage(),
     };
-    let mut task = find_task(root, reference)?;
+    let mut task = find_task(&root, reference)?;
     let plan = read_task_section(&task, "plan")?;
     if plan.trim().is_empty() || plan.trim() == "# Plan" {
         return Err("the task has no plan yet; write one to its plan section first".into());
@@ -629,7 +1351,26 @@ fn plan_task_command(
     validate_plan(&subtasks)?;
     let mut scheduled = subtasks.clone();
     let round = schedule_subtasks(&mut scheduled, &[], usize::MAX);
-    println!(
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": task.status.id,
+                "subtasks": subtasks,
+                "ready": round.ready,
+                "saved": save,
+            }))?
+        )?;
+        if save {
+            task.status.subtasks = subtasks;
+            task.status.state = "planning".into();
+            save_task_status(task.directory.join("status.json"), &task.status)?;
+        }
+        return Ok(());
+    }
+    writeln!(
+        writer,
         "task {}: {} subtask(s), initial ready: {}",
         task.status.id,
         subtasks.len(),
@@ -639,7 +1380,7 @@ fn plan_task_command(
             .map(u32::to_string)
             .collect::<Vec<_>>()
             .join(", ")
-    );
+    )?;
     for subtask in &subtasks {
         let deps = if subtask.depends_on.is_empty() {
             "-".to_owned()
@@ -651,19 +1392,20 @@ fn plan_task_command(
                 .collect::<Vec<_>>()
                 .join(",")
         };
-        println!(
+        writeln!(
+            writer,
             "{}\t{}\tdepends: {}\tverify: {}",
             subtask.number,
             subtask.title,
             deps,
             subtask.verify.join(" && ")
-        );
+        )?;
     }
     if save {
         task.status.subtasks = subtasks;
         task.status.state = "planning".into();
         save_task_status(task.directory.join("status.json"), &task.status)?;
-        println!("saved validated plan to status.json");
+        writeln!(writer, "saved validated plan to status.json")?;
     }
     Ok(())
 }
@@ -671,18 +1413,19 @@ fn plan_task_command(
 fn edit_task_command(
     root: PathBuf,
     args: Vec<String>,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     if !(1..=2).contains(&args.len()) {
         return usage();
     }
-    let task = find_task(root, &args[0])?;
+    let task = find_task(&root, &args[0])?;
     let section = args.get(1).map(String::as_str).unwrap_or("spec");
     let path = task_section_path(&task, section)?;
     if !path.exists() {
         write_task_section(&task, section, &format!("# {section}\n\n"))?;
     }
     if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-        println!("{}", path.display());
+        writeln!(writer, "{}", path.display())?;
         return Ok(());
     }
     let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".into());
@@ -697,24 +1440,66 @@ fn edit_task_command(
 fn task_path_command(
     root: PathBuf,
     args: Vec<String>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let [reference] = args.as_slice() else {
         return usage();
     };
-    let task = find_task(root, reference)?;
-    println!("{}", task.directory.display());
+    let task = find_task(&root, reference)?;
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "path": task.directory.display().to_string(),
+            }))?
+        )?;
+    } else {
+        writeln!(writer, "{}", task.directory.display())?;
+    }
     Ok(())
 }
 
 fn archive_task_command(
     root: PathBuf,
     args: Vec<String>,
+    server: Option<&HerdrClient>,
+    json: bool,
+    writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let [reference] = args.as_slice() else {
         return usage();
     };
-    let path = archive_task(root, reference)?;
-    println!("archived {}", path.display());
+    if let Some(client) = server {
+        let data = client.shepherd_call(
+            "task_archive",
+            serde_json::json!({
+                "root": root.display().to_string(),
+                "id": reference,
+            }),
+        )?;
+        if json {
+            writeln!(writer, "{}", serde_json::to_string_pretty(&data)?)?;
+        } else {
+            let path = data.get("path").and_then(Value::as_str).unwrap_or("");
+            writeln!(writer, "archived {path}")?;
+        }
+        return Ok(());
+    }
+    let path = archive_task(&root, reference)?;
+    if json {
+        writeln!(
+            writer,
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "archived": true,
+                "path": path.display().to_string(),
+            }))?
+        )?;
+    } else {
+        writeln!(writer, "archived {}", path.display())?;
+    }
     Ok(())
 }
 
@@ -730,13 +1515,59 @@ pub fn project_root(mut path: PathBuf) -> PathBuf {
 }
 
 fn usage<T>() -> Result<T, Box<dyn std::error::Error + Send + Sync>> {
-    Err("usage: shepherd attach [herdr-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> --mcp-url <http://127.0.0.1:PORT/mcp> | shepherd approve <task-id> plan|<subtask-number> | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <http://127.0.0.1:PORT/mcp>] | shepherd agents [--json] | shepherd roles list [--json] | shepherd vendors list | shepherd config path|validate | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] | task edit <id-or-name> [section] | task path <id-or-name> | task archive <id-or-name>".into())
+    Err("usage: shepherd attach [herdr-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json]".into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::terminals::{herdr_attach_args, InMemoryTerminals};
+
+    static TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct TestEnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        orig_xdg: Option<std::ffi::OsString>,
+        orig_home: Option<std::ffi::OsString>,
+        dir: PathBuf,
+    }
+
+    impl TestEnvGuard {
+        fn new() -> Self {
+            let lock = TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+            let orig_xdg = std::env::var_os("XDG_STATE_HOME");
+            let orig_home = std::env::var_os("HOME");
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir()
+                .join(format!("shepherd-test-env-{}-{nonce}", std::process::id()));
+            std::fs::create_dir_all(dir.join("shepherd")).unwrap();
+            std::env::set_var("XDG_STATE_HOME", &dir);
+            std::env::set_var("HOME", &dir);
+            Self {
+                _lock: lock,
+                orig_xdg,
+                orig_home,
+                dir,
+            }
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            match &self.orig_xdg {
+                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+                None => std::env::remove_var("XDG_STATE_HOME"),
+            }
+            match &self.orig_home {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
 
     #[test]
     fn attach_delegates_to_the_selected_herdr_session_and_agent() {
@@ -757,13 +1588,14 @@ mod tests {
 
     #[test]
     fn plan_command_validates_and_persists_subtasks_in_go_compatible_status() {
+        let _env = TestEnvGuard::new();
         use crate::{create_task, find_task, write_task_section, NewTask};
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("shepherd-plan-command-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-plan-command-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let task = create_task(
             &root,
@@ -784,7 +1616,7 @@ mod tests {
             "# Plan\n\n## Subtask 1: Base\nVerify: cargo test\n\n## Subtask 2: Follow-up\nDepends on: 1\n",
         )
         .unwrap();
-        run_cli_in_root(root.clone(), ["task", "plan", "1", "--save"], None).unwrap();
+        run_with_buf(&root, &["task", "plan", "1", "--save"], None, None).unwrap();
         let saved = find_task(&root, "1").unwrap();
         assert_eq!(saved.status.subtasks.len(), 2);
         assert_eq!(saved.status.subtasks[1].depends_on, [1]);
@@ -795,13 +1627,14 @@ mod tests {
 
     #[test]
     fn cli_json_flags_and_injected_terminals_are_accepted() {
+        let _env = TestEnvGuard::new();
         use crate::{create_task, NewTask};
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("shepherd-json-command-{}-{nonce}", std::process::id()));
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-json-command-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         create_task(
             &root,
@@ -817,37 +1650,460 @@ mod tests {
         )
         .unwrap();
 
-        run_cli_in_root(root.clone(), ["agents", "--json"], None).unwrap();
-        run_cli_in_root(root.clone(), ["task", "list", "--json"], None).unwrap();
-        run_cli_in_root(
-            root.clone(),
-            ["task", "list", "--archived", "--json"],
+        run_with_buf(&root, &["agents", "--json"], None, None).unwrap();
+        run_with_buf(&root, &["task", "list", "--json"], None, None).unwrap();
+        run_with_buf(
+            &root,
+            &["task", "list", "--archived", "--json"],
+            None,
             None,
         )
         .unwrap();
-        run_cli_in_root(root.clone(), ["task", "show", "1", "--json"], None).unwrap();
-        run_cli_in_root(
-            root.clone(),
-            ["task", "show", "1", "spec", "--json"],
+        run_with_buf(&root, &["task", "show", "1", "--json"], None, None).unwrap();
+        run_with_buf(
+            &root,
+            &["task", "show", "1", "spec", "--json"],
+            None,
             None,
         )
         .unwrap();
-        run_cli_in_root(root.clone(), ["roles", "list", "--json"], None).unwrap();
+        run_with_buf(&root, &["roles", "list", "--json"], None, None).unwrap();
 
         let fake = Arc::new(InMemoryTerminals::new());
         let terminals_dyn: Arc<dyn Terminals> = Arc::clone(&fake) as Arc<dyn Terminals>;
-        run_cli_in_root(
-            root.clone(),
-            ["clean", "--json"],
+        run_with_buf(
+            &root,
+            &["clean", "--json"],
             Some(Arc::clone(&terminals_dyn)),
+            None,
         )
         .unwrap();
-        run_cli_in_root(
-            root.clone(),
-            ["attach", "coder-1", "--takeover"],
+        run_with_buf(
+            &root,
+            &["attach", "coder-1", "--takeover"],
             Some(terminals_dyn),
+            None,
         )
         .unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn run_with_buf(
+        root: &Path,
+        args: &[&str],
+        terminals: Option<Arc<dyn Terminals>>,
+        client: Option<HerdrClient>,
+    ) -> Result<String, (String, Box<dyn std::error::Error + Send + Sync>)> {
+        let mut buf = Vec::new();
+        let string_args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        match run_cli_in_root_with_output(root.to_path_buf(), string_args, terminals, client, &mut buf) {
+            Ok(()) => Ok(String::from_utf8_lossy(&buf).to_string()),
+            Err(e) => Err((String::from_utf8_lossy(&buf).to_string(), e)),
+        }
+    }
+
+    #[test]
+    fn test_flag_parsing_no_server_and_json_position() {
+        let _env = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-flag-test-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // 1. Mock server client that tracks whether it was invoked
+        let invoked = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let invoked_clone = Arc::clone(&invoked);
+        let client = HerdrClient::in_process(move |method, params| {
+            assert_eq!(method, "shepherd.call");
+            invoked_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(params["op"], "agents");
+            Ok(serde_json::json!({
+                "type": "shepherd_call",
+                "data": []
+            }))
+        });
+
+        // 2. Normal execution without --no-server uses the server
+        let out = run_with_buf(&root, &["agents", "--json"], None, Some(client)).unwrap();
+        assert!(invoked.load(std::sync::atomic::Ordering::SeqCst));
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+
+        // 3. Execution with --no-server (placed anywhere) bypasses the server
+        let invoked_no_srv = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let invoked_no_srv_clone = Arc::clone(&invoked_no_srv);
+        let client_no_srv = HerdrClient::in_process(move |_method, _params| {
+            invoked_no_srv_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(serde_json::json!({}))
+        });
+        let out2 = run_with_buf(
+            &root,
+            &["--no-server", "agents", "--json"],
+            None,
+            Some(client_no_srv),
+        )
+        .unwrap();
+        assert!(!invoked_no_srv.load(std::sync::atomic::Ordering::SeqCst));
+        let parsed2: Value = serde_json::from_str(&out2).unwrap();
+        assert!(parsed2.is_array());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_fallback_to_in_process_when_no_server() {
+        let _env = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-fallback-test-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Pass a client pointing to a nonexistent socket
+        let client = HerdrClient::new(PathBuf::from("/tmp/nonexistent-shepherd-socket-12345.sock"));
+        let out = run_with_buf(&root, &["agents", "--json"], None, Some(client)).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.is_array());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_json_error_output() {
+        let _env = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-json-err-test-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // 1. Task not found error with --json
+        let (out, err) = run_with_buf(&root, &["task", "show", "9999", "--json"], None, None).unwrap_err();
+        assert!(err.to_string().contains("9999"));
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert!(parsed.get("error").is_some());
+        assert!(parsed["error"].as_str().unwrap().contains("9999"));
+
+        // 2. Kill missing id with --json
+        let (out_kill, _) = run_with_buf(&root, &["kill", "--json"], None, None).unwrap_err();
+        let parsed_kill: Value = serde_json::from_str(&out_kill).unwrap();
+        assert!(parsed_kill["error"].as_str().unwrap().contains("usage"));
+
+        // 3. Msg / messages not available error with --json
+        let (out_msg, _) = run_with_buf(&root, &["messages", "--json"], None, None).unwrap_err();
+        let parsed_msg: Value = serde_json::from_str(&out_msg).unwrap();
+        assert!(parsed_msg["error"].as_str().unwrap().contains("operation not available"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_all_subcommands_json_output() {
+        let _env = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-all-json-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let fake_terminals = Arc::new(InMemoryTerminals::new());
+        let terminals_dyn: Arc<dyn Terminals> = Arc::clone(&fake_terminals) as Arc<dyn Terminals>;
+
+        // 1. task new --json
+        let out = run_with_buf(
+            &root,
+            &[
+                "task", "new", "Feature X",
+                "--description", "My feature",
+                "--criteria", "- [ ] Must work",
+                "--id", "1",
+                "--json",
+            ],
+            None,
+            None,
+        )
+        .unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["status"]["id"], 1);
+        assert_eq!(v["status"]["title"], "Feature X");
+        assert!(v.get("directory").is_some());
+
+        // 2. task list --json
+        let out = run_with_buf(&root, &["task", "list", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+        assert_eq!(v[0]["id"], 1);
+
+        // 3. task list --archived --json
+        let out = run_with_buf(&root, &["task", "list", "--archived", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+
+        // 4. task show 1 --json
+        let out = run_with_buf(&root, &["task", "show", "1", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["id"], 1);
+        assert!(v.get("context").is_some());
+
+        // 5. task show 1 spec --json
+        let out = run_with_buf(&root, &["task", "show", "1", "spec", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["id"], 1);
+        assert_eq!(v["section"], "spec");
+        assert!(v.get("content").is_some());
+
+        // 6. task plan 1 --json
+        let task = find_task(&root, "1").unwrap();
+        write_task_section(
+            &task,
+            "plan",
+            "# Plan\n\n## Subtask 1: Base\nVerify: true\n",
+        )
+        .unwrap();
+        let out = run_with_buf(&root, &["task", "plan", "1", "--save", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["id"], 1);
+        assert!(v.get("subtasks").is_some());
+        assert_eq!(v["saved"], true);
+
+        // 7. task path 1 --json
+        let out = run_with_buf(&root, &["task", "path", "1", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("path").is_some());
+
+        // 8. roles list --json
+        let out = run_with_buf(&root, &["roles", "list", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+
+        // 9. vendors list --json
+        let out = run_with_buf(&root, &["vendors", "list", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+        assert!(v[0].get("name").is_some());
+        assert!(v[0].get("command").is_some());
+
+        // 10. config path --json
+        let out = run_with_buf(&root, &["config", "path", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("global").is_some());
+        assert!(v.get("project").is_some());
+        assert!(v.get("state").is_some());
+
+        // 11. config validate --json
+        let out = run_with_buf(&root, &["config", "validate", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("valid").is_some());
+
+        // 12. skills list --json
+        let out = run_with_buf(&root, &["skills", "list", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+
+        // 13. runs list --json
+        let out = run_with_buf(&root, &["runs", "list", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+        assert_eq!(v[0]["task_id"], 1);
+
+        // 14. agents --json
+        let out = run_with_buf(&root, &["agents", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.is_array());
+
+        // 15. clean --json
+        let out = run_with_buf(&root, &["clean", "--json"], Some(Arc::clone(&terminals_dyn)), None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.get("cleaned").is_some());
+
+        // 16. approve 1 plan --json
+        let mut status = task.status.clone();
+        status.waiting = "plan".into();
+        save_task_status(task.directory.join("status.json"), &status).unwrap();
+        let out = run_with_buf(&root, &["approve", "1", "plan", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["task"], "1");
+        assert_eq!(v["approved"], "plan");
+
+        // 17. task archive 1 --json
+        let out = run_with_buf(&root, &["task", "archive", "1", "--json"], None, None).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["archived"], true);
+        assert!(v.get("path").is_some());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn test_server_mode_delegation_via_in_process_client() {
+        let _env = TestEnvGuard::new();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir()
+            .join(format!("shepherd-server-delegation-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let ops_called = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let ops_clone = Arc::clone(&ops_called);
+
+        let client = HerdrClient::in_process(move |method, params| {
+            assert_eq!(method, "shepherd.call");
+            let op = params["op"].as_str().unwrap().to_string();
+            ops_clone.lock().unwrap().push((op.clone(), params["args"].clone()));
+            match op.as_str() {
+                "agents" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": [
+                        { "id": "coder-1", "state": "idle", "role": "coder", "vendor": "gemini", "model": "", "task_text": "demo" }
+                    ]
+                })),
+                "spawn" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "id": "coder-2", "role": "coder", "vendor": "gemini", "model": "", "state": "starting", "pane": "w1:p2", "worktree": "", "branch": "" }
+                })),
+                "kill" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "id": "coder-1", "state": "killed" }
+                })),
+                "clean" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "cleaned": ["coder-1"] }
+                })),
+                "focus" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "id": "coder-1" }
+                })),
+                "skills" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": [
+                        { "name": "test-skill", "tier": "default", "description": "A skill" }
+                    ]
+                })),
+                "runs" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": [
+                        { "task_id": 1, "task_title": "Run demo", "status": "active", "pending_gate": null, "active_agents": [] }
+                    ]
+                })),
+                "tasks" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": [
+                        { "status": { "id": 1, "state": "planning", "title": "T1", "slug": "t1", "issue": null, "pr": 0 }, "directory": "/tmp/t1" }
+                    ]
+                })),
+                "task_create" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "status": { "id": 2, "state": "draft", "title": "T2", "slug": "t2" }, "directory": "/tmp/t2" }
+                })),
+                "task_archive" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "archived": true, "path": "/tmp/archive/1" }
+                })),
+                "run" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "started": ["1"], "completed_coding": [1], "waiting_for_human": [], "failed": [], "plan_waiting": false, "auto_push": false, "pushed_prs": [] }
+                })),
+                "approve" => Ok(serde_json::json!({
+                    "type": "shepherd_call",
+                    "data": { "task": "1", "approved": "plan" }
+                })),
+                other => Err(crate::herdr::HerdrError::Api {
+                    code: "unknown_op".into(),
+                    message: format!("unknown op {other}"),
+                }),
+            }
+        });
+
+        // 1. agents in server mode (human and JSON)
+        let out_json = run_with_buf(&root, &["agents", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out_json).unwrap();
+        assert_eq!(parsed[0]["id"], "coder-1");
+
+        let out_human = run_with_buf(&root, &["agents"], None, Some(client.clone())).unwrap();
+        assert!(out_human.contains("coder-1"));
+
+        // 2. spawn in server mode
+        let out = run_with_buf(&root, &["spawn", "coder", "do task", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["id"], "coder-2");
+
+        // 3. kill in server mode
+        let out = run_with_buf(&root, &["kill", "coder-1", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["state"], "killed");
+
+        // 4. clean in server mode
+        let out = run_with_buf(&root, &["clean", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["cleaned"][0], "coder-1");
+
+        // 5. focus in server mode
+        let out = run_with_buf(&root, &["focus", "coder-1", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["id"], "coder-1");
+
+        // 6. skills list in server mode
+        let out = run_with_buf(&root, &["skills", "list", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["name"], "test-skill");
+
+        // 7. runs list in server mode
+        let out = run_with_buf(&root, &["runs", "list", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["task_id"], 1);
+
+        // 8. tasks in server mode
+        let out = run_with_buf(&root, &["task", "list", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed[0]["status"]["id"], 1);
+
+        // 9. task new in server mode
+        let out = run_with_buf(&root, &["task", "new", "T2", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["status"]["id"], 2);
+
+        // 10. task archive in server mode
+        let out = run_with_buf(&root, &["task", "archive", "1", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["archived"], true);
+
+        // 11. run in server mode
+        let out = run_with_buf(&root, &["run", "1", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["started"][0], "1");
+
+        // 12. approve in server mode
+        let out = run_with_buf(&root, &["approve", "1", "plan", "--json"], None, Some(client.clone())).unwrap();
+        let parsed: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed["approved"], "plan");
+
+        // Verify that all 12 alive-state ops were dispatched to shepherd.call!
+        let calls = ops_called.lock().unwrap();
+        let dispatched_ops: Vec<String> = calls.iter().map(|(op, _)| op.clone()).collect();
+        assert!(dispatched_ops.contains(&"agents".to_string()));
+        assert!(dispatched_ops.contains(&"spawn".to_string()));
+        assert!(dispatched_ops.contains(&"kill".to_string()));
+        assert!(dispatched_ops.contains(&"clean".to_string()));
+        assert!(dispatched_ops.contains(&"focus".to_string()));
+        assert!(dispatched_ops.contains(&"skills".to_string()));
+        assert!(dispatched_ops.contains(&"runs".to_string()));
+        assert!(dispatched_ops.contains(&"tasks".to_string()));
+        assert!(dispatched_ops.contains(&"task_create".to_string()));
+        assert!(dispatched_ops.contains(&"task_archive".to_string()));
+        assert!(dispatched_ops.contains(&"run".to_string()));
+        assert!(dispatched_ops.contains(&"approve".to_string()));
 
         std::fs::remove_dir_all(root).unwrap();
     }

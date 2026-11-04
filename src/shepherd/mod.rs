@@ -167,23 +167,39 @@ pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
     let root = shepherd_core::cli::project_root(cwd);
     let config = shepherd_core::config::load_config(&root).unwrap_or_default();
 
+    let active_session = crate::session::active_name();
+    let session_name = active_session
+        .as_deref()
+        .or(Some(config.herdr.session.as_str()));
+    let socket_path = resolve_session_socket_path(session_name);
+
+    let client = if socket_path.exists() {
+        Some(shepherd_core::herdr::HerdrClient::new(socket_path))
+    } else {
+        None
+    };
+
     let terminals: Option<Arc<dyn Terminals>> = match shepherd_core::terminals::select_backend(&config)
     {
         Ok(BackendKind::Hc) => None,
         Ok(BackendKind::InProcess | BackendKind::Socket) | Err(_) => {
-            let active_session = crate::session::active_name();
-            let session_name = active_session
-                .as_deref()
-                .or(Some(config.herdr.session.as_str()));
             try_connect_local_in_process(session_name)
                 .map(|adapter| Arc::new(adapter) as Arc<dyn Terminals>)
         }
     };
 
-    match shepherd_core::run_cli_with_terminals(args.iter().skip(1).cloned(), terminals) {
+    let is_json = args.iter().any(|a| a == "--json");
+    match shepherd_core::cli::run_cli_in_root_with_client(
+        root,
+        args.iter().skip(1).cloned(),
+        terminals,
+        client,
+    ) {
         Ok(()) => Ok(0),
         Err(error) => {
-            eprintln!("shepherd: {error}");
+            if !is_json {
+                eprintln!("shepherd: {error}");
+            }
             Ok(1)
         }
     }
@@ -564,40 +580,55 @@ mod tests {
 
     #[test]
     fn herdr_shepherd_cli_subcommands_run_agents_tasks_and_roles_json() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let temp_dir = std::env::temp_dir()
+            .join(format!("shepherd-herdr-cli-test-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(temp_dir.join("shepherd")).unwrap();
+        let orig_xdg = std::env::var_os("XDG_STATE_HOME");
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("XDG_STATE_HOME", &temp_dir);
+        std::env::set_var("HOME", &temp_dir);
+
+        let res1 = crate::cli::maybe_run(&[
+            "herdr".into(),
+            "shepherd".into(),
+            "agents".into(),
+            "--json".into(),
+        ]);
+        let res2 = run_cli(&["shepherd".into(), "agents".into(), "--json".into()]);
+        let res3 = run_cli(&[
+            "shepherd".into(),
+            "task".into(),
+            "list".into(),
+            "--json".into(),
+        ]);
+        let res4 = run_cli(&[
+            "shepherd".into(),
+            "roles".into(),
+            "list".into(),
+            "--json".into(),
+        ]);
+
+        match orig_xdg {
+            Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+            None => std::env::remove_var("XDG_STATE_HOME"),
+        }
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
         assert!(matches!(
-            crate::cli::maybe_run(&[
-                "herdr".into(),
-                "shepherd".into(),
-                "agents".into(),
-                "--json".into()
-            ])
-            .unwrap(),
+            res1.unwrap(),
             crate::cli::CommandOutcome::Handled(0)
         ));
-        assert_eq!(
-            run_cli(&["shepherd".into(), "agents".into(), "--json".into()]).unwrap(),
-            0
-        );
-        assert_eq!(
-            run_cli(&[
-                "shepherd".into(),
-                "task".into(),
-                "list".into(),
-                "--json".into()
-            ])
-            .unwrap(),
-            0
-        );
-        assert_eq!(
-            run_cli(&[
-                "shepherd".into(),
-                "roles".into(),
-                "list".into(),
-                "--json".into()
-            ])
-            .unwrap(),
-            0
-        );
+        assert_eq!(res2.unwrap(), 0);
+        assert_eq!(res3.unwrap(), 0);
+        assert_eq!(res4.unwrap(), 0);
     }
 
     #[test]

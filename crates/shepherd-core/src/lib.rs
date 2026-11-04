@@ -14,7 +14,10 @@ pub mod spawn;
 pub mod mcp;
 pub mod workflow;
 
-pub use cli::{run_cli, run_cli_in_root, run_cli_with_terminals};
+pub use cli::{
+    run_cli, run_cli_in_root, run_cli_in_root_with_client, run_cli_in_root_with_output,
+    run_cli_with_terminals,
+};
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
