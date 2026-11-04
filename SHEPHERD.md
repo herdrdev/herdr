@@ -772,3 +772,11 @@ El marcador `[working]` se muestra completo y visible a la derecha, mientras que
 ### Nota del revisor (F3f)
 
 Repetido por el revisor: `worktree.create` con `base` omitido y con `base: ""` crea el worktree en la sesión aislada; tests en verde (`shepherd-core` 65, `client::shell` 391, `shepherd::` 47, `protocol::` 156, `server::` 318, `app::api::worktrees` 33). Cambio en herdr no previsto por el encargo: `src/app/api/worktrees/deferred.rs` trata `base` vacío como `HEAD` (endurecimiento de la API; anotado entre los archivos de herdr modificados).
+
+## Prueba de comunicación entre agentes (2026-11-04)
+
+Sesión aislada con un agy real (`gemini-3.8-flash-high`, sin MCP porque agy no lo declara en la config de vendors) y el servidor MCP real del servicio (loopback, token por agente) llamado por HTTP con el token de ese agente. Un agente `claude`/`codex` real usando las herramientas MCP **no** se ha probado.
+
+Funciona: `initialize` y `tools/list`; autenticación (token falso → 401); `send_message` escribe en el bus y `read_messages` lo devuelve; `submit_result` registra el resultado y `get_result` lo lee; el agente agy real terminó y pasó a `done`; la barra lateral mostró `[working]` visible con la etiqueta larga (F3f confirmado con agente real).
+
+Fallo: **los mensajes no se entregan a la terminal de agentes sin MCP.** La skill `shepherd-comms` promete que llegan como `[shep] from <rol>#<n>: …`, pero en el servicio de Rust `send_message` solo escribe en el bus y nada lo teclea en el pane del destinatario (no existe «[shep]» en el código). Tras `send_message` al agente agy, su terminal no mostró nada. Un agente sin MCP (todos los agy hoy) solo recibe el primer prompt. Pendiente: un repartidor en el servicio que, para agentes no-MCP vivos, teclee los mensajes nuevos del bus en su pane cuando esté inactivo (con las mismas cautelas del primer prompt: esperar a que esté libre, verificar, no pisar un diálogo).
