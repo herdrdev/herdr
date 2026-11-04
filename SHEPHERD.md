@@ -780,3 +780,14 @@ Sesión aislada con un agy real (`gemini-3.8-flash-high`, sin MCP porque agy no 
 Funciona: `initialize` y `tools/list`; autenticación (token falso → 401); `send_message` escribe en el bus y `read_messages` lo devuelve; `submit_result` registra el resultado y `get_result` lo lee; el agente agy real terminó y pasó a `done`; la barra lateral mostró `[working]` visible con la etiqueta larga (F3f confirmado con agente real).
 
 Fallo: **los mensajes no se entregan a la terminal de agentes sin MCP.** La skill `shepherd-comms` promete que llegan como `[shep] from <rol>#<n>: …`, pero en el servicio de Rust `send_message` solo escribe en el bus y nada lo teclea en el pane del destinatario (no existe «[shep]» en el código). Tras `send_message` al agente agy, su terminal no mostró nada. Un agente sin MCP (todos los agy hoy) solo recibe el primer prompt. Pendiente: un repartidor en el servicio que, para agentes no-MCP vivos, teclee los mensajes nuevos del bus en su pane cuando esté inactivo (con las mismas cautelas del primer prompt: esperar a que esté libre, verificar, no pisar un diálogo).
+
+### Prueba con agentes reales claude + codex (2026-11-04)
+
+Sesión aislada (`SHF_HOME=$HOME` solo para las credenciales de los vendors). Un `brain` (`claude`, `haiku`) recibió una tarea que usaba solo las herramientas MCP de Shepherd y el servicio lanzó un `coder` (`codex`, worktree).
+
+Funcionó de punta a punta: el brain llamó a `list_agents`, `spawn_agent` (el servicio abrió el pane y el worktree de codex), `send_message`, `wait_for`, `get_result` y `submit_result`; el coder (codex) llamó a `read_messages` por iniciativa propia, leyó «recuerda no hacer commit» del brain, creó `hola.txt` en su worktree sin commit y llamó a `submit_result`; ambos agentes pasaron a `idle` con `has_result` y la barra lateral los mostró con su marcador. Skills (`shepherd-comms`, `implement-task`), MCP con token por agente y entrega del primer prompt confirmados con vendors reales.
+
+Observaciones:
+- `get_task_context` devuelve «this agent has no task context» cuando el agente se lanza sin `task_id` (esperable, pero el prompt del coder le manda llamarlo primero).
+- Los worktrees se crean bajo el `HOME` con el que corre el servidor: con `SHF_HOME` real se crearon en `~/.herdr/worktrees/` (limpiados a mano); la config de confianza de claude/codex/agy conserva la entrada `/tmp/shfiso/repo`.
+- Sigue el fallo de los agentes **sin MCP** (agy): los mensajes del bus no se teclean en su terminal.

@@ -18,7 +18,7 @@ case "${1:-}" in
  screen) tmux -L shfiso capture-pane -p -t t;;
  call) python3 - "$SOCK" "$2" "$3" <<'PY'
 import socket,sys,json
-s=socket.socket(socket.AF_UNIX); s.settimeout(20); s.connect(sys.argv[1])
+s=socket.socket(socket.AF_UNIX); s.settimeout(float(__import__("os").environ.get("SHF_TIMEOUT","20"))); s.connect(sys.argv[1])
 s.sendall((json.dumps({"id":"1","method":sys.argv[2],"params":json.loads(sys.argv[3])})+"\n").encode())
 d=b""
 while not d.endswith(b"\n"):
