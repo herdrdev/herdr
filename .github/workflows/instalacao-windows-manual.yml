@@ -1,0 +1,39 @@
+name: Instalação Windows (manual)
+
+# Executa, numa máquina Windows hospedada, os passos do README para outros usuários:
+# clone de master, rustup já presente, Zig 0.16.0, `cargo install just`, `just build` e o executável.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  instalacao-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Instalar Zig 0.16.0
+        uses: vercel-labs/setup-zig@83c1594f26b86da8a9a8ddd9b5ee5f3af0f96943 # v1.0.2
+        with:
+          version: 0.16.0
+      - name: Clonar e construir como no README
+        env:
+          CARGO_INCREMENTAL: "0"
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo install just --locked
+          git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
+          Set-Location herdr-pretorian
+          "commit=$(git rev-parse --short HEAD)"
+          zig version
+          just build
+          .\target\release\herdr.exe --version
+          $cfg = .\target\release\herdr.exe --default-config
+          if (-not ($cfg | Select-String -Quiet 'name = "pretorian"')) { throw "config padrao sem tema pretorian" }
+          if (-not ($cfg | Select-String -Quiet 'window_title = "Pretorian"')) { throw "config padrao sem titulo Pretorian" }
+          if (-not (Test-Path .\target\release\conpty\conpty.dll)) { throw "conpty ausente ao lado do executavel" }
+          "INSTALACAO_WINDOWS_OK $([System.Environment]::OSVersion.VersionString)"
