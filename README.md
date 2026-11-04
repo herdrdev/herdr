@@ -54,18 +54,18 @@ Pré-requisitos (uma vez por máquina):
 macOS e Linux:
 
 ```bash
-git clone -b trabalho/interface-pretorian https://github.com/lamarck-nemesis/herdr-pretorian.git
+git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
 cd herdr-pretorian
 just instalar          # ou: cargo build --release --locked && install -m 755 target/release/herdr ~/.local/bin/pretorian
 pretorian
 ```
 
-Enquanto a proposta não for incorporada em `master`, clone a branch `trabalho/interface-pretorian` como acima; depois do merge, o `-b` deixa de ser necessário. `just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
+Até a proposta ser incorporada em `master`, acrescente `-b trabalho/interface-pretorian` ao `git clone`. `just instalar` grava `~/.local/bin/pretorian` (outro destino: `just instalar /caminho`). Um `herdr` pessoal já instalado não é tocado. Confira que `~/.local/bin` está no `PATH`.
 
 Windows x64 (PowerShell, com rustup, Zig e Python 3 instalados; o script baixa o ConPTY da Microsoft):
 
 ```powershell
-git clone -b trabalho/interface-pretorian https://github.com/lamarck-nemesis/herdr-pretorian.git
+git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
 cd herdr-pretorian
 just build             # ou: python scripts/package_windows_conpty.py build-local
 .\target\release\herdr.exe
