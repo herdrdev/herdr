@@ -1,3 +1,5 @@
+> **Note:** This upstream documentation translation may be outdated. Please see [README.md](README.md) for the current English Shepherd documentation.
+
 # herdr
 
 

@@ -1385,3 +1385,88 @@ Verificación de extremo a extremo sin agentes reales en entorno aislado (`/tmp/
    - Pestañas funcionales: `Tareas   Runs   Skills   Git`.
    - La captura de pantalla en cada una de las pestañas (`Tareas`, `Runs`, `Skills`) confirma que **no existe ninguna aparición de `herdr` visible en la TUI**.
 4. **Cierre limpio**: `Escape` cierra el overlay y `./scripts/shepherd-iso.sh stop` apaga el servidor y sesión tmux de forma limpia.
+
+## Estado F5b (2026-11-04)
+
+README, NOTICE con crédito a herdr, documentación y rutina de sincronización con upstream verificada en repositorios temporales.
+
+### 1. Lo hecho
+
+1. **`NOTICE` (raíz)**:
+   - Atribución conforme a Apache-2.0 §4 a herdr (`herdrdev/herdr` base 0.9.5, «the herdr contributors»).
+   - Atribución del orquestador en proceso (`crates/shepherd-core`, `src/shepherd/`) © Sebastián Araque Rivaldito bajo Apache-2.0.
+   - Aviso explícito de modificaciones («files changed from the upstream herdr; see git history and SHEPHERD.md»).
+   - `LICENSE` permanece intacto sin modificaciones.
+
+2. **`README.md` reescrito para Shepherd (inglés, 72 líneas)**:
+   - Qué es: runtime y orquestador basado en terminal para agentes de código.
+   - Crédito prominente a herdr con enlace a upstream (`https://github.com/herdrdev/herdr`) y licencia Apache-2.0.
+   - Qué añade: overlay TUI (`prefix + a`) con Tareas, Runs, Skills y Git (solo lectura); barra lateral con estados de agentes y avisos multilínea `[NEEDS YOU]`; servidor MCP en proceso con autenticación por token; entrega automática de mensajes a la terminal de agentes sin MCP (`[shep] from <rol>#<n>: ...`); CLI estructurada con salida `--json` uniforme; daemon headless con reconciliación y reanudación.
+   - Instalación estrictamente desde fuente con `cargo` (sin instrucciones de Homebrew, curl de upstream ni badges).
+   - Configuración mínima con `[shepherd] enabled = true`, ruta propia `~/.config/shepherd` y fallback de lectura de `~/.config/herdr/config.toml`.
+   - Diferencias con herdr, estado experimental y licencia.
+   - El README no contiene `herdrdev` salvo en el enlace de crédito a upstream.
+
+3. **`README.zh-CN.md`**:
+   - Añadida al inicio la nota en inglés indicando que la traducción de upstream puede estar desfasada y remitiendo a `README.md`.
+
+4. **Rutina de sincronización con upstream (`scripts/upstream-sync.sh`)**:
+   - Implementada en `scripts/upstream-sync.sh` con soporte para `--dry-run`, `--skip-build`, `--skip-tests`, `--allow-branch`, `--allow-dirty` y `--upstream <remote>`:
+     - (a) Verifica árbol limpio y rama `shepherd`.
+     - (b) Crea rama temporal `sync/<tag>`.
+     - (c) Ejecuta `git fetch <upstream>` y merge de tag o commit; ante conflictos detiene el proceso con código de salida 2, lista los ficheros afectados y emite instrucciones de resolución.
+     - (d) Re-aplica `scripts/rename-from-herdr.sh`, verifica limpieza con `--check` y confirma los cambios en la rama.
+     - (e) Compila con `./cargo-fork.sh build` y ejecuta la batería de tests por áreas.
+     - (f) Deja la rama lista **sin push y sin merge a `shepherd`**, recordando la revisión humana previa.
+   - Exclusiones añadidas en `scripts/rename-from-herdr.sh` (`scripts/upstream-sync.sh` y `docs/UPSTREAM-SYNC.md`) y regla en `.gitignore` para no ignorar `!/docs/UPSTREAM-SYNC.md`.
+
+5. **Documentación de sincronización (`docs/UPSTREAM-SYNC.md`)**:
+   - Guía paso a paso del flujo de sincronización y modo `--dry-run`.
+   - Detalle de conflictos típicos esperables y cómo resolverlos: archivos renombrados o movidos, `Cargo.lock`, fixtures congelados de protocolo v1 (`tests/fixtures/`), compatibilidad de contrato wire (`PaneRightClickTarget`), auto-updater de upstream desactivado y fallback de configuración.
+   - Batería de verificación y notas sobre tests.
+
+### 2. Verificación
+
+1. **Rename check**:
+   `./scripts/rename-from-herdr.sh --check` finaliza con código 0: `[OK] No unexcluded occurrences of herdr/Herdr/HERDR found.`.
+
+2. **Crédito y enlaces en README**:
+   `grep -n "herdrdev" README.md` devuelve únicamente la línea 9 (enlace a upstream en la sección de crédito).
+
+3. **Compilación**:
+   `./cargo-fork.sh build` finaliza limpiamente con código 0.
+
+4. **Tests de `shepherd-core`**:
+   `./cargo-fork.sh test -p shepherd-core`: 82 tests pasados, 0 fallados.
+   `./cargo-fork.sh test -p shepherd-core 2>&1 | grep -c testRepo` devuelve **0**.
+
+5. **Tests por áreas**:
+   - `client::shell`: 391 passed, 0 failed, 2 ignored.
+   - `shepherd::`: 52 passed, 0 failed.
+   - `protocol::`: 156 passed (unittests) + 3 passed (cli.rs), 0 failed.
+   - `api::`: 319 passed, 0 failed, 1 ignored.
+   - `server::`: 318 passed, 0 failed, 5 ignored.
+   - *Nota de entorno*: la ejecución de la suite completa en bloque puede terminar con SIGPIPE debido al harness de PTY en entornos sin terminal interactivo, y los tests de plugins/config en paralelo son intermitentes conocidos (pasan en solitario).
+
+6. **Verificación de la rutina de sync en repositorio temporal**:
+   - Ejecutado en `/tmp/` con dos repositorios locales simulando `upstream` y `downstream` sin tocar en ningún momento la red ni el remoto upstream real.
+   - Commit simulado en upstream con la palabra `herdr`.
+   - `upstream-sync.sh v0.9.6` completó el ciclo: merge en rama `sync/v0.9.6`, renombrado automático aplicado transformando `herdr` a `shepherd`, `--check` limpio, tests simulados ejecutados, y rama `shepherd` preservada intacta sin push ni merge.
+   - Prueba adicional simulando conflicto de merge: detección de conflicto, salida limpia con código 2 y reporte de fichero en conflicto.
+
+### 3. Qué NO queda (lo que falta para lanzamiento público)
+
+1. **Publicación en GitHub**: El repositorio de Shepherd no ha sido publicado como repositorio público ni privado en GitHub.
+2. **Releases y canales de distribución**: No hay tags de versión ni manifests de release publicados (`distribution/latest.json` y `distribution/preview.json` son los originales y no deben usarse).
+3. **Instaladores y binarios empaquetados**: No existen instaladores rápidos de `curl | sh`, fórmulas de Homebrew ni paquetes de Nix o Windows para Shepherd; la instalación es exclusivamente desde fuente con `cargo`.
+4. **Sitio web y documentación pública**: No hay despliegue web público de la documentación (vive en el repositorio).
+5. **Marca definitiva**: "Shepherd" es el nombre acordado para el fork; los dominios, logos finales y detalles comerciales quedan fuera de esta fase.
+
+### 4. Decisiones abiertas para el dueño
+
+1. **Organización y visibilidad en GitHub**: ¿Bajo qué cuenta u organización se alojará el repositorio de Shepherd (p. ej. repositorio público o privado) y cuál será el nombre del remote canónico?
+2. **Estrategia de versionado**: ¿Comenzar las versiones de Shepherd en `0.1.0` (como proyecto independiente) o alineadas con la base upstream `0.9.5`?
+3. **Canales de actualización (`latest` / `preview`)**: ¿Se desea implementar un sistema propio de actualización para binarios precompilados de Shepherd mediante GitHub Releases u otro backend de almacenamiento?
+4. **Instalación y empaquetado**: ¿Interesa publicar una fórmula propia de Homebrew (`brew tap`) y un script `install.sh` propio de Shepherd?
+5. **Documentación multi-idioma**: ¿Se mantendrán traducciones como `README.zh-CN.md` (con aviso de posible desactualización) o se prefiere retirarlas para mantener únicamente la versión en inglés?
+

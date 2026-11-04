@@ -47,6 +47,8 @@ my %exact_path_exclusions = map { $_ => 1 } qw(
     distribution/preview.json
     skills/herdr/SKILL.md
     scripts/rename-from-herdr.sh
+    scripts/upstream-sync.sh
+    docs/UPSTREAM-SYNC.md
     README.md
     README.zh-CN.md
 );

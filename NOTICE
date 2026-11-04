@@ -1,0 +1,9 @@
+Shepherd
+Copyright (c) Sebastián Araque Rivaldito.
+
+Shepherd is a fork of herdr (https://github.com/herdrdev/herdr), © its authors ("the herdr contributors"), licensed under Apache-2.0.
+Base version: 0.9.5.
+
+Shepherd adds an in-process coding agent orchestrator (`crates/shepherd-core`, `src/shepherd/`), © Sebastián Araque Rivaldito, licensed under Apache-2.0.
+
+This product contains files changed from the upstream herdr; see git history and SHEPHERD.md.
