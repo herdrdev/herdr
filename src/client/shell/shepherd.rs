@@ -392,7 +392,12 @@ impl ClientShellState {
                         }
                     }
                     "runs" => {
-                        // If runs JSON is returned, update runs view
+                        if let Some(arr) = data.as_array() {
+                            overlay.runs.runs = arr
+                                .iter()
+                                .filter_map(crate::shepherd::runs::ShepherdRunRow::from_value)
+                                .collect();
+                        }
                         overlay.status_message = None;
                     }
                     "skills" => {

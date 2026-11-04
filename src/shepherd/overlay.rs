@@ -558,24 +558,26 @@ pub fn route_shepherd_key(
                     ShepherdRunsAction::ApproveGate { task_id, gate } => {
                         let target = match gate {
                             GateKind::PlanApproval => "plan".to_string(),
-                            GateKind::PushAndPr { subtask } => format!("subtask:{subtask}"),
+                            GateKind::PushAndPr { subtask } => format!("{subtask}"),
                         };
                         overlay.last_dispatched = Some(format!("approve:{task_id}:{target}"));
                         dispatcher.dispatch_call(
                             "approve",
                             json!({ "task": task_id.to_string(), "target": target }),
                         );
+                        dispatcher.dispatch_call("runs", json!({}));
                     }
                     ShepherdRunsAction::RejectGate { task_id, gate } => {
                         let target = match gate {
                             GateKind::PlanApproval => "plan".to_string(),
-                            GateKind::PushAndPr { subtask } => format!("subtask:{subtask}"),
+                            GateKind::PushAndPr { subtask } => format!("{subtask}"),
                         };
-                        overlay.last_dispatched = Some(format!("reject_gate:{task_id}:{target}"));
+                        overlay.last_dispatched = Some(format!("reject:{task_id}:{target}"));
                         dispatcher.dispatch_call(
-                            "reject_gate",
+                            "reject",
                             json!({ "task": task_id.to_string(), "target": target }),
                         );
+                        dispatcher.dispatch_call("runs", json!({}));
                     }
                 }
             }
@@ -1000,17 +1002,18 @@ mod tests {
             subtasks_progress: (1, 1),
         }];
 
-        // Press 'A' or 'y' to open approve gate confirm (which triggers push & PR)
-        route_shepherd_key(&mut overlay, KeyCode::Char('A'), KeyModifiers::SHIFT, &mut dispatcher);
+        // Press 'a' to open approve gate confirm (which triggers push & PR)
+        route_shepherd_key(&mut overlay, KeyCode::Char('a'), KeyModifiers::empty(), &mut dispatcher);
         assert!(matches!(overlay.runs.sub_modal, RunsSubModal::ConfirmApproveGate { .. }));
         assert!(dispatcher.calls.is_empty(), "Push & PR must NEVER be dispatched without confirmation");
 
         // Confirm with Enter
         route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
-        assert_eq!(dispatcher.calls.len(), 1);
+        assert_eq!(dispatcher.calls.len(), 2);
         assert_eq!(dispatcher.calls[0].0, "approve");
         assert_eq!(dispatcher.calls[0].1["task"], "303");
-        assert_eq!(dispatcher.calls[0].1["target"], "subtask:1");
+        assert_eq!(dispatcher.calls[0].1["target"], "1");
+        assert_eq!(dispatcher.calls[1].0, "runs");
     }
 
     #[test]
@@ -1030,16 +1033,18 @@ mod tests {
             subtasks_progress: (1, 1),
         }];
 
-        // Press 'R' to open reject gate confirm
-        route_shepherd_key(&mut overlay, KeyCode::Char('R'), KeyModifiers::SHIFT, &mut dispatcher);
+        // Press 'd' to open reject gate confirm
+        route_shepherd_key(&mut overlay, KeyCode::Char('d'), KeyModifiers::empty(), &mut dispatcher);
         assert!(matches!(overlay.runs.sub_modal, RunsSubModal::ConfirmRejectGate { .. }));
         assert!(dispatcher.calls.is_empty(), "Reject must NOT be dispatched without confirmation");
 
         // Confirm with Enter
         route_shepherd_key(&mut overlay, KeyCode::Enter, KeyModifiers::empty(), &mut dispatcher);
-        assert_eq!(dispatcher.calls.len(), 1);
-        assert_eq!(dispatcher.calls[0].0, "reject_gate");
+        assert_eq!(dispatcher.calls.len(), 2);
+        assert_eq!(dispatcher.calls[0].0, "reject");
         assert_eq!(dispatcher.calls[0].1["task"], "304");
+        assert_eq!(dispatcher.calls[0].1["target"], "1");
+        assert_eq!(dispatcher.calls[1].0, "runs");
     }
 
     #[test]

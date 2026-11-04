@@ -240,16 +240,17 @@ struct ScreenQuietTracker {
 }
 
 /// Core Shepherd orchestration service.
+#[derive(Clone)]
 pub struct OrchestrationService {
     service_config: ServiceConfig,
     shepherd_config: Config,
     terminals: Arc<dyn Terminals>,
     clock: Arc<dyn Clock>,
     active_vendors_override: Option<Vec<String>>,
-    mcp_url: Mutex<Option<String>>,
-    blocked_announced: Mutex<HashSet<String>>,
-    quiet_screens: Mutex<HashMap<String, ScreenQuietTracker>>,
-    failed_requests: Mutex<Vec<FailedRequestLogEntry>>,
+    mcp_url: Arc<Mutex<Option<String>>>,
+    blocked_announced: Arc<Mutex<HashSet<String>>>,
+    quiet_screens: Arc<Mutex<HashMap<String, ScreenQuietTracker>>>,
+    failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
 }
 
 impl OrchestrationService {
@@ -276,10 +277,10 @@ impl OrchestrationService {
             terminals,
             clock,
             active_vendors_override: None,
-            mcp_url: Mutex::new(None),
-            blocked_announced: Mutex::new(HashSet::new()),
-            quiet_screens: Mutex::new(HashMap::new()),
-            failed_requests: Mutex::new(Vec::new()),
+            mcp_url: Arc::new(Mutex::new(None)),
+            blocked_announced: Arc::new(Mutex::new(HashSet::new())),
+            quiet_screens: Arc::new(Mutex::new(HashMap::new())),
+            failed_requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -1135,10 +1136,27 @@ impl OrchestrationService {
                 full_prompt.push('\n');
                 full_prompt.push_str(RUNTIME_CONSTRAINTS);
             }
-            self.deliver_first_prompt(&agent.id, &full_prompt)?;
-            let refreshed = self.load_registry()?;
-            if let Some(updated) = refreshed.result(&agent.id) {
-                return Ok(updated.clone());
+            let terminal_status = self.terminals.agent_status(&agent.id).ok();
+            let is_ready = terminal_status
+                .as_ref()
+                .map(|s| matches!(s.status.as_str(), "working" | "idle"))
+                .unwrap_or(false);
+            if is_ready {
+                self.deliver_first_prompt(&agent.id, &full_prompt)?;
+                let refreshed = self.load_registry()?;
+                if let Some(updated) = refreshed.result(&agent.id) {
+                    return Ok(updated.clone());
+                }
+            } else {
+                let this = self.clone();
+                let ag_id = agent.id.clone();
+                let prompt_text = full_prompt.clone();
+                std::thread::Builder::new()
+                    .name(format!("shepherd-deliver-{}", agent.id))
+                    .spawn(move || {
+                        let _ = this.deliver_first_prompt(&ag_id, &prompt_text);
+                    })
+                    .map_err(|e| e.to_string())?;
             }
         }
 
@@ -1404,14 +1422,16 @@ impl OrchestrationService {
     /// Requirement 9: Explicit human approval for `plan` or a subtask number.
     pub fn approve(&self, root: PathBuf, task: &str, target: &str) -> Result<Value, String> {
         let result = (|| {
-            if target == "plan" {
+            let clean_target = target.strip_prefix("subtask:").unwrap_or(target);
+            if clean_target == "plan" {
                 crate::workflow::approve_plan(root, task).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({
+                    "ok": true,
                     "task": task,
                     "approved": "plan",
                 }))
             } else {
-                let number: u32 = target
+                let number: u32 = clean_target
                     .parse()
                     .map_err(|_| format!("invalid approval target {target:?}; expected 'plan' or subtask number"))?;
                 let pr_url = crate::workflow::approve_subtask_with_registry(
@@ -1422,13 +1442,43 @@ impl OrchestrationService {
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!({
+                    "ok": true,
                     "task": task,
                     "approved": number,
+                    "url": pr_url,
                     "pr": pr_url,
                 }))
             }
         })();
         self.log_err("approve", result)
+    }
+
+    /// Explicit human rejection for `plan` or a subtask number.
+    pub fn reject(&self, root: PathBuf, task: &str, target: &str, reason: Option<&str>) -> Result<Value, String> {
+        let result = (|| {
+            let clean_target = target.strip_prefix("subtask:").unwrap_or(target);
+            if clean_target == "plan" {
+                crate::workflow::reject_plan(root, task, reason).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "task": task,
+                    "rejected": "plan",
+                    "reason": reason,
+                }))
+            } else {
+                let number: u32 = clean_target
+                    .parse()
+                    .map_err(|_| format!("invalid rejection target {target:?}; expected 'plan' or subtask number"))?;
+                crate::workflow::reject_subtask(root, task, number, reason).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "ok": true,
+                    "task": task,
+                    "rejected": number,
+                    "reason": reason,
+                }))
+            }
+        })();
+        self.log_err("reject", result)
     }
 
     /// Generic dispatcher for `shepherd.call {op, args}`.
@@ -1509,7 +1559,20 @@ impl OrchestrationService {
                     .get("auto_push")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
-                self.run_workflow(root, task, mcp_url, auto_push)
+                let job_id = format!("run-{}", task);
+                let this = self.clone();
+                let task_clone = task.clone();
+                std::thread::Builder::new()
+                    .name(format!("shepherd-run-{}", task))
+                    .spawn(move || {
+                        let _ = this.run_workflow(root, task_clone, mcp_url, auto_push);
+                    })
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "accepted": true,
+                    "job": job_id,
+                    "task": task,
+                }))
             }
             "approve" => {
                 let root = args
@@ -1534,6 +1597,31 @@ impl OrchestrationService {
                         msg
                     })?;
                 self.approve(root, task, target)
+            }
+            "reject" | "reject_gate" => {
+                let root = args
+                    .get("root")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let task = args
+                    .get("task")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        let msg = "missing 'task' for reject".to_owned();
+                        self.record_failure("reject", &msg);
+                        msg
+                    })?;
+                let target = args
+                    .get("target")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        let msg = "missing 'target' for reject".to_owned();
+                        self.record_failure("reject", &msg);
+                        msg
+                    })?;
+                let reason = args.get("reason").and_then(Value::as_str);
+                self.reject(root, task, target, reason)
             }
             "reconcile" => {
                 let reg = self.reconcile_once()?;
@@ -1627,11 +1715,30 @@ impl OrchestrationService {
                     .into_iter()
                     .map(|t| {
                         let has_plan = t.directory.join("plan.md").is_file();
-                        let pending_gate = if t.status.state == "awaiting-approval" {
-                            Some("approve_plan")
+                        let pending_gate = if t.status.waiting == "plan" {
+                            Some(serde_json::json!("plan"))
+                        } else if let Some(subtask) = t.status.subtasks.iter().find(|s| s.state == "awaiting-approval") {
+                            Some(serde_json::json!({
+                                "kind": "push_pr",
+                                "subtask": subtask.number,
+                            }))
                         } else {
                             None
                         };
+                        let total = t.status.subtasks.len();
+                        let done_count = t.status.subtasks.iter().filter(|s| matches!(s.state.as_str(), "pr" | "done")).count();
+                        let subtasks: Vec<serde_json::Value> = t.status.subtasks.iter().map(|s| {
+                            serde_json::json!({
+                                "n": s.number,
+                                "title": s.title,
+                                "state": s.state,
+                                "branch": s.branch,
+                                "pr": s.pr,
+                                "note": s.note,
+                                "coder": s.coder,
+                                "reviewer": s.reviewer,
+                            })
+                        }).collect();
                         serde_json::json!({
                             "task_id": t.status.id,
                             "task_title": t.status.title,
@@ -1640,7 +1747,8 @@ impl OrchestrationService {
                             "has_saved_plan": has_plan,
                             "pending_gate": pending_gate,
                             "active_agents": t.status.agents,
-                            "subtasks_progress": [0, 0]
+                            "subtasks_progress": [done_count, total],
+                            "subtasks": subtasks,
                         })
                     })
                     .collect();
@@ -2658,6 +2766,8 @@ mod tests {
         let runs_arr = runs.as_array().unwrap();
         assert_eq!(runs_arr.len(), 1);
         assert_eq!(runs_arr[0]["task_id"], 1);
+        assert_eq!(runs_arr[0]["subtasks_progress"], serde_json::json!([0, 0]));
+        assert!(runs_arr[0]["subtasks"].is_array());
 
         // 4. Skills list
         let skills = service.handle_call("skills", list_args).unwrap();
@@ -2685,6 +2795,204 @@ mod tests {
             )
             .unwrap();
         assert!(git_status["worktrees"].is_array());
+    }
+
+    #[test]
+    fn test_runs_pending_gate_and_subtasks_real() {
+        let tmp = TestDir::new("runs-gates");
+        let (service, _terminals, _clock) = test_service(tmp.path());
+
+        // Create task 1: waiting for plan
+        let create_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "title": "Task with plan gate",
+            "description": "Waiting for plan",
+            "criteria": ["- [ ] criteria"],
+            "attachments": []
+        });
+        service.handle_call("task_create", create_args).unwrap();
+        let mut t1 = crate::find_task(tmp.path(), "1").unwrap();
+        t1.status.waiting = "plan".into();
+        crate::save_task_status(t1.directory.join("status.json"), &t1.status).unwrap();
+
+        // Create task 2: subtasks with awaiting-approval
+        let create_args2 = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "title": "Task with push_pr gate",
+            "description": "Subtask ready for PR",
+            "criteria": ["- [ ] criteria 1", "- [ ] criteria 2"],
+            "attachments": []
+        });
+        service.handle_call("task_create", create_args2).unwrap();
+        let mut t2 = crate::find_task(tmp.path(), "2").unwrap();
+        t2.status.subtasks = vec![
+            crate::Subtask {
+                number: 1,
+                title: "Subtask 1".into(),
+                body: "Body 1".into(),
+                depends_on: vec![],
+                verify: vec![],
+                state: "done".into(),
+                note: Some("done note".into()),
+                coder: "coder-1".into(),
+                reviewer: "reviewer-1".into(),
+                round: 1,
+                branch: "shep/1-s1".into(),
+                pr: "https://pr/1".into(),
+            },
+            crate::Subtask {
+                number: 2,
+                title: "Subtask 2".into(),
+                body: "Body 2".into(),
+                depends_on: vec![1],
+                verify: vec![],
+                state: "awaiting-approval".into(),
+                note: Some("waiting note".into()),
+                coder: "coder-2".into(),
+                reviewer: "reviewer-2".into(),
+                round: 1,
+                branch: "shep/2-s2".into(),
+                pr: "".into(),
+            },
+        ];
+        crate::save_task_status(t2.directory.join("status.json"), &t2.status).unwrap();
+
+        let runs_val = service.handle_call("runs", serde_json::json!({ "root": tmp.path().to_str().unwrap() })).unwrap();
+        let runs = runs_val.as_array().unwrap();
+        assert_eq!(runs.len(), 2);
+
+        // Task 1: pending_gate == "plan"
+        let r1 = runs.iter().find(|r| r["task_id"] == 1).unwrap();
+        assert_eq!(r1["pending_gate"], serde_json::json!("plan"));
+        assert_eq!(r1["subtasks_progress"], serde_json::json!([0, 0]));
+
+        // Task 2: pending_gate == {"kind":"push_pr", "subtask": 2}
+        let r2 = runs.iter().find(|r| r["task_id"] == 2).unwrap();
+        assert_eq!(r2["pending_gate"], serde_json::json!({ "kind": "push_pr", "subtask": 2 }));
+        assert_eq!(r2["subtasks_progress"], serde_json::json!([1, 2]));
+        let subs = r2["subtasks"].as_array().unwrap();
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs[0]["n"], 1);
+        assert_eq!(subs[0]["state"], "done");
+        assert_eq!(subs[1]["n"], 2);
+        assert_eq!(subs[1]["state"], "awaiting-approval");
+    }
+
+    #[test]
+    fn test_service_approve_and_reject_ops() {
+        let tmp = TestDir::new("service-approve-reject");
+        let (service, _terminals, _clock) = test_service(tmp.path());
+
+        // Create task with plan
+        let create_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "title": "Task for approve reject test",
+            "description": "Description",
+            "criteria": ["- [ ] criteria 1"],
+            "attachments": []
+        });
+        service.handle_call("task_create", create_args).unwrap();
+        let mut t1 = crate::find_task(tmp.path(), "1").unwrap();
+        t1.status.waiting = "plan".into();
+        std::fs::write(t1.directory.join("plan.md"), "# Plan\n\n### 1. Subtask 1\nBody\n").unwrap();
+        crate::save_task_status(t1.directory.join("status.json"), &t1.status).unwrap();
+
+        // 1. Reject plan
+        let rej_res = service.handle_call("reject", serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "task": "1",
+            "target": "plan",
+            "reason": "plan needs more details"
+        })).unwrap();
+        assert_eq!(rej_res["ok"], true);
+        assert_eq!(rej_res["rejected"], "plan");
+        let t1_reloaded = crate::find_task(tmp.path(), "1").unwrap();
+        assert_eq!(t1_reloaded.status.waiting, "plan");
+        assert!(t1_reloaded.status.note.contains("plan needs more details"));
+
+        // 2. Approve plan
+        let app_res = service.handle_call("approve", serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "task": "1",
+            "target": "plan"
+        })).unwrap();
+        assert_eq!(app_res["ok"], true);
+        assert_eq!(app_res["approved"], "plan");
+        let mut t1_reloaded2 = crate::find_task(tmp.path(), "1").unwrap();
+        assert!(t1_reloaded2.status.waiting.is_empty());
+
+        // 3. Reject subtask in awaiting-approval
+        t1_reloaded2.status.subtasks[0].state = "awaiting-approval".into();
+        crate::save_task_status(t1_reloaded2.directory.join("status.json"), &t1_reloaded2.status).unwrap();
+
+        let rej_sub = service.handle_call("reject", serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "task": "1",
+            "target": "1",
+            "reason": "flaky test"
+        })).unwrap();
+        assert_eq!(rej_sub["ok"], true);
+        assert_eq!(rej_sub["rejected"], 1);
+
+        let t1_reloaded3 = crate::find_task(tmp.path(), "1").unwrap();
+        // Subtask must have transitioned to "pending" (non-terminal, retryable)
+        assert_eq!(t1_reloaded3.status.subtasks[0].state, "pending");
+        assert!(t1_reloaded3.status.subtasks[0].note.as_ref().unwrap().contains("flaky test"));
+    }
+
+    #[test]
+    fn test_concurrent_run_does_not_block_agents() {
+        let tmp = TestDir::new("concurrent-run-agents");
+        let (service, _terminals, _clock) = test_service(tmp.path());
+        service.set_mcp_url(Some("http://127.0.0.1:9999/mcp".into()));
+
+        // Pre-create task 1
+        let create_args = serde_json::json!({
+            "root": tmp.path().to_str().unwrap(),
+            "title": "Long running task",
+            "description": "Will take time",
+            "criteria": ["- [ ] work done"],
+            "attachments": []
+        });
+        service.handle_call("task_create", create_args).unwrap();
+
+        // Configure a running agent in registry so "agents" has data
+        service
+            .spawn(ServiceSpawnRequest {
+                root: tmp.path().to_path_buf(),
+                role: "brain".into(),
+                task: "existing agent".into(),
+                deliver_prompt: false,
+                ..ServiceSpawnRequest::default()
+            })
+            .unwrap();
+
+        // 1. Dispatch "run" via handle_call
+        let run_res = service
+            .handle_call(
+                "run",
+                serde_json::json!({
+                    "root": tmp.path().to_str().unwrap(),
+                    "task": "1",
+                }),
+            )
+            .unwrap();
+
+        // run op must return immediately with accepted: true and job id
+        assert_eq!(run_res["accepted"], true);
+        assert_eq!(run_res["task"], "1");
+        assert_eq!(run_res["job"], "run-1");
+
+        // 2. Concurrently call "agents" - it must respond immediately without being blocked by run!
+        let start = std::time::Instant::now();
+        let agents_res = service
+            .handle_call("agents", serde_json::json!({}))
+            .unwrap();
+        let elapsed = start.elapsed();
+        assert!(elapsed < Duration::from_secs(2), "agents call must not be blocked by running workflow; took {:?}", elapsed);
+        let agents = agents_res.as_array().unwrap();
+        assert!(!agents.is_empty());
+        assert_eq!(agents[0]["id"], "brain-1");
     }
 
     #[test]

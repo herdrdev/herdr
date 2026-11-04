@@ -121,6 +121,10 @@ impl ShepherdClient {
         self.in_process.is_some()
     }
 
+    pub fn socket_exists(&self) -> bool {
+        self.in_process.is_some() || (!self.socket.as_os_str().is_empty() && self.socket.exists())
+    }
+
     /// Check whether the Shepherd server is reachable.
     pub fn is_reachable(&self) -> bool {
         if self.in_process.is_some() {

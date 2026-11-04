@@ -468,15 +468,6 @@ where
             if !ag.branch.is_empty() && ag.branch == branch_name {
                 return Some(ag.id.clone());
             }
-            if branch_name.starts_with("shep/") {
-                let suffix = &branch_name["shep/".len()..];
-                if suffix.starts_with(&ag.id) || suffix.contains(&ag.id) {
-                    return Some(ag.id.clone());
-                }
-                if !ag.task_id.is_empty() && suffix.starts_with(&format!("{}-", ag.task_id)) {
-                    return Some(ag.id.clone());
-                }
-            }
             None
         });
 
@@ -735,6 +726,61 @@ branch refs/heads/shep/1-auth
         assert_eq!(status.worktrees[1].agent_id.as_deref(), Some("coder-1"));
         assert!(status.worktrees[1].pr.is_some());
         assert_eq!(status.worktrees[1].pr.as_ref().unwrap().number, 10);
+    }
+
+    #[test]
+    fn test_git_status_does_not_associate_old_worktree_with_unrelated_agent() {
+        let root = Path::new("/virtual/repo");
+        // Agent brain-1 has task_id "1" but no worktree or branch registered
+        let agents = vec![Agent {
+            id: "brain-1".into(),
+            task_id: "1".into(),
+            worktree: "".into(),
+            branch: "".into(),
+            ..Agent::default()
+        }];
+
+        let runner = |cmd: &str, args: &[&str], _cwd: &Path, _t: Duration| -> Result<std::process::Output, String> {
+            use std::os::unix::process::ExitStatusExt;
+            if cmd == "git" && args == ["worktree", "list", "--porcelain"] {
+                let out = "\
+worktree /virtual/repo
+HEAD 1111111111111111111111111111111111111111
+branch refs/heads/master
+
+worktree /virtual/repo/worktrees/wt-coder
+HEAD 2222222222222222222222222222222222222222
+branch refs/heads/shep/1-coder
+";
+                return Ok(std::process::Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: out.as_bytes().to_vec(),
+                    stderr: Vec::new(),
+                });
+            }
+            if cmd == "git" && args == ["status", "--porcelain=v1", "-b"] {
+                let out = "## shep/1-coder\n";
+                return Ok(std::process::Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: out.as_bytes().to_vec(),
+                    stderr: Vec::new(),
+                });
+            }
+            if cmd == "gh" {
+                return Ok(std::process::Output {
+                    status: std::process::ExitStatus::from_raw(0),
+                    stdout: b"[]".to_vec(),
+                    stderr: Vec::new(),
+                });
+            }
+            Err("command failed".into())
+        };
+
+        let status = collect_git_status_internal(root, &agents, runner).unwrap();
+        assert_eq!(status.worktrees.len(), 2);
+        // Worktree shep/1-coder should NOT be associated with brain-1
+        assert_eq!(status.worktrees[1].branch, "shep/1-coder");
+        assert_eq!(status.worktrees[1].agent_id, None);
     }
 
     #[test]

@@ -138,7 +138,7 @@ pub fn run_coders_with_terminals(
 
     let complete = !task.status.subtasks.is_empty() && task.status.subtasks.iter().all(|subtask| matches!(subtask.state.as_str(), "pr" | "done"));
     task.status.state = if complete { "done".into() } else { "reviewing".into() };
-    task.status.note = format!("Rust run: {} coder(s) started, {} result(s) received, {} failed; human approval and push/PR creation are not ported yet", report.started.len(), report.completed_coding.len(), report.failed.len());
+    task.status.note = format!("Rust run: {} coder(s) started, {} result(s) received, {} failed; awaiting human approval for push/PR", report.started.len(), report.completed_coding.len(), report.failed.len());
     checkpoint(&mut task.status, &task.directory)?;
     Ok(report)
 }
@@ -168,6 +168,45 @@ pub fn approve_plan(root: PathBuf, task_ref: &str) -> Result<(), Box<dyn std::er
     task.status.waiting.clear();
     task.status.state = "coding".into();
     task.status.note = "plan approved by human; rerun `shepherd run` to start coders".into();
+    checkpoint(&mut task.status, &task.directory)
+}
+
+pub fn reject_plan(root: PathBuf, task_ref: &str, reason: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut task = find_task(root, task_ref)?;
+    if task.status.waiting != "plan" { return Err("task is not waiting for plan approval".into()); }
+    task.status.waiting = "plan".into();
+    task.status.state = "planning".into();
+    let reason_str = reason.unwrap_or("plan rejected by human; revisions requested");
+    task.status.note = format!("plan rejected by human: {reason_str}");
+    checkpoint(&mut task.status, &task.directory)
+}
+
+pub fn reject_subtask(
+    root: PathBuf,
+    task_ref: &str,
+    number: u32,
+    reason: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut task = find_task(root, task_ref)?;
+    let index = task
+        .status
+        .subtasks
+        .iter()
+        .position(|subtask| subtask.number == number)
+        .ok_or_else(|| format!("task has no subtask {number}"))?;
+    let subtask = &mut task.status.subtasks[index];
+    if subtask.state != "awaiting-approval" {
+        return Err(format!(
+            "subtask {number} is in state {:?}; only subtasks in awaiting-approval can be rejected",
+            subtask.state
+        )
+        .into());
+    }
+    subtask.state = "pending".into();
+    let reason_str = reason.unwrap_or("changes requested");
+    subtask.note = Some(format!("rejected by human: {reason_str}"));
+    task.status.state = "coding".into();
+    task.status.note = format!("subtask {number} rejected by human: {reason_str}");
     checkpoint(&mut task.status, &task.directory)
 }
 
@@ -320,7 +359,7 @@ fn review_and_check(
             };
             continue;
         }
-        return Ok(ReviewOutcome { reviewer: reviewer_id, state: "awaiting-approval".into(), note: "review approved and checks passed; human approval and push/PR are not ported yet".into() });
+        return Ok(ReviewOutcome { reviewer: reviewer_id, state: "awaiting-approval".into(), note: "review approved and checks passed; awaiting human approval for push/PR".into() });
     }
     Ok(ReviewOutcome { reviewer: reviewer_id, state: "needs-human".into(), note: "review/check loop ended without approval".into() })
 }

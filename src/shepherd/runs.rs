@@ -170,6 +170,84 @@ pub struct ShepherdRunRow {
     pub subtasks_progress: (usize, usize),
 }
 
+impl ShepherdRunRow {
+    pub fn from_value(val: &serde_json::Value) -> Option<Self> {
+        let task_id = val.get("task_id").and_then(serde_json::Value::as_u64)? as u32;
+        let task_title = val
+            .get("task_title")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let status_str = val
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("pending");
+        let status = match status_str {
+            "done" | "completed" => RunStatus::Completed,
+            "failed" => RunStatus::Failed {
+                reason: "failed".into(),
+            },
+            "cancelled" => RunStatus::Cancelled,
+            _ => RunStatus::Running,
+        };
+        let current_stage = val
+            .get("current_stage")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(status_str)
+            .to_string();
+        let has_saved_plan = val
+            .get("has_saved_plan")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let pending_gate = match val.get("pending_gate") {
+            Some(serde_json::Value::String(s)) if s == "plan" || s == "approve_plan" => {
+                Some(GateKind::PlanApproval)
+            }
+            Some(serde_json::Value::Object(obj)) => {
+                let kind = obj.get("kind").and_then(serde_json::Value::as_str).unwrap_or("");
+                let subtask = obj.get("subtask").and_then(serde_json::Value::as_u64).unwrap_or(0) as u32;
+                if kind == "push_pr" || subtask > 0 {
+                    Some(GateKind::PushAndPr { subtask })
+                } else if kind == "plan" {
+                    Some(GateKind::PlanApproval)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let active_agents = val
+            .get("active_agents")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let subtasks_progress = val
+            .get("subtasks_progress")
+            .and_then(serde_json::Value::as_array)
+            .map(|a| {
+                let done = a.get(0).and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                let total = a.get(1).and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                (done, total)
+            })
+            .unwrap_or((0, 0));
+        Some(Self {
+            task_id,
+            task_title,
+            status,
+            current_stage,
+            has_saved_plan,
+            pending_gate,
+            active_agents,
+            subtasks_progress,
+        })
+    }
+}
+
 /// Pure presentation state for the runs and gates view.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShepherdRunsState {
@@ -368,11 +446,11 @@ impl ShepherdRunsState {
                     self.open_cancel_confirm();
                     None
                 }
-                KeyCode::Char('y') | KeyCode::Char('A') => {
+                KeyCode::Char('a') | KeyCode::Char('y') | KeyCode::Char('A') => {
                     self.open_approve_gate_confirm();
                     None
                 }
-                KeyCode::Char('R') => {
+                KeyCode::Char('d') | KeyCode::Char('D') | KeyCode::Char('R') => {
                     self.open_reject_gate_confirm();
                     None
                 }
@@ -610,9 +688,9 @@ pub fn render_shepherd_runs_panel(
             Span::styled("lanzar/reanudar  ·  ", base.fg(palette.overlay0)),
             Span::styled(" c ", base.fg(palette.yellow).add_modifier(Modifier::BOLD)),
             Span::styled("cancelar  ·  ", base.fg(palette.overlay0)),
-            Span::styled(" y/A ", base.fg(palette.green).add_modifier(Modifier::BOLD)),
+            Span::styled(" a ", base.fg(palette.green).add_modifier(Modifier::BOLD)),
             Span::styled("aprobar gate  ·  ", base.fg(palette.overlay0)),
-            Span::styled(" R ", base.fg(palette.red).add_modifier(Modifier::BOLD)),
+            Span::styled(" d ", base.fg(palette.red).add_modifier(Modifier::BOLD)),
             Span::styled("rechazar gate  ·  ", base.fg(palette.overlay0)),
             Span::styled(" Esc ", base.fg(palette.text).add_modifier(Modifier::BOLD)),
             Span::styled("cerrar", base.fg(palette.overlay0)),
@@ -1034,8 +1112,8 @@ mod tests {
         let mut state = ShepherdRunsState::new(vec![run]);
         state.open = true;
 
-        // Press 'y' / 'A' to approve gate
-        let act = state.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
+        // Press 'a' to approve gate
+        let act = state.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
         // Publishing action guard: must NOT push or PR without explicit confirmation!
         assert_eq!(act, None);
         assert_eq!(state.last_action, None);
@@ -1056,8 +1134,8 @@ mod tests {
         assert_eq!(state.sub_modal, RunsSubModal::None);
         assert_eq!(state.last_action, None);
 
-        // Confirm approval
-        state.handle_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::empty()));
+        // Confirm approval with 'a' + Enter
+        state.handle_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty()));
         let conf_act = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         assert_eq!(
             conf_act,
@@ -1084,8 +1162,8 @@ mod tests {
         let mut state = ShepherdRunsState::new(vec![run]);
         state.open = true;
 
-        // Press 'R' to reject gate
-        let act = state.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::empty()));
+        // Press 'd' to reject gate
+        let act = state.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
         assert_eq!(act, None);
 
         if let RunsSubModal::ConfirmRejectGate { task_id, ref gate, .. } = state.sub_modal {
@@ -1099,8 +1177,8 @@ mod tests {
         state.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::empty()));
         assert_eq!(state.sub_modal, RunsSubModal::None);
 
-        // Confirm reject
-        state.handle_key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::empty()));
+        // Confirm reject with 'd' + Enter
+        state.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::empty()));
         let conf_act = state.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()));
         assert_eq!(
             conf_act,

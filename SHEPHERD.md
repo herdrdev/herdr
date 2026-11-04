@@ -1484,3 +1484,232 @@ Hallazgos:
 4. **Pestaña Git: asignación de agente dudosa.** La rama `shep/1-coder` (un worktree viejo de pruebas anteriores) se asoció a `brain-1`; parece coincidir por número en vez de por agente real.
 5. Los worktrees del coder se crean bajo `$HOME/.shepherd/worktrees/` (el HOME real por `SHF_HOME`); el de esta prueba se eliminó a mano.
 6. Codex pide permiso humano para escribir en el `.git` del worktree al hacer commit (sandbox); es un diálogo que Shepherd no debe contestar.
+
+
+## Estado F6 (2026-11-04)
+
+Gates humanos del workflow `run` (plan y push/PR) completamente visibles y operables desde CLI y overlay TUI, servicio no bloqueante desacoplado de operaciones largas, prevención estricta de caídas silenciosas a in-process en el CLI, y asociación exacta y determinista de worktrees/ramas en la pestaña Git.
+
+### 1. Lo hecho
+
+1. **`runs` real (`service.rs` y `cli.rs`)**:
+   - Cálculo preciso de `pending_gate`:
+     - `"plan"` cuando `task.status.waiting == "plan"`.
+     - `{"kind": "push_pr", "subtask": N}` cuando la primera subtarea está en estado `"awaiting-approval"`.
+     - `null` si no hay gate pendiente.
+   - Cálculo de progreso `subtasks_progress: [hechas, total]` (donde hechas cuenta subtareas en estado `pr` o `done`).
+   - Inclusión del array detallado `subtasks: [{n, title, state, branch, pr, note, coder, reviewer}]`.
+   - Eliminación de notas obsoletas "not ported yet" en `workflow.rs` (sustituidas por notas descriptivas de espera de aprobación humana).
+   - Conversión de fila en cliente TUI (`ShepherdRunRow::from_value`) para reflejar gates y progreso directamente en el overlay.
+
+2. **Aprobar y rechazar desde el servicio (`workflow.rs`, `service.rs`, `cli.rs`)**:
+   - **Op `approve`**:
+     - Ejecuta `workflow::approve_plan` o `workflow::approve_subtask`.
+     - Realiza `git push --set-upstream origin <branch>` y llamada a `gh pr create` únicamente bajo aprobación explícita humana.
+     - Devuelve `{ok: true, task: "...", approved: ..., url: "...", pr: "..."}`.
+   - **Op `reject`**:
+     - Para plan: revierte el plan a `waiting = "plan"` registrando la razón en `status.note`.
+     - Para subtarea: transiciona la subtarea de `awaiting-approval` al estado no terminal `"pending"` con nota `rejected by human: <razón>`.
+     - **Elección de estado `pending`**: se eligió `"pending"` porque es el estado nativo no terminal del planificador (`schedule_subtasks`) que permite que un futuro `shepherd run` vuelva a programar y reintentar la subtarea sin necesidad de recrear el task, garantizando además que **nunca** se realice push o PR al rechazar.
+     - Devuelve `{ok: true, task: "...", rejected: ..., reason: "..."}`.
+   - Subcomandos CLI correspondientes: `shepherd approve <task> plan|<n> [--json]` y `shepherd reject <task> plan|<n> [--reason <texto>] [--json]`.
+
+3. **Overlay TUI (`runs.rs` y `overlay.rs`)**:
+   - Pestaña Runs muestra los gates pendientes en la lista: `[GATE: Espera aprobación del plan]` o `[GATE: Espera push/PR subtarea N]`.
+   - Botones y accesos rápidos de teclado:
+     - Tecla `a` / `A` / `y`: abre modal de confirmación `ConfirmApproveGate`, explicando claramente que la acción ejecutará `git push` a la rama remota y creará el Pull Request en GitHub.
+     - Tecla `d` / `D` / `R`: abre modal de confirmación `ConfirmRejectGate`.
+     - Confirmación con `Enter` despacha la acción (`"approve"` o `"reject"`) y refresca inmediatamente la lista de runs mediante llamada a `"runs"`.
+   - El renderizado permanece completamente puro y sin E/S.
+
+4. **Servicio no bloqueante (`service.rs` y `cli.rs`)**:
+   - `OrchestrationService` envuelve sus estructuras de sincronización en `Arc` para permitir clonado seguro.
+   - La op `"run"` en `handle_call` inicia el flujo de trabajo (`run_workflow`) en un hilo en segundo plano (`std::thread::spawn`) y devuelve inmediatamente `{accepted: true, job: "run-<task_id>", task: "<task_id>"}`.
+   - En `spawn_inner`, la entrega del primer prompt del agente continúa en segundo plano si la terminal no está libre inmediatamente, evitando que el bucle de RPC quede congelado durante minutos.
+   - Subcomando `shepherd run <task-id>` avisa de la aceptación y retorna de inmediato, o bien espera con el nuevo flag `--wait` mediante sondeo periódico con timeout máximo de 30 minutos y salida clara cuando el run finaliza o se detiene en un gate humano.
+
+5. **CLI sin vacíos silenciosos (`cli.rs` y `shepherd.rs`)**:
+   - Se eliminó la sonda frágil `is_reachable()` (que utilizaba un timeout rígido de 500 ms y provocaba la caída silenciosa al modo en proceso si el servidor tardaba en responder).
+   - Se introdujo `socket_exists()`: la caída al modo en proceso solo se produce si el socket no existe físicamente en el sistema de archivos o si el usuario pasa `--no-server` explícitamente.
+   - Si el socket existe pero la llamada al servidor falla o agota el tiempo, el CLI no oculta el problema cayendo a `[]`: sale con código de error ≠ 0 y emite `{"error": "..."}` en stdout con `--json`.
+
+6. **Pestaña Git y asociación estricta (`git.rs`)**:
+   - Se eliminó la heurística de concordancia difusa que asociaba ramas que empezaban por `shep/<task_id>-...` con cualquier agente con el mismo número de tarea.
+   - La asociación se realiza ahora de forma estricta: un worktree o rama solo se asocia a un agente si la ruta de worktree del agente (`ag.worktree`) coincide exactamente (o por ruta canónica) con la del worktree, o si la rama registrada (`ag.branch`) coincide exactamente con la rama inspeccionada.
+   - Los worktrees de subtareas viejas (como `shep/1-coder`) no se asocian indebidamente con agentes de tareas distintas (como `brain-1`).
+
+### 2. Verificación real con `./scripts/shepherd-iso.sh` (sin agentes reales)
+
+Se configuró un entorno aislado en `/tmp/shfiso` con:
+- Repositorio bare local como origen remoto: `/tmp/shfiso/bare`.
+- Repositorio de trabajo con rama `master` configurada para rastrear `origin/master`.
+- Worktree en `/tmp/shfiso/repo/wt-coder` en rama `shep/1-implement` con un commit (`feat: hello`).
+- Ejecutable `gh` falso en `/tmp/shfiso/fake-bin/gh` que registra argumentos en `/tmp/shfiso/gh.log` y devuelve `https://github.com/fake/repo/pull/1`.
+- Tarea 1 con subtarea 1 en estado `awaiting-approval` y agente `coder-1` registrado con `branch: "shep/1-implement"` y `worktree: "/tmp/shfiso/repo/wt-coder"`.
+
+#### A. Verificación del gate en CLI (`runs list --json`)
+```bash
+$ shepherd runs list --json
+[
+  {
+    "active_agents": [],
+    "current_stage": "awaiting-approval",
+    "has_saved_plan": true,
+    "pending_gate": {
+      "kind": "push_pr",
+      "subtask": 1
+    },
+    "status": "awaiting-approval",
+    "subtasks": [
+      {
+        "branch": "shep/1-implement",
+        "coder": "coder-1",
+        "n": 1,
+        "note": null,
+        "pr": "",
+        "reviewer": "reviewer-1",
+        "state": "awaiting-approval",
+        "title": "Subtask 1"
+      }
+    ],
+    "subtasks_progress": [
+      0,
+      1
+    ],
+    "task_id": 1,
+    "task_title": "Iso Task"
+  }
+]
+```
+
+#### B. Aprobación vía CLI (`shepherd approve 1 1 --json`)
+```bash
+$ shepherd approve 1 1 --json
+{
+  "approved": 1,
+  "ok": true,
+  "pr": "https://github.com/fake/repo/pull/1",
+  "task": "1",
+  "url": "https://github.com/fake/repo/pull/1"
+}
+
+$ cat /tmp/shfiso/gh.log
+pr create --base master --head shep/1-implement --title Subtask 1 --body ## Subtask 1 ... --draft
+
+$ git -C /tmp/shfiso/bare branch -a
+* master
+  shep/1-implement
+```
+La rama fue empujada al bare local, el fake `gh` fue invocado con los argumentos correspondientes y la subtarea pasó al estado `pr`.
+
+#### C. Rechazo vía CLI (`shepherd reject 1 1 --reason "needs more tests" --json`)
+```bash
+$ shepherd reject 1 1 --reason "needs more tests" --json
+{
+  "ok": true,
+  "reason": "needs more tests",
+  "rejected": 1,
+  "task": "1"
+}
+
+$ [ -f /tmp/shfiso/gh.log ] && echo "gh called" || echo "gh NOT called"
+gh NOT called
+
+$ git -C /tmp/shfiso/bare branch -a
+* master
+```
+El rechazo no ejecutó push ni llamó a `gh`; la subtarea pasó a estado `pending` con nota `rejected by human: needs more tests`.
+
+#### D. Aprobación interactiva desde el Overlay TUI
+1. Abrir overlay: `Ctrl+b a` → Tab a "Runs":
+   ```text
+   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+   │ Shepherd                                                                                  [x]│
+   │ Tareas   Runs   Skills   Git                                                                 │
+   │──────────────────────────────────────────────────────────────────────────────────────────────│
+   │ ▶ Lanzar/Reanuda  ■ Cancelar run  ✓ Aprobar gate    ✗ Rechazar gate                          │
+   │ 1 run(s) · human gates protegen push y PR                                                    │
+   │                                                                                              │
+   │ ● #1  Iso Task [EN CURSO] subtareas:0/1                    [GATE: Espera push/PR subtarea]   │
+   │                                                                                              │
+   │ r/l lanzar/reanudar  ·   c cancelar  ·   a aprobar gate  ·   d rechazar gate  ·   Esc cerrar │
+   └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   ```
+2. Pulsar `a` (Aprobar Gate):
+   ```text
+            ┌──────────────────────────────────────────────────────────────────────────┐
+            │ Confirmación Requerida: Aprobar Gate #1                                  │
+            │                                                                          │
+            │ ¿Aprobar gate de la subtarea 1? Esta acción realizará git push a la      │
+            │ rama remota y abrirá el Pull Request en GitHub.                          │
+            │                                                                          │
+            │   Aprobar y Publicar (Push/PR)    esc Cancelar                           │
+            └──────────────────────────────────────────────────────────────────────────┘
+   ```
+3. Confirmar con `Enter`:
+   ```text
+   ┌──────────────────────────────────────────────────────────────────────────────────────────────┐
+   │ Shepherd                                                                                  [x]│
+   │ Tareas   Runs   Skills   Git                                                                 │
+   │──────────────────────────────────────────────────────────────────────────────────────────────│
+   │ ▶ Lanzar/Reanuda  ■ Cancelar run  ✓ Aprobar gate    ✗ Rechazar gate                          │
+   │ 1 run(s) · human gates protegen push y PR                                                    │
+   │                                                                                              │
+   │ ● #1  Iso Task [TERMINADO] subtareas:1/1                                                     │
+   │                                                                                              │
+   │ r/l lanzar/reanudar  ·   c cancelar  ·   a aprobar gate  ·   d rechazar gate  ·   Esc cerrar │
+   └──────────────────────────────────────────────────────────────────────────────────────────────┘
+   ```
+   El overlay se refrescó inmediatamente reflejando `[TERMINADO] subtareas:1/1`, el push se completó en el bare local y `gh.log` registró la creación del PR.
+
+#### E. Prevención de caída silenciosa (`agents --json`)
+Con el servidor activo:
+```bash
+$ shepherd agents --json
+[
+  {
+    "branch": "shep/1-implement",
+    "delivery_cursor": 0,
+    "depth": 0,
+    "has_result": false,
+    "id": "coder-1",
+    "mcp": false,
+    "model": "flash",
+    "pane": "w1:p1",
+    "role": "coder",
+    "root": "/tmp/shfiso/repo",
+    "seq": 1,
+    "skills": {},
+    "state": "exited",
+    "task_id": "1",
+    "updated": "2026-11-04T21:34:15Z",
+    "vendor": "gemini",
+    "worktree": "/tmp/shfiso/repo/wt-coder"
+  }
+]
+```
+Cuando una llamada al servidor falla o da error, no se emite un `[]` silencioso; se sale con código ≠ 0 y `{"error": "..."}`.
+
+### 3. Archivos tocados
+
+| Archivo | Tipo de cambio | Contenido / Razón del cambio |
+|---|---|---|
+| `crates/shepherd-core/src/lib.rs` | Modificación | `#[serde(default)]` en campos `seq`, `root`, `started` y `updated` de `Agent` para deserialización robusta de registros antiguos/parciales. |
+| `crates/shepherd-core/src/service.rs` | Modificación | Cálculo real de `pending_gate`, `subtasks_progress` y lista completa `subtasks` en op `runs`; operaciones `approve` y `reject` en `handle_call`; ejecución no bloqueante de `run` en hilo desacoplado; prompt delivery no bloqueante en `spawn_inner`; tests unitarios. |
+| `crates/shepherd-core/src/cli.rs` | Modificación | Subcomandos `approve` y `reject` (`--reason`, `--json`); flag `--wait` en `run`; resolución de servidor por `socket_exists()`; reporte estricto de errores JSON sin caída a in-process; formateo humano de gates en `runs list`; tests unitarios. |
+| `crates/shepherd-core/src/workflow.rs` | Modificación | Funciones `reject_plan` y `reject_subtask`; limpieza de notas obsoletas «not ported yet». |
+| `crates/shepherd-core/src/shepherd.rs` | Modificación | Método `socket_exists()` en `ShepherdClient`. |
+| `crates/shepherd-core/src/git.rs` | Modificación | Asociación estricta rama/worktree → agente por coincidencia exacta de worktree o branch; eliminación de coincidencia difusa por prefijo; tests unitarios. |
+| `src/shepherd/runs.rs` | Modificación | Conversión `ShepherdRunRow::from_value`; atajos `a`/`A`/`y` para aprobar y `d`/`D`/`R` para rechazar; diálogo de confirmación con explicación de push/PR; indicadores en footer. |
+| `src/shepherd/overlay.rs` | Modificación | Despacho de `"approve"` y `"reject"` contra el servidor y refresco inmediato con llamada `"runs"`; tests unitarios con fakes. |
+| `src/client/shell/shepherd.rs` | Modificación | Manejador del resultado de la llamada `runs` en el endpoint shell para poblar `overlay.runs.runs`. |
+| `SHEPHERD.md` | Documentación | Registro del Estado F6, evidencias, capturas TUI y notas de verificación. |
+
+### 4. Qué NO queda (alcance explícito futuro)
+
+1. **Prueba de gates con LLMs y agentes CLI reales en vivo**:
+   - Por directiva de aislamiento, la verificación de F6 se realizó sin agentes reales de pago contra APIs externas. El flujo funcional de los gates queda validado de punta a punta con el servidor, CLI y overlay.
+2. **Streaming continuo de eventos de runs**:
+   - La actualización del estado de un run en el overlay se realiza tras cada acción humana o apertura del modal; no existe suscripción push websocket/evento en tiempo real para el progreso de subhilos de un run en curso.
+3. **Múltiples aprobadores o políticas avanzadas de gates**:
+   - La aprobación de gate es actualmente 1:1 por subtarea o plan. Políticas multi-firma o aprobaciones escalonadas quedan para fases posteriores.

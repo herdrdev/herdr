@@ -244,6 +244,7 @@ pub struct SkillAdjust {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Agent {
     pub id: String,
+    #[serde(default)]
     pub seq: u64,
     pub role: String,
     pub vendor: String,
@@ -257,6 +258,7 @@ pub struct Agent {
     pub parent_id: String,
     #[serde(default)]
     pub depth: u32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub root: String,
     #[serde(default)]
     pub mcp: bool,
@@ -289,7 +291,9 @@ pub struct Agent {
     pub delivery_cursor: i64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub token: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub started: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub updated: String,
 }
 
