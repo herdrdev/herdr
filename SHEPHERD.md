@@ -2123,3 +2123,23 @@ Principio: **mismas convenciones que herdr, sin cambiar el comportamiento**. Cad
 | F9e | **Estilo y persistencia**: aplicar `cargo fmt`/clippy con la configuración del repo al crate importado; evaluar con evidencia si la config YAML por proyecto y los ficheros propios deben ir al `config.toml` y a la persistencia de sesión de herdr (decidir caso por caso; no migrar nada que herdr no cubra) y migrar solo lo que convenga, con migración y respaldo | medio |
 
 Dependencias: F9 empieza **después de F8d** (para no mover código mientras se construye la funcionalidad). Reglas por fase: brief, agente `gemini-3.8-flash-high` (reutilizado con `/clear`), revisión mía, comparación de salidas antes/después, prueba aislada y, al cerrar F9b, la prueba con agentes reales de claude y codex para comprobar que nada cambió.
+
+## Plan F10 — Interfaz sin ventanas emergentes: todo en pestañas y paneles de la ventana de herdr (planificado 2026-11-05)
+
+Requisito del dueño: **todas las opciones de Shepherd deben estar como pestañas o paneles dentro de la ventana ya existente de herdr, no en ventanas emergentes ni en combinaciones de teclas; muy amigable y fácil de usar.** Hoy el overlay (`Ctrl+b a`) es un modal flotante con submodales de confirmación y varias acciones solo por tecla; eso incumple el requisito y se corrige antes de construir la pestaña de patrones (F8c).
+
+Reglas de interfaz (valen para F10 y para toda UI nueva de Shepherd):
+1. **Sin modales ni pop-ups**: ningún cuadro flotante sobre el contenido. Crear, editar y confirmar ocurre **en el propio panel** (formularios en línea, franja de confirmación con botones «Confirmar» / «Cancelar» dentro del panel, panel de detalle a la derecha).
+2. **Todo visible y clicable**: cada acción es un botón o pestaña visible con ratón; las teclas son un atajo secundario que se muestra en la etiqueta, nunca la única vía. Nada que obligue a recordar combinaciones.
+3. **Estructura estable**: una sección «Shepherd» dentro de la ventana de herdr con navegación lateral/superior por pestañas: Agentes, Tareas, Runs, Patrones, Skills, Git, Eventos; el contenido de cada una es un panel con lista a la izquierda y detalle/formulario a la derecha, y un pie con estado y ayuda contextual.
+4. **Descubrible**: estados vacíos que explican qué hacer («No hay tareas — [Crear la primera]»), validación en vivo junto al campo, mensajes de error en el panel y no en diálogos.
+5. **Reutilizar lo de herdr**: pestañas, paneles, ratón, tema, barra lateral y el patrón de estado puro + render puro; no reinventar controles que herdr ya tenga (revisar `src/client/shell/*`, `tabs.rs`, `sidebar.rs`, y cómo herdr aloja paneles de plugin).
+
+| Fase | Contenido | Riesgo |
+|---|---|---|
+| F10a | **Investigación y diseño** (solo lectura + prototipo mínimo): cómo aloja herdr contenido propio dentro de su ventana (pestaña/panel no-PTY, `client_shell.surface`, paneles de plugin, sidebar), qué se puede reutilizar, y decisión de diseño con evidencia: sección Shepherd como pestaña de la barra de pestañas de herdr o como panel anclado; mapa de pantallas con maquetas ASCII de cada pestaña; inventario de todas las acciones actuales (teclas/modales) y su equivalente en botón/panel | medio |
+| F10b | **Armazón**: la sección Shepherd con navegación por pestañas, ratón y teclado, y los componentes reutilizables (lista, detalle, formulario en línea, franja de confirmación, botón, estado vacío); migrar Tareas y Runs; retirar el overlay modal | alto (toca la UI de herdr) |
+| F10c | Migrar Skills, Git y Agentes (formulario de lanzamiento en línea, sin modal) y el menú global; ayuda contextual y estados vacíos | medio |
+| F10d | Pulido de usabilidad: recorrido completo con ratón y teclado en sesión aislada, capturas, tamaños pequeños de terminal, accesibilidad del foco; prueba con agentes reales | bajo |
+
+Orden de trabajo actualizado: F8b (en curso) → **F10a → F10b → F10c** → F8c (la pestaña **Patrones** se construye ya sobre el nuevo armazón, sin modal) → F8d (incluye la pestaña **Eventos**) → F10d → F9. Si F10a concluye que el armazón exige otra estructura, se ajusta F8c antes de lanzarla.
