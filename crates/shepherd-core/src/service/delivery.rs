@@ -185,15 +185,12 @@ impl OrchestrationService {
                         return Ok(());
                     }
                     Ok(PromptOutcome::Blocked) => {
-                        let wait_res = self.wait_until_unblocked(
+                        self.wait_until_unblocked(
                             agent_id,
                             start_ms,
                             ready_timeout_ms,
                             notice_after_ms,
-                        );
-                        if let Err(err) = wait_res {
-                            return Err(err);
-                        }
+                        )?;
                         continue;
                     }
                     Err(err) => {
@@ -220,15 +217,12 @@ impl OrchestrationService {
 
                 match send_outcome {
                     Ok(PromptOutcome::Blocked) => {
-                        let wait_res = self.wait_until_unblocked(
+                        self.wait_until_unblocked(
                             agent_id,
                             start_ms,
                             ready_timeout_ms,
                             notice_after_ms,
-                        );
-                        if let Err(err) = wait_res {
-                            return Err(err);
-                        }
+                        )?;
                         continue;
                     }
                     Ok(PromptOutcome::Delivered) => {}

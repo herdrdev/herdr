@@ -500,6 +500,12 @@
           "description": "Open settings."
         },
         {
+          "key": "keys.shepherd",
+          "type": "keybinding",
+          "default": "\"prefix+a\"",
+          "description": "Open Shepherd overlay."
+        },
+        {
           "key": "keys.new_workspace",
           "type": "keybinding",
           "default": "\"prefix+shift+n\"",
@@ -1533,6 +1539,35 @@
           "type": "boolean",
           "default": "false",
           "description": "While prefix mode is active, temporarily switch the host input source to an ASCII-capable mode so prefix commands are read as ASCII even when an IME is active, then restore the previous input source when prefix mode exits. On macOS this selects the ASCII-capable keyboard layout; on Windows it switches the IME to English (ASCII) input. Windows support is currently limited to the Korean IME; with an IME for any other language, the input source is left unchanged. macOS and Windows only; a no-op elsewhere and a best-effort no-op if the switch fails."
+        }
+      ]
+    },
+    {
+      "title": "Shepherd",
+      "keys": [
+        {
+          "key": "shepherd.enabled",
+          "type": "boolean",
+          "default": "false",
+          "description": "Start the in-process Shepherd orchestration service on server startup."
+        },
+        {
+          "key": "shepherd.limits.max_depth",
+          "type": "integer",
+          "default": "2",
+          "description": "Maximum spawn depth for sub-agents."
+        },
+        {
+          "key": "shepherd.limits.max_concurrent",
+          "type": "integer",
+          "default": "4",
+          "description": "Maximum number of concurrently running agents."
+        },
+        {
+          "key": "shepherd.limits.notice_after_secs",
+          "type": "integer",
+          "default": "3",
+          "description": "Delay in seconds before notifying for blocked or idle agents."
         }
       ]
     }

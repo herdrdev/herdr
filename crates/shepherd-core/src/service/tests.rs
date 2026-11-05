@@ -590,7 +590,9 @@ fn req5_kill_clean_focus_and_limits_confirmation() {
             ..ServiceSpawnRequest::default()
         })
         .unwrap();
-    assert!(service.clean(&[coder.id.clone()], None).is_err());
+    assert!(service
+        .clean(std::slice::from_ref(&coder.id), None)
+        .is_err());
 
     // Clean path traversal validation
     assert!(service.clean(&["../evil".into()], None).is_err());
@@ -604,7 +606,9 @@ fn req5_kill_clean_focus_and_limits_confirmation() {
     let coder_session_dir = service.service_config().agent_session_dir(&coder.id);
     assert!(coder_session_dir.exists());
 
-    let cleaned = service.clean(&[coder.id.clone()], None).unwrap();
+    let cleaned = service
+        .clean(std::slice::from_ref(&coder.id), None)
+        .unwrap();
     assert_eq!(cleaned, vec![coder.id.clone()]);
     assert!(!coder_session_dir.exists());
     assert!(terminals.closed().contains(&coder.tab));

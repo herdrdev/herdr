@@ -332,8 +332,7 @@ impl OrchestrationService {
                 let occupied_by_live_registered = registry.live().iter().any(|live| {
                     live.id != open_req.agent_id
                         && ((!existing.pane.is_empty() && live.pane == existing.pane)
-                            || (!existing.tab.is_empty() && live.tab == existing.tab)
-                            || live.id == open_req.agent_id)
+                            || (!existing.tab.is_empty() && live.tab == existing.tab))
                 }) || registry
                     .live()
                     .iter()

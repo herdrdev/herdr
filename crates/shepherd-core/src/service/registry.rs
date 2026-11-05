@@ -102,10 +102,10 @@ impl OrchestrationService {
                     } else {
                         agent.pane.clone()
                     };
-                    if (agent.state == "done" && !ids.is_empty()) || agent.state == "failed" {
-                        if !close_target.is_empty() {
-                            let _ = self.terminals.close(&close_target);
-                        }
+                    if ((agent.state == "done" && !ids.is_empty()) || agent.state == "failed")
+                        && !close_target.is_empty()
+                    {
+                        let _ = self.terminals.close(&close_target);
                     }
                     let session_dir = self.service_config.agent_session_dir(&id);
                     if session_dir.exists() {
@@ -168,10 +168,7 @@ pub fn format_shep_sender(from: &str, registry: &AgentRegistryFile) -> String {
 }
 
 pub fn format_shep_content(content: &str) -> String {
-    let replaced = content
-        .replace("\r\n", " ")
-        .replace('\n', " ")
-        .replace('\r', " ");
+    let replaced = content.replace("\r\n", " ").replace(['\n', '\r'], " ");
     let char_count = replaced.chars().count();
     if char_count > MAX_DELIVERED_MESSAGE_LEN {
         let truncated: String = replaced.chars().take(MAX_DELIVERED_MESSAGE_LEN).collect();

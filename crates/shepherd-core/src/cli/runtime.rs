@@ -899,18 +899,17 @@ pub(crate) fn runs_list(
             let has_plan = t.directory.join("plan.md").is_file();
             let pending_gate = if t.status.waiting == "plan" {
                 Some(serde_json::json!("plan"))
-            } else if let Some(subtask) = t
-                .status
-                .subtasks
-                .iter()
-                .find(|s| s.state == "awaiting-approval")
-            {
-                Some(serde_json::json!({
-                    "kind": "push_pr",
-                    "subtask": subtask.number,
-                }))
             } else {
-                None
+                t.status
+                    .subtasks
+                    .iter()
+                    .find(|s| s.state == "awaiting-approval")
+                    .map(|subtask| {
+                        serde_json::json!({
+                            "kind": "push_pr",
+                            "subtask": subtask.number,
+                        })
+                    })
             };
             let total = t.status.subtasks.len();
             let done_count = t
@@ -1189,8 +1188,11 @@ pub fn config_validate(
     json: bool,
     writer: &mut dyn std::io::Write,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = load_config(&root)?;
+    let (config, deprecations) = crate::config::load_config_with_diagnostics(&root)?;
     let issues = validate(&config);
+    for dep in &deprecations {
+        eprintln!("- warning: {dep}");
+    }
     if json {
         writeln!(
             writer,

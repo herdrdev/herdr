@@ -111,21 +111,23 @@ pub fn run_coders_with_terminals(
             ..RunReport::default()
         });
     }
-    let mut report = RunReport::default();
-    report.waiting_for_human = task
-        .status
-        .subtasks
-        .iter()
-        .filter(|subtask| subtask.state == "needs-human")
-        .map(|subtask| subtask.number)
-        .collect();
-    report.failed = task
-        .status
-        .subtasks
-        .iter()
-        .filter(|subtask| subtask.state == "failed")
-        .map(|subtask| subtask.number)
-        .collect();
+    let mut report = RunReport {
+        waiting_for_human: task
+            .status
+            .subtasks
+            .iter()
+            .filter(|subtask| subtask.state == "needs-human")
+            .map(|subtask| subtask.number)
+            .collect(),
+        failed: task
+            .status
+            .subtasks
+            .iter()
+            .filter(|subtask| subtask.state == "failed")
+            .map(|subtask| subtask.number)
+            .collect(),
+        ..RunReport::default()
+    };
     let timeout =
         parse_timeout(&config.limits.agent_timeout).unwrap_or(Duration::from_secs(30 * 60));
 

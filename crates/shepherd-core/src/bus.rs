@@ -547,7 +547,7 @@ impl MessageBus {
 
         let mut live_members: Vec<String> = all_members
             .into_iter()
-            .filter(|m| active_members.map_or(true, |actives| actives.contains(m)))
+            .filter(|m| active_members.is_none_or(|actives| actives.contains(m)))
             .collect();
         live_members.sort();
 
@@ -675,7 +675,7 @@ impl MessageBus {
             .all
             .iter()
             .filter(|m| m.topic == topic)
-            .filter(|m| partition.map_or(true, |p| m.partition == p))
+            .filter(|m| partition.is_none_or(|p| m.partition == p))
             .filter(|m| m.offset >= from_offset)
             .cloned()
             .collect();

@@ -133,7 +133,7 @@ pub fn approve_subtask_with_runner(
         .verify
         .iter()
         .chain(config.workflow.checks.iter())
-        .any(|command| command.trim().len() > 0)
+        .any(|command| !command.trim().is_empty())
     {
         if let Some(problem) = verify_coder(
             coder,

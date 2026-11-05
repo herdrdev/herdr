@@ -48,8 +48,9 @@ pub enum ShepherdTasksAction {
 }
 
 /// Sub-modals for the tasks view. At most one active at a time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum TasksSubModal {
+    #[default]
     None,
     Create(CreateTaskFormState),
     ImportGh(ImportGhFormState),
@@ -58,12 +59,6 @@ pub enum TasksSubModal {
         title: String,
         message: String,
     },
-}
-
-impl Default for TasksSubModal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Form state for creating a new task.
@@ -244,10 +239,8 @@ impl ShepherdTaskRow {
 
         let title = if !task.status.title.trim().is_empty() {
             task.status.title.clone()
-        } else if let Some(t) = extracted_title {
-            t
         } else {
-            String::new()
+            extracted_title.unwrap_or_default()
         };
 
         let spec_raw = std::fs::read_to_string(&spec_file).unwrap_or_default();
@@ -933,12 +926,7 @@ fn render_task_preview(
             base.fg(palette.mauve).add_modifier(Modifier::BOLD),
         )]));
         for l in task.spec.lines() {
-            if l.starts_with("# ") {
-                lines.push(Line::from(vec![Span::styled(
-                    l,
-                    base.fg(palette.accent).add_modifier(Modifier::BOLD),
-                )]));
-            } else if l.starts_with("## ") {
+            if l.starts_with("# ") || l.starts_with("## ") {
                 lines.push(Line::from(vec![Span::styled(
                     l,
                     base.fg(palette.accent).add_modifier(Modifier::BOLD),

@@ -3465,5 +3465,113 @@ Test de humo ejecutado exitosamente contra el daemon aislado:
 - **Lo que NO entra (alcance para F9e)**:
   - F9e: Unificación de configuración y persistencia entre `shepherd-core` y herdr.
 
+---
+
+## Estado F9e
+
+**Estilo (Clippy), Resolución de Build Warnings y Migración de Límites a `config.toml` de Herdr:**
+Fase F9e completada con éxito. Se corrigieron la totalidad de avisos de compilación y de clippy en archivos propios de Shepherd, se trasladó la configuración de límites (`max_depth`, `max_concurrent`, `notice_after_secs`) a la sección `[shepherd.limits]` del `config.toml` nativo de herdr manteniendo retrocompatibilidad total con YAML, y se documentó y verificó el comportamiento de forma aislada e interactiva.
+
+### 1. Avisos Clippy y Build Warnings (Antes vs Después)
+
+- **Build warnings (`cargo check --bin shepherd`)**:
+  - **Antes**: 6 advertencias emitidas por rustc en código propio de Shepherd (`ShepherdEmptyParams`, `ShepherdCallParams`, `ShepherdPatternSaveParams` y sus proyecciones generadas con `cli_projection!` / `cli_params!` que no tenían parámetros en bindings CLI).
+  - **Después**: **0** advertencias. Se simplificaron las estructuras a structs estándar eliminando proyecciones y métodos muertos.
+
+- **Clippy warnings en archivos de Shepherd**:
+  - **Antes**: 53 advertencias en código propio:
+    - 21 en `crates/shepherd-core/**` (tipos complejos en callbacks, `manual_map`, líneas vacías tras doc-comments, `is_none_or`, simplificación booleana, reasignaciones redundantes).
+    - 25 en `src/shepherd/**` (`Default` manual vs derive en submodales, branches colapsables, variables de asignación repetidas, formato de cadenas innecesario).
+    - 7 en tests y CLI de Shepherd (`src/cli/shepherd_bindings.rs`, fakes y characterization).
+  - **Después**: **0** advertencias en código de Shepherd corregibles.
+  - **Advertencias permitidas con justificación (1)**:
+    - `src/cli/shepherd_bindings.rs:27`: `#[allow(clippy::large_enum_variant)]` en `enum ShepherdOperation`. Justificación: agrupa las 27 variantes de operaciones de comandos de la CLI de Shepherd; boxear cada variante individualmente degradaría la claridad de los match arms y la ergonomía sin beneficio práctico en memoria en un enum efímero de CLI.
+  - **Advertencias preexistentes en código de herdr no tocadas (4)**:
+    - Siguiendo la regla de no editar código de herdr para clippy, se conservaron intactas 4 advertencias ajenas a Shepherd en `src/app/mod.rs:725`, `src/client/shell/agent_sidebar.rs:539`, `src/client/shell/../shell/overlays.rs:93`, y `src/client/shell/state.rs:591`.
+
+### 2. Cambios de Configuración: Migración de `limits` a `config.toml`
+
+1. **Nueva sección `[shepherd.limits]`**:
+   - Campos configurables en el `config.toml` de herdr:
+     - `max_depth` (u32, default `2`): profundidad máxima de spawn de sub-agentes (alias `max_spawn_depth`).
+     - `max_concurrent` (usize, default `4`): número máximo de agentes concurrentes en ejecución (alias `max_concurrent_agents`).
+     - `notice_after_secs` (u64, default `3`): umbral de segundos antes de emitir notificación al usuario.
+2. **Capas de Configuración y Retrocompatibilidad**:
+   - **Prioridad TOML > YAML**: Si existen ambos ficheros (`config.toml` y el legacy `.shepherd/config.yaml`), los valores declarados en `[shepherd.limits]` de `config.toml` tienen precedencia y sobrescriben los del YAML.
+   - **Respaldo YAML**: Si no hay `[shepherd.limits]` en `config.toml`, se cargan los límites del YAML antiguo (admitiendo tanto los nombres clásicos `max_depth`/`max_concurrent` como `max_spawn_depth`/`max_concurrent_agents`).
+   - **Valores por defecto**: Idénticos a las versiones anteriores (`max_depth: 2`, `max_concurrent: 4`, `notice_after_secs: 3`).
+   - **Diagnóstico y Deprecación**: `config validate` (mediante `load_config_with_diagnostics`) emite un aviso por `stderr` (`warning: 'limits' in YAML config is deprecated; please configure [shepherd.limits] in config.toml`) sin alterar la salida JSON estructurada en `stdout`, preservando la fidelidad de los golden tests.
+   - **Errores de parseo**: Un `config.toml` con sintaxis rota genera un error explícito identificando el archivo y la causa del fallo (`config.toml: ...`).
+3. **Documentación en Herdr**:
+   - Se registraron formalmente en `docs/next/website/src/data/config-reference.json` las claves: `keys.shepherd`, `shepherd.enabled`, `shepherd.limits.max_depth`, `shepherd.limits.max_concurrent` y `shepherd.limits.notice_after_secs`. Validado por `python3 scripts/config_reference_check.py` y `python3 -m unittest scripts.test_config_reference_check` (14/14 tests OK).
+
+### 3. Qué se Mantiene Propio (Justificación de 4.5)
+
+No se migraron a herdr los siguientes componentes y se conservan bajo propiedad de Shepherd:
+- `status.json` y `.shepherd/tasks`: Gestiona el ciclo de vida, sub-tareas y dependencias DAG del orquestador multi-agente de Shepherd; herdr no dispone de abstracción de tareas orquestadas ni DAGs.
+- `messages.jsonl` y sidecars SQLite: Bus de eventos asíncronos con offset commit y replay histórico entre agentes; herdr provee eventos de terminal/TUI en memoria pero no un bus durable de agentes.
+- Patrones YAML (`.shepherd/patterns/`): Topologías multi-agente declarativas (`blackboard`, `hierarchical`, `market`, `orchestrator-worker`); pertenecen estrictamente al dominio de orquestación de Shepherd.
+
+### 4. Archivos de Herdr Modificados (Mínimos y Aditivos)
+
+| Archivo | Líneas Añadidas | Líneas Eliminadas | Propósito / Cambio Aditivo |
+|---|---|---|---|
+| `src/config/model.rs` | +22 | 0 | Definición de `ShepherdLimitsConfig` con defaults (2, 4, 3) y campo `limits` en `ShepherdConfig`. |
+| `docs/next/website/src/data/config-reference.json` | +35 | 0 | Definición formal de claves de configuración de límites de Shepherd. |
+| `Cargo.lock` | +1 | 0 | Resolución de dependencia `toml = "0.8"` para `shepherd-core`. |
+
+Total en archivos de herdr: 2 archivos de código/datos + 1 lockfile. 0 líneas eliminadas o modificadas fuera del esquema aditivo.
+
+### 5. Resultados Reales de la Batería de Tests
+
+Todas las áreas fueron ejecutadas con `./cargo-fork.sh`:
+
+| Área de Tests | Comando Ejecutado | Pasados | Fallados | Ignorados | Notas |
+|---|---|---|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **270** | 0 | 0 | 122 unit (+5 nuevos tests de límites) + 148 characterization. 90 golden files JSON/txt intactos con 0 diffs. |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **52** | 0 | 0 | Integración de servicio, runtime y paneles de Shepherd en herdr. |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **391** | 0 | 2 | Suite de cliente TUI. |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159** | 0 | 0 | 156 unit + 3 en `tests/cli.rs`. Framing y surface delta. |
+| `api::` | `./cargo-fork.sh test api:: -- --test-threads=1` | **319** | 0 | 1 | Operaciones y endpoints de API. |
+| `server::` | `./cargo-fork.sh test server::` | **318** | 0 | 5 | Servidor headless y sockets de conexión. |
+| Contratos v1 | `./cargo-fork.sh test --bin shepherd client_commands` | **5** | 0 | 0 | Formas de métodos de endpoint client shell. |
+| Bindings CLI | `./cargo-fork.sh test --bin shepherd shepherd_bindings` | **6** | 0 | 0 | Parseo de argumentos de CLI. |
+| Config Reference | `python3 -m unittest scripts.test_config_reference_check` | **14** | 0 | 0 | Sincronización entre modelo Rust y referencia JSON. |
+
+### 6. Verificación con Servidor Aislado (`./scripts/shepherd-iso.sh`)
+
+Se verificó el servidor aislado en `/tmp/shfiso`:
+1. **Validación de error con límites inválidos**: Con `[shepherd.limits] max_concurrent = 0` en `/tmp/shfiso/cfg/shepherd-dev/config.toml`, la validación de configuración reportó:
+   ```json
+   {
+     "issues": [
+       "limits.max_concurrent_agents must be at least 1"
+     ],
+     "valid": false
+   }
+   ```
+2. **Respeto de límites en tiempo de ejecución por el servidor**:
+   - Se configuró `/tmp/shfiso/cfg/shepherd-dev/config.toml` con `max_concurrent = 1`.
+   - Se sembró 1 agente en estado `working` en la sesión aislada (`shepherd-iso.sh seed`).
+   - Al invocar `shepherd.agent.spawn` contra el servidor en ejecución, el daemon rechazó la creación excedente respetando el límite de `config.toml`:
+     ```json
+     {
+       "id": "1",
+       "error": {
+         "code": "shepherd_error",
+         "message": "confirmation_required: max_concurrent_agents (1) reached (1 live); pass confirm_over_limit to proceed"
+       }
+     }
+     ```
+3. **Parada y limpieza**: Se detuvo el servidor y se eliminaron los datos temporales con `shepherd-iso.sh reset`.
+
+### 7. Guardarraíles y Mantenimiento
+
+- `scripts/rename-from-herdr.sh --check`: **[OK]** No unexcluded occurrences of herdr/Herdr/HERDR found.
+- Detección de cadenas prohibidas: `grep -rn "testRepo\|araquesebastian" crates/shepherd-core/ src/` = 0 coincidencias.
+- Golden files: 0 modificaciones, 0 archivos regenerados.
+- Commits: 0 commits realizados (estricto cumplimiento de no commitear).
+- Formato: Formateados con `rustfmt` exclusivamente los archivos propios de Shepherd.
+
 
 

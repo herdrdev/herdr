@@ -61,7 +61,7 @@ pub struct Mcp {
     pub style: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfig {
     pub global: Vec<String>,
@@ -103,7 +103,9 @@ pub struct WorkflowConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Limits {
+    #[serde(alias = "max_depth")]
     pub max_spawn_depth: u32,
+    #[serde(alias = "max_concurrent")]
     pub max_concurrent_agents: usize,
     pub agent_timeout: String,
     pub protected_branches: Vec<String>,
@@ -136,15 +138,6 @@ impl Default for General {
         Self {
             log_level: "info".into(),
             theme: "auto".into(),
-        }
-    }
-}
-
-impl Default for SkillsConfig {
-    fn default() -> Self {
-        Self {
-            global: Vec::new(),
-            disabled: Vec::new(),
         }
     }
 }
@@ -296,15 +289,132 @@ fn words(value: &str) -> Vec<String> {
     value.split_whitespace().map(str::to_owned).collect()
 }
 
-/// Apply Go-compatible defaults < global YAML < project YAML, recursively merging mappings.
+#[derive(Debug, Deserialize, Default)]
+struct TomlFileConfig {
+    #[serde(default)]
+    shepherd: Option<TomlShepherdSection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlShepherdSection {
+    #[serde(default)]
+    limits: Option<TomlLimitsSection>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlLimitsSection {
+    max_depth: Option<u32>,
+    max_concurrent: Option<usize>,
+    notice_after_secs: Option<u64>,
+}
+
+pub fn global_config_toml_path() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("SHEPHERD_CONFIG_PATH") {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    let config_home = if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
+        PathBuf::from(path)
+    } else {
+        home_dir().join(".config")
+    };
+    let candidates = [
+        config_home.join("shepherd-dev/config.toml"),
+        config_home.join("shepherd/config.toml"),
+        config_home.join("herdr-dev/config.toml"), // fallback herdr directory
+        config_home.join("herdr/config.toml"),     // fallback herdr directory
+    ];
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Some(candidate.clone());
+        }
+    }
+    if let Ok(path) = std::env::var("SHEPHERD_CONFIG_PATH") {
+        return Some(PathBuf::from(path));
+    }
+    None
+}
+
+/// Apply Go-compatible defaults < global YAML < project YAML < config.toml, recursively merging mappings.
 /// A YAML null deletes a key; sequences and scalar values replace the previous layer.
+/// [shepherd.limits] in config.toml takes priority over YAML limits.
 pub fn load_config(
     project_dir: impl AsRef<Path>,
 ) -> Result<Config, Box<dyn std::error::Error + Send + Sync>> {
-    load_config_files(&[
+    load_config_with_diagnostics(project_dir).map(|(cfg, _)| cfg)
+}
+
+pub fn load_config_with_diagnostics(
+    project_dir: impl AsRef<Path>,
+) -> Result<(Config, Vec<String>), Box<dyn std::error::Error + Send + Sync>> {
+    let mut tree = serde_yaml_ng::to_value(Config::default())?;
+    let mut deprecations = Vec::new();
+    let yaml_paths = [
         global_config_path(),
         project_config_path(project_dir.as_ref()),
-    ])
+    ];
+
+    for path in &yaml_paths {
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let layer: serde_yaml_ng::Value = serde_yaml_ng::from_slice(&bytes)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
+
+        if let serde_yaml_ng::Value::Mapping(ref map) = layer {
+            if map.contains_key("limits") {
+                deprecations.push(format!(
+                    "'limits' in {} is deprecated; configure '[shepherd.limits]' in config.toml instead",
+                    path.display()
+                ));
+            }
+        }
+
+        merge_yaml(&mut tree, layer);
+    }
+
+    let mut config: Config = serde_yaml_ng::from_value(tree)?;
+
+    // Layer TOML config over YAML (TOML > YAML priority)
+    let mut toml_candidates = Vec::new();
+    if let Some(global_toml) = global_config_toml_path() {
+        toml_candidates.push(global_toml);
+    }
+    let project_toml = project_dir.as_ref().join(".shepherd/config.toml");
+    if project_toml.is_file() {
+        toml_candidates.push(project_toml);
+    }
+
+    for toml_path in toml_candidates {
+        let content = match std::fs::read_to_string(&toml_path) {
+            Ok(c) => c,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(format!("{}: {err}", toml_path.display()).into()),
+        };
+
+        let parsed: TomlFileConfig =
+            toml::from_str(&content).map_err(|err| format!("{}: {err}", toml_path.display()))?;
+
+        if let Some(shep) = parsed.shepherd {
+            if let Some(lim) = shep.limits {
+                if let Some(depth) = lim.max_depth {
+                    config.limits.max_spawn_depth = depth;
+                }
+                if let Some(conc) = lim.max_concurrent {
+                    config.limits.max_concurrent_agents = conc;
+                }
+                if let Some(notice) = lim.notice_after_secs {
+                    config.limits.notice_after_secs = notice;
+                }
+            }
+        }
+    }
+
+    Ok((config, deprecations))
 }
 
 pub fn load_config_files(
@@ -312,7 +422,7 @@ pub fn load_config_files(
 ) -> Result<Config, Box<dyn std::error::Error + Send + Sync>> {
     let mut tree = serde_yaml_ng::to_value(Config::default())?;
     for path in paths {
-        let bytes = match std::fs::read(&path) {
+        let bytes = match std::fs::read(path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error.into()),
@@ -335,6 +445,25 @@ fn merge_yaml(dst: &mut serde_yaml_ng::Value, src: serde_yaml_ng::Value) {
                     } else if destination.contains_key(&key) {
                         merge_yaml(destination.get_mut(&key).expect("key exists"), value);
                     } else {
+                        match key.as_str() {
+                            Some("max_depth") => {
+                                let k = Value::String("max_spawn_depth".into());
+                                destination.remove(&k);
+                            }
+                            Some("max_spawn_depth") => {
+                                let k = Value::String("max_depth".into());
+                                destination.remove(&k);
+                            }
+                            Some("max_concurrent") => {
+                                let k = Value::String("max_concurrent_agents".into());
+                                destination.remove(&k);
+                            }
+                            Some("max_concurrent_agents") => {
+                                let k = Value::String("max_concurrent".into());
+                                destination.remove(&k);
+                            }
+                            _ => {}
+                        }
                         destination.insert(key, value);
                     }
                 }
@@ -642,5 +771,151 @@ mod tests {
         assert!(!config.vendors.contains_key("gemini"));
         assert_eq!(config.limits.max_concurrent_agents, 4);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    struct EnvGuard {
+        var: &'static str,
+        orig: Option<std::ffi::OsString>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl EnvGuard {
+        fn set(var: &'static str, val: impl AsRef<std::ffi::OsStr>) -> Self {
+            let lock = crate::TEST_ENV_MUTEX
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let orig = std::env::var_os(var);
+            std::env::set_var(var, val);
+            Self {
+                var,
+                orig,
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(ref val) = self.orig {
+                std::env::set_var(self.var, val);
+            } else {
+                std::env::remove_var(self.var);
+            }
+        }
+    }
+
+    #[test]
+    fn test_shepherd_limits_defaults() {
+        let config = Config::default();
+        assert_eq!(config.limits.max_spawn_depth, 2);
+        assert_eq!(config.limits.max_concurrent_agents, 4);
+        assert_eq!(config.limits.notice_after_secs, 3);
+    }
+
+    #[test]
+    fn test_shepherd_limits_read_from_toml() {
+        let root = std::env::temp_dir().join(format!("shep-test-toml-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let toml_file = root.join("config.toml");
+        std::fs::write(
+            &toml_file,
+            "[shepherd.limits]\nmax_depth = 5\nmax_concurrent = 10\nnotice_after_secs = 15\n",
+        )
+        .unwrap();
+
+        let _guard = EnvGuard::set("SHEPHERD_CONFIG_PATH", &toml_file);
+        let config = load_config(&root).unwrap();
+        assert_eq!(config.limits.max_spawn_depth, 5);
+        assert_eq!(config.limits.max_concurrent_agents, 10);
+        assert_eq!(config.limits.notice_after_secs, 15);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_shepherd_limits_priority_toml_over_yaml() {
+        let root = std::env::temp_dir().join(format!("shep-test-priority-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shep_dir = root.join(".shepherd");
+        std::fs::create_dir_all(&shep_dir).unwrap();
+
+        std::fs::write(
+            shep_dir.join("config.yaml"),
+            "limits:\n  max_depth: 3\n  max_concurrent: 6\n",
+        )
+        .unwrap();
+
+        let toml_file = root.join("custom_config.toml");
+        std::fs::write(&toml_file, "[shepherd.limits]\nmax_concurrent = 12\n").unwrap();
+
+        let _guard = EnvGuard::set("SHEPHERD_CONFIG_PATH", &toml_file);
+        let config = load_config(&root).unwrap();
+        // TOML overrides YAML for max_concurrent (12 > 6)
+        assert_eq!(config.limits.max_concurrent_agents, 12);
+        // YAML fallback preserves max_depth (3)
+        assert_eq!(config.limits.max_spawn_depth, 3);
+        // Default preserved for notice_after_secs (3)
+        assert_eq!(config.limits.notice_after_secs, 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_shepherd_limits_invalid_toml_error() {
+        let root =
+            std::env::temp_dir().join(format!("shep-test-invalid-toml-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let toml_file = root.join("config.toml");
+        std::fs::write(&toml_file, "[shepherd.limits\nmalformed = syntax").unwrap();
+
+        let _guard = EnvGuard::set("SHEPHERD_CONFIG_PATH", &toml_file);
+        let err = load_config(&root).unwrap_err();
+        let err_msg = err.to_string();
+        assert!(
+            err_msg.contains("config.toml")
+                || err_msg.contains("syntax")
+                || err_msg.contains("expected"),
+            "Error should clearly identify TOML parse error: {err_msg}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn test_shepherd_limits_config_validate_yaml_deprecation_warning() {
+        let root =
+            std::env::temp_dir().join(format!("shep-test-deprecation-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shep_dir = root.join(".shepherd");
+        std::fs::create_dir_all(&shep_dir).unwrap();
+
+        std::fs::write(
+            shep_dir.join("config.yaml"),
+            "limits:\n  max_depth: 3\n  max_concurrent: 5\n",
+        )
+        .unwrap();
+
+        // Clear any SHEPHERD_CONFIG_PATH
+        let _guard = EnvGuard::set("SHEPHERD_CONFIG_PATH", "/tmp/nonexistent-config.toml");
+        let (config, deprecations) = load_config_with_diagnostics(&root).unwrap();
+        assert_eq!(config.limits.max_spawn_depth, 3);
+        assert_eq!(config.limits.max_concurrent_agents, 5);
+        assert_eq!(deprecations.len(), 1);
+        assert!(deprecations[0].contains("deprecated"));
+        assert!(deprecations[0].contains("[shepherd.limits]"));
+
+        // Test cli config_validate in JSON mode succeeds with valid=true
+        let mut json_buf = Vec::new();
+        crate::cli::config_validate(root.clone(), true, &mut json_buf).unwrap();
+        let json_val: serde_json::Value = serde_json::from_slice(&json_buf).unwrap();
+        assert_eq!(json_val["valid"], true);
+        assert!(json_val["issues"].as_array().unwrap().is_empty());
+
+        // Test cli config_validate in text mode writes valid message
+        let mut text_buf = Vec::new();
+        crate::cli::config_validate(root.clone(), false, &mut text_buf).unwrap();
+        let text_str = String::from_utf8(text_buf).unwrap();
+        assert!(text_str.contains("configuration is valid"));
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

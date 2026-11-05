@@ -50,10 +50,10 @@ pub(crate) fn validate_mcp_url(url: &str) -> Result<(), Box<dyn std::error::Erro
     };
     let host = authority.split(':').next().unwrap_or("");
     if !matches!(host, "127.0.0.1" | "localhost")
-        || !authority
+        || authority
             .rsplit_once(':')
             .and_then(|(_, port)| port.parse::<u16>().ok())
-            .is_some()
+            .is_none()
     {
         return Err("MCP endpoint must use localhost or 127.0.0.1 and include a valid port".into());
     }

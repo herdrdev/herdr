@@ -487,9 +487,9 @@ pub fn inspect(dir: &Path) -> Skill {
         .unwrap_or_default();
     let mut name = String::new();
     let txt = raw.replace("\r\n", "\n");
-    if txt.starts_with("---\n") {
-        if let Some(end) = txt[4..].find("\n---") {
-            if let Ok(fm) = serde_yaml_ng::from_str::<Frontmatter>(&txt[4..4 + end]) {
+    if let Some(rest) = txt.strip_prefix("---\n") {
+        if let Some(end) = rest.find("\n---") {
+            if let Ok(fm) = serde_yaml_ng::from_str::<Frontmatter>(&rest[..end]) {
                 name = fm.name;
             }
         }

@@ -308,11 +308,33 @@ pub fn validated_sidebar_bounds(min: u16, max: u16) -> Option<(u16, u16)> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ShepherdLimitsConfig {
+    /// Maximum spawn depth for sub-agents. Default: 2.
+    pub max_depth: u32,
+    /// Maximum number of concurrently running agents. Default: 4.
+    pub max_concurrent: usize,
+    /// Delay in seconds before notifying for blocked or idle agents. Default: 3.
+    pub notice_after_secs: u64,
+}
+
+impl Default for ShepherdLimitsConfig {
+    fn default() -> Self {
+        Self {
+            max_depth: 2,
+            max_concurrent: 4,
+            notice_after_secs: 3,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ShepherdConfig {
     /// Start the in-process Shepherd orchestration service on server startup. Default: false.
     pub enabled: bool,
+    pub limits: ShepherdLimitsConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]

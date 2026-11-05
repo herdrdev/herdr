@@ -439,6 +439,8 @@ impl Default for InMemoryTerminals {
     }
 }
 
+pub type PromptCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 #[derive(Default)]
 struct InMemoryState {
     next_id: u64,
@@ -457,7 +459,7 @@ struct InMemoryState {
     pub create_real_worktrees: bool,
     pub disable_auto_react: bool,
     pub disable_echo_on_send_text: bool,
-    pub on_prompt: Option<Arc<dyn Fn(&str, &str) + Send + Sync>>,
+    pub on_prompt: Option<PromptCallback>,
     pub notifications: Vec<(String, Option<String>)>,
     pub worktrees: Option<Vec<ParsedWorktree>>,
     pub event_signaled: bool,

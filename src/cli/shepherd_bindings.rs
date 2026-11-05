@@ -267,6 +267,7 @@ pub(crate) enum LocalCommand {
 }
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // CLI parse result enum is transient and parsed once per execution
 pub(crate) enum ShepherdOperation {
     Api(Request),
     Local(LocalCommand),

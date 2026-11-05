@@ -51,8 +51,9 @@ pub enum ShepherdAgentsAction {
 
 /// Sub-modals displayed within the Shepherd agents panel.
 /// Only one sub-modal or confirmation may be active at any given time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum AgentsSubModal {
+    #[default]
     None,
     Spawn(SpawnFormState),
     ConfirmKill {
@@ -70,12 +71,6 @@ pub enum AgentsSubModal {
         workspace: Option<String>,
         message: String,
     },
-}
-
-impl Default for AgentsSubModal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Form state for spawning a new agent.
@@ -1550,7 +1545,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
         a1.state = "working".into();
         reg.agents[0] = a1;
@@ -1561,7 +1556,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
         a2.state = "exited".into();
         reg.agents[1] = a2;
@@ -1572,7 +1567,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
         a3.state = "killed".into();
         reg.agents[2] = a3;
@@ -1583,7 +1578,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
         a4.state = "failed".into();
         reg.agents[3] = a4;
@@ -1632,7 +1627,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
 
         let mut panel = ShepherdAgentsPanelState::from_registry(&reg);
@@ -1665,7 +1660,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
         let _a2 = reg.create(
             Agent {
@@ -1674,7 +1669,7 @@ mod tests {
                 ..Agent::default()
             },
             "t".into(),
-            "now".into(),
+            "now",
         );
 
         let mut panel = ShepherdAgentsPanelState::from_registry(&reg);

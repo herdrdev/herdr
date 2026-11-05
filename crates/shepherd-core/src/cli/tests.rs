@@ -3,12 +3,11 @@ use crate::terminals::{shepherd_attach_args, InMemoryTerminals};
 use crate::{find_task, save_task_status, write_task_section};
 use serde_json::Value;
 
-static TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 struct TestEnvGuard {
     _lock: std::sync::MutexGuard<'static, ()>,
     orig_xdg: Option<std::ffi::OsString>,
     orig_xdg_config: Option<std::ffi::OsString>,
+    orig_shepherd_config: Option<std::ffi::OsString>,
     orig_home: Option<std::ffi::OsString>,
     orig_editor: Option<std::ffi::OsString>,
     dir: PathBuf,
@@ -16,9 +15,12 @@ struct TestEnvGuard {
 
 impl TestEnvGuard {
     fn new() -> Self {
-        let lock = TEST_ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::TEST_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let orig_xdg = std::env::var_os("XDG_STATE_HOME");
         let orig_xdg_config = std::env::var_os("XDG_CONFIG_HOME");
+        let orig_shepherd_config = std::env::var_os("SHEPHERD_CONFIG_PATH");
         let orig_home = std::env::var_os("HOME");
         let orig_editor = std::env::var_os("EDITOR");
         let nonce = std::time::SystemTime::now()
@@ -30,12 +32,14 @@ impl TestEnvGuard {
         std::fs::create_dir_all(dir.join("shepherd")).unwrap();
         std::env::set_var("XDG_STATE_HOME", &dir);
         std::env::set_var("XDG_CONFIG_HOME", dir.join("cfg"));
+        std::env::remove_var("SHEPHERD_CONFIG_PATH");
         std::env::set_var("HOME", &dir);
         std::env::set_var("EDITOR", "true");
         Self {
             _lock: lock,
             orig_xdg,
             orig_xdg_config,
+            orig_shepherd_config,
             orig_home,
             orig_editor,
             dir,
@@ -52,6 +56,10 @@ impl Drop for TestEnvGuard {
         match &self.orig_xdg_config {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        match &self.orig_shepherd_config {
+            Some(v) => std::env::set_var("SHEPHERD_CONFIG_PATH", v),
+            None => std::env::remove_var("SHEPHERD_CONFIG_PATH"),
         }
         match &self.orig_home {
             Some(v) => std::env::set_var("HOME", v),
@@ -964,7 +972,7 @@ fn test_pattern_cli_lifecycle_and_json() {
     let problems = broken_json["problems"].as_array().unwrap();
     assert!(problems.iter().any(|p| p["message"]
         .as_str()
-        .map_or(false, |m| m.contains("broken-unknown-orders-topic"))));
+        .is_some_and(|m| m.contains("broken-unknown-orders-topic"))));
 
     // 6b. human output returns Err and prints diagnostic
     let (_, human_err) =

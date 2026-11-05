@@ -31,6 +31,9 @@ pub use cli::{
     run_cli_with_terminals,
 };
 
+#[cfg(test)]
+pub(crate) static TEST_ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use patterns::{
     Pattern, PatternAgent, PatternDetail, PatternError, PatternKind, PatternSource, PatternSummary,
     Problem, Severity, Topic,

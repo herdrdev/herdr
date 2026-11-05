@@ -69,12 +69,11 @@ impl OrchestrationService {
                                 agent.state = "blocked".into();
                                 agent.updated = now.clone();
                             }
-                            "idle" | "done" => {
-                                if agent.state != "done" {
-                                    agent.state = "idle".into();
-                                    agent.updated = now.clone();
-                                }
+                            "idle" | "done" if agent.state != "done" => {
+                                agent.state = "idle".into();
+                                agent.updated = now.clone();
                             }
+                            "idle" | "done" => {}
                             _ => {}
                         },
                     }

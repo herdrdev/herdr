@@ -136,8 +136,9 @@ pub enum ShepherdRunsAction {
 }
 
 /// Sub-modals for runs and gates. At most one active at a time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum RunsSubModal {
+    #[default]
     None,
     LaunchOptions(LaunchOptionsFormState),
     ConfirmCancelRun {
@@ -154,12 +155,6 @@ pub enum RunsSubModal {
         gate: GateKind,
         message: String,
     },
-}
-
-impl Default for RunsSubModal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Pure presentation row for a task run.
@@ -241,7 +236,7 @@ impl ShepherdRunRow {
             .get("subtasks_progress")
             .and_then(serde_json::Value::as_array)
             .map(|a| {
-                let done = a.get(0).and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+                let done = a.first().and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
                 let total = a.get(1).and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
                 (done, total)
             })
@@ -859,7 +854,7 @@ fn render_launch_options_modal(
     buffer.set_stringn(
         inner.x + 1,
         inner.y,
-        &format!(
+        format!(
             "Opciones de Lanzamiento / Reanudación (Tarea #{})",
             form.task_id
         ),

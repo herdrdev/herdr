@@ -22,16 +22,13 @@ cli_params! {
     }
 }
 
-cli_params! {
-    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-    pub struct ShepherdPatternSaveParams => ShepherdPatternSaveProjection {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
-        pub pattern: shepherd_core::patterns::Pattern => Field::new(shepherd_core::patterns::Pattern::default()),
-        #[serde(default)]
-        pub global: bool => Field::new(false)
-            .input(bindings::boolean_flag("global")),
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+pub struct ShepherdPatternSaveParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    pub pattern: shepherd_core::patterns::Pattern,
+    #[serde(default)]
+    pub global: bool,
 }
 
 cli_params! {

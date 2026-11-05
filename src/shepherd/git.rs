@@ -46,15 +46,13 @@ pub struct ShepherdGitRow {
 }
 
 impl ShepherdGitRow {
-    pub fn from_worktree_info(wt: &GitWorktreeInfo, gh_available: bool) -> Self {
+    pub fn from_worktree_info(wt: &GitWorktreeInfo, _gh_available: bool) -> Self {
         let (pr_display, pr_url) = if let Some(ref pr) = wt.pr {
             let draft = if pr.is_draft { " [draft]" } else { "" };
             (
                 format!("#{} {}{draft}", pr.number, pr.state),
                 Some(pr.url.clone()),
             )
-        } else if gh_available {
-            ("—".to_string(), None)
         } else {
             ("—".to_string(), None)
         };

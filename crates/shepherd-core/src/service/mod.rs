@@ -72,11 +72,13 @@ impl Clock for SystemClock {
     }
 }
 
+type SleepCallback = Arc<dyn Fn(u64) + Send + Sync>;
+
 /// Deterministic test clock that never sleeps the OS thread.
 #[derive(Clone, Default)]
 pub struct ManualClock {
     now_ms: Arc<Mutex<u64>>,
-    on_sleep: Arc<Mutex<Option<Arc<dyn Fn(u64) + Send + Sync>>>>,
+    on_sleep: Arc<Mutex<Option<SleepCallback>>>,
 }
 
 impl ManualClock {
@@ -390,8 +392,7 @@ impl OrchestrationService {
         self.log_err("agents", result)
     }
 
-    /// Requirement 9: Run workflow with human approval gate by default, or auto-push when `auto_push` is true.
-
+    /// List tasks in project root.
     pub fn list_tasks(&self, root: &Path, archived: bool) -> Result<Vec<CreatedTask>, String> {
         crate::list_tasks(root, archived).map_err(|e| e.to_string())
     }
@@ -447,18 +448,17 @@ impl OrchestrationService {
                 let has_plan = t.directory.join("plan.md").is_file();
                 let pending_gate = if t.status.waiting == "plan" {
                     Some(serde_json::json!("plan"))
-                } else if let Some(subtask) = t
-                    .status
-                    .subtasks
-                    .iter()
-                    .find(|s| s.state == "awaiting-approval")
-                {
-                    Some(serde_json::json!({
-                        "kind": "push_pr",
-                        "subtask": subtask.number,
-                    }))
                 } else {
-                    None
+                    t.status
+                        .subtasks
+                        .iter()
+                        .find(|s| s.state == "awaiting-approval")
+                        .map(|subtask| {
+                            serde_json::json!({
+                                "kind": "push_pr",
+                                "subtask": subtask.number,
+                            })
+                        })
                 };
                 let total = t.status.subtasks.len();
                 let done_count = t

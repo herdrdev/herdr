@@ -28,16 +28,11 @@ use crate::app::state::Palette;
 pub const SHEPHERD_SKILLS_MODAL_SIZE: (u16, u16) = (92, 26);
 
 /// Mode of the skills view: viewing an agent's assigned skills vs viewing the global catalog.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum SkillsViewMode {
     AgentView,
+    #[default]
     CatalogView,
-}
-
-impl Default for SkillsViewMode {
-    fn default() -> Self {
-        Self::CatalogView
-    }
 }
 
 /// A skill assigned to an agent across the 3 tiers.
@@ -145,8 +140,9 @@ pub enum ShepherdSkillsAction {
 }
 
 /// Sub-modals for skills. At most one active at a time.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum SkillsSubModal {
+    #[default]
     None,
     Create(CreateSkillFormState),
     ConfirmRestore {
@@ -159,12 +155,6 @@ pub enum SkillsSubModal {
         scope: Scope,
         message: String,
     },
-}
-
-impl Default for SkillsSubModal {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Pure presentation state for the skills view.

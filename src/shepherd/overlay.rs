@@ -107,11 +107,12 @@ pub struct ClientShepherdOverlay {
 
 impl Default for ClientShepherdOverlay {
     fn default() -> Self {
-        let mut tasks = ShepherdTasksState::default();
-        tasks.open = true;
         Self {
             active_tab: ShepherdTab::Tasks,
-            tasks,
+            tasks: ShepherdTasksState {
+                open: true,
+                ..ShepherdTasksState::default()
+            },
             runs: ShepherdRunsState::default(),
             skills: ShepherdSkillsState::default(),
             git: ShepherdGitState::default(),
@@ -708,12 +709,14 @@ pub fn route_agent_modal_key(
     }
 
     let key_event = KeyEvent::new(code, modifiers);
-    let mut temp_panel = super::panel::ShepherdAgentsPanelState::default();
-    temp_panel.sub_modal = modal.sub_modal.clone();
+    let mut temp_panel = super::panel::ShepherdAgentsPanelState {
+        sub_modal: modal.sub_modal.clone(),
+        ..super::panel::ShepherdAgentsPanelState::default()
+    };
     let action = temp_panel.handle_key(key_event);
     modal.sub_modal = temp_panel.sub_modal;
 
-    if let Some(action) = action.or_else(|| temp_panel.last_action) {
+    if let Some(action) = action.or(temp_panel.last_action) {
         match action {
             ShepherdAgentsAction::FocusPane { pane_id, agent_id } => {
                 dispatcher.focus_pane(&pane_id, &agent_id);
@@ -800,11 +803,11 @@ pub fn handle_shepherd_mouse_click(
     if contains_point(hits.content, point.0, point.1) {
         match (overlay.active_tab, &hits.panel) {
             (ShepherdTab::Tasks, Some(ActivePanelRender::Tasks(rendered))) => {
-                if let Some(action) = overlay.tasks.handle_click(point.0, point.1, rendered) {
-                    if let ShepherdTasksAction::OpenEditor { task_id, file_path } = action {
-                        dispatcher.open_editor(task_id, &file_path);
-                        return ShepherdClickOutcome::OpenEditor { task_id, file_path };
-                    }
+                if let Some(ShepherdTasksAction::OpenEditor { task_id, file_path }) =
+                    overlay.tasks.handle_click(point.0, point.1, rendered)
+                {
+                    dispatcher.open_editor(task_id, &file_path);
+                    return ShepherdClickOutcome::OpenEditor { task_id, file_path };
                 }
                 return ShepherdClickOutcome::Handled;
             }

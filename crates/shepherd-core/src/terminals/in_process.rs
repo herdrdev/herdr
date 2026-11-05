@@ -13,14 +13,16 @@ use crate::{
 use serde_json::Value;
 use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
+pub type AttachHandler = Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>;
+pub type EventWaiter = Arc<dyn Fn(Duration) -> Result<bool, TerminalError> + Send + Sync>;
+
 /// In-process adapter for Shepherd's runtime API (`trait Terminals`), avoiding external NDJSON socket I/O
 /// in `shepherd-core` by routing RPC calls through a direct handler (`App` channel or `ApiClient`).
 pub struct ShepherdInProcess {
     client: ShepherdClient,
     session: String,
-    attach_handler:
-        Option<Arc<dyn Fn(Option<&str>, bool) -> Result<(), TerminalError> + Send + Sync>>,
-    event_waiter: Option<Arc<dyn Fn(Duration) -> Result<bool, TerminalError> + Send + Sync>>,
+    attach_handler: Option<AttachHandler>,
+    event_waiter: Option<EventWaiter>,
 }
 
 impl ShepherdInProcess {
@@ -149,10 +151,12 @@ mod tests {
     use crate::terminals::WorktreeSpec;
     use std::{path::PathBuf, sync::Mutex};
 
+    type AttachedLog = Arc<Mutex<Vec<(Option<String>, bool)>>>;
+
     #[test]
     fn shepherd_in_process_executes_every_terminals_operation_without_socket() {
         let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::new(Mutex::new(Vec::new()));
-        let attached: Arc<Mutex<Vec<(Option<String>, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let attached: AttachedLog = Arc::new(Mutex::new(Vec::new()));
         let calls_ref = Arc::clone(&calls);
         let attached_ref = Arc::clone(&attached);
 
