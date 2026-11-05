@@ -1,9 +1,47 @@
 Shepherd
-Copyright (c) Sebastián Araque Rivaldito.
+Copyright (c) 2026 Sebastián Araque Rivaldito.
 
-Shepherd is a fork of herdr (https://github.com/herdrdev/herdr), © its authors ("the herdr contributors"), licensed under Apache-2.0.
-Base version: 0.9.5.
+Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-Shepherd adds an in-process coding agent orchestrator (`crates/shepherd-core`, `src/shepherd/`), © Sebastián Araque Rivaldito, licensed under Apache-2.0.
+---------------------------------------------------------------------
+Upstream attribution
+---------------------------------------------------------------------
 
-This product contains files changed from the upstream herdr; see git history and SHEPHERD.md.
+Shepherd is a fork of herdr, an open-source terminal workspace manager and
+runtime for coding agents:
+
+    herdr            https://github.com/herdrdev/herdr
+    website          https://herdr.dev
+    license          Apache License 2.0
+    copyright        the herdr authors and contributors ("the herdr contributors")
+    base version     0.9.5
+
+The terminal multiplexer, pseudo-terminal management, session persistence,
+agent screen detection, client/server protocol, socket API, plugin system and
+the rest of the herdr code base in this repository are the work of the herdr
+contributors and remain under their copyright and the Apache-2.0 license.
+Their history is preserved in this repository's git log.
+
+Changes made to the upstream herdr files (Apache-2.0, section 4(b)):
+files carry the modifications listed in SHEPHERD.md, section "Archivos de
+herdr modificados" (renaming to "shepherd", configuration paths, and the small
+hooks that connect the orchestrator to the multiplexer). The git history shows
+every change line by line.
+
+---------------------------------------------------------------------
+Shepherd additions
+---------------------------------------------------------------------
+
+The coding-agent orchestrator is original work, Copyright (c) 2026 Sebastián
+Araque Rivaldito, licensed under Apache-2.0:
+
+    crates/shepherd-core/        orchestration core (agents, tasks, patterns,
+                                 event bus, snapshots, workflow)
+    src/shepherd/                Shepherd section of the interface
+    src/cli/shepherd*.rs         command-line interface for the orchestrator
+    src/client/shell/shepherd*.rs
+    docs/shepherd/               documentation
+
+Names and marks: "herdr" and its logo belong to their respective owners.
+Shepherd is an independent fork and is not affiliated with or endorsed by the
+herdr project.

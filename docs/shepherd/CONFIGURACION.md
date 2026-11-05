@@ -7,7 +7,7 @@ Shepherd se configura con **dos tipos de archivo** que se combinan:
 | `config.toml` | TOML | La aplicación (atajos, tema, etc.) y la sección `[shepherd]`: activar, límites, snapshots | `~/.config/shepherd/config.toml` (compilación de depuración: `~/.config/shepherd-dev/`) y `<repo>/.shepherd/config.toml` |
 | `config.yaml` | YAML | Roles, vendors, skills, flujo de trabajo, límites (forma antigua) | `~/.config/shepherd/config.yaml` (global) y `<repo>/.shepherd/config.yaml` (proyecto) |
 
-Si no existe `config.toml` en la ruta de Shepherd, se lee en solo lectura `~/.config/herdr/config.toml` (herencia del proyecto base).
+Si no existe `config.toml` en la ruta de Shepherd, se lee en solo lectura el `config.toml` del proyecto base del que parte Shepherd (carpeta de configuración de su proyecto original, ver NOTICE).
 
 Comprobar: `shepherd config check` valida el `config.toml`; `shepherd config path` muestra las rutas del `config.yaml` y el directorio de estado; `shepherd config validate` valida el `config.yaml` (con `--json` ambos dan salida estructurada).
 

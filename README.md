@@ -1,76 +1,96 @@
-# Shepherd
+# shepherd
 
-A terminal-based runtime and orchestrator for coding agents.
+<p align="center">
+  <a href="#install">install</a> · <a href="#quick-start">quick start</a> · <a href="docs/shepherd/README.md">docs</a> · <a href="#built-on-herdr">built on herdr</a> · <a href="#license">license</a>
+</p>
 
-Shepherd combines a high-performance terminal multiplexer with an in-process orchestrator for multi-agent workflows. It lets you monitor, coordinate, and steer coding agents across tasks and worktrees without taking over their native terminal sessions.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-666666?labelColor=333333" alt="Apache 2.0 license" /></a>
+  <a href="https://github.com/herdrdev/herdr"><img src="https://img.shields.io/badge/based%20on-herdr%200.9.5-666666?labelColor=333333" alt="based on herdr 0.9.5" /></a>
+  <img src="https://img.shields.io/badge/status-experimental-666666?labelColor=333333" alt="experimental" />
+</p>
 
-## Upstream Credit
+---
 
-Shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) (base version 0.9.5), created by the herdr contributors and licensed under the [Apache License 2.0](LICENSE).
-We build upon herdr's mouse-first terminal multiplexing, PTY management, session persistence, and agent screen detection.
+**the orchestrator for your coding agents.**
 
-## What Shepherd Adds
+shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) that adds multi-agent orchestration on top of herdr's terminal runtime. you keep the native terminal of every agent; shepherd decides who works on what, in which worktree, and how they talk to each other.
 
-- **Shepherd section (`prefix + a`, or click the first tab)**: a virtual tab with Agents, Tasks, Runs, Patterns, Skills, Git and Events views:
-  - **Tasks**: Create tasks, preview Markdown specs and acceptance criteria, edit specs in `$EDITOR` in a split pane, and archive completed tasks.
-  - **Runs**: Track multi-phase task execution pipelines and approve human gates.
-  - **Skills**: Skill catalog with global, role and per-session levels, shown in the overlay; default skills are protected from deletion.
-  - **Git**: Read-only inspection of repository worktrees, branch statuses, dirty state, and linked agent identifiers.
-- **Enhanced Agent Sidebar**:
-  - Live agent status badges (`starting`, `working`, `idle`, `blocked`, `done`).
-  - Multiline, non-truncated `[NEEDS YOU]` alerts when an agent requires human intervention (e.g., trust dialogs or logins).
-- **Inter-Agent Communication (MCP & Bus)**:
-  - In-process Model Context Protocol (MCP) server over loopback HTTP with per-agent tokens.
-  - Message delivery for non-MCP agents: bus messages are formatted and typed into the terminal pane (`[shep] from <role>#<n>: ...`) once the pane is idle and quiet.
-- **Unified CLI & Automation**:
-  - Direct subcommands on `shepherd` (e.g., `shepherd agents`, `shepherd task new`, `shepherd runs list`, `shepherd git`).
-  - Consistent `--json` output across all data-returning commands for headless workflows.
-- **Headless Daemon**:
-  - Orchestration service runs inside the background server and handles reconciliation, agent recovery on restart, and state persistence.
+- **agents with roles** — claude, codex and gemini (agy) as `brain`, `coder`, `reviewer`, `docs` or `tester`. routing by role, with fallbacks and a different-vendor rule for reviews. `shepherd spawn coder "…"`.
+- **one git worktree per agent** — each coder gets its own branch and worktree, so agents never step on each other. you integrate with plain git; shepherd never merges or pushes on its own.
+- **multi-agent patterns** — orchestrator-worker, hierarchical, blackboard and market as YAML teams you can copy, edit, validate and run. `shepherd pattern run webteam --task "…"`.
+- **event bus** — topics, partitions, consumer groups, offsets and replay, exposed to agents as MCP tools and to you as `shepherd topic …`. publishing wakes idle agents.
+- **tasks and gated runs** — tasks with specs and acceptance criteria; plan, implement, review, check and publish with explicit human approval.
+- **local snapshots** — automatic safety copies of every agent's worktree in hidden git refs, with diff and safe restore. no network, no extra dependencies.
+- **a shepherd tab in the terminal** — `ctrl+b a` opens agents, tasks, runs, patterns, skills, git and events as an in-window section with herdr's look, keyboard and mouse. no pop-ups.
+- **cli for everything** — every action is a command with `--json` output. [cli guide →](docs/shepherd/USO-CLI.md)
+- **one rust binary, no electron** — runs in whatever terminal you already use.
 
-## Differences from herdr
+---
 
-- **Focus**: herdr is a terminal multiplexer for managing agent panes; Shepherd adds automated multi-agent coordination, tasks, and workflow gates.
-- **Upstream Auto-Updates Disabled**: Auto-update checks against herdr release channels are disabled to prevent replacing the fork binary.
-- **Workflow Gates**: Changes and git publishing require explicit human confirmation unless explicitly overridden.
-- **Separate State & Config**: Stores configuration in `~/.config/shepherd` and per-session orchestration state under that session directory, with a read-only fallback to herdr's `config.toml`.
+## install
 
-## Project Status
-
-**Experimental**. Shepherd is functional for local development and multi-agent coordination, but is currently in active development. Binary distribution packages (Homebrew, installers) and public release channels are not yet published.
-
-## Installation from Source
-
-Shepherd must be built from source using Cargo:
+shepherd is experimental and has no binary releases yet; build it from source.
 
 ```bash
-git clone <repo-url>
+git clone <repo-url> shepherd
 cd shepherd
-cargo build --release
+./cargo-fork.sh build --release     # or: cargo build --release
 ```
 
-The resulting binary will be at `target/release/shepherd`.
+requirements: Rust 1.96.1+ and Zig 0.16.0 (to build the vendored terminal library). the binary is `target/release/shepherd`.
 
-Requirements: Rust 1.96.1+ (or use `./cargo-fork.sh`) and Zig 0.16.0 (for ghostty-vt compilation).
+## quick start
 
-## Configuration
-
-Shepherd stores configuration at `~/.config/shepherd/config.toml` (or `~/.config/shepherd-dev/config.toml` in debug builds). If no configuration file exists at that path, Shepherd falls back to reading `~/.config/herdr/config.toml` in read-only mode.
-
-To enable Shepherd's orchestration features, add the following to your `config.toml`:
+enable the orchestrator in `~/.config/shepherd/config.toml`:
 
 ```toml
 [shepherd]
 enabled = true
 ```
 
-When disabled, Shepherd behaves as a standard terminal multiplexer.
+start it where the work lives, then open the shepherd section:
 
-## Documentation
+```bash
+shepherd                 # then press ctrl+b a, or click the "Shepherd" tab
+shepherd config check    # validate your configuration
+shepherd spawn coder "Add GET /health and a test. Commit." --vendor claude --model haiku
+shepherd agents
+```
 
-See [docs/shepherd/](docs/shepherd/README.md): usage from the TUI and the CLI, configuration, patterns, agents, skills and the event bus (Spanish).
+`ctrl+b q` detaches, `shepherd` reattaches. [tui guide →](docs/shepherd/USO-TUI.md)
 
-## License
+## docs
 
-Shepherd is licensed under the [Apache License 2.0](LICENSE).
-See [NOTICE](NOTICE) for copyright details and upstream attribution.
+everything lives in [docs/shepherd](docs/shepherd/README.md) (spanish): [tui guide](docs/shepherd/USO-TUI.md) · [cli guide](docs/shepherd/USO-CLI.md) · [configuration](docs/shepherd/CONFIGURACION.md) · [patterns](docs/shepherd/PATRONES.md) · [agents, skills, mcp and bus](docs/shepherd/AGENTES-Y-SKILLS.md). design notes and project status: [SHEPHERD.md](SHEPHERD.md).
+
+## built on herdr
+
+shepherd would not exist without [herdr](https://github.com/herdrdev/herdr) ([herdr.dev](https://herdr.dev)), created by the herdr contributors and licensed under the Apache License 2.0. the terminal multiplexer, pty management, session persistence, agent detection, client/server protocol, socket api and plugin system in this repository are their work. shepherd is based on herdr 0.9.5, keeps its history, and merges upstream changes regularly. thank you to everyone who builds herdr 🐑
+
+what differs from herdr:
+
+- **focus** — herdr manages agent panes; shepherd adds coordination: roles, worktrees, patterns, bus, tasks and snapshots.
+- **separate config and state** — `~/.config/shepherd`, with a read-only fallback to herdr's `config.toml`.
+- **no upstream auto-update** — update checks against herdr's release channels are disabled so they never replace the shepherd binary.
+- **human gates** — changes and git publishing need explicit confirmation unless you override it.
+
+shepherd is an independent fork; it is not affiliated with or endorsed by the herdr project. see [NOTICE](NOTICE) for the full attribution and the list of modified upstream files.
+
+## development
+
+```bash
+./cargo-fork.sh build                 # debug build
+./cargo-fork.sh test -p shepherd-core # orchestrator core tests
+./cargo-fork.sh test --bin shepherd -- shepherd:: client::shell protocol:: api:: config::
+
+scripts/rename-from-herdr.sh --check              # no leftover upstream names
+scripts/upstream-sync.sh --dry-run --allow-branch shepherd   # preview merging upstream herdr
+scripts/shepherd-iso.sh start                     # isolated session for manual checks
+```
+
+code style follows herdr: rustfmt and clippy clean on shepherd-owned files, a typed socket api, and minimal, additive hooks in herdr files. see [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## license
+
+shepherd is licensed under the [Apache License 2.0](LICENSE). copyright (c) 2026 Sebastián Araque Rivaldito for the shepherd additions; the herdr code remains copyright of the herdr contributors under the same license. see [NOTICE](NOTICE).
