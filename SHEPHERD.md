@@ -5267,3 +5267,58 @@ Mismo patrón `duo`, tarea sin commit. **Todo correcto**:
 Bug hallado de paso y corregido en el momento: la clave `shepherd.limits.run_quiescence_secs` (F8f/F8h) estaba en `shepherd-core` y en la referencia de configuración pero **no en el modelo de configuración de herdr** (`src/config/model.rs`), así que herdr mostraba el aviso «config.toml has unknown keys; shepherd config check» al usarla. Añadido el campo `run_quiescence_secs` (default 30) a `ShepherdLimitsConfig` (+3 líneas en un archivo de herdr, anotar en «Archivos de herdr modificados»); `shepherd config check` pasa a `config: ok`.
 
 No cubierto: patrones jerárquico/blackboard/market con agentes reales; controles de la pestaña Eventos (pausa de vista, replay, filtro) con ratón.
+
+
+## Estado F10d — Pulido de usabilidad de la sección Shepherd (2026-11-05)
+
+Solo correcciones y pulido; ninguna función nueva. **0 archivos de herdr modificados** (`git status`: solo `src/shepherd/**`). Recorrido hecho en sesión aislada (`./scripts/shepherd-iso.sh`, sin agentes reales) con las 7 pestañas a 200x50, 120x40, 80x24 y 60x20 (capturas antes/después en el recorrido; se citan las recortadas).
+
+### 1. Informe de hallazgos y correcciones
+
+| # | Hallazgo (antes) | Corrección (después) |
+|---|---|---|
+| 1 | **A <70 columnas (un terminal de 80 con barra lateral deja 55) Tareas, Runs, Patrones, Agentes, Skills y Git no dibujaban formularios, franjas de confirmación ni estados vacíos**: `n` abría un formulario invisible, la lista vacía quedaba en blanco. Umbrales distintos (60 y 70). | Una sola regla `components::split_panes` (`COMPACT_WIDTH = 70`) en las 6 pestañas: ancho = lista \| detalle; compacto = una columna donde el formulario/franja **sustituye** a la lista y el estado vacío ocupa el resto. Antes: `\| ` vacío; después: «NO HAY TAREAS REGISTRADAS … [ + Crear Primera Tarea (n) ]». |
+| 2 | Pestaña interna **[7] Eventos desaparecía a 80x24** (se reservaban 18 columnas para «[ × Cerrar (Esc) ]»). | Barra adaptable: etiquetas completas → solo nombre → solo número, la más rica en que caben las 7; el cierre pasa a `[×]` si falta sitio. Test: 7 pestañas clicables y sin solape con el cierre en 4 tamaños. |
+| 3 | Sección <20x6: **pantalla en blanco sin explicación**. | Mensaje «Amplía la terminal para usar Shepherd (mínimo 30x8, ahora WxH). Esc: salir», ajustado al ancho. Sin pánico hasta 0x0 (test). |
+| 4 | **Selección fuera de pantalla**: con 100+ elementos `↓` movía `selected` pero `list_scroll` solo se corregía al subir; la fila seleccionada desaparecía. | Corregido en origen (`render_list_view` ajusta el desplazamiento para que la selección sea siempre visible; afecta a las 6 listas). Test con 150 elementos y selecciones/scroll fuera de rango. |
+| 5 | **Eventos: los botones Pausar/Reanudar/Detener ejecución no tenían rectángulo de clic** (`pause_run_button`/`stop_run_button` nunca se rellenaban); clic en `Offset`/`Filtro` y en «+ Ver Patrones» no hacía nada; clic en una ejecución no cargaba su detalle (la tecla sí). | Rectángulos rellenados desde el detalle; clic en offset/filtro entra en edición; la CTA lleva a Patrones; el clic en ejecución dispara `ShowRun`. Tests de hit-testing de todo el flujo con la franja de confirmación. |
+| 6 | Eventos: el flujo en vivo **mostraba los mensajes más antiguos** (con cientos de mensajes el nuevo quedaba fuera); `PageDown` crecía sin límite; la rueda movía el tópico en vez del flujo. | `message_scroll` = filas por encima del último (0 sigue la cola en vivo), acotado; rueda sobre la tabla desplaza el flujo. Controles de la fila superior fluyen a una 2ª línea si no caben (antes se desbordaban). Sub-pestañas con etiqueta corta si <64 columnas. |
+| 7 | Cabecera del detalle: **el título se pisaba con los botones** («PATRÓN: black[ Validar (v) ]», «[m[ + Worktree »). | Se dibujan antes las acciones y el título se recorta al hueco restante. |
+| 8 | Unicode ancho (CJK) rompía las columnas (`put_str` contaba 1 celda por carácter; anchos con `chars().count()`). | `put_str`/`text_width` por ancho de celda (`unicode-width`, ya dependencia); los glifos que no caben se descartan, nunca se parten. |
+| 9 | Párrafos/checklists/viñetas largos se cortaban; estados vacíos cortados («…importar un issue de»). | Ajuste de línea por palabras (`wrap_text`) en detalle y estados vacíos; los botones del estado vacío se apilan si no caben en una fila. El diagrama ASCII usa bloque `Preformatted` (sin reflujo). |
+| 10 | Pie de ayuda cortado sin «Esc»; con `needs_you` el aviso «AVISO DESTACADO (NEEDS YOU)» (mezcla de idiomas) **tapaba toda la ayuda**. | El pie descarta pistas intermedias y conserva siempre la primera y la última («Esc: salir»); se elimina el aviso permanente (el recuento ya está en el resumen: «N REQUIERE ATENCIÓN»). Con formulario/franja abierto el pie dice «Tab: campo \| Enter: confirmar \| Esc: cancelar». |
+| 11 | Patrones: viñetas dobles («• • ID:») y botón duplicado «[ [ + Ver Patrones (4) ] (4) ]» en Eventos. | Corregidos. |
+
+### 2. Consistencia (estado final)
+- Botones y posición: acción primaria `+ Nuevo/Nueva/Worktree/Iniciar` arriba a la derecha de la lista en todas las pestañas; Cerrar siempre a la derecha de la barra; formularios `Guardar/Cancelar (Esc)`; confirmaciones `Confirmar … / Cancelar`.
+- Teclas: ↑/↓ (`j/k`), Enter, Esc (cierra sub-acción y luego la sección), `Tab/Shift+Tab` en formularios, rueda en todas las listas, clic en pestañas internas y en filas. Colores solo desde `Palette`. Idioma: español en todo texto visible; se mantienen en inglés los datos (descripciones de patrones integrados, estados `WORKING`, nombres de roles).
+
+### 3. Higiene
+- `ui/mod.rs` 1219 → 408 líneas (ratón movido a `ui/mouse.rs`, 895, sin cambio de comportamiento salvo los puntos del hallazgo 5). Ningún archivo propio supera 1500 (máx. `events.rs` 1145).
+- **Código muerto del overlay eliminado** (≈4 900 líneas): `render_shepherd_{agents,tasks,runs,skills,git}_panel`, sus `*Render`, `handle_click/handle_mouse` del overlay, `SHEPHERD_*_MODAL_SIZE`, `contains_point` de `panel.rs` y los 11 tests que solo ejercitaban esos dibujos (`git diff --shortstat`: +673 −4885). Se conservan los modelos de estado y sus tests de máquina de estados.
+
+### 4. Archivos de herdr modificados (acumulado de las fases de UI, F10b–F10e + F8c/F8d)
+Medido con `git diff --numstat 76ada77b^ HEAD` descontando código propio ubicado en rutas de herdr (`client/shell/shepherd.rs`, `tests/shepherd_virtual_tab.rs`, `cli/shepherd*.rs`, `api/schema/shepherd/*`): **≈ +196 / −54 líneas en 19 archivos de enganche** (`api/schema.rs` +6, `api/schema/response.rs` +18, `app/api.rs` +6, `client/shell/{actions +10/−1, composition +32/−11, config +8, input +7, mouse +16/−7, preferences +2, render +2, state +19/−7, tabs +34/−4, tests/mod +1}`, `client/mod.rs` +2/−1, `config/model.rs` **+3** (`run_quiescence_secs`), `server/{client_commands +24, headless +6}`; `overlay_input.rs` −4 y `overlays.rs` −19 por la retirada del overlay). **F10d: 0 líneas en archivos de herdr.**
+Métrica de fusión: `./scripts/upstream-sync.sh --dry-run --allow-branch --allow-dirty v0.9.6` → simulación correcta, sin red; renombre `--check` limpio.
+
+### 5. Tabla final de desviaciones de UI respecto a herdr
+Sin cambios respecto a F10e (pestaña virtual del cliente; `Ctrl+b 1` sigue siendo el primer terminal; cierre/renombrado/arrastre de la pestaña protegidos). Añadidas en F10d: (a) al no caber la sección se muestra un mensaje en lugar de dibujar (herdr no tiene un equivalente; coste de fusión nulo, código propio); (b) layout compacto de una columna <70 columnas (herdr usa «mobile» para ocultar la barra lateral; el umbral de Shepherd actúa sobre el ancho de su propio panel).
+
+### 6. Verificación (números reales, tras `rustfmt --edition 2021` solo de `src/shepherd/**`, sin `cargo fmt --all`)
+| Área | Resultado |
+|---|---|
+| `-p shepherd-core` | 300 passed, 0 failed |
+| `shepherd::` | 93 passed, 0 failed (incluye 10 tests nuevos de `hit_tests`, 4 de `list_view`/`status_bar`) |
+| `client::shell` | 403 passed, 0 failed, 2 ignored |
+| `protocol::` | 159 passed, 0 failed |
+| `api::` | 319 passed, 0 failed, 1 ignored (con `--test-threads=1`; en paralelo fallan 2 tests de plugins distintos en cada ejecución — los intermitentes conocidos — y pasan solos: `app::api::plugins` 60 passed) |
+| `server::` | 318 passed, 0 failed, 5 ignored |
+| `rename-from-herdr.sh --check` | `[OK] No unexcluded occurrences` |
+Goldens existentes intactos (`tests/fixtures` sin cambios). `grep testRepo/araquesebastian` en `src/shepherd` = 0. No se commiteó, no hubo push/`gh`/fetch, no se lanzaron agentes reales, solo `./cargo-fork.sh` y `./scripts/shepherd-iso.sh`.
+
+### 7. Qué NO queda / límites conocidos
+- En compacto (<70) no hay panel de detalle (solo lista; el detalle se ve ensanchando la terminal). Añadir «Enter abre detalle» sería una función nueva.
+- Con anchos 55–70 la cabecera del detalle puede recortar mucho el título cuando hay 3 botones (p. ej. Patrones); los botones se mantienen clicables.
+- Eventos sigue sondeando 50 mensajes (`tail`, no streaming push); el render del flujo de 500 mensajes de 300 caracteres a 200x50 es O(filas visibles) más un filtrado O(n) por fotograma (test acotado a <250 ms/fotograma, muy por encima de lo medido).
+- Comprobación visual final con los 4 tamaños hecha solo en las pestañas vacías/seed de la sesión aislada; los datos extremos (150 elementos, CJK, multilínea) se cubren con tests de render, no con agentes reales.
+- Los ganchos `shepherd_agents_panel` de `AppState` (`app/{mod,state,actions,agents}.rs`, `server/headless.rs`) siguen en uso para el aviso «needs you»; no se tocan por ser archivos de herdr.

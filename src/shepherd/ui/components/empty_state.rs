@@ -5,6 +5,7 @@ use ratatui::{
 };
 
 use super::list_view::put_str;
+use super::list_view::text_width;
 use crate::app::state::Palette;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -28,7 +29,7 @@ pub fn render_empty_state(
     let mut current_y = area.y + area.height / 4;
 
     // Centered title
-    let title_len = title.chars().count() as u16;
+    let title_len = text_width(&title);
     let title_x = area.x + (area.width.saturating_sub(title_len)) / 2;
     put_str(
         buffer,
@@ -43,8 +44,12 @@ pub fn render_empty_state(
     current_y += 2;
 
     // Centered or wrapped message
-    for line in message.lines() {
-        let line_len = line.chars().count() as u16;
+    for line in super::list_view::wrap_text(message, area.width.saturating_sub(2)) {
+        if current_y >= area.bottom() {
+            break;
+        }
+        let line = line.as_str();
+        let line_len = text_width(&line);
         let line_x = area.x + (area.width.saturating_sub(line_len)) / 2;
         put_str(
             buffer,
@@ -68,15 +73,21 @@ pub fn render_empty_state(
                 Some(sc) => format!("[ {label} ({sc}) ]"),
                 None => format!("[ {label} ]"),
             };
-            total_btn_w += text.chars().count() as u16 + 2;
+            total_btn_w += text_width(&text) + 2;
             btn_texts.push(text);
         }
 
+        // Side by side when they fit, otherwise one per row.
+        let stacked = total_btn_w > area.width;
         let mut btn_x = area.x + (area.width.saturating_sub(total_btn_w)) / 2;
+        let mut btn_y = current_y;
         for (i, text) in btn_texts.iter().enumerate() {
-            let w = text.chars().count() as u16;
-            if btn_x + w <= area.right() {
-                let rect = Rect::new(btn_x, current_y, w, 1);
+            let w = text_width(text);
+            if stacked {
+                btn_x = area.x + (area.width.saturating_sub(w)) / 2;
+            }
+            if btn_y < area.bottom() && btn_x + w <= area.right() {
+                let rect = Rect::new(btn_x, btn_y, w, 1);
                 hits.actions.push((rect, i));
                 let style = if i == 0 {
                     Style::default()
@@ -85,7 +96,11 @@ pub fn render_empty_state(
                 } else {
                     Style::default().fg(palette.overlay0)
                 };
-                put_str(buffer, btn_x, current_y, w, text, style);
+                put_str(buffer, btn_x, btn_y, w, text, style);
+            }
+            if stacked {
+                btn_y += 1;
+            } else {
                 btn_x += w + 2;
             }
         }

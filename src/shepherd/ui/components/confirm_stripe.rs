@@ -5,6 +5,7 @@ use ratatui::{
 };
 
 use super::list_view::put_str;
+use super::list_view::text_width;
 use crate::app::state::Palette;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -93,7 +94,7 @@ pub fn render_confirm_stripe(
     if btn_y == content_y {
         let conf_text = format!("[ {confirm_label} ]");
         let can_text = format!("[ {cancel_label} ]");
-        let needed_w = conf_text.chars().count() as u16 + can_text.chars().count() as u16 + 4;
+        let needed_w = text_width(&conf_text) + text_width(&can_text) + 4;
         if area.width > needed_w + 10 {
             btn_x = area.right().saturating_sub(needed_w + 2);
         }
@@ -101,7 +102,7 @@ pub fn render_confirm_stripe(
 
     // Confirm button
     let conf_text = format!("[ {confirm_label} ]");
-    let conf_w = conf_text.chars().count() as u16;
+    let conf_w = text_width(&conf_text);
     if btn_x + conf_w <= area.right() {
         let conf_rect = Rect::new(btn_x, btn_y, conf_w, 1);
         hits.confirm_button = Some(conf_rect);
@@ -122,7 +123,7 @@ pub fn render_confirm_stripe(
 
     // Cancel button
     let can_text = format!("[ {cancel_label} ]");
-    let can_w = can_text.chars().count() as u16;
+    let can_w = text_width(&can_text);
     if btn_x + can_w <= area.right() {
         let can_rect = Rect::new(btn_x, btn_y, can_w, 1);
         hits.cancel_button = Some(can_rect);

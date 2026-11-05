@@ -12,6 +12,7 @@ use crate::shepherd::ui::components::{
     empty_state::render_empty_state,
     inline_form::{render_inline_form, FormField, InlineFormState},
     list_view::{render_list_view, ListViewItem},
+    {compact_panel, draw_divider, split_panes},
 };
 use shepherd_core::patterns::PatternSource;
 
@@ -31,10 +32,8 @@ pub fn render_patterns_section(
     } else if area.width >= 70 {
         (area.width * 34 / 100).max(24)
     } else {
-        area.width
+        24
     };
-
-    let list_area = Rect::new(area.x, area.y, list_width, area.height);
 
     let filtered_indices = state.filtered_indices();
     let list_items: Vec<ListViewItem> = filtered_indices
@@ -57,6 +56,12 @@ pub fn render_patterns_section(
         .collect();
 
     let filter_tabs = ["Todos", "Proyecto", "Global", "Plantillas"];
+    let split = split_panes(
+        area,
+        list_width,
+        compact_panel(state.has_sub_action(), list_items.is_empty()),
+    );
+    let list_area = split.list;
     hits.list_hits = render_list_view(
         buffer,
         list_area,
@@ -68,17 +73,16 @@ pub fn render_patterns_section(
         palette,
     );
 
-    if area.width >= 70 {
-        let sep_x = list_area.right();
-        for y in area.y..area.bottom() {
-            let cell = &mut buffer[(sep_x, y)];
-            cell.set_char('│');
-            cell.set_fg(palette.surface_dim);
+    if let Some(detail_area) = split.detail {
+        if let Some(sep_x) = split.divider_x {
+            draw_divider(
+                buffer,
+                area,
+                sep_x,
+                Style::default().fg(palette.surface_dim),
+            );
         }
-
-        let detail_x = sep_x + 1;
-        let detail_w = area.right().saturating_sub(detail_x);
-        let detail_area = Rect::new(detail_x, area.y, detail_w, area.height);
+        let detail_w = detail_area.width;
 
         if let Some(ref sub) = state.sub_action {
             match sub {
@@ -282,7 +286,7 @@ pub fn render_patterns_section(
             ));
             let diag_lines =
                 generate_topology_diagram(&detail.pattern, detail_w.saturating_sub(4) as usize);
-            blocks.push(DetailContentBlock::BulletList(diag_lines));
+            blocks.push(DetailContentBlock::Preformatted(diag_lines));
 
             blocks.push(DetailContentBlock::Heading(format!(
                 "AGENTES ({})",
@@ -290,7 +294,7 @@ pub fn render_patterns_section(
             )));
             let mut agent_entries = Vec::new();
             for a in &detail.pattern.agents {
-                let mut desc = format!("• ID: {} | Rol: {}", a.id, a.role);
+                let mut desc = format!("ID: {} | Rol: {}", a.id, a.role);
                 if a.count > 1 {
                     desc.push_str(&format!(" (x{})", a.count));
                 }
@@ -326,7 +330,7 @@ pub fn render_patterns_section(
             )));
             let mut topic_entries = Vec::new();
             for t in &detail.pattern.topics {
-                let mut desc = format!("• {}: {} partición(es)", t.name, t.partitions);
+                let mut desc = format!("{}: {} partición(es)", t.name, t.partitions);
                 if let Some(ref k) = t.key {
                     desc.push_str(&format!(" | clave: {}", k));
                 }

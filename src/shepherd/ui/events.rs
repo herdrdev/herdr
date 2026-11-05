@@ -1,6 +1,7 @@
 //! Events tab (`Eventos (7)`): live event streaming, topic inspector, replay from offset,
 //! and pattern runs management with pause/resume and destructive stop confirmation.
 
+use super::components::list_view::{put_str, text_width};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     buffer::Buffer,
@@ -33,6 +34,13 @@ impl ShepherdEventsSubTab {
         match self {
             Self::Topics => "1. Tópicos y Flujo",
             Self::PatternRuns => "2. Ejecuciones de Patrones",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Topics => "1. Tópicos",
+            Self::PatternRuns => "2. Ejecuciones",
         }
     }
 }
@@ -86,6 +94,8 @@ pub struct ShepherdEventsHits {
     pub replay_button: Option<Rect>,
     pub replay_input_rect: Option<Rect>,
     pub filter_input_rect: Option<Rect>,
+    /// Message table (wheel scrolls it, not the topic list).
+    pub messages_rect: Option<Rect>,
     pub pause_run_button: Option<Rect>,
     pub stop_run_button: Option<Rect>,
     pub empty_hits: Option<EmptyStateHits>,
@@ -185,6 +195,15 @@ impl ShepherdEventsSectionState {
                 }
             }
         }
+    }
+
+    /// `up` moves toward older messages; 0 offset follows the live tail.
+    pub fn scroll_messages(&mut self, up: bool) {
+        self.message_scroll = if up {
+            (self.message_scroll + 3).min(self.messages.len())
+        } else {
+            self.message_scroll.saturating_sub(3)
+        };
     }
 
     pub fn trigger_run_load(&mut self) {
@@ -351,15 +370,11 @@ impl ShepherdEventsSectionState {
                 true
             }
             KeyCode::PageUp => {
-                if self.message_scroll >= 5 {
-                    self.message_scroll -= 5;
-                } else {
-                    self.message_scroll = 0;
-                }
+                self.scroll_messages(true);
                 true
             }
             KeyCode::PageDown => {
-                self.message_scroll += 5;
+                self.scroll_messages(false);
                 true
             }
             KeyCode::Char(' ') => {
@@ -506,10 +521,14 @@ fn render_subtab_bar(
     let mut current_x = area.left() + 1;
 
     for tab in subtabs {
-        let label = tab.label();
+        let label = if area.width >= 64 {
+            tab.label()
+        } else {
+            tab.short_label()
+        };
         let is_active = tab == active;
         let text = format!("[ {label} ]");
-        let width = text.chars().count() as u16;
+        let width = text_width(&text);
 
         if current_x + width > area.right() {
             break;
@@ -550,7 +569,7 @@ fn render_topics_view(
             area,
             "SIN TÓPICOS ACTIVOS",
             "No se han creado tópicos en el bus de eventos aún.\nInicia un patrón de agentes o usa 'shepherd topic create' para comenzar.",
-            &[("[ + Ver Patrones (4) ]", Some("4"))],
+            &[("+ Ver Patrones", Some("4"))],
             palette,
         ));
         return;
@@ -604,35 +623,48 @@ fn render_topics_view(
     let header_area = right_chunks[1];
     let table_area = right_chunks[2];
 
-    // Controls Row
+    // Controls: flow left to right, wrapping to the second row when narrow; what
+    // still does not fit is not drawn (and gets no hit rect).
     let mut cx = controls_area.left();
+    let mut cy = controls_area.top();
+    let mut place = |w: u16, gap: u16| -> Option<(u16, u16)> {
+        if cx + w > controls_area.right() {
+            cx = controls_area.left();
+            cy += 1;
+        }
+        if cy >= controls_area.bottom() || cx + w > controls_area.right() {
+            return None;
+        }
+        let at = (cx, cy);
+        cx += w + gap;
+        Some(at)
+    };
+
     let pause_label = if state.view_paused {
         "[ ⏸ Pausada (p) ]"
     } else {
         "[ ▶ En vivo (p) ]"
     };
-    let pause_w = pause_label.chars().count() as u16;
-    let pause_style = if state.view_paused {
-        Style::default()
-            .fg(palette.yellow)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(palette.green)
-            .add_modifier(Modifier::BOLD)
-    };
-    buffer.set_string(cx, controls_area.top(), pause_label, pause_style);
-    hits.pause_view_button = Some(Rect {
-        x: cx,
-        y: controls_area.top(),
-        width: pause_w,
-        height: 1,
-    });
-    cx += pause_w + 2;
+    let pause_w = text_width(pause_label);
+    let pause_style = Style::default()
+        .fg(if state.view_paused {
+            palette.yellow
+        } else {
+            palette.green
+        })
+        .add_modifier(Modifier::BOLD);
+    if let Some((x, y)) = place(pause_w, 2) {
+        put_str(buffer, x, y, pause_w, pause_label, pause_style);
+        hits.pause_view_button = Some(Rect {
+            x,
+            y,
+            width: pause_w,
+            height: 1,
+        });
+    }
 
-    // Replay offset input & button
     let replay_input_str = format!("Offset: [{}]", state.replay_offset_input);
-    let replay_in_w = replay_input_str.chars().count() as u16;
+    let replay_in_w = text_width(&replay_input_str);
     let replay_in_style = if state.editing_replay_offset {
         Style::default()
             .fg(palette.accent)
@@ -640,38 +672,48 @@ fn render_topics_view(
     } else {
         Style::default().fg(palette.text)
     };
-    buffer.set_string(cx, controls_area.top(), &replay_input_str, replay_in_style);
-    hits.replay_input_rect = Some(Rect {
-        x: cx,
-        y: controls_area.top(),
-        width: replay_in_w,
-        height: 1,
-    });
-    cx += replay_in_w + 1;
+    if let Some((x, y)) = place(replay_in_w, 1) {
+        put_str(
+            buffer,
+            x,
+            y,
+            replay_in_w,
+            &replay_input_str,
+            replay_in_style,
+        );
+        hits.replay_input_rect = Some(Rect {
+            x,
+            y,
+            width: replay_in_w,
+            height: 1,
+        });
+    }
 
     let replay_btn = "[ ⟲ Replay (r) ]";
-    let replay_btn_w = replay_btn.chars().count() as u16;
-    buffer.set_string(
-        cx,
-        controls_area.top(),
-        replay_btn,
-        Style::default().fg(palette.accent),
-    );
-    hits.replay_button = Some(Rect {
-        x: cx,
-        y: controls_area.top(),
-        width: replay_btn_w,
-        height: 1,
-    });
-    cx += replay_btn_w + 2;
+    let replay_btn_w = text_width(replay_btn);
+    if let Some((x, y)) = place(replay_btn_w, 2) {
+        put_str(
+            buffer,
+            x,
+            y,
+            replay_btn_w,
+            replay_btn,
+            Style::default().fg(palette.accent),
+        );
+        hits.replay_button = Some(Rect {
+            x,
+            y,
+            width: replay_btn_w,
+            height: 1,
+        });
+    }
 
-    // Agent filter input
     let filter_str = if state.agent_filter_input.is_empty() {
         "Filtro: [ / ]".to_string()
     } else {
         format!("Filtro: [{}]", state.agent_filter_input)
     };
-    let filter_w = filter_str.chars().count() as u16;
+    let filter_w = text_width(&filter_str);
     let filter_style = if state.editing_agent_filter {
         Style::default()
             .fg(palette.accent)
@@ -679,11 +721,11 @@ fn render_topics_view(
     } else {
         Style::default().fg(palette.overlay0)
     };
-    if cx + filter_w < controls_area.right() {
-        buffer.set_string(cx, controls_area.top(), &filter_str, filter_style);
+    if let Some((x, y)) = place(filter_w, 0) {
+        put_str(buffer, x, y, filter_w, &filter_str, filter_style);
         hits.filter_input_rect = Some(Rect {
-            x: cx,
-            y: controls_area.top(),
+            x,
+            y,
             width: filter_w,
             height: 1,
         });
@@ -697,9 +739,11 @@ fn render_topics_view(
         "{:<6} {:<4} {:<12} {:<10} {:<6} {:<24}",
         "OFFSET", "PART", "DE", "CLAVE", "TIPO", "CONTENIDO"
     );
-    buffer.set_string(
+    put_str(
+        buffer,
         header_area.left(),
         header_area.top(),
+        header_area.width,
         &head_text,
         head_style,
     );
@@ -720,11 +764,12 @@ fn render_topics_view(
         })
         .collect();
 
+    hits.messages_rect = Some(table_area);
     let visible_rows = table_area.height as usize;
-    let start_idx = state
-        .message_scroll
-        .min(filtered_messages.len().saturating_sub(1));
-    let end_idx = (start_idx + visible_rows).min(filtered_messages.len());
+    // message_scroll = rows above the newest message (0 follows the live tail).
+    let total = filtered_messages.len();
+    let end_idx = total - state.message_scroll.min(total.saturating_sub(1));
+    let start_idx = end_idx.saturating_sub(visible_rows);
 
     for (row_idx, m) in filtered_messages[start_idx..end_idx].iter().enumerate() {
         let y = table_area.top() + row_idx as u16;
@@ -739,7 +784,14 @@ fn render_topics_view(
             excerpt
         );
         let row_style = Style::default().fg(palette.text);
-        buffer.set_string(table_area.left(), y, &line_text, row_style);
+        put_str(
+            buffer,
+            table_area.left(),
+            y,
+            table_area.width,
+            &line_text,
+            row_style,
+        );
     }
 }
 
@@ -756,7 +808,7 @@ fn render_pattern_runs_view(
             area,
             "SIN EJECUCIONES DE PATRONES",
             "No hay ejecuciones de patrones en curso ni archivadas.\nVe a la pestaña Patrones (4) y presiona [ Ejecutar (r) ] para instanciar uno.",
-            &[("[ + Ver Patrones (4) ]", Some("4"))],
+            &[("+ Ver Patrones", Some("4"))],
             palette,
         ));
         return;
@@ -907,6 +959,18 @@ fn render_pattern_runs_view(
             &bottom_actions,
             palette,
         ));
+        // Pause/resume = action 0, stop = action 1; bottom buttons win over header ones.
+        if let Some(dh) = &hits.detail_hits {
+            let find = |idx: usize| {
+                dh.bottom_actions
+                    .iter()
+                    .chain(dh.header_actions.iter())
+                    .find(|&&(_, i)| i == idx)
+                    .map(|&(r, _)| r)
+            };
+            hits.pause_run_button = find(0);
+            hits.stop_run_button = find(1);
+        }
     }
 }
 

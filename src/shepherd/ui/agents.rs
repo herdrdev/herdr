@@ -6,13 +6,16 @@ use ratatui::{
 };
 
 use super::components::{
+    compact_panel,
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
     detail_view::{
         render_detail_view, AlertLevel, DetailContentBlock, DetailHeader, DetailViewHits,
     },
+    draw_divider,
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
+    split_panes,
 };
 use crate::app::state::Palette;
 pub use crate::shepherd::panel::{ShepherdAgentRow, ShepherdAgentsAction};
@@ -432,15 +435,7 @@ pub fn render_agents_section(
         return hits;
     }
 
-    let is_compact = area.width < 60;
-    let list_w = if is_compact {
-        area.width
-    } else {
-        (area.width * 34 / 100)
-            .max(24)
-            .min(area.width.saturating_sub(24))
-    };
-    let list_area = Rect::new(area.x, area.y, list_w, area.height);
+    let wide_list_w = (area.width * 34 / 100).max(24);
 
     let items: Vec<ListViewItem> = state
         .agents
@@ -467,6 +462,12 @@ pub fn render_agents_section(
         })
         .collect();
 
+    let split = split_panes(
+        area,
+        wide_list_w,
+        compact_panel(state.has_sub_action(), items.is_empty()),
+    );
+    let list_area = split.list;
     hits.list_hits = render_list_view(
         buffer,
         list_area,
@@ -478,19 +479,17 @@ pub fn render_agents_section(
         palette,
     );
 
-    if is_compact {
+    let Some(detail_area) = split.detail else {
         return hits;
+    };
+    if let Some(div_x) = split.divider_x {
+        draw_divider(
+            buffer,
+            area,
+            div_x,
+            Style::default().fg(palette.surface_dim),
+        );
     }
-
-    // Vertical divider
-    let div_x = list_area.right();
-    for y in area.y..area.bottom() {
-        buffer[(div_x, y)].set_char('│').set_fg(palette.surface_dim);
-    }
-
-    let detail_x = div_x + 1;
-    let detail_w = area.right().saturating_sub(detail_x);
-    let detail_area = Rect::new(detail_x, area.y, detail_w, area.height);
 
     // 1. Spawn inline form
     if let Some(ref form) = state.spawn_form {

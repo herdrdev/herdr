@@ -26,10 +26,7 @@ pub use ui::{
 };
 
 #[allow(unused_imports)]
-pub use git::{
-    render_shepherd_git_panel, ShepherdGitAction, ShepherdGitRender, ShepherdGitRow,
-    ShepherdGitState,
-};
+pub use git::{ShepherdGitAction, ShepherdGitRow, ShepherdGitState};
 pub use panel::ShepherdAgentsPanelState;
 #[allow(unused_imports)]
 pub use runs::ShepherdRunsState;
@@ -441,12 +438,10 @@ fn map_client_error(error: ApiClientError) -> ShepherdError {
 
 #[cfg(test)]
 mod tests {
-    use super::panel::render_shepherd_agents_from_app;
     use super::*;
     use crate::api::schema::{AgentStatus, EventData, EventEnvelope, EventKind};
-    use crate::app::{App, AppPolicy, AppState};
+    use crate::app::{App, AppPolicy};
     use crate::config::Config;
-    use ratatui::{buffer::Buffer, layout::Rect};
     use shepherd_core::terminals::Terminals;
     use std::collections::HashMap;
     use tokio::sync::mpsc as tokio_mpsc;
@@ -639,73 +634,6 @@ mod tests {
         assert_eq!(res2.unwrap(), 0);
         assert_eq!(res3.unwrap(), 0);
         assert_eq!(res4.unwrap(), 0);
-    }
-
-    #[test]
-    fn shepherd_agents_panel_renders_pure_state_and_highlights_needs_you() {
-        let mut registry = shepherd_core::AgentRegistryFile::default();
-        let mut brain = registry.create(
-            shepherd_core::Agent {
-                role: "brain".into(),
-                vendor: "claude".into(),
-                model: "opus".into(),
-                pane: "w1:p1".into(),
-                task_text: "Plan F1".into(),
-                ..shepherd_core::Agent::default()
-            },
-            "tok1".into(),
-            "2026-11-03T16:00:00Z",
-        );
-        brain.state = "working".into();
-        registry.agents[0] = brain;
-
-        let mut coder = registry.create(
-            shepherd_core::Agent {
-                role: "coder".into(),
-                vendor: "codex".into(),
-                model: "gpt-5".into(),
-                pane: "w1:p2".into(),
-                notice: "Waiting for tool permission in pane w1:p2".into(),
-                ..shepherd_core::Agent::default()
-            },
-            "tok2".into(),
-            "2026-11-03T16:01:00Z",
-        );
-        coder.state = "blocked".into();
-        registry.agents[1] = coder;
-
-        let mut app = AppState::test_new();
-        // When panel is closed, render_shepherd_agents_from_app returns None
-        let area = Rect::new(0, 0, 100, 28);
-        let mut buffer = Buffer::empty(area);
-        assert!(render_shepherd_agents_from_app(&mut buffer, area, &app).is_none());
-
-        // Populate pure state and open panel
-        app.shepherd_agents_panel = ShepherdAgentsPanelState::from_registry(&registry);
-        app.shepherd_agents_panel.refresh_from_registry(&registry);
-        app.shepherd_agents_panel.open = true;
-        assert_eq!(app.shepherd_agents_panel.needs_you_count(), 1);
-
-        let rendered = render_shepherd_agents_from_app(&mut buffer, area, &app)
-            .expect("panel should render when open");
-        assert_eq!(rendered.rows.len(), 3); // brain-1 row + coder-1 row + coder-1 notice row
-
-        let text = buffer
-            .content
-            .chunks(usize::from(area.width))
-            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("Shepherd Agents"));
-        assert!(text.contains("brain-1"));
-        assert!(text.contains("role:brain"));
-        assert!(text.contains("vendor:claude/opus"));
-        assert!(text.contains("coder-1"));
-        assert!(text.contains("role:coder"));
-        assert!(text.contains("vendor:codex/gpt-5"));
-        assert!(text.contains("state:blocked"));
-        assert!(text.contains("NEEDS YOU"));
-        assert!(text.contains("Waiting for tool permission in pane w1:p2"));
     }
 
     #[test]

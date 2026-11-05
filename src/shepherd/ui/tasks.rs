@@ -2,11 +2,14 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{buffer::Buffer, layout::Rect, style::Style};
 
 use super::components::{
+    compact_panel,
     confirm_stripe::{render_confirm_stripe, ConfirmStripeHits},
     detail_view::{render_detail_view, DetailContentBlock, DetailHeader, DetailViewHits},
+    draw_divider,
     empty_state::{render_empty_state, EmptyStateHits},
     inline_form::{render_inline_form, FormField, InlineFormHits, InlineFormState},
     list_view::{render_list_view, ListViewHits, ListViewItem},
+    split_panes,
 };
 use crate::app::state::Palette;
 pub use crate::shepherd::tasks::{
@@ -342,10 +345,8 @@ pub fn render_tasks_section(
     } else if area.width >= 70 {
         (area.width * 35 / 100).max(24)
     } else {
-        area.width
+        24
     };
-
-    let list_area = Rect::new(area.x, area.y, list_width, area.height);
 
     // Prepare list items
     let filtered_indices = state.filtered_indices();
@@ -371,6 +372,15 @@ pub fn render_tasks_section(
         .collect();
 
     let filter_tabs = ["Todas", "Abiertas", "Completadas"];
+    let split = split_panes(
+        area,
+        list_width,
+        compact_panel(
+            state.form.is_some() || state.import_gh.is_some() || state.confirm_archive.is_some(),
+            list_items.is_empty(),
+        ),
+    );
+    let list_area = split.list;
     hits.list_hits = render_list_view(
         buffer,
         list_area,
@@ -383,17 +393,15 @@ pub fn render_tasks_section(
     );
 
     // If terminal is wide enough, render right panel (detail or form)
-    if area.width >= 70 {
-        let sep_x = list_area.right();
-        for y in area.y..area.bottom() {
-            let cell = &mut buffer[(sep_x, y)];
-            cell.set_char('│');
-            cell.set_fg(palette.surface_dim);
+    if let Some(detail_area) = split.detail {
+        if let Some(sep_x) = split.divider_x {
+            draw_divider(
+                buffer,
+                area,
+                sep_x,
+                Style::default().fg(palette.surface_dim),
+            );
         }
-
-        let detail_x = sep_x + 1;
-        let detail_w = area.right().saturating_sub(detail_x);
-        let detail_area = Rect::new(detail_x, area.y, detail_w, area.height);
 
         // 1. If Create Task Form is open
         if let Some(ref form) = state.form {

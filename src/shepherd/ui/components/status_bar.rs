@@ -5,6 +5,7 @@ use ratatui::{
 };
 
 use super::list_view::put_str;
+use super::list_view::text_width;
 use crate::app::state::Palette;
 
 pub fn render_status_bar(
@@ -43,33 +44,34 @@ pub fn render_status_bar(
         return;
     }
 
-    // Left summary
+    let text_style = Style::default().fg(palette.text).bg(palette.surface0);
+    let help_style = Style::default().fg(palette.overlay0).bg(palette.surface0);
+    let help = fit_help(summary, help_text, area.width);
     let sum_text = format!(" {summary}");
-    let sum_w = sum_text.chars().count() as u16;
+    let sum_w = text_width(&sum_text).min(area.width);
+    put_str(buffer, area.x, y, sum_w, &sum_text, text_style);
     put_str(
         buffer,
-        area.x,
+        area.x + sum_w,
         y,
-        sum_w,
-        &sum_text,
-        Style::default().fg(palette.text).bg(palette.surface0),
+        area.width - sum_w,
+        &help,
+        help_style,
     );
+}
 
-    // Separator and help text
-    let help_full = format!(" | {help_text} ");
-    let _help_w = help_full.chars().count() as u16;
-    let help_x = area.x + sum_w;
-    if help_x < area.right() {
-        let max_w = area.right().saturating_sub(help_x);
-        put_str(
-            buffer,
-            help_x,
-            y,
-            max_w,
-            &help_full,
-            Style::default().fg(palette.overlay0).bg(palette.surface0),
-        );
+/// Help hints that fit after the summary. Hints are `" | "`-separated; whole hints are
+/// dropped from the middle so the first (navigation) and last (`Esc: salir`) stay visible.
+fn fit_help(summary: &str, help_text: &str, width: u16) -> String {
+    let budget = width.saturating_sub(text_width(summary) + 2) as usize;
+    let hints: Vec<&str> = help_text.split(" | ").collect();
+    let join = |hs: &[&str]| format!(" | {} ", hs.join(" | "));
+    let mut keep: Vec<&str> = hints.clone();
+    while keep.len() > 1 && text_width(join(&keep)) as usize > budget + 1 {
+        // drop from the middle first, then the leading hint
+        keep.remove(if keep.len() > 2 { keep.len() - 2 } else { 0 });
     }
+    join(&keep)
 }
 
 #[cfg(test)]
@@ -96,6 +98,17 @@ mod tests {
         );
 
         assert_eq!(buffer[(1, 0)].symbol(), "4");
+    }
+
+    #[test]
+    fn fit_help_keeps_first_and_last_hints() {
+        let h = "a: uno | b: dos | c: tres | d: cuatro | Esc: salir";
+        assert_eq!(fit_help("S", h, 200), format!(" | {h} "));
+        let narrow = fit_help("S", h, 30);
+        assert!(narrow.contains("Esc: salir"), "{narrow}");
+        assert!(text_width(&narrow) <= 30);
+        // tiny width never panics and still ends with the exit hint
+        assert!(fit_help("resumen largo", h, 5).contains("Esc: salir"));
     }
 
     #[test]

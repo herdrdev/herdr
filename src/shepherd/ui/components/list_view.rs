@@ -24,19 +24,86 @@ pub struct ListViewHits {
     pub scroll_metrics: Option<ScrollMetrics>,
 }
 
+/// Display width in terminal cells (wide CJK/emoji count 2).
+pub fn text_width(s: impl AsRef<str>) -> u16 {
+    unicode_width::UnicodeWidthStr::width(s.as_ref()).min(u16::MAX as usize) as u16
+}
+
+/// Greedy word wrap by display width; over-long words are hard-split. Never returns an empty vec.
+pub fn wrap_text(s: &str, width: u16) -> Vec<String> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for para in s.lines() {
+        let mut line = String::new();
+        for word in para.split_whitespace() {
+            let mut word = word.to_string();
+            loop {
+                let need = text_width(&line) + text_width(&word) + u16::from(!line.is_empty());
+                if need <= width {
+                    if !line.is_empty() {
+                        line.push(' ');
+                    }
+                    line.push_str(&word);
+                    break;
+                }
+                if !line.is_empty() {
+                    out.push(std::mem::take(&mut line));
+                    continue;
+                }
+                // word alone is wider than the line: split it
+                let mut head = String::new();
+                let mut rest = String::new();
+                for ch in word.chars() {
+                    if rest.is_empty() && text_width(&head) + text_width(ch.to_string()) <= width {
+                        head.push(ch);
+                    } else {
+                        rest.push(ch);
+                    }
+                }
+                if head.is_empty() {
+                    // single glyph wider than the line
+                    break;
+                }
+                out.push(head);
+                word = rest;
+                if word.is_empty() {
+                    break;
+                }
+            }
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
+}
+
+/// Writes `s` clipped to `max_w` cells; wide glyphs that do not fit are dropped, never split.
 pub fn put_str(buffer: &mut Buffer, x: u16, y: u16, max_w: u16, s: &str, style: Style) {
+    use unicode_width::UnicodeWidthChar;
     if max_w == 0 || y >= buffer.area.height {
         return;
     }
+    let limit = x.saturating_add(max_w).min(buffer.area.width);
     let mut cur_x = x;
     for ch in s.chars() {
-        if cur_x >= x.saturating_add(max_w) || cur_x >= buffer.area.width {
+        let w = ch.width().unwrap_or(0) as u16;
+        if w == 0 {
+            continue;
+        }
+        if cur_x.saturating_add(w) > limit {
             break;
         }
         let cell = &mut buffer[(cur_x, y)];
         cell.set_char(ch);
         cell.set_style(style);
-        cur_x += 1;
+        if w == 2 {
+            let c2 = &mut buffer[(cur_x + 1, y)];
+            c2.set_symbol("");
+            c2.set_style(style);
+        }
+        cur_x += w;
     }
 }
 
@@ -60,7 +127,7 @@ pub fn render_list_view(
     // Header line: optional action button on right
     if let Some((btn_label, shortcut)) = action_button {
         let label = format!("[ {btn_label} ({shortcut}) ]");
-        let btn_w = (label.chars().count() as u16).min(area.width);
+        let btn_w = (text_width(&label)).min(area.width);
         let btn_x = area.x.saturating_add(area.width).saturating_sub(btn_w);
         let btn_rect = Rect::new(btn_x, current_y, btn_w, 1);
         put_str(
@@ -88,7 +155,7 @@ pub fn render_list_view(
             } else {
                 format!("[{tab_label}]")
             };
-            let tab_w = display.chars().count() as u16;
+            let tab_w = text_width(&display);
             if tab_x + tab_w <= area.right() {
                 let tab_rect = Rect::new(tab_x, current_y, tab_w, 1);
                 hits.filter_tabs.push((tab_rect, i));
@@ -134,7 +201,13 @@ pub fn render_list_view(
         area.width
     };
 
-    let start_idx = scroll.min(total_items.saturating_sub(1));
+    let mut start_idx = scroll.min(total_items.saturating_sub(1));
+    if selected < start_idx {
+        start_idx = selected;
+    } else if selected >= start_idx + list_height {
+        start_idx = (selected + 1).saturating_sub(list_height);
+    }
+    let scroll = start_idx;
     let end_idx = (start_idx + list_height).min(total_items);
 
     for (row_offset, idx) in (start_idx..end_idx).enumerate() {
@@ -171,7 +244,7 @@ pub fn render_list_view(
 
         // Badge (if present)
         if let Some((badge_text, badge_style)) = &items[idx].badge {
-            let b_w = badge_text.chars().count() as u16;
+            let b_w = text_width(&badge_text);
             if text_x + b_w < area.x + content_w {
                 put_str(
                     buffer,
@@ -237,6 +310,54 @@ pub fn render_list_view(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wrap_text_wraps_splits_and_handles_wide_glyphs() {
+        assert_eq!(wrap_text("uno dos tres", 7), vec!["uno dos", "tres"]);
+        assert_eq!(wrap_text("abcdefgh", 3), vec!["abc", "def", "gh"]);
+        assert_eq!(wrap_text("日本語日本語", 4), vec!["日本", "語日", "本語"]);
+        assert_eq!(wrap_text("", 5), vec![""]);
+        assert_eq!(wrap_text("x\ny", 5), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn put_str_clips_wide_glyphs_without_splitting() {
+        let mut b = Buffer::empty(Rect::new(0, 0, 6, 1));
+        put_str(&mut b, 0, 0, 5, "日本語", Style::default());
+        assert_eq!(b[(0, 0)].symbol(), "日");
+        assert_eq!(b[(2, 0)].symbol(), "本");
+        assert_eq!(b[(4, 0)].symbol(), " "); // third glyph (2 cells) does not fit in 5
+        assert_eq!(text_width("日本語"), 6);
+    }
+
+    #[test]
+    fn selection_is_always_visible_and_hit_rows_are_in_range() {
+        let palette = Palette::catppuccin();
+        let area = Rect::new(0, 0, 30, 10);
+        let items: Vec<ListViewItem> = (0..150)
+            .map(|i| ListViewItem {
+                title: format!("item {i}"),
+                badge: None,
+                meta: None,
+            })
+            .collect();
+        for sel in [0usize, 5, 6, 7, 99, 149] {
+            let mut b = Buffer::empty(area);
+            let hits = render_list_view(&mut b, area, &items, sel, 0, None, None, &palette);
+            assert!(
+                hits.rows.iter().any(|&(_, i)| i == sel),
+                "sel {sel} not visible"
+            );
+            assert!(hits
+                .rows
+                .iter()
+                .all(|&(r, i)| i < 150 && r.bottom() <= area.bottom()));
+        }
+        // out-of-range selection/scroll must not panic
+        let mut b = Buffer::empty(area);
+        render_list_view(&mut b, area, &items, 9999, 9999, None, None, &palette);
+        render_list_view(&mut b, area, &[], 3, 3, None, None, &palette);
+    }
 
     fn test_palette() -> Palette {
         Palette::catppuccin()

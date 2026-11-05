@@ -5,6 +5,7 @@ use ratatui::{
 };
 
 use super::list_view::put_str;
+use super::list_view::text_width;
 use crate::app::state::Palette;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,8 +209,7 @@ pub fn render_inline_form(
 
         // Active field cursor
         if is_active {
-            let cursor_x =
-                area.x + 2 + (field.value.chars().count() as u16).min(box_w.saturating_sub(5));
+            let cursor_x = area.x + 2 + (text_width(&field.value)).min(box_w.saturating_sub(5));
             if cursor_x < area.x + box_w.saturating_sub(1) {
                 let cell = &mut buffer[(cursor_x, current_y)];
                 cell.set_char('█');
@@ -267,7 +267,7 @@ pub fn render_inline_form(
 
         // Submit button
         let submit_text = format!("[ {submit_label} ]");
-        let sub_w = submit_text.chars().count() as u16;
+        let sub_w = text_width(&submit_text);
         let submit_rect = Rect::new(btn_x, btn_y, sub_w, 1);
         hits.submit_button = Some(submit_rect);
 
@@ -283,7 +283,7 @@ pub fn render_inline_form(
 
         // Cancel button
         let cancel_text = format!("[ {cancel_label} ]");
-        let can_w = cancel_text.chars().count() as u16;
+        let can_w = text_width(&cancel_text);
         let cancel_rect = Rect::new(btn_x, btn_y, can_w, 1);
         hits.cancel_button = Some(cancel_rect);
         put_str(

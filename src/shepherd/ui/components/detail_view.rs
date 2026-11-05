@@ -5,6 +5,7 @@ use ratatui::{
 };
 
 use super::list_view::put_str;
+use super::list_view::{text_width, wrap_text};
 use crate::app::state::Palette;
 use crate::pane::ScrollMetrics;
 use crate::ui::render_scrollbar_buffer;
@@ -22,7 +23,12 @@ pub enum DetailContentBlock {
     Paragraph(String),
     Checklist(Vec<(bool, String)>),
     BulletList(Vec<String>),
-    Notice { text: String, level: AlertLevel },
+    Notice {
+        text: String,
+        level: AlertLevel,
+    },
+    /// Lines drawn verbatim (diagrams): no wrapping, clipped at the edge.
+    Preformatted(Vec<String>),
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -57,28 +63,7 @@ pub fn render_detail_view(
 
     let mut current_y = area.y;
 
-    // 1. Header Title & Actions
-    let mut title_x = area.x;
-    put_str(
-        buffer,
-        title_x,
-        current_y,
-        area.width,
-        &header.title,
-        Style::default()
-            .fg(palette.text)
-            .add_modifier(Modifier::BOLD),
-    );
-    title_x += header.title.chars().count() as u16 + 1;
-
-    for (badge_text, badge_style) in &header.badges {
-        let bw = badge_text.chars().count() as u16;
-        if title_x + bw < area.right() {
-            put_str(buffer, title_x, current_y, bw, badge_text, *badge_style);
-            title_x += bw + 1;
-        }
-    }
-
+    // 1. Header Title & Actions (actions first so the title is clipped before them)
     // Header actions (right aligned)
     let mut action_right = area.right();
     for (i, (action_label, shortcut)) in header.actions.iter().enumerate().rev() {
@@ -86,7 +71,7 @@ pub fn render_detail_view(
             Some(sc) => format!("[ {action_label} ({sc}) ]"),
             None => format!("[ {action_label} ]"),
         };
-        let w = label.chars().count() as u16;
+        let w = text_width(&label);
         if action_right >= area.x + w + 1 {
             let x = action_right - w;
             let rect = Rect::new(x, current_y, w, 1);
@@ -102,6 +87,31 @@ pub fn render_detail_view(
                     .add_modifier(Modifier::BOLD),
             );
             action_right = x.saturating_sub(1);
+        }
+    }
+    let title_limit = if action_right + 1 < area.right() {
+        action_right.saturating_sub(area.x)
+    } else {
+        area.width
+    };
+    let mut title_x = area.x;
+    put_str(
+        buffer,
+        title_x,
+        current_y,
+        title_limit,
+        &header.title,
+        Style::default()
+            .fg(palette.text)
+            .add_modifier(Modifier::BOLD),
+    );
+    title_x += text_width(&header.title) + 1;
+
+    for (badge_text, badge_style) in &header.badges {
+        let bw = text_width(&badge_text);
+        if title_x + bw < area.x + title_limit {
+            put_str(buffer, title_x, current_y, bw, badge_text, *badge_style);
+            title_x += bw + 1;
         }
     }
 
@@ -142,6 +152,8 @@ pub fn render_detail_view(
     let visible_content_h = content_bottom.saturating_sub(current_y) as usize;
 
     // Render content lines
+    // Wrap to the width left after reserving the scrollbar column.
+    let wrap_w = area.width.saturating_sub(1);
     let mut lines: Vec<(String, Style)> = Vec::new();
     for block in content {
         match block {
@@ -155,8 +167,8 @@ pub fn render_detail_view(
                 ));
             }
             DetailContentBlock::Paragraph(p) => {
-                for line in p.lines() {
-                    lines.push((line.to_string(), Style::default().fg(palette.text)));
+                for line in wrap_text(p, wrap_w) {
+                    lines.push((line, Style::default().fg(palette.text)));
                 }
             }
             DetailContentBlock::Checklist(items) => {
@@ -167,12 +179,30 @@ pub fn render_detail_view(
                     } else {
                         Style::default().fg(palette.text)
                     };
-                    lines.push((format!("{mark}{text}"), style));
+                    for (i, l) in wrap_text(&format!("{mark}{text}"), wrap_w)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        lines.push((if i == 0 { l } else { format!("    {l}") }, style));
+                    }
+                }
+            }
+            DetailContentBlock::Preformatted(rows) => {
+                for r in rows {
+                    lines.push((r.clone(), Style::default().fg(palette.text)));
                 }
             }
             DetailContentBlock::BulletList(items) => {
                 for text in items {
-                    lines.push((format!("• {text}"), Style::default().fg(palette.text)));
+                    for (i, l) in wrap_text(&format!("• {text}"), wrap_w)
+                        .into_iter()
+                        .enumerate()
+                    {
+                        lines.push((
+                            if i == 0 { l } else { format!("  {l}") },
+                            Style::default().fg(palette.text),
+                        ));
+                    }
                 }
             }
             DetailContentBlock::Notice { text, level } => {
@@ -181,10 +211,9 @@ pub fn render_detail_view(
                     AlertLevel::Warning => palette.yellow,
                     AlertLevel::Success => palette.green,
                 };
-                lines.push((
-                    format!("ℹ {text}"),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                ));
+                for l in wrap_text(&format!("ℹ {text}"), wrap_w) {
+                    lines.push((l, Style::default().fg(color).add_modifier(Modifier::BOLD)));
+                }
             }
         }
     }
@@ -237,7 +266,7 @@ pub fn render_detail_view(
         let mut act_x = area.x;
         for (i, &(label, shortcut, primary)) in bottom_actions.iter().enumerate() {
             let text = format!("[ {label} ({shortcut}) ]");
-            let w = text.chars().count() as u16;
+            let w = text_width(&text);
             if act_x + w <= area.right() {
                 let rect = Rect::new(act_x, act_y, w, 1);
                 hits.bottom_actions.push((rect, i));

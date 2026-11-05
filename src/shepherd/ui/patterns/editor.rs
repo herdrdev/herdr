@@ -1,5 +1,6 @@
 //! Pattern interactive editor state, input handling, and pure renderer.
 
+use crate::shepherd::ui::components::list_view::text_width;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -574,7 +575,7 @@ pub fn render_pattern_editor(
             Style::default().fg(palette.overlay0).bg(palette.surface0)
         };
         let formatted = format!(" [ {} ] ", t_label);
-        let len = formatted.chars().count() as u16;
+        let len = text_width(&formatted);
         if tab_x + len < area.right() {
             put_str(buffer, tab_x, current_y, len, &formatted, style);
             hits.tabs.push((Rect::new(tab_x, current_y, len, 1), i));
@@ -678,7 +679,7 @@ pub fn render_pattern_editor(
                     Style::default().fg(palette.overlay0).bg(palette.surface0)
                 };
                 let txt = format!(" [{}: {}] ", ag.id, ag.role);
-                let len = txt.chars().count() as u16;
+                let len = text_width(&txt);
                 if ag_x + len < area.right().saturating_sub(25) {
                     put_str(buffer, ag_x, current_y, len, &txt, st);
                     hits.agent_tabs
@@ -848,7 +849,7 @@ pub fn render_pattern_editor(
                     Style::default().fg(palette.overlay0).bg(palette.surface0)
                 };
                 let txt = format!(" [{}: (p:{})] ", top.name, top.partitions);
-                let len = txt.chars().count() as u16;
+                let len = text_width(&txt);
                 if top_x + len < area.right().saturating_sub(14) {
                     put_str(buffer, top_x, current_y, len, &txt, st);
                     hits.topic_tabs
@@ -1036,7 +1037,7 @@ pub fn render_pattern_editor(
     } else {
         "[ Guardar bloqueado ]"
     };
-    let submit_len = submit_label.chars().count() as u16;
+    let submit_len = text_width(&submit_label);
     let submit_rect = Rect::new(area.x, btn_y, submit_len, 1);
     let submit_style = if editor.is_valid() {
         Style::default()
@@ -1057,7 +1058,7 @@ pub fn render_pattern_editor(
     hits.submit_button = Some(submit_rect);
 
     let cancel_label = "[ Cancelar (Esc) ]";
-    let cancel_len = cancel_label.chars().count() as u16;
+    let cancel_len = text_width(&cancel_label);
     let cancel_rect = Rect::new(submit_rect.right() + 2, btn_y, cancel_len, 1);
     put_str(
         buffer,
