@@ -96,6 +96,21 @@ instalar destino=(env_var('HOME') / '.local/bin'):
     install -m 755 "${CARGO_TARGET_DIR:-target}/release/herdr" "{{destino}}/pretorian"
     @echo "instalado em {{destino}}/pretorian"
 
+# Compila com o ConPTY e instala como %LOCALAPPDATA%\Programs\pretorian\pretorian.exe; a pasta conpty precisa ficar ao lado do executável
+[script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
+[extension('.ps1')]
+[windows]
+instalar destino=(env_var('LOCALAPPDATA') / 'Programs' / 'pretorian'):
+    $ErrorActionPreference = "Stop"
+    python scripts/package_windows_conpty.py build-local
+    if ($LASTEXITCODE) { exit $LASTEXITCODE }
+    $alvo = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { "target" }
+    New-Item -ItemType Directory -Force "{{destino}}" | Out-Null
+    Copy-Item -Force "$alvo\release\herdr.exe" "{{destino}}\pretorian.exe"
+    if (Test-Path "{{destino}}\conpty") { Remove-Item -Recurse -Force "{{destino}}\conpty" }
+    Copy-Item -Recurse -Force "$alvo\release\conpty" "{{destino}}\conpty"
+    Write-Output "instalado em {{destino}}\pretorian.exe"
+
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:
     cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1

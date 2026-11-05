@@ -26,14 +26,17 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           cargo install just --locked
-          git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
+          git clone --branch "${{ github.ref_name }}" https://github.com/lamarck-nemesis/herdr-pretorian.git
           Set-Location herdr-pretorian
           "commit=$(git rev-parse --short HEAD)"
           zig version
-          just build
-          .\target\release\herdr.exe --version
-          $cfg = .\target\release\herdr.exe --default-config
+          just instalar
+          if (-not (Test-Path .\target\release\conpty\conpty.dll)) { throw "conpty ausente ao lado do executavel construido" }
+          $instalado = Join-Path $env:LOCALAPPDATA "Programs\pretorian\pretorian.exe"
+          if (-not (Test-Path $instalado)) { throw "pretorian.exe nao instalado em $instalado" }
+          if (-not (Test-Path (Join-Path (Split-Path $instalado) "conpty\conpty.dll"))) { throw "conpty ausente ao lado do pretorian.exe instalado" }
+          & $instalado --version
+          $cfg = & $instalado --default-config
           if (-not ($cfg | Select-String -Quiet 'name = "pretorian"')) { throw "config padrao sem tema pretorian" }
           if (-not ($cfg | Select-String -Quiet 'window_title = "Pretorian"')) { throw "config padrao sem titulo Pretorian" }
-          if (-not (Test-Path .\target\release\conpty\conpty.dll)) { throw "conpty ausente ao lado do executavel" }
-          "INSTALACAO_WINDOWS_OK $([System.Environment]::OSVersion.VersionString)"
+          "INSTALACAO_WINDOWS_OK $([System.Environment]::OSVersion.VersionString) $instalado"

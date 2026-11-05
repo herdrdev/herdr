@@ -2,6 +2,17 @@
 
 Terminal based agent runtime for coding agents.
 
+## Pretorian (fork)
+
+Este repositório é o fork `lamarck-nemesis/herdr-pretorian`, interface de terminal do Pretorian CLI. Para o trabalho do fork, estas regras prevalecem sobre as seções do upstream abaixo; o restante do arquivo continua valendo como guia do código.
+
+- Escopo: só o mínimo útil (textos em português, tema `pretorian`, título, cabeçalho, seção **usuário**, diretórios próprios, `just instalar`, correções apontadas em inspeção). Sem painel Pretorian dentro do Herdr, sem reconstrução da interface, sem traduzir comandos, opções, protocolos ou saída dos agentes.
+- Remotos: `origin` é o fork; `upstream` é `herdrdev/herdr`. Este é um "private or custom fork" para o guardrail de contribuição externa do upstream: nada aqui vira PR no upstream sem pedido do usuário.
+- Fluxo: ramo a partir de `master`, conventional commits (o CI valida), PR no fork, CI verde em Ubuntu, macOS e Windows, merge em `master`. Quem usa atualiza com `git pull && just instalar`.
+- Validação local: `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`, `cargo nextest run --locked -E 'test(/filtro/)'` dirigido ao que mudou; Zig 0.16.0 e `just` atual (`cargo install just`) são pré-requisitos. Windows se prova no fluxo manual `instalacao-windows-manual.yml`.
+- Licença: Apache-2.0 preservada; `NOTICE` registra a modificação. Mantenha avisos de copyright do upstream.
+- Idioma dos commits, PRs e textos novos da interface: português brasileiro.
+
 ## Scope and Audience
 
 These instructions are layered.

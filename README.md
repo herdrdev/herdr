@@ -67,11 +67,11 @@ Windows x64 (PowerShell, com rustup, Zig e Python 3 instalados; o script baixa o
 ```powershell
 git clone https://github.com/lamarck-nemesis/herdr-pretorian.git
 cd herdr-pretorian
-just build             # ou: python scripts/package_windows_conpty.py build-local
-.\target\release\herdr.exe
+just instalar          # ou: just build e copie target\release\herdr.exe e a pasta target\release\conpty juntos
+pretorian
 ```
 
-No Windows o executável precisa ficar ao lado da pasta `conpty` gerada em `target\release`; copie a pasta inteira se quiser movê-lo.
+`just instalar` grava `%LOCALAPPDATA%\Programs\pretorian\pretorian.exe` com a pasta `conpty` ao lado (outro destino: `just instalar C:\caminho`). Acrescente essa pasta ao `PATH` do usuário para chamar `pretorian` de qualquer terminal. O executável precisa ficar sempre ao lado da pasta `conpty`; copie os dois juntos se quiser movê-lo.
 
 ### Nome no cabeçalho
 
