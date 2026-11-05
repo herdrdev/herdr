@@ -372,9 +372,27 @@ impl OrchestrationService {
         let mut registry_dirty = false;
         let reg_snapshot = registry.clone();
 
+        let paused_agent_ids: std::collections::HashSet<String> = {
+            let runs_file = crate::service::patterns_run::pattern_runs_path(
+                &self.service_config.state_dir,
+                &self.service_config.state_dir,
+            );
+            crate::service::patterns_run::load_pattern_runs(&runs_file)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|r| r.state == crate::service::patterns_run::PatternRunState::Paused)
+                .flat_map(|r| r.agents.into_iter().map(|a| a.id))
+                .collect()
+        };
+
         for agent in &mut registry.agents {
-            // Only live non-MCP agents (not mcp, not gone, not done, not starting)
-            if agent.mcp || agent.gone() || agent.state == "done" || agent.state == "starting" {
+            // Only live non-MCP agents (not mcp, not gone, not done, not starting, and not paused)
+            if agent.mcp
+                || agent.gone()
+                || agent.state == "done"
+                || agent.state == "starting"
+                || paused_agent_ids.contains(&agent.id)
+            {
                 continue;
             }
 

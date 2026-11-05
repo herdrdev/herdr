@@ -264,6 +264,61 @@ pub fn execute_shepherd_method(
                     },
                 )
         }
+        Method::ShepherdPatternRunStart(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.start_pattern_run(
+                &root,
+                Some(&params.pattern),
+                None,
+                params.task.as_deref(),
+                params.worktree.as_deref(),
+                params.confirm_over_limit,
+            )
+            .map(|run| ResponseResult::ShepherdPatternRunStarted { run })
+        }
+        Method::ShepherdPatternRunList(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.list_pattern_runs(&root)
+                .map(|runs| ResponseResult::ShepherdPatternRunList { runs })
+        }
+        Method::ShepherdPatternRunShow(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.get_pattern_run(&root, &params.id)
+                .map(|run| ResponseResult::ShepherdPatternRunDetail { run })
+        }
+        Method::ShepherdPatternRunPause(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.pause_pattern_run(&root, &params.id)
+                .map(|run| ResponseResult::ShepherdPatternRunPaused { run })
+        }
+        Method::ShepherdPatternRunResume(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.resume_pattern_run(&root, &params.id)
+                .map(|run| ResponseResult::ShepherdPatternRunResumed { run })
+        }
+        Method::ShepherdPatternRunStop(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.stop_pattern_run(&root, &params.id, params.confirm)
+                .map(|run| ResponseResult::ShepherdPatternRunStopped { run })
+        }
         Method::ShepherdTopicList(_) => core
             .list_topics()
             .map(|topics| ResponseResult::ShepherdTopicList { topics }),

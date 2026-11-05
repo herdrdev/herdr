@@ -375,6 +375,24 @@ pub enum ResponseResult {
     ShepherdConsumerGroups {
         groups: Vec<shepherd_core::bus::ConsumerGroupSummary>,
     },
+    ShepherdPatternRunStarted {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunList {
+        runs: Vec<shepherd_core::service::patterns_run::PatternRunSummary>,
+    },
+    ShepherdPatternRunDetail {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunPaused {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunResumed {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
+    ShepherdPatternRunStopped {
+        run: shepherd_core::service::patterns_run::PatternRun,
+    },
     Ok {},
 }
 

@@ -366,6 +366,30 @@ mod tests {
             actual.remove("shepherd.topic.tail").as_deref(),
             Some("ad498af9deabf61f97d3ea37ba31d916ab5cf103b801529cecdd0c2e23484823")
         );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.list").as_deref(),
+            Some("10161f0f362e75873e03dd0842545aa93192749bcf29354fc9e07b0f74f392cf")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.pause").as_deref(),
+            Some("b0d85cfe92607d4842835e0074acd7ba975d550e49f29a319db32af7794aed80")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.resume").as_deref(),
+            Some("7599cce4c0b470a8bc80bba4987c6cb9b5d437e1c1850dee1fda2d818ebd7262")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.show").as_deref(),
+            Some("a38306f3aae881ec4a0dbb17280261068942f5a60e0368c0ea4dc4f4a74b3ee7")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.start").as_deref(),
+            Some("ac2892dd4f0a792e24a93cf17806fea6691bd3710f3fe3d03b119b802132c2b5")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.run.stop").as_deref(),
+            Some("383d02f5284bd5c33c065e939d9d9b7eb96b13144423b4ea5b46a6731b5efee1")
+        );
 
         assert_eq!(
             actual, expected,

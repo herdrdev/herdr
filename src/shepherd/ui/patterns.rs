@@ -311,6 +311,11 @@ pub enum ShepherdPatternsAction {
     Save { pattern: Pattern, global: bool },
     Delete { name: String },
     Validate { name: Option<String>, pattern: Option<Pattern> },
+    RunPattern {
+        pattern: String,
+        task: Option<String>,
+        worktree: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -338,6 +343,7 @@ pub struct ShepherdPatternsHits {
     pub empty_hits: Option<EmptyStateHits>,
     pub new_from_template_hits: Option<InlineFormHits>,
     pub duplicate_hits: Option<InlineFormHits>,
+    pub run_form_hits: Option<InlineFormHits>,
 }
 
 // ============================================================================
@@ -808,6 +814,26 @@ pub enum PatternSubAction {
     Duplicate(DuplicatePatternState),
     ConfirmDelete { name: String, source: PatternSource },
     Edit(PatternEditorState),
+    Run(PatternRunFormState),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PatternRunFormState {
+    pub pattern_name: String,
+    pub task: String,
+    pub worktree: String,
+    pub active_field: usize, // 0: task, 1: worktree
+}
+
+impl PatternRunFormState {
+    pub fn new(pattern_name: String) -> Self {
+        Self {
+            pattern_name,
+            task: String::new(),
+            worktree: String::new(),
+            active_field: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1086,6 +1112,13 @@ impl ShepherdPatternsSectionState {
         }
     }
 
+    pub fn start_run(&mut self) {
+        if let Some(sum) = self.selected_summary() {
+            self.sub_action = Some(PatternSubAction::Run(PatternRunFormState::new(sum.name.clone())));
+            self.error = None;
+        }
+    }
+
     pub fn handle_key(&mut self, key: &KeyEvent) -> (bool, Option<ShepherdPatternsAction>) {
         // 1. If Sub-action is active
         if let Some(ref mut sub) = self.sub_action {
@@ -1328,6 +1361,51 @@ impl ShepherdPatternsSectionState {
                         _ => return (false, None),
                     }
                 }
+                PatternSubAction::Run(state) => {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.sub_action = None;
+                            return (true, None);
+                        }
+                        KeyCode::Tab => {
+                            state.active_field = (state.active_field + 1) % 2;
+                            return (true, None);
+                        }
+                        KeyCode::BackTab => {
+                            state.active_field = if state.active_field == 0 { 1 } else { 0 };
+                            return (true, None);
+                        }
+                        KeyCode::Backspace => {
+                            if state.active_field == 0 {
+                                state.task.pop();
+                            } else {
+                                state.worktree.pop();
+                            }
+                            return (true, None);
+                        }
+                        KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
+                            if state.active_field == 0 {
+                                state.task.push(c);
+                            } else {
+                                state.worktree.push(c);
+                            }
+                            return (true, None);
+                        }
+                        KeyCode::Enter => {
+                            let pattern = state.pattern_name.clone();
+                            let task = if state.task.trim().is_empty() { None } else { Some(state.task.trim().to_string()) };
+                            let worktree = if state.worktree.trim().is_empty() { None } else { Some(state.worktree.trim().to_string()) };
+                            let act = ShepherdPatternsAction::RunPattern {
+                                pattern,
+                                task,
+                                worktree,
+                            };
+                            self.sub_action = None;
+                            return (true, Some(act));
+                        }
+                        _ => return (false, None),
+                    }
+                }
             }
         }
 
@@ -1353,6 +1431,10 @@ impl ShepherdPatternsSectionState {
             }
             KeyCode::Char('e') => {
                 self.start_edit();
+                (true, None)
+            }
+            KeyCode::Char('r') => {
+                self.start_run();
                 (true, None)
             }
             KeyCode::Char('d') => {
@@ -1565,7 +1647,41 @@ impl ShepherdPatternsSectionState {
             }
         }
 
-        // 5. Empty state hits
+        // 5. Run form hits
+        if let Some(ref rfh) = hits.run_form_hits {
+            if let Some(r) = rfh.submit_button {
+                if r.contains(ratatui::layout::Position { x: col, y: row }) {
+                    if let Some(PatternSubAction::Run(ref st)) = self.sub_action {
+                        let pattern = st.pattern_name.clone();
+                        let task = if st.task.trim().is_empty() { None } else { Some(st.task.trim().to_string()) };
+                        let worktree = if st.worktree.trim().is_empty() { None } else { Some(st.worktree.trim().to_string()) };
+                        let act = ShepherdPatternsAction::RunPattern {
+                            pattern,
+                            task,
+                            worktree,
+                        };
+                        self.sub_action = None;
+                        return (true, Some(act));
+                    }
+                }
+            }
+            if let Some(r) = rfh.cancel_button {
+                if r.contains(ratatui::layout::Position { x: col, y: row }) {
+                    self.sub_action = None;
+                    return (true, None);
+                }
+            }
+            for (f_rect, idx) in &rfh.field_rects {
+                if f_rect.contains(ratatui::layout::Position { x: col, y: row }) {
+                    if let Some(PatternSubAction::Run(ref mut st)) = self.sub_action {
+                        st.active_field = *idx;
+                        return (true, None);
+                    }
+                }
+            }
+        }
+
+        // 6. Empty state hits
         if let Some(ref eh) = hits.empty_hits {
             for (rect, idx) in &eh.actions {
                 if rect.contains(ratatui::layout::Position { x: col, y: row }) {
@@ -1611,6 +1727,7 @@ impl ShepherdPatternsSectionState {
                         1 => { self.start_duplicate(); return (true, None); }
                         2 => { let act = self.validate_selected(); return (true, act); }
                         3 => { self.start_delete(); return (true, None); }
+                        4 => { self.start_run(); return (true, None); }
                         _ => {}
                     }
                 }
@@ -1622,6 +1739,7 @@ impl ShepherdPatternsSectionState {
                         1 => { self.start_duplicate(); return (true, None); }
                         2 => { let act = self.validate_selected(); return (true, act); }
                         3 => { self.start_delete(); return (true, None); }
+                        4 => { self.start_run(); return (true, None); }
                         _ => {}
                     }
                 }
@@ -1797,6 +1915,36 @@ pub fn render_patterns_section(
                     ));
                     return hits;
                 }
+                PatternSubAction::Run(st) => {
+                    let inline_form = InlineFormState {
+                        title: format!("EJECUTAR PATRÓN: {}", st.pattern_name),
+                        fields: vec![
+                            FormField {
+                                label: "Objetivo o tarea (opcional):".into(),
+                                value: st.task.clone(),
+                                placeholder: "p.ej. Implementar endpoint de métricas".into(),
+                            },
+                            FormField {
+                                label: "Worktree aislado (opcional):".into(),
+                                value: st.worktree.clone(),
+                                placeholder: "p.ej. /tmp/worktree-f8d".into(),
+                            },
+                        ],
+                        active_field: st.active_field,
+                        error: None,
+                        success: None,
+                    };
+                    hits.run_form_hits = Some(render_inline_form(
+                        buffer,
+                        detail_area,
+                        &inline_form,
+                        "Iniciar Ejecución (Enter)",
+                        "Cancelar (Esc)",
+                        true,
+                        palette,
+                    ));
+                    return hits;
+                }
             }
         }
 
@@ -1832,6 +1980,7 @@ pub fn render_patterns_section(
                 detail.path.as_deref().map(|p| format!(" | {}", p)).unwrap_or_default()
             );
 
+            let is_valid = error_count == 0;
             let header = DetailHeader {
                 title: format!("PATRÓN: {}", detail.pattern.name),
                 badges: vec![src_badge, kind_badge, validity_badge],
@@ -1841,6 +1990,7 @@ pub fn render_patterns_section(
                     ("Duplicar".into(), Some("c".into())),
                     ("Validar".into(), Some("v".into())),
                     ("Eliminar".into(), Some("d".into())),
+                    ("Ejecutar".into(), Some("r".into())),
                 ],
             };
 
@@ -1920,7 +2070,7 @@ pub fn render_patterns_section(
                 ("Duplicar", "c", false),
                 ("Validar", "v", false),
                 ("Eliminar", "d", false),
-                ("Ejecutar (llega en F8d)", "", false),
+                ("Ejecutar", "r", is_valid),
             ];
 
             hits.detail_hits = Some(render_detail_view(
@@ -2621,5 +2771,81 @@ mod tests {
         assert!(load_pattern("custom-flow", &proj_root, Some(&glob_dir)).is_err());
 
         let _ = std::fs::remove_dir_all(&temp_base);
+    }
+
+    #[test]
+    fn test_pattern_run_execution_flow_via_key_and_mouse() {
+        let mut state = ShepherdPatternsSectionState::default();
+        let pat = get_builtin_pattern("orchestrator-worker").expect("template exists");
+        state.update_detail(PatternDetail {
+            pattern: pat,
+            source: PatternSource::Builtin,
+            path: None,
+            problems: vec![],
+        });
+        state.patterns = vec![PatternSummary {
+            name: "orchestrator-worker".into(),
+            description: "OW".into(),
+            kind: PatternKind::OrchestratorWorker,
+            source: PatternSource::Builtin,
+            agents_count: 4,
+            topics_count: 2,
+            shadowed: false,
+            path: None,
+        }];
+
+        // Press 'r' to start execution form
+        let (handled, act) = state.handle_key(&crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('r'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(handled);
+        assert!(act.is_none());
+        assert!(matches!(state.sub_action, Some(PatternSubAction::Run(_))));
+
+        // Type task description
+        for c in "Implement F8d".chars() {
+            state.handle_key(&crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+
+        // Tab to worktree field
+        state.handle_key(&crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Tab,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+
+        // Type worktree path
+        for c in "/tmp/wt-f8d".chars() {
+            state.handle_key(&crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char(c),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+
+        // Render pure section and verify run_form_hits are populated
+        let area = Rect::new(0, 0, 100, 30);
+        let mut buffer = Buffer::empty(area);
+        let palette = Palette::catppuccin();
+        let hits = render_patterns_section(&mut buffer, area, &state, &palette);
+        assert!(hits.run_form_hits.is_some());
+
+        // Press Enter to submit execution
+        let (handled_submit, act_submit) = state.handle_key(&crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(handled_submit);
+        assert_eq!(
+            act_submit,
+            Some(ShepherdPatternsAction::RunPattern {
+                pattern: "orchestrator-worker".into(),
+                task: Some("Implement F8d".into()),
+                worktree: Some("/tmp/wt-f8d".into()),
+            })
+        );
+        assert!(state.sub_action.is_none());
     }
 }

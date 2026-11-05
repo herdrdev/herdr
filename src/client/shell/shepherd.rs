@@ -103,6 +103,36 @@ fn shepherd_op_to_method(op: &str, args: serde_json::Value) -> crate::api::schem
                 serde_json::from_value(args.clone()).unwrap_or_default();
             Method::ShepherdPatternValidate(params)
         }
+        "pattern_run_start" => {
+            let params: ShepherdPatternRunStartParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunStart(params)
+        }
+        "pattern_runs" | "pattern_run_list" => {
+            let params: ShepherdPatternRunListParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunList(params)
+        }
+        "pattern_run_show" => {
+            let params: ShepherdPatternRunShowParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunShow(params)
+        }
+        "pattern_run_pause" => {
+            let params: ShepherdPatternRunPauseParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunPause(params)
+        }
+        "pattern_run_resume" => {
+            let params: ShepherdPatternRunResumeParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunResume(params)
+        }
+        "pattern_run_stop" => {
+            let params: ShepherdPatternRunStopParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternRunStop(params)
+        }
         "topics" => Method::ShepherdTopicList(ShepherdEmptyParams {}),
         "topic_create" => {
             let params: ShepherdTopicCreateParams =
@@ -333,8 +363,12 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) -> bool {
         let section = self.ensure_shepherd_section();
+        let prev_tab = section.active_tab;
         let key_event = crossterm::event::KeyEvent::new(key.code, key.modifiers);
         let section_outcome = section.handle_key(&key_event);
+        if self.shepherd_section.as_ref().map(|s| s.active_tab) != Some(prev_tab) {
+            self.refresh_shepherd_views(outcome);
+        }
         self.dispatch_shepherd_section_outcome(section_outcome, outcome);
         true
     }
@@ -368,8 +402,12 @@ impl ClientShellState {
             return false;
         }
         let section = self.ensure_shepherd_section();
+        let prev_tab = section.active_tab;
         let section_outcome =
             crate::shepherd::ui::handle_shepherd_section_mouse(section, &hits, mouse);
+        if self.shepherd_section.as_ref().map(|s| s.active_tab) != Some(prev_tab) {
+            self.refresh_shepherd_views(outcome);
+        }
         self.dispatch_shepherd_section_outcome(section_outcome, outcome);
         true
     }
@@ -407,6 +445,9 @@ impl ClientShellState {
                     }
                     ShepherdSectionAction::Git(git_action) => {
                         self.dispatch_shepherd_git_action(git_action, outcome);
+                    }
+                    ShepherdSectionAction::Events(events_action) => {
+                        self.dispatch_shepherd_events_action(events_action, outcome);
                     }
                 }
                 outcome.repaint = true;
@@ -711,6 +752,27 @@ impl ClientShellState {
                     outcome,
                 );
             }
+            ShepherdPatternsAction::RunPattern {
+                pattern,
+                task,
+                worktree,
+            } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunStart(
+                        crate::api::schema::ShepherdPatternRunStartParams {
+                            root: None,
+                            pattern,
+                            task,
+                            worktree,
+                            confirm_over_limit: false,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_start".to_string(),
+                    },
+                    outcome,
+                );
+            }
         }
     }
 
@@ -897,6 +959,126 @@ impl ClientShellState {
         }
     }
 
+    pub(super) fn dispatch_shepherd_events_action(
+        &mut self,
+        action: crate::shepherd::ui::events::ShepherdEventsAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::shepherd::ui::events::ShepherdEventsAction;
+        match action {
+            ShepherdEventsAction::RefreshTopics => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdTopicList(
+                        crate::api::schema::ShepherdEmptyParams::default(),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "topic_list".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::RefreshRuns => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunList(
+                        crate::api::schema::ShepherdPatternRunListParams::default(),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_list".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::ShowRun { id } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunShow(
+                        crate::api::schema::ShepherdPatternRunShowParams {
+                            root: None,
+                            id,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_show".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::TailTopic { topic, partition, limit } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdTopicTail(
+                        crate::api::schema::ShepherdTopicTailParams {
+                            topic,
+                            partition,
+                            limit,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "topic_tail".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::ReplayTopic { topic, partition, from_offset, limit } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdTopicReplay(
+                        crate::api::schema::ShepherdTopicReplayParams {
+                            topic,
+                            partition,
+                            from_offset,
+                            limit,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "topic_replay".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::PauseRun { id } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunPause(
+                        crate::api::schema::ShepherdPatternRunPauseParams {
+                            root: None,
+                            id,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_pause".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::ResumeRun { id } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunResume(
+                        crate::api::schema::ShepherdPatternRunResumeParams {
+                            root: None,
+                            id,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_resume".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdEventsAction::StopRun { id, confirm } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternRunStop(
+                        crate::api::schema::ShepherdPatternRunStopParams {
+                            root: None,
+                            id,
+                            confirm,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_run_stop".to_string(),
+                    },
+                    outcome,
+                );
+            }
+        }
+    }
+
     pub(super) fn open_shepherd_spawn_form(&mut self, outcome: &mut ClientShellInput) {
         if !self.config.shepherd_enabled {
             return;
@@ -1013,6 +1195,26 @@ impl ClientShellState {
             },
             outcome,
         );
+        // Fetch topics
+        self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::ShepherdTopicList(
+                crate::api::schema::ShepherdEmptyParams::default(),
+            ),
+            PendingEndpointKind::ShepherdCall {
+                op: "topic_list".to_string(),
+            },
+            outcome,
+        );
+        // Fetch pattern runs
+        self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::ShepherdPatternRunList(
+                crate::api::schema::ShepherdPatternRunListParams::default(),
+            ),
+            PendingEndpointKind::ShepherdCall {
+                op: "pattern_run_list".to_string(),
+            },
+            outcome,
+        );
     }
 
     pub(super) fn handle_shepherd_endpoint_result(
@@ -1083,6 +1285,117 @@ impl ClientShellState {
                     section.patterns.update_detail(pattern);
                     section.status_message = None;
                 }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdTopicList { topics }) => {
+                let mut auto_tail_topic = None;
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.events.topics = topics
+                        .into_iter()
+                        .map(|t| crate::shepherd::ui::events::ShepherdTopicRow {
+                            name: t.name,
+                            partitions: t.partitions,
+                            messages_count: t.messages_count,
+                            groups_count: 0,
+                        })
+                        .collect();
+                    if section.events.messages.is_empty() {
+                        if let Some(t) = section.events.selected_topic_row() {
+                            auto_tail_topic = Some(t.name.clone());
+                        }
+                    }
+                    section.status_message = None;
+                }
+                if let Some(topic) = auto_tail_topic {
+                    self.push_endpoint_method_with_kind(
+                        crate::api::schema::Method::ShepherdTopicTail(
+                            crate::api::schema::ShepherdTopicTailParams {
+                                topic,
+                                partition: None,
+                                limit: Some(50),
+                            },
+                        ),
+                        PendingEndpointKind::ShepherdCall {
+                            op: "topic_tail".to_string(),
+                        },
+                        outcome,
+                    );
+                }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdTopicMessages { messages }) => {
+                if let Some(ref mut section) = self.shepherd_section {
+                    if !section.events.view_paused {
+                        section.events.messages = messages;
+                    }
+                    section.status_message = None;
+                }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunList { runs }) => {
+                let mut auto_show_run = None;
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.events.runs = runs;
+                    if section.events.selected_run_detail.is_none() {
+                        if let Some(r) = section.events.selected_run_row() {
+                            auto_show_run = Some(r.id.clone());
+                        }
+                    }
+                    section.status_message = None;
+                }
+                if let Some(id) = auto_show_run {
+                    self.push_endpoint_method_with_kind(
+                        crate::api::schema::Method::ShepherdPatternRunShow(
+                            crate::api::schema::ShepherdPatternRunShowParams {
+                                root: None,
+                                id,
+                            },
+                        ),
+                        PendingEndpointKind::ShepherdCall {
+                            op: "pattern_run_show".to_string(),
+                        },
+                        outcome,
+                    );
+                }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunDetail { run }) => {
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.events.selected_run_detail = Some(run);
+                    section.status_message = None;
+                }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunStarted { run }) => {
+                let msg = format!("Ejecución de patrón iniciada: {}", run.id);
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunPaused { run }) => {
+                let msg = format!("Ejecución de patrón pausada: {}", run.id);
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunResumed { run }) => {
+                let msg = format!("Ejecución de patrón reanudada: {}", run.id);
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternRunStopped { run }) => {
+                let msg = format!("Ejecución de patrón detenida: {}", run.id);
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
+                self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;
             }
             Ok(crate::api::schema::ResponseResult::ShepherdTaskCreated { .. })
@@ -1250,6 +1563,67 @@ impl ClientShellState {
                             section.status_message = Some(msg);
                         }
                         self.refresh_shepherd_views(outcome);
+                    }
+                    "pattern_run_start" | "pattern_run_pause" | "pattern_run_resume" | "pattern_run_stop" => {
+                        let msg = format!("Operación de ejecución completada ({op})");
+                        if let Some(ref mut section) = self.shepherd_section {
+                            section.status_message = Some(msg);
+                        }
+                        self.refresh_shepherd_views(outcome);
+                    }
+                    "pattern_run_list" => {
+                        if let Ok(runs) = serde_json::from_value::<
+                            Vec<shepherd_core::service::patterns_run::PatternRunSummary>,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.events.runs = runs;
+                                section.status_message = None;
+                            }
+                        }
+                    }
+                    "pattern_run_show" => {
+                        if let Ok(run) = serde_json::from_value::<
+                            shepherd_core::service::patterns_run::PatternRun,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.events.selected_run_detail = Some(run);
+                                section.status_message = None;
+                            }
+                        }
+                    }
+                    "topic_list" => {
+                        if let Ok(topics) = serde_json::from_value::<
+                            Vec<shepherd_core::bus::TopicSummary>,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.events.topics = topics
+                                    .into_iter()
+                                    .map(|t| crate::shepherd::ui::events::ShepherdTopicRow {
+                                        name: t.name,
+                                        partitions: t.partitions,
+                                        messages_count: t.messages_count,
+                                        groups_count: 0,
+                                    })
+                                    .collect();
+                                section.status_message = None;
+                            }
+                        }
+                    }
+                    "topic_tail" | "topic_replay" => {
+                        if let Ok(messages) = serde_json::from_value::<
+                            Vec<shepherd_core::bus::Message>,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                if !section.events.view_paused {
+                                    section.events.messages = messages;
+                                }
+                                section.status_message = None;
+                            }
+                        }
                     }
                     _ => {
                         if let Some(ref mut section) = self.shepherd_section {

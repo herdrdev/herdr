@@ -3,6 +3,7 @@ use ratatui::layout::Rect;
 
 use super::agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
 use super::components::EmptyStateHits;
+use super::events::{ShepherdEventsAction, ShepherdEventsHits, ShepherdEventsSectionState};
 use super::git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
 use super::patterns::{ShepherdPatternsAction, ShepherdPatternsHits, ShepherdPatternsSectionState};
 use super::runs::{ShepherdRunsAction, ShepherdRunsHits, ShepherdRunsSectionState};
@@ -95,6 +96,7 @@ pub enum ShepherdSectionAction {
     Patterns(ShepherdPatternsAction),
     Skills(ShepherdSkillsAction),
     Git(ShepherdGitAction),
+    Events(ShepherdEventsAction),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +117,7 @@ pub struct ShepherdSectionHits {
     pub patterns_hits: Option<ShepherdPatternsHits>,
     pub skills_hits: Option<ShepherdSkillsHits>,
     pub git_hits: Option<ShepherdGitHits>,
+    pub events_hits: Option<ShepherdEventsHits>,
     pub empty_state_hits: Option<EmptyStateHits>,
 }
 
@@ -128,6 +131,7 @@ pub struct ShepherdSectionState {
     pub patterns: ShepherdPatternsSectionState,
     pub skills: ShepherdSkillsSectionState,
     pub git: ShepherdGitSectionState,
+    pub events: ShepherdEventsSectionState,
     pub status_message: Option<String>,
     pub loading: bool,
 }
@@ -143,6 +147,7 @@ impl Default for ShepherdSectionState {
             patterns: ShepherdPatternsSectionState::default(),
             skills: ShepherdSkillsSectionState::default(),
             git: ShepherdGitSectionState::default(),
+            events: ShepherdEventsSectionState::default(),
             status_message: None,
             loading: false,
         }
@@ -179,7 +184,11 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Patterns => self.patterns.has_sub_action(),
             ShepherdSectionTab::Skills => self.skills.has_sub_action(),
             ShepherdSectionTab::Git => self.git.has_sub_action(),
-            _ => false,
+            ShepherdSectionTab::Events => {
+                self.events.confirm_stop_run.is_some()
+                    || self.events.editing_replay_offset
+                    || self.events.editing_agent_filter
+            }
         }
     }
 
@@ -191,7 +200,7 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Patterns => self.patterns.cancel_sub_action(),
             ShepherdSectionTab::Skills => self.skills.cancel_sub_action(),
             ShepherdSectionTab::Git => self.git.cancel_sub_action(),
-            _ => false,
+            ShepherdSectionTab::Events => self.events.cancel_sub_action(),
         }
     }
 
@@ -309,7 +318,16 @@ impl ShepherdSectionState {
                     ShepherdSectionOutcome::Ignored
                 }
             }
-            _ => ShepherdSectionOutcome::Ignored,
+            ShepherdSectionTab::Events => {
+                let handled = self.events.handle_key(*key);
+                if let Some(act) = self.events.last_action.take() {
+                    ShepherdSectionOutcome::Action(ShepherdSectionAction::Events(act))
+                } else if handled {
+                    ShepherdSectionOutcome::Handled
+                } else {
+                    ShepherdSectionOutcome::Ignored
+                }
+            }
         }
     }
 }

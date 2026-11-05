@@ -274,7 +274,7 @@ pub(crate) enum ShepherdOperation {
 }
 
 pub(crate) const USAGE_STRING: &str =
-    "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]";
+    "usage: shepherd attach [shepherd-agent-name-or-pane-id] [--takeover] | shepherd mcp serve [port] | shepherd run <task-id> [--mcp-url <url>] [--auto-push] [--wait] [--json] | shepherd approve <task-id> plan|<subtask-number> [--json] | shepherd reject <task-id> plan|<subtask-number> [--reason <text>] [--json] | shepherd spawn <role> <task...> [--task-id <id>] [--vendor <name>] [--model <name>] [--mcp-url <url>] [--json] | shepherd agents [--json] | shepherd skills list [--json] | shepherd runs list [--json] | shepherd roles list [--json] | shepherd vendors list [--json] | shepherd config path|validate [--json] | shepherd task new <title> [--description <text>] [--criteria <text>]... [--id <number>] [--json] | task list [--archived] [--json] | task show <id-or-name> [section] [--json] | task plan <id-or-name> [--save] [--json] | task edit <id-or-name> [section] | task path <id-or-name> [--json] | task archive <id-or-name> [--json] | shepherd pattern list [--json] | pattern show <name> [--json] | pattern new <name> --from <template|name> [--global] [--json] | pattern validate <name|--file path> [--json] | pattern delete <name> [--json] | pattern edit <name> | pattern run <name> [--task <task>] [--worktree <path>] [--confirm-over-limit] [--json] | pattern runs [--json] | pattern pause <id> [--json] | pattern resume <id> [--json] | pattern stop <id> [--confirm] [--json] | shepherd topic list [--json] | topic create <name> [--partitions <n>] [--json] | topic publish <topic> <content> [--key <key>] [--partition <p>] [--from <from>] [--json] | topic tail <topic> [--partition <p>] [--limit <n>] [--json] | topic replay <topic> [--partition <p>] [--from <offset>] [--limit <n>] [--json] | topic groups [topic] [--json]";
 
 // =========================================================================
 // Command Definitions
@@ -445,6 +445,36 @@ pub(crate) fn pattern_command() -> Command {
             Command::new("edit")
                 .about("Edit a custom pattern in $EDITOR")
                 .args(PatternEditProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("run")
+                .about("Run a multi-agent pattern")
+                .args(ShepherdPatternRunStartProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("runs")
+                .about("List pattern execution runs")
+                .args(ShepherdPatternRunListProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("run-show")
+                .about("Show pattern run details")
+                .args(ShepherdPatternRunShowProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("pause")
+                .about("Pause a pattern run")
+                .args(ShepherdPatternRunPauseProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("resume")
+                .about("Resume a paused pattern run")
+                .args(ShepherdPatternRunResumeProjection::arguments()),
+        )
+        .subcommand(
+            Command::new("stop")
+                .about("Stop a pattern run and terminate its agents")
+                .args(ShepherdPatternRunStopProjection::arguments()),
         )
 }
 
@@ -931,6 +961,87 @@ pub(crate) fn parse_operation(args: &[String]) -> Result<ShepherdOperation, Pars
                         name: params.name,
                     }))
                 }
+                "run" => {
+                    let matches = parse_matches(
+                        Command::new("run").args(ShepherdPatternRunStartProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunStartProjection::from_matches(&matches)?;
+                    if params.pattern.is_empty() {
+                        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+                    }
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:start".into(),
+                        method: Method::ShepherdPatternRunStart(params),
+                    }))
+                }
+                "runs" => {
+                    let matches = parse_matches(
+                        Command::new("runs").args(ShepherdPatternRunListProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunListProjection::from_matches(&matches)?;
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:list".into(),
+                        method: Method::ShepherdPatternRunList(params),
+                    }))
+                }
+                "run-show" => {
+                    let matches = parse_matches(
+                        Command::new("run-show").args(ShepherdPatternRunShowProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunShowProjection::from_matches(&matches)?;
+                    if params.id.is_empty() {
+                        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+                    }
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:show".into(),
+                        method: Method::ShepherdPatternRunShow(params),
+                    }))
+                }
+                "pause" => {
+                    let matches = parse_matches(
+                        Command::new("pause").args(ShepherdPatternRunPauseProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunPauseProjection::from_matches(&matches)?;
+                    if params.id.is_empty() {
+                        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+                    }
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:pause".into(),
+                        method: Method::ShepherdPatternRunPause(params),
+                    }))
+                }
+                "resume" => {
+                    let matches = parse_matches(
+                        Command::new("resume").args(ShepherdPatternRunResumeProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunResumeProjection::from_matches(&matches)?;
+                    if params.id.is_empty() {
+                        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+                    }
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:resume".into(),
+                        method: Method::ShepherdPatternRunResume(params),
+                    }))
+                }
+                "stop" => {
+                    let matches = parse_matches(
+                        Command::new("stop").args(ShepherdPatternRunStopProjection::arguments()),
+                        sub_args,
+                    )?;
+                    let params = ShepherdPatternRunStopProjection::from_matches(&matches)?;
+                    if params.id.is_empty() {
+                        return Err(ParseError::Usage(USAGE_STRING.to_string()));
+                    }
+                    Ok(ShepherdOperation::Api(Request {
+                        id: "cli:shepherd:pattern:run:stop".into(),
+                        method: Method::ShepherdPatternRunStop(params),
+                    }))
+                }
                 _ => Err(ParseError::Usage(USAGE_STRING.to_string())),
             }
         }
@@ -1220,6 +1331,78 @@ mod tests {
             assert_eq!(params.partitions, 3);
         } else {
             panic!("expected topic create");
+        }
+    }
+
+    #[test]
+    fn parses_pattern_run_commands() {
+        // pattern run
+        let op = parse_operation(&args(&[
+            "pattern",
+            "run",
+            "orchestrator-worker",
+            "--task",
+            "Initial task objective",
+            "--confirm-over-limit",
+        ]))
+        .unwrap();
+        if let ShepherdOperation::Api(Request {
+            method: Method::ShepherdPatternRunStart(params),
+            ..
+        }) = op
+        {
+            assert_eq!(params.pattern, "orchestrator-worker");
+            assert_eq!(params.task.as_deref(), Some("Initial task objective"));
+            assert!(params.confirm_over_limit);
+        } else {
+            panic!("expected pattern run start");
+        }
+
+        // pattern runs
+        let op_runs = parse_operation(&args(&["pattern", "runs"])).unwrap();
+        assert!(matches!(
+            op_runs,
+            ShepherdOperation::Api(Request {
+                method: Method::ShepherdPatternRunList(_),
+                ..
+            })
+        ));
+
+        // pattern pause
+        let op_pause = parse_operation(&args(&["pattern", "pause", "run-123"])).unwrap();
+        if let ShepherdOperation::Api(Request {
+            method: Method::ShepherdPatternRunPause(params),
+            ..
+        }) = op_pause
+        {
+            assert_eq!(params.id, "run-123");
+        } else {
+            panic!("expected pattern run pause");
+        }
+
+        // pattern resume
+        let op_resume = parse_operation(&args(&["pattern", "resume", "run-123"])).unwrap();
+        if let ShepherdOperation::Api(Request {
+            method: Method::ShepherdPatternRunResume(params),
+            ..
+        }) = op_resume
+        {
+            assert_eq!(params.id, "run-123");
+        } else {
+            panic!("expected pattern run resume");
+        }
+
+        // pattern stop
+        let op_stop = parse_operation(&args(&["pattern", "stop", "run-123", "--confirm"])).unwrap();
+        if let ShepherdOperation::Api(Request {
+            method: Method::ShepherdPatternRunStop(params),
+            ..
+        }) = op_stop
+        {
+            assert_eq!(params.id, "run-123");
+            assert!(params.confirm);
+        } else {
+            panic!("expected pattern run stop");
         }
     }
 

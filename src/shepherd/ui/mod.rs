@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod components;
+pub mod events;
 pub mod git;
 pub mod patterns;
 pub mod runs;
@@ -16,12 +17,13 @@ use ratatui::{
 
 use crate::app::state::Palette;
 use components::{
-    empty_state::render_empty_state,
     list_view::put_str,
     status_bar::render_status_bar,
 };
 #[allow(unused_imports)]
 pub use agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
+#[allow(unused_imports)]
+pub use events::{ShepherdEventsAction, ShepherdEventsHits, ShepherdEventsSectionState};
 #[allow(unused_imports)]
 pub use git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
 #[allow(unused_imports)]
@@ -183,12 +185,10 @@ pub fn render_shepherd_section(
             ));
         }
         ShepherdSectionTab::Events => {
-            hits.empty_state_hits = Some(render_empty_state(
+            hits.events_hits = Some(events::render_events_section(
                 buffer,
                 content_area,
-                "PESTAÑA DE EVENTOS (F8d)",
-                "Próximamente en F8d: Visualizador en tiempo real del bus JSONL\ncon controles de pausa, streaming y replay histórico.",
-                &[],
+                &mut state.events,
                 palette,
             ));
         }
@@ -261,7 +261,24 @@ pub fn render_shepherd_section(
             (sum, help)
         }
         ShepherdSectionTab::Events => {
-            ("Bus de eventos JSONL".into(), "Próximamente en F8d | 1-7: cambiar pestaña | Esc: salir")
+            let sum = match state.events.active_subtab {
+                events::ShepherdEventsSubTab::Topics => {
+                    let paused_str = if state.events.view_paused { " (PAUSADO)" } else { "" };
+                    format!("Tópicos y Streaming{paused_str} ({} msgs)", state.events.messages.len())
+                }
+                events::ShepherdEventsSubTab::PatternRuns => {
+                    format!("Ejecuciones de patrones ({})", state.events.runs.len())
+                }
+            };
+            let help = match state.events.active_subtab {
+                events::ShepherdEventsSubTab::Topics => {
+                    "Tab: alternar vista | Space: pausa/reanudar | r: replay | /: filtrar | Esc: salir"
+                }
+                events::ShepherdEventsSubTab::PatternRuns => {
+                    "Tab: alternar vista | p: pausar/reanudar | K: detener | ↑/↓: lista | Esc: salir"
+                }
+            };
+            (sum, help)
         }
     };
 
@@ -954,7 +971,102 @@ pub fn handle_shepherd_section_mouse(
                     }
                 }
             }
-            _ => {}
+            ShepherdSectionTab::Events => {
+                if let Some(ref ev_hits) = hits.events_hits {
+                    // Subtabs
+                    for &(tab_rect, sub_tab) in &ev_hits.subtab_rects {
+                        if contains_point(tab_rect, point) {
+                            state.events.active_subtab = sub_tab;
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Topic list rows
+                    for &(row_rect, idx) in &ev_hits.topic_list_hits.rows {
+                        if contains_point(row_rect, point) {
+                            state.events.selected_topic = idx;
+                            state.events.trigger_topic_load();
+                            if let Some(act) = state.events.last_action.take() {
+                                return ShepherdSectionOutcome::Action(
+                                    ShepherdSectionAction::Events(act),
+                                );
+                            }
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Run list rows
+                    for &(row_rect, idx) in &ev_hits.run_list_hits.rows {
+                        if contains_point(row_rect, point) {
+                            state.events.selected_run = idx;
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Pause view button
+                    if let Some(btn_rect) = ev_hits.pause_view_button {
+                        if contains_point(btn_rect, point) {
+                            state.events.toggle_pause_view();
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Replay button
+                    if let Some(btn_rect) = ev_hits.replay_button {
+                        if contains_point(btn_rect, point) {
+                            state.events.trigger_replay();
+                            if let Some(act) = state.events.last_action.take() {
+                                return ShepherdSectionOutcome::Action(
+                                    ShepherdSectionAction::Events(act),
+                                );
+                            }
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Pause run button
+                    if let Some(btn_rect) = ev_hits.pause_run_button {
+                        if contains_point(btn_rect, point) {
+                            state.events.toggle_pause_selected_run();
+                            if let Some(act) = state.events.last_action.take() {
+                                return ShepherdSectionOutcome::Action(
+                                    ShepherdSectionAction::Events(act),
+                                );
+                            }
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Stop run button
+                    if let Some(btn_rect) = ev_hits.stop_run_button {
+                        if contains_point(btn_rect, point) {
+                            state.events.start_stop_run();
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Stripe confirm/cancel buttons
+                    if let Some(ref sh) = ev_hits.confirm_stripe_hits {
+                        if let Some(conf_rect) = sh.confirm_button {
+                            if contains_point(conf_rect, point) {
+                                state.events.confirm_stop();
+                                if let Some(act) = state.events.last_action.take() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Events(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = sh.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.events.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -985,7 +1097,10 @@ pub fn handle_shepherd_section_mouse(
                 state.git.select_prev();
                 return ShepherdSectionOutcome::Handled;
             }
-            _ => {}
+            ShepherdSectionTab::Events => {
+                state.events.select_prev_item();
+                return ShepherdSectionOutcome::Handled;
+            }
         }
     } else if mouse.kind == MouseEventKind::ScrollDown {
         match state.active_tab {
@@ -1013,7 +1128,10 @@ pub fn handle_shepherd_section_mouse(
                 state.git.select_next();
                 return ShepherdSectionOutcome::Handled;
             }
-            _ => {}
+            ShepherdSectionTab::Events => {
+                state.events.select_next_item();
+                return ShepherdSectionOutcome::Handled;
+            }
         }
     }
 
@@ -1065,10 +1183,10 @@ mod tests {
         let hits6 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
         assert!(hits6.patterns_hits.is_some());
 
-        // Switch to Events (empty state)
+        // Switch to Events
         state.select_tab(ShepherdSectionTab::Events);
         let hits7 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
-        assert!(hits7.empty_state_hits.is_some());
+        assert!(hits7.events_hits.is_some());
     }
 
     #[test]

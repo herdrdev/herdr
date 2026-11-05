@@ -4216,6 +4216,122 @@
           },
           "type": "object"
         },
+        "ShepherdPatternRunListParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdPatternRunPauseParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternRunResumeParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternRunShowParams": {
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternRunStartParams": {
+          "properties": {
+            "confirm_over_limit": {
+              "default": false,
+              "type": "boolean"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "task": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "worktree": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternRunStopParams": {
+          "properties": {
+            "confirm": {
+              "default": false,
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "type": "object"
+        },
         "ShepherdPatternSaveParams": {
           "properties": {
             "global": {
@@ -7289,6 +7405,102 @@
         {
           "properties": {
             "method": {
+              "const": "shepherd.pattern.run.start",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunStartParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.run.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.run.show",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunShowParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.run.pause",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunPauseParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.run.resume",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunResumeParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.run.stop",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternRunStopParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "shepherd.topic.list",
               "type": "string"
             },
@@ -10184,6 +10396,181 @@
           ],
           "type": "string"
         },
+        "PatternRun": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/PatternRunAgent"
+              },
+              "type": "array"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "finished_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/PatternRunState"
+            },
+            "task": {
+              "type": "string"
+            },
+            "topics": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "updated_at": {
+              "type": "string"
+            },
+            "worktree": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "pattern",
+            "kind",
+            "task",
+            "state",
+            "created_at",
+            "updated_at"
+          ],
+          "type": "object"
+        },
+        "PatternRunAgent": {
+          "properties": {
+            "consumes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "level": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publishes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "role": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "vendor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "role",
+            "state"
+          ],
+          "type": "object"
+        },
+        "PatternRunState": {
+          "enum": [
+            "running",
+            "paused",
+            "stopped",
+            "failed",
+            "completed"
+          ],
+          "type": "string"
+        },
+        "PatternRunSummary": {
+          "properties": {
+            "agents_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "created_at": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "live_agents": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "pattern": {
+              "type": "string"
+            },
+            "state": {
+              "$ref": "#/schemas/success_response/$defs/PatternRunState"
+            },
+            "topics_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "updated_at": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "pattern",
+            "kind",
+            "state",
+            "agents_count",
+            "live_agents",
+            "topics_count",
+            "created_at",
+            "updated_at"
+          ],
+          "type": "object"
+        },
         "PatternSource": {
           "enum": [
             "project",
@@ -12604,6 +12991,105 @@
               "required": [
                 "type",
                 "groups"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "run": {
+                  "$ref": "#/schemas/success_response/$defs/PatternRun"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_started",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "runs": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PatternRunSummary"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "runs"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "run": {
+                  "$ref": "#/schemas/success_response/$defs/PatternRun"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_detail",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "run": {
+                  "$ref": "#/schemas/success_response/$defs/PatternRun"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_paused",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "run": {
+                  "$ref": "#/schemas/success_response/$defs/PatternRun"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_resumed",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "run"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "run": {
+                  "$ref": "#/schemas/success_response/$defs/PatternRun"
+                },
+                "type": {
+                  "const": "shepherd_pattern_run_stopped",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "run"
               ],
               "type": "object"
             },

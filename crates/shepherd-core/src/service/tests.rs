@@ -1473,6 +1473,201 @@ fn test_handle_call_pattern_operations() {
 }
 
 #[test]
+fn test_pattern_run_executor_all_four_topologies_and_lifecycle() {
+    let tmp = TestDir::new("test-pat-run-exec");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path();
+    let root_str = root.display().to_string();
+
+    // 1. Run orchestrator-worker pattern
+    let orch_res = service
+        .handle_call(
+            "pattern_run_start",
+            serde_json::json!({
+                "pattern": "orchestrator-worker",
+                "root": root_str,
+                "task": "Build authentication microservice",
+                "confirm_over_limit": true
+            }),
+        )
+        .expect("start orchestrator-worker pattern run");
+
+    let run_id = orch_res["id"].as_str().unwrap();
+    assert_eq!(orch_res["pattern"], "orchestrator-worker");
+    assert_eq!(orch_res["state"], "running");
+    let agents = orch_res["agents"].as_array().unwrap();
+    assert_eq!(agents.len(), 4); // planner, coder, tester, reviewer
+
+    // Verify topics created in bus
+    let topics_val = service.handle_call("topics", serde_json::json!({})).unwrap();
+    let topics_list = topics_val.as_array().unwrap();
+    let topic_names: Vec<&str> = topics_list
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(topic_names.contains(&"orders"));
+    assert!(topic_names.contains(&"results"));
+
+    // Verify agents registered and prompts delivered in terminals
+    let reg = service.load_registry().unwrap();
+    assert_eq!(reg.agents.len(), 4);
+    for ag in &reg.agents {
+        assert!(ag.task_text.contains("shepherd-events"));
+        assert!(ag.task_text.contains("orchestrator-worker"));
+    }
+
+    // 2. Pause the pattern run
+    let pause_res = service
+        .handle_call(
+            "pattern_run_pause",
+            serde_json::json!({ "id": run_id, "root": root_str }),
+        )
+        .expect("pause pattern run");
+    assert_eq!(pause_res["state"], "paused");
+
+    // Bus topics should be marked paused
+    let bus = service.bus().unwrap();
+    assert!(bus.is_topic_paused("orders"));
+    assert!(bus.is_topic_paused("results"));
+
+    // 3. Resume the pattern run
+    let resume_res = service
+        .handle_call(
+            "pattern_run_resume",
+            serde_json::json!({ "id": run_id, "root": root_str }),
+        )
+        .expect("resume pattern run");
+    assert_eq!(resume_res["state"], "running");
+    let bus = service.bus().unwrap();
+    assert!(!bus.is_topic_paused("orders"));
+    assert!(!bus.is_topic_paused("results"));
+
+    // 4. Stop the pattern run without confirmation must fail
+    let stop_unconfirmed = service.handle_call(
+        "pattern_run_stop",
+        serde_json::json!({ "id": run_id, "root": root_str, "confirm": false }),
+    );
+    assert!(stop_unconfirmed.is_err());
+    assert!(stop_unconfirmed.unwrap_err().contains("confirmation_required"));
+
+    // Stop with confirmation succeeds and kills agents
+    let stop_res = service
+        .handle_call(
+            "pattern_run_stop",
+            serde_json::json!({ "id": run_id, "root": root_str, "confirm": true }),
+        )
+        .expect("stop pattern run with confirmation");
+    assert_eq!(stop_res["state"], "stopped");
+
+    // 5. Test remaining 3 topologies instantiate cleanly
+    // A. Hierarchical
+    let hier_res = service
+        .handle_call(
+            "pattern_run_start",
+            serde_json::json!({
+                "pattern": "hierarchical",
+                "root": root_str,
+                "confirm_over_limit": true
+            }),
+        )
+        .expect("start hierarchical run");
+    assert_eq!(hier_res["pattern"], "hierarchical");
+    assert_eq!(hier_res["state"], "running");
+
+    // B. Blackboard
+    let bb_res = service
+        .handle_call(
+            "pattern_run_start",
+            serde_json::json!({
+                "pattern": "blackboard",
+                "root": root_str,
+                "confirm_over_limit": true
+            }),
+        )
+        .expect("start blackboard run");
+    assert_eq!(bb_res["pattern"], "blackboard");
+    assert_eq!(bb_res["state"], "running");
+
+    // C. Market
+    let mkt_res = service
+        .handle_call(
+            "pattern_run_start",
+            serde_json::json!({
+                "pattern": "market",
+                "root": root_str,
+                "confirm_over_limit": true
+            }),
+        )
+        .expect("start market run");
+    assert_eq!(mkt_res["pattern"], "market");
+    assert_eq!(mkt_res["state"], "running");
+
+    // 6. List pattern runs: should have 4 runs recorded
+    let runs_list = service
+        .handle_call("pattern_runs", serde_json::json!({ "root": root_str }))
+        .unwrap();
+    let runs_arr = runs_list.as_array().unwrap();
+    assert_eq!(runs_arr.len(), 4);
+}
+
+#[test]
+fn test_pattern_run_limits_and_validation_guard() {
+    let tmp = TestDir::new("test-pat-run-limits");
+    let (service, _terminals, _clock) = test_service(tmp.path());
+    let root = tmp.path();
+    let root_str = root.display().to_string();
+
+    // 1. Invalid pattern validation failure blocks run
+    let broken_pattern = crate::patterns::Pattern {
+        name: "broken-pattern".into(),
+        kind: crate::patterns::PatternKind::OrchestratorWorker,
+        description: "Missing worker group".into(),
+        topics: vec![],
+        agents: vec![crate::patterns::PatternAgent {
+            id: "solo".into(),
+            role: "planner".into(),
+            ..Default::default()
+        }],
+    };
+
+    let invalid_res = service.handle_call(
+        "pattern_run_start",
+        serde_json::json!({
+            "pattern_obj": broken_pattern,
+            "root": root_str,
+            "confirm_over_limit": true
+        }),
+    );
+    assert!(invalid_res.is_err());
+    assert!(invalid_res.unwrap_err().contains("validation failed"));
+
+    // 2. Concurrency limit triggers confirmation_required without confirm_over_limit
+    // Default limit in shep_cfg is 4. Starting orchestrator-worker (4 agents) without confirm_over_limit:
+    // If we first spawn 1 dummy agent:
+    service
+        .handle_call(
+            "spawn",
+            serde_json::json!({
+                "role": "coder",
+                "task": "pre-existing task",
+                "root": root_str
+            }),
+        )
+        .unwrap();
+
+    let over_limit_res = service.handle_call(
+        "pattern_run_start",
+        serde_json::json!({
+            "pattern": "orchestrator-worker",
+            "root": root_str,
+            "confirm_over_limit": false
+        }),
+    );
+    assert!(over_limit_res.is_err());
+    assert!(over_limit_res.unwrap_err().contains("confirmation_required: max_concurrent_agents"));
+}
+
+#[test]
 fn test_format_shep_topic_message() {
     let registry = AgentRegistryFile {
         seq: 2,

@@ -168,6 +168,12 @@ operations::define_operations! {
     ShepherdPatternSave(ShepherdPatternSaveParams) => "shepherd.pattern.save", false, true;
     ShepherdPatternDelete(ShepherdPatternDeleteParams) => "shepherd.pattern.delete", false, true;
     ShepherdPatternValidate(ShepherdPatternValidateParams) => "shepherd.pattern.validate", false, true;
+    ShepherdPatternRunStart(ShepherdPatternRunStartParams) => "shepherd.pattern.run.start", false, true;
+    ShepherdPatternRunList(ShepherdPatternRunListParams) => "shepherd.pattern.run.list", false, true;
+    ShepherdPatternRunShow(ShepherdPatternRunShowParams) => "shepherd.pattern.run.show", false, true;
+    ShepherdPatternRunPause(ShepherdPatternRunPauseParams) => "shepherd.pattern.run.pause", false, true;
+    ShepherdPatternRunResume(ShepherdPatternRunResumeParams) => "shepherd.pattern.run.resume", false, true;
+    ShepherdPatternRunStop(ShepherdPatternRunStopParams) => "shepherd.pattern.run.stop", false, true;
     ShepherdTopicList(ShepherdEmptyParams) => "shepherd.topic.list", false, true;
     ShepherdTopicCreate(ShepherdTopicCreateParams) => "shepherd.topic.create", false, true;
     ShepherdTopicPublish(ShepherdTopicPublishParams) => "shepherd.topic.publish", false, true;

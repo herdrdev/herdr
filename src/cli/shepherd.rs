@@ -462,6 +462,87 @@ fn print_human_api_response(
                 }
             }
         }
+        Method::ShepherdPatternRunStart(_) => {
+            let run = &result["run"];
+            let id = run.get("id").and_then(Value::as_str).unwrap_or("-");
+            let pattern = run.get("pattern").and_then(Value::as_str).unwrap_or("-");
+            let state = run.get("state").and_then(Value::as_str).unwrap_or("-");
+            let agents_count = run
+                .get("agents")
+                .and_then(Value::as_array)
+                .map(|a| a.len())
+                .unwrap_or(0);
+            writeln!(
+                writer,
+                "started pattern run {id} for pattern {pattern} ({state}) with {agents_count} agents"
+            )?;
+        }
+        Method::ShepherdPatternRunList(_) => {
+            let runs = result
+                .get("runs")
+                .and_then(Value::as_array)
+                .map(|a| a.as_slice())
+                .unwrap_or(&[]);
+            if runs.is_empty() {
+                writeln!(writer, "no pattern runs found")?;
+                return Ok(());
+            }
+            writeln!(
+                writer,
+                "ID\tPATTERN\tKIND\tSTATE\tAGENTS\tLIVE\tTOPICS\tCREATED"
+            )?;
+            for r in runs {
+                let id = r.get("id").and_then(Value::as_str).unwrap_or("-");
+                let pattern = r.get("pattern").and_then(Value::as_str).unwrap_or("-");
+                let kind = r.get("kind").and_then(Value::as_str).unwrap_or("-");
+                let state = r.get("state").and_then(Value::as_str).unwrap_or("-");
+                let agents = r.get("agents_count").and_then(Value::as_u64).unwrap_or(0);
+                let live = r.get("live_agents").and_then(Value::as_u64).unwrap_or(0);
+                let topics = r.get("topics_count").and_then(Value::as_u64).unwrap_or(0);
+                let created = r.get("created_at").and_then(Value::as_str).unwrap_or("-");
+                writeln!(
+                    writer,
+                    "{id}\t{pattern}\t{kind}\t{state}\t{agents}\t{live}\t{topics}\t{created}"
+                )?;
+            }
+        }
+        Method::ShepherdPatternRunShow(_) => {
+            let run = &result["run"];
+            let id = run.get("id").and_then(Value::as_str).unwrap_or("-");
+            let pattern = run.get("pattern").and_then(Value::as_str).unwrap_or("-");
+            let kind = run.get("kind").and_then(Value::as_str).unwrap_or("-");
+            let state = run.get("state").and_then(Value::as_str).unwrap_or("-");
+            let task = run.get("task").and_then(Value::as_str).unwrap_or("-");
+            writeln!(writer, "Run ID:   {id}")?;
+            writeln!(writer, "Pattern:  {pattern}")?;
+            writeln!(writer, "Kind:     {kind}")?;
+            writeln!(writer, "State:    {state}")?;
+            writeln!(writer, "Task:     {task}")?;
+            if let Some(agents) = run.get("agents").and_then(Value::as_array) {
+                writeln!(writer, "\nAgents ({}):", agents.len())?;
+                for a in agents {
+                    let aid = a.get("id").and_then(Value::as_str).unwrap_or("-");
+                    let role = a.get("role").and_then(Value::as_str).unwrap_or("-");
+                    let astate = a.get("state").and_then(Value::as_str).unwrap_or("-");
+                    writeln!(writer, "  - {aid} ({role}) [{astate}]")?;
+                }
+            }
+        }
+        Method::ShepherdPatternRunPause(_) => {
+            let run = &result["run"];
+            let id = run.get("id").and_then(Value::as_str).unwrap_or("-");
+            writeln!(writer, "paused pattern run {id}")?;
+        }
+        Method::ShepherdPatternRunResume(_) => {
+            let run = &result["run"];
+            let id = run.get("id").and_then(Value::as_str).unwrap_or("-");
+            writeln!(writer, "resumed pattern run {id}")?;
+        }
+        Method::ShepherdPatternRunStop(_) => {
+            let run = &result["run"];
+            let id = run.get("id").and_then(Value::as_str).unwrap_or("-");
+            writeln!(writer, "stopped pattern run {id}")?;
+        }
         Method::ShepherdTopicList(_) => {
             let topics = result
                 .get("topics")

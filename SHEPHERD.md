@@ -4866,13 +4866,250 @@ Todas las áreas de pruebas se ejecutaron mediante `./cargo-fork.sh test` arroja
 ### 6. Alcance Fuera de F8c y Próximas Fases
 
 1. **F8d (Ejecutor de patrones multi-agente y Pestaña Eventos)**:
-   - Implementación del motor de ejecución de patrones multi-agente (coordinación automática del ciclo de vida, despacho de tareas sobre agentes y subscripciones en el bus de eventos).
-   - Activación del botón «Ejecutar» en la interfaz de usuario.
-   - Pestaña «Eventos (7)» en la sección Shepherd con streaming en tiempo real del bus JSONL y filtrado reactivo.
+   - Completada en esta fase (ver Estado F8d a continuación).
 2. **F10d (Pulido y temas)**:
    - Afinamiento cosmético fino y personalización temática de la TUI.
 
 *(Nota: En cumplimiento estricto con las instrucciones del usuario, no se ha realizado ningún commit git en este repositorio).*
+
+---
+
+## Estado F8d — Pattern Run Executor & Events Tab (2026-11-05)
+
+### 1. Qué se Implementó
+
+Siguiendo el encargo de `SHEPHERD-F8D-BRIEF.md`, el diseño F10a/F8 y las bases de F8a, F8b, F8c, F9b y F10e:
+
+1. **Motor Ejecutor de Patrones Multi-Agente (`crates/shepherd-core/src/service/patterns_run.rs` y `service/mod.rs`)**:
+   - **Instanciación y topologías soportadas**: Capacidad de arrancar ejecuciones de patrones sobre las cuatro topologías canónicas (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`), cargándolos desde `.shepherd/patterns/<name>.yaml`, catálogo global o plantillas predefinidas en memoria.
+   - **Creación automática de tópicos**: Al arrancar una ejecución, se crean automáticamente en el bus todos los tópicos declarados con sus particiones respectivas.
+   - **Lanzamiento de agentes y composición de prompts**: Cada agente definido en el patrón es instanciado con su rol, vendor y modelo, y recibe una inyección contextual con su rol, persona, objetivo/tarea del patrón, tópicos en los que publica y consume, y la disponibilidad de herramientas MCP `shepherd-events` y mensajería en bus.
+   - **Ciclo de vida completo**:
+     * `start`: Validación, comprobación de límites F9e (`max_concurrent_agents`, `max_depth`), arranque de agentes, creación de tópicos y transición a `running`.
+     * `list`: Resumen consolidado (`PatternRunSummary`) con ID, tipo, estado, conteo de agentes y tópicos.
+     * `show`: Detalle completo (`PatternRun`) con información extendida de agentes (rol, vendor, estado, tópicos).
+     * `pause`: Pausado de la ejecución y de sus tópicos asociados; los agentes ignoran nuevos mensajes mientras la ejecución esté en pausa.
+     * `resume`: Reactivación de tópicos y reanudación del procesamiento de mensajes.
+     * `stop`: Detención controlada con protección destructiva (requiere `confirm: true` o confirmación en franja TUI), matando los procesos de sus agentes asociados y marcando la ejecución como `stopped`.
+   - **Persistencia atómica**: Registro en `.shepherd/pattern_runs.json` mediante reemplazo atómico (`tempfile` + `persist`), manteniendo el estado entre reinicios.
+   - **Control de concurrencia y límites F9e**: Si el número de agentes necesarios excede `max_concurrent_agents` configurado en el servidor, el ejecutor exige confirmación explícita (`confirm_over_limit: true`), previniendo desbordamientos accidentales de recursos.
+   - **Pausa y reanudación de tópicos en el Bus (`crates/shepherd-core/src/bus.rs` y `service/delivery.rs`)**:
+     * Métodos `pause_topic`, `resume_topic`, `is_topic_paused` con persistencia en `<bus_path>.paused`.
+     * `poll_active` ignora particiones pausadas.
+     * `deliver_pending_non_mcp_messages` comprueba si el agente pertenece a una ejecución pausada y omite temporalmente las entregas.
+
+2. **API Tipada RPC y CLI declarativa (`src/api/` y `src/cli/`)**:
+   - **Métodos de API tipados**:
+     * `shepherd.pattern.run.start`: `ShepherdPatternRunStartParams` -> `ShepherdPatternRunStarted`
+     * `shepherd.pattern.run.list`: `ShepherdPatternRunListParams` -> `ShepherdPatternRunList`
+     * `shepherd.pattern.run.show`: `ShepherdPatternRunShowParams` -> `ShepherdPatternRunDetail`
+     * `shepherd.pattern.run.pause`: `ShepherdPatternRunPauseParams` -> `ShepherdPatternRunPaused`
+     * `shepherd.pattern.run.resume`: `ShepherdPatternRunResumeParams` -> `ShepherdPatternRunResumed`
+     * `shepherd.pattern.run.stop`: `ShepherdPatternRunStopParams` -> `ShepherdPatternRunStopped`
+   - **Comandos de CLI**:
+     * `shepherd pattern run <pattern> [--task <text>] [--worktree <path>] [--confirm-over-limit] [--json]`
+     * `shepherd pattern runs [--json]`
+     * `shepherd pattern run-show <id> [--json]`
+     * `shepherd pattern pause <id> [--json]`
+     * `shepherd pattern resume <id> [--json]`
+     * `shepherd pattern stop <id> [--confirm] [--json]`
+   - Formateo legible por humanos y salida en JSON puro con `--json`.
+
+3. **Pestaña Eventos en la TUI (`src/shepherd/ui/events.rs`)**:
+   - Se implementó la pestaña `Eventos (7)` en la barra de navegación superior de la sección Shepherd, dividida en dos subpestañas accesibles mediante `Tab`:
+     * **`[ 1. Tópicos y Flujo ]`**:
+       - Panel izquierdo: lista de tópicos con número de particiones (`4p`, `1p`), cantidad de mensajes y selección activa.
+       - Panel derecho: flujo en vivo de mensajes (offset, partición, remitente, clave, tipo y contenido).
+       - Controles integrados en cabecera: botón de pausa/reanudación de vista en vivo (`p` o `Space`), entrada de offset para replay (`r` + dígitos + `Enter`), campo de filtro interactivo de remitente/agente (`/`).
+     * **`[ 2. Ejecuciones de Patrones ]`**:
+       - Panel izquierdo: lista de ejecuciones con badge de estado (`RUNNING`, `PAUSED`, `STOPPED`, `FAILED`), tipo de patrón y conteo de agentes.
+       - Panel derecho: detalle completo de la ejecución seleccionada con objetivo/tarea, tópicos, lista de agentes con su estado en vivo (`idle`, `working`, `stopped`), rol, vendor y suscripciones.
+       - Acciones contextuales: `[ Pausar/Reanudar (p) ]` y `[ Detener (x) ]`.
+       - Franja de confirmación destructiva (`render_confirm_stripe`): al pulsar `x` o activar detener, se solicita confirmación explícita explicando que se matarán los procesos asociados; `Enter` ejecuta la parada y `Esc` cancela.
+   - Navegación pura por teclado y ratón (`ShepherdEventsHits`), respetando dimensiones mínimas 80x24 sin pánico.
+
+4. **Activación de «Ejecutar» en la Pestaña Patrones (`src/shepherd/ui/patterns.rs`)**:
+   - El botón antes deshabilitado `[ Ejecutar (llega en F8d) ]` pasó a ser `[ Ejecutar (r) ]`, habilitado en cabecera y barra inferior cuando el patrón es válido.
+   - Formulario en línea desplegable dentro de la sección Shepherd:
+     * Campo editable para objetivo o tarea del patrón.
+     * Campo editable opcional para worktree aislado.
+     * Teclas `Enter` para iniciar ejecución y `Esc` para cancelar.
+   - Integración con el cliente shell (`dispatch_shepherd_patterns_action`) para invocar `Method::ShepherdPatternRunStart` y refrescar automáticamente las vistas.
+
+---
+
+### 2. Capturas Reales con `shepherd-iso.sh` (Sesión Aislada)
+
+#### A. Flujo en Vivo de Tópicos y Mensajes (`Eventos (7)` - Subpestaña 1)
+```text
+ spaces                  │  Shepherd      1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                 ▾│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │ [ 1. Tópicos y Flujo ]  [ 2. Ejecuciones de Patrones ]
+   ├─ ○ coder·codex·ru…  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ├─ ○ coder·codex·ru…  │                                                        [ ▶ En vivo (p) ]  Offset: [0] [ ⟲ Replay (r) ]  Filtro: [ / ]
+   └─ ○ coder·codex·ru…  │────────────────────────────────────────────────────────
+ ○ repo                  │▸ 4p orders                                             OFFSET PART DE           CLAVE      TIPO   CONTENIDO
+   master                │  1p results                                            0      0    brain-1                 msg    Task 1: generate migrations
+                         │                                                        1      0    brain-1                 msg    Task 2: add endpoint tests
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+ new                 menu│
+─────────────────────────│
+ agents           grouped│
+                         │
+ ○ repo · brain·c… [idle]│
+   brain-1               │
+ ○ coder… · coder… [idle]│
+   coder-1               │
+ ○ coder… · coder… [idle]│
+   coder-2               │
+ ○ coder… · coder… [idle]│
+   coder-3               │
+                         │
+                         │
+                         │
+                        «│ Tópicos y Streaming (2 msgs) | Tab: alternar vista | Space: pausa/reanudar | r: replay | /: filtrar | Esc: salir
+```
+
+#### B. Ejecuciones de Patrones y Franja de Confirmación Destructiva (`Eventos (7)` - Subpestaña 2)
+```text
+ spaces                  │  Shepherd      1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                 ▾│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │ [ 1. Tópicos y Flujo ]  [ 2. Ejecuciones de Patrones ]
+   ├─ ○ coder·codex·ru…  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ├─ ○ coder·codex·ru…  │                                                        EJECUCIÓN: run-orchestrator-worker-7094 ✓ EN EJECUCIÓN Topología: orchestrator-[ Pausar/Reanudar (p) ] [ Detener (x) ]
+   └─ ○ coder·codex·ru…  │────────────────────────────────────────────────────────Patrón: orchestrator-worker | Iniciada: 2026-11-05T12:53:58Z
+ ○ repo                  │▸ RUNNING orchestrator-worker                           ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │
+                         │                                                        INFORMACIÓN
+                         │                                                        Tarea / Objetivo: Orchestrated refactoring task
+                         │                                                        Tópicos: orders, results
+                         │
+                         │                                                        AGENTES (4)
+                         │                                                        • • brain-1      [idle] brain    claude    (pub: ["orders"], sub: ["results"])
+                         │                                                        • • coder-1      [idle] coder    codex     (pub: ["results"], sub: ["orders"])
+                         │                                                        • • coder-2      [idle] coder    codex     (pub: ["results"], sub: ["orders"])
+                         │                                                        • • coder-3      [idle] coder    codex     (pub: ["results"], sub: ["orders"])
+                         │
+                         │
+                         │
+                         │
+                         │
+                         │
+ new                 menu│
+─────────────────────────│
+ agents           grouped│
+                         │
+ ○ repo · brain·c… [idle]│
+   brain-1               │
+ ○ coder… · coder… [idle]│
+   coder-1               │
+ ○ coder… · coder… [idle]│
+   coder-2               │
+ ○ coder… · coder… [idle]│
+   coder-3               │
+                         │
+                         │
+                         │
+                         │                                                        [ Pausar (p) ]  [ Detener (x) ]
+                         │┌─ CONFIRMACIÓN ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │  ⚠ ¿Detener ejecución 'run-orchestrator-worker-7094' y matar sus 4 agentes? Esta acción no se puede deshacer.
+                         │└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                        «│ Ejecuciones de patrones (1) | Tab: alternar vista | p: pausar/reanudar | K: detener | ↑/↓: lista | Esc: salir
+```
+
+#### C. Activación de «Ejecutar (r)» y Formulario en Línea (`Patrones (4)`)
+```text
+ spaces                  │  Shepherd      1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                 ▾│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                     [ + Nuevo (n) ]│EJECUTAR PATRÓN: blackboard
+   ├─ ○ coder·codex·ru…  │[✓ Todos] [Proyecto] [Global] [Plantillas]          │─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   ├─ ○ coder·codex·ru…  │────────────────────────────────────────────────────│
+   └─ ○ coder·codex·ru…  │▸ [BUILTIN] blackboard                              │Objetivo o tarea (opcional):
+ ○ repo                  │  [BUILTIN] hierarchical                            │[ █.ej. Implementar endpoint de métricas                                                                              ]
+   master                │  [BUILTIN] market                                  │
+                         │  [BUILTIN] orchestrator-worker                     │Worktree aislado (opcional):
+                         │                                                    │[ p.ej. /tmp/worktree-f8d                                                                                             ]
+                         │                                                    │
+                         │                                                    │
+                         │                                                    │
+                         │                                                    │[ Iniciar Ejecución (Enter) ]   [ Cancelar (Esc) ]
+                         │                                                    │
+                        «│ 4 patrones disponibles | ↑/↓: lista | n: nuevo | e: editar | c: duplicar | v: validar | d: eliminar | Esc: salir
+```
+
+---
+
+### 3. Tabla de Pruebas Reales por Área
+
+Todas las áreas se ejecutaron mediante `./cargo-fork.sh test` arrojando resultados reales sin fallos ni regresiones:
+
+| Área | Comando | Resultado Real |
+|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **274 passed; 0 failed** (126 unitarios en `lib.rs` + 148 de caracterización) |
+| `shepherd::` | `./cargo-fork.sh test --bin shepherd -- shepherd::` | **87 passed; 0 failed** (incluye los 47 tests de `shepherd::ui`) |
+| `client::shell` | `./cargo-fork.sh test --bin shepherd -- client::shell` | **402 passed; 0 failed; 2 ignored** |
+| `protocol::` | `./cargo-fork.sh test --bin shepherd -- protocol::` | **156 passed; 0 failed** |
+| `api::` | `./cargo-fork.sh test --bin shepherd -- api::` | **319 passed; 0 failed; 1 ignored** |
+| `server::` | `./cargo-fork.sh test --bin shepherd -- server::` | **318 passed; 0 failed; 5 ignored** |
+| **Total verificado** | | **1,556 tests pasando sin regresiones** |
+
+---
+
+### 4. Archivos Modificados y Creados
+
+| Archivo | Operación | Líneas | Resumen de cambios |
+|---|---|---|---|
+| `crates/shepherd-core/src/service/patterns_run.rs` | Creado | +136 | Modelos `PatternRun`, `PatternRunSummary`, `PatternRunState`, persistencia atómica en `pattern_runs.json` |
+| `src/shepherd/ui/events.rs` | Creado | +1,032 | Pestaña Eventos con subpestañas streaming y ejecuciones, filtros, replay, pausa y franja destructiva |
+| `crates/shepherd-core/src/bus.rs` | Modificado | +84 | Métodos de pausa/reanudación de tópicos y bypass en `poll_active` |
+| `crates/shepherd-core/src/service/delivery.rs` | Modificado | +22, -1 | Omitir entregas de mensajes a agentes en ejecuciones pausadas |
+| `crates/shepherd-core/src/service/mod.rs` | Modificado | +412 | Operaciones `start_pattern_run`, `list_pattern_runs`, `get_pattern_run`, `pause_pattern_run`, `resume_pattern_run`, `stop_pattern_run` |
+| `crates/shepherd-core/src/service/tests.rs` | Modificado | +195 | Tests de integración de las 4 topologías, ciclo de vida y límites F9e |
+| `src/api/schema/shepherd/patterns.rs` | Modificado | +61 | Esquemas `ShepherdPatternRun*Params` para API tipada |
+| `src/api/schema/response.rs` | Modificado | +18 | Variantes `ShepherdPatternRun*` en respuestas RPC |
+| `src/api/schema.rs` | Modificado | +6 | Registro en macro `methods!` de los 6 nuevos métodos |
+| `src/app/api.rs` & `src/server/headless.rs` | Modificados | +12 | Enrutamiento de métodos de ejecución de patrones |
+| `src/shepherd/service.rs` | Modificado | +55 | Conexión con `RuntimeServiceCore` para pattern runs |
+| `src/cli/shepherd_bindings.rs` & `shepherd.rs` | Modificados | +266 | Comandos CLI `run`, `runs`, `run-show`, `pause`, `resume`, `stop` |
+| `src/client/shell/shepherd.rs` | Modificado | +374 | Despacho y auto-carga de eventos, tópicos y ejecuciones en TUI |
+| `src/server/client_commands.rs` | Modificado | +24 | Hashes SHA256 de compatibilidad de métodos en lane client-shell |
+| `src/shepherd/ui/patterns.rs` | Modificado | +230, -5 | Activación del botón «Ejecutar (r)», formulario en línea y tests de ejecución |
+| `src/shepherd/ui/state.rs` & `ui/mod.rs` | Modificados | +164, -23 | Cableado de estado de Eventos, renderizado en pestaña 7, atajos y eventos de ratón |
+| `docs/next/api/shepherd-api.schema.json` | Modificado | +486 | Esquema API regenerado para reflejar los nuevos métodos |
+
+---
+
+### 5. Verificaciones de Higiene y Guardarraíles
+
+- **Sin commits realizados**: `git status` muestra únicamente modificaciones en el árbol de trabajo; `git log -1` permanece en `4a8b8f3e Add F8d brief`.
+- **Sin agentes reales lanzados**: Todas las pruebas y ejecuciones se realizaron mediante fakes/stubs controlados o la sesión aislada en `/tmp/shfiso`.
+- **Renombre limpio**: `./scripts/rename-from-herdr.sh --check` completado con `[OK] No unexcluded occurrences of herdr/Herdr/HERDR found.`
+- **Cero fugas**: `git grep -E "testRepo|araquesebastian" crates/ src/` = 0 ocurrencias.
+- **Contratos congelados**: `tests/fixtures/endpoint-method-shapes-v1.json` permanece inalterado.
+
+---
+
+### 6. Próximos Pasos
+
+1. **F10d (Pulido y temas)**:
+   - Personalización estética de paleta y temas visuales para la TUI completa.
+
 
 
 

@@ -142,6 +142,8 @@ struct State {
     committed_offsets: HashMap<String, HashMap<String, HashMap<u32, u64>>>,
     // Round-robin counter per topic for unkeyed messages
     round_robin: HashMap<String, u32>,
+    // Paused topics (no message polling/delivery while paused)
+    paused_topics: std::collections::HashSet<String>,
 }
 
 pub struct MessageBus {
@@ -191,6 +193,14 @@ impl MessageBus {
             >(&bytes)
             {
                 state.committed_offsets = offsets;
+            }
+        }
+
+        // 3b. Load paused topics sidecar if present
+        let paused_path = path_with_suffix(&path, ".paused");
+        if let Ok(bytes) = std::fs::read(&paused_path) {
+            if let Ok(paused) = serde_json::from_slice::<std::collections::HashSet<String>>(&bytes) {
+                state.paused_topics = paused;
             }
         }
 
@@ -535,6 +545,9 @@ impl MessageBus {
         active_members: Option<&[String]>,
     ) -> Result<Vec<Message>, Box<dyn std::error::Error + Send + Sync>> {
         let state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
+        if state.paused_topics.contains(topic) {
+            return Ok(Vec::new());
+        }
         let grp = find_consumer_group(&state.subscriptions, topic, consumer)
             .unwrap_or_else(|| consumer.to_owned());
 
@@ -719,6 +732,30 @@ impl MessageBus {
         });
         Ok(groups)
     }
+
+    /// Pause message consumption on a topic without losing queued or future published messages.
+    pub fn pause_topic(&self, topic: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
+        state.paused_topics.insert(topic.to_string());
+        save_json_sidecar(&self.path, ".paused", &state.paused_topics)?;
+        Ok(())
+    }
+
+    /// Resume message consumption on a previously paused topic.
+    pub fn resume_topic(&self, topic: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut state = self.state.lock().map_err(|_| "message bus lock poisoned")?;
+        state.paused_topics.remove(topic);
+        save_json_sidecar(&self.path, ".paused", &state.paused_topics)?;
+        Ok(())
+    }
+
+    /// Check if a topic is currently paused.
+    pub fn is_topic_paused(&self, topic: &str) -> bool {
+        self.state
+            .lock()
+            .map(|st| st.paused_topics.contains(topic))
+            .unwrap_or(false)
+    }
 }
 
 fn find_consumer_group(
@@ -806,6 +843,8 @@ mod tests {
             ".offsets.tmp",
             ".subscriptions",
             ".subscriptions.tmp",
+            ".paused",
+            ".paused.tmp",
         ] {
             let _ = std::fs::remove_file(path_with_suffix(path, suffix));
         }
@@ -1180,6 +1219,51 @@ mod tests {
                 assert_eq!(m.offset, idx as u64);
             }
         }
+
+        clean_bus_files(&path);
+    }
+
+    #[test]
+    fn test_topic_pause_and_resume_semantics() {
+        let path = std::env::temp_dir().join(format!(
+            "shepherd-messages-pause-resume-{}.jsonl",
+            std::process::id()
+        ));
+        clean_bus_files(&path);
+        let bus = MessageBus::open(&path).unwrap();
+
+        bus.topic_create("pipeline", 2).unwrap();
+        bus.subscribe("worker-1", "pipeline", Some("pool")).unwrap();
+
+        // 1. Publish while running
+        bus.publish("pipeline", "job-1", Some("k1"), None, "user").unwrap();
+        let polled = bus.poll("worker-1", "pipeline", None).unwrap();
+        assert_eq!(polled.len(), 1);
+        assert_eq!(polled[0].content, "job-1");
+        bus.ack("worker-1", "pipeline", Some(polled[0].partition), Some(polled[0].offset)).unwrap();
+
+        // 2. Pause topic
+        assert!(!bus.is_topic_paused("pipeline"));
+        bus.pause_topic("pipeline").unwrap();
+        assert!(bus.is_topic_paused("pipeline"));
+
+        // Publishing during pause still succeeds without loss
+        bus.publish("pipeline", "job-2", Some("k2"), None, "user").unwrap();
+        bus.publish("pipeline", "job-3", Some("k3"), None, "user").unwrap();
+
+        // Polling during pause yields NO messages
+        let paused_polled = bus.poll("worker-1", "pipeline", None).unwrap();
+        assert_eq!(paused_polled.len(), 0);
+
+        // 3. Resume topic
+        bus.resume_topic("pipeline").unwrap();
+        assert!(!bus.is_topic_paused("pipeline"));
+
+        // Polling now yields the retained messages in order
+        let resumed_polled = bus.poll("worker-1", "pipeline", None).unwrap();
+        assert_eq!(resumed_polled.len(), 2);
+        assert_eq!(resumed_polled[0].content, "job-2");
+        assert_eq!(resumed_polled[1].content, "job-3");
 
         clean_bus_files(&path);
     }
