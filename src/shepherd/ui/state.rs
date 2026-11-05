@@ -4,6 +4,7 @@ use ratatui::layout::Rect;
 use super::agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
 use super::components::EmptyStateHits;
 use super::git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
+use super::patterns::{ShepherdPatternsAction, ShepherdPatternsHits, ShepherdPatternsSectionState};
 use super::runs::{ShepherdRunsAction, ShepherdRunsHits, ShepherdRunsSectionState};
 use super::skills::{ShepherdSkillsAction, ShepherdSkillsHits, ShepherdSkillsSectionState};
 use super::tasks::{ShepherdTasksAction, ShepherdTasksHits, ShepherdTasksSectionState};
@@ -91,6 +92,7 @@ pub enum ShepherdSectionAction {
     Agents(ShepherdAgentsAction),
     Tasks(ShepherdTasksAction),
     Runs(ShepherdRunsAction),
+    Patterns(ShepherdPatternsAction),
     Skills(ShepherdSkillsAction),
     Git(ShepherdGitAction),
 }
@@ -110,6 +112,7 @@ pub struct ShepherdSectionHits {
     pub agents_hits: Option<ShepherdAgentsHits>,
     pub tasks_hits: Option<ShepherdTasksHits>,
     pub runs_hits: Option<ShepherdRunsHits>,
+    pub patterns_hits: Option<ShepherdPatternsHits>,
     pub skills_hits: Option<ShepherdSkillsHits>,
     pub git_hits: Option<ShepherdGitHits>,
     pub empty_state_hits: Option<EmptyStateHits>,
@@ -122,6 +125,7 @@ pub struct ShepherdSectionState {
     pub agents: ShepherdAgentsSectionState,
     pub tasks: ShepherdTasksSectionState,
     pub runs: ShepherdRunsSectionState,
+    pub patterns: ShepherdPatternsSectionState,
     pub skills: ShepherdSkillsSectionState,
     pub git: ShepherdGitSectionState,
     pub status_message: Option<String>,
@@ -136,6 +140,7 @@ impl Default for ShepherdSectionState {
             agents: ShepherdAgentsSectionState::default(),
             tasks: ShepherdTasksSectionState::default(),
             runs: ShepherdRunsSectionState::default(),
+            patterns: ShepherdPatternsSectionState::default(),
             skills: ShepherdSkillsSectionState::default(),
             git: ShepherdGitSectionState::default(),
             status_message: None,
@@ -171,6 +176,7 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Runs => {
                 self.runs.launch_form.is_some() || self.runs.confirm_cancel.is_some()
             }
+            ShepherdSectionTab::Patterns => self.patterns.has_sub_action(),
             ShepherdSectionTab::Skills => self.skills.has_sub_action(),
             ShepherdSectionTab::Git => self.git.has_sub_action(),
             _ => false,
@@ -182,6 +188,7 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Agents => self.agents.cancel_sub_action(),
             ShepherdSectionTab::Tasks => self.tasks.cancel_sub_action(),
             ShepherdSectionTab::Runs => self.runs.cancel_sub_action(),
+            ShepherdSectionTab::Patterns => self.patterns.cancel_sub_action(),
             ShepherdSectionTab::Skills => self.skills.cancel_sub_action(),
             ShepherdSectionTab::Git => self.git.cancel_sub_action(),
             _ => false,
@@ -266,6 +273,16 @@ impl ShepherdSectionState {
                 let (handled, act) = self.runs.handle_key(key);
                 if let Some(a) = act {
                     ShepherdSectionOutcome::Action(ShepherdSectionAction::Runs(a))
+                } else if handled {
+                    ShepherdSectionOutcome::Handled
+                } else {
+                    ShepherdSectionOutcome::Ignored
+                }
+            }
+            ShepherdSectionTab::Patterns => {
+                let (handled, act) = self.patterns.handle_key(key);
+                if let Some(a) = act {
+                    ShepherdSectionOutcome::Action(ShepherdSectionAction::Patterns(a))
                 } else if handled {
                     ShepherdSectionOutcome::Handled
                 } else {

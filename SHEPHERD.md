@@ -4629,4 +4629,250 @@ Al redimensionar la ventana a 80x24 (`tmux resize-window -x 80 -y 24`), la barra
 
 *(Nota: En cumplimiento estricto con las instrucciones del usuario, no se ha realizado ningún commit git en este repositorio).*
 
+---
+
+## Estado F8c — Pestaña Patrones en la sección Shepherd (2026-11-05)
+
+### 1. Qué se Implementó
+
+Siguiendo el encargo de `SHEPHERD-F8C-BRIEF.md`, el diseño F10a §5.7 y el modelo `patterns.rs` establecido en F8a/F8b:
+
+1. **Galería interactiva de patrones (`src/shepherd/ui/patterns.rs`)**:
+   - Reemplazo completo del estado vacío de la pestaña «Patrones» en la sección Shepherd por una galería visual de doble panel (lista a la izquierda, detalle/diagrama a la derecha).
+   - Filtros de origen por pestañas: `[Todos]`, `[Proyecto]`, `[Global]`, `[Plantillas]`.
+   - Soporte para los cuatro tipos canónicos de patrones: `orchestrator-worker`, `hierarchical`, `blackboard`, `market`.
+   - Indicador visual de validez de cada patrón (`✓ válido` en verde, `✗ n errores` en rojo con aviso).
+   - Barra de acciones superior: `[ + Nueva (n) ]` (selector de plantilla), `[ Duplicar (d) ]`, `[ Editar (e) ]`, `[ Eliminar (x) ]`, `[ Validar (v) ]` y `[ Ejecutar (llega en F8d) ]` (deshabilitado como placeholder).
+   - Franja de confirmación en línea para eliminación (`ConfirmDelete`), con destrucción segura vía RPC y reversión con `Esc`.
+
+2. **Generador puro de diagramas de topología ASCII (`generate_topology_diagram`)**:
+   - Función pura `generate_topology_diagram(pattern: &Pattern, max_width: u16) -> Vec<String>` con tests de caracterización exactos.
+   - Representaciones especializadas para cada una de las 4 topologías:
+     * **Orchestrator-Worker**: nodo coordinador central con enlaces bidireccionales (`│`, `▼`, `▲`) hacia los grupos de trabajadores y canales de despacho/resultados.
+     * **Hierarchical**: árbol jerárquico multinivel (`L1 Leader`, `L2 Sub-leads`, `L3 Workers`) con ramificaciones de supervisión (`├─►`, `└─►`).
+     * **Blackboard**: pizarra compartida central (`╔══════ Blackboard (State/Topics) ══════╗`) con especialistas publicando y suscribiéndose (`──► [topic] ──►`).
+     * **Market**: bus de subastas/anuncios con nodo de licitación y agentes postores (`Bidder Agents`) respondiendo a tareas.
+   - **Adaptación responsiva a anchos estrechos (`< 50` columnas)**: generación de grafos compactos orientados a líneas verticales simples sin truncamiento ni desbordamiento horizontal.
+
+3. **Editor interactivo en línea con validación reactiva en vivo**:
+   - Sin ventanas modales emergentes ni flotantes: el editor se despliega completamente dentro de la sección Shepherd conservando la coherencia espacial y estética de la TUI.
+   - Estructuración en 3 secciones seleccionables mediante pestañas:
+     * `[ 1. General ]`: nombre del patrón, tipo de topología, destino de almacenamiento (`[ Proyecto ]` vs `[ Global ]`), descripción multilínea.
+     * `[ 2. Agentes ]`: selector de agentes con adición `[ + Añadir Agente ]`, eliminación `[ - Eliminar ]` y reordenación `[ ↑ Subir ]` / `[ ↓ Bajar ]`. Formulario completo por agente: id único, rol, selector de vendor (poblado dinámicamente con los vendors configurados: `claude`, `gemini`, `openai`, `codestral`), modelo, prompt de sistema (área multilínea), count, level (para jerárquico), group (para worker), tópicos publicados y tópicos suscritos.
+     * `[ 3. Tópicos ]`: selector y editor de tópicos del bus de eventos con adición `[ + Añadir Tópico ]`, eliminación `[ - Eliminar ]`, nombre, particiones, clave y filtro.
+   - **Validación reactiva en vivo (`shepherd_core::patterns::validate`)**:
+     * Evaluación automática en cada pulsación o cambio de campo.
+     * Mapeo de diagnósticos tipados (`Diagnostic { severity, field, message }`) directamente al campo infractor.
+     * Campos con errores resaltados en rojo (`✗ <mensaje>`), con botón `[ Guardar bloqueado ]` deshabilitado ante errores.
+     * Advertencias informativas mostradas en amarillo (`⚠ <mensaje>`) sin bloquear la persistencia.
+
+4. **Integración con RPC y despacho tipado (`src/client/shell/shepherd.rs`)**:
+   - Conexión con los métodos de endpoint existentes `Method::ShepherdPattern*`:
+     * `ShepherdPatternList`: consulta y refresco reactivo de patrones en disco y catálogo integrado.
+     * `ShepherdPatternGet`: obtención de la definición deserializada de un patrón seleccionado.
+     * `ShepherdPatternSave`: persistencia atómica en `.shepherd/patterns/<name>.yaml` (o directorio global).
+     * `ShepherdPatternDelete`: eliminación segura de patrones de proyecto o globales.
+     * `ShepherdPatternValidate`: verificación estructural en el servidor.
+   - Notificaciones contextuales en la barra de estado inferior para cada operación (`✓ Patrón guardado en proyecto`, `✓ Patrón eliminado`, etc.).
+
+5. **Navegación e interactividad completa**:
+   - Navegación por teclado completa: `Tab` / `Shift+Tab` entre campos, `↑`/`↓` para listas, atajos de letra rápida (`n`, `d`, `e`, `x`, `v`, `1`, `2`, `3`), `Ctrl+s` para guardar, `Esc` para cancelar sin efectos colaterales.
+   - Soporte exhaustivo para hit-testing de ratón (`ShepherdPatternsHits`): clics en pestañas de filtro, filas de la galería, botones de acción, pestañas de sección del editor, selectores de agentes/tópicos y botones de reordenación/guardado.
+
+---
+
+### 2. Maquetas ASCII y Capturas de la TUI en Vivo
+
+#### A. Galería de Patrones con Diagrama de Topología (Orchestrator-Worker)
+```text
+ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[ Todos (4) ] [ Proyecto (0) ] [ Global (0) ] [✓ Plantillas (4) ]  [ + Nueva (n) ] [ Duplicar (d) ] [ Editar (e) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+▸ [builtin] orchestrator-worker   │ Nombre:  orchestrator-worker
+    Tipo: orchestrator-worker     │ Tipo:    orchestrator-worker    Origen: builtin    Estado: ✓ válido
+  [builtin] hierarchical          │ Descripción: Coordinador central descompone tareas y las asigna a trabajadores
+    Tipo: hierarchical            │
+  [builtin] blackboard            │ Topología:
+    Tipo: blackboard              │   ┌───────────────────────────────┐
+  [builtin] market                │   │   [Orchestrator] planner      │
+    Tipo: market                  │   └───────────────┬───────────────┘
+                                  │                   │ (assign / dispatch)
+                                  │                   ▼
+                                  │   ┌───────────────────────────────┐
+                                  │   │  Worker Pool: workers (x3)    │
+                                  │   │  coder, tester, reviewer      │
+                                  │   └───────────────┬───────────────┘
+                                  │                   │ (results)
+                                  │                   ▼
+                                  │   ┌───────────────────────────────┐
+                                  │   │ [Topic] tasks-done (p:2)      │
+                                  │   └───────────────────────────────┘
+                                  │ Agentes (4):
+                                  │   • planner (lead) [claude]
+                                  │   • coder (worker) [gemini]
+                                  │   • tester (worker) [claude]
+                                  │   • reviewer (worker) [openai]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 4 patrones | ↑/↓: lista | n: nueva | e: editar | d: duplicar | x: eliminar | Esc: salir
+```
+
+#### B. Editor en Línea con Error de Validación en Vivo (Nombre Vacío)
+Al vaciar el nombre del patrón, el sistema detecta de inmediato el fallo estructural, marca el campo con un aviso en rojo y deshabilita el botón de guardado:
+```text
+ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ EDITANDO PATRÓN: custom-flow                                                        [ Cancelar (Esc) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Secciones: [✓ 1. General ] [ 2. Agentes (4) ] [ 3. Tópicos (2) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Nombre del patrón:
+ > █
+ ✗ pattern name cannot be empty
+
+ Tipo de topología:
+ [✓ orchestrator-worker ] [ hierarchical ] [ blackboard ] [ market ]
+
+ Destino de almacenamiento:
+ [✓ Proyecto (.shepherd/patterns/) ] [ Global (~/.config/shepherd/patterns/) ]
+
+ Descripción:
+ > Flujo personalizado con orquestador principal y pool de especialistas.
+
+ [ Guardar bloqueado ]  [ Cancelar ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✗ 1 error de validación detectado | Corrige los campos marcados para habilitar el guardado
+```
+
+#### C. Corrección del Error y Guardado en Proyecto
+Al completar un identificador válido (`custom-flow`), la validación pasa a verde y el botón `[ Guardar (Ctrl+S) ]` queda activo:
+```text
+ Nombre del patrón:
+ > custom-flow
+
+ Tipo de topología:
+ [✓ orchestrator-worker ] [ hierarchical ] [ blackboard ] [ market ]
+
+ Destino de almacenamiento:
+ [✓ Proyecto (.shepherd/patterns/) ] [ Global (~/.config/shepherd/patterns/) ]
+
+ Descripción:
+ > Flujo personalizado con orquestador principal y pool de especialistas.
+
+ [✓ Guardar (Ctrl+S) ]  [ Cancelar ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ Patrón válido | Listo para guardar en proyecto
+```
+
+#### D. Franja de Confirmación de Eliminación (`ConfirmDelete`)
+La eliminación de patrones persigue la protección estricta contra pérdidas accidentales:
+```text
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ¿Eliminar patrón 'custom-flow' de project? Esta acción no se puede deshacer.        [ Confirmar (Enter) ] [ Cancelar (Esc) ]
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+```
+
+#### E. Topología en Pantalla Estrecha (`< 50` columnas)
+```text
+ Topología (modo compacto):
+   [Orchestrator]
+         │ (dispatch)
+         ▼
+    Worker Pool: workers
+         │ (results)
+         ▼
+    [Topic] tasks-done
+```
+
+---
+
+### 3. Verificación Real Aislada (`./scripts/shepherd-iso.sh`)
+
+La verificación interactiva completa se realizó en una sesión aislada efímera sin contaminar configuraciones de usuario:
+
+1. **Arranque e inspección inicial**:
+   - `shepherd-iso.sh start` inició el servidor de pruebas con sockets y directorios en `/tmp/shfiso/`.
+   - Navegación a la pestaña Patrones: galería cargada con las 4 plantillas integradas (`orchestrator-worker`, `hierarchical`, `blackboard`, `market`).
+2. **Creación desde plantilla**:
+   - Apertura de formulario de creación desde plantilla (`n`), seleccionando `orchestrator-worker`.
+   - Carga reactiva de los 4 agentes y 2 tópicos por defecto.
+3. **Edición personalizada**:
+   - Modificación del vendor del agente orquestador a `claude` y ampliación de su prompt del sistema a `- Lead planner expert.`.
+4. **Validación reactiva en vivo**:
+   - Vaciado del nombre del patrón: comprobación de aparición inmediata de `✗ pattern name cannot be empty` y sustitución de `[ Guardar ]` por `[ Guardar bloqueado ]`.
+   - Restauración a `custom-flow`: restauración inmediata de estado verde `✓ Patrón válido`.
+5. **Persistencia en proyecto**:
+   - Selección de guardado en proyecto y confirmación.
+   - Comprobación en disco: archivo `.shepherd/patterns/custom-flow.yaml` generado con serialización YAML válida.
+6. **Inspección en galería**:
+   - Nuevo patrón `custom-flow` listado bajo la pestaña `[ Proyecto (1) ]`.
+   - Diagrama ASCII renderizado en panel derecho con sus 4 agentes y tópicos.
+7. **Eliminación segura**:
+   - Pulsación `x`: apertura de la franja de confirmación en línea `¿Eliminar patrón 'custom-flow' de project?`.
+   - Confirmación con `Enter`: eliminación del archivo en disco confirmada y decremento del contador de patrones de proyecto a 0.
+8. **Cierre limpio**:
+   - `shepherd-iso.sh stop` detuvo la sesión sin dejar procesos huérfanos.
+
+---
+
+### 4. Tabla de Pruebas Reales por Área
+
+Todas las áreas de pruebas se ejecutaron mediante `./cargo-fork.sh test` arrojando resultados reales sin fallos ni regresiones:
+
+| Área | Comando | Resultado Real |
+|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **271 passed; 0 failed** (123 unitarios en `lib.rs` + 148 de integración) |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **81 passed; 0 failed** (incluye los 13 tests de `shepherd::ui::patterns`) |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **402 passed; 0 failed; 2 ignored** (incluye los 11 tests de `shepherd_virtual_tab`) |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159 passed; 0 failed** (156 unitarios en `main.rs` + 3 de integración en `cli.rs`) |
+| `api::` | `./cargo-fork.sh test api::` | **319 passed; 0 failed; 1 ignored** |
+| `server::` | `./cargo-fork.sh test server::` | **318 passed; 0 failed; 5 ignored** |
+| **Total verificado** | | **1,550 tests pasando sin regresiones** |
+
+#### Detalle de los 13 tests de `src/shepherd/ui/patterns.rs`:
+1. `test_topology_diagram_orchestrator_worker`: Generación exacta de diagrama ASCII para orquestador-trabajador en modo ancho y compacto.
+2. `test_topology_diagram_hierarchical`: Diagrama multinivel jerárquico con árbol de ramificación.
+3. `test_topology_diagram_blackboard`: Diagrama de pizarra compartida central con especialistas.
+4. `test_topology_diagram_market`: Diagrama de mercado de subastas con postores y anuncios.
+5. `test_patterns_section_pure_render_and_gallery`: Render puro en `Buffer` de la galería con selección y detalle.
+6. `test_patterns_section_hit_testing`: Hit-testing de ratón en pestañas de filtrado, filas y botones de acción.
+7. `test_pattern_editor_field_focus_and_navigation`: Ciclo de navegación por campos con `Tab` y `Shift+Tab`.
+8. `test_pattern_editor_agent_add_remove_and_reorder`: Máquina de estados para adición, eliminación y reordenación de agentes (`[↑]` / `[↓]`).
+9. `test_pattern_editor_topic_add_and_remove`: Máquina de estados para adición y baja de tópicos del bus de eventos.
+10. `test_pattern_editor_live_validation_and_guards`: Validación reactiva en vivo y bloqueo de guardado ante campos vacíos o roles desconocidos.
+11. `test_pattern_editor_cancel_leaves_state_unmodified`: Cancelación limpia (`Esc`) sin mutaciones colaterales.
+12. `test_pattern_operations_with_isolated_tempdirs`: Guardado y borrado de patrones sobre carpetas temporales aisladas sin contaminar rutas del usuario.
+13. `test_patterns_section_80x24_pure_render`: Composición y renderizado sin pánicos ni desbordamientos en dimensiones compactas 80x24.
+
+---
+
+### 5. Desviaciones de UI y Recuento de Líneas Tocadas
+
+- **Desviaciones de UI**: Ninguna. Se siguió rigurosamente la maqueta de F10a §5.7, con interacción dentro de la sección, formularios en línea, franjas de confirmación y adaptación responsiva a 80x24 y anchos reducidos.
+- **Líneas tocadas**:
+  * `crates/shepherd-core/src/patterns.rs`: +16 líneas (helper `get_builtin_pattern` para carga en memoria de plantillas).
+  * `src/client/shell/shepherd.rs`: +156 líneas (enrutado y despacho de llamadas `Method::ShepherdPattern*`).
+  * `src/client/shell/tests/shepherd_virtual_tab.rs`: +1 / -1 línea (corrección de identificador para pasar comprobación de renombre).
+  * `src/shepherd/ui/mod.rs`: +36, -8 líneas (render de Patrones, eventos de ratón y barra de estado).
+  * `src/shepherd/ui/state.rs`: +17 líneas (cableado de estado puro de la sección Patrones).
+  * `src/shepherd/ui/patterns.rs`: +2,625 líneas (nuevo módulo independiente con galería, diagramas, editor y pruebas unitarias).
+- **Comprobaciones de higiene y sincronización**:
+  * Comprobación de fuga de rutas/identidades de usuario / repositorios de prueba: **0 coincidencias**.
+  * `./scripts/rename-from-herdr.sh --check`: **[OK] No unexcluded occurrences of herdr/Herdr/HERDR found.**
+  * `./scripts/upstream-sync.sh --dry-run --allow-branch HEAD`: comprobación de sincronización con upstream completada con código 0 exitoso.
+
+---
+
+### 6. Alcance Fuera de F8c y Próximas Fases
+
+1. **F8d (Ejecutor de patrones multi-agente y Pestaña Eventos)**:
+   - Implementación del motor de ejecución de patrones multi-agente (coordinación automática del ciclo de vida, despacho de tareas sobre agentes y subscripciones en el bus de eventos).
+   - Activación del botón «Ejecutar» en la interfaz de usuario.
+   - Pestaña «Eventos (7)» en la sección Shepherd con streaming en tiempo real del bus JSONL y filtrado reactivo.
+2. **F10d (Pulido y temas)**:
+   - Afinamiento cosmético fino y personalización temática de la TUI.
+
+*(Nota: En cumplimiento estricto con las instrucciones del usuario, no se ha realizado ningún commit git en este repositorio).*
+
+
 

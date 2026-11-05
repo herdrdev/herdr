@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod components;
 pub mod git;
+pub mod patterns;
 pub mod runs;
 pub mod skills;
 pub mod state;
@@ -23,6 +24,8 @@ use components::{
 pub use agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
 #[allow(unused_imports)]
 pub use git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
+#[allow(unused_imports)]
+pub use patterns::{ShepherdPatternsAction, ShepherdPatternsHits, ShepherdPatternsSectionState};
 #[allow(unused_imports)]
 pub use runs::{ShepherdRunsAction, ShepherdRunsHits, ShepherdRunsSectionState};
 #[allow(unused_imports)]
@@ -156,12 +159,10 @@ pub fn render_shepherd_section(
             ));
         }
         ShepherdSectionTab::Patterns => {
-            hits.empty_state_hits = Some(render_empty_state(
+            hits.patterns_hits = Some(patterns::render_patterns_section(
                 buffer,
                 content_area,
-                "PESTAÑA DE PATRONES (F8c)",
-                "Próximamente en F8c: Catálogo e inspección de topologías multi-agente\n(orchestrator-worker, blackboard, market) sobre este armazón.",
-                &[],
+                &state.patterns,
                 palette,
             ));
         }
@@ -228,7 +229,10 @@ pub fn render_shepherd_section(
             (sum, help)
         }
         ShepherdSectionTab::Patterns => {
-            ("Patrones multi-agente".into(), "Próximamente en F8c | 1-7: cambiar pestaña | Esc: salir")
+            let total = state.patterns.patterns.len();
+            let sum = format!("{total} patrones disponibles");
+            let help = "↑/↓: lista | n: nuevo | e: editar | c: duplicar | v: validar | d: eliminar | Esc: salir";
+            (sum, help)
         }
         ShepherdSectionTab::Skills => {
             let sum = match state.skills.mode {
@@ -692,6 +696,16 @@ pub fn handle_shepherd_section_mouse(
                     }
                 }
             }
+            ShepherdSectionTab::Patterns => {
+                if let Some(ref pattern_hits) = hits.patterns_hits {
+                    let (handled, act) = state.patterns.handle_mouse(mouse.column, mouse.row, pattern_hits);
+                    if let Some(a) = act {
+                        return ShepherdSectionOutcome::Action(ShepherdSectionAction::Patterns(a));
+                    } else if handled {
+                        return ShepherdSectionOutcome::Handled;
+                    }
+                }
+            }
             ShepherdSectionTab::Skills => {
                 if let Some(ref skill_hits) = hits.skills_hits {
                     // Filter / mode tabs ([Por Agente], [Catálogo])
@@ -959,6 +973,10 @@ pub fn handle_shepherd_section_mouse(
                 state.runs.select_prev();
                 return ShepherdSectionOutcome::Handled;
             }
+            ShepherdSectionTab::Patterns => {
+                state.patterns.select_prev();
+                return ShepherdSectionOutcome::Handled;
+            }
             ShepherdSectionTab::Skills => {
                 state.skills.select_prev();
                 return ShepherdSectionOutcome::Handled;
@@ -981,6 +999,10 @@ pub fn handle_shepherd_section_mouse(
             }
             ShepherdSectionTab::Runs => {
                 state.runs.select_next();
+                return ShepherdSectionOutcome::Handled;
+            }
+            ShepherdSectionTab::Patterns => {
+                state.patterns.select_next();
                 return ShepherdSectionOutcome::Handled;
             }
             ShepherdSectionTab::Skills => {
@@ -1038,10 +1060,10 @@ mod tests {
         let hits5 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
         assert!(hits5.git_hits.is_some());
 
-        // Switch to Patterns (empty state)
+        // Switch to Patterns (gallery view)
         state.select_tab(ShepherdSectionTab::Patterns);
         let hits6 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
-        assert!(hits6.empty_state_hits.is_some());
+        assert!(hits6.patterns_hits.is_some());
 
         // Switch to Events (empty state)
         state.select_tab(ShepherdSectionTab::Events);

@@ -134,7 +134,7 @@ fn test_render_tab_bar_with_shepherd_inactive() {
 }
 
 #[test]
-fn test_render_tab_bar_disabled_matches_herdr_upstream() {
+fn test_render_tab_bar_disabled_matches_upstream() {
     let config = test_config(false);
     let snap = snapshot();
     let area = Rect::new(0, 0, 80, 1);

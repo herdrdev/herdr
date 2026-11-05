@@ -49,6 +49,11 @@ pub fn get_builtin_template(name: &str) -> Option<&'static str> {
         .map(|t| t.yaml)
 }
 
+pub fn get_builtin_pattern(name: &str) -> Option<Pattern> {
+    let yaml = get_builtin_template(name)?;
+    serde_yaml_ng::from_str(yaml).ok()
+}
+
 pub fn is_builtin_template(name: &str) -> bool {
     get_builtin_template(name).is_some()
 }
@@ -1414,5 +1419,16 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&proj_root);
         let _ = std::fs::remove_dir_all(&glob_dir);
+    }
+
+    #[test]
+    fn test_get_builtin_pattern_loads_all_four_types() {
+        for name in &["orchestrator-worker", "hierarchical", "blackboard", "market"] {
+            let pat = get_builtin_pattern(name).expect("builtin pattern must deserialize");
+            assert_eq!(&pat.name, name);
+            assert!(!pat.agents.is_empty());
+            assert!(!pat.topics.is_empty());
+        }
+        assert!(get_builtin_pattern("nonexistent").is_none());
     }
 }

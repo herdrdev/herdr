@@ -399,6 +399,9 @@ impl ClientShellState {
                     ShepherdSectionAction::Runs(runs_action) => {
                         self.dispatch_shepherd_runs_action(runs_action, outcome);
                     }
+                    ShepherdSectionAction::Patterns(patterns_action) => {
+                        self.dispatch_shepherd_patterns_action(patterns_action, outcome);
+                    }
                     ShepherdSectionAction::Skills(skills_action) => {
                         self.dispatch_shepherd_skills_action(skills_action, outcome);
                     }
@@ -625,6 +628,85 @@ impl ClientShellState {
                     method,
                     PendingEndpointKind::ShepherdCall {
                         op: "reject_gate".to_string(),
+                    },
+                    outcome,
+                );
+            }
+        }
+    }
+
+    pub(super) fn dispatch_shepherd_patterns_action(
+        &mut self,
+        action: crate::shepherd::ui::patterns::ShepherdPatternsAction,
+        outcome: &mut ClientShellInput,
+    ) {
+        use crate::shepherd::ui::patterns::ShepherdPatternsAction;
+        match action {
+            ShepherdPatternsAction::List => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternList(
+                        crate::api::schema::ShepherdPatternListParams::default(),
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "patterns".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdPatternsAction::Get { name } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternGet(
+                        crate::api::schema::ShepherdPatternGetParams {
+                            root: None,
+                            name,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_get".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdPatternsAction::Save { pattern, global } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternSave(
+                        crate::api::schema::ShepherdPatternSaveParams {
+                            root: None,
+                            pattern,
+                            global,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_save".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdPatternsAction::Delete { name } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternDelete(
+                        crate::api::schema::ShepherdPatternDeleteParams {
+                            root: None,
+                            name,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_delete".to_string(),
+                    },
+                    outcome,
+                );
+            }
+            ShepherdPatternsAction::Validate { name, pattern } => {
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternValidate(
+                        crate::api::schema::ShepherdPatternValidateParams {
+                            root: None,
+                            name,
+                            pattern,
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_validate".to_string(),
                     },
                     outcome,
                 );
@@ -921,6 +1003,16 @@ impl ClientShellState {
             },
             outcome,
         );
+        // Fetch patterns
+        self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::ShepherdPatternList(
+                crate::api::schema::ShepherdPatternListParams::default(),
+            ),
+            PendingEndpointKind::ShepherdCall {
+                op: "patterns".to_string(),
+            },
+            outcome,
+        );
     }
 
     pub(super) fn handle_shepherd_endpoint_result(
@@ -979,6 +1071,20 @@ impl ClientShellState {
                 }
                 outcome.repaint = true;
             }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternList { patterns }) => {
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.patterns.update_from_summaries(patterns);
+                    section.status_message = None;
+                }
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternDetail { pattern }) => {
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.patterns.update_detail(pattern);
+                    section.status_message = None;
+                }
+                outcome.repaint = true;
+            }
             Ok(crate::api::schema::ResponseResult::ShepherdTaskCreated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTaskArchived { .. }) => {
                 let msg = format!("Tarea actualizada exitosamente ({op})");
@@ -991,7 +1097,6 @@ impl ClientShellState {
             Ok(crate::api::schema::ResponseResult::ShepherdRunStarted { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdGateApproved { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdGateRejected { .. })
-            | Ok(crate::api::schema::ResponseResult::ShepherdPatternSaved { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdPatternDeleted { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdPatternValidated { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdTopicCreated { .. })
@@ -1000,6 +1105,26 @@ impl ClientShellState {
                 if let Some(ref mut section) = self.shepherd_section {
                     section.status_message = Some(msg);
                 }
+                self.refresh_shepherd_views(outcome);
+                outcome.repaint = true;
+            }
+            Ok(crate::api::schema::ResponseResult::ShepherdPatternSaved { ref name, .. }) => {
+                let msg = format!("Patrón '{name}' guardado exitosamente");
+                if let Some(ref mut section) = self.shepherd_section {
+                    section.status_message = Some(msg);
+                }
+                self.push_endpoint_method_with_kind(
+                    crate::api::schema::Method::ShepherdPatternGet(
+                        crate::api::schema::ShepherdPatternGetParams {
+                            root: None,
+                            name: name.clone(),
+                        },
+                    ),
+                    PendingEndpointKind::ShepherdCall {
+                        op: "pattern_get".to_string(),
+                    },
+                    outcome,
+                );
                 self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;
             }
@@ -1092,6 +1217,35 @@ impl ClientShellState {
                     "skills_toggle" | "skills_restore" | "skills_create" | "skills_delete"
                     | "skills_global" => {
                         let msg = format!("Configuración de skills actualizada ({op})");
+                        if let Some(ref mut section) = self.shepherd_section {
+                            section.status_message = Some(msg);
+                        }
+                        self.refresh_shepherd_views(outcome);
+                    }
+                    "patterns" => {
+                        if let Ok(patterns) = serde_json::from_value::<
+                            Vec<shepherd_core::patterns::PatternSummary>,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.patterns.update_from_summaries(patterns);
+                                section.status_message = None;
+                            }
+                        }
+                    }
+                    "pattern_get" => {
+                        if let Ok(detail) = serde_json::from_value::<
+                            shepherd_core::patterns::PatternDetail,
+                        >(data.clone())
+                        {
+                            if let Some(ref mut section) = self.shepherd_section {
+                                section.patterns.update_detail(detail);
+                                section.status_message = None;
+                            }
+                        }
+                    }
+                    "pattern_save" | "pattern_delete" | "pattern_validate" => {
+                        let msg = format!("Operación de patrón completada ({op})");
                         if let Some(ref mut section) = self.shepherd_section {
                             section.status_message = Some(msg);
                         }
