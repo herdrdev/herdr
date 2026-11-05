@@ -150,8 +150,6 @@ struct State {
     subscriptions: HashMap<String, HashMap<String, Vec<String>>>,
     // Committed offsets: topic -> group_name -> partition -> offset
     committed_offsets: HashMap<String, HashMap<String, HashMap<u32, u64>>>,
-    // Round-robin counter per topic for unkeyed messages
-    round_robin: HashMap<String, u32>,
     // Paused topics (no message polling/delivery while paused)
     paused_topics: std::collections::HashSet<String>,
 }
@@ -446,10 +444,15 @@ impl MessageBus {
         } else if let Some(k) = key.filter(|k| !k.is_empty()) {
             (fnv1a_hash(k) % (partitions as u64)) as u32
         } else {
-            let rr = state.round_robin.entry(topic.to_owned()).or_insert(0);
-            let p = *rr % partitions;
-            *rr = (*rr + 1) % partitions;
-            p
+            // The counter must survive reopening the bus (each MCP call opens a fresh
+            // `MessageBus`): derive it from the messages already in the topic.
+            let published: u64 = state
+                .topic_partition_next_offset
+                .iter()
+                .filter(|((t, _), _)| t == topic)
+                .map(|(_, n)| *n)
+                .sum();
+            (published % u64::from(partitions)) as u32
         };
 
         let next_offset = state
@@ -1047,6 +1050,28 @@ mod tests {
             [1, 2, 3, 4, 5]
         );
 
+        clean_bus_files(&path);
+    }
+
+    #[test]
+    fn unkeyed_publish_spreads_across_partitions_even_when_bus_is_reopened() {
+        let path =
+            std::env::temp_dir().join(format!("shepherd-f13-rr-{}.jsonl", std::process::id()));
+        clean_bus_files(&path);
+        MessageBus::open(&path)
+            .unwrap()
+            .topic_create("orders", 4)
+            .unwrap();
+        let parts: Vec<u32> = (0..4)
+            .map(|_| {
+                // MCP publish opens a fresh bus per call
+                let bus = MessageBus::open(&path).unwrap();
+                bus.publish("orders", "o", None, None, "brain-1")
+                    .unwrap()
+                    .partition
+            })
+            .collect();
+        assert_eq!(parts, vec![0, 1, 2, 3]);
         clean_bus_files(&path);
     }
 
