@@ -92,7 +92,7 @@ Sección **Eventos**:
 
 ## 4. Ejemplo de uso paso a paso: servidor web en Go
 
-Escenario: tienes un repo `webgo` con un servidor mínimo y quieres añadir `/health`, `/version` y logging con un equipo de agentes, cada uno en su worktree. Abre herdr en la carpeta del repo.
+Escenario: tienes un repo `webgo` con un servidor mínimo y quieres añadir `/health`, `/version` y logging con un equipo de agentes, cada uno en su worktree. Abre Shepherd en la carpeta del repo.
 
 1. **Abrir Shepherd:** `Ctrl+b a`.
 2. **Crear la tarea** (sección 2): `n`, título `Ampliar webgo`, descripción con lo que quieres, criterios `go test pasa; GET /health devuelve 200`. `Enter`.

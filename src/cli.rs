@@ -106,6 +106,16 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
         return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
     }
 
+    // `config path|validate` inspect Shepherd's own config; the other subcommands keep the inherited behavior.
+    if command == "config"
+        && matches!(
+            args.get(2).map(String::as_str),
+            Some("path") | Some("validate")
+        )
+    {
+        return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
+    }
+
     const SHEPHERD_DIRECT_COMMANDS: &[&str] = &[
         "agents", "spawn", "kill", "clean", "focus", "task", "tasks", "skills", "runs", "roles",
         "vendors", "run", "approve", "git", "mcp", "msg", "messages", "attach", "pattern",
@@ -994,6 +1004,8 @@ fn print_session_error(code: &str, message: &str) {
 fn print_config_help() {
     eprintln!("shepherd config commands:");
     eprintln!("  shepherd config check  validate config.toml and print diagnostics");
+    eprintln!("  shepherd config path  show the global, project and state paths");
+    eprintln!("  shepherd config validate  validate the Shepherd settings [--json]");
     eprintln!("  shepherd config reset-keys  back up config.toml and remove custom keybindings");
 }
 

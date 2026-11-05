@@ -16,7 +16,7 @@ Todo lo que hace la interfaz se puede hacer con el comando `shepherd`. Los coman
 | Patrones | `pattern list`, `show`, `new <nombre> --from <plantilla>`, `validate`, `edit`, `delete`, `run`, `runs`, `pause`, `resume`, `stop` |
 | Bus de eventos | `topic list`, `create`, `publish`, `tail`, `replay`, `groups` |
 | Snapshots | `snapshot capture`, `list`, `show`, `diff`, `restore`, `delete`, `prune` |
-| Otros | `skills list`, `git status`, `config check`, `mcp serve` |
+| Otros | `skills list`, `git status`, `config check|path|validate`, `mcp serve` |
 
 Ayuda de cualquiera: `shepherd <comando> --help`.
 
@@ -141,9 +141,17 @@ $ shepherd skills list      # skills disponibles: lang-go, code-review, shepherd
 $ shepherd git status
 BRANCH  STATUS  SYNC        AGENT  PR  PATH
 main    clean   up to date  -      —   /ruta/repo
-$ shepherd config check
+$ shepherd config check          # valida config.toml (límites, snapshots, atajos)
 config: ok
+$ shepherd config path           # rutas de la configuración de roles/vendors y el estado
+global	~/.config/shepherd/config.yaml
+project	<repo>/.shepherd/config.yaml
+state	~/.local/state/shepherd
+$ shepherd config validate       # valida esa configuración de roles/vendors (--json disponible)
+configuration is valid
 ```
+
+Hay dos configuraciones: `config.toml` (sección `[shepherd]`: límites, snapshots) la valida `config check`; `config.yaml` (roles, vendors, flujo) la muestran `config path` y `config validate`.
 
 ## 8. Ejemplo completo: servidor web en Go con 2 workers
 
