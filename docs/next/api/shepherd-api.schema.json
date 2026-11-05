@@ -3403,6 +3403,110 @@
           },
           "type": "object"
         },
+        "Pattern": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/PatternAgent"
+              },
+              "type": "array"
+            },
+            "description": {
+              "default": "",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/request/$defs/PatternKind"
+            },
+            "name": {
+              "type": "string"
+            },
+            "topics": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/Topic"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "kind"
+          ],
+          "type": "object"
+        },
+        "PatternAgent": {
+          "properties": {
+            "consumes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "level": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publishes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "role": {
+              "type": "string"
+            },
+            "vendor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "role"
+          ],
+          "type": "object"
+        },
+        "PatternKind": {
+          "enum": [
+            "orchestrator-worker",
+            "hierarchical",
+            "blackboard",
+            "market"
+          ],
+          "type": "string"
+        },
         "PingParams": {
           "type": "object"
         },
@@ -4067,6 +4171,99 @@
           },
           "type": "object"
         },
+        "ShepherdPatternDeleteParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternGetParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternListParams": {
+          "properties": {
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdPatternSaveParams": {
+          "properties": {
+            "global": {
+              "default": false,
+              "type": "boolean"
+            },
+            "pattern": {
+              "$ref": "#/schemas/request/$defs/Pattern"
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "pattern"
+          ],
+          "type": "object"
+        },
+        "ShepherdPatternValidateParams": {
+          "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "pattern": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/Pattern"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "root": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "ShepherdRunListParams": {
           "properties": {
             "root": {
@@ -4181,6 +4378,127 @@
               ]
             }
           },
+          "type": "object"
+        },
+        "ShepherdTopicCreateParams": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "partitions": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "ShepherdTopicGroupsParams": {
+          "properties": {
+            "topic": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ShepherdTopicPublishParams": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "from": {
+              "default": "user",
+              "type": "string"
+            },
+            "key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "partition": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "content"
+          ],
+          "type": "object"
+        },
+        "ShepherdTopicReplayParams": {
+          "properties": {
+            "from_offset": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "limit": {
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "partition": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
+          "type": "object"
+        },
+        "ShepherdTopicTailParams": {
+          "properties": {
+            "limit": {
+              "format": "uint",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "partition": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic"
+          ],
           "type": "object"
         },
         "SplitDirection": {
@@ -4655,6 +4973,35 @@
             "bottom-right"
           ],
           "type": "string"
+        },
+        "Topic": {
+          "properties": {
+            "filter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "partitions": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
         },
         "WorkspaceCloseParams": {
           "properties": {
@@ -6862,6 +7209,182 @@
         {
           "properties": {
             "method": {
+              "const": "shepherd.pattern.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternListParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.get",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternGetParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.save",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternSaveParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.delete",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternDeleteParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.pattern.validate",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdPatternValidateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.list",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdEmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.create",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTopicCreateParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.publish",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTopicPublishParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.tail",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTopicTailParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.replay",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTopicReplayParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "shepherd.topic.groups",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/ShepherdTopicGroupsParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
               "const": "shepherd.call",
               "type": "string"
             },
@@ -7498,6 +8021,40 @@
             "failed"
           ],
           "type": "string"
+        },
+        "ConsumerGroupSummary": {
+          "properties": {
+            "committed_offsets": {
+              "additionalProperties": false,
+              "patternProperties": {
+                "^\\d+$": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "type": "object"
+            },
+            "group": {
+              "type": "string"
+            },
+            "members": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "topic": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "topic",
+            "group",
+            "members",
+            "committed_offsets"
+          ],
+          "type": "object"
         },
         "CreatedTask": {
           "properties": {
@@ -8645,6 +9202,58 @@
             }
           ]
         },
+        "Message": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "from": {
+              "type": "string"
+            },
+            "id": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "key": {
+              "default": "",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "offset": {
+              "default": 0,
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "partition": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "to": {
+              "default": "",
+              "type": "string"
+            },
+            "topic": {
+              "default": "",
+              "type": "string"
+            },
+            "ts": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "from",
+            "kind",
+            "content"
+          ],
+          "type": "object"
+        },
         "NotificationShowReason": {
           "enum": [
             "shown",
@@ -9454,6 +10063,180 @@
           ],
           "type": "object"
         },
+        "PatternAgent": {
+          "properties": {
+            "consumes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "count": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "group": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "level": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "prompt": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "publishes": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "role": {
+              "type": "string"
+            },
+            "vendor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "role"
+          ],
+          "type": "object"
+        },
+        "PatternDetail": {
+          "properties": {
+            "agents": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/PatternAgent"
+              },
+              "type": "array"
+            },
+            "description": {
+              "default": "",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/success_response/$defs/PatternKind"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "problems": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Problem"
+              },
+              "type": "array"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/PatternSource"
+            },
+            "topics": {
+              "items": {
+                "$ref": "#/schemas/success_response/$defs/Topic"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "source",
+            "problems"
+          ],
+          "type": "object"
+        },
+        "PatternKind": {
+          "enum": [
+            "orchestrator-worker",
+            "hierarchical",
+            "blackboard",
+            "market"
+          ],
+          "type": "string"
+        },
+        "PatternSource": {
+          "enum": [
+            "project",
+            "global",
+            "builtin"
+          ],
+          "type": "string"
+        },
+        "PatternSummary": {
+          "properties": {
+            "agents_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "description": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/schemas/success_response/$defs/PatternKind"
+            },
+            "name": {
+              "type": "string"
+            },
+            "path": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "shadowed": {
+              "type": "boolean"
+            },
+            "source": {
+              "$ref": "#/schemas/success_response/$defs/PatternSource"
+            },
+            "topics_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "kind",
+            "description",
+            "source",
+            "shadowed",
+            "agents_count",
+            "topics_count"
+          ],
+          "type": "object"
+        },
         "PluginActionContext": {
           "enum": [
             "global",
@@ -10019,6 +10802,25 @@
               "type": "string"
             }
           ]
+        },
+        "Problem": {
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "severity": {
+              "$ref": "#/schemas/success_response/$defs/Severity"
+            }
+          },
+          "required": [
+            "severity",
+            "path",
+            "message"
+          ],
+          "type": "object"
         },
         "ReadFormat": {
           "enum": [
@@ -11602,6 +12404,211 @@
             },
             {
               "properties": {
+                "patterns": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/PatternSummary"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_pattern_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "patterns"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "pattern": {
+                  "$ref": "#/schemas/success_response/$defs/PatternDetail"
+                },
+                "type": {
+                  "const": "shepherd_pattern_detail",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "pattern"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "problems": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Problem"
+                  },
+                  "type": "array"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "type": {
+                  "const": "shepherd_pattern_saved",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "ok",
+                "name",
+                "path",
+                "source"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "deleted_source": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "const": "shepherd_pattern_deleted",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "ok",
+                "name",
+                "deleted_source"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "problems": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Problem"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_pattern_validated",
+                  "type": "string"
+                },
+                "valid": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type",
+                "valid",
+                "problems"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "topics": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/TopicSummary"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_topic_list",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "topics"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "topic": {
+                  "$ref": "#/schemas/success_response/$defs/Topic2"
+                },
+                "type": {
+                  "const": "shepherd_topic_created",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "topic"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "message": {
+                  "$ref": "#/schemas/success_response/$defs/Message"
+                },
+                "type": {
+                  "const": "shepherd_message_published",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "messages": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/Message"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_topic_messages",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "messages"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "groups": {
+                  "items": {
+                    "$ref": "#/schemas/success_response/$defs/ConsumerGroupSummary"
+                  },
+                  "type": "array"
+                },
+                "type": {
+                  "const": "shepherd_consumer_groups",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "groups"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
                 "type": {
                   "const": "ok",
                   "type": "string"
@@ -11830,6 +12837,13 @@
           ],
           "type": "object"
         },
+        "Severity": {
+          "enum": [
+            "error",
+            "warning"
+          ],
+          "type": "string"
+        },
         "Skill": {
           "description": "A discovered skill in the catalog (`Repo > User > Default`).",
           "properties": {
@@ -12056,6 +13070,75 @@
             "state",
             "created",
             "updated"
+          ],
+          "type": "object"
+        },
+        "Topic": {
+          "properties": {
+            "filter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "key": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": "string"
+            },
+            "partitions": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "type": "object"
+        },
+        "Topic2": {
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "partitions": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "partitions"
+          ],
+          "type": "object"
+        },
+        "TopicSummary": {
+          "properties": {
+            "messages_count": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "name": {
+              "type": "string"
+            },
+            "partitions": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "name",
+            "partitions",
+            "messages_count"
           ],
           "type": "object"
         },

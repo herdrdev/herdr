@@ -337,6 +337,44 @@ pub enum ResponseResult {
     ShepherdGitStatus {
         status: shepherd_core::git::GitRepoStatus,
     },
+    ShepherdPatternList {
+        patterns: Vec<shepherd_core::patterns::PatternSummary>,
+    },
+    ShepherdPatternDetail {
+        pattern: shepherd_core::patterns::PatternDetail,
+    },
+    ShepherdPatternSaved {
+        ok: bool,
+        name: String,
+        path: String,
+        source: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        problems: Vec<shepherd_core::patterns::Problem>,
+    },
+    ShepherdPatternDeleted {
+        ok: bool,
+        name: String,
+        deleted_source: String,
+    },
+    ShepherdPatternValidated {
+        valid: bool,
+        problems: Vec<shepherd_core::patterns::Problem>,
+    },
+    ShepherdTopicList {
+        topics: Vec<shepherd_core::bus::TopicSummary>,
+    },
+    ShepherdTopicCreated {
+        topic: shepherd_core::bus::Topic,
+    },
+    ShepherdMessagePublished {
+        message: shepherd_core::bus::Message,
+    },
+    ShepherdTopicMessages {
+        messages: Vec<shepherd_core::bus::Message>,
+    },
+    ShepherdConsumerGroups {
+        groups: Vec<shepherd_core::bus::ConsumerGroupSummary>,
+    },
     Ok {},
 }
 

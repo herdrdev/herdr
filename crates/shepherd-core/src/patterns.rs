@@ -55,9 +55,12 @@ pub fn is_builtin_template(name: &str) -> bool {
 
 // --- Data Models ---
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum PatternKind {
+    #[default]
     OrchestratorWorker,
     Hierarchical,
     Blackboard,
@@ -98,7 +101,7 @@ fn default_partitions() -> u32 {
     1
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Topic {
     pub name: String,
     #[serde(default = "default_partitions")]
@@ -117,7 +120,7 @@ fn is_default_count(c: &u32) -> bool {
     *c == 1
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PatternAgent {
     pub id: String,
     pub role: String,
@@ -139,7 +142,24 @@ pub struct PatternAgent {
     pub group: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+impl Default for PatternAgent {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            role: String::new(),
+            vendor: None,
+            model: None,
+            prompt: None,
+            count: default_count(),
+            level: None,
+            publishes: Vec::new(),
+            consumes: Vec::new(),
+            group: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Pattern {
     pub name: String,
     pub kind: PatternKind,
@@ -153,7 +173,19 @@ pub struct Pattern {
 
 // --- Storage Metadata & Enums ---
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum PatternSource {
     Project,
@@ -177,7 +209,7 @@ impl fmt::Display for PatternSource {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PatternSummary {
     pub name: String,
     pub kind: PatternKind,
@@ -186,23 +218,23 @@ pub struct PatternSummary {
     pub shadowed: bool,
     pub agents_count: usize,
     pub topics_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PatternDetail {
     #[serde(flatten)]
     pub pattern: Pattern,
     pub source: PatternSource,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     pub problems: Vec<Problem>,
 }
 
 // --- Validation Models ---
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     Error,
@@ -218,7 +250,7 @@ impl fmt::Display for Severity {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Problem {
     pub severity: Severity,
     pub path: String,

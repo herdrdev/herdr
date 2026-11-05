@@ -201,6 +201,98 @@ pub fn execute_shepherd_method(
             core.git_status(&root)
                 .map(|status| ResponseResult::ShepherdGitStatus { status })
         }
+        Method::ShepherdPatternList(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.list_patterns(&root)
+                .map(|patterns| ResponseResult::ShepherdPatternList { patterns })
+        }
+        Method::ShepherdPatternGet(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.get_pattern(&root, &params.name)
+                .map(|pattern| ResponseResult::ShepherdPatternDetail { pattern })
+        }
+        Method::ShepherdPatternSave(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let name = params.pattern.name.clone();
+            let is_global = params.global;
+            core.save_pattern(&root, &params.pattern, is_global)
+                .map(|(path, problems)| ResponseResult::ShepherdPatternSaved {
+                    ok: true,
+                    name,
+                    path: path.display().to_string(),
+                    source: if is_global {
+                        "global".into()
+                    } else {
+                        "project".into()
+                    },
+                    problems,
+                })
+        }
+        Method::ShepherdPatternDelete(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            let name = params.name.clone();
+            core.delete_pattern(&root, &params.name).map(|source| {
+                ResponseResult::ShepherdPatternDeleted {
+                    ok: true,
+                    name,
+                    deleted_source: source.as_str().into(),
+                }
+            })
+        }
+        Method::ShepherdPatternValidate(params) => {
+            let root = params
+                .root
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."));
+            core.validate_pattern(&root, params.pattern.as_ref(), params.name.as_deref())
+                .map(
+                    |(valid, problems)| ResponseResult::ShepherdPatternValidated {
+                        valid,
+                        problems,
+                    },
+                )
+        }
+        Method::ShepherdTopicList(_) => core
+            .list_topics()
+            .map(|topics| ResponseResult::ShepherdTopicList { topics }),
+        Method::ShepherdTopicCreate(params) => core
+            .create_topic(&params.name, params.partitions)
+            .map(|topic| ResponseResult::ShepherdTopicCreated { topic }),
+        Method::ShepherdTopicPublish(params) => core
+            .publish_topic(
+                &params.topic,
+                &params.content,
+                params.key.as_deref(),
+                params.partition,
+                &params.from,
+            )
+            .map(|message| ResponseResult::ShepherdMessagePublished { message }),
+        Method::ShepherdTopicTail(params) => core
+            .replay_topic(&params.topic, params.partition, 0, params.limit)
+            .map(|messages| ResponseResult::ShepherdTopicMessages { messages }),
+        Method::ShepherdTopicReplay(params) => core
+            .replay_topic(
+                &params.topic,
+                params.partition,
+                params.from_offset,
+                params.limit,
+            )
+            .map(|messages| ResponseResult::ShepherdTopicMessages { messages }),
+        Method::ShepherdTopicGroups(params) => core
+            .consumer_groups(params.topic.as_deref())
+            .map(|groups| ResponseResult::ShepherdConsumerGroups { groups }),
         _ => Err(format!("unsupported shepherd method: {:?}", method)),
     };
 

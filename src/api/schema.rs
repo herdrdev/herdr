@@ -163,6 +163,17 @@ operations::define_operations! {
     ShepherdRunReject(ShepherdGateRejectParams) => "shepherd.run.reject", false, true;
     ShepherdSkillList(ShepherdSkillListParams) => "shepherd.skill.list", false, true;
     ShepherdGitStatus(ShepherdGitStatusParams) => "shepherd.git.status", false, true;
+    ShepherdPatternList(ShepherdPatternListParams) => "shepherd.pattern.list", false, true;
+    ShepherdPatternGet(ShepherdPatternGetParams) => "shepherd.pattern.get", false, true;
+    ShepherdPatternSave(ShepherdPatternSaveParams) => "shepherd.pattern.save", false, true;
+    ShepherdPatternDelete(ShepherdPatternDeleteParams) => "shepherd.pattern.delete", false, true;
+    ShepherdPatternValidate(ShepherdPatternValidateParams) => "shepherd.pattern.validate", false, true;
+    ShepherdTopicList(ShepherdEmptyParams) => "shepherd.topic.list", false, true;
+    ShepherdTopicCreate(ShepherdTopicCreateParams) => "shepherd.topic.create", false, true;
+    ShepherdTopicPublish(ShepherdTopicPublishParams) => "shepherd.topic.publish", false, true;
+    ShepherdTopicTail(ShepherdTopicTailParams) => "shepherd.topic.tail", false, true;
+    ShepherdTopicReplay(ShepherdTopicReplayParams) => "shepherd.topic.replay", false, true;
+    ShepherdTopicGroups(ShepherdTopicGroupsParams) => "shepherd.topic.groups", false, true;
     ShepherdCall(ShepherdCallParams) => "shepherd.call", false, true;
 }
 

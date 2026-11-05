@@ -322,6 +322,50 @@ mod tests {
             actual.remove("shepherd.task.list").as_deref(),
             Some("d5a20d5985bef170d0a875c679e0238f795e6917b2c875acd3d97c186b232646")
         );
+        assert_eq!(
+            actual.remove("shepherd.pattern.delete").as_deref(),
+            Some("4239180c954ccea02f1f2a5c5ca9a6e5b90e294181228f5e9f496e333cbe69bb")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.get").as_deref(),
+            Some("59584787f8b06958e554b6780022edbcfcaf44bfc6c33c94173b29c77d8173fc")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.list").as_deref(),
+            Some("26484e5b246e5ee74868a24c966243e2a611257e9e112631196969f85a037a07")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.save").as_deref(),
+            Some("bf7b742c475ce0e560177e8ddd0b3a9df21f85ce3267509eec8910a779e2745b")
+        );
+        assert_eq!(
+            actual.remove("shepherd.pattern.validate").as_deref(),
+            Some("acae7d7b5598828187644aa8bf77bbd509f407fb8e6d2e5cfc57b95e26772504")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.create").as_deref(),
+            Some("103480c99abc40c6af01219ab678806c4e19d5db92b4ba1db7e88c461cc6ec6f")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.groups").as_deref(),
+            Some("655b28877f7bccdae9272a5ed73318e012f8140365d63036b5a4462d0883cd86")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.list").as_deref(),
+            Some("1dd8ded7b062ffac82d361925e05f7c366ae7420a418ed484a15dcc2ffe4f411")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.publish").as_deref(),
+            Some("6c60b1c2fdd7ef730bb8a4588ce08c2d63ee54e78fb1f2ca6b88dc938f89e414")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.replay").as_deref(),
+            Some("9119f97f31dcb9a70462f43f66bdea9abc8651b77d4393fe97c92f1569869085")
+        );
+        assert_eq!(
+            actual.remove("shepherd.topic.tail").as_deref(),
+            Some("ad498af9deabf61f97d3ea37ba31d916ab5cf103b801529cecdd0c2e23484823")
+        );
 
         assert_eq!(
             actual, expected,

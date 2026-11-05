@@ -1275,7 +1275,18 @@ impl App {
             | Method::ShepherdRunApprove(_)
             | Method::ShepherdRunReject(_)
             | Method::ShepherdSkillList(_)
-            | Method::ShepherdGitStatus(_) => {
+            | Method::ShepherdGitStatus(_)
+            | Method::ShepherdPatternList(_)
+            | Method::ShepherdPatternGet(_)
+            | Method::ShepherdPatternSave(_)
+            | Method::ShepherdPatternDelete(_)
+            | Method::ShepherdPatternValidate(_)
+            | Method::ShepherdTopicList(_)
+            | Method::ShepherdTopicCreate(_)
+            | Method::ShepherdTopicPublish(_)
+            | Method::ShepherdTopicTail(_)
+            | Method::ShepherdTopicReplay(_)
+            | Method::ShepherdTopicGroups(_) => {
                 if let Some(ref svc) = self.shepherd_service {
                     return svc.call_method_sync(&request.id, request.method);
                 } else {

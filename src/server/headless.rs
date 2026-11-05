@@ -2929,6 +2929,17 @@ impl HeadlessServer {
                 | api::schema::Method::ShepherdRunReject(_)
                 | api::schema::Method::ShepherdSkillList(_)
                 | api::schema::Method::ShepherdGitStatus(_)
+                | api::schema::Method::ShepherdPatternList(_)
+                | api::schema::Method::ShepherdPatternGet(_)
+                | api::schema::Method::ShepherdPatternSave(_)
+                | api::schema::Method::ShepherdPatternDelete(_)
+                | api::schema::Method::ShepherdPatternValidate(_)
+                | api::schema::Method::ShepherdTopicList(_)
+                | api::schema::Method::ShepherdTopicCreate(_)
+                | api::schema::Method::ShepherdTopicPublish(_)
+                | api::schema::Method::ShepherdTopicTail(_)
+                | api::schema::Method::ShepherdTopicReplay(_)
+                | api::schema::Method::ShepherdTopicGroups(_)
         )
     }
 

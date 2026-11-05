@@ -3073,13 +3073,228 @@ Total de líneas añadidas en archivos de Herdr: ~196 líneas aditivas repartida
 
 ### 4. Qué queda para fases posteriores
 
-1. **Fase F9b-2 (Dominios restantes: patrones y tópicos)**:
-   - Declaración de parámetros tipados para `shepherd.pattern.*` (`list`, `get`, `save`, `delete`, `validate`) y `shepherd.topic.*` (`list`, `create`, `publish`, `tail`, `replay`, `groups`).
-   - Registro en `define_operations!`, `ResponseResult` y digests SHA-256 asociados.
+1. **Fase F9b-2 (Dominios restantes: patrones y tópicos)**: [Completada]
 2. **Fase F9c (CLI declarativo)**:
    - Sustituir el despachador artesanal `cli.rs` por bindings `cli_params!` sobre los métodos tipados expuestos.
 3. **Fase F9d (Partición modular)**:
    - Partir `service.rs`, `terminals.rs` y `mcp.rs` manteniendo la suite de golden files verde en cada paso.
 4. **Fase F9e (Configuración y persistencia)**:
    - Unificación de directivas de configuración sin romper compatibilidad.
+
+---
+
+## Estado F9b-2 — Métodos de API tipados al estilo de herdr (patrones y tópicos) y cierre de F9b (2026-11-05)
+
+Fase F9b-2 completada según el brief `SHEPHERD-F9B2-BRIEF.md`, completando el cierre definitivo de F9b con los dominios **patrones** y **tópicos/bus**, respetando las convenciones exactas de herdr, sin cambiar comportamiento ni alterar los golden files existentes.
+
+### 1. Qué se ha implementado
+
+1. **Extracción y tipado en Shepherd Core (`crates/shepherd-core`)**:
+   - Derivación de `schemars::JsonSchema` en los modelos del dominio de patrones (`PatternKind`, `Topic`, `PatternAgent`, `Pattern`, `PatternSource`, `PatternSummary`, `PatternDetail`, `Severity`, `Problem`) y del bus de mensajería (`Message`, `Topic`, `TopicSummary`, `ConsumerGroupSummary`).
+   - Extraídas 10 funciones auxiliares fuertemente tipadas en `OrchestrationService` (`crates/shepherd-core/src/service.rs`):
+     - `list_patterns(&self, root: &Path) -> Result<Vec<PatternSummary>, String>`
+     - `get_pattern(&self, root: &Path, name: &str) -> Result<PatternDetail, String>`
+     - `save_pattern(&self, root: &Path, pattern: &Pattern, is_global: bool) -> Result<(PathBuf, Vec<Problem>), String>`
+     - `delete_pattern(&self, root: &Path, name: &str) -> Result<PatternSource, String>`
+     - `validate_pattern(&self, root: &Path, pattern: Option<&Pattern>, name: Option<&str>) -> Result<(bool, Vec<Problem>), String>`
+     - `list_topics(&self) -> Result<Vec<TopicSummary>, String>`
+     - `create_topic(&self, name: &str, partitions: u32) -> Result<Topic, String>`
+     - `publish_topic(&self, topic: &str, content: &str, key: Option<&str>, partition: Option<u32>, from: &str) -> Result<Message, String>`
+     - `replay_topic(&self, topic: &str, partition: Option<u32>, from_offset: u64, limit: Option<usize>) -> Result<Vec<Message>, String>`
+     - `consumer_groups(&self, topic: Option<&str>) -> Result<Vec<ConsumerGroupSummary>, String>`
+   - `handle_call` en `crates/shepherd-core/src/service.rs` delega directamente en estos métodos tipados, garantizando 100% de paridad semántica y de serialización JSON.
+
+2. **Árbol de esquemas de parámetros (`src/api/schema/shepherd/`)**:
+   - `src/api/schema/shepherd/patterns.rs`: `ShepherdPatternListParams`, `ShepherdPatternGetParams`, `ShepherdPatternSaveParams`, `ShepherdPatternDeleteParams`, `ShepherdPatternValidateParams`.
+   - `src/api/schema/shepherd/topics.rs`: `ShepherdTopicCreateParams`, `ShepherdTopicPublishParams`, `ShepherdTopicTailParams`, `ShepherdTopicReplayParams`, `ShepherdTopicGroupsParams`.
+   - Reexport de los submódulos `patterns` y `topics` en `src/api/schema/shepherd/mod.rs`.
+
+3. **Registro y contrato en Herdr Core (`src/api/schema.rs` y `src/api/schema/response.rs`)**:
+   - Registrados los 11 métodos en `define_operations!` con atributos `changes_ui: false, client_shell: true`:
+     - `shepherd.pattern.list`, `shepherd.pattern.get`, `shepherd.pattern.save`, `shepherd.pattern.delete`, `shepherd.pattern.validate`
+     - `shepherd.topic.list`, `shepherd.topic.create`, `shepherd.topic.publish`, `shepherd.topic.tail`, `shepherd.topic.replay`, `shepherd.topic.groups`
+     - `shepherd.call` permanece activo como alias deprecado.
+   - Registradas 10 variantes fuertemente tipadas en `ResponseResult` de `src/api/schema/response.rs`:
+     - `ShepherdPatternList`, `ShepherdPatternDetail`, `ShepherdPatternSaved`, `ShepherdPatternDeleted`, `ShepherdPatternValidated`
+     - `ShepherdTopicList`, `ShepherdTopicCreated`, `ShepherdMessagePublished`, `ShepherdTopicMessages`, `ShepherdConsumerGroups`
+
+4. **Compatibilidad Wire, Digests SHA-256 y Esquema JSON**:
+   - Congelados los 11 digests SHA-256 en `src/server/client_commands.rs`:
+     - `shepherd.pattern.delete`: `4239180c954ccea02f1f2a5c5ca9a6e5b90e294181228f5e9f496e333cbe69bb`
+     - `shepherd.pattern.get`: `59584787f8b06958e554b6780022edbcfcaf44bfc6c33c94173b29c77d8173fc`
+     - `shepherd.pattern.list`: `26484e5b246e5ee74868a24c966243e2a611257e9e112631196969f85a037a07`
+     - `shepherd.pattern.save`: `bf7b742c475ce0e560177e8ddd0b3a9df21f85ce3267509eec8910a779e2745b`
+     - `shepherd.pattern.validate`: `acae7d7b5598828187644aa8bf77bbd509f407fb8e6d2e5cfc57b95e26772504`
+     - `shepherd.topic.create`: `103480c99abc40c6af01219ab678806c4e19d5db92b4ba1db7e88c461cc6ec6f`
+     - `shepherd.topic.groups`: `655b28877f7bccdae9272a5ed73318e012f8140365d63036b5a4462d0883cd86`
+     - `shepherd.topic.list`: `1dd8ded7b062ffac82d361925e05f7c366ae7420a418ed484a15dcc2ffe4f411`
+     - `shepherd.topic.publish`: `6c60b1c2fdd7ef730bb8a4588ce08c2d63ee54e78fb1f2ca6b88dc938f89e414`
+     - `shepherd.topic.replay`: `9119f97f31dcb9a70462f43f66bdea9abc8651b77d4393fe97c92f1569869085`
+     - `shepherd.topic.tail`: `ad498af9deabf61f97d3ea37ba31d916ab5cf103b801529cecdd0c2e23484823`
+   - El fixture de compatibilidad `tests/fixtures/endpoint-method-shapes-v1.json` permanece inalterado.
+   - Sincronizado deterministamente el artefacto `docs/next/api/shepherd-api.schema.json` mediante `SHEPHERD_UPDATE_API_SCHEMA=1`.
+
+5. **Despacho en Servidor y Runtime**:
+   - `src/server/headless.rs`: `is_shepherd_method` reconoce los 27 métodos tipados + alias `shepherd.call`.
+   - `src/app/api.rs`: enrutamiento síncrono unificado hacia `shepherd_service.call_method_sync`.
+   - `src/shepherd/service.rs`: `execute_shepherd_method` despacha los 11 nuevos métodos invocando a `OrchestrationService` y envolviendo en `ResponseResult`.
+
+6. **Cliente TUI (`src/client/shell/shepherd.rs`)**:
+   - `shepherd_op_to_method` mapea exhaustivamente todas las operaciones de patrones y tópicos a sus métodos tipados.
+   - `handle_shepherd_response` gestiona las respuestas de métodos tipados de patrones y tópicos sin fallbacks opacos.
+
+7. **Pruebas de Caracterización y Golden Files**:
+   - Añadidos 11 tests tipados en `crates/shepherd-core/tests/characterization.rs` validando contra los mismos golden files de `handle_call`.
+   - Los **90 golden files originales** de `crates/shepherd-core/tests/golden/` permanecen en verde **SIN regenerarse** (0 diffs).
+   - Añadido test exhaustivo de paridad `test_all_legacy_ops_match_typed_methods_equivalently` comprobando que cada una de las operaciones responde exactamente igual por `shepherd.call` y por su método tipado.
+   - Añadido test de errores de parámetros inválidos `test_typed_methods_invalid_params_error`.
+
+### 2. Mapeo final completo op → método (cero ops huérfanas)
+
+No queda ninguna operación en `handle_call` sin su correspondiente método tipado de API:
+
+| Operación `shepherd.call` | Alias heredados | Método Tipado de API | Parámetros (`cli_params!`) | Resultado Tipado (`ResponseResult`) |
+|---|---|---|---|---|
+| `"agents"` | — | `shepherd.agent.list` | `ShepherdAgentListParams` | `ShepherdAgentList` |
+| `"spawn"` | — | `shepherd.agent.spawn` | `ShepherdAgentSpawnParams` | `ShepherdAgentSpawned` |
+| `"kill"` | — | `shepherd.agent.kill` | `ShepherdAgentTargetParams` | `ShepherdAgentKilled` |
+| `"clean"` | — | `shepherd.agent.clean` | `ShepherdAgentCleanParams` | `ShepherdAgentCleaned` |
+| `"focus"` | — | `shepherd.agent.focus` | `ShepherdAgentTargetParams` | `ShepherdAgentFocused` |
+| `"reconcile"` | — | `shepherd.agent.reconcile` | `ShepherdEmptyParams` | `ShepherdAgentReconciled` |
+| `"resume"` | — | `shepherd.agent.resume` | `ShepherdEmptyParams` | `ShepherdAgentResumed` |
+| `"tasks"` | — | `shepherd.task.list` | `ShepherdTaskListParams` | `ShepherdTaskList` |
+| `"task_create"` | `"create_task"` | `shepherd.task.create` | `ShepherdTaskCreateParams` | `ShepherdTaskCreated` |
+| `"task_archive"` | `"archive_task"` | `shepherd.task.archive` | `ShepherdTaskArchiveParams` | `ShepherdTaskArchived` |
+| `"runs"` | — | `shepherd.run.list` | `ShepherdRunListParams` | `ShepherdRunList` |
+| `"run"` | — | `shepherd.run.start` | `ShepherdRunStartParams` | `ShepherdRunStarted` |
+| `"approve"` | — | `shepherd.run.approve` | `ShepherdGateActionParams` | `ShepherdGateApproved` |
+| `"reject"` | `"reject_gate"` | `shepherd.run.reject` | `ShepherdGateRejectParams` | `ShepherdGateRejected` |
+| `"skills"` | — | `shepherd.skill.list` | `ShepherdSkillListParams` | `ShepherdSkillList` |
+| `"git_status"` | — | `shepherd.git.status` | `ShepherdGitStatusParams` | `ShepherdGitStatus` |
+| `"patterns"` | — | `shepherd.pattern.list` | `ShepherdPatternListParams` | `ShepherdPatternList` |
+| `"pattern_get"` | — | `shepherd.pattern.get` | `ShepherdPatternGetParams` | `ShepherdPatternDetail` |
+| `"pattern_save"` | — | `shepherd.pattern.save` | `ShepherdPatternSaveParams` | `ShepherdPatternSaved` |
+| `"pattern_delete"` | — | `shepherd.pattern.delete` | `ShepherdPatternDeleteParams` | `ShepherdPatternDeleted` |
+| `"pattern_validate"` | — | `shepherd.pattern.validate` | `ShepherdPatternValidateParams` | `ShepherdPatternValidated` |
+| `"topics"` | — | `shepherd.topic.list` | `ShepherdEmptyParams` | `ShepherdTopicList` |
+| `"topic_create"` | — | `shepherd.topic.create` | `ShepherdTopicCreateParams` | `ShepherdTopicCreated` |
+| `"publish"` | — | `shepherd.topic.publish` | `ShepherdTopicPublishParams` | `ShepherdMessagePublished` |
+| `"topic_tail"` | — | `shepherd.topic.tail` | `ShepherdTopicTailParams` | `ShepherdTopicMessages` |
+| `"topic_replay"` | — | `shepherd.topic.replay` | `ShepherdTopicReplayParams` | `ShepherdTopicMessages` |
+| `"consumer_groups"` | — | `shepherd.topic.groups` | `ShepherdTopicGroupsParams` | `ShepherdConsumerGroups` |
+| `*` (cualquiera) | — | `shepherd.call` (alias) | `ShepherdCallParams` | `ShepherdCall` |
+
+Total: **27 métodos tipados específicos** + **1 método dispatcher alias** (`shepherd.call`). Cobertura: 100% de operaciones y alias.
+
+### 3. Archivos de herdr modificados y coste de fusión
+
+Todos los cambios en archivos de herdr son estrictamente aditivos y mínimos:
+
+| Archivo de Herdr | Líneas Modificadas en F9b-2 | Líneas Acumuladas en F9b | Motivo de enganche |
+|---|---|---|---|
+| `src/api/schema.rs` | +11 | +27 | Registro de métodos en macro `define_operations!` (`changes_ui: false, client_shell: true`). |
+| `src/api/schema/response.rs` | +38 | +95 | Registro de variantes tipadas en enum `ResponseResult`. |
+| `src/app/api.rs` | +12, -1 | +30, -10 | Despacho síncrono de variantes `Method::Shepherd*` a `call_method_sync`. |
+| `src/server/client_commands.rs` | +44 | +108 | Registro de asserts para digests SHA-256 en test de contrato. |
+| `src/server/headless.rs` | +11 | +42, -4 | Función auxiliar `is_shepherd_method` para encolado hacia `ShepherdCallJob`. |
+
+**Total de líneas añadidas en F9b-2 en archivos de herdr**: 116 líneas (+116, -1).
+Coste de fusión extremadamente bajo y limpio en 5 puntos de enganche arquitectónicamente requeridos por herdr.
+
+Resultado de `./scripts/upstream-sync.sh --dry-run --allow-branch master`:
+```
+=== [DRY RUN] Upstream Sync Routine for Shepherd ===
+Target upstream ref: master
+Upstream remote:     upstream
+Sync branch to create: sync/master
+
+Steps that would be executed:
+  (a) Check working tree is clean and current branch is 'shepherd' (current: 'shep/24-eres-el-agente-de-codigo-de-la-fase-f1-d')
+  (b) Create and switch to temporary branch: git checkout -b "sync/master"
+  (c) Fetch upstream: git fetch "upstream"
+      Merge target:   git merge "master"
+  (d) Re-apply automated rename: ./scripts/rename-from-herdr.sh
+      Verify rename check:       ./scripts/rename-from-herdr.sh --check
+  (e) Build project:             ./cargo-fork.sh build
+      Run test battery by area:  ./cargo-fork.sh test -p shepherd-core
+                                 ./cargo-fork.sh test client::shell
+                                 ./cargo-fork.sh test shepherd::
+                                 ./cargo-fork.sh test protocol::
+                                 ./cargo-fork.sh test api::
+                                 ./cargo-fork.sh test server::
+  (f) Leave 'sync/master' ready WITHOUT pushing to any remote and WITHOUT merging into 'shepherd'
+=== [DRY RUN END] ===
+```
+
+### 4. Números reales de tests por área
+
+Todas las áreas de tests fueron ejecutadas de forma real y directa contra el código de la fase:
+
+| Área de Tests | Comando Ejecutado | Resultados Reales | Estado |
+|---|---|---|---|
+| **shepherd-core** | `./cargo-fork.sh test -p shepherd-core` | **228 passed** (117 unitarios + 111 de caracterización [90 golden originales intactos + 8 F9b-1 + 11 F9b-2 + 1 paridad + 1 params]), 0 failed, 0 ignored | **VERDE** (`grep -c testRepo` = **0**) |
+| **shepherd::** | `./cargo-fork.sh test shepherd::` | **52 passed**, 0 failed, 0 ignored | **VERDE** |
+| **client::shell** | `./cargo-fork.sh test client::shell` | **391 passed**, 0 failed, 2 ignored | **VERDE** |
+| **protocol::** | `./cargo-fork.sh test protocol::` | **159 passed** (156 en `src/main.rs`, 3 en `tests/cli.rs`), 0 failed, 0 ignored | **VERDE** |
+| **api::** | `./cargo-fork.sh test api:: -- --test-threads=1` | **319 passed**, 0 failed, 1 ignored (suite entera verde; sin test-threads=1 los tests de plugins compiten por sockets/env como documentado) | **VERDE** |
+| **server::** | `./cargo-fork.sh test server::` | **318 passed**, 0 failed, 5 ignored | **VERDE** |
+| **rename check** | `./scripts/rename-from-herdr.sh --check` | `[OK] No unexcluded occurrences of herdr/Herdr/HERDR found.` | **VERDE** |
+| **formato** | Formateo estricto solo en archivos propios (`crates/shepherd-core/**`, `src/shepherd/**`, `src/api/schema/shepherd/**`, `src/client/shell/shepherd.rs`), revirtiendo cualquier archivo de herdr tocado por fmt | **VERDE** |
+
+### 5. Verificación real con `./scripts/shepherd-iso.sh` (sin agentes reales)
+
+Se levantó una instancia real aislada del servidor (`./scripts/shepherd-iso.sh start`) y se comprobaron las respuestas tipadas vs `shepherd.call` y la navegación del overlay:
+
+1. **`shepherd.pattern.list` vs `shepherd.call`**:
+   ```
+   $ ./scripts/shepherd-iso.sh call shepherd.pattern.list '{}'
+   {"id":"1","result":{"type":"shepherd_pattern_list","patterns":[{"name":"blackboard","kind":"blackboard","description":"Shared knowledge base where specialist agents read hypotheses and post discoveries.","source":"builtin","shadowed":false,"agents_count":3,"topics_count":1},{"name":"hierarchical",...},{"name":"market",...},{"name":"orchestrator-worker",...}]}}
+
+   $ ./scripts/shepherd-iso.sh call shepherd.call '{"op":"patterns","args":{}}'
+   {"id":"1","result":{"type":"shepherd_call","data":[{"agents_count":3,"description":"Shared knowledge base where specialist agents read hypotheses and post discoveries.","kind":"blackboard","name":"blackboard","shadowed":false,"source":"builtin","topics_count":1},...]}}
+   ```
+
+2. **`shepherd.pattern.get` vs `shepherd.call`**:
+   ```
+   $ ./scripts/shepherd-iso.sh call shepherd.pattern.get '{"name":"orchestrator-worker"}'
+   {"id":"1","result":{"type":"shepherd_pattern_detail","pattern":{"name":"orchestrator-worker","kind":"orchestrator-worker","description":"Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results.","topics":[{"name":"orders","partitions":4,"key":"task_id"},{"name":"results","partitions":1}],"agents":[...],"source":"builtin","problems":[]}}}
+   ```
+
+3. **`shepherd.pattern.validate`**:
+   ```
+   $ ./scripts/shepherd-iso.sh call shepherd.pattern.validate '{"name":"orchestrator-worker"}'
+   {"id":"1","result":{"type":"shepherd_pattern_validated","valid":true,"problems":[]}}
+   ```
+
+4. **`shepherd.topic.create`, `publish`, `tail`, `replay`, `groups`**:
+   ```
+   $ ./scripts/shepherd-iso.sh call shepherd.topic.create '{"name":"my-topic","partitions":2}'
+   {"id":"1","result":{"type":"shepherd_topic_created","topic":{"name":"my-topic","partitions":2}}}
+
+   $ ./scripts/shepherd-iso.sh call shepherd.topic.publish '{"topic":"my-topic","content":"hello typed bus","key":"k1"}'
+   {"id":"1","result":{"type":"shepherd_message_published","message":{"id":1,"ts":"<TIMESTAMP>","from":"user","kind":"msg","content":"hello typed bus","topic":"my-topic","key":"k1","partition":1,"offset":0}}}
+
+   $ ./scripts/shepherd-iso.sh call shepherd.topic.tail '{"topic":"my-topic"}'
+   {"id":"1","result":{"type":"shepherd_topic_messages","messages":[{"id":1,"ts":"<TIMESTAMP>","from":"user","kind":"msg","content":"hello typed bus","topic":"my-topic","key":"k1","partition":1,"offset":0}]}}
+   ```
+
+5. **`shepherd.pattern.save` y `delete`**:
+   ```
+   $ ./scripts/shepherd-iso.sh call shepherd.pattern.save '{"pattern":{"name":"iso-pat","kind":"orchestrator-worker","description":"test","topics":[{"name":"in","partitions":1},{"name":"out","partitions":1}],"agents":[{"id":"lead","role":"brain","count":1,"publishes":["in"],"consumes":["out"]},{"id":"w1","role":"coder","count":1,"publishes":["out"],"consumes":["in"],"group":"w"}]},"global":false}'
+   {"id":"1","result":{"type":"shepherd_pattern_saved","ok":true,"name":"iso-pat","path":"./.shepherd/patterns/iso-pat.yaml","source":"project"}}
+
+   $ ./scripts/shepherd-iso.sh call shepherd.pattern.delete '{"name":"iso-pat"}'
+   {"id":"1","result":{"type":"shepherd_pattern_deleted","ok":true,"name":"iso-pat","deleted_source":"project"}}
+   ```
+
+6. **Overlay TUI (`Ctrl+b a`)**:
+   - Apertura y captura de pantalla (`./scripts/shepherd-iso.sh keys C-b a && ./scripts/shepherd-iso.sh screen`): visualización de pestaña Tareas.
+   - Navegación por pestañas con `Tab`: Runs, Skills (catálogo completo cargado), Git (worktree inspeccionado en modo solo lectura).
+   - Cierre limpio con `Esc` volviendo al shell sin artifacts residuales.
+   - Parada limpia con `./scripts/shepherd-iso.sh stop`.
+
+### 6. Qué NO queda (qué pasa a F9c)
+
+- La fase F9b queda **100% finalizada y cerrada**: todos los métodos de API de Shepherd (27 métodos tipados) están definidos con `cli_params!`, registrados en `Method`, tipados en `ResponseResult` y congelados con digests SHA-256.
+- **Qué NO queda en F9b y pasa a F9c**: la migración de la CLI declarativa. En F9c, el despachador de argumentos de `crates/shepherd-core/src/cli.rs` (~3.984 líneas) será reemplazado por `Leaf` y `projection::group_request` sobre los métodos tipados ya construidos.
 

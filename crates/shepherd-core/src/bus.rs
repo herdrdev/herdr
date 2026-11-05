@@ -13,7 +13,7 @@ pub const KIND_MESSAGE: &str = "msg";
 pub const KIND_RESULT: &str = "result";
 pub const KIND_SYSTEM: &str = "system";
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, schemars::JsonSchema)]
 pub struct Message {
     pub id: i64,
     #[serde(default)]
@@ -92,20 +92,20 @@ impl Serialize for Message {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Topic {
     pub name: String,
     pub partitions: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct TopicSummary {
     pub name: String,
     pub partitions: u32,
     pub messages_count: usize,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ConsumerGroupSummary {
     pub topic: String,
     pub group: String,

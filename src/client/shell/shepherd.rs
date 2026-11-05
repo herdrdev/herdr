@@ -79,6 +79,57 @@ fn shepherd_op_to_method(op: &str, args: serde_json::Value) -> crate::api::schem
                 serde_json::from_value(args.clone()).unwrap_or_default();
             Method::ShepherdGitStatus(params)
         }
+        "patterns" => {
+            let params: ShepherdPatternListParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternList(params)
+        }
+        "pattern_get" => {
+            let params: ShepherdPatternGetParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternGet(params)
+        }
+        "pattern_save" => {
+            let params: ShepherdPatternSaveParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternSave(params)
+        }
+        "pattern_delete" => {
+            let params: ShepherdPatternDeleteParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternDelete(params)
+        }
+        "pattern_validate" => {
+            let params: ShepherdPatternValidateParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdPatternValidate(params)
+        }
+        "topics" => Method::ShepherdTopicList(ShepherdEmptyParams {}),
+        "topic_create" => {
+            let params: ShepherdTopicCreateParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTopicCreate(params)
+        }
+        "publish" => {
+            let params: ShepherdTopicPublishParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTopicPublish(params)
+        }
+        "topic_tail" => {
+            let params: ShepherdTopicTailParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTopicTail(params)
+        }
+        "topic_replay" => {
+            let params: ShepherdTopicReplayParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTopicReplay(params)
+        }
+        "consumer_groups" => {
+            let params: ShepherdTopicGroupsParams =
+                serde_json::from_value(args.clone()).unwrap_or_default();
+            Method::ShepherdTopicGroups(params)
+        }
         _ => Method::ShepherdCall(ShepherdCallParams {
             op: op.to_string(),
             args,
@@ -508,7 +559,12 @@ impl ClientShellState {
             }
             Ok(crate::api::schema::ResponseResult::ShepherdRunStarted { .. })
             | Ok(crate::api::schema::ResponseResult::ShepherdGateApproved { .. })
-            | Ok(crate::api::schema::ResponseResult::ShepherdGateRejected { .. }) => {
+            | Ok(crate::api::schema::ResponseResult::ShepherdGateRejected { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdPatternSaved { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdPatternDeleted { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdPatternValidated { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdTopicCreated { .. })
+            | Ok(crate::api::schema::ResponseResult::ShepherdMessagePublished { .. }) => {
                 overlay.status_message = Some(format!("Operación completada ({op})"));
                 self.refresh_shepherd_views(outcome);
                 outcome.repaint = true;

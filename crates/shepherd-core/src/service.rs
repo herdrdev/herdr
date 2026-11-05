@@ -1738,6 +1738,127 @@ impl OrchestrationService {
             .map_err(|e| e.to_string())
     }
 
+    pub fn list_patterns(
+        &self,
+        root: &Path,
+    ) -> Result<Vec<crate::patterns::PatternSummary>, String> {
+        crate::patterns::list_patterns(root, None).map_err(|e| e.to_string())
+    }
+
+    pub fn get_pattern(
+        &self,
+        root: &Path,
+        name: &str,
+    ) -> Result<crate::patterns::PatternDetail, String> {
+        let (pattern, source, path) =
+            crate::patterns::load_pattern(name, root, None).map_err(|e| e.to_string())?;
+        let config = load_config(root).unwrap_or_default();
+        let problems = crate::patterns::validate(&pattern, &config);
+        Ok(crate::patterns::PatternDetail {
+            pattern,
+            source,
+            path: path.map(|p| p.display().to_string()),
+            problems,
+        })
+    }
+
+    pub fn save_pattern(
+        &self,
+        root: &Path,
+        pattern: &crate::patterns::Pattern,
+        is_global: bool,
+    ) -> Result<(PathBuf, Vec<crate::patterns::Problem>), String> {
+        let config = load_config(root).unwrap_or_default();
+        let problems = crate::patterns::validate(pattern, &config);
+        let has_errors = problems
+            .iter()
+            .any(|p| p.severity == crate::patterns::Severity::Error);
+        if has_errors {
+            return Err(format!(
+                "pattern validation failed: {}",
+                serde_json::to_string(&problems).unwrap_or_default()
+            ));
+        }
+        let path = crate::patterns::save_pattern(pattern, is_global, root, None)
+            .map_err(|e| e.to_string())?;
+        Ok((path, problems))
+    }
+
+    pub fn delete_pattern(
+        &self,
+        root: &Path,
+        name: &str,
+    ) -> Result<crate::patterns::PatternSource, String> {
+        crate::patterns::delete_pattern(name, root, None).map_err(|e| e.to_string())
+    }
+
+    pub fn validate_pattern(
+        &self,
+        root: &Path,
+        pattern: Option<&crate::patterns::Pattern>,
+        name: Option<&str>,
+    ) -> Result<(bool, Vec<crate::patterns::Problem>), String> {
+        let config = load_config(root).unwrap_or_default();
+        let pat = if let Some(p) = pattern {
+            p.clone()
+        } else if let Some(n) = name {
+            let (loaded, _, _) =
+                crate::patterns::load_pattern(n, root, None).map_err(|e| e.to_string())?;
+            loaded
+        } else {
+            return Err("missing 'pattern' or 'name' for pattern_validate".to_owned());
+        };
+        let problems = crate::patterns::validate(&pat, &config);
+        let valid = !problems
+            .iter()
+            .any(|p| p.severity == crate::patterns::Severity::Error);
+        Ok((valid, problems))
+    }
+
+    pub fn list_topics(&self) -> Result<Vec<crate::bus::TopicSummary>, String> {
+        let bus = self.bus()?;
+        bus.list_topics().map_err(|e| e.to_string())
+    }
+
+    pub fn create_topic(&self, name: &str, partitions: u32) -> Result<crate::bus::Topic, String> {
+        let bus = self.bus()?;
+        bus.topic_create(name, partitions)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn publish_topic(
+        &self,
+        topic: &str,
+        content: &str,
+        key: Option<&str>,
+        partition: Option<u32>,
+        from: &str,
+    ) -> Result<crate::bus::Message, String> {
+        let bus = self.bus()?;
+        bus.publish(topic, content, key, partition, from)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn replay_topic(
+        &self,
+        topic: &str,
+        partition: Option<u32>,
+        from_offset: u64,
+        limit: Option<usize>,
+    ) -> Result<Vec<crate::bus::Message>, String> {
+        let bus = self.bus()?;
+        bus.replay(topic, partition, from_offset, limit)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn consumer_groups(
+        &self,
+        topic: Option<&str>,
+    ) -> Result<Vec<crate::bus::ConsumerGroupSummary>, String> {
+        let bus = self.bus()?;
+        bus.consumer_groups(topic).map_err(|e| e.to_string())
+    }
+
     /// Generic dispatcher for `shepherd.call {op, args}`.
     pub fn handle_call(&self, op: &str, args: Value) -> Result<Value, String> {
         match op {
@@ -1963,8 +2084,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let list =
-                    crate::patterns::list_patterns(&root, None).map_err(|e| e.to_string())?;
+                let list = self.list_patterns(&root)?;
                 serde_json::to_value(list).map_err(|e| e.to_string())
             }
             "pattern_get" => {
@@ -1979,16 +2099,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let (pattern, source, path) =
-                    crate::patterns::load_pattern(name, &root, None).map_err(|e| e.to_string())?;
-                let config = load_config(&root).unwrap_or_default();
-                let problems = crate::patterns::validate(&pattern, &config);
-                let detail = crate::patterns::PatternDetail {
-                    pattern,
-                    source,
-                    path: path.map(|p| p.display().to_string()),
-                    problems,
-                };
+                let detail = self.get_pattern(&root, name)?;
                 serde_json::to_value(detail).map_err(|e| e.to_string())
             }
             "pattern_save" => {
@@ -2005,19 +2116,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let config = load_config(&root).unwrap_or_default();
-                let problems = crate::patterns::validate(&pattern, &config);
-                let has_errors = problems
-                    .iter()
-                    .any(|p| p.severity == crate::patterns::Severity::Error);
-                if has_errors {
-                    return Err(format!(
-                        "pattern validation failed: {}",
-                        serde_json::to_string(&problems).unwrap_or_default()
-                    ));
-                }
-                let path = crate::patterns::save_pattern(&pattern, is_global, &root, None)
-                    .map_err(|e| e.to_string())?;
+                let (path, problems) = self.save_pattern(&root, &pattern, is_global)?;
                 Ok(serde_json::json!({
                     "ok": true,
                     "name": pattern.name,
@@ -2038,8 +2137,7 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let source = crate::patterns::delete_pattern(name, &root, None)
-                    .map_err(|e| e.to_string())?;
+                let source = self.delete_pattern(&root, name)?;
                 Ok(serde_json::json!({
                     "ok": true,
                     "name": name,
@@ -2054,21 +2152,16 @@ impl OrchestrationService {
                     .unwrap_or_else(|| {
                         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
                     });
-                let config = load_config(&root).unwrap_or_default();
                 let pattern = if let Some(pat_val) = args.get("pattern") {
-                    serde_json::from_value::<crate::patterns::Pattern>(pat_val.clone())
-                        .map_err(|e| format!("invalid pattern json: {e}"))?
-                } else if let Some(name) = args.get("name").and_then(Value::as_str) {
-                    let (pat, _, _) = crate::patterns::load_pattern(name, &root, None)
-                        .map_err(|e| e.to_string())?;
-                    pat
+                    Some(
+                        serde_json::from_value::<crate::patterns::Pattern>(pat_val.clone())
+                            .map_err(|e| format!("invalid pattern json: {e}"))?,
+                    )
                 } else {
-                    return Err("missing 'pattern' or 'name' for pattern_validate".to_owned());
+                    None
                 };
-                let problems = crate::patterns::validate(&pattern, &config);
-                let valid = !problems
-                    .iter()
-                    .any(|p| p.severity == crate::patterns::Severity::Error);
+                let name = args.get("name").and_then(Value::as_str);
+                let (valid, problems) = self.validate_pattern(&root, pattern.as_ref(), name)?;
                 Ok(serde_json::json!({
                     "valid": valid,
                     "problems": problems,
@@ -2097,8 +2190,7 @@ impl OrchestrationService {
                 serde_json::to_value(status).map_err(|e| e.to_string())
             }
             "topics" => {
-                let bus = self.bus()?;
-                let list = bus.list_topics().map_err(|e| e.to_string())?;
+                let list = self.list_topics()?;
                 serde_json::to_value(list).map_err(|e| e.to_string())
             }
             "topic_create" => {
@@ -2107,10 +2199,7 @@ impl OrchestrationService {
                     .and_then(Value::as_str)
                     .ok_or_else(|| "missing 'name' for topic_create".to_owned())?;
                 let partitions = args.get("partitions").and_then(Value::as_u64).unwrap_or(1) as u32;
-                let bus = self.bus()?;
-                let topic = bus
-                    .topic_create(name, partitions)
-                    .map_err(|e| e.to_string())?;
+                let topic = self.create_topic(name, partitions)?;
                 serde_json::to_value(topic).map_err(|e| e.to_string())
             }
             "publish" => {
@@ -2128,10 +2217,7 @@ impl OrchestrationService {
                     .and_then(Value::as_u64)
                     .map(|p| p as u32);
                 let from = args.get("from").and_then(Value::as_str).unwrap_or("user");
-                let bus = self.bus()?;
-                let msg = bus
-                    .publish(topic, content, key, partition, from)
-                    .map_err(|e| e.to_string())?;
+                let msg = self.publish_topic(topic, content, key, partition, from)?;
                 serde_json::to_value(msg).map_err(|e| e.to_string())
             }
             "topic_tail" | "topic_replay" => {
@@ -2152,16 +2238,12 @@ impl OrchestrationService {
                     .get("limit")
                     .and_then(Value::as_u64)
                     .map(|l| l as usize);
-                let bus = self.bus()?;
-                let msgs = bus
-                    .replay(topic, partition, from_offset, limit)
-                    .map_err(|e| e.to_string())?;
+                let msgs = self.replay_topic(topic, partition, from_offset, limit)?;
                 serde_json::to_value(msgs).map_err(|e| e.to_string())
             }
             "consumer_groups" => {
                 let topic = args.get("topic").and_then(Value::as_str);
-                let bus = self.bus()?;
-                let groups = bus.consumer_groups(topic).map_err(|e| e.to_string())?;
+                let groups = self.consumer_groups(topic)?;
                 serde_json::to_value(groups).map_err(|e| e.to_string())
             }
             other => {

@@ -25,6 +25,7 @@ use shepherd_core::bus::MessageBus;
 use shepherd_core::cli::run_cli_in_root_with_output;
 use shepherd_core::config::Config;
 use shepherd_core::mcp::RunningMcpServer;
+use shepherd_core::patterns::{Pattern, PatternAgent, PatternKind, Topic as PatternTopic};
 use shepherd_core::service::{ManualClock, OrchestrationService, ServiceConfig};
 use shepherd_core::terminals::InMemoryTerminals;
 use shepherd_core::{
@@ -1989,4 +1990,372 @@ fn test_typed_git_status_matches_golden() {
     let res = serde_json::to_value(&status).unwrap();
     let norm = normalize_json(&res, &env);
     assert_golden("handle_call_git_status", &norm);
+}
+
+// =========================================================================
+// 5. Characterization tests for typed domain methods (F9b-2: patterns & topics)
+// =========================================================================
+
+#[test]
+fn test_typed_pattern_list_matches_golden() {
+    let env = TestEnv::new("typed-pattern-list");
+    let patterns = env.service.list_patterns(&env.root).unwrap();
+    let res = serde_json::to_value(&patterns).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_patterns", &norm);
+}
+
+#[test]
+fn test_typed_pattern_get_matches_golden() {
+    let env = TestEnv::new("typed-pattern-get");
+    let detail = env
+        .service
+        .get_pattern(&env.root, "orchestrator-worker")
+        .unwrap();
+    let res = serde_json::to_value(&detail).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_get", &norm);
+}
+
+#[test]
+fn test_typed_pattern_save_matches_golden() {
+    let env = TestEnv::new("typed-pattern-save");
+    let pattern = Pattern {
+        name: "saved-pattern".to_string(),
+        kind: PatternKind::OrchestratorWorker,
+        description: "A saved pattern test".to_string(),
+        topics: vec![
+            PatternTopic {
+                name: "orders".to_string(),
+                partitions: 1,
+                key: None,
+                filter: None,
+            },
+            PatternTopic {
+                name: "results".to_string(),
+                partitions: 1,
+                key: None,
+                filter: None,
+            },
+        ],
+        agents: vec![
+            PatternAgent {
+                id: "lead".to_string(),
+                role: "brain".to_string(),
+                publishes: vec!["orders".to_string()],
+                consumes: vec!["results".to_string()],
+                ..Default::default()
+            },
+            PatternAgent {
+                id: "worker".to_string(),
+                role: "coder".to_string(),
+                publishes: vec!["results".to_string()],
+                consumes: vec!["orders".to_string()],
+                group: Some("workers".to_string()),
+                ..Default::default()
+            },
+        ],
+    };
+    let (path, problems) = env
+        .service
+        .save_pattern(&env.root, &pattern, false)
+        .unwrap();
+    let res = json!({
+        "ok": true,
+        "name": pattern.name,
+        "path": path.display().to_string(),
+        "source": "project",
+        "problems": problems,
+    });
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_save", &norm);
+}
+
+#[test]
+fn test_typed_pattern_delete_matches_golden() {
+    let env = TestEnv::new("typed-pattern-delete");
+    let pattern = Pattern {
+        name: "to-delete".to_string(),
+        kind: PatternKind::OrchestratorWorker,
+        description: "Pattern to delete".to_string(),
+        topics: vec![
+            PatternTopic {
+                name: "orders".to_string(),
+                partitions: 1,
+                key: None,
+                filter: None,
+            },
+            PatternTopic {
+                name: "results".to_string(),
+                partitions: 1,
+                key: None,
+                filter: None,
+            },
+        ],
+        agents: vec![
+            PatternAgent {
+                id: "lead".to_string(),
+                role: "brain".to_string(),
+                publishes: vec!["orders".to_string()],
+                consumes: vec!["results".to_string()],
+                ..Default::default()
+            },
+            PatternAgent {
+                id: "worker".to_string(),
+                role: "coder".to_string(),
+                publishes: vec!["results".to_string()],
+                consumes: vec!["orders".to_string()],
+                group: Some("workers".to_string()),
+                ..Default::default()
+            },
+        ],
+    };
+    env.service
+        .save_pattern(&env.root, &pattern, false)
+        .unwrap();
+    let source = env.service.delete_pattern(&env.root, "to-delete").unwrap();
+    let res = json!({
+        "ok": true,
+        "name": "to-delete",
+        "deleted_source": source.as_str(),
+    });
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_delete", &norm);
+}
+
+#[test]
+fn test_typed_pattern_validate_matches_golden() {
+    let env = TestEnv::new("typed-pattern-validate");
+    let (valid, problems) = env
+        .service
+        .validate_pattern(&env.root, None, Some("orchestrator-worker"))
+        .unwrap();
+    let res = json!({
+        "valid": valid,
+        "problems": problems,
+    });
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_pattern_validate", &norm);
+}
+
+#[test]
+fn test_typed_topic_list_matches_golden() {
+    let env = TestEnv::new("typed-topic-list");
+    let topics = env.service.list_topics().unwrap();
+    let res = serde_json::to_value(&topics).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_topics", &norm);
+}
+
+#[test]
+fn test_typed_topic_create_matches_golden() {
+    let env = TestEnv::new("typed-topic-create");
+    let topic = env
+        .service
+        .create_topic("characterization-topic", 3)
+        .unwrap();
+    let res = serde_json::to_value(&topic).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_topic_create", &norm);
+}
+
+#[test]
+fn test_typed_topic_publish_matches_golden() {
+    let env = TestEnv::new("typed-topic-publish");
+    env.service.create_topic("pub-topic", 2).unwrap();
+    let msg = env
+        .service
+        .publish_topic(
+            "pub-topic",
+            "Characterization message payload",
+            Some("user-42"),
+            None,
+            "tester",
+        )
+        .unwrap();
+    let res = serde_json::to_value(&msg).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_publish", &norm);
+}
+
+#[test]
+fn test_typed_topic_tail_matches_golden() {
+    let env = TestEnv::new("typed-topic-tail");
+    env.service.create_topic("tail-topic", 1).unwrap();
+    env.service
+        .publish_topic("tail-topic", "tail msg 1", None, None, "user")
+        .unwrap();
+    let msgs = env
+        .service
+        .replay_topic("tail-topic", None, 0, None)
+        .unwrap();
+    let res = serde_json::to_value(&msgs).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_topic_tail", &norm);
+}
+
+#[test]
+fn test_typed_topic_replay_matches_golden() {
+    let env = TestEnv::new("typed-topic-replay");
+    env.service.create_topic("replay-topic", 1).unwrap();
+    env.service
+        .publish_topic("replay-topic", "replay msg 1", None, None, "user")
+        .unwrap();
+    let msgs = env
+        .service
+        .replay_topic("replay-topic", None, 0, None)
+        .unwrap();
+    let res = serde_json::to_value(&msgs).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_topic_replay", &norm);
+}
+
+#[test]
+fn test_typed_topic_groups_matches_golden() {
+    let env = TestEnv::new("typed-topic-groups");
+    env.service.create_topic("groups-topic", 1).unwrap();
+    let bus_path = env.state_dir.join("messages.jsonl");
+    let bus = MessageBus::open(&bus_path).unwrap();
+    bus.subscribe("agent-1", "groups-topic", Some("group-alpha"))
+        .unwrap();
+    let groups = env.service.consumer_groups(Some("groups-topic")).unwrap();
+    let res = serde_json::to_value(&groups).unwrap();
+    let norm = normalize_json(&res, &env);
+    assert_golden("handle_call_consumer_groups", &norm);
+}
+
+#[test]
+fn test_all_legacy_ops_match_typed_methods_equivalently() {
+    let env = TestEnv::new("all-ops-parity");
+    env.seed_agent("coder-1", "coder", "idle");
+    env.seed_task(1, "First Task");
+    env.service.create_topic("test-topic", 1).unwrap();
+    env.service
+        .publish_topic("test-topic", "hello", None, None, "user")
+        .unwrap();
+
+    // 1. agents
+    let call_res = env.service.handle_call("agents", json!({})).unwrap();
+    let typed_res = serde_json::to_value(env.service.list_public_agents().unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 2. reconcile
+    let call_res = env.service.handle_call("reconcile", json!({})).unwrap();
+    let typed_res = serde_json::to_value(env.service.reconcile_agents().unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 3. resume
+    let call_res = env.service.handle_call("resume", json!({})).unwrap();
+    let typed_res = serde_json::to_value(env.service.resume_agents().unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 4. tasks
+    let root_arg = json!({ "root": env.root.display().to_string() });
+    let call_res = env.service.handle_call("tasks", root_arg.clone()).unwrap();
+    let typed_res =
+        serde_json::to_value(env.service.list_tasks(&env.root, false).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 5. runs
+    let call_res = env.service.handle_call("runs", root_arg.clone()).unwrap();
+    let typed_res = serde_json::to_value(env.service.list_runs(&env.root).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 6. skills
+    let call_res = env.service.handle_call("skills", root_arg.clone()).unwrap();
+    let typed_res = serde_json::to_value(env.service.list_skills(&env.root).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 7. git_status
+    let call_res = env
+        .service
+        .handle_call("git_status", root_arg.clone())
+        .unwrap();
+    let typed_res = serde_json::to_value(env.service.git_status(&env.root).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 8. patterns
+    let call_res = env
+        .service
+        .handle_call("patterns", root_arg.clone())
+        .unwrap();
+    let typed_res = serde_json::to_value(env.service.list_patterns(&env.root).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 9. pattern_get
+    let call_res = env
+        .service
+        .handle_call(
+            "pattern_get",
+            json!({ "root": env.root.display().to_string(), "name": "orchestrator-worker" }),
+        )
+        .unwrap();
+    let typed_res = serde_json::to_value(
+        env.service
+            .get_pattern(&env.root, "orchestrator-worker")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 10. pattern_validate
+    let call_res = env
+        .service
+        .handle_call(
+            "pattern_validate",
+            json!({ "root": env.root.display().to_string(), "name": "orchestrator-worker" }),
+        )
+        .unwrap();
+    let (valid, problems) = env
+        .service
+        .validate_pattern(&env.root, None, Some("orchestrator-worker"))
+        .unwrap();
+    let typed_res = json!({ "valid": valid, "problems": problems });
+    assert_eq!(call_res, typed_res);
+
+    // 11. topics
+    let call_res = env.service.handle_call("topics", json!({})).unwrap();
+    let typed_res = serde_json::to_value(env.service.list_topics().unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 12. topic_tail
+    let call_res = env
+        .service
+        .handle_call("topic_tail", json!({ "topic": "test-topic" }))
+        .unwrap();
+    let typed_res = serde_json::to_value(
+        env.service
+            .replay_topic("test-topic", None, 0, None)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(call_res, typed_res);
+
+    // 13. consumer_groups
+    let call_res = env
+        .service
+        .handle_call("consumer_groups", json!({ "topic": "test-topic" }))
+        .unwrap();
+    let typed_res =
+        serde_json::to_value(env.service.consumer_groups(Some("test-topic")).unwrap()).unwrap();
+    assert_eq!(call_res, typed_res);
+}
+
+#[test]
+fn test_typed_methods_invalid_params_error() {
+    let env = TestEnv::new("typed-invalid-params");
+    // Validate with no name and no pattern
+    let err = env.service.validate_pattern(&env.root, None, None);
+    assert!(err.is_err());
+    assert!(err.unwrap_err().contains("missing 'pattern' or 'name'"));
+
+    // Pattern get non-existent
+    let err = env.service.get_pattern(&env.root, "non-existent-pattern");
+    assert!(err.is_err());
+
+    // Pattern delete non-existent
+    let err = env
+        .service
+        .delete_pattern(&env.root, "non-existent-pattern");
+    assert!(err.is_err());
 }
