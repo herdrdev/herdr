@@ -97,6 +97,24 @@ fn resize_mode_highlights_focused_pane_frame_and_badges_it() {
             "unfocused frame at {x},{y}"
         );
     }
+    // The focused frame is redrawn as a heavy dashed line; other frames keep their shape.
+    assert_eq!(buffer[(focused.x, focused.y)].symbol(), "┏");
+    assert_eq!(buffer[(focused.x + 1, focused.y)].symbol(), "┅");
+    assert_eq!(buffer[(focused.x, focused.y + 1)].symbol(), "┇");
+    assert_eq!(
+        buffer[(focused.right() - 1, focused.bottom() - 1)].symbol(),
+        "┛"
+    );
+    assert_eq!(buffer[(other.x, other.y)].symbol(), "┌");
+    assert_eq!(buffer[(other.x + 1, other.y)].symbol(), "─");
+    // The badge moved onto the pane, so the mode bar shows it only once.
+    assert_eq!(
+        frame_rows(&frame).concat().matches("RESIZE").count(),
+        1,
+        "{:?}",
+        frame_rows(&frame)
+    );
+    assert!(frame_rows(&frame).concat().contains("h/l width"));
     // Pane content is not restyled.
     let (text_x, text_y) = cell_symbol_position(&frame, focused, "left");
     assert_eq!(buffer[(text_x, text_y)].fg, ratatui::style::Color::Reset);
@@ -154,4 +172,6 @@ fn resize_mode_badge_never_covers_borderless_pane_content() {
         frame_rows(frame)[usize::from(pane.y)..usize::from(pane.bottom())].to_vec()
     };
     assert_eq!(rows(&resized), rows(&baseline));
+    // With no pane edge to carry it, the badge stays in the mode bar.
+    assert!(frame_rows(&resized).concat().contains("RESIZE"));
 }

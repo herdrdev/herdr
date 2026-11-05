@@ -134,6 +134,7 @@ impl ClientShellState {
             false,
             &self.config.keybinds,
             &self.config.palette,
+            false,
         );
         if let Some(notice) = &self.visible_endpoint_notice {
             self.hits.notification_toast = endpoint_notices::render_notice(
@@ -318,6 +319,32 @@ impl ClientShellState {
         let mobile_navigate_panel = !layout.mobile_header.is_empty()
             && self.mode == ClientShellMode::Navigate
             && self.endpoint_error.is_none();
+        let resize_mode_panes = (self.mode == ClientShellMode::Resize && self.overlay.is_none())
+            .then(|| {
+                // `hits.panes` was built from `surface.panes` above, in the same order.
+                surface
+                    .panes
+                    .iter()
+                    .zip(&self.hits.panes)
+                    .map(|(pane, hit)| render::ResizeModePane {
+                        rect: hit.rect,
+                        inner_rect: hit.inner_rect,
+                        scrollbar_rect: hit.scrollbar_rect,
+                        focused: pane.focused,
+                    })
+                    .collect::<Vec<_>>()
+            });
+        let resize_badge_on_pane = resize_mode_panes.as_deref().is_some_and(|panes| {
+            panes.iter().any(|pane| {
+                pane.focused
+                    && render::resize_badge_area(
+                        pane.rect,
+                        pane.inner_rect,
+                        Rect::new(0, 0, cols, rows),
+                    )
+                    .is_some()
+            })
+        });
         let mode_bar = if mobile_navigate_panel || self.overlay.is_some() {
             None
         } else {
@@ -330,6 +357,7 @@ impl ClientShellState {
                 snapshot.update_available.is_some(),
                 &self.config.keybinds,
                 &self.config.palette,
+                resize_badge_on_pane,
             )
         };
         if mode_bar == Some(layout.tab_bar) {
@@ -412,23 +440,11 @@ impl ClientShellState {
             }
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
-        if self.mode == ClientShellMode::Resize && self.overlay.is_none() {
-            // `hits.panes` was built from `surface.panes` above, in the same order.
-            let panes = surface
-                .panes
-                .iter()
-                .zip(&self.hits.panes)
-                .map(|(pane, hit)| render::ResizeModePane {
-                    rect: hit.rect,
-                    inner_rect: hit.inner_rect,
-                    scrollbar_rect: hit.scrollbar_rect,
-                    focused: pane.focused,
-                })
-                .collect::<Vec<_>>();
+        if let Some(panes) = resize_mode_panes.as_deref() {
             let cursor = frame.cursor.clone();
             let mut composed = frame.to_ratatui_buffer()?;
             if let Some(badge) =
-                render::render_resize_mode_panes(&mut composed, &panes, &self.config.palette)
+                render::render_resize_mode_panes(&mut composed, panes, &self.config.palette)
             {
                 occlusion.cover(badge);
             }
