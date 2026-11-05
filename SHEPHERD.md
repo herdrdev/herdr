@@ -5776,3 +5776,14 @@ Sin commits. Tests nuevos en `crates/shepherd-core/src/service/tests_f12.rs` (8)
 **Incidente (a revisar):** en el primer intento de la prueba aislada solo había un `claude` falso en el PATH; los roles `coder`/`docs` usan `codex`/`agy` y **se lanzaron brevemente agentes reales** (codex ×3, agy ×2, en el repo temporal `/tmp/shfiso/repo`, ~1 min, con el prompt de arranque) antes de que lo detectara; paré la sesión y maté esos procesos, y repetí con `claude/codex/agy/gemini` falsos y `PATH=/tmp/shfiso/fake-bin:/usr/bin:/bin` (verificado: ningún agente real en la segunda tanda). Consumieron algo de cuota; no tocaron estado real.
 
 **No verificado / límites.** (a) El fake no se reconoce como agente, así que no pude capturar el texto entregado en el pane; el prompt se verifica en tests con terminales en proceso. (b) `shepherd.topic.publish` contra panes falsos no devolvió respuesta en 15–20 s (el run sí se revivió); no investigado. (c) «Reportó blocked» se detecta por estado `blocked`/`error` del agente; un agente que **dice** estar bloqueado en texto y queda `idle` con otros mensajes publicados sigue pasando a `done`. (d) Pendiente la repetición real de jerárquico y market con claude haiku.
+
+## Repetición real de jerárquico y market tras F12 (claude haiku, 2026-11-05)
+
+Mismos patrones mínimos (`mini-hierarchical`: director→manager(rol `reviewer`)→especialista(`coder`); `mini-market`: maker + requester(`docs`) + 2 solvers), entorno aislado.
+
+- **Jerárquico** ✔ (18 s): `root-orders` «say: build feature X» (director) → `team-orders` «build feature X» (manager) → `team-results` «done X» (especialista) → `root-results` «done X» (manager); run `done`. El manager con rol `reviewer` ya no se bloquea: el prompt de modo patrón sustituye el guion del rol.
+- **Market** ✔ (~25 s): `ask` «summarize: hello» (requester `docs-1`); dos `bid` con coste y latencia (`coder-2`, `coder-3`); `transaction` del maker asignando a `coder-3`; el solver publicó el resultado «A greeting: the single word 'hello'.»; run `done`.
+- La concurrencia ya cuenta solo agentes activos (el segundo run se rechazó mientras el primero tenía 3 activos, y se aceptó cuando se calmó).
+- Pendiente de probar con agentes reales: `stalled` (agente bloqueado de verdad), patrón orquestador-worker con 3+ workers, patrones con vendors mezclados claude+codex+agy.
+
+Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
