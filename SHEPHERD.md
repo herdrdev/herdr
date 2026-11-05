@@ -5146,3 +5146,21 @@ Continuación del trabajo de otro agente (cuota agotada); no se rehízo, se comp
 **Verificación aislada**: `shepherd-iso.sh` arranca, `shepherd.pattern.run.list` responde `runs: []`, pestañas visibles incl. Agentes y Eventos. NO se lanzó ningún agente real; no se capturó la pestaña con agentes de patrón ni el aviso entregado en vivo (cubierto solo por tests).
 
 **No queda hecho**: golden CLI humanos de `pattern run`; prueba real con claude/codex (la hará el brain).
+
+## Segunda prueba real de patrones tras F8e: claude + codex (2026-11-05)
+
+Mismo patrón `duo` (brain claude/haiku + 1 worker codex), entorno aislado con `SHF_HOME=$HOME` solo para credenciales.
+
+Resultado con agentes reales:
+- **Corregido (F8e, despertar)**: el worker publicó en `results` y Shepherd avisó al orquestador con «Hay 1 mensaje nuevo en 'results': usa poll» por `agent.prompt`; el orquestador lo leyó y publicó su resumen final 8 s después (en la primera prueba nunca se despertaba).
+- **Pausa/reanudación**: con el run en pausa, un mensaje publicado a `results` no se entregó; tras `pattern resume` el orquestador recibió el aviso y lo procesó.
+- **Detener**: `pattern stop <id> --confirm` marcó el run `stopped`, ambos agentes `killed`, 0 panes de agente; sin residuos.
+
+Fallos nuevos:
+1. **El run no pasa a `done` con agentes interactivos**: claude y codex, al acabar su turno, quedan en `idle` (no `done`); el run seguía `running` con `LIVE 2`. La transición de F8e solo ve `done`/`killed`. Hace falta definir la quiescencia: todos los agentes `idle`/`done` y todos los grupos de los tópicos del run sin mensajes pendientes durante un periodo → run `done` (o estado `idle` reanudable).
+2. **Auto-despertar**: el orquestador fue despertado por su propio mensaje (`results#1` publicado por él) y luego por un mensaje de prueba: el aviso debe excluir al publicador y a mensajes ya reconocidos.
+3. **`topic groups results`** mostró `MEMBERS 0 / COMMITTED 0 / TOTAL 0 / LAG 0` con mensajes presentes y agentes consumiendo: la tabla de grupos no refleja los grupos reales (por agente `brain-1`/`coder-1`).
+
+No cubierto: pestaña Eventos con tráfico real (capturas), patrones jerárquico/blackboard/market con agentes reales.
+
+Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
