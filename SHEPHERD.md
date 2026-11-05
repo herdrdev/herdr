@@ -5800,3 +5800,6 @@ Limpieza: sesión aislada parada y reseteada, worktrees eliminados.
 
 **Límites.** Un tópico con 1 partición (valor por defecto) solo da trabajo a un miembro del grupo; hay que crear el tópico con ≥ nº de workers. La quiescencia/despertar no se tocaron (tests F8h verdes). En esta máquina no hay Zig, así que el binario `shepherd` no compila y **no se pudieron ejecutar** los tests `--bin` (`cli::shepherd`, `shepherd::`, `client::shell`, `protocol::`, `server::`, `api::`, `config::`) ni la prueba real del CLI; el cambio del CLI no está compilado.
 
+
+### F13 — complemento tras la prueba real (2026-11-06)
+La repetición real del patrón con 2 workers destapó la causa de fondo del fallo 2: cada `publish` por MCP abre un `MessageBus` nuevo y el contador round-robin (en memoria) volvía a 0, así que todo mensaje sin clave caía en la partición 0 y un único worker del grupo recibía todo. Arreglo: la partición sin clave se deriva del número de mensajes ya publicados en el tópico (`bus.rs`, campo `round_robin` eliminado; test `unkeyed_publish_spreads_across_partitions_even_when_bus_is_reopened`). El prompt de patrón además pide no fijar `key`/`partition`. Prueba real tras el arreglo: `topic groups orders` = `worker-pool` con 2 miembros, lag `p0:1, p1:1`; coder-1 hizo la orden A y coder-2 la B, cada uno en su worktree y commit.
