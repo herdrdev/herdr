@@ -40,6 +40,9 @@ pub use skills::ShepherdSkillsState;
 #[allow(unused_imports)]
 pub use tasks::ShepherdTasksState;
 
+pub const SHEPHERD_VIRTUAL_TAB_ID: &str = "__shepherd__";
+pub const SHEPHERD_TAB_LABEL: &str = "Shepherd";
+
 use serde_json::{json, Value};
 use shepherd_core::{
     shepherd::ShepherdError,

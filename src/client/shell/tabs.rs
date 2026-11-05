@@ -12,15 +12,33 @@ pub(crate) fn render_tab_bar(
     tab_scroll: &mut usize,
     reveal_focused_tab: &mut bool,
     tab_drag_insert_index: Option<usize>,
+    shepherd_tab_active: bool,
     hits: &mut ShellHitMap,
 ) {
     let palette = &config.palette;
     buffer.set_style(area, Style::default().bg(palette.panel_bg));
-    let tabs = snapshot
+    let real_tabs = snapshot
         .tabs
         .iter()
         .filter(|tab| Some(tab.workspace_id.as_str()) == snapshot.focused_workspace_id.as_deref())
         .collect::<Vec<_>>();
+    let shepherd_tab = (config.shepherd_enabled && snapshot.focused_workspace_id.is_some()).then(|| {
+        ClientShellTab {
+            tab_id: crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID.to_string(),
+            workspace_id: snapshot.focused_workspace_id.clone().unwrap_or_default(),
+            number: 0,
+            label: crate::shepherd::SHEPHERD_TAB_LABEL.to_string(),
+            custom_label: false,
+            zoomed: false,
+            focused: shepherd_tab_active,
+            agent_status: crate::api::schema::AgentStatus::Idle,
+        }
+    });
+    let mut tabs = Vec::with_capacity(real_tabs.len() + 1);
+    if let Some(ref stab) = shepherd_tab {
+        tabs.push(stab);
+    }
+    tabs.extend(real_tabs.iter().copied());
     let desired_widths = tabs
         .iter()
         .map(|tab| {
@@ -51,7 +69,14 @@ pub(crate) fn render_tab_bar(
     if !overflow {
         *tab_scroll = 0;
     } else if *reveal_focused_tab {
-        if let Some(focused) = tabs.iter().position(|tab| tab.focused) {
+        let is_tab_focused = |tab: &&ClientShellTab| {
+            if shepherd_tab_active {
+                tab.tab_id == crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID
+            } else {
+                tab.focused && tab.tab_id != crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID
+            }
+        };
+        if let Some(focused) = tabs.iter().position(is_tab_focused) {
             *tab_scroll = centered_tab_scroll(focused, &desired_widths, available).min(max_scroll);
         }
     } else {
@@ -100,7 +125,12 @@ pub(crate) fn render_tab_bar(
             break;
         }
         let rect = Rect::new(x, area.y, width, 1);
-        let style = if tab.focused {
+        let is_tab_focused = if shepherd_tab_active {
+            tab.tab_id == crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID
+        } else {
+            tab.focused && tab.tab_id != crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID
+        };
+        let style = if is_tab_focused {
             let base = Style::default()
                 .fg(panel_contrast_fg(palette))
                 .bg(palette.accent);
@@ -209,7 +239,7 @@ pub(crate) fn render_tab_bar(
     }
 
     if let Some(insert_index) = tab_drag_insert_index {
-        if let Some(indicator_x) = tab_drop_indicator_x(hits, &tabs, insert_index) {
+        if let Some(indicator_x) = tab_drop_indicator_x(hits, &real_tabs, insert_index) {
             put_text(
                 buffer,
                 indicator_x.min(content.right().saturating_sub(1)),

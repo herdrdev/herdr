@@ -639,10 +639,6 @@ impl ClientShellState {
             self.route_overlay_key(key, outcome);
             return None;
         }
-        if self.shepherd_section.is_some() {
-            self.route_shepherd_section_key(key, outcome);
-            return None;
-        }
         if matches!(key.code, KeyCode::Modifier(_)) {
             return None;
         }
@@ -685,6 +681,10 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return None;
                 }
+                if self.is_shepherd_tab_active() {
+                    self.route_shepherd_section_key(key, outcome);
+                    return None;
+                }
                 self.focused_pane_id().map(ClientInputTarget::Pane)
             }
             ClientShellMode::Prefix => {
@@ -698,6 +698,9 @@ impl ClientShellState {
                 if self.config.keybinds.matches_prefix(key) {
                     self.mode = return_mode;
                     outcome.repaint = true;
+                    if self.is_shepherd_tab_active() {
+                        return None;
+                    }
                     return self.focused_pane_id().map(ClientInputTarget::Pane);
                 }
                 if key.code == KeyCode::Esc {

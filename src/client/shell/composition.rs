@@ -54,6 +54,7 @@ impl ClientShellState {
                 && self.endpoint_status(&self.active_endpoint_id)
                     == Some(ClientEndpointStatus::Online)
         });
+        let shepherd_tab_active = self.is_shepherd_tab_active();
         let mut render_state = render::ShellRenderState {
             machine_diagnostics: &self.machine_diagnostics,
             endpoints: &self.endpoints,
@@ -69,6 +70,7 @@ impl ClientShellState {
             sidebar_collapsed: false,
             sidebar_section_split: self.sidebar_section_split,
             tab_drag_insert_index: None,
+            shepherd_tab_active,
             selected_workspace_id: self
                 .navigate_workspace_id
                 .as_ref()
@@ -205,6 +207,7 @@ impl ClientShellState {
             _ => (None, None),
         };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
+        let shepherd_tab_active = self.is_shepherd_tab_active();
         self.hits = render::render_shell(
             &mut buffer,
             layout,
@@ -225,6 +228,7 @@ impl ClientShellState {
                 sidebar_collapsed: self.sidebar_collapsed,
                 sidebar_section_split: self.sidebar_section_split,
                 tab_drag_insert_index,
+                shepherd_tab_active,
                 selected_workspace_id: self
                     .navigate_workspace_id
                     .as_ref()
@@ -338,32 +342,34 @@ impl ClientShellState {
             self.hits.tab_scroll_left = Rect::default();
             self.hits.tab_scroll_right = Rect::default();
         }
-        if let Some(ref mut section) = self.shepherd_section {
-            self.hits.panes.clear();
-            let s_hits = crate::shepherd::ui::render_shepherd_section(
-                &mut buffer,
-                layout.pane_surface,
-                section,
-                &self.config.palette,
-            );
-            self.hits.shepherd_section_hits = Some(s_hits);
+        if shepherd_tab_active {
+            if let Some(ref mut section) = self.shepherd_section {
+                self.hits.panes.clear();
+                let s_hits = crate::shepherd::ui::render_shepherd_section(
+                    &mut buffer,
+                    layout.pane_surface,
+                    section,
+                    &self.config.palette,
+                );
+                self.hits.shepherd_section_hits = Some(s_hits);
+            }
         }
         let mut frame = FrameData::from_ratatui_buffer_with_hyperlinks(&buffer, None, &[]);
         let mode_bar_cells = mode_bar.map(|bar| {
             let start = usize::from(bar.y) * usize::from(frame.width) + usize::from(bar.x);
             frame.cells[start..start + usize::from(bar.width)].to_vec()
         });
-        if self.shepherd_section.is_none() {
+        if !shepherd_tab_active {
             blit_pane_surface(&mut frame, &surface.frame, layout.pane_surface);
         }
         restore_mode_bar(&mut frame, mode_bar, mode_bar_cells.as_deref());
         let mut occlusion = crate::kitty_graphics::surface::Occlusion::default();
-        let has_selection = self.shepherd_section.is_none()
+        let has_selection = !shepherd_tab_active
             && self
                 .selection
                 .as_ref()
                 .is_some_and(|selection| selection.is_visible());
-        let has_search = self.shepherd_section.is_none()
+        let has_search = !shepherd_tab_active
             && self
                 .copy_mode
                 .as_ref()
@@ -573,7 +579,7 @@ impl ClientShellState {
             frame.replace_from_ratatui_buffer_preserving_effects(&composed, cursor);
         }
         self.hits.popup = None;
-        if self.shepherd_section.is_none() {
+        if !shepherd_tab_active {
             if let Some(popup) = surface.popup.as_deref() {
             let width = popup.width.map(client_popup_size);
             let height = popup.height.map(client_popup_size);

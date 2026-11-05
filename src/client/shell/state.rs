@@ -914,6 +914,7 @@ pub(crate) struct ClientShellState {
     pub(super) reveal_navigation_workspace: bool,
     pub(super) overlay: Option<ClientShellOverlay>,
     pub(super) shepherd_section: Option<crate::shepherd::ui::ShepherdSectionState>,
+    pub(super) shepherd_tab_active: HashMap<String, bool>,
     pub(super) previous_pane_id: Option<String>,
     pub(super) pane_mouse_gesture: Option<ClientPaneMouseGesture>,
     pub(super) link_hover: Option<super::link_hover::LinkHover>,
@@ -1039,6 +1040,10 @@ impl ClientShellState {
                 .or_default()
                 .extend(saved.collapsed_groups);
         }
+        let mut shepherd_tab_active = HashMap::new();
+        for ws in &preferences.shepherd_tab_inactive_workspaces {
+            shepherd_tab_active.insert(ws.clone(), false);
+        }
         Self {
             machine_diagnostics: Default::default(),
             config,
@@ -1088,7 +1093,8 @@ impl ClientShellState {
             pending_workspace_highlight: None,
             reveal_navigation_workspace: false,
             overlay,
-            shepherd_section: None,
+            shepherd_section: Some(crate::shepherd::ui::state::ShepherdSectionState::default()),
+            shepherd_tab_active,
             previous_pane_id: None,
             pane_mouse_gesture: None,
             link_hover: None,

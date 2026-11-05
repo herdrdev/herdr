@@ -1374,6 +1374,7 @@ impl ClientShellState {
                 return;
             }
             if let Some(press) = self.tab_press.take() {
+                self.set_shepherd_tab_active(false, outcome);
                 self.push_endpoint_method(
                     crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
                         tab_id: press.tab_id,
@@ -1570,7 +1571,7 @@ impl ClientShellState {
             }
             return;
         }
-        if self.shepherd_section.is_some() && self.route_shepherd_section_mouse(mouse, point, outcome) {
+        if self.is_shepherd_tab_active() && self.route_shepherd_section_mouse(mouse, point, outcome) {
             return;
         }
         if matches!(self.overlay, Some(ClientShellOverlay::Help(_))) {
@@ -2125,6 +2126,9 @@ impl ClientShellState {
                             .iter()
                             .find(|(rect, _)| super::contains(*rect, point))
                             .and_then(|(_, tab_id)| {
+                                if tab_id == crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID {
+                                    return None;
+                                }
                                 let tab = self
                                     .snapshot
                                     .as_deref()?
@@ -2143,6 +2147,17 @@ impl ClientShellState {
                 if let Some(tab_press) = tab_press {
                     self.tab_press = Some(tab_press);
                     return;
+                }
+                if let Some((_, tab_id)) = self
+                    .hits
+                    .tabs
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                {
+                    if tab_id == crate::shepherd::SHEPHERD_VIRTUAL_TAB_ID {
+                        self.select_shepherd_tab(outcome);
+                        return;
+                    }
                 }
                 if self.handle_endpoint_agent_click(point, outcome) {
                     return;

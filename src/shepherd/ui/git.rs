@@ -674,7 +674,7 @@ mod tests {
                 upstream: None,
                 agent_id: Some("coder-1".into()),
                 pr_display: "#12 open".into(),
-                pr_url: Some("https://github.com/herdr/herdr/pull/12".into()),
+                pr_url: Some("https://github.com/example/repo/pull/12".into()),
             },
         ]);
 

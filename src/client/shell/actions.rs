@@ -130,6 +130,9 @@ impl ClientShellState {
                     return;
                 }
                 if action == crate::input::KeybindAction::CloseTab {
+                    if self.is_shepherd_tab_active() {
+                        return;
+                    }
                     if let Some(tab_id) = self
                         .snapshot
                         .as_deref()
@@ -146,6 +149,9 @@ impl ClientShellState {
                     return;
                 }
                 if action == crate::input::KeybindAction::RenameTab {
+                    if self.is_shepherd_tab_active() {
+                        return;
+                    }
                     self.open_rename_tab_overlay();
                     outcome.repaint = true;
                     return;
@@ -174,6 +180,9 @@ impl ClientShellState {
                     if self.enter_copy_mode(outcome) {
                         outcome.repaint = true;
                     }
+                    return;
+                }
+                if self.handle_tab_navigation(action, outcome) {
                     return;
                 }
                 if self.handle_endpoint_navigation(action, outcome) {

@@ -161,19 +161,170 @@ impl<'a> ClientActionDispatcher<'a> {
 }
 
 impl ClientShellState {
+    pub(super) fn is_shepherd_tab_active(&self) -> bool {
+        if !self.config.shepherd_enabled {
+            return false;
+        }
+        let Some(ws_id) = self
+            .snapshot
+            .as_deref()
+            .and_then(|s| s.focused_workspace_id.as_deref())
+        else {
+            return true;
+        };
+        self.shepherd_tab_active.get(ws_id).copied().unwrap_or(true)
+    }
+
+    pub(super) fn ensure_shepherd_section(
+        &mut self,
+    ) -> &mut crate::shepherd::ui::state::ShepherdSectionState {
+        if self.shepherd_section.is_none() {
+            let sec = crate::shepherd::ui::state::ShepherdSectionState::default();
+            self.shepherd_section = Some(sec);
+        }
+        self.shepherd_section.as_mut().unwrap()
+    }
+
+    pub(super) fn select_shepherd_tab(&mut self, outcome: &mut ClientShellInput) {
+        if !self.config.shepherd_enabled {
+            return;
+        }
+        self.ensure_shepherd_section();
+        self.refresh_shepherd_views(outcome);
+        if let Some(ws_id) = self
+            .snapshot
+            .as_deref()
+            .and_then(|s| s.focused_workspace_id.as_deref())
+        {
+            self.shepherd_tab_active.insert(ws_id.to_string(), true);
+        }
+        self.reveal_focused_tab = true;
+        outcome.repaint = true;
+        self.persist_chrome_preferences(outcome);
+    }
+
+    pub(super) fn set_shepherd_tab_active(
+        &mut self,
+        active: bool,
+        outcome: &mut ClientShellInput,
+    ) {
+        if !self.config.shepherd_enabled {
+            return;
+        }
+        if active {
+            self.ensure_shepherd_section();
+            self.refresh_shepherd_views(outcome);
+        }
+        if let Some(ws_id) = self
+            .snapshot
+            .as_deref()
+            .and_then(|s| s.focused_workspace_id.as_deref())
+        {
+            self.shepherd_tab_active.insert(ws_id.to_string(), active);
+        }
+        self.reveal_focused_tab = true;
+        outcome.repaint = true;
+        self.persist_chrome_preferences(outcome);
+    }
+
     pub(super) fn toggle_shepherd_section(&mut self, outcome: &mut ClientShellInput) {
         if !self.config.shepherd_enabled {
             return;
         }
-        if self.shepherd_section.is_some() {
-            self.shepherd_section = None;
-            self.invalidate_pane_surface();
+        let is_active = self.is_shepherd_tab_active();
+        if is_active {
+            self.set_shepherd_tab_active(false, outcome);
         } else {
-            self.shepherd_section =
-                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
-            self.refresh_shepherd_views(outcome);
+            self.select_shepherd_tab(outcome);
         }
-        outcome.repaint = true;
+    }
+
+    pub(super) fn handle_tab_navigation(
+        &mut self,
+        action: crate::input::KeybindAction,
+        outcome: &mut ClientShellInput,
+    ) -> bool {
+        if !self.config.shepherd_enabled {
+            return false;
+        }
+        let (real_tab_ids, current_index) = {
+            let Some(snapshot) = self.snapshot.as_deref() else {
+                return false;
+            };
+            let Some(focused_workspace) = snapshot.focused_workspace_id.as_deref() else {
+                return false;
+            };
+            let real_tab_ids = snapshot
+                .tabs
+                .iter()
+                .filter(|tab| tab.workspace_id == focused_workspace)
+                .map(|tab| tab.tab_id.clone())
+                .collect::<Vec<_>>();
+            if real_tab_ids.is_empty() {
+                return false;
+            }
+            let current_focused = snapshot.focused_tab_id.as_deref();
+            let current_index = current_focused
+                .and_then(|id| real_tab_ids.iter().position(|tab_id| tab_id == id))
+                .unwrap_or(0);
+            (real_tab_ids, current_index)
+        };
+
+        match action {
+            crate::input::KeybindAction::PreviousTab | crate::input::KeybindAction::NextTab => {
+                let is_shepherd_active = self.is_shepherd_tab_active();
+                if is_shepherd_active {
+                    if action == crate::input::KeybindAction::NextTab {
+                        self.set_shepherd_tab_active(false, outcome);
+                        self.push_endpoint_method(
+                            crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                                tab_id: real_tab_ids[0].clone(),
+                            }),
+                            outcome,
+                        );
+                    } else {
+                        let last_tab_id = real_tab_ids.last().unwrap().clone();
+                        self.set_shepherd_tab_active(false, outcome);
+                        self.push_endpoint_method(
+                            crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                                tab_id: last_tab_id,
+                            }),
+                            outcome,
+                        );
+                    }
+                    true
+                } else {
+                    if action == crate::input::KeybindAction::NextTab
+                        && current_index + 1 >= real_tab_ids.len()
+                    {
+                        self.select_shepherd_tab(outcome);
+                        true
+                    } else if action == crate::input::KeybindAction::PreviousTab
+                        && current_index == 0
+                    {
+                        self.select_shepherd_tab(outcome);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
+            crate::input::KeybindAction::SwitchTab(index) => {
+                if let Some(tab_id) = real_tab_ids.get(index).cloned() {
+                    self.set_shepherd_tab_active(false, outcome);
+                    self.push_endpoint_method(
+                        crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
+                            tab_id,
+                        }),
+                        outcome,
+                    );
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn route_shepherd_section_key(
@@ -181,9 +332,7 @@ impl ClientShellState {
         key: &crate::input::TerminalKey,
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let Some(ref mut section) = self.shepherd_section else {
-            return false;
-        };
+        let section = self.ensure_shepherd_section();
         let key_event = crossterm::event::KeyEvent::new(key.code, key.modifiers);
         let section_outcome = section.handle_key(&key_event);
         self.dispatch_shepherd_section_outcome(section_outcome, outcome);
@@ -196,9 +345,6 @@ impl ClientShellState {
         point: (u16, u16),
         outcome: &mut ClientShellInput,
     ) -> bool {
-        let Some(ref mut section) = self.shepherd_section else {
-            return false;
-        };
         let Some(hits) = self.hits.shepherd_section_hits.clone() else {
             return false;
         };
@@ -209,6 +355,19 @@ impl ClientShellState {
         if super::contains(self.hits.sidebar_toggle, point) {
             return false;
         }
+        // If click is on the tab bar, do not intercept
+        if self
+            .hits
+            .tabs
+            .iter()
+            .any(|(rect, _)| super::contains(*rect, point))
+            || super::contains(self.hits.new_tab, point)
+            || super::contains(self.hits.tab_scroll_left, point)
+            || super::contains(self.hits.tab_scroll_right, point)
+        {
+            return false;
+        }
+        let section = self.ensure_shepherd_section();
         let section_outcome =
             crate::shepherd::ui::handle_shepherd_section_mouse(section, &hits, mouse);
         self.dispatch_shepherd_section_outcome(section_outcome, outcome);
@@ -223,8 +382,7 @@ impl ClientShellState {
         use crate::shepherd::ui::state::{ShepherdSectionAction, ShepherdSectionOutcome};
         match section_outcome {
             ShepherdSectionOutcome::Close => {
-                self.shepherd_section = None;
-                self.invalidate_pane_surface();
+                self.set_shepherd_tab_active(false, outcome);
                 outcome.repaint = true;
             }
             ShepherdSectionOutcome::Handled => {
@@ -262,8 +420,7 @@ impl ClientShellState {
         use crate::shepherd::ui::agents::ShepherdAgentsAction;
         match action {
             ShepherdAgentsAction::FocusPane { pane_id, .. } => {
-                self.shepherd_section = None;
-                self.invalidate_pane_surface();
+                self.set_shepherd_tab_active(false, outcome);
                 self.push_endpoint_method(
                     crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
                         pane_id,
@@ -662,15 +819,10 @@ impl ClientShellState {
         if !self.config.shepherd_enabled {
             return;
         }
-        if self.shepherd_section.is_none() {
-            self.shepherd_section =
-                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
-            self.refresh_shepherd_views(outcome);
-        }
-        if let Some(ref mut section) = self.shepherd_section {
-            section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
-            section.agents.start_spawn();
-        }
+        self.select_shepherd_tab(outcome);
+        let section = self.ensure_shepherd_section();
+        section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
+        section.agents.start_spawn();
         outcome.repaint = true;
     }
 
@@ -682,15 +834,10 @@ impl ClientShellState {
         if !self.config.shepherd_enabled {
             return;
         }
-        if self.shepherd_section.is_none() {
-            self.shepherd_section =
-                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
-            self.refresh_shepherd_views(outcome);
-        }
-        if let Some(ref mut section) = self.shepherd_section {
-            section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
-            section.agents.confirm_kill = Some(agent_id.to_string());
-        }
+        self.select_shepherd_tab(outcome);
+        let section = self.ensure_shepherd_section();
+        section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
+        section.agents.confirm_kill = Some(agent_id.to_string());
         outcome.repaint = true;
     }
 
@@ -702,15 +849,10 @@ impl ClientShellState {
         if !self.config.shepherd_enabled {
             return;
         }
-        if self.shepherd_section.is_none() {
-            self.shepherd_section =
-                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
-            self.refresh_shepherd_views(outcome);
-        }
-        if let Some(ref mut section) = self.shepherd_section {
-            section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
-            section.agents.confirm_clean = Some(agent_id.to_string());
-        }
+        self.select_shepherd_tab(outcome);
+        let section = self.ensure_shepherd_section();
+        section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
+        section.agents.confirm_clean = Some(agent_id.to_string());
         outcome.repaint = true;
     }
 
@@ -718,15 +860,10 @@ impl ClientShellState {
         if !self.config.shepherd_enabled {
             return;
         }
-        if self.shepherd_section.is_none() {
-            self.shepherd_section =
-                Some(crate::shepherd::ui::state::ShepherdSectionState::default());
-            self.refresh_shepherd_views(outcome);
-        }
-        if let Some(ref mut section) = self.shepherd_section {
-            section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
-            section.agents.start_clean_all();
-        }
+        self.select_shepherd_tab(outcome);
+        let section = self.ensure_shepherd_section();
+        section.select_tab(crate::shepherd::ui::state::ShepherdSectionTab::Agents);
+        section.agents.start_clean_all();
         outcome.repaint = true;
     }
 
