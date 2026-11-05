@@ -317,6 +317,8 @@ pub struct ShepherdLimitsConfig {
     pub max_concurrent: usize,
     /// Delay in seconds before notifying for blocked or idle agents. Default: 3.
     pub notice_after_secs: u64,
+    /// Seconds of agent idleness and publish silence before a pattern run is done. Default: 30.
+    pub run_quiescence_secs: u64,
 }
 
 impl Default for ShepherdLimitsConfig {
@@ -325,6 +327,7 @@ impl Default for ShepherdLimitsConfig {
             max_depth: 2,
             max_concurrent: 4,
             notice_after_secs: 3,
+            run_quiescence_secs: 30,
         }
     }
 }

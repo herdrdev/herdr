@@ -5256,3 +5256,14 @@ publica "humano" en results:
 ```
 
 **Límites:** el temporizador sigue en memoria; mensajes publicados con el servidor parado no reabren un run `done`. Pendiente la repetición con claude y codex.
+
+## Quinta prueba real de patrones tras F8h: claude + codex (2026-11-05)
+
+Mismo patrón `duo`, tarea sin commit. **Todo correcto**:
+- El run pasó solo a `done` con lag pendiente (`results brain-1 lag p0:1`, el resumen del propio orquestador), es decir, la quiescencia ya no depende de los `ack`.
+- Publicar un mensaje nuevo (`results#2`) lo devolvió al instante a `running` y, ~33 s después, a `done` (T=8 s en la config de prueba más la reconciliación).
+- `topic groups` sin grupos fantasma; la pestaña Eventos (tecla 7 dentro de la sección Shepherd) mostró los tópicos `orders`/`results` y el mensaje ORDER del orquestador con offset, partición, remitente y contenido.
+
+Bug hallado de paso y corregido en el momento: la clave `shepherd.limits.run_quiescence_secs` (F8f/F8h) estaba en `shepherd-core` y en la referencia de configuración pero **no en el modelo de configuración de herdr** (`src/config/model.rs`), así que herdr mostraba el aviso «config.toml has unknown keys; shepherd config check» al usarla. Añadido el campo `run_quiescence_secs` (default 30) a `ShepherdLimitsConfig` (+3 líneas en un archivo de herdr, anotar en «Archivos de herdr modificados»); `shepherd config check` pasa a `config: ok`.
+
+No cubierto: patrones jerárquico/blackboard/market con agentes reales; controles de la pestaña Eventos (pausa de vista, replay, filtro) con ratón.
