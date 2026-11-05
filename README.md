@@ -33,7 +33,7 @@ shepherd is a fork of [herdr](https://github.com/herdrdev/herdr) that adds multi
 shepherd is experimental and has no binary releases yet; build it from source.
 
 ```bash
-git clone <repo-url> shepherd
+git clone https://github.com/Rivaldito/shepherd.git
 cd shepherd
 ./cargo-fork.sh build --release     # or: cargo build --release
 ```
