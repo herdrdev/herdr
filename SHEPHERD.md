@@ -5232,3 +5232,27 @@ Mismo patrón `duo`, tarea sin commit. Resultado: la tarea se cumplió (`note.tx
 - La reapertura del run por tráfico nuevo (F8g) no se pudo probar porque el run nunca llegó a `done`.
 
 Conclusión: la quiescencia no puede depender de que los agentes reconozcan todo. Propuesta F8h: run `done` = todos los agentes `idle`/`done` sostenido T segundos y sin mensajes publicados en los tópicos del run durante T (ignorando lag), y reabrir con el siguiente mensaje publicado.
+
+## Estado F8h — quiescencia del run sin depender del lag (2026-11-05)
+
+Sin commits. Tests nuevos en `crates/shepherd-core/src/service/tests_f8h.rs` (2); ambos **fallaban antes** de la corrección (`Running` ≠ `Done`: caso real con el worker suscrito a `results` sin ack y el resumen propio del orquestador pendiente; y publicación reciente que debe reiniciar el periodo) y pasan después.
+
+**Definición final.** Un run `running` pasa a `done` (`quiesced = true`) cuando **todos sus agentes están `idle`/`done`** (ninguno `working`/`blocked`/`starting`) y **no se ha publicado ningún mensaje en los tópicos del run** durante `run_quiescence_secs` seguidos (T; default 30; 0 la desactiva). El lag/ack de los grupos **ya no cuenta**. Implementación: `run_published_count` suma `messages_count` de los tópicos del run; el temporizador en memoria guarda `(desde_ms, contador)` y se reinicia si el contador cambia o algún agente está activo (sin depender del reloj del bus). Reapertura (F8g, intacta): `publish_topic` y el `publish` MCP devuelven un run `done` quiescente a `running` en el acto; en el reconcile también vuelve a `running` si un agente pasa a activo. `stopped`/`failed`/`degraded`/`paused` no se tocan; tras reiniciar el servidor el temporizador se recalcula desde cero. `topic groups`, el aviso de despertar (excluye al publicador) y el bus: sin cambios.
+
+**Borrado:** `run_has_pending_messages` (F8f; era lo único que miraba miembros/`poll_active`/lag para la quiescencia). Conservado: `poll_active`, `consumer_groups`, `reopen_quiesced_runs`, `wake_dormant_topic_subscribers`. Cambiado el tipo de `run_quiet_since` a `(u64, usize)`. Textos actualizados: doc de `PatternRun.quiesced` (→ descripción en `shepherd-api.schema.json`, regenerada, 1 línea), `config.rs` y `config-reference.json`.
+
+**Archivos de herdr tocados: 0.** Modificados: `service/{mod,patterns_run}.rs`, `config.rs` (solo comentario), nuevo `service/tests_f8h.rs`, `docs/next/api/shepherd-api.schema.json`, `docs/next/website/src/data/config-reference.json`. Golden existentes intactos. rustfmt (`--edition 2021`) solo sobre archivos propios, `--check` OK.
+
+**Números reales:** shepherd-core 145 + 155 ok; `shepherd::` 90; `client::shell` 403 (2 ignored); `protocol::` 156; `api::` 318 ok + 1 intermitente de plugins (`plugin_launch_survives_executable_replacement`, pasa solo 1/1) — la tanda previa falló además `generated_protocol_schema_artifact_is_current` (descripción de `quiesced`), regenerada con `SHEPHERD_UPDATE_API_SCHEMA=1`, `api::schema` 51 ok; `server::` 318 (5 ignored); `workflow::…explicit_approval…` ok solo. `rename-from-herdr.sh --check` OK; `testRepo|araquesebastian` = 0. Nota: `scripts/config_reference_check.py` informa que `run_quiescence_secs` no está en `src/config` (la clave vive en shepherd-core; viene de F8f, no de esta fase).
+
+**Prueba aislada** (`shepherd-iso.sh`, `run_quiescence_secs = 8`, vendor falso `claude`→`sleep`, estados con `pane.report_agent`; `brain-1` quedó en `starting` y se puso `idle` editando el `agents.json` aislado; ningún agente real):
+```
+brain publica en results (propio), workers sin ack; 4 agentes idle:
+17:48:48 running ['idle','idle','idle','idle']
+17:48:52 done quiesced=True        results brain  lag p0:2  (sigue pendiente)
+publica "humano" en results:
+17:49:21 running (brain working: despertado)      ... 17:49:48 todos idle
+17:49:58..17:50:07 done quiesced=True             (≥8 s sin publicar)
+```
+
+**Límites:** el temporizador sigue en memoria; mensajes publicados con el servidor parado no reabren un run `done`. Pendiente la repetición con claude y codex.

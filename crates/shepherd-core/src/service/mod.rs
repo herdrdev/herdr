@@ -283,7 +283,7 @@ pub struct OrchestrationService {
     pub(crate) failed_requests: Arc<Mutex<Vec<FailedRequestLogEntry>>>,
     pub(crate) topic_wake_notified: Arc<Mutex<HashMap<(String, String), (u64, u64)>>>,
     /// Run id -> ms since which the run has been continuously quiescent.
-    pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, u64>>>,
+    pub(crate) run_quiet_since: Arc<Mutex<HashMap<String, (u64, usize)>>>,
 }
 
 impl OrchestrationService {
@@ -1181,3 +1181,5 @@ mod tests;
 mod tests_f8f;
 #[cfg(test)]
 mod tests_f8g;
+#[cfg(test)]
+mod tests_f8h;

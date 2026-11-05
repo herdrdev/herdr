@@ -64,7 +64,7 @@ pub struct PatternRun {
     pub finished_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// `done` reached by quiescence (agents idle, no pending messages); a new message revives it.
+    /// `done` reached by quiescence (agents idle, nothing published for T seconds); a new message revives it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub quiesced: bool,
 }
@@ -370,31 +370,18 @@ impl OrchestrationService {
         Ok(run)
     }
 
-    /// True when any live run agent has unacknowledged messages from another publisher.
-    fn run_has_pending_messages(
-        &self,
-        run: &PatternRun,
-        registry: &crate::AgentRegistryFile,
-    ) -> bool {
-        let Ok(bus) = self.bus() else {
-            return false;
-        };
-        let live_ids: Vec<String> = registry.live().into_iter().map(|a| a.id.clone()).collect();
-        let run_live =
-            |id: &String| run.agents.iter().any(|a| &a.id == id) && live_ids.contains(id);
-        run.topics.iter().any(|topic| {
-            bus.consumer_groups(Some(topic))
-                .unwrap_or_default()
-                .iter()
-                .flat_map(|g| g.members.iter())
-                .filter(|m| run_live(m))
-                .any(|m| {
-                    bus.poll_active(m, topic, None, Some(&live_ids))
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|msg| &msg.from != m)
-                })
-        })
+    /// F8h: total messages ever published on the run's topics. Lag/acks are ignored on purpose:
+    /// real agents leave their own summaries and foreign-group messages unacknowledged.
+    fn run_published_count(&self, run: &PatternRun) -> usize {
+        self.bus()
+            .and_then(|b| b.list_topics().map_err(|e| e.to_string()))
+            .map(|ts| {
+                ts.iter()
+                    .filter(|t| run.topics.contains(&t.name))
+                    .map(|t| t.messages_count)
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     pub fn reconcile_pattern_runs(
@@ -462,7 +449,7 @@ impl OrchestrationService {
                     .any(|a| matches!(a.state.as_str(), "working" | "blocked" | "starting"));
 
                 if revivable {
-                    if busy || self.run_has_pending_messages(run, registry) {
+                    if busy {
                         run.state = PatternRunState::Running;
                         run.quiesced = false;
                         run.finished_at = None;
@@ -496,20 +483,22 @@ impl OrchestrationService {
                     run.updated_at = now.clone();
                     dirty = true;
                 } else if run.state == PatternRunState::Running {
-                    // Quiescence: every live agent idle, nothing pending, sustained.
+                    // Quiescence (F8h): every agent idle/done and nothing published on the run's
+                    // topics for `run_quiescence_secs`. Lag/acks do not count.
                     let period_ms = self.service_config.run_quiescence_secs.saturating_mul(1000);
-                    if period_ms == 0 || busy || self.run_has_pending_messages(run, registry) {
+                    if period_ms == 0 || busy {
                         self.run_quiet_since.lock().unwrap().remove(&run.id);
                     } else {
                         let now_ms = self.clock.now_ms();
-                        let since = *self
-                            .run_quiet_since
-                            .lock()
-                            .unwrap()
-                            .entry(run.id.clone())
-                            .or_insert(now_ms);
-                        if now_ms.saturating_sub(since) >= period_ms {
-                            self.run_quiet_since.lock().unwrap().remove(&run.id);
+                        let published = self.run_published_count(run);
+                        let mut quiet = self.run_quiet_since.lock().unwrap();
+                        let entry = quiet.entry(run.id.clone()).or_insert((now_ms, published));
+                        if entry.1 != published {
+                            *entry = (now_ms, published);
+                        }
+                        if now_ms.saturating_sub(entry.0) >= period_ms {
+                            quiet.remove(&run.id);
+                            drop(quiet);
                             run.state = PatternRunState::Done;
                             run.quiesced = true;
                             run.finished_at = Some(now.clone());

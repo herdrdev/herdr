@@ -10447,7 +10447,7 @@
               "type": "string"
             },
             "quiesced": {
-              "description": "`done` reached by quiescence (agents idle, no pending messages); a new message revives it.",
+              "description": "`done` reached by quiescence (agents idle, nothing published for T seconds); a new message revives it.",
               "type": "boolean"
             },
             "state": {

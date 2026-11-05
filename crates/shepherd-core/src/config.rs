@@ -111,7 +111,7 @@ pub struct Limits {
     pub protected_branches: Vec<String>,
     pub non_mcp_done_quiet_secs: u64,
     pub notice_after_secs: u64,
-    /// Seconds a pattern run stays quiescent (agents idle, nothing pending) before it is `done`.
+    /// Seconds a pattern run stays quiescent (agents idle, nothing published on its topics) before it is `done`.
     pub run_quiescence_secs: u64,
 }
 
