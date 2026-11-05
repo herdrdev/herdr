@@ -139,7 +139,6 @@ pub(super) struct ShellHitMap {
     pub(super) release_notes_scrollbar: Rect,
     pub(super) release_notes_scroll_metrics: Option<crate::pane::ScrollMetrics>,
     pub(super) release_notes_max_scroll: usize,
-    pub(super) shepherd_hits: Option<crate::shepherd::ShepherdOverlayHits>,
     pub(super) shepherd_section_hits: Option<crate::shepherd::ui::ShepherdSectionHits>,
 }
 
@@ -294,8 +293,6 @@ pub(super) enum ClientShellOverlayKind {
     ContextMenu,
     GlobalMenu,
     Settings,
-    Shepherd,
-    ShepherdAgentModal,
 }
 
 #[derive(Debug)]
@@ -603,8 +600,6 @@ pub(super) enum ClientShellOverlay {
     ContextMenu(ClientContextMenuOverlay),
     GlobalMenu(ClientGlobalMenuOverlay),
     Settings(ClientSettingsOverlay),
-    Shepherd(crate::shepherd::ClientShepherdOverlay),
-    ShepherdAgentModal(crate::shepherd::ClientShepherdAgentModal),
 }
 
 impl ClientShellOverlay {
@@ -623,8 +618,6 @@ impl ClientShellOverlay {
             Self::ContextMenu(_) => ClientShellOverlayKind::ContextMenu,
             Self::GlobalMenu(_) => ClientShellOverlayKind::GlobalMenu,
             Self::Settings(_) => ClientShellOverlayKind::Settings,
-            Self::Shepherd(_) => ClientShellOverlayKind::Shepherd,
-            Self::ShepherdAgentModal(_) => ClientShellOverlayKind::ShepherdAgentModal,
         }
     }
 }

@@ -78,6 +78,10 @@ impl ShepherdGitRow {
 pub enum ShepherdGitAction {
     Refresh,
     CopyOrShowPath { path: PathBuf },
+    CreateWorktree { path: String, branch: String },
+    CreateBranch { branch: String, base: String },
+    PublishBranch { branch: String },
+    RemoveWorktree { path: String },
 }
 
 /// Pure presentation state for the Git view.

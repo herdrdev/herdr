@@ -4250,3 +4250,175 @@ Al pulsar `Esc` dos veces (la primera cancela el formulario de lanzamiento, la s
    - Desarrollar las interfaces de `Patrones` y `Eventos` directamente sobre este nuevo armazón de componentes.
 
 *(Nota: Siguiendo las directrices expresas del usuario, todos los cambios han quedado preparados en el worktree sin realizar commits git).*
+
+## Estado F10c (2026-11-05)
+
+### Qué se implementó
+
+1. **Migración completa a la sección in-place (Opción D sin modales emergentes)**:
+   - Migración de las tres pestañas restantes al armazón centralizado `src/shepherd/ui/`:
+     - **Skills (`src/shepherd/ui/skills.rs`)**: Lista de skills activas / catálogo global, panel de detalle con visualización de prompts y metadatos, soporte de conmutación de catálogo (`c`), activación/desactivación (`Space`), formulario en línea de creación de nueva skill (`n`), franja embebida de confirmación de restauración (`r`) y franja de borrado seguro (`d`).
+     - **Git (`src/shepherd/ui/git.rs`)**: Detección reactiva de worktrees del repositorio (`repo/` y `.shepherd/worktrees/`), panel de detalle con rama activa, commit, upstream y ahead/behind, formularios en línea de creación de worktree (`w`) y rama (`b`), franjas embebidas de confirmación para publicar rama (`p`) y eliminar worktree (`x`), y copia rápida de ruta al portapapeles (`c`).
+     - **Agentes (`src/shepherd/ui/agents.rs`)**: Lista de agentes en ejecución con estado e indicador `[!]`, panel de detalle estructurado con información de PID, rol, tarea asignada, workspace y skills cargadas, salto directo al terminal del pane con `Enter`, formulario en línea de lanzamiento de agentes (`s`), franja de confirmación para matar agente (`K`), franja para limpiar agentes detenidos (`x`) y franja definitiva para limpiar todos los agentes (`X`).
+   - Todos los flujos de creación y confirmación destructiva operan de manera embebida en el panel de detalle derecho (`DetailView`, `InlineForm`, `ConfirmStripe`), manteniendo el sidebar de Herdr a la izquierda permanentemente visible e interactivo.
+
+2. **Retiro definitivo del overlay flotante (`src/shepherd/overlay.rs`)**:
+   - Eliminación física de `src/shepherd/overlay.rs` (**-968 líneas** de código de modales obsoletos).
+   - Supresión completa de los tipos de overlay modal de Shepherd (`ClientShepherdOverlay`, `ClientShepherdAgentModal`, `ClientShellOverlayKind::Shepherd`, etc.) en `src/client/shell/state.rs`, `src/client/shell/overlays.rs`, `src/client/shell/composition.rs`, `src/client/shell/mouse.rs` y `src/client/shell/overlay_input.rs`.
+   - Redirección limpia de los puntos de entrada globales: tanto el menú global `ClientGlobalMenuAction::ShepherdSpawn` ("lanzar agente") como el atajo `KeybindAction::Shepherd` abren directamente la sección Shepherd en la pestaña Agentes con el formulario de lanzamiento activo.
+
+3. **Status bar contextual e insignias de alerta**:
+   - Barra de estado inferior adaptada dinámicamente según la pestaña activa (atajos específicos para Agentes, Tareas, Runs, Skills y Git).
+   - Incorporación de insignia de alerta visual `[!] NEEDS YOU` en el encabezado de la sección cuando cualquier agente requiere atención humana (`needs_human_attention == true`).
+   - Placeholders informativos y elegantes para las fases pendientes: Patrones (`F8c`) y Eventos (`F8d`).
+
+4. **Diseño responsivo (80x24 a 200x50)**:
+   - Adaptación inteligente de etiquetas de pestañas: en terminales compactos (<120 columnas) se muestran identificadores cortos `[1] [2] ... [7]`, mientras que en anchos amplios (>=120 columnas) se muestran nombres descriptivos completos `[ Agentes (1) ] ... [ Eventos (7) ]`, evitando el desbordamiento o truncado de líneas en resoluciones estándar 80x24.
+
+### Reducción de código y archivos modificados
+
+- **Archivo eliminado**: `src/shepherd/overlay.rs` (-968 líneas).
+- **Archivos nuevos en la sección in-place**:
+  - `src/shepherd/ui/skills.rs` (+458 líneas)
+  - `src/shepherd/ui/git.rs` (+427 líneas)
+  - `src/shepherd/ui/agents.rs` (+479 líneas)
+- **Impacto neto**: `git diff --stat` refleja **902 inserciones y 1,472 eliminaciones** (reducción neta de **-570 líneas** en el repositorio y desacoplamiento total de modales).
+- **Archivos de Herdr / upstream tocados fuera de `src/shepherd/`**:
+  - `src/client/shell/state.rs` (-7 líneas de structs/variantes de modales obsoletos).
+  - `src/client/shell/overlays.rs` (-19 líneas de rendering de modales).
+  - `src/client/shell/composition.rs` (-1 línea de hit testing de overlays).
+  - `src/client/shell/overlay_input.rs` (-4 líneas de enrutamiento de teclas hacia overlay).
+  - `src/client/shell/mouse.rs` (-9 líneas de captura de clics en modales).
+  - `src/client/shell/shepherd.rs` (despacho tipado de llamadas hacia la sección y apertura de formularios en línea).
+  - **0 líneas modificadas en el runtime o servidor de Herdr**.
+
+### Verificación real de la batería de tests
+
+Se ejecutó la batería completa de pruebas por áreas en el entorno de desarrollo, confirmando el 100% de éxito:
+
+| Área | Comando de prueba | Resultados reales |
+|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **270 passed; 0 failed** (122 unitarios + 148 integración) |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **68 passed; 0 failed** (incluye unit tests en `ui/agents.rs`, `ui/git.rs`, `ui/skills.rs`, `ui/mod.rs`) |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **391 passed; 0 failed; 2 ignored** |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159 passed; 0 failed** (156 unitarios + 3 integración) |
+| `api::` | `./cargo-fork.sh test api::` | **319 passed; 0 failed; 1 ignored** |
+| `server::` | `./cargo-fork.sh test server::` | **318 passed; 0 failed; 5 ignored** |
+| **Total verificado** | | **1,525 tests pasando sin regresiones** |
+
+### Verificación con sesión aislada (`scripts/shepherd-iso.sh`)
+
+Se realizaron pruebas interactivas en sesión aislada arrancada mediante `./scripts/shepherd-iso.sh`:
+
+#### 1. Pestaña 1: Agentes y Formulario en Línea (`s`)
+La sección sustituye el área del terminal mientras la barra lateral de Herdr (`spaces`, `· repo/master`, `new menu`, `agents grouped`) permanece totalmente intacta:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                            [ + Nuevo (s) ]│NUEVO AGENTE (Formulario en línea)
+                         │───────────────────────────────────────────────────────────│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │                                                           │
+                         │                                                           │Rol obligatorio
+                         │                                                           │[ █j. coder                                                                                                    ]
+                         │                                                           │
+                         │                                                           │Tarea asignada (ID o descripción)
+                         │                                                           │[ ej. 12 - Soporte para banderas booleanas                                                                     ]
+                         │                                                           │
+                         │                                                           │Vendor / Modelo (opcional)
+                         │                                                           │[ ej. anthropic/claude-3-7-sonnet                                                                              ]
+                         │                                                           │
+                         │                                                           │Worktree / Directorio (opcional)
+                         │                                                           │[ ej. .shepherd/worktrees/task-12                                                                              ]
+                         │                                                           │
+                         │                                                           │Skills adicionales (separadas por coma)
+                         │                                                           │[ ej. git-safe, rust-tools                                                                                     ]
+                         │                                                           │
+                         │                                                           │[ Lanzar Agente ]   [ Cancelar ]
+                         │                                                           │
+                        «│ 0 agentes registrados | ↑/↓: lista | Enter: terminal | s: nuevo | K: matar | x: limpiar | Esc: salir
+```
+
+#### 2. Pestaña 5: Skills (Catálogo activo cargado en línea)
+Al pulsar `5`, se visualiza el catálogo de skills cargadas en memoria (`code-review`, `conventional-commits`, `debug`, etc.), el panel de detalle con el contenido de la skill seleccionada y los atajos correspondientes en la barra de estado:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                            [ + Nueva (n) ]│SKILL: code-review [default]                                                                       [ + Nueva (n) ]
+                         │[Por Agente] [✓ Catálogo]                                  │Ámbito: Default | Global: No | Habilitada: Sí
+                         │───────────────────────────────────────────────────────────│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │▸ [default] code-review                                    │
+                         │  [default] conventional-commits                           │DESCRIPCIÓN:
+                         │  [default] debug                                          │Use when reviewing a change as the reviewer role - verify every acceptance criterion, check correctness, readabili
+                         │  [default] docs-lookup                                    │
+                         │  [default] implement-task                                 │
+                         │  [default] lang-go                                        │
+                         │  [default] lang-python                                    │
+                         │  [default] lang-ts                                        │
+                         │  [default] plan-tasks                                     │
+                         │  [default] pr-workflow                                    │
+                         │  [default] security-review                                │
+                         │  [default] shepherd-comms                                 │
+                         │  [default] shepherd-events                                │
+                         │  [default] write-tests                                    │
+                         │                                                           │[ Alternar Global (g) ]
+                        «│ Catálogo de skills (14) | c: por agente | n: nueva | g: global | d: eliminar | Esc: salir
+```
+
+#### 3. Pestaña 6: Git (Worktrees e inspección de ramas)
+Al pulsar `6`, se enumeran los worktrees detectados, mostrando estado de limpieza, upstream y acciones disponibles:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [ Agentes (1) ] [ Tareas (2) ] [ Runs (3) ] [ Patrones (4) ] [ Skills (5) ] [ Git (6) ] [ Eventos (7) ]                                          [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+   master                │                                         [ + Worktree (w) ]│WORKTREE: /tmp/shfiso/repo [main] [clean]                                        [ + Worktree (w) ] [ + Rama (b) ]
+                         │───────────────────────────────────────────────────────────│Rama: master | Ahead: 0 | Behind: 0 | Agente: ninguno
+                         │▸ [clean] master                                           │──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                         │                                                           │
+                         │                                                           │ESTADO DEL WORKTREE:
+                         │                                                           │Directorio: /tmp/shfiso/repo
+                         │                                                           │Rama activa: master
+                         │                                                           │Upstream: origin/master
+                         │                                                           │
+                         │                                                           │[ Nueva Rama (b) ]  [ Publicar Rama (p) ]  [ Copiar Ruta (c) ]  [ Refrescar (r) ]
+                        «│ 1 worktrees (0 modificados) | ↑/↓: lista | w: nuevo worktree | b: nueva rama | p: publicar | x: eliminar | c: copiar ruta | Esc: salir
+```
+
+#### 4. Responsividad en terminal 80x24
+Al redimensionar la terminal a 80x24 (`tmux resize-window -x 80 -y 24`), las pestañas colapsan automáticamente en modo compacto sin romper el layout:
+
+```text
+ spaces                  │   1      +
+                         │ Shepherd  [1] [2] [3] [4] [5] [6]  [ × Cerrar (Esc) ]
+ · repo                  │──────────────────────────────────────────────────────
+   master                │                                       [ + Nuevo (s) ]
+                         │──────────────────────────────────────────────────────
+                         │
+                         │
+                         │
+ new                 menu│
+─────────────────────────│
+ agents           grouped│
+                        «│ 0 agentes registrados | ↑/↓: lista | Enter: terminal
+```
+
+### Comprobaciones de higiene y scripts
+
+- `./scripts/upstream-sync.sh --dry-run --allow-branch HEAD`: verificado en modo simulación con salida limpia (0 errores).
+- `./scripts/rename-from-herdr.sh --check`: comprobado exitosamente sin ninguna instancia residual (`[OK] No unexcluded occurrences of herdr/Herdr/HERDR found`).
+
+### Alcance fuera de F10c y próximas fases
+
+1. **F8c (Patrones multi-agente)**:
+   - Catálogo e inspección interactiva de topologías multi-agente (orquestador-trabajador, blackboard, mercado) sobre el armazón in-place.
+2. **F8d (Eventos en tiempo real)**:
+   - Visualizador en streaming del bus JSONL con controles de pausa, filtrado y replay histórico.
+3. **F10d (Pulido y temas)**:
+   - Afinamiento de micro-interacciones, animaciones de foco y personalización estética avanzada.
+
+*(Nota: Siguiendo las directrices del usuario, no se han creado commits git).*
+

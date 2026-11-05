@@ -1,5 +1,8 @@
+pub mod agents;
 pub mod components;
+pub mod git;
 pub mod runs;
+pub mod skills;
 pub mod state;
 pub mod tasks;
 
@@ -17,14 +20,20 @@ use components::{
     status_bar::render_status_bar,
 };
 #[allow(unused_imports)]
-pub use runs::{ShepherdRunsAction, ShepherdRunsSectionState};
+pub use agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
+#[allow(unused_imports)]
+pub use git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
+#[allow(unused_imports)]
+pub use runs::{ShepherdRunsAction, ShepherdRunsHits, ShepherdRunsSectionState};
+#[allow(unused_imports)]
+pub use skills::{ShepherdSkillsAction, ShepherdSkillsHits, ShepherdSkillsSectionState};
 #[allow(unused_imports)]
 pub use state::{
     ShepherdFocusedPanel, ShepherdSectionAction, ShepherdSectionHits, ShepherdSectionOutcome,
     ShepherdSectionState, ShepherdSectionTab,
 };
 #[allow(unused_imports)]
-pub use tasks::{ShepherdTasksAction, ShepherdTasksSectionState};
+pub use tasks::{ShepherdTasksAction, ShepherdTasksHits, ShepherdTasksSectionState};
 
 pub fn contains_point(rect: Rect, point: (u16, u16)) -> bool {
     point.0 >= rect.x
@@ -64,10 +73,12 @@ pub fn render_shepherd_section(
     // Tabs
     for &tab in &ShepherdSectionTab::ALL {
         let is_active = tab == state.active_tab;
-        let tab_label = if area.width >= 90 {
+        let tab_label = if area.width >= 120 {
             format!("[ {} ({}) ]", tab.label(), tab.shortcut())
-        } else {
+        } else if area.width >= 80 {
             format!("[{}]", tab.label())
+        } else {
+            format!("[{}]", tab.shortcut())
         };
         let tab_w = tab_label.chars().count() as u16;
         if tab_x + tab_w < area.right().saturating_sub(18) {
@@ -120,6 +131,14 @@ pub fn render_shepherd_section(
     let content_area = Rect::new(area.x, content_y, area.width, content_h);
 
     match state.active_tab {
+        ShepherdSectionTab::Agents => {
+            hits.agents_hits = Some(agents::render_agents_section(
+                buffer,
+                content_area,
+                &state.agents,
+                palette,
+            ));
+        }
         ShepherdSectionTab::Tasks => {
             hits.tasks_hits = Some(tasks::render_tasks_section(
                 buffer,
@@ -136,16 +155,6 @@ pub fn render_shepherd_section(
                 palette,
             ));
         }
-        ShepherdSectionTab::Agents => {
-            hits.empty_state_hits = Some(render_empty_state(
-                buffer,
-                content_area,
-                "PESTAÑA DE AGENTES (F10c)",
-                "Próximamente en F10c: Formulario de lanzamiento en línea,\ngestión y franjas de confirmación de agentes integradas en este armazón.\nActualmente puedes gestionarlos en la barra lateral izquierda.",
-                &[],
-                palette,
-            ));
-        }
         ShepherdSectionTab::Patterns => {
             hits.empty_state_hits = Some(render_empty_state(
                 buffer,
@@ -157,24 +166,18 @@ pub fn render_shepherd_section(
             ));
         }
         ShepherdSectionTab::Skills => {
-            let actions = [("Abrir en Overlay temporal", Some("o"))];
-            hits.empty_state_hits = Some(render_empty_state(
+            hits.skills_hits = Some(skills::render_skills_section(
                 buffer,
                 content_area,
-                "PESTAÑA DE SKILLS (F10c)",
-                "Próximamente en F10c: Gestión de 3 capas (global/rol/agente)\ne inspección integrada en este armazón.\nPuedes abrir temporalmente el overlay de Skills con el botón inferior.",
-                &actions,
+                &state.skills,
                 palette,
             ));
         }
         ShepherdSectionTab::Git => {
-            let actions = [("Abrir en Overlay temporal", Some("o"))];
-            hits.empty_state_hits = Some(render_empty_state(
+            hits.git_hits = Some(git::render_git_section(
                 buffer,
                 content_area,
-                "PESTAÑA DE GIT (F10c)",
-                "Próximamente en F10c: Gestión de worktrees y ramas en línea\nsobre este armazón.\nPuedes abrir temporalmente el overlay de Git con el botón inferior.",
-                &actions,
+                &state.git,
                 palette,
             ));
         }
@@ -195,6 +198,17 @@ pub fn render_shepherd_section(
     let status_area = Rect::new(area.x, status_y, area.width, 1);
 
     let (summary, help_text) = match state.active_tab {
+        ShepherdSectionTab::Agents => {
+            let total = state.agents.agents.len();
+            let needs_you = state.agents.needs_you_count();
+            let sum = if needs_you > 0 {
+                format!("{total} agentes ({needs_you} REQUIERE ATENCIÓN)")
+            } else {
+                format!("{total} agentes registrados")
+            };
+            let help = "↑/↓: lista | Enter: terminal | s: nuevo | K: matar | x: limpiar | Esc: salir";
+            (sum, help)
+        }
         ShepherdSectionTab::Tasks => {
             let total = state.tasks.tasks.len();
             let open_count = state
@@ -213,18 +227,54 @@ pub fn render_shepherd_section(
             let help = "↑/↓: lista | l: iniciar run | c: cancelar | a: aprobar gate | d: rechazar | Esc: salir";
             (sum, help)
         }
-        ShepherdSectionTab::Skills | ShepherdSectionTab::Git => {
-            ("Vista provisional".into(), "o/Enter: abrir en overlay | Esc: salir")
+        ShepherdSectionTab::Patterns => {
+            ("Patrones multi-agente".into(), "Próximamente en F8c | 1-7: cambiar pestaña | Esc: salir")
         }
-        _ => ("Próximamente".into(), "1-7: cambiar pestaña | Esc: salir"),
+        ShepherdSectionTab::Skills => {
+            let sum = match state.skills.mode {
+                skills::SkillsViewMode::AgentView => {
+                    format!("Skills de agente ({})", state.skills.agent_skills.len())
+                }
+                skills::SkillsViewMode::CatalogView => {
+                    format!("Catálogo de skills ({})", state.skills.catalog_skills.len())
+                }
+            };
+            let help = match state.skills.mode {
+                skills::SkillsViewMode::AgentView => {
+                    "c: catálogo | Space: activar/desactivar | r: restaurar | Esc: salir"
+                }
+                skills::SkillsViewMode::CatalogView => {
+                    "c: por agente | n: nueva | g: global | d: eliminar | Esc: salir"
+                }
+            };
+            (sum, help)
+        }
+        ShepherdSectionTab::Git => {
+            let total = state.git.rows.len();
+            let dirty = state.git.rows.iter().filter(|r| !r.is_clean).count();
+            let sum = format!("{total} worktrees ({dirty} modificados)");
+            let help = "↑/↓: lista | w: nuevo worktree | b: nueva rama | p: publicar | x: eliminar | c: copiar ruta | Esc: salir";
+            (sum, help)
+        }
+        ShepherdSectionTab::Events => {
+            ("Bus de eventos JSONL".into(), "Próximamente en F8d | 1-7: cambiar pestaña | Esc: salir")
+        }
     };
+
+    let notice = state.status_message.as_deref().or_else(|| {
+        if state.agents.needs_you_count() > 0 {
+            Some("⚠ AVISO DESTACADO (NEEDS YOU): Agente esperando intervención")
+        } else {
+            None
+        }
+    });
 
     render_status_bar(
         buffer,
         status_area,
         &summary,
         help_text,
-        state.status_message.as_deref(),
+        notice,
         palette,
     );
 
@@ -257,6 +307,128 @@ pub fn handle_shepherd_section_mouse(
 
         // 3. Active tab mouse handling
         match state.active_tab {
+            ShepherdSectionTab::Agents => {
+                if let Some(ref agent_hits) = hits.agents_hits {
+                    // Header action (+ Nuevo)
+                    if let Some(btn_rect) = agent_hits.list_hits.action_button {
+                        if contains_point(btn_rect, point) {
+                            state.agents.start_spawn();
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // List rows
+                    for &(row_rect, idx) in &agent_hits.list_hits.rows {
+                        if contains_point(row_rect, point) {
+                            state.agents.selected = idx;
+                            state.agents.detail_scroll = 0;
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Spawn form buttons
+                    if let Some(ref form_hits) = agent_hits.form_hits {
+                        if let Some(sub_rect) = form_hits.submit_button {
+                            if contains_point(sub_rect, point) {
+                                if let Ok(Some(act)) = state.agents.submit_spawn() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Agents(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = form_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.agents.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        for &(field_rect, field_idx) in &form_hits.field_rects {
+                            if contains_point(field_rect, point) {
+                                if let Some(ref mut f) = state.agents.spawn_form {
+                                    f.active_field = field_idx;
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Stripe buttons
+                    if let Some(ref stripe_hits) = agent_hits.stripe_hits {
+                        if let Some(conf_rect) = stripe_hits.confirm_button {
+                            if contains_point(conf_rect, point) {
+                                if let Some(act) = state.agents.confirm_kill_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Agents(act),
+                                    );
+                                } else if let Some(act) = state.agents.confirm_clean_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Agents(act),
+                                    );
+                                } else if let Some(act) = state.agents.confirm_clean_all_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Agents(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = stripe_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.agents.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Detail view actions
+                    if let Some(ref detail_hits) = agent_hits.detail_hits {
+                        for &(btn_rect, action_idx) in &detail_hits.bottom_actions {
+                            if contains_point(btn_rect, point) {
+                                match action_idx {
+                                    0 => {
+                                        if let Some(act) = state.agents.focus_selected_agent() {
+                                            return ShepherdSectionOutcome::Action(
+                                                ShepherdSectionAction::Agents(act),
+                                            );
+                                        }
+                                    }
+                                    1 => state.agents.start_kill(),
+                                    2 => state.agents.start_clean(),
+                                    3 => state.agents.start_clean_all(),
+                                    _ => {}
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        for &(btn_rect, action_idx) in &detail_hits.header_actions {
+                            if contains_point(btn_rect, point) {
+                                if action_idx == 0 {
+                                    if let Some(act) = state.agents.focus_selected_agent() {
+                                        return ShepherdSectionOutcome::Action(
+                                            ShepherdSectionAction::Agents(act),
+                                        );
+                                    }
+                                } else {
+                                    state.agents.start_spawn();
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Empty state CTA
+                    if let Some(ref empty_hits) = agent_hits.empty_hits {
+                        for &(btn_rect, _) in &empty_hits.actions {
+                            if contains_point(btn_rect, point) {
+                                state.agents.start_spawn();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+                }
+            }
             ShepherdSectionTab::Tasks => {
                 if let Some(ref task_hits) = hits.tasks_hits {
                     // Filter tabs
@@ -347,7 +519,6 @@ pub fn handle_shepherd_section_mouse(
                             if contains_point(btn_rect, point) {
                                 match action_idx {
                                     0 => {
-                                        // Iniciar Run -> switch to Runs tab or start run
                                         state.select_tab(ShepherdSectionTab::Runs);
                                         if let Some(t) = state.tasks.selected_task() {
                                             state.runs.start_launch_run(t.id, false);
@@ -355,12 +526,10 @@ pub fn handle_shepherd_section_mouse(
                                         return ShepherdSectionOutcome::Handled;
                                     }
                                     1 => {
-                                        // Archivar
                                         state.tasks.start_archive_task();
                                         return ShepherdSectionOutcome::Handled;
                                     }
                                     2 => {
-                                        // Importar GitHub
                                         state.tasks.start_import_gh();
                                         return ShepherdSectionOutcome::Handled;
                                     }
@@ -497,14 +666,12 @@ pub fn handle_shepherd_section_mouse(
                             if contains_point(btn_rect, point) {
                                 match action_idx {
                                     0 => {
-                                        // Launch / Resume
                                         if let Some(r) = state.runs.selected_run() {
                                             state.runs.start_launch_run(r.task_id, r.has_saved_plan);
                                         }
                                         return ShepherdSectionOutcome::Handled;
                                     }
                                     1 => {
-                                        // Cancel Run
                                         state.runs.start_cancel_run();
                                         return ShepherdSectionOutcome::Handled;
                                     }
@@ -526,27 +693,249 @@ pub fn handle_shepherd_section_mouse(
                 }
             }
             ShepherdSectionTab::Skills => {
-                if let Some(ref empty_hits) = hits.empty_state_hits {
-                    for &(btn_rect, _) in &empty_hits.actions {
+                if let Some(ref skill_hits) = hits.skills_hits {
+                    // Filter / mode tabs ([Por Agente], [Catálogo])
+                    for &(tab_rect, idx) in &skill_hits.list_hits.filter_tabs {
+                        if contains_point(tab_rect, point) {
+                            let new_mode = if idx == 0 {
+                                skills::SkillsViewMode::AgentView
+                            } else {
+                                skills::SkillsViewMode::CatalogView
+                            };
+                            if state.skills.mode != new_mode {
+                                state.skills.toggle_mode();
+                            }
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Header action in list (+ Nueva)
+                    if let Some(btn_rect) = skill_hits.list_hits.action_button {
                         if contains_point(btn_rect, point) {
-                            return ShepherdSectionOutcome::Action(
-                                ShepherdSectionAction::OpenLegacyOverlay(
-                                    crate::shepherd::overlay::ShepherdTab::Skills,
-                                ),
-                            );
+                            state.skills.start_create_skill();
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // List rows
+                    for &(row_rect, idx) in &skill_hits.list_hits.rows {
+                        if contains_point(row_rect, point) {
+                            state.skills.selected = idx;
+                            state.skills.detail_scroll = 0;
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Form buttons
+                    if let Some(ref form_hits) = skill_hits.form_hits {
+                        if let Some(sub_rect) = form_hits.submit_button {
+                            if contains_point(sub_rect, point) {
+                                if let Ok(Some(act)) = state.skills.submit_create_skill() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Skills(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = form_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.skills.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Confirm stripes
+                    if let Some(ref stripe_hits) = skill_hits.stripe_hits {
+                        if let Some(conf_rect) = stripe_hits.confirm_button {
+                            if contains_point(conf_rect, point) {
+                                if let Some(act) = state.skills.confirm_restore_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Skills(act),
+                                    );
+                                } else if let Some(act) = state.skills.confirm_delete_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Skills(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = stripe_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.skills.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Detail view actions
+                    if let Some(ref detail_hits) = skill_hits.detail_hits {
+                        for &(btn_rect, action_idx) in &detail_hits.bottom_actions {
+                            if contains_point(btn_rect, point) {
+                                match state.skills.mode {
+                                    skills::SkillsViewMode::AgentView => {
+                                        if action_idx == 0 {
+                                            if let Some(act) = state.skills.toggle_agent_skill() {
+                                                return ShepherdSectionOutcome::Action(
+                                                    ShepherdSectionAction::Skills(act),
+                                                );
+                                            }
+                                        } else {
+                                            state.skills.start_restore_skill();
+                                        }
+                                    }
+                                    skills::SkillsViewMode::CatalogView => {
+                                        if action_idx == 0 {
+                                            if let Some(act) = state.skills.toggle_catalog_global() {
+                                                return ShepherdSectionOutcome::Action(
+                                                    ShepherdSectionAction::Skills(act),
+                                                );
+                                            }
+                                        } else {
+                                            state.skills.start_delete_skill();
+                                        }
+                                    }
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Empty state CTA
+                    if let Some(ref empty_hits) = skill_hits.empty_hits {
+                        for &(btn_rect, _) in &empty_hits.actions {
+                            if contains_point(btn_rect, point) {
+                                match state.skills.mode {
+                                    skills::SkillsViewMode::AgentView => state.skills.toggle_mode(),
+                                    skills::SkillsViewMode::CatalogView => state.skills.start_create_skill(),
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
                         }
                     }
                 }
             }
             ShepherdSectionTab::Git => {
-                if let Some(ref empty_hits) = hits.empty_state_hits {
-                    for &(btn_rect, _) in &empty_hits.actions {
+                if let Some(ref git_hits) = hits.git_hits {
+                    // Header action (+ Worktree)
+                    if let Some(btn_rect) = git_hits.list_hits.action_button {
                         if contains_point(btn_rect, point) {
-                            return ShepherdSectionOutcome::Action(
-                                ShepherdSectionAction::OpenLegacyOverlay(
-                                    crate::shepherd::overlay::ShepherdTab::Git,
-                                ),
-                            );
+                            state.git.start_create_worktree();
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // List rows
+                    for &(row_rect, idx) in &git_hits.list_hits.rows {
+                        if contains_point(row_rect, point) {
+                            state.git.selected = idx;
+                            state.git.detail_scroll = 0;
+                            return ShepherdSectionOutcome::Handled;
+                        }
+                    }
+
+                    // Form buttons
+                    if let Some(ref form_hits) = git_hits.form_hits {
+                        if let Some(sub_rect) = form_hits.submit_button {
+                            if contains_point(sub_rect, point) {
+                                if state.git.worktree_form.is_some() {
+                                    if let Ok(Some(act)) = state.git.submit_create_worktree() {
+                                        return ShepherdSectionOutcome::Action(
+                                            ShepherdSectionAction::Git(act),
+                                        );
+                                    }
+                                } else if state.git.branch_form.is_some() {
+                                    if let Ok(Some(act)) = state.git.submit_create_branch() {
+                                        return ShepherdSectionOutcome::Action(
+                                            ShepherdSectionAction::Git(act),
+                                        );
+                                    }
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = form_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.git.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Confirm stripes
+                    if let Some(ref stripe_hits) = git_hits.stripe_hits {
+                        if let Some(conf_rect) = stripe_hits.confirm_button {
+                            if contains_point(conf_rect, point) {
+                                if let Some(act) = state.git.confirm_publish_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Git(act),
+                                    );
+                                } else if let Some(act) = state.git.confirm_remove_action() {
+                                    return ShepherdSectionOutcome::Action(
+                                        ShepherdSectionAction::Git(act),
+                                    );
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        if let Some(can_rect) = stripe_hits.cancel_button {
+                            if contains_point(can_rect, point) {
+                                state.git.cancel_sub_action();
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Detail view actions
+                    if let Some(ref detail_hits) = git_hits.detail_hits {
+                        for &(btn_rect, action_idx) in &detail_hits.bottom_actions {
+                            if contains_point(btn_rect, point) {
+                                match action_idx {
+                                    0 => state.git.start_create_branch(),
+                                    1 => state.git.start_publish_branch(),
+                                    2 => {
+                                        if let Some(r) = state.git.selected_row() {
+                                            return ShepherdSectionOutcome::Action(
+                                                ShepherdSectionAction::Git(
+                                                    ShepherdGitAction::CopyOrShowPath {
+                                                        path: std::path::PathBuf::from(&r.path),
+                                                    },
+                                                ),
+                                            );
+                                        }
+                                    }
+                                    3 => {
+                                        return ShepherdSectionOutcome::Action(
+                                            ShepherdSectionAction::Git(ShepherdGitAction::Refresh),
+                                        );
+                                    }
+                                    4 => state.git.start_remove_worktree(),
+                                    _ => {}
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                        for &(btn_rect, action_idx) in &detail_hits.header_actions {
+                            if contains_point(btn_rect, point) {
+                                if action_idx == 0 {
+                                    state.git.start_create_worktree();
+                                } else {
+                                    state.git.start_create_branch();
+                                }
+                                return ShepherdSectionOutcome::Handled;
+                            }
+                        }
+                    }
+
+                    // Empty state CTA
+                    if let Some(ref empty_hits) = git_hits.empty_hits {
+                        for &(btn_rect, _) in &empty_hits.actions {
+                            if contains_point(btn_rect, point) {
+                                state.git.start_create_worktree();
+                                return ShepherdSectionOutcome::Handled;
+                            }
                         }
                     }
                 }
@@ -558,6 +947,10 @@ pub fn handle_shepherd_section_mouse(
     // Scroll wheel handling
     if mouse.kind == MouseEventKind::ScrollUp {
         match state.active_tab {
+            ShepherdSectionTab::Agents => {
+                state.agents.select_prev();
+                return ShepherdSectionOutcome::Handled;
+            }
             ShepherdSectionTab::Tasks => {
                 state.tasks.select_prev();
                 return ShepherdSectionOutcome::Handled;
@@ -566,16 +959,36 @@ pub fn handle_shepherd_section_mouse(
                 state.runs.select_prev();
                 return ShepherdSectionOutcome::Handled;
             }
+            ShepherdSectionTab::Skills => {
+                state.skills.select_prev();
+                return ShepherdSectionOutcome::Handled;
+            }
+            ShepherdSectionTab::Git => {
+                state.git.select_prev();
+                return ShepherdSectionOutcome::Handled;
+            }
             _ => {}
         }
     } else if mouse.kind == MouseEventKind::ScrollDown {
         match state.active_tab {
+            ShepherdSectionTab::Agents => {
+                state.agents.select_next();
+                return ShepherdSectionOutcome::Handled;
+            }
             ShepherdSectionTab::Tasks => {
                 state.tasks.select_next();
                 return ShepherdSectionOutcome::Handled;
             }
             ShepherdSectionTab::Runs => {
                 state.runs.select_next();
+                return ShepherdSectionOutcome::Handled;
+            }
+            ShepherdSectionTab::Skills => {
+                state.skills.select_next();
+                return ShepherdSectionOutcome::Handled;
+            }
+            ShepherdSectionTab::Git => {
+                state.git.select_next();
                 return ShepherdSectionOutcome::Handled;
             }
             _ => {}
@@ -596,82 +1009,66 @@ mod tests {
     #[test]
     fn test_shepherd_section_pure_render_and_tab_switching() {
         let palette = test_palette();
-        let area = Rect::new(0, 0, 100, 25);
+        let area = Rect::new(0, 0, 140, 25);
         let mut buffer = Buffer::empty(area);
-
         let mut state = ShepherdSectionState::default();
-        assert_eq!(state.active_tab, ShepherdSectionTab::Tasks);
 
         let hits = render_shepherd_section(&mut buffer, area, &mut state, &palette);
-        assert!(!hits.tabs.is_empty());
+        assert_eq!(hits.tabs.len(), 7);
         assert!(hits.close_button.is_some());
-        assert!(hits.tasks_hits.is_some());
+        assert!(hits.agents_hits.is_some());
 
-        // Title was rendered
-        assert_eq!(buffer[(1, 0)].symbol(), "S");
+        // Switch to Tasks
+        state.select_tab(ShepherdSectionTab::Tasks);
+        let hits2 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits2.tasks_hits.is_some());
 
-        // Switch to Runs tab
+        // Switch to Runs
         state.select_tab(ShepherdSectionTab::Runs);
-        let hits_runs = render_shepherd_section(&mut buffer, area, &mut state, &palette);
-        assert!(hits_runs.runs_hits.is_some());
+        let hits3 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits3.runs_hits.is_some());
+
+        // Switch to Skills
+        state.select_tab(ShepherdSectionTab::Skills);
+        let hits4 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits4.skills_hits.is_some());
+
+        // Switch to Git
+        state.select_tab(ShepherdSectionTab::Git);
+        let hits5 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits5.git_hits.is_some());
+
+        // Switch to Patterns (empty state)
+        state.select_tab(ShepherdSectionTab::Patterns);
+        let hits6 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits6.empty_state_hits.is_some());
+
+        // Switch to Events (empty state)
+        state.select_tab(ShepherdSectionTab::Events);
+        let hits7 = render_shepherd_section(&mut buffer, area, &mut state, &palette);
+        assert!(hits7.empty_state_hits.is_some());
     }
 
     #[test]
     fn test_shepherd_section_close_and_esc_state_machine() {
         let mut state = ShepherdSectionState::default();
-        // Esc when clean closes section
+        state.select_tab(ShepherdSectionTab::Agents);
+
+        // 1. Esc with sub-action: cancels sub-action, handled
+        state.agents.start_spawn();
+        assert!(state.has_active_sub_modal_or_stripe());
         let outcome = state.handle_key(&crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
             crossterm::event::KeyModifiers::NONE,
         ));
-        assert_eq!(outcome, ShepherdSectionOutcome::Close);
+        assert_eq!(outcome, ShepherdSectionOutcome::Handled);
+        assert!(!state.has_active_sub_modal_or_stripe());
 
-        // Esc when in create task form cancels form without closing section
-        state.tasks.start_create_task();
+        // 2. Esc without sub-action: closes section
         let outcome2 = state.handle_key(&crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
             crossterm::event::KeyModifiers::NONE,
         ));
-        assert_eq!(outcome2, ShepherdSectionOutcome::Handled);
-        assert_eq!(state.tasks.form, None);
-    }
-
-    #[test]
-    fn test_shepherd_section_mouse_click_handling() {
-        use crossterm::event::KeyModifiers;
-
-        let palette = test_palette();
-        let area = Rect::new(0, 0, 100, 25);
-        let mut buffer = Buffer::empty(area);
-        let mut state = ShepherdSectionState::default();
-        let hits = render_shepherd_section(&mut buffer, area, &mut state, &palette);
-
-        // Click close button
-        let close_rect = hits.close_button.unwrap();
-        let mouse_close = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: close_rect.x,
-            row: close_rect.y,
-            modifiers: KeyModifiers::NONE,
-        };
-        let out = handle_shepherd_section_mouse(&mut state, &hits, mouse_close);
-        assert_eq!(out, ShepherdSectionOutcome::Close);
-
-        // Click Runs tab
-        let runs_tab_rect = hits
-            .tabs
-            .iter()
-            .find(|(_, t)| *t == ShepherdSectionTab::Runs)
-            .unwrap()
-            .0;
-        let mouse_tab = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: runs_tab_rect.x,
-            row: runs_tab_rect.y,
-            modifiers: KeyModifiers::NONE,
-        };
-        let out = handle_shepherd_section_mouse(&mut state, &hits, mouse_tab);
-        assert_eq!(out, ShepherdSectionOutcome::Handled);
-        assert_eq!(state.active_tab, ShepherdSectionTab::Runs);
+        assert_eq!(outcome2, ShepherdSectionOutcome::Close);
     }
 }

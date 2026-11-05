@@ -1,8 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
 
+use super::agents::{ShepherdAgentsAction, ShepherdAgentsHits, ShepherdAgentsSectionState};
 use super::components::EmptyStateHits;
+use super::git::{ShepherdGitAction, ShepherdGitHits, ShepherdGitSectionState};
 use super::runs::{ShepherdRunsAction, ShepherdRunsHits, ShepherdRunsSectionState};
+use super::skills::{ShepherdSkillsAction, ShepherdSkillsHits, ShepherdSkillsSectionState};
 use super::tasks::{ShepherdTasksAction, ShepherdTasksHits, ShepherdTasksSectionState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,9 +88,11 @@ pub enum ShepherdFocusedPanel {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ShepherdSectionAction {
+    Agents(ShepherdAgentsAction),
     Tasks(ShepherdTasksAction),
     Runs(ShepherdRunsAction),
-    OpenLegacyOverlay(crate::shepherd::overlay::ShepherdTab),
+    Skills(ShepherdSkillsAction),
+    Git(ShepherdGitAction),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -102,8 +107,11 @@ pub enum ShepherdSectionOutcome {
 pub struct ShepherdSectionHits {
     pub tabs: Vec<(Rect, ShepherdSectionTab)>,
     pub close_button: Option<Rect>,
+    pub agents_hits: Option<ShepherdAgentsHits>,
     pub tasks_hits: Option<ShepherdTasksHits>,
     pub runs_hits: Option<ShepherdRunsHits>,
+    pub skills_hits: Option<ShepherdSkillsHits>,
+    pub git_hits: Option<ShepherdGitHits>,
     pub empty_state_hits: Option<EmptyStateHits>,
 }
 
@@ -111,8 +119,11 @@ pub struct ShepherdSectionHits {
 pub struct ShepherdSectionState {
     pub active_tab: ShepherdSectionTab,
     pub focused_panel: ShepherdFocusedPanel,
+    pub agents: ShepherdAgentsSectionState,
     pub tasks: ShepherdTasksSectionState,
     pub runs: ShepherdRunsSectionState,
+    pub skills: ShepherdSkillsSectionState,
+    pub git: ShepherdGitSectionState,
     pub status_message: Option<String>,
     pub loading: bool,
 }
@@ -120,10 +131,13 @@ pub struct ShepherdSectionState {
 impl Default for ShepherdSectionState {
     fn default() -> Self {
         Self {
-            active_tab: ShepherdSectionTab::Tasks,
+            active_tab: ShepherdSectionTab::Agents,
             focused_panel: ShepherdFocusedPanel::List,
+            agents: ShepherdAgentsSectionState::default(),
             tasks: ShepherdTasksSectionState::default(),
             runs: ShepherdRunsSectionState::default(),
+            skills: ShepherdSkillsSectionState::default(),
+            git: ShepherdGitSectionState::default(),
             status_message: None,
             loading: false,
         }
@@ -148,6 +162,7 @@ impl ShepherdSectionState {
 
     pub fn has_active_sub_modal_or_stripe(&self) -> bool {
         match self.active_tab {
+            ShepherdSectionTab::Agents => self.agents.has_sub_action(),
             ShepherdSectionTab::Tasks => {
                 self.tasks.form.is_some()
                     || self.tasks.import_gh.is_some()
@@ -156,14 +171,19 @@ impl ShepherdSectionState {
             ShepherdSectionTab::Runs => {
                 self.runs.launch_form.is_some() || self.runs.confirm_cancel.is_some()
             }
+            ShepherdSectionTab::Skills => self.skills.has_sub_action(),
+            ShepherdSectionTab::Git => self.git.has_sub_action(),
             _ => false,
         }
     }
 
     pub fn cancel_active_sub_modal_or_stripe(&mut self) -> bool {
         match self.active_tab {
+            ShepherdSectionTab::Agents => self.agents.cancel_sub_action(),
             ShepherdSectionTab::Tasks => self.tasks.cancel_sub_action(),
             ShepherdSectionTab::Runs => self.runs.cancel_sub_action(),
+            ShepherdSectionTab::Skills => self.skills.cancel_sub_action(),
+            ShepherdSectionTab::Git => self.git.cancel_sub_action(),
             _ => false,
         }
     }
@@ -222,6 +242,16 @@ impl ShepherdSectionState {
 
         // Forward to active tab
         match self.active_tab {
+            ShepherdSectionTab::Agents => {
+                let (handled, act) = self.agents.handle_key(key);
+                if let Some(a) = act {
+                    ShepherdSectionOutcome::Action(ShepherdSectionAction::Agents(a))
+                } else if handled {
+                    ShepherdSectionOutcome::Handled
+                } else {
+                    ShepherdSectionOutcome::Ignored
+                }
+            }
             ShepherdSectionTab::Tasks => {
                 let (handled, act) = self.tasks.handle_key(key);
                 if let Some(a) = act {
@@ -243,19 +273,21 @@ impl ShepherdSectionState {
                 }
             }
             ShepherdSectionTab::Skills => {
-                if key.code == KeyCode::Char('o') || key.code == KeyCode::Enter {
-                    ShepherdSectionOutcome::Action(ShepherdSectionAction::OpenLegacyOverlay(
-                        crate::shepherd::overlay::ShepherdTab::Skills,
-                    ))
+                let (handled, act) = self.skills.handle_key(key);
+                if let Some(a) = act {
+                    ShepherdSectionOutcome::Action(ShepherdSectionAction::Skills(a))
+                } else if handled {
+                    ShepherdSectionOutcome::Handled
                 } else {
                     ShepherdSectionOutcome::Ignored
                 }
             }
             ShepherdSectionTab::Git => {
-                if key.code == KeyCode::Char('o') || key.code == KeyCode::Enter {
-                    ShepherdSectionOutcome::Action(ShepherdSectionAction::OpenLegacyOverlay(
-                        crate::shepherd::overlay::ShepherdTab::Git,
-                    ))
+                let (handled, act) = self.git.handle_key(key);
+                if let Some(a) = act {
+                    ShepherdSectionOutcome::Action(ShepherdSectionAction::Git(a))
+                } else if handled {
+                    ShepherdSectionOutcome::Handled
                 } else {
                     ShepherdSectionOutcome::Ignored
                 }

@@ -1570,15 +1570,6 @@ impl ClientShellState {
             }
             return;
         }
-        if matches!(
-            self.overlay,
-            Some(ClientShellOverlay::Shepherd(_) | ClientShellOverlay::ShepherdAgentModal(_))
-        ) {
-            if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
-                self.route_shepherd_mouse(point, outcome);
-            }
-            return;
-        }
         if self.shepherd_section.is_some() && self.route_shepherd_section_mouse(mouse, point, outcome) {
             return;
         }
