@@ -4068,3 +4068,6 @@ Si el ancho cae por debajo de 70 columnas (modo ultra-compacto), la vista conmut
 
 2. **Aprobación del Plan de Trabajo Ajustado**:
    - Confirmar el orden de ejecución: **F10b** (Armazón + Tareas + Runs) → **F10c** (Skills + Git + Agentes) → **F8c** (Patrones sobre el nuevo armazón) → **F8d** (Eventos sobre el nuevo armazón) → **F10d** (Pulido y accesibilidad con agentes reales).
+
+## Decisión del dueño sobre F10a (2026-11-05)
+Elegida la **Opción D**: la sección Shepherd sustituye el área central (`pane_surface`) en el cliente, con la sidebar de herdr visible; sin overlay modal. Registrar en «Desviaciones de UI respecto a herdr» (F10b): conmutación de `blit_pane_surface` por `render_shepherd_surface`, ~40 líneas en `composition.rs`, `state.rs`, `mouse.rs`, `input.rs`; 0 en el servidor.
