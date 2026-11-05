@@ -11,7 +11,7 @@ We build upon herdr's mouse-first terminal multiplexing, PTY management, session
 
 ## What Shepherd Adds
 
-- **TUI Overlay (`prefix + a` or mouse menu)**:
+- **Shepherd section (`prefix + a`, or click the first tab)**: a virtual tab with Agents, Tasks, Runs, Patterns, Skills, Git and Events views:
   - **Tasks**: Create tasks, preview Markdown specs and acceptance criteria, edit specs in `$EDITOR` in a split pane, and archive completed tasks.
   - **Runs**: Track multi-phase task execution pipelines and approve human gates.
   - **Skills**: Skill catalog with global, role and per-session levels, shown in the overlay; default skills are protected from deletion.
@@ -65,6 +65,10 @@ enabled = true
 ```
 
 When disabled, Shepherd behaves as a standard terminal multiplexer.
+
+## Documentation
+
+See [docs/shepherd/](docs/shepherd/README.md): usage from the TUI and the CLI, configuration, patterns, agents, skills and the event bus (Spanish).
 
 ## License
 
