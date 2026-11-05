@@ -46,7 +46,7 @@ pub(crate) fn startup_prompt(
     format!(
         "Estás en el patrón `{name}` (`{kind}`), tu id es `{AGENT_ID_PLACEHOLDER}` (definición `{def_id}`, rol `{role}`) y tu persona es: {persona}\n\n\
          Tus tópicos: publicas en {publishes}; consumes de {consumes}.\n\
-         Cómo colaborar: skill `shepherd-events` o herramientas MCP (publish, poll, subscribe, ack). Ya estás suscrito a tus tópicos: no pases `group` en `subscribe` salvo necesidad (cambiaría tu grupo de consumo).\n\n\
+         Cómo colaborar: skill `shepherd-events` o herramientas MCP (publish, poll, subscribe, ack). Ya estás suscrito a tus tópicos: no pases `group` en `subscribe` salvo necesidad (cambiaría tu grupo de consumo). Al publicar no pases `key` ni `partition` salvo necesidad real de orden: sin clave el bus reparte los mensajes entre particiones y, con ellos, entre los miembros de un grupo (con la misma clave todo cae en una partición y un solo worker lo recibe).\n\n\
          Objetivo del run: {task}\n\n\
          {order}\n\n\
          Reglas: actúa solo según tu persona; no pidas contexto de tarea ni diff (no hay tarea ni coder: `get_task_context` solo devuelve este objetivo y la topología); publica tu resultado en tus tópicos y termina tu turno; recibirás avisos cuando lleguen mensajes.\n",
