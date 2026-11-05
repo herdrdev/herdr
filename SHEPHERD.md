@@ -5222,3 +5222,13 @@ Sin commits. Tests nuevos en `crates/shepherd-core/src/service/tests_f8g.rs` (4)
 **Números reales**: shepherd-core 143 + 155 ok; `shepherd::` 90; `client::shell` 403 (2 ignored); `protocol::` 156; `api::` 318 ok + 1 intermitente de plugins (`plugin_pane_open_injects…`, pasa solo: 1/1); `server::` 318 (5 ignored); `workflow::…explicit_approval…` ok solo (en shepherd-core). `rename-from-herdr.sh --check` OK; `testRepo|araquesebastian` = 0 en el test nuevo.
 
 **No hecho:** la prueba aislada con `shepherd-iso.sh` (run done → publicar → running → done) no se ejecutó en esta fase; el flujo queda cubierto por los tests de servicio (incl. la ruta MCP). Pendiente la repetición real con claude y codex.
+
+## Cuarta prueba real de patrones tras F8g: claude + codex (2026-11-05)
+
+Mismo patrón `duo`, tarea sin commit. Resultado: la tarea se cumplió (`note.txt` = `pattern ok`; worker publicó en `results`; orquestador despertó por el aviso, procesó, confirmó (`ack`) y publicó su resumen), ambos agentes `idle`, pero **el run se quedó en `running`** (comprobado ~2 min). Causa: el criterio de quiescencia basado en lag (F8f) no se cumple con agentes reales:
+- `results brain` quedó con `lag p0:1`: el mensaje pendiente es el **resumen del propio orquestador** (`results#1`); nadie lo confirma.
+- Apareció además `results coder-1` (1 miembro, `lag p0:2`): el worker se suscribió a `results`, que no está en sus `consumes`, y nunca confirma esos mensajes.
+- `topic groups` ya no muestra el grupo fantasma por rol sin miembros (F8g OK en ese punto; los grupos que ahora se ven son por agente, con miembro).
+- La reapertura del run por tráfico nuevo (F8g) no se pudo probar porque el run nunca llegó a `done`.
+
+Conclusión: la quiescencia no puede depender de que los agentes reconozcan todo. Propuesta F8h: run `done` = todos los agentes `idle`/`done` sostenido T segundos y sin mensajes publicados en los tópicos del run durante T (ignorando lag), y reabrir con el siguiente mensaje publicado.
