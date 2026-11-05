@@ -18,4 +18,4 @@ En `webteam` (`group: worker-pool`, `count: 2`), `shepherd topic groups orders` 
 
 ## Verificación y entrega
 - `cargo build`; áreas: `-p shepherd-core`, `--bin shepherd shepherd:: client::shell protocol:: server:: api:: config::`; golden existentes intactos; greps de fuga (`testRepo`, `araquesebastian`) en 0.
-- Añade a `SHEPHERD.md` una sección «Estado F13» (qué cambió, archivos, tests, límites). Commit en tu rama con trailer `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`. Dime al terminar con un resumen corto.
+- Añade a `SHEPHERD.md` una sección «Estado F13» (qué cambió, archivos, tests, límites). Commit en tu rama. Dime al terminar con un resumen corto.
