@@ -312,6 +312,35 @@ pub fn assert_golden(test_name: &str, actual: &Value) {
     }
 }
 
+pub fn assert_golden_text(test_name: &str, actual: &str) {
+    let golden_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden");
+    fs::create_dir_all(&golden_dir).unwrap();
+    let golden_file = golden_dir.join(format!("{test_name}.txt"));
+
+    if std::env::var_os("SHEPHERD_UPDATE_GOLDEN").is_some()
+        || std::env::var_os("UPDATE_GOLDEN").is_some()
+    {
+        fs::write(&golden_file, actual).unwrap();
+    } else {
+        if !golden_file.exists() {
+            panic!(
+                "Golden text file does not exist: {}. Run with SHEPHERD_UPDATE_GOLDEN=1 to create it.",
+                golden_file.display()
+            );
+        }
+        let expected = fs::read_to_string(&golden_file).unwrap();
+        assert_eq!(
+            actual,
+            expected,
+            "\n\nGolden file mismatch for '{}'!\nFile: {}\nRun with SHEPHERD_UPDATE_GOLDEN=1 to update golden files if this change is intentional.\n",
+            test_name,
+            golden_file.display()
+        );
+    }
+}
+
 fn run_cli_json(env: &TestEnv, args: &[&str]) -> Result<Value, String> {
     let mut output = Vec::new();
     let args_vec: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -340,6 +369,75 @@ fn run_cli_json(env: &TestEnv, args: &[&str]) -> Result<Value, String> {
             }
         }
     }
+}
+
+fn run_cli_human(env: &TestEnv, args: &[&str]) -> Result<String, String> {
+    let mut output = Vec::new();
+    let args_vec: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let res = run_cli_in_root_with_output(
+        env.root.clone(),
+        args_vec,
+        Some(Arc::new(env.terminals.clone())),
+        None,
+        &mut output,
+    );
+    let text = String::from_utf8_lossy(&output).to_string();
+    match res {
+        Ok(_) => Ok(text),
+        Err(err) => {
+            if !text.is_empty() {
+                Ok(text)
+            } else {
+                Err(format!("shepherd: {err}\n"))
+            }
+        }
+    }
+}
+
+fn normalize_text(text: &str, env: &TestEnv) -> String {
+    let root_str = env.root.display().to_string();
+    let state_str = env.state_dir.display().to_string();
+    let test_str = env.dir.display().to_string();
+    let temp_str = std::env::temp_dir().display().to_string();
+
+    let res = text
+        .replace(&root_str, "<ROOT>")
+        .replace(&state_str, "<STATE_DIR>")
+        .replace(&test_str, "<TEST_DIR>")
+        .replace(&temp_str, "<TEMP_DIR>");
+
+    let lines: Vec<String> = res
+        .lines()
+        .map(|line| {
+            let mut l = line.to_string();
+            if l.starts_with('[') && l.len() >= 22 && l.chars().nth(21) == Some(']') {
+                let inner = &l[1..21];
+                if inner.chars().nth(4) == Some('-')
+                    && inner.chars().nth(7) == Some('-')
+                    && inner.chars().nth(10) == Some('T')
+                {
+                    l = format!("[<TIMESTAMP>]{}", &l[22..]);
+                }
+            }
+            if l.starts_with("published message ") {
+                let parts: Vec<&str> = l.split_whitespace().collect();
+                if parts.len() >= 4 && parts[0] == "published" && parts[1] == "message" {
+                    let rest = parts[3..].join(" ");
+                    return format!("published message <MSG_ID> {rest}");
+                }
+            }
+            if l.starts_with("Note: ") {
+                return "Note: <GH_NOTE>".to_string();
+            }
+            l
+        })
+        .collect();
+
+    let mut normalized = lines.join("\n");
+    if text.ends_with('\n') {
+        normalized.push('\n');
+    }
+    normalized
 }
 
 fn mcp_request(url: &str, token: &str, body: &Value) -> Result<Value, String> {
@@ -2358,4 +2456,372 @@ fn test_typed_methods_invalid_params_error() {
         .service
         .delete_pattern(&env.root, "non-existent-pattern");
     assert!(err.is_err());
+}
+
+// =========================================================================
+// 5. Tests for CLI subcommands with Human (non-JSON) output
+// =========================================================================
+
+#[test]
+fn test_characterization_cli_human_agents_empty() {
+    let env = TestEnv::new("cli-human-agents-empty");
+    let res = run_cli_human(&env, &["agents"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_agents_empty", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_agents_populated() {
+    let env = TestEnv::new("cli-human-agents");
+    env.seed_agent("coder-1", "coder", "idle");
+    let res = run_cli_human(&env, &["agents"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_agents_populated", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_spawn() {
+    let env = TestEnv::new("cli-human-spawn");
+    let res = run_cli_human(&env, &["spawn", "coder", "Implement feature Y"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_spawn", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_kill() {
+    let env = TestEnv::new("cli-human-kill");
+    let agent = env.seed_agent("coder-1", "coder", "working");
+    let res = run_cli_human(&env, &["kill", &agent.id]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_kill", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_clean() {
+    let env = TestEnv::new("cli-human-clean");
+    let _ = run_cli_human(&env, &["spawn", "coder", "Clean test task"]).unwrap();
+    let _ = run_cli_human(&env, &["kill", "coder-1"]).unwrap();
+    let res = run_cli_human(&env, &["clean", "coder-1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_clean", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_focus() {
+    let env = TestEnv::new("cli-human-focus");
+    let _ = run_cli_human(&env, &["spawn", "coder", "Focus test task"]).unwrap();
+    let res = run_cli_human(&env, &["focus", "coder-1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_focus", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_list_empty() {
+    let env = TestEnv::new("cli-human-task-empty");
+    let res = run_cli_human(&env, &["task", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_list_empty", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_new() {
+    let env = TestEnv::new("cli-human-task-new");
+    let res = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_new", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_list_populated() {
+    let env = TestEnv::new("cli-human-task-list");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let res = run_cli_human(&env, &["task", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_list_populated", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_tasks_alias() {
+    let env = TestEnv::new("cli-human-tasks");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let res = run_cli_human(&env, &["tasks"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_tasks_alias", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_show() {
+    let env = TestEnv::new("cli-human-task-show");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let res = run_cli_human(&env, &["task", "show", "1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_show", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_plan() {
+    let env = TestEnv::new("cli-human-task-plan");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let task = shepherd_core::find_task(&env.root, "1").unwrap();
+    shepherd_core::write_task_section(&task, "plan", "# Plan\n\n1. Initial step\n2. Next step")
+        .unwrap();
+    let res = run_cli_human(&env, &["task", "plan", "1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_plan", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_path() {
+    let env = TestEnv::new("cli-human-task-path");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let res = run_cli_human(&env, &["task", "path", "1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_path", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_task_archive() {
+    let env = TestEnv::new("cli-human-task-archive");
+    let _ = run_cli_human(&env, &["task", "new", "Build login flow"]).unwrap();
+    let res = run_cli_human(&env, &["task", "archive", "1"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_task_archive", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_skills_list() {
+    let env = TestEnv::new("cli-human-skills");
+    let res = run_cli_human(&env, &["skills", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_skills_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_runs_list() {
+    let env = TestEnv::new("cli-human-runs");
+    let res = run_cli_human(&env, &["runs", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_runs_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_roles_list() {
+    let env = TestEnv::new("cli-human-roles");
+    let res = run_cli_human(&env, &["roles", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_roles_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_vendors_list() {
+    let env = TestEnv::new("cli-human-vendors");
+    let res = run_cli_human(&env, &["vendors", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_vendors_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_git() {
+    let env = TestEnv::new("cli-human-git");
+    let res = run_cli_human(&env, &["git"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_git", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_config_path() {
+    let env = TestEnv::new("cli-human-cfg-path");
+    let res = run_cli_human(&env, &["config", "path"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_config_path", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_config_validate() {
+    let env = TestEnv::new("cli-human-cfg-val");
+    let res = run_cli_human(&env, &["config", "validate"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_config_validate", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_pattern_list() {
+    let env = TestEnv::new("cli-human-pattern-list");
+    let res = run_cli_human(&env, &["pattern", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_pattern_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_patterns_alias() {
+    let env = TestEnv::new("cli-human-patterns");
+    let res = run_cli_human(&env, &["patterns"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_patterns_alias", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_pattern_show() {
+    let env = TestEnv::new("cli-human-pattern-show");
+    let res = run_cli_human(&env, &["pattern", "show", "orchestrator-worker"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_pattern_show", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_pattern_new() {
+    let env = TestEnv::new("cli-human-pattern-new");
+    let res = run_cli_human(
+        &env,
+        &[
+            "pattern",
+            "new",
+            "test-pattern",
+            "--from",
+            "orchestrator-worker",
+        ],
+    )
+    .unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_pattern_new", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_pattern_validate() {
+    let env = TestEnv::new("cli-human-pattern-validate");
+    let res = run_cli_human(&env, &["pattern", "validate", "orchestrator-worker"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_pattern_validate", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_pattern_delete() {
+    let env = TestEnv::new("cli-human-pattern-delete");
+    let _ = run_cli_human(
+        &env,
+        &[
+            "pattern",
+            "new",
+            "test-pattern-to-del",
+            "--from",
+            "orchestrator-worker",
+        ],
+    )
+    .unwrap();
+    let res = run_cli_human(&env, &["pattern", "delete", "test-pattern-to-del"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_pattern_delete", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_list() {
+    let env = TestEnv::new("cli-human-topic-list");
+    let res = run_cli_human(&env, &["topic", "list"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_list", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topics_alias() {
+    let env = TestEnv::new("cli-human-topics");
+    let res = run_cli_human(&env, &["topics"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topics_alias", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_create() {
+    let env = TestEnv::new("cli-human-topic-create");
+    let res = run_cli_human(
+        &env,
+        &["topic", "create", "notifications", "--partitions", "2"],
+    )
+    .unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_create", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_publish() {
+    let env = TestEnv::new("cli-human-topic-pub");
+    let _ = run_cli_human(&env, &["topic", "create", "events", "--partitions", "1"]).unwrap();
+    let res = run_cli_human(&env, &["topic", "publish", "events", "Build started"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_publish", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_tail() {
+    let env = TestEnv::new("cli-human-topic-tail");
+    let _ = run_cli_human(&env, &["topic", "create", "events", "--partitions", "1"]).unwrap();
+    let _ = run_cli_human(&env, &["topic", "publish", "events", "Message A"]).unwrap();
+    let res = run_cli_human(&env, &["topic", "tail", "events"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_tail", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_replay() {
+    let env = TestEnv::new("cli-human-topic-replay");
+    let _ = run_cli_human(&env, &["topic", "create", "events", "--partitions", "1"]).unwrap();
+    let _ = run_cli_human(&env, &["topic", "publish", "events", "Message 1"]).unwrap();
+    let res = run_cli_human(&env, &["topic", "replay", "events", "--from", "0"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_replay", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_topic_groups() {
+    let env = TestEnv::new("cli-human-topic-groups");
+    let _ = run_cli_human(&env, &["topic", "create", "events", "--partitions", "1"]).unwrap();
+    let res = run_cli_human(&env, &["topic", "groups"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_topic_groups", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_approve() {
+    let env = TestEnv::new("cli-human-approve");
+    env.seed_task(1, "Approve task");
+    let mut task = shepherd_core::find_task(&env.root, "1").unwrap();
+    task.status.waiting = "plan".into();
+    fs::write(
+        task.directory.join("plan.md"),
+        "# Plan\nVerified plan content.\n",
+    )
+    .unwrap();
+    shepherd_core::save_task_status(task.directory.join("status.json"), &task.status).unwrap();
+
+    let res = run_cli_human(&env, &["approve", "1", "plan"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_approve", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_reject() {
+    let env = TestEnv::new("cli-human-reject");
+    env.seed_task(1, "Reject task");
+    let mut task = shepherd_core::find_task(&env.root, "1").unwrap();
+    task.status.waiting = "plan".into();
+    fs::write(
+        task.directory.join("plan.md"),
+        "# Plan\nVerified plan content.\n",
+    )
+    .unwrap();
+    shepherd_core::save_task_status(task.directory.join("status.json"), &task.status).unwrap();
+
+    let res = run_cli_human(&env, &["reject", "1", "plan", "--reason", "Not ready"]).unwrap();
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_reject", &norm);
+}
+
+#[test]
+fn test_characterization_cli_human_help_usage() {
+    let env = TestEnv::new("cli-human-help");
+    let res = match run_cli_human(&env, &["--help"]) {
+        Ok(s) => s,
+        Err(e) => e,
+    };
+    let norm = normalize_text(&res, &env);
+    assert_golden_text("cli_human_help_usage", &norm);
 }

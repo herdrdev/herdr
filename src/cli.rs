@@ -31,6 +31,8 @@ pub(crate) mod projection;
 mod protocol_guard;
 mod server;
 mod server_not_running;
+pub(crate) mod shepherd;
+pub(crate) mod shepherd_bindings;
 mod spec;
 mod status;
 pub(crate) mod tab;
@@ -101,17 +103,16 @@ pub fn maybe_run(args: &[String]) -> std::io::Result<CommandOutcome> {
     };
 
     if command == "shepherd" {
-        return crate::shepherd::run_cli(&args[1..]).map(CommandOutcome::Handled);
+        return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
     }
 
     const SHEPHERD_DIRECT_COMMANDS: &[&str] = &[
-        "agents", "spawn", "kill", "clean", "focus", "task", "tasks",
-        "skills", "runs", "roles", "vendors", "run", "approve", "git",
-        "mcp", "msg", "messages", "attach", "pattern", "patterns",
-        "topic", "topics",
+        "agents", "spawn", "kill", "clean", "focus", "task", "tasks", "skills", "runs", "roles",
+        "vendors", "run", "approve", "git", "mcp", "msg", "messages", "attach", "pattern",
+        "patterns", "topic", "topics",
     ];
     if SHEPHERD_DIRECT_COMMANDS.contains(&command) {
-        return crate::shepherd::run_cli(&args[1..]).map(CommandOutcome::Handled);
+        return shepherd::run_shepherd_command(&args[1..]).map(CommandOutcome::Handled);
     }
 
     if spec::print_requested_help(args)? {

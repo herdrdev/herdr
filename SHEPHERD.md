@@ -3298,3 +3298,116 @@ Se levantó una instancia real aislada del servidor (`./scripts/shepherd-iso.sh 
 - La fase F9b queda **100% finalizada y cerrada**: todos los métodos de API de Shepherd (27 métodos tipados) están definidos con `cli_params!`, registrados en `Method`, tipados en `ResponseResult` y congelados con digests SHA-256.
 - **Qué NO queda en F9b y pasa a F9c**: la migración de la CLI declarativa. En F9c, el despachador de argumentos de `crates/shepherd-core/src/cli.rs` (~3.984 líneas) será reemplazado por `Leaf` y `projection::group_request` sobre los métodos tipados ya construidos.
 
+## Estado F9c — CLI declarada con cli_params! y bindings al estilo de herdr (2026-11-05)
+
+Fase F9c completada según las especificaciones de `SHEPHERD-F9C-BRIEF.md`, implementando la CLI de Shepherd declarada con `cli_params!` y bindings al estilo canónico de herdr (`Leaf`, proyecciones declarativas y despacho unificado servidor/in-process), garantizando paridad 100% en salida humana, flags `--json`, `--no-server`, y conservando todos los golden files existentes intactos sin regenerarlos.
+
+### 1. Qué se ha implementado
+
+1. **Caracterización rigurosa de salida humana y ayuda (Paso 1)**:
+   - Implementado arnés de caracterización en `crates/shepherd-core/tests/characterization.rs`:
+     - Función `assert_golden_text` con normalización de timestamps (`[<TIMESTAMP>]`), UUIDs (`<UUID>`) y paths temporales (`<REPO_ROOT>`).
+     - Función `run_cli_human` ejecutando comandos y capturando salida `stdout` formateada para humanos y mensajes de uso.
+   - Añadidos **37 tests de caracterización de salida humana** en `characterization.rs` cubriendo todos los comandos y subcomandos (`agents`, `spawn`, `kill`, `clean`, `focus`, `tasks`, `task list`, `task new`, `task show`, `task plan`, `task edit`, `task path`, `task archive`, `runs`, `run`, `approve`, `reject`, `skills`, `git`, `patterns`, `pattern list`, `pattern show`, `pattern new`, `pattern validate`, `pattern delete`, `topics`, `topic list`, `topic create`, `topic publish`, `topic tail`, `topic replay`, `topic groups`, `roles`, `vendors`, `config path`, `config validate`, `help`).
+   - Generados 37 archivos golden `.txt` en `crates/shepherd-core/tests/golden/*.txt`.
+   - **Invariante crítico respetado**: los 90 archivos golden `.json` originales de F9b permanecen intactos **SIN regenerarse** (0 modificaciones).
+
+2. **Bindings de CLI declarativos (`src/cli/shepherd_bindings.rs`)**:
+   - Creado módulo `src/cli/shepherd_bindings.rs` siguiendo la estructura canónica de `src/cli/workspace_bindings.rs` y `src/cli/worktree_bindings.rs`.
+   - Helpers de entrada fuertemente tipados: `root_option`, `text_position`, `optional_text_position`, `rest_position`, `optional_text`, `text_value`, `boolean_flag`, `optional_bool_flag`, `u32_value`, `optional_u32`, `u64_value`, `optional_usize`, `string_list`.
+   - Proyecciones locales para comandos que no son métodos de API o que ejecutan lógica local del cliente:
+     - `TaskShowParams` / `TaskShowProjection`
+     - `TaskPlanParams` / `TaskPlanProjection`
+     - `TaskEditParams` / `TaskEditProjection`
+     - `TaskPathParams` / `TaskPathProjection`
+     - `PatternEditParams` / `PatternEditProjection`
+     - `PatternNewLocalParams` / `PatternNewLocalProjection`
+     - `McpServeParams` / `McpServeProjection`
+     - `AttachParams` / `AttachProjection`
+     - `LocalEmptyParams` / `LocalEmptyProjection`
+   - Función `parse_operation(args: &[String]) -> Result<ShepherdOperation, ParseError>` que analiza y mapea argumentos de línea de comandos en una de dos variantes de `ShepherdOperation`:
+     - `ShepherdOperation::Api(Request)`: solicitud RPC fuertemente tipada a un método de API (`Method::Shepherd*`).
+     - `ShepherdOperation::Local(LocalCommand)`: comando local que requiere ejecución directa en el proceso cliente (ej. `mcp serve`, `$EDITOR`).
+   - Árbol de comandos Clap completo disponible para inspección o futuras compleciones.
+   - Suite de tests unitarios incluida en `shepherd_bindings.rs::tests` validando el análisis sintáctico de los comandos principales.
+
+3. **Ejecutor y formateador unificado (`src/cli/shepherd.rs`)**:
+   - Implementada la función `run_shepherd_command(args: &[String]) -> std::io::Result<i32>`.
+   - **Punto delicado del modo en proceso resuelto**:
+     - Detección de sesión activa y verificación de existencia del socket (`socket_path.exists()`).
+     - Si el socket existe y `!no_server`, envía la petición al servidor vía `super::send_request(&request)`.
+     - Si no hay servidor en marcha o se pasa `--no-server`, ejecuta en proceso mediante `OrchestrationService` y despacha a través de `crate::shepherd::service::execute_shepherd_method`, respaldado por `InMemoryTerminals` cuando no hay runtime PTY disponible, garantizando que comandos como `shepherd agents --no-server` o `shepherd task list --no-server` funcionen inmediatamente sin requerir socket ni binario en `PATH`.
+   - Formateo de respuesta:
+     - Con `--json`: imprime el JSON serializado de la respuesta tipada.
+     - Sin `--json`: formatea la respuesta en tablas y textos humanos (`print_human_api_response`) idénticos a los golden files.
+   - Despacho de comandos locales a través de `execute_local_command`.
+
+4. **Integración limpia y aditiva en Herdr**:
+   - `src/cli.rs`:
+     - Registrados submódulos `pub(crate) mod shepherd;` y `pub(crate) mod shepherd_bindings;`.
+     - El comando `shepherd <subcommand>` y los comandos directos (`agents`, `spawn`, `kill`, `clean`, `focus`, `task`, `tasks`, `runs`, `run`, `approve`, `reject`, `skills`, `git`, `patterns`, `pattern`, `topic`, `topics`, `roles`, `vendors`, `config`, `mcp`, `attach`) delegan directamente en `shepherd::run_shepherd_command`.
+   - `src/shepherd/mod.rs`:
+     - Adelgazada la función `run_cli` reemplazando ~50 líneas de resolución duplicada por la delegación en `crate::cli::shepherd::run_shepherd_command`.
+     - Visibilidad de `resolve_session_socket_path` ajustada a `pub(crate)`.
+   - `crates/shepherd-core/src/cli.rs`:
+     - Ajustada la visibilidad a `pub fn` en 10 funciones auxiliares de comando local (`roles_list`, `vendors_list`, `config_paths`, `config_validate`, `attach_to_shepherd`, `show_task_command`, `plan_task_command`, `edit_task_command`, `task_path_command`, `pattern_new_command`, `pattern_delete_command`, `pattern_edit_command`) permitiendo su reuso directo sin duplicar lógica.
+
+5. **Invariante de Contratos SHA-256 Wire**:
+   - `ShepherdRunStartParams` conserva sus campos de API intactos; el flag CLI `--wait` se definió con `#[serde(skip)] #[schemars(skip)]`, manteniendo el digest SHA-256 del esquema de `shepherd.run.start` idéntico al contrato v1.
+   - Test `advertised_client_shell_method_shapes_stay_at_the_v1_contract` pasa al 100% sin modificaciones de hashes.
+
+### 2. Resultados Reales de la Batería de Tests
+
+Todas las áreas fueron ejecutadas de verdad con `./cargo-fork.sh`:
+
+| Área de Tests | Comando Ejecutado | Pasados | Fallados | Ignorados | Notas |
+|---|---|---|---|---|---|
+| `shepherd-core` | `./cargo-fork.sh test -p shepherd-core` | **265** | 0 | 0 | 117 unit + 148 characterization. `grep -c testRepo` = 0. 90 JSON goldens intactos. |
+| `shepherd::` | `./cargo-fork.sh test shepherd::` | **52** | 0 | 0 | Pruebas de integración de runtime y servicio shepherd en herdr. |
+| `client::shell` | `./cargo-fork.sh test client::shell` | **391** | 0 | 2 | Pruebas de capa TUI/cliente de herdr. |
+| `protocol::` | `./cargo-fork.sh test protocol::` | **159** | 0 | 0 | 156 unit + 3 integration en `cli.rs`. Wire framing y surface delta. |
+| `api::` | `./cargo-fork.sh test api:: -- --test-threads=1` | **319** | 0 | 1 | Operaciones de API de herdr y shepherd. |
+| `server::` | `./cargo-fork.sh test server::` | **318** | 0 | 5 | Despacho de comandos cliente, headless y sockets. |
+| Contratos v1 | `./cargo-fork.sh test --bin shepherd client_commands` | **5** | 0 | 0 | `advertised_client_shell_method_shapes_stay_at_the_v1_contract ... ok`. |
+| Bindings CLI | `./cargo-fork.sh test --bin shepherd shepherd_bindings` | **6** | 0 | 0 | Parseo sintáctico de CLI declarativa. |
+
+### 3. Verificación con Servidor Aislado (`./scripts/shepherd-iso.sh`)
+
+Verificación real contra sesión aislada (sin agentes reales ni tocar estado de usuario):
+
+1. **Arranque y verificación de socket**:
+   ```bash
+   $ ./scripts/shepherd-iso.sh start
+   started
+   ```
+
+2. **Comandos ejecutados contra el servidor en marcha**:
+   - `agents`: devuelve `no agents` (código 0).
+   - `agents --json`: devuelve `{ "id": "cli:shepherd:agent:list", "result": { "agents": [], "type": "shepherd_agent_list" } }`.
+   - `task list`: devuelve `no tasks` (código 0).
+   - `task list --json`: devuelve `{ "id": "cli:shepherd:task:list", "result": { "tasks": [], "type": "shepherd_task_list" } }`.
+   - `topic list`: lista tópicos del bus (`my-topic`, 2 particiones, 1 mensaje).
+   - `topic list --json`: devuelve JSON con la lista tipada de tópicos.
+   - `pattern list`: lista los patrones builtin (`blackboard`, `hierarchical`, `market`, `orchestrator-worker`).
+   - `pattern list --json`: devuelve JSON estructurado con los patrones.
+   - Alias `shepherd shepherd <cmd>`: `shepherd shepherd agents` y `shepherd shepherd task list` funcionan con idéntico resultado.
+
+3. **Parada limpia del servidor**:
+   ```bash
+   $ ./scripts/shepherd-iso.sh stop
+   stopped
+   ```
+
+4. **Verificación en modo in-process (`--no-server`) sin servidor**:
+   - `./target/debug/shepherd agents --no-server`: ejecuta en proceso cargando el registro y formateando la tabla humana de agentes.
+   - `./target/debug/shepherd agents --json --no-server`: devuelve el JSON de agentes en proceso.
+
+### 4. Mantenimiento y Guardarraíles
+
+- `./scripts/rename-from-herdr.sh --check`: **[OK]** No unexcluded occurrences of herdr/Herdr/HERDR found.
+- `./scripts/upstream-sync.sh --dry-run --allow-branch master`: **[OK]** Rutina de sincronización upstream limpia.
+- Cero archivos herdr modificados por formato automático; formateados únicamente archivos propios de Shepherd.
+- Cero commits realizados (siguiendo la instrucción de no commitear).
+- Cero peticiones de red/push/gh/fetch reales. Servidor aislado detenido.
+
+

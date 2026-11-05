@@ -1,36 +1,54 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdRunListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
+use crate::cli::projection::{cli_params, Field};
+use crate::cli::shepherd_bindings as bindings;
+
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdRunListParams => ShepherdRunListProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None)
+            .input(bindings::root_option()),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdRunStartParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    pub task: String,
-    #[serde(default)]
-    pub auto_push: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp_url: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdRunStartParams => ShepherdRunStartProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        pub task: String => Field::new(String::new()).input(bindings::text_position("task", "TASK", 0)),
+        #[serde(default)]
+        pub auto_push: bool => Field::new(false).input(bindings::boolean_flag("auto-push")),
+        #[serde(skip)]
+        #[schemars(skip)]
+        pub wait: bool => Field::new(false).input(bindings::boolean_flag("wait")),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub mcp_url: Option<String> => Field::new(None)
+            .input(bindings::optional_text("mcp-url", "URL")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdGateActionParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    pub task: String,
-    pub target: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdGateActionParams => ShepherdGateActionProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        pub task: String => Field::new(String::new()).input(bindings::text_position("task", "TASK", 0)),
+        pub target: String => Field::new(String::new())
+            .input(bindings::text_position("target", "TARGET", 1)),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdGateRejectParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    pub task: String,
-    pub target: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdGateRejectParams => ShepherdGateRejectProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        pub task: String => Field::new(String::new()).input(bindings::text_position("task", "TASK", 0)),
+        pub target: String => Field::new(String::new()).input(bindings::text_position("target", "TARGET", 1)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub reason: Option<String> => Field::new(None)
+            .input(bindings::optional_text("reason", "TEXT")),
+    }
 }

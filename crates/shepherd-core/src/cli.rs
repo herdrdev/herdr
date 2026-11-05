@@ -1327,7 +1327,7 @@ fn print_human_git_status(
     Ok(())
 }
 
-fn roles_list(
+pub fn roles_list(
     root: PathBuf,
     args: Vec<String>,
     json: bool,
@@ -1362,7 +1362,7 @@ fn roles_list(
     Ok(())
 }
 
-fn vendors_list(
+pub fn vendors_list(
     root: PathBuf,
     json: bool,
     writer: &mut dyn std::io::Write,
@@ -1407,7 +1407,7 @@ fn vendors_list(
     Ok(())
 }
 
-fn config_paths(
+pub fn config_paths(
     root: PathBuf,
     json: bool,
     writer: &mut dyn std::io::Write,
@@ -1434,7 +1434,7 @@ fn config_paths(
     Ok(())
 }
 
-fn config_validate(
+pub fn config_validate(
     root: PathBuf,
     json: bool,
     writer: &mut dyn std::io::Write,
@@ -1462,7 +1462,7 @@ fn config_validate(
     Err("configuration validation failed".into())
 }
 
-fn attach_to_shepherd(
+pub fn attach_to_shepherd(
     root: PathBuf,
     args: Vec<String>,
     terminals: Option<Arc<dyn Terminals>>,
@@ -1685,7 +1685,7 @@ fn print_human_tasks_from_json(
     Ok(())
 }
 
-fn show_task_command(
+pub fn show_task_command(
     root: PathBuf,
     args: Vec<String>,
     json: bool,
@@ -1712,7 +1712,7 @@ fn show_task_command(
     Ok(())
 }
 
-fn plan_task_command(
+pub fn plan_task_command(
     root: PathBuf,
     args: Vec<String>,
     json: bool,
@@ -1791,7 +1791,7 @@ fn plan_task_command(
     Ok(())
 }
 
-fn edit_task_command(
+pub fn edit_task_command(
     root: PathBuf,
     args: Vec<String>,
     writer: &mut dyn std::io::Write,
@@ -1818,7 +1818,7 @@ fn edit_task_command(
     Ok(())
 }
 
-fn task_path_command(
+pub fn task_path_command(
     root: PathBuf,
     args: Vec<String>,
     json: bool,
@@ -2116,7 +2116,7 @@ fn print_human_pattern_detail(
     Ok(())
 }
 
-fn pattern_new_command(
+pub fn pattern_new_command(
     root: PathBuf,
     args: Vec<String>,
     server: Option<&ShepherdClient>,
@@ -2360,7 +2360,7 @@ fn pattern_delete_command(
     Ok(())
 }
 
-fn pattern_edit_command(
+pub fn pattern_edit_command(
     root: PathBuf,
     args: Vec<String>,
     writer: &mut dyn std::io::Write,

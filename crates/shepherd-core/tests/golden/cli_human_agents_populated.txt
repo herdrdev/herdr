@@ -1,0 +1,2 @@
+ID	STATE	ROLE	VENDOR	MODEL	TASK
+coder-1	starting	coder		-	Task for coder-1

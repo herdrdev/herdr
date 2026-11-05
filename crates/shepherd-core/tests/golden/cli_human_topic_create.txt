@@ -1,0 +1,1 @@
+created topic 'notifications' with 2 partition(s)

@@ -44,7 +44,7 @@ pub use tasks::ShepherdTasksState;
 use serde_json::{json, Value};
 use shepherd_core::{
     shepherd::ShepherdError,
-    terminals::{BackendKind, ShepherdInProcess, TerminalError, Terminals},
+    terminals::{ShepherdInProcess, TerminalError},
 };
 use std::{
     path::PathBuf,
@@ -180,7 +180,7 @@ pub fn try_connect_local_in_process(session: Option<&str>) -> Option<ShepherdInP
     Some(in_process_from_api_client(client, session))
 }
 
-fn resolve_session_socket_path(session: Option<&str>) -> PathBuf {
+pub(crate) fn resolve_session_socket_path(session: Option<&str>) -> PathBuf {
     if crate::session::explicit_session_requested() {
         return crate::session::active_api_socket_path();
     }
@@ -206,53 +206,7 @@ fn resolve_session_socket_path(session: Option<&str>) -> PathBuf {
 /// Entrypoint for `shepherd shepherd <args...>`.
 pub fn run_cli(args: &[String]) -> std::io::Result<i32> {
     register_default_in_process_factory();
-
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let root = shepherd_core::cli::project_root(cwd);
-    let config = shepherd_core::config::load_config(&root).unwrap_or_default();
-
-    let active_session = crate::session::active_name();
-    let session_name = active_session
-        .as_deref()
-        .or(Some(config.shepherd.session.as_str()));
-    let socket_path = resolve_session_socket_path(session_name);
-
-    let client = if socket_path.exists() {
-        Some(shepherd_core::shepherd::ShepherdClient::new(socket_path))
-    } else {
-        None
-    };
-
-    let terminals: Option<Arc<dyn Terminals>> =
-        match shepherd_core::terminals::select_backend(&config) {
-            Ok(BackendKind::Hc) => None,
-            Ok(BackendKind::InProcess | BackendKind::Socket) | Err(_) => {
-                try_connect_local_in_process(session_name)
-                    .map(|adapter| Arc::new(adapter) as Arc<dyn Terminals>)
-            }
-        };
-
-    let cli_args: Vec<String> = if args.first().map(|s| s.as_str()) == Some("shepherd") {
-        args.iter().skip(1).cloned().collect()
-    } else {
-        args.to_vec()
-    };
-
-    let is_json = cli_args.iter().any(|a| a == "--json");
-    match shepherd_core::cli::run_cli_in_root_with_client(
-        root,
-        cli_args.into_iter(),
-        terminals,
-        client,
-    ) {
-        Ok(()) => Ok(0),
-        Err(error) => {
-            if !is_json {
-                eprintln!("shepherd: {error}");
-            }
-            Ok(1)
-        }
-    }
+    crate::cli::shepherd::run_shepherd_command(args)
 }
 
 /// Resolve Shepherd agent information for a given pane ID without any disk I/O.
@@ -491,6 +445,7 @@ mod tests {
     use crate::app::{App, AppPolicy, AppState};
     use crate::config::Config;
     use ratatui::{buffer::Buffer, layout::Rect};
+    use shepherd_core::terminals::Terminals;
     use std::collections::HashMap;
     use tokio::sync::mpsc as tokio_mpsc;
 

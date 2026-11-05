@@ -1,32 +1,44 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdTaskListParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    #[serde(default)]
-    pub archived: bool,
+use crate::cli::projection::{cli_params, Field};
+use crate::cli::shepherd_bindings as bindings;
+
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdTaskListParams => ShepherdTaskListProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        #[serde(default)]
+        pub archived: bool => Field::new(false)
+            .input(bindings::boolean_flag("archived")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdTaskCreateParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub criteria: Vec<String>,
-    #[serde(default, alias = "attachments", skip_serializing_if = "Vec::is_empty")]
-    pub links: Vec<String>,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdTaskCreateParams => ShepherdTaskCreateProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        pub title: String => Field::new(String::new()).input(bindings::text_position("title", "TITLE", 0)),
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub description: Option<String> => Field::new(None).input(bindings::optional_text("description", "TEXT")),
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub criteria: Vec<String> => Field::new(Vec::new()).input(bindings::string_list("criteria", "TEXT")),
+        #[serde(default, alias = "attachments", skip_serializing_if = "Vec::is_empty")]
+        pub links: Vec<String> => Field::new(Vec::new())
+            .input(bindings::string_list("links", "URL")),
+    }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
-pub struct ShepherdTaskArchiveParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-    #[serde(deserialize_with = "deserialize_string_or_number")]
-    pub id: String,
+cli_params! {
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
+    pub struct ShepherdTaskArchiveParams => ShepherdTaskArchiveProjection {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub root: Option<String> => Field::new(None).input(bindings::root_option()),
+        #[serde(deserialize_with = "deserialize_string_or_number")]
+        pub id: String => Field::new(String::new())
+            .input(bindings::text_position("id", "ID", 0)),
+    }
 }
 
 fn deserialize_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>

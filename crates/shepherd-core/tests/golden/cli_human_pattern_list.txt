@@ -1,0 +1,5 @@
+NAME	KIND	SOURCE	SHADOWED	AGENTS	TOPICS	DESCRIPTION
+blackboard	blackboard	builtin	no	3	1	Shared knowledge base where specialist agents read hypotheses and post discoveries.
+hierarchical	hierarchical	builtin	no	7	4	Multi-tier command hierarchy where managers supervise specialized worker teams.
+market	market	builtin	no	6	3	Competitive market where solvers bid on asks coordinated by a market-maker.
+orchestrator-worker	orchestrator-worker	builtin	no	4	2	Central orchestrator dispatches partitioned tasks to a worker pool and aggregates results.

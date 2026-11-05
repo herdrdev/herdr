@@ -1,0 +1,2 @@
+started coder-1 (codex/default) in Shepherd pane pane-1
+worktree <ROOT>/.worktrees/shep-1-implement-feature-y (shep/1-implement-feature-y)
