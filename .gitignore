@@ -16,6 +16,8 @@ __pycache__/
 !/docs/versions/
 !/docs/versions/**
 !/docs/UPSTREAM-SYNC.md
+!/docs/shepherd/
+!/docs/shepherd/**
 /.local/
 /backlog
 
